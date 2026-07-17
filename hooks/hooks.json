@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "npx -y agentboard@latest hook session-start" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "npx -y agentboard@latest hook post-tool-use" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "npx -y agentboard@latest hook stop" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "npx -y agentboard@latest hook session-end" }] }
+    ]
+  }
+}

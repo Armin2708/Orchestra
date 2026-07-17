@@ -6,6 +6,17 @@
 
 ## Quickstart
 
+**Plug and play (Claude Code plugin — recommended):** inside Claude Code, run
+
+```
+/plugin marketplace add Armin2708/Orchestra
+/plugin install agentboard@orchestra
+```
+
+That's it. Hooks come bundled with the plugin, the CLI auto-downloads from npm on first use, and the daemon auto-starts with your next session. Open http://localhost:4750 to watch the board.
+
+**Manual install (npm):**
+
 ```bash
 npm i -g agentboard   # or: npx agentboard serve
 agentboard install    # wires Claude Code hooks (global; use --project for one repo)
