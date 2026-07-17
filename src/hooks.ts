@@ -82,8 +82,20 @@ const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
 
 async function stop(input: any): Promise<void> {
   const sess = loadSession(input.session_id)
+  if (!sess) return
   // heartbeat only — pulse would consume undelivered messages with no way to show them
-  if (sess) await api('POST', `/agents/${sess.agent_id}/heartbeat`)
+  await api('POST', `/agents/${sess.agent_id}/heartbeat`)
+  if (input.stop_hook_active) return // already continued once for this — never loop
+  const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
+  const mine = snap.cards.filter((c: any) => c.owner === sess.agent_name && c.column === 'in_progress')
+  if (mine.length === 0) return
+  const ids = mine.map((c: any) => `#${c.id} "${c.title}"`).join(', ')
+  console.log(JSON.stringify({
+    decision: 'block',
+    reason: `Orchestra board check before you finish: your card(s) ${ids} are still marked in_progress. ` +
+      `If the work is done: orchestra card move <id> done. Waiting on review: orchestra card move <id> review. ` +
+      `Blocked: orchestra card move <id> blocked. Only mid-task and pausing for the user? Leave it and finish your reply.`,
+  }))
 }
 
 async function sessionEnd(input: any): Promise<void> {

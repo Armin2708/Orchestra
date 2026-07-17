@@ -62,6 +62,32 @@ it('stop does not consume messages; user-prompt-submit delivers them', async () 
   expect(payload.hookSpecificOutput.additionalContext).toContain('are you blocked?')
 })
 
+it('stop blocks once to demand a status update on in_progress cards', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: '/tmp' }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start')
+  const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess3.json'), 'utf8'))
+  await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, title: 'Fix parser', column: 'in_progress', agent: sess.agent_name }),
+  })
+
+  out.length = 0
+  await hooks.runHook('stop')
+  const payload = JSON.parse(out.join('\n'))
+  expect(payload.decision).toBe('block')
+  expect(payload.reason).toContain('Fix parser')
+
+  // second stop (continuation) must not loop
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: '/tmp', stop_hook_active: true }))
+  out.length = 0
+  await hooks.runHook('stop')
+  expect(out.join('\n')).toBe('')
+})
+
 it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
   process.env.ORCHESTRA_PORT = '1' // nothing listening
