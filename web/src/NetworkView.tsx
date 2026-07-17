@@ -67,7 +67,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
     const wasDrag = drag.current.moved
     drag.current = null
     setPos((p) => { localStorage.setItem(`orchestra-net-${boardId}`, JSON.stringify(p)); return p })
-    if (!wasDrag && a) setPromptFor(a) // click (no movement) opens the prompt box
+    if (!wasDrag && a) onOpenAgent(a) // click (no movement) opens the console
   }
 
   // one edge per question; answered ones linger green for 3 minutes, then vanish
@@ -151,7 +151,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
           <div key={a.id} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
             <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-              title={`${a.name} — drag to move, click to prompt`}
+              title={`${a.name} — drag to move, click to open console`}
               onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}>
               {initials(a.name)}
               <i className={`presence ${a.status}`} />
@@ -211,7 +211,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
       <div className="net-legend">
         <span><i className="leg-line open" /> open question</span>
         <span><i className="leg-line done" /> answered (fades after 3 min)</span>
-        <span>drag circles · click to prompt</span>
+        <span>drag circles · click to open console</span>
       </div>
     </div>
   )

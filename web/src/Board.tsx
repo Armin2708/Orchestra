@@ -68,7 +68,7 @@ function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () =>
 
 export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
   const [open, setOpen] = useState<{ card: Card; boardId: number } | null>(null)
-  const [terminal, setTerminal] = useState<Agent | null>(null)
+  const [terminal, setTerminal] = useState<{ agent: Agent; boardId: number } | null>(null)
   const [askTo, setAskTo] = useState<{ name: string; boardId: number } | null>(null)
   const [askBody, setAskBody] = useState('')
   const [adding, setAdding] = useState<number | null>(null)
@@ -123,10 +123,10 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                 <div className="project-crew">
                   {agents.map((a) => (
                     <span key={a.id} className="crew-slot">
-                      <span className={`avatar ${a.status} ${a.kind === 'hired' ? 'hired clickable' : ''}`}
-                        title={a.kind === 'hired' ? `${a.name} · ${a.status} · open console` : `${a.name} · ${a.status}`}
+                      <span className={`avatar clickable ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
+                        title={`${a.name} · ${a.status} · open console`}
                         style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-                        onClick={a.kind === 'hired' ? () => setTerminal(a) : undefined}>
+                        onClick={() => setTerminal({ agent: a, boardId: s.board.id })}>
                         {initials(a.name)}
                         <i className="presence" />
                       </span>
@@ -143,7 +143,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               {netView.has(s.board.id) ? (
                 <NetworkView snap={s}
                   onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
-                  onOpenAgent={(a) => setTerminal(a)} />
+                  onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })} />
               ) : (<>
               {threads.length > 0 && (
                 <div className="threads">
@@ -218,7 +218,11 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
         onClose={() => setOpen(null)} onChange={onChange} />}
-      {terminal && <AgentTerminal agent={terminal} onClose={() => setTerminal(null)} onChange={onChange} />}
+      {terminal && <AgentTerminal
+        agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}
+        boardId={terminal.boardId}
+        threads={(snaps.find((s) => s.board.id === terminal.boardId)?.threads ?? []) as Thread[]}
+        onClose={() => setTerminal(null)} onChange={onChange} />}
     </>
   )
 }
