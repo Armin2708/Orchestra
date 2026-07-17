@@ -1,6 +1,8 @@
 export const api = async (method: string, p: string, body?: unknown) => {
   const res = await fetch(`/api/v1${p}`, {
-    method, headers: { 'content-type': 'application/json' },
+    method,
+    // fastify rejects bodyless requests that carry a json content-type
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) throw new Error(await res.text())
