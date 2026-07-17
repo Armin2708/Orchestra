@@ -23,6 +23,7 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number } | null>(null)
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -35,6 +36,7 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
       if (!alive) return
       setLines(r.lines ?? r)
       setTurn(r.working ?? null)
+      setInfo(r.info ?? null)
     }).catch(() => {})
     load()
     const t = setInterval(load, 1000)
@@ -142,9 +144,8 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
             )}
             {working && turn && (
               <p className="cc-spinner">
-                <span className="cc-star-frame">{star}</span> {gerund}… ({fmtSecs(turn.secs)}
-                {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>}
-                {' · '}<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt)
+                <span className="cc-star-frame">{star}</span> {gerund}… (<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · {fmtSecs(turn.secs)}
+                {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
               </p>
             )}
           </div>
@@ -157,8 +158,14 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
           </div>
           <div className="cc-hints">
-            <span>enter to send · shift+enter for newline{hired ? ' · esc to interrupt' : ''}</span>
-            <span>{hired ? 'delivered instantly' : 'delivered on its next turn'}</span>
+            {hired
+              ? <span className="cc-mode">⏵⏵ bypass permissions on <span className="cc-dim">(hired agents run autonomously)</span></span>
+              : <span>enter to send · shift+enter for newline</span>}
+            <span>
+              {info?.cwd ?? ''}{info?.model ? ` · ${info.model}` : ''}
+              {info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
+              {!hired ? ' · delivered on its next turn' : ''}
+            </span>
           </div>
         </div>
       </aside>

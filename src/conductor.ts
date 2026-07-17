@@ -34,6 +34,8 @@ type Hired = {
   transcript: TranscriptLine[]
   turnStart: number | null
   turnTokens: number
+  sessionTokens: number
+  model: string | null
 }
 
 const rules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
@@ -132,7 +134,7 @@ export class Conductor {
       end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
-      turnStart: null, turnTokens: 0,
+      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null,
     }
     this.hired.set(agent.id, hired)
     log('status', `hired in ${opts.cwd}`)
@@ -141,10 +143,12 @@ export class Conductor {
       try {
         for await (const m of q as AsyncIterable<any>) {
           if (m.type === 'system' && m.subtype === 'init') {
+            hired.model = m.model ?? null
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
           } else if (m.type === 'assistant') {
             if (hired.turnStart === null) hired.turnStart = Date.now()
             hired.turnTokens += m.message?.usage?.output_tokens ?? 0
+            hired.sessionTokens += m.message?.usage?.output_tokens ?? 0
             const blocks = m.message?.content ?? []
             for (const b of blocks) {
               if (b.type === 'text' && b.text) log('text', b.text)
@@ -199,12 +203,13 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number } } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
+      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens },
     }
   }
 

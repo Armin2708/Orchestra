@@ -300,3 +300,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-logo { color: #D97757; display: inline-block; min-width: 14px; }
 .cc-welcome-sub { color: #6f6b64; font-size: 12px; margin-top: 2px; }
 .cc-star-frame { color: #D97757; display: inline-block; min-width: 14px; }
+.cc-mode { color: #D97757; }
+.cc-dim { color: #6f6b64; }
