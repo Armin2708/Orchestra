@@ -36,6 +36,11 @@ export function buildServer(db: Database.Database): FastifyInstance {
     '/api/v1/agents/register', (req) => {
       const { board_id, session_id } = req.body
       let name = req.body.name
+      if (!name && session_id) {
+        // same session re-registering (e.g. lost session file) keeps its identity
+        const existing = db.prepare(`SELECT name FROM agents WHERE board_id=? AND session_id=?`).get(board_id, session_id) as any
+        if (existing) name = existing.name
+      }
       if (!name) {
         do { name = generateName() } while (
           db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(board_id, name))

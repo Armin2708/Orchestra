@@ -39,7 +39,18 @@ Industry-consensus answer to "N agents, same repo" is **git worktrees — isolat
 
 **D. Status quo (pure ad-hoc board).** Fine for launch, not a durable position.
 
-## 4. Recommendation
+## 4. Scope decision (2026-07-17): same repo, same checkout, different tasks
+
+Confirmed target: **multiple concurrent Claude sessions in one shared checkout, each on a different task.** This reframes the "anti-pattern" critique: the worktree consensus is what power users *say*, but in practice worktrees carry real friction (per-worktree `npm install`, dev servers, `.env` files, merge overhead) and a large pragmatic segment simply opens more terminals in the same directory. That segment is underserved — native Agent Teams doesn't cover it (team-initiated, lead-owned), and Vibe Kanban replaces the workflow instead of protecting it.
+
+**What this makes the hero feature:** collision avoidance in a shared checkout.
+1. **Overlap warnings must get faster.** The 30 s pulse means a warning can land after the collision. Add a **PreToolUse gate on Edit/Write**: check the file against other agents' claimed paths at edit time, inject an advisory warning (or soft-block with override) *before* the write. This is the killer capability no one else has.
+2. **Guard shared git state.** In one checkout, `git checkout/switch/rebase` by one session silently breaks the others. Detect and warn on branch-mutating git commands (PreToolUse Bash matcher) — arguably a worse failure mode than file overlap.
+3. **Disjoint-task hygiene.** Cards + paths become the mechanism for making tasks *provably* disjoint; the board shows the human where scopes drift toward each other.
+
+Positioning line: **"Run many Claude sessions in one repo — safely. No worktrees, no workflow change."** Worktree/conflict-forecasting (angle A) remains the later expansion, not the launch story.
+
+## 5. Recommendation
 
 Position as: **"The coordination and oversight layer for agents you already run — any tool, any worktree, zero workflow change."** Concretely: launch v0.1 as-is for credibility (cheap, MIT), but put A on the roadmap immediately (worktree/branch awareness + cross-worktree conflict forecasting) and message B (agent-agnostic) in the README. Avoid "kanban for agents" phrasing entirely. Treat C as an experiment behind a flag.
 

@@ -20,6 +20,23 @@ const loadSession = (id: string): Session | undefined => {
   try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
 }
 
+async function registerSession(input: any): Promise<Session | undefined> {
+  if (!input.session_id) return undefined
+  if (!(await ensureDaemon())) return undefined
+  const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
+  const agent = await api('POST', '/agents/register', {
+    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME,
+  })
+  const sess: Session = { agent_id: agent.id, agent_name: agent.name, board_id: board.id }
+  fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
+  fs.writeFileSync(sessFile(input.session_id), JSON.stringify(sess))
+  return sess
+}
+
+// session file may be missing (session-start cut short, cleanup, crash) — self-heal
+const ensureSession = async (input: any): Promise<Session | undefined> =>
+  loadSession(input.session_id) ?? registerSession(input)
+
 const rules = (me: string) => `orchestra rules (coordination board for this project — these are standing instructions):
 - You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.
 - REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
@@ -48,7 +65,7 @@ async function sessionStart(input: any): Promise<void> {
 }
 
 async function deliver(input: any, hookEventName: string, throttleMs: number): Promise<void> {
-  const sess = loadSession(input.session_id)
+  const sess = await ensureSession(input)
   if (!sess) return
   const throttle = sessFile(input.session_id) + '.throttle'
   if (throttleMs > 0) {
@@ -90,7 +107,7 @@ const postToolUse = (input: any) => deliver(input, 'PostToolUse', 30_000)
 const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
 
 async function stop(input: any): Promise<void> {
-  const sess = loadSession(input.session_id)
+  const sess = await ensureSession(input)
   if (!sess) return
   // heartbeat only — pulse would consume undelivered messages with no way to show them
   await api('POST', `/agents/${sess.agent_id}/heartbeat`)
@@ -116,7 +133,8 @@ async function sessionEnd(input: any): Promise<void> {
 }
 
 export async function runHook(event: string): Promise<void> {
-  const deadline = new Promise<void>((r) => setTimeout(r, 2000))
+  // session-start runs once and may need to cold-start the daemon; per-tool hooks stay tight
+  const deadline = new Promise<void>((r) => setTimeout(r, event === 'session-start' ? 10_000 : 2000))
   const work = (async () => {
     const input = JSON.parse((await _internals.readStdin()) || '{}')
     if (event === 'session-start') await sessionStart(input)

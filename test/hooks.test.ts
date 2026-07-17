@@ -88,6 +88,32 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
   expect(out.join('\n')).toBe('')
 })
 
+it('self-heals a lost session file and keeps the same agent identity', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess4', cwd: '/tmp' }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start')
+  const sessPath = path.join(home, 'sessions', 'sess4.json')
+  const orig = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
+
+  // question addressed to the original identity, then the session file is lost
+  await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: orig.board_id, to: orig.agent_name, body: 'still there?' }),
+  })
+  fs.rmSync(sessPath)
+  fs.rmSync(sessPath + '.throttle', { force: true })
+
+  out.length = 0
+  await hooks.runHook('post-tool-use')
+  const payload = JSON.parse(out.join('\n'))
+  expect(payload.hookSpecificOutput.additionalContext).toContain('still there?')
+  const healed = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
+  expect(healed.agent_name).toBe(orig.agent_name) // same identity, not a new agent
+})
+
 it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
   process.env.ORCHESTRA_PORT = '1' // nothing listening
