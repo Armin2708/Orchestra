@@ -34,9 +34,20 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
     let alive = true
     const load = () => api('GET', `/agents/${agent.id}/transcript`).then((r) => {
       if (!alive) return
-      setLines(r.lines ?? r)
-      setTurn(r.working ?? null)
-      setInfo(r.info ?? null)
+      const next: Line[] = r.lines ?? r
+      // avoid re-rendering the whole history when nothing changed — keeps scrolling smooth
+      setLines((prev) => (prev.length === next.length &&
+        prev[prev.length - 1]?.text === next[next.length - 1]?.text) ? prev : [...next])
+      setTurn((prev) => {
+        const w = r.working ?? null
+        if (!prev && !w) return prev
+        return w
+      })
+      setInfo((prev) => {
+        const i = r.info ?? null
+        if (prev && i && prev.tokens === i.tokens && prev.model === i.model) return prev
+        return i
+      })
     }).catch(() => {})
     load()
     const t = setInterval(load, 1000)
@@ -76,8 +87,12 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
 
   const working = hired && turn !== null
 
+  // auto-follow only when already near the bottom — manual scrolling stays untouched
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight })
   }, [convo.length, working])
 
   const send = async () => {

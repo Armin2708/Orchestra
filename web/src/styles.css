@@ -679,3 +679,6 @@ textarea {
   padding: 7px 11px; font: inherit; font-size: 13px; background: var(--surface);
 }
 .quest-add input:focus-visible, .quest-new input:focus-visible { outline: none; border-color: #ccc8bf; border-style: solid; }
+.terminal-col { min-height: 0; }
+.terminal-scroll { min-height: 0; overscroll-behavior: contain; }
+.cc-promptbox, .cc-hints, .cc-head { flex-shrink: 0; }
