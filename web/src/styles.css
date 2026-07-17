@@ -626,3 +626,13 @@ textarea {
 .rm-ticket-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rm-ticket time { font-size: 10.5px; color: #b8b4ac; }
 .roadmap.focused { grid-template-columns: 1fr; max-width: 1000px; margin: 0 auto; width: 100%; }
+.rm-brainstorm {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 8px 8px 14px; background: var(--surface);
+}
+.rm-brainstorm:focus-within { border-color: #ccc8bf; }
+.rm-spark { color: #D97757; }
+.rm-brainstorm input { flex: 1; border: none; background: none; font: inherit; font-size: 13.5px; }
+.rm-brainstorm input:focus-visible { outline: none; }
+.rm-brainstorm .btn:disabled { opacity: 0.6; cursor: default; }

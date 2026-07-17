@@ -6,7 +6,23 @@ const ORDER = ['backlog', 'in_progress', 'blocked', 'review', 'done']
 
 function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
   const [text, setText] = useState('')
+  const [brainstorm, setBrainstorm] = useState('')
+  const [briefing, setBriefing] = useState(false)
   const agents = snap.agents.filter((a) => a.status !== 'gone')
+  const strategist = agents.find((a) => a.name === 'strategist')
+
+  const askStrategist = async () => {
+    if (!brainstorm.trim() || briefing) return
+    setBriefing(true)
+    try {
+      let agent = strategist
+      if (!agent) agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
+      await api('POST', `/agents/${agent!.id}/task`, {
+        text: `Brainstorm request from the roadmap: "${brainstorm.trim()}". Research the repo as needed and add your ideas to the roadmap with orchestra idea. Finish with a one-line summary and stop.`,
+      })
+      setBrainstorm('')
+    } finally { setBriefing(false); onChange() }
+  }
 
   const add = async () => {
     if (!text.trim()) return
@@ -29,9 +45,20 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
     <section className="rm-project">
       <h2>{snap.board.name}</h2>
 
+      <div className="rm-brainstorm">
+        <span className="rm-spark">✻</span>
+        <input value={brainstorm}
+          placeholder={strategist ? `Ask ${'strategist'} to brainstorm — it researches the repo and adds ideas below` : 'Ask Claude to brainstorm — hires a strategist agent for this project'}
+          onChange={(e) => setBrainstorm(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') askStrategist() }} />
+        <button className="btn primary" disabled={briefing} onClick={askStrategist}>
+          {briefing ? 'Briefing…' : strategist?.status === 'active' ? 'Working…' : 'Brainstorm'}
+        </button>
+      </div>
+
       <div className="rm-composer">
         <textarea value={text} rows={2}
-          placeholder={'Brainstorm here — first line becomes the ticket title, the rest its scope.\nEnter to save, Shift+Enter for a new line.'}
+          placeholder={'Or jot an idea yourself — first line becomes the ticket title, the rest its scope.\nEnter to save, Shift+Enter for a new line.'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add() } }} />
       </div>

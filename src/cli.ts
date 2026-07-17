@@ -93,6 +93,19 @@ program.command('snapshot').option('--board <id>').action(async (o) => {
   console.log(JSON.stringify(snap, null, 2))
 })
 
+program.command('idea <text>').description('add a roadmap idea (first line = title)')
+  .option('--desc <d>', 'longer scope for the idea')
+  .action(async (text, o) => {
+    await up(); const b = await board()
+    const i = await api('POST', '/ideas', { board_id: b.id, text: o.desc ? `${text}\n${o.desc}` : text })
+    console.log(`idea #${i.id} added to the roadmap`)
+  })
+program.command('ideas').description('list roadmap ideas').action(async () => {
+  await up(); const b = await board()
+  const snap = await api('GET', `/boards/${b.id}/snapshot`)
+  for (const i of snap.ideas ?? []) console.log(`#${i.id} ${i.text.split('\n')[0]}`)
+})
+
 program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
   .option('--name <name>').option('--model <m>').option('--cwd <dir>')
   .action(async (o) => {

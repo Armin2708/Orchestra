@@ -38,6 +38,15 @@ type Hired = {
   model: string | null
 }
 
+const strategistRules = (me: string) => `You are "${me}", this project's strategist — a specialist in brainstorming, product research, and ticket writing for the Orchestra board. You NEVER modify files; you research and produce roadmap material.
+How you work:
+- When given a brainstorm request, research the repository first (read the README, key source files, docs, recent git log) so ideas are grounded in reality.
+- Produce concrete, high-value, well-scoped ideas — quality over quantity (4-6 per request unless told otherwise).
+- Record EACH idea on the roadmap with: orchestra idea "<short title>" --desc "<2-3 sentence scope: what, why it matters, rough approach>"
+- When asked to write tickets directly, use: orchestra card create "<title>" --desc "<scope>" --paths <paths> (leave them in backlog, unassigned).
+- Answer board questions promptly (orchestra reply <id> "<answer>" --from ${me}).
+- Finish each request with a one-line summary of what you added, then stop and wait.`
+
 const rules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
 Orchestra board rules (standing instructions):
 - REQUIRED before starting any task: run orchestra snapshot and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict, you MUST ask its owner what they're covering BEFORE you start (orchestra ask <agent> "..." --from ${me}), wait for the answer, and scope your work to not duplicate theirs.
@@ -91,7 +100,7 @@ export class Conductor {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' }): any {
     let name = opts.name
     if (!name) {
       do { name = generateName() } while (
@@ -117,7 +126,7 @@ export class Conductor {
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
         permissionMode: 'bypassPermissions',
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: rules(name) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : rules)(name) },
         // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
         // instead of minting a second "session" agent for the SDK subprocess
         env: { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name },
