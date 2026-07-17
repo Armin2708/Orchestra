@@ -1,0 +1,18 @@
+* { box-sizing: border-box; margin: 0; }
+body { font: 14px/1.45 -apple-system, system-ui, sans-serif; background: #f5f4f0; color: #1a1a1a; }
+.app header { display: flex; gap: 12px; align-items: center; padding: 12px 16px; background: #fff; border-bottom: 1px solid #e2e0da; }
+.app h1 { font-size: 16px; }
+.layout { display: grid; grid-template-columns: 220px 1fr; gap: 12px; padding: 12px; }
+aside { background: #fff; border: 1px solid #e2e0da; border-radius: 8px; padding: 12px; height: fit-content; display: grid; gap: 8px; }
+aside h2 { font-size: 12px; text-transform: uppercase; color: #6b675f; }
+.agent .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #b8b4aa; margin-right: 6px; }
+.agent.active .dot { background: #3a9e5f; }
+.agent.idle .dot { background: #d9a13b; }
+main { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; align-items: start; }
+main section { background: #ecebe6; border-radius: 8px; padding: 8px; min-height: 200px; }
+main h3 { font-size: 12px; text-transform: uppercase; color: #6b675f; padding: 4px; }
+article { background: #fff; border: 1px solid #e2e0da; border-radius: 6px; padding: 8px; margin-top: 8px; cursor: pointer; display: grid; gap: 4px; }
+article code, .drawer code { font-size: 11px; color: #6b675f; word-break: break-all; }
+.drawer { position: fixed; top: 0; right: 0; width: 380px; height: 100vh; background: #fff; border-left: 1px solid #e2e0da; padding: 16px; overflow-y: auto; display: grid; gap: 8px; align-content: start; }
+.drawer .close { justify-self: end; }
+textarea { width: 100%; min-height: 60px; }
