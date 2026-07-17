@@ -50,7 +50,7 @@ One local daemon, three thin clients over the same REST API.
 ## 3. Data model (SQLite)
 
 - **boards** — id, project_path (git root, unique), name, created_at.
-- **agents** — id, board_id, name (e.g. `crimson-otter`), session_id, status (`active | idle | gone`), last_seen, created_at. Heartbeat from throttled PreToolUse hook; reaper marks `idle` after 5 min silence, `gone` after SessionEnd or 30 min.
+- **agents** — id, board_id, name (e.g. `crimson-otter`), session_id, status (`active | idle | gone`), last_seen, created_at. Heartbeat from throttled PostToolUse hook; reaper marks `idle` after 5 min silence, `gone` after SessionEnd or 30 min.
 - **cards** — id, board_id, title, description (scope of work), column (`backlog | in_progress | blocked | review | done`), owner_agent_id, paths (JSON array of globs/paths in scope), created_at, updated_at.
 - **card_events** — id, card_id, agent_id (nullable = human), type (`created | updated | moved | comment`), payload JSON, created_at. Powers the activity feed.
 - **messages** — id, board_id, from_agent_id (nullable = human), to_agent_id (nullable = broadcast/human), card_id (nullable context), body, reply_to (nullable), delivered_at (nullable), created_at. A question is a message; an answer is a message with `reply_to`.
@@ -77,7 +77,7 @@ Shipped as a plugin (`hooks/` + a small skill telling agents board etiquette).
 
 - **SessionStart** — `agentboard join` → registers agent, exports `AGENTBOARD_AGENT`, prints (as additionalContext): board rules, current snapshot (who's active, their cards/paths), and any questions addressed to this agent's prior identity.
   Rules injected: *create a card with scope+paths before starting work; update column/description as you go; check the snapshot before touching files another card claims; use `agentboard ask` when blocked on a neighbor.*
-- **PreToolUse** (throttled to ≥30 s via timestamp file) — `agentboard pulse`: heartbeat + fetch undelivered inbox; if messages exist, emit them as hook output so they're injected mid-work; mark delivered.
+- **PostToolUse** (throttled to ≥30 s via timestamp file) — `agentboard pulse`: heartbeat + fetch undelivered inbox; if messages exist, emit them via `hookSpecificOutput.additionalContext` so they're injected mid-work; mark delivered. (PostToolUse rather than PreToolUse: it reliably supports additionalContext injection.)
 - **Stop** — mark agent `idle`; nudge (once) if agent has an `in_progress` card untouched this session ("update or move your card").
 - **SessionEnd** — mark `gone`; card stays, flagged stale on the board.
 
@@ -87,7 +87,7 @@ Env override `AGENTBOARD_NAME` lets users name agents per terminal.
 
 1. Agent A: `agentboard ask crimson-otter "are you changing the auth middleware signature?"` (optionally `--card 12`).
 2. Stored as message; web UI shows it on the board (unanswered badge).
-3. Agent B's next PreToolUse pulse delivers it into B's context; B replies: `agentboard reply <msg-id> "yes, merging tonight — hold off"`.
+3. Agent B's next PostToolUse pulse delivers it into B's context; B replies: `agentboard reply <msg-id> "yes, merging tonight — hold off"`.
 4. A receives the reply the same way. Human can ask/answer anyone from the UI; delivery identical.
 
 Broadcast supported (`--all`) for "I'm about to rebase main"-style announcements.
