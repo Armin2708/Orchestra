@@ -9,7 +9,8 @@ export const api = async (method: string, p: string, body?: unknown) => {
 
 export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string }
 export type Agent = { id: number; name: string; status: string; last_seen: string }
-export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[] }
+export type Thread = { id: number; body: string; from_name: string | null; to_name: string | null; created_at: string; answered: boolean; replies: { id: number; body: string; from_name: string | null; created_at: string }[] }
+export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[]; threads: Thread[] }
 
 // deterministic identity color per agent name — muted, editorial
 export function agentHue(name: string): number {

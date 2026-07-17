@@ -75,12 +75,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .project-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .project-crew { display: flex; }
 .project-crew .avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
-.project-questions { display: grid; gap: 6px; }
-.question-line {
-  background: #FBF3DB; color: #956400;
-  border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12px; line-height: 1.5;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.threads { display: grid; gap: 8px; }
+.thread {
+  background: #FBF3DB; border-radius: var(--radius-sm);
+  padding: 8px 12px; font-size: 12px; line-height: 1.5;
+  display: grid; gap: 4px;
 }
+.thread.answered { background: var(--bg); }
+.thread-q { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.thread .thread-text { color: #6b5b1f; }
+.thread.answered .thread-text { color: var(--ink-soft); }
+.thread-a { color: var(--ink); padding-left: 12px; border-left: 2px solid var(--line); }
+.chip-open { background: #FBF3DB; color: #956400; border: 1px solid #ecd9a4; }
+.chip-answered { background: #EDF3EC; color: #346538; }
+.thread-reply {
+  border: none; background: none; color: #956400; font-size: 11.5px; font-weight: 600;
+  padding: 0; text-align: left; width: fit-content;
+}
+.thread-reply:hover { text-decoration: underline; }
 .project-cards { display: flex; flex-direction: column; gap: 10px; }
 .col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
 

@@ -1,6 +1,41 @@
 import React, { useState } from 'react'
-import { api, Card, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Card, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
 import { CardDrawer } from './CardDrawer'
+
+function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onChange: () => void }) {
+  const [reply, setReply] = useState('')
+  const [replying, setReplying] = useState(false)
+  const send = async () => {
+    if (!reply.trim()) return
+    await api('POST', '/messages', { board_id: boardId, to: t.from_name ?? undefined, body: reply.trim(), reply_to: t.id })
+    setReply(''); setReplying(false); onChange()
+  }
+  return (
+    <div className={`thread ${t.answered ? 'answered' : ''}`}>
+      <div className="thread-q">
+        <span className="thread-text">
+          <b>{t.from_name ?? 'you'}</b> → <b>{t.to_name ?? 'everyone'}</b>: {t.body}
+        </span>
+        <span className={`status-chip ${t.answered ? 'chip-answered' : 'chip-open'}`}>
+          {t.answered ? 'Answered' : 'Open'}
+        </span>
+      </div>
+      {t.replies.map((r) => (
+        <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
+      ))}
+      {!t.answered && (replying ? (
+        <div className="add-form">
+          <input autoFocus value={reply} placeholder="Answer this question"
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') send(); if (e.key === 'Escape') setReplying(false) }} />
+          <button className="btn primary" onClick={send}>Reply</button>
+        </div>
+      ) : (
+        <button className="thread-reply" onClick={() => setReplying(true)}>Reply</button>
+      ))}
+    </div>
+  )
+}
 
 export const STATUS: Record<string, { label: string; bg: string; ink: string }> = {
   backlog: { label: 'Queued', bg: '#F1F0EC', ink: '#787774' },
@@ -43,7 +78,7 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
         {snaps.map((s) => {
           const agents = s.agents.filter((a) => a.status !== 'gone')
           const cards = [...s.cards].sort((a, b) => ORDER.indexOf(a.column) - ORDER.indexOf(b.column))
-          const openQs = s.open_questions
+          const threads = [...s.threads].sort((a, b) => Number(a.answered) - Number(b.answered)).slice(0, 6)
           return (
             <section key={s.board.id} className="project">
               <header className="project-head">
@@ -60,13 +95,9 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
                 </div>
               </header>
 
-              {openQs.length > 0 && (
-                <div className="project-questions">
-                  {openQs.map((q: any) => (
-                    <p key={q.id} className="question-line" title={q.body}>
-                      <b>{q.from_name ?? 'you'}</b> asked <b>{q.to_name ?? 'everyone'}</b>: {q.body}
-                    </p>
-                  ))}
+              {threads.length > 0 && (
+                <div className="threads">
+                  {threads.map((t) => <ThreadView key={t.id} t={t} boardId={s.board.id} onChange={onChange} />)}
                 </div>
               )}
 

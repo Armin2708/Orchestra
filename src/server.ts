@@ -62,6 +62,7 @@ export function buildServer(db: Database.Database): FastifyInstance {
         WHERE m.board_id=? AND m.reply_to IS NULL
           AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id)
         ORDER BY m.id`).all(id),
+      threads: listThreads(db, id),
     }
   })
 
@@ -204,6 +205,21 @@ export function buildServer(db: Database.Database): FastifyInstance {
   }
 
   return server
+}
+
+export function listThreads(db: Database.Database, boardId: number) {
+  const msgs = db.prepare(`
+    SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
+    LEFT JOIN agents fa ON fa.id = m.from_agent_id
+    LEFT JOIN agents ta ON ta.id = m.to_agent_id
+    WHERE m.board_id=? ORDER BY m.id`).all(boardId) as any[]
+  return msgs
+    .filter((m) => !m.reply_to)
+    .map((root) => {
+      const replies = msgs.filter((r) => r.reply_to === root.id)
+      return { ...root, replies, answered: replies.length > 0 }
+    })
+    .reverse() // newest thread first
 }
 
 export function listCards(db: Database.Database, boardId: number) {
