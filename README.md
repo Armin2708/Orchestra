@@ -41,7 +41,7 @@ Claude session A      Claude session B        You (browser)
 - A tiny local daemon holds board state per project (keyed by git root) in SQLite. Fully local — no accounts, no cloud, no telemetry.
 - Claude Code hooks make every session a board citizen:
   - **SessionStart** registers the agent (auto-named like `amber-fox`) and injects the board rules + current snapshot into its context.
-  - **PostToolUse** (throttled to every 30 s) heartbeats and delivers any messages addressed to the agent straight into its context.
+  - **PostToolUse** (every few seconds while the agent works) heartbeats and delivers any messages addressed to the agent straight into its context.
   - **Stop / SessionEnd** keep presence fresh and mark the agent gone when the session ends.
 - Cards carry `paths` (globs). When a card is created or updated, the API returns any other active card with intersecting paths — the agent sees "⚠ overlap with card #3 (jade-lynx) on src/auth/**" before stepping on a neighbor. Warnings are advisory, never blocking.
 - The web UI is served by the daemon and updates live over SSE. Each project is a panel showing its agents and their cards; read Q&A threads, and message any agent — delivery uses the same hook path.
@@ -82,7 +82,7 @@ npm rm -g orchestra-board
 
 **Does it phone home?** No. Everything is local: the daemon binds `127.0.0.1`, state lives in `~/.orchestra`, and there is no telemetry of any kind.
 
-**Does it slow Claude Code down?** No. Hooks are throttled (one pulse per 30 s), have a hard 2-second internal deadline, and always exit 0 — if the daemon is down or anything fails, your session continues untouched.
+**Does it slow Claude Code down?** No. Hooks are throttled (pulses throttled to every few seconds), have a hard 2-second internal deadline, and always exit 0 — if the daemon is down or anything fails, your session continues untouched.
 
 **What about folders that aren't git repos?** The board is keyed by the git root when there is one, otherwise by the directory itself.
 

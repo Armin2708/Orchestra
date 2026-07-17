@@ -103,7 +103,8 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: lines.join('\n') } }))
 }
 
-const postToolUse = (input: any) => deliver(input, 'PostToolUse', 30_000)
+// pulse is a ~1ms localhost call — keep the throttle just tight enough to survive tool bursts
+const postToolUse = (input: any) => deliver(input, 'PostToolUse', 5_000)
 const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
 
 async function stop(input: any): Promise<void> {

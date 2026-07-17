@@ -78,7 +78,7 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
         </ol>
 
         <h3>Message {card.owner ?? 'the board'}</h3>
-        <textarea value={comment} placeholder="Lands in the agent's context within about 30 seconds"
+        <textarea value={comment} placeholder="Lands in the agent's context within seconds if it's working, or at its next turn"
           onChange={(e) => setComment(e.target.value)} />
         <button className="btn primary" onClick={send}>Send</button>
 
