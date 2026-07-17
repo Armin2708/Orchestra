@@ -1,8 +1,78 @@
 import React, { useState } from 'react'
-import { api, Idea, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Card, Idea, Milestone, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
 import { STATUS } from './Board'
 
 const ORDER = ['backlog', 'in_progress', 'blocked', 'review', 'done']
+
+function MilestoneQuest({ m, cards, agents, onChange }:
+  { m: Milestone; cards: Card[]; agents: { id: number; name: string }[]; onChange: () => void }) {
+  const [stepTitle, setStepTitle] = useState('')
+  const steps = cards.filter((c) => c.milestone_id === m.id)
+    .sort((a, b) => (a.step_order ?? 0) - (b.step_order ?? 0))
+  const done = steps.filter((s) => s.column === 'done').length
+  const pct = steps.length ? Math.round((done / steps.length) * 100) : 0
+  const complete = steps.length > 0 && done === steps.length
+
+  const addStep = async () => {
+    if (!stepTitle.trim()) return
+    await api('POST', `/milestones/${m.id}/steps`, { title: stepTitle.trim() })
+    setStepTitle(''); onChange()
+  }
+  const assign = async (cardId: number, agent: string) => {
+    if (!agent) return
+    try { await api('POST', `/cards/${cardId}/assign`, { agent }) } catch { /* locked */ }
+    onChange()
+  }
+
+  let blocked = false
+  return (
+    <div className={complete ? 'quest complete' : 'quest'}>
+      <div className="quest-head">
+        <span className="quest-flag">{complete ? '🏆' : '⛳'}</span>
+        <div className="quest-title">
+          <h4>{m.title}</h4>
+          {m.description && <p>{m.description}</p>}
+        </div>
+        {complete && <span className="quest-badge">Complete!</span>}
+        <button className="icon-x" title="Delete milestone (steps become normal tickets)"
+          onClick={async () => { await api('DELETE', `/milestones/${m.id}`); onChange() }}>×</button>
+      </div>
+      <div className="quest-progress">
+        <div className="quest-track"><div className="quest-fill" style={{ width: `${pct}%` }} /></div>
+        <span className="quest-pct">{done}/{steps.length}</span>
+      </div>
+      <ol className="quest-steps">
+        {steps.map((s) => {
+          const locked = blocked
+          if (s.column !== 'done') blocked = true
+          const state = s.column === 'done' ? 'done' : locked ? 'locked' : s.column === 'in_progress' ? 'active' : 'open'
+          return (
+            <li key={s.id} className={`quest-step ${state}`}>
+              <span className="step-mark">
+                {state === 'done' ? '✓' : state === 'locked' ? '🔒' : state === 'active' ? '●' : '○'}
+              </span>
+              <span className="step-title">{s.title}</span>
+              {s.owner && <span className="owner"><i className="avatar mini" style={{ background: agentWash(s.owner), color: agentInk(s.owner) }}>{initials(s.owner)}</i>{s.owner}</span>}
+              {state !== 'done' && !locked && agents.length > 0 && (
+                <select className="assign-select" defaultValue=""
+                  onChange={(e) => { assign(s.id, e.target.value); e.target.value = '' }}>
+                  <option value="" disabled>assign…</option>
+                  {agents.filter((a) => a.name !== s.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+                </select>
+              )}
+              {locked && <span className="step-lockhint">complete previous step</span>}
+            </li>
+          )
+        })}
+      </ol>
+      <div className="quest-add">
+        <input value={stepTitle} placeholder="+ add a step (unlocks in order)"
+          onChange={(e) => setStepTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addStep() }} />
+      </div>
+    </div>
+  )
+}
 
 function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
   const [text, setText] = useState('')
@@ -39,7 +109,7 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
     onChange()
   }
 
-  const tickets = [...snap.cards].sort((a, b) => ORDER.indexOf(a.column) - ORDER.indexOf(b.column))
+  const tickets = snap.cards.filter((c) => !c.milestone_id).sort((a, b) => ORDER.indexOf(a.column) - ORDER.indexOf(b.column))
 
   return (
     <section className="rm-project">
@@ -61,6 +131,14 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
           placeholder={'Or jot an idea yourself — first line becomes the ticket title, the rest its scope.\nEnter to save, Shift+Enter for a new line.'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add() } }} />
+      </div>
+
+      <h3 className="rm-h">Milestones <span className="rm-count">{(snap.milestones ?? []).length}</span></h3>
+      <NewMilestone boardId={snap.board.id} onChange={onChange} />
+      <div className="quests">
+        {(snap.milestones ?? []).map((m) => (
+          <MilestoneQuest key={m.id} m={m} cards={snap.cards} agents={agents} onChange={onChange} />
+        ))}
       </div>
 
       <h3 className="rm-h">Ideas <span className="rm-count">{(snap.ideas ?? []).length}</span></h3>
@@ -108,6 +186,22 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
         {tickets.length === 0 && <p className="col-empty">No tickets yet — promote an idea.</p>}
       </div>
     </section>
+  )
+}
+
+function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => void }) {
+  const [title, setTitle] = useState('')
+  const add = async () => {
+    if (!title.trim()) return
+    await api('POST', '/milestones', { board_id: boardId, title: title.trim() })
+    setTitle(''); onChange()
+  }
+  return (
+    <div className="quest-new">
+      <input value={title} placeholder="🎯 New milestone — a major goal made of ordered steps"
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') add() }} />
+    </div>
   )
 }
 

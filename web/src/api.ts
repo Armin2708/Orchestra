@@ -9,11 +9,12 @@ export const api = async (method: string, p: string, body?: unknown) => {
   return res.json()
 }
 
-export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string }
+export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null }
 export type Agent = { id: number; name: string; status: string; last_seen: string; kind?: string; board_id?: number }
+export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }
 export type Thread = { id: number; body: string; from_name: string | null; to_name: string | null; created_at: string; answered: boolean; replies: { id: number; body: string; from_name: string | null; created_at: string }[] }
-export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[]; threads: Thread[]; ideas: Idea[] }
+export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[]; threads: Thread[]; ideas: Idea[]; milestones: Milestone[] }
 
 // deterministic identity color per agent name — muted, editorial
 export function agentHue(name: string): number {

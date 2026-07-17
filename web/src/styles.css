@@ -636,3 +636,46 @@ textarea {
 .rm-brainstorm input { flex: 1; border: none; background: none; font: inherit; font-size: 13.5px; }
 .rm-brainstorm input:focus-visible { outline: none; }
 .rm-brainstorm .btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Milestone quests ────────────────────────────── */
+.quests { display: grid; gap: 12px; }
+.quest {
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px; background: var(--surface);
+  transition: box-shadow 0.2s;
+}
+.quest:hover { box-shadow: var(--shadow-hover); }
+.quest.complete { border-color: #bcd9c0; background: #F4FAF4; }
+.quest-head { display: flex; align-items: flex-start; gap: 10px; }
+.quest-flag { font-size: 18px; }
+.quest-title { flex: 1; }
+.quest-title h4 { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+.quest-title p { font-size: 12.5px; color: var(--ink-soft); }
+.quest-badge {
+  background: #346538; color: #fff; border-radius: 9999px; padding: 2px 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+}
+.quest-progress { display: flex; align-items: center; gap: 10px; }
+.quest-track { flex: 1; height: 6px; border-radius: 99px; background: var(--bg); overflow: hidden; }
+.quest-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #D97757, #E8A87C); transition: width 0.5s var(--ease); }
+.quest.complete .quest-fill { background: #3a9e5f; }
+.quest-pct { font-family: 'SF Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-soft); }
+.quest-steps { list-style: none; padding: 0; display: grid; gap: 4px; }
+.quest-step {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-radius: 8px; font-size: 13px;
+}
+.quest-step.active { background: #FBF3DB; }
+.quest-step.done { color: var(--ink-soft); }
+.quest-step.done .step-title { text-decoration: line-through; text-decoration-color: #bcd9c0; }
+.quest-step.locked { opacity: 0.55; }
+.step-mark { width: 18px; text-align: center; flex-shrink: 0; }
+.quest-step.done .step-mark { color: #346538; font-weight: 700; }
+.quest-step.active .step-mark { color: #956400; }
+.step-title { flex: 1; }
+.step-lockhint { font-size: 11px; color: #b8b4ac; font-style: italic; }
+.quest-add input, .quest-new input {
+  width: 100%; border: 1px dashed var(--line); border-radius: var(--radius-sm);
+  padding: 7px 11px; font: inherit; font-size: 13px; background: var(--surface);
+}
+.quest-add input:focus-visible, .quest-new input:focus-visible { outline: none; border-color: #ccc8bf; border-style: solid; }

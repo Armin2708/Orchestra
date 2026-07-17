@@ -74,6 +74,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       agents: db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id),
       cards: listCards(db, id),
       ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
+      milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=? ORDER BY id`).all(id),
       open_questions: db.prepare(`
         SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
         LEFT JOIN agents fa ON fa.id = m.from_agent_id
@@ -156,6 +157,47 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { card: updated }
     })
 
+  // a step is locked while an earlier step of the same milestone isn't done
+  const isLocked = (card: any): boolean => {
+    if (!card.milestone_id || card.step_order == null) return false
+    return Boolean(db.prepare(`
+      SELECT 1 FROM cards WHERE milestone_id=? AND step_order < ? AND column_name != 'done' LIMIT 1`)
+      .get(card.milestone_id, card.step_order))
+  }
+
+  server.post<{ Body: { board_id: number; title: string; description?: string } }>('/api/v1/milestones', (req) => {
+    const { board_id, title, description = '' } = req.body
+    const { lastInsertRowid } = db.prepare(`INSERT INTO milestones (board_id, title, description) VALUES (?, ?, ?)`)
+      .run(board_id, title, description)
+    const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(lastInsertRowid))
+    emit(board_id, 'milestone', m)
+    return m
+  })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/milestones/:id', (req, reply) => {
+    const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(req.params.id)) as any
+    if (!m) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`UPDATE cards SET milestone_id=NULL, step_order=NULL WHERE milestone_id=?`).run(m.id)
+    db.prepare(`DELETE FROM milestones WHERE id=?`).run(m.id)
+    emit(m.board_id, 'milestone', { deleted: m.id })
+    return { ok: true }
+  })
+
+  server.post<{ Params: { id: string }; Body: { title: string; description?: string } }>(
+    '/api/v1/milestones/:id/steps', (req, reply) => {
+      const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(req.params.id)) as any
+      if (!m) return reply.code(404).send({ error: 'not found' })
+      const next = (db.prepare(`SELECT COALESCE(MAX(step_order), 0) AS mx FROM cards WHERE milestone_id=?`).get(m.id) as any).mx + 1
+      const { lastInsertRowid } = db.prepare(`
+        INSERT INTO cards (board_id, title, description, column_name, milestone_id, step_order)
+        VALUES (?, ?, ?, 'backlog', ?, ?)`)
+        .run(m.board_id, req.body.title, req.body.description ?? '', m.id, next)
+      const card = getCard(Number(lastInsertRowid))
+      logEvent(card.id, null, 'created', { milestone: m.title, step: next })
+      emit(m.board_id, 'card', card)
+      return { card }
+    })
+
   // ── roadmap: ideas → tickets → assignment ─────────────────────────────
   const assignmentBrief = (card: any) =>
     `You've been assigned card #${card.id}: "${card.title}".` +
@@ -218,6 +260,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.post<{ Params: { id: string }; Body: { agent: string } }>('/api/v1/cards/:id/assign', (req, reply) => {
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
+    if (isLocked(card)) return reply.code(409).send({ error: 'step is locked — complete its prerequisites first' })
     const agentRow = agentByName(card.board_id, req.body.agent)
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
     return { card: notifyAssignment(card, agentRow) }
