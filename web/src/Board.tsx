@@ -7,36 +7,41 @@ import { NetworkView } from './NetworkView'
 function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onChange: () => void }) {
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const send = async () => {
     if (!reply.trim()) return
     await api('POST', '/messages', { board_id: boardId, to: t.from_name ?? undefined, body: reply.trim(), reply_to: t.id })
     setReply(''); setReplying(false); onChange()
   }
+  const title = t.body.length > 64 ? t.body.slice(0, 64) + '…' : t.body
   return (
-    <div className={`thread ${t.answered ? 'answered' : ''}`}>
-      <div className="thread-q">
+    <div className={`thread ${t.answered ? 'answered' : ''} ${expanded ? 'expanded' : ''}`}>
+      <button className="thread-q" onClick={() => setExpanded(!expanded)}>
         <span className="thread-text">
-          <b>{t.from_name ?? 'you'}</b> → <b>{t.to_name ?? 'everyone'}</b>: {t.body}
+          <b>{t.from_name ?? 'you'}</b> → <b>{t.to_name ?? 'everyone'}</b>: {expanded ? t.body : title}
         </span>
         <span className={`status-chip ${t.answered ? 'chip-answered' : 'chip-open'}`}>
           {t.answered ? 'Answered' : 'Open'}
         </span>
-        <button className="icon-x" title="Delete question"
-          onClick={async () => { await api('DELETE', `/messages/${t.id}`); onChange() }}>×</button>
-      </div>
-      {t.replies.map((r) => (
-        <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
-      ))}
-      {!t.answered && (replying ? (
-        <div className="add-form">
-          <input autoFocus value={reply} placeholder="Answer this question"
-            onChange={(e) => setReply(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') send(); if (e.key === 'Escape') setReplying(false) }} />
-          <button className="btn primary" onClick={send}>Reply</button>
-        </div>
-      ) : (
-        <button className="thread-reply" onClick={() => setReplying(true)}>Reply</button>
-      ))}
+        <span className="thread-caret">{expanded ? '▾' : '▸'}</span>
+        <span className="icon-x" role="button" title="Delete question"
+          onClick={async (e) => { e.stopPropagation(); await api('DELETE', `/messages/${t.id}`); onChange() }}>×</span>
+      </button>
+      {expanded && <>
+        {t.replies.map((r) => (
+          <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
+        ))}
+        {!t.answered && (replying ? (
+          <div className="add-form">
+            <input autoFocus value={reply} placeholder="Answer this question"
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') send(); if (e.key === 'Escape') setReplying(false) }} />
+            <button className="btn primary" onClick={send}>Reply</button>
+          </div>
+        ) : (
+          <button className="thread-reply" onClick={() => setReplying(true)}>Reply</button>
+        ))}
+      </>}
     </div>
   )
 }
@@ -151,26 +156,17 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                   const st = STATUS[c.column] ?? STATUS.backlog
                   return (
                     <article key={c.id} className={`card ${c.column === 'done' ? 'is-done' : ''}`}
-                      style={{ ['--i' as any]: i }}
+                      style={{ ['--i' as any]: i, ['--st' as any]: st.ink }}
                       onClick={() => setOpen({ card: c, boardId: s.board.id })}>
-                      <div className="card-top">
-                        <h4>{c.title}</h4>
-                        <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{st.label}</span>
-                      </div>
-                      {c.description && <p className="card-desc">{c.description}</p>}
-                      {c.paths.length > 0 && (
-                        <div className="tags">
-                          {c.paths.slice(0, 3).map((p) => <code key={p}>{p}</code>)}
-                          {c.paths.length > 3 && <code>+{c.paths.length - 3}</code>}
-                        </div>
-                      )}
+                      <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{st.label}</span>
+                      <h4>{c.title}</h4>
                       <footer>
                         {c.owner
                           ? <span className="owner">
                               <i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>
-                              {c.owner}
+                              {c.owner.split('-')[0]}
                             </span>
-                          : <span className="owner unowned">unassigned</span>}
+                          : <span className="owner unowned">—</span>}
                         <time>{timeAgo(c.updated_at)}</time>
                       </footer>
                     </article>

@@ -30,7 +30,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* ── Top bar ─────────────────────────────────────── */
 .topbar {
   display: flex; align-items: center; gap: 24px;
-  padding: 28px 40px 20px; max-width: 1400px; margin: 0 auto;
+  padding: 24px 32px 16px;
 }
 .brand { display: flex; align-items: center; gap: 14px; margin-right: auto; }
 .mark { width: 34px; height: 34px; flex-shrink: 0; }
@@ -63,7 +63,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 /* ── Project tabs ────────────────────────────────── */
 .project-tabs {
-  max-width: 1400px; margin: 0 auto; padding: 0 40px 16px;
+  padding: 0 32px 14px;
   display: flex; gap: 6px; flex-wrap: wrap;
 }
 .tab {
@@ -81,10 +81,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tab.active .tab-count { background: rgba(255, 255, 255, 0.2); }
 
 /* ── Projects ────────────────────────────────────── */
-.projects.focused { grid-template-columns: 1fr; max-width: 860px; }
+.projects.focused { grid-template-columns: 1fr; }
 .projects {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px;
-  align-items: start; max-width: 1400px; margin: 0 auto; padding: 8px 40px 130px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 20px;
+  align-items: start; padding: 4px 32px 130px;
 }
 .project {
   background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
@@ -102,7 +102,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   display: grid; gap: 4px;
 }
 .thread.answered { background: var(--bg); }
-.thread-q { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.thread-q {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border: none; background: none; padding: 0; text-align: left; font: inherit; cursor: pointer;
+}
+.thread-q .thread-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread.expanded .thread-q .thread-text { white-space: normal; }
+.thread-caret { color: #b8b4ac; font-size: 10px; flex-shrink: 0; }
 .thread .thread-text { color: #6b5b1f; }
 .thread.answered .thread-text { color: var(--ink-soft); }
 .thread-a { color: var(--ink); padding-left: 12px; border-left: 2px solid var(--line); }
@@ -242,7 +248,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .terminal-input textarea::placeholder { color: #8d8a83; }
 .terminal-input .btn.primary { background: #E8E4DA; color: #1B1A17; align-self: flex-end; }
 .terminal-input .btn.primary:hover { background: #fff; }
-.project-cards { display: flex; flex-direction: column; gap: 10px; }
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
 
 .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -260,10 +266,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 /* ── Card ────────────────────────────────────────── */
 .card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
+  border-left: 3px solid var(--st, var(--line));
   border-radius: var(--radius);
-  padding: 14px 16px 12px;
+  padding: 10px 12px 9px;
   box-shadow: var(--shadow);
   cursor: pointer; display: grid; gap: 8px;
   animation: card-in 0.5s var(--ease) both;
@@ -273,7 +281,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .card:hover { box-shadow: var(--shadow-hover); border-color: #ddd9d0; transform: translateY(-1px); }
 .card:active { transform: scale(0.99); }
 @keyframes card-in { from { opacity: 0; transform: translateY(12px); } }
-.card h4 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; text-wrap: pretty; }
+.card h4 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; text-wrap: pretty; }
 .card-desc {
   font-size: 12.5px; color: var(--ink-soft); line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -283,7 +291,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-size: 10.5px; background: var(--bg); color: var(--ink-soft);
   border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; word-break: break-all;
 }
-.card footer { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.card footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; }
 .owner { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
 .owner.unowned { color: #b8b4ac; font-weight: 400; }
 .card time { font-size: 10.5px; color: #b8b4ac; }
