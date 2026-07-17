@@ -41,7 +41,8 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
     return () => clearInterval(t)
   }, [turn !== null])
 
-  const convo: Line[] = hired ? lines : threads
+  const convo: Line[] = hired ? lines : [...threads]
+    .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
     .flatMap((t) => [
       { kind: (t.from_name === agent.name ? 'text' : 'user') as Line['kind'],
