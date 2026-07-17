@@ -28,6 +28,14 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // grow the prompt box with its content, up to a cap — like the real cli
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+  }, [input])
   useEffect(() => { firstScroll.current = true }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
@@ -174,7 +182,7 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
 
           <div className="cc-promptbox">
             <span className="cc-prompt-caret">&gt;</span>
-            <textarea autoFocus value={input} rows={1}
+            <textarea ref={inputRef} autoFocus value={input} rows={1}
               placeholder=""
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />

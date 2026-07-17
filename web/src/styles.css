@@ -287,7 +287,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-prompt-caret { color: #999489; padding-top: 1px; }
 .cc-promptbox textarea {
   flex: 1; border: none; background: none; color: #DED9D1; resize: none;
-  font: inherit; line-height: 1.6; min-height: 22px; max-height: 160px; padding: 0;
+  font: inherit; line-height: 1.6; min-height: 22px; max-height: 180px; padding: 0;
+  overflow-y: auto;
 }
 .cc-promptbox textarea:focus-visible { outline: none; }
 .cc-hints {
