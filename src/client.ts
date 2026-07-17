@@ -12,7 +12,7 @@ export function projectPath(cwd: string = process.cwd()): string {
 export async function api(method: string, p: string, body?: unknown): Promise<any> {
   const res = await fetch(`${baseUrl()}/api/v1${p}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`${method} ${p} → ${res.status}: ${await res.text()}`)
