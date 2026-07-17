@@ -18,6 +18,7 @@ export interface ConductorLike {
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any[]
+  interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
 }
 declare module 'fastify' {
@@ -221,6 +222,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const ok = maestro.task(Number(req.params.id), req.body.text)
       return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
     })
+
+  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/interrupt', async (req, reply) => {
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+    const ok = await maestro.interruptAgent(Number(req.params.id))
+    return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
+  })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/fire', async (req, reply) => {
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })

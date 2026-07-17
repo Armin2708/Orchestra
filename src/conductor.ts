@@ -5,7 +5,23 @@ import { generateName } from './names.js'
 import { removeAgentCards } from './reaper.js'
 import { port } from './daemon.js'
 
-type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user'; text: string }
+type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result'; text: string }
+
+// one-line summary of a tool call, claude-code style: Bash(git status) / Read(src/app.ts)
+function toolSummary(name: string, input: any): string {
+  const arg = input?.command ?? input?.file_path ?? input?.path ?? input?.pattern ?? input?.url ?? input?.query
+  const s = typeof arg === 'string' ? arg : JSON.stringify(input ?? {})
+  return `${name}(${s.length > 90 ? s.slice(0, 90) + '…' : s})`
+}
+
+function resultSummary(content: unknown): string {
+  const text = typeof content === 'string' ? content
+    : Array.isArray(content) ? content.map((c: any) => c?.text ?? '').join('\n') : ''
+  const lines = text.split('\n').filter((l) => l.trim() !== '')
+  if (lines.length === 0) return '(no output)'
+  const first = lines[0].length > 110 ? lines[0].slice(0, 110) + '…' : lines[0]
+  return lines.length > 1 ? `${first}  … +${lines.length - 1} lines` : first
+}
 
 type Hired = {
   agentId: number
@@ -116,12 +132,22 @@ export class Conductor {
     void (async () => {
       try {
         for await (const m of q as AsyncIterable<any>) {
-          if (m.type === 'assistant') {
+          if (m.type === 'system' && m.subtype === 'init') {
+            log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
+          } else if (m.type === 'assistant') {
             const blocks = m.message?.content ?? []
-            for (const b of blocks) if (b.type === 'text' && b.text) log('text', b.text)
+            for (const b of blocks) {
+              if (b.type === 'text' && b.text) log('text', b.text)
+              else if (b.type === 'tool_use') log('tool', toolSummary(b.name, b.input))
+            }
             this.touch(agent.id, 'active')
+          } else if (m.type === 'user') {
+            for (const b of (Array.isArray(m.message?.content) ? m.message.content : [])) {
+              if (b.type === 'tool_result') log('tool_result', resultSummary(b.content))
+            }
           } else if (m.type === 'result') {
-            log('status', `turn finished (${m.subtype ?? 'done'})`)
+            const secs = m.duration_ms ? ` · ${(m.duration_ms / 1000).toFixed(1)}s` : ''
+            log('status', `turn finished (${m.subtype ?? 'done'})${secs}`)
             this.touch(agent.id, 'idle')
           }
         }
@@ -162,6 +188,16 @@ export class Conductor {
 
   transcript(agentId: number): TranscriptLine[] {
     return this.hired.get(agentId)?.transcript ?? []
+  }
+
+  async interruptAgent(agentId: number): Promise<boolean> {
+    const h = this.hired.get(agentId)
+    if (!h) return false
+    await h.interrupt()
+    const log = h.transcript
+    log.push({ at: new Date().toISOString(), kind: 'status', text: 'interrupted by user' })
+    this.touch(agentId, 'idle')
+    return true
   }
 
   async fire(agentId: number): Promise<boolean> {

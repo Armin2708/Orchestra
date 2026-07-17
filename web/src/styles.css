@@ -431,3 +431,25 @@ textarea {
 .net-prompt-title { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; flex-shrink: 0; }
 .net-prompt input { flex: 1; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; font-size: 13px; }
 .net-thread-q { font-size: 13px; }
+
+/* claude-code style console lines */
+.terminal-scroll { gap: 6px; }
+.cc-user { color: #C8C2B4; }
+.cc-user .cc-caret, .cc-caret { color: #8d8a83; font-weight: 700; }
+.cc-caret.big { color: #b8b4ac; font-family: 'SF Mono', ui-monospace, monospace; font-size: 14px; padding-top: 10px; }
+.cc-bullet { color: #C9A15C; }
+.cc-text { color: #E8E4DA; }
+.cc-tool { color: #E8E4DA; }
+.cc-tool b { color: #8FBF7F; font-weight: 600; }
+.cc-result { color: #8d8a83; white-space: pre-wrap; }
+.cc-status { color: #6f6c66; font-style: italic; }
+.cc-error { color: #ff8a80; }
+.cc-spinner { color: #C9A15C; }
+.cc-star { display: inline-block; animation: cc-spin 1.6s ease-in-out infinite; }
+@keyframes cc-spin { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.cc-interrupt {
+  border: 1px solid rgba(255,255,255,0.14); background: none; color: #b8b4ac;
+  border-radius: 6px; padding: 2px 9px; font-size: 11px;
+}
+.cc-interrupt:hover { color: #fff; }
+.cc-inputbox { align-items: flex-start; }

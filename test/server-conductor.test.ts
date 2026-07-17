@@ -14,6 +14,7 @@ function stubConductor(db: any): ConductorLike & { delivered: any[] } {
     deliver: (id, msg) => { delivered.push({ id, msg }); return true },
     task: () => true,
     transcript: () => [],
+    interruptAgent: async () => true,
     fire: async () => true,
   }
 }
