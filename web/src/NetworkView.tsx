@@ -2,9 +2,6 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
 import { STATUS } from './Board'
 
-// svg logical space — stretches to the container, positions are normalized 0..1
-const W = 1000, H = 600
-
 type Norm = { x: number; y: number }
 
 function loadPos(boardId: number): Record<string, Norm> {
@@ -18,6 +15,18 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
   const boardId = snap.board.id
   const agents = snap.agents.filter((a) => a.status !== 'gone')
   const wrap = useRef<HTMLDivElement>(null)
+  // real pixel size of the canvas — svg renders 1:1, so text and arrows never distort
+  const [size, setSize] = useState({ w: 1000, h: 600 })
+  useEffect(() => {
+    if (!wrap.current) return
+    const ro = new ResizeObserver(([e]) => {
+      const { width, height } = e.contentRect
+      if (width > 0 && height > 0) setSize({ w: width, h: height })
+    })
+    ro.observe(wrap.current)
+    return () => ro.disconnect()
+  }, [])
+  const W = size.w, H = size.h
   const [pos, setPos] = useState<Record<string, Norm>>(() => loadPos(boardId))
   const [openThread, setOpenThread] = useState<Thread | null>(null)
   const [promptFor, setPromptFor] = useState<Agent | null>(null)
@@ -88,7 +97,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
 
   return (
     <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
         <defs>
           <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#d9a13b" />
@@ -113,9 +122,10 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
             const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1
             const nx = -dy / len, ny = dx / len
             const cx = (x1 + x2) / 2 + nx * off * 1.6, cy = (y1 + y2) / 2 + ny * off * 1.6
-            // point on the quadratic at t=0.5 — where the question box sits
-            const mx = 0.25 * x1 + 0.5 * cx + 0.25 * x2
-            const my = 0.25 * y1 + 0.5 * cy + 0.25 * y2
+            // stagger boxes along the curve so parallel questions never collide
+            const bt = idx === 0 ? 0.5 : idx % 2 ? 0.3 : 0.7
+            const mx = (1 - bt) ** 2 * x1 + 2 * (1 - bt) * bt * cx + bt ** 2 * x2
+            const my = (1 - bt) ** 2 * y1 + 2 * (1 - bt) * bt * cy + bt ** 2 * y2
             const label = t.body.length > 26 ? t.body.slice(0, 26) + '…' : t.body
             const cls = t.answered ? 'done' : 'open'
             return (
