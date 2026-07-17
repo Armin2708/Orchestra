@@ -129,6 +129,43 @@ export function buildServer(db: Database.Database): FastifyInstance {
     db.prepare(`SELECT e.*, a.name AS agent FROM card_events e LEFT JOIN agents a ON a.id=e.agent_id WHERE card_id=? ORDER BY e.id`)
       .all(Number(req.params.id)))
 
+  server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number } }>(
+    '/api/v1/messages', (req) => {
+      const { board_id, from, to, card_id, body, reply_to } = req.body
+      const fromA = agentByName(board_id, from), toA = agentByName(board_id, to)
+      const { lastInsertRowid } = db.prepare(`
+        INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, body, reply_to)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(board_id, fromA?.id ?? null, toA?.id ?? null, card_id ?? null, body, reply_to ?? null)
+      const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid))
+      emit(board_id, 'message', msg)
+      return msg
+    })
+
+  const inboxSql = `
+    SELECT m.*, fa.name AS from_name FROM messages m
+    LEFT JOIN agents fa ON fa.id = m.from_agent_id
+    WHERE m.board_id = ? AND (m.from_agent_id IS NULL OR m.from_agent_id != ?)
+      AND (m.to_agent_id = ?
+           OR m.reply_to IN (SELECT id FROM messages WHERE from_agent_id = ?)
+           OR m.to_agent_id IS NULL)`
+
+  server.get<{ Params: { id: string } }>('/api/v1/agents/:id/inbox', (req) => {
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+    return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id)
+  })
+
+  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/pulse', (req) => {
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+    db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
+    const messages = db.prepare(inboxSql + ` AND m.delivered_at IS NULL ORDER BY m.id`)
+      .all(a.board_id, a.id, a.id, a.id) as any[]
+    const mark = db.prepare(`UPDATE messages SET delivered_at=datetime('now') WHERE id=?`)
+    db.transaction(() => messages.forEach((m) => mark.run(m.id)))()
+    emit(a.board_id, 'agent', db.prepare(`SELECT * FROM agents WHERE id=?`).get(a.id))
+    return { agent: a, messages }
+  })
+
   return server
 }
 
