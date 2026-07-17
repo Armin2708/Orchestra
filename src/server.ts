@@ -159,13 +159,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       .all(Number(req.params.id)))
 
   server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number } }>(
-    '/api/v1/messages', (req) => {
+    '/api/v1/messages', (req, reply) => {
       const { board_id, from, to, card_id, body, reply_to } = req.body
       const fromA = agentByName(board_id, from), toA = agentByName(board_id, to)
+      // a typo'd recipient must fail loudly, not silently become a broadcast
+      if (to && !toA) return reply.code(400).send({ error: `no agent named "${to}" on this board` })
+      // a reply without an explicit recipient targets the original sender, not the whole board
+      let toId = toA?.id ?? null
+      if (toId === null && reply_to) {
+        const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
+        toId = orig?.from_agent_id ?? null
+      }
       const { lastInsertRowid } = db.prepare(`
         INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, body, reply_to)
         VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(board_id, fromA?.id ?? null, toA?.id ?? null, card_id ?? null, body, reply_to ?? null)
+        .run(board_id, fromA?.id ?? null, toId, card_id ?? null, body, reply_to ?? null)
       let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
       // hired agents get instant delivery — no waiting for a hook to fire
       const targets = new Set<number>()
@@ -174,9 +182,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
         if (orig?.from_agent_id && maestro?.isHired(orig.from_agent_id)) targets.add(orig.from_agent_id)
       }
+      if (!toA && !reply_to) {
+        // broadcast: every hired agent on the board except the sender hears it now
+        for (const a of db.prepare(`SELECT id FROM agents WHERE board_id=? AND kind='hired' AND status != 'gone'`).all(board_id) as any[]) {
+          if (a.id !== fromA?.id && maestro?.isHired(a.id)) targets.add(a.id)
+        }
+      }
+      const markDelivered = db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
       for (const id of targets) {
         if (maestro!.deliver(id, { ...msg, from_name: fromA?.name ?? null })) {
-          db.prepare(`UPDATE messages SET delivered_at=datetime('now') WHERE id=?`).run(msg.id)
+          markDelivered.run(msg.id, id)
+          db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(msg.id)
         }
       }
       if (targets.size) msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
@@ -223,7 +239,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     WHERE m.board_id = ? AND (m.from_agent_id IS NULL OR m.from_agent_id != ?)
       AND (m.to_agent_id = ?
            OR m.reply_to IN (SELECT id FROM messages WHERE from_agent_id = ?)
-           OR m.to_agent_id IS NULL)`
+           OR (m.to_agent_id IS NULL AND m.reply_to IS NULL))`
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/inbox', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
@@ -282,10 +298,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/pulse', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
-    const messages = db.prepare(inboxSql + ` AND m.delivered_at IS NULL ORDER BY m.id`)
-      .all(a.board_id, a.id, a.id, a.id) as any[]
-    const mark = db.prepare(`UPDATE messages SET delivered_at=datetime('now') WHERE id=?`)
-    db.transaction(() => messages.forEach((m) => mark.run(m.id)))()
+    // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
+    const messages = db.prepare(inboxSql +
+      ` AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.id AND d.agent_id = ?) ORDER BY m.id`)
+      .all(a.board_id, a.id, a.id, a.id, a.id) as any[]
+    const mark = db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
+    const stamp = db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`)
+    db.transaction(() => messages.forEach((m) => { mark.run(m.id, a.id); stamp.run(m.id) }))()
     emit(a.board_id, 'agent', db.prepare(`SELECT * FROM agents WHERE id=?`).get(a.id))
     return { agent: a, messages }
   })
