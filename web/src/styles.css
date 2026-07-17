@@ -291,3 +291,4 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   display: flex; justify-content: space-between; padding: 6px 2px 0;
   color: #6f6b64; font-size: 11.5px;
 }
+.cc-thinking { color: #8a867e; font-style: italic; }

@@ -5,7 +5,7 @@ import { generateName } from './names.js'
 import { removeAgentCards } from './reaper.js'
 import { port } from './daemon.js'
 
-type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result'; text: string }
+type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
 // one-line summary of a tool call, claude-code style: Bash(git status) / Read(src/app.ts)
 function toolSummary(name: string, input: any): string {
@@ -32,6 +32,8 @@ type Hired = {
   end: () => void
   interrupt: () => Promise<void>
   transcript: TranscriptLine[]
+  turnStart: number | null
+  turnTokens: number
 }
 
 const rules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
@@ -122,9 +124,15 @@ export class Conductor {
 
     const hired: Hired = {
       agentId: agent.id, boardId: opts.boardId, name, cwd: opts.cwd,
-      push: (text: string) => { log('user', text); input.push(text) }, end: input.end,
+      push: (text: string) => {
+        log('user', text)
+        if (hired.turnStart === null) { hired.turnStart = Date.now(); hired.turnTokens = 0 }
+        input.push(text)
+      },
+      end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
+      turnStart: null, turnTokens: 0,
     }
     this.hired.set(agent.id, hired)
     log('status', `hired in ${opts.cwd}`)
@@ -135,9 +143,12 @@ export class Conductor {
           if (m.type === 'system' && m.subtype === 'init') {
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
           } else if (m.type === 'assistant') {
+            if (hired.turnStart === null) hired.turnStart = Date.now()
+            hired.turnTokens += m.message?.usage?.output_tokens ?? 0
             const blocks = m.message?.content ?? []
             for (const b of blocks) {
               if (b.type === 'text' && b.text) log('text', b.text)
+              else if (b.type === 'thinking' && b.thinking?.trim()) log('thinking', b.thinking)
               else if (b.type === 'tool_use') log('tool', toolSummary(b.name, b.input))
             }
             this.touch(agent.id, 'active')
@@ -148,6 +159,8 @@ export class Conductor {
           } else if (m.type === 'result') {
             const secs = m.duration_ms ? ` · ${(m.duration_ms / 1000).toFixed(1)}s` : ''
             log('status', `turn finished (${m.subtype ?? 'done'})${secs}`)
+            hired.turnStart = null
+            hired.turnTokens = 0
             this.touch(agent.id, 'idle')
           }
         }
@@ -186,8 +199,13 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): TranscriptLine[] {
-    return this.hired.get(agentId)?.transcript ?? []
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null } {
+    const h = this.hired.get(agentId)
+    if (!h) return { lines: [], working: null }
+    return {
+      lines: h.transcript,
+      working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
+    }
   }
 
   async interruptAgent(agentId: number): Promise<boolean> {

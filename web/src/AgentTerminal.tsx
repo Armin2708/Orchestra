@@ -1,26 +1,45 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Thread } from './api'
 
-type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result'; text: string }
+type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
+
+// claude-code's whimsical working gerunds
+const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolating', 'Ruminating',
+  'Marinating', 'Brewing', 'Conjuring', 'Scheming', 'Tinkering', 'Musing', 'Whirring', 'Puzzling',
+  'Simmering', 'Crunching', 'Weaving', 'Hatching', 'Composing', 'Orchestrating', 'Grooving', 'Vibing']
+
+const fmtTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
 export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
+  const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
   const [input, setInput] = useState('')
-  const [now, setNow] = useState(Date.now())
-  const workingSince = useRef<number | null>(null)
+  const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // hired agents stream their real transcript; terminal agents show the board conversation
   useEffect(() => {
     if (!hired) return
     let alive = true
-    const load = () => api('GET', `/agents/${agent.id}/transcript`).then((l) => { if (alive) setLines(l) }).catch(() => {})
+    const load = () => api('GET', `/agents/${agent.id}/transcript`).then((r) => {
+      if (!alive) return
+      setLines(r.lines ?? r)
+      setTurn(r.working ?? null)
+    }).catch(() => {})
     load()
-    const t = setInterval(() => { load(); setNow(Date.now()) }, 1000)
+    const t = setInterval(load, 1000)
     return () => { alive = false; clearInterval(t) }
   }, [agent.id, hired])
+
+  // rotate the working word every so often, like the real thing
+  useEffect(() => {
+    if (!turn) return
+    const t = setInterval(() => setGerund(GERUNDS[Math.floor(Math.random() * GERUNDS.length)]), 9000)
+    return () => clearInterval(t)
+  }, [turn !== null])
 
   const convo: Line[] = hired ? lines : threads
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
@@ -33,10 +52,7 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
       })),
     ])
 
-  const working = hired && agent.status === 'active'
-  if (working && workingSince.current === null) workingSince.current = Date.now()
-  if (!working) workingSince.current = null
-  const workedSecs = workingSince.current ? Math.max(1, Math.round((now - workingSince.current) / 1000)) : 0
+  const working = hired && turn !== null
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -65,6 +81,8 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
       }
       case 'tool_result':
         return <p key={i} className="cc-result">⎿  {l.text}</p>
+      case 'thinking':
+        return <p key={i} className="cc-thinking">✻ {l.text}</p>
       case 'status':
         return <p key={i} className="cc-status">{l.text}</p>
       case 'error':
@@ -93,8 +111,12 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
                 {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
               </p>
             )}
-            {working && (
-              <p className="cc-spinner"><span className="cc-star">✳</span> Working… ({workedSecs}s · <button className="cc-esc" onClick={interrupt}>esc</button> to interrupt)</p>
+            {working && turn && (
+              <p className="cc-spinner">
+                <span className="cc-star">✳</span> {gerund}… ({fmtSecs(turn.secs)}
+                {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>}
+                {' · '}<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt)
+              </p>
             )}
           </div>
 

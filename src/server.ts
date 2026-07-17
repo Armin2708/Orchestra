@@ -17,7 +17,7 @@ export interface ConductorLike {
   hire(opts: { boardId: number; cwd: string; name?: string; model?: string }): any
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
-  transcript(agentId: number): any[]
+  transcript(agentId: number): any
   interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
 }

@@ -13,7 +13,7 @@ function stubConductor(db: any): ConductorLike & { delivered: any[] } {
     },
     deliver: (id, msg) => { delivered.push({ id, msg }); return true },
     task: () => true,
-    transcript: () => [],
+    transcript: () => ({ lines: [], working: null }),
     interruptAgent: async () => true,
     fire: async () => true,
   }
