@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import { api, Card, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, agentInk, agentWash, initials, timeAgo } from './api'
 import { STATUS } from './Board'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
 }
 
-export function CardDrawer({ card, boardId, onClose, onChange }:
-  { card: Card; boardId: number; onClose: () => void; onChange: () => void }) {
+export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
+  { card: Card; boardId: number; agents?: Agent[]; onClose: () => void; onChange: () => void }) {
   const [events, setEvents] = useState<any[]>([])
   const [comment, setComment] = useState('')
   const [editingDesc, setEditingDesc] = useState(false)
@@ -48,6 +48,17 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
           {card.owner
             ? <><i className="avatar mini" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>{initials(card.owner)}</i> {card.owner}</>
             : 'unassigned'} · updated {timeAgo(card.updated_at)}
+          {agents.length > 0 && (
+            <select className="assign-select" defaultValue="" title="Assign this ticket — the agent gets briefed and starts"
+              onChange={async (e) => {
+                if (!e.target.value) return
+                await api('POST', `/cards/${card.id}/assign`, { agent: e.target.value })
+                e.target.value = ''; onChange()
+              }}>
+              <option value="" disabled>assign…</option>
+              {agents.filter((a) => a.name !== card.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+            </select>
+          )}
         </p>
 
         <h3>Scope</h3>

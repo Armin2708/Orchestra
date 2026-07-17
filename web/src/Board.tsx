@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, Idea, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
 import { CardDrawer } from './CardDrawer'
 import { AgentTerminal } from './AgentTerminal'
 import { NetworkView } from './NetworkView'
@@ -54,6 +54,47 @@ export const STATUS: Record<string, { label: string; bg: string; ink: string }> 
   done: { label: 'Done', bg: '#EDF3EC', ink: '#346538' },
 }
 const ORDER = ['in_progress', 'blocked', 'review', 'backlog', 'done']
+
+function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
+  const [text, setText] = useState('')
+  const agents = snap.agents.filter((a) => a.status !== 'gone')
+  const add = async () => {
+    if (!text.trim()) return
+    await api('POST', '/ideas', { board_id: snap.board.id, text: text.trim() })
+    setText(''); onChange()
+  }
+  const promote = async (idea: Idea, agent: string) => {
+    await api('POST', `/ideas/${idea.id}/promote`, agent ? { agent } : {})
+    onChange()
+  }
+  return (
+    <div className="ideas">
+      <div className="ideas-row">
+        <span className="ideas-label">Roadmap</span>
+        <input value={text} placeholder="Brainstorm an idea… (Enter to save)"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') add() }} />
+      </div>
+      {(snap.ideas ?? []).length > 0 && (
+        <div className="idea-chips">
+          {(snap.ideas ?? []).map((i) => (
+            <span key={i.id} className="idea">
+              <span className="idea-text" title={i.text}>{i.text.split('\n')[0]}</span>
+              <select defaultValue="" title="Turn into a ticket"
+                onChange={(e) => { if (e.target.value !== '') promote(i, e.target.value === '·' ? '' : e.target.value) }}>
+                <option value="" disabled>→ ticket</option>
+                <option value="·">unassigned</option>
+                {agents.map((a) => <option key={a.id} value={a.name}>assign {a.name}</option>)}
+              </select>
+              <button className="icon-x" title="Delete idea"
+                onClick={async () => { await api('DELETE', `/ideas/${i.id}`); onChange() }}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () => void }) {
   const [arming, setArming] = useState(false)
@@ -145,6 +186,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                   onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
                   onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })} />
               ) : (<>
+              <IdeaStrip snap={s} onChange={onChange} />
               {threads.length > 0 && (
                 <div className="threads">
                   {threads.map((t) => <ThreadView key={t.id} t={t} boardId={s.board.id} onChange={onChange} />)}
@@ -217,6 +259,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
       </div>
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
+        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone')}
         onClose={() => setOpen(null)} onChange={onChange} />}
       {terminal && <AgentTerminal
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}

@@ -39,6 +39,12 @@ export function openDb(file: string): Database.Database {
     payload TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS ideas (
+    id INTEGER PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES boards(id),
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS deliveries (
     message_id INTEGER NOT NULL,
     agent_id INTEGER NOT NULL,

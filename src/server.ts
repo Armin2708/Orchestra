@@ -73,6 +73,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       board: db.prepare(`SELECT * FROM boards WHERE id=?`).get(id),
       agents: db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id),
       cards: listCards(db, id),
+      ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
       open_questions: db.prepare(`
         SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
         LEFT JOIN agents fa ON fa.id = m.from_agent_id
@@ -154,6 +155,73 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       emit(card.board_id, 'card', updated)
       return { card: updated }
     })
+
+  // ── roadmap: ideas → tickets → assignment ─────────────────────────────
+  const assignmentBrief = (card: any) =>
+    `You've been assigned card #${card.id}: "${card.title}".` +
+    (card.description ? ` Scope: ${card.description}.` : '') +
+    ` Start now; keep the card updated (orchestra card update ${card.id} / orchestra card move ${card.id} <column>) and move it to done when finished.`
+
+  const notifyAssignment = (card: any, agentRow: any) => {
+    db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
+      .run(agentRow.id, card.id)
+    const updated = getCard(card.id)
+    logEvent(card.id, agentRow.id, 'updated', { assigned_to: agentRow.name })
+    emit(card.board_id, 'card', updated)
+    const brief = assignmentBrief(updated)
+    if (maestro?.isHired(agentRow.id)) {
+      maestro.task(agentRow.id, brief)
+    } else {
+      const { lastInsertRowid } = db.prepare(`
+        INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
+        .run(card.board_id, agentRow.id, card.id, brief)
+      emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
+    }
+    return updated
+  }
+
+  server.post<{ Body: { board_id: number; text: string } }>('/api/v1/ideas', (req) => {
+    const { board_id, text } = req.body
+    const { lastInsertRowid } = db.prepare(`INSERT INTO ideas (board_id, text) VALUES (?, ?)`).run(board_id, text)
+    const idea = db.prepare(`SELECT * FROM ideas WHERE id=?`).get(Number(lastInsertRowid))
+    emit(board_id, 'idea', idea)
+    return idea
+  })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/ideas/:id', (req, reply) => {
+    const idea = db.prepare(`SELECT * FROM ideas WHERE id=?`).get(Number(req.params.id)) as any
+    if (!idea) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM ideas WHERE id=?`).run(idea.id)
+    emit(idea.board_id, 'idea', { deleted: idea.id })
+    return { ok: true }
+  })
+
+  // idea becomes a ticket; optionally assigned (and briefed) in the same step
+  server.post<{ Params: { id: string }; Body: { agent?: string } }>('/api/v1/ideas/:id/promote', (req, reply) => {
+    const idea = db.prepare(`SELECT * FROM ideas WHERE id=?`).get(Number(req.params.id)) as any
+    if (!idea) return reply.code(404).send({ error: 'not found' })
+    const [title, ...rest] = idea.text.split('\n')
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO cards (board_id, title, description, column_name) VALUES (?, ?, ?, 'backlog')`)
+      .run(idea.board_id, title.slice(0, 200), rest.join('\n').trim())
+    let card = getCard(Number(lastInsertRowid))
+    logEvent(card.id, null, 'created', { from_idea: idea.id })
+    db.prepare(`DELETE FROM ideas WHERE id=?`).run(idea.id)
+    emit(idea.board_id, 'idea', { deleted: idea.id })
+    emit(idea.board_id, 'card', card)
+    const agentRow = agentByName(idea.board_id, req.body?.agent)
+    if (req.body?.agent && !agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
+    if (agentRow) card = notifyAssignment(card, agentRow)
+    return { card }
+  })
+
+  server.post<{ Params: { id: string }; Body: { agent: string } }>('/api/v1/cards/:id/assign', (req, reply) => {
+    const card = getCard(Number(req.params.id))
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    const agentRow = agentByName(card.board_id, req.body.agent)
+    if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
+    return { card: notifyAssignment(card, agentRow) }
+  })
 
   server.get<{ Params: { id: string } }>('/api/v1/cards/:id/events', (req) =>
     db.prepare(`SELECT e.*, a.name AS agent FROM card_events e LEFT JOIN agents a ON a.id=e.agent_id WHERE card_id=? ORDER BY e.id`)
