@@ -47,19 +47,22 @@ async function sessionStart(input: any): Promise<void> {
   console.log(lines.join('\n'))
 }
 
-async function postToolUse(input: any): Promise<void> {
+async function deliver(input: any, hookEventName: string, throttleMs: number): Promise<void> {
   const sess = loadSession(input.session_id)
   if (!sess) return
   const throttle = sessFile(input.session_id) + '.throttle'
-  try {
-    if (Date.now() - fs.statSync(throttle).mtimeMs < 30_000) return
-  } catch { /* first run */ }
+  if (throttleMs > 0) {
+    try {
+      if (Date.now() - fs.statSync(throttle).mtimeMs < throttleMs) return
+    } catch { /* first run */ }
+  }
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`)
   const lines = r.messages.map((m: any) =>
-    `orchestra message from ${m.from_name ?? 'human'}: ${m.body}` +
-    (m.reply_to ? ` (reply to your msg #${m.reply_to})` : ` — reply with: orchestra reply ${m.id} "..."`))
+    `orchestra message from ${m.from_name ?? 'human'}: "${m.body}"` +
+    (m.reply_to ? ` (this answers your msg #${m.reply_to})`
+      : ` — answer it now with: orchestra reply ${m.id} "<answer>", then continue your task.`))
   // one-time nudge if the agent is working without a card on the board
   const nudged = sessFile(input.session_id) + '.nudged'
   if (!fs.existsSync(nudged)) {
@@ -71,12 +74,16 @@ async function postToolUse(input: any): Promise<void> {
     }
   }
   if (lines.length === 0) return
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: lines.join('\n') } }))
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: lines.join('\n') } }))
 }
+
+const postToolUse = (input: any) => deliver(input, 'PostToolUse', 30_000)
+const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
 
 async function stop(input: any): Promise<void> {
   const sess = loadSession(input.session_id)
-  if (sess) await api('POST', `/agents/${sess.agent_id}/pulse`)
+  // heartbeat only — pulse would consume undelivered messages with no way to show them
+  if (sess) await api('POST', `/agents/${sess.agent_id}/heartbeat`)
 }
 
 async function sessionEnd(input: any): Promise<void> {
@@ -93,6 +100,7 @@ export async function runHook(event: string): Promise<void> {
     const input = JSON.parse((await _internals.readStdin()) || '{}')
     if (event === 'session-start') await sessionStart(input)
     else if (event === 'post-tool-use') await postToolUse(input)
+    else if (event === 'user-prompt-submit') await userPromptSubmit(input)
     else if (event === 'stop') await stop(input)
     else if (event === 'session-end') await sessionEnd(input)
   })()

@@ -38,6 +38,30 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
   expect(payload.hookSpecificOutput.additionalContext).toContain('status?')
 })
 
+it('stop does not consume messages; user-prompt-submit delivers them', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess2', cwd: '/tmp' }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start')
+  const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess2.json'), 'utf8'))
+  await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, to: sess.agent_name, body: 'are you blocked?' }),
+  })
+
+  out.length = 0
+  await hooks.runHook('stop') // turn ends — must NOT swallow the pending question
+  expect(out.join('\n')).toBe('')
+
+  out.length = 0
+  await hooks.runHook('user-prompt-submit') // next turn starts — question arrives
+  const payload = JSON.parse(out.join('\n'))
+  expect(payload.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit')
+  expect(payload.hookSpecificOutput.additionalContext).toContain('are you blocked?')
+})
+
 it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
   process.env.ORCHESTRA_PORT = '1' // nothing listening

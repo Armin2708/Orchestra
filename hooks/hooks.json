@@ -40,6 +40,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@latest hook user-prompt-submit"
+          }
+        ]
+      }
     ]
   }
 }

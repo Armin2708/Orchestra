@@ -157,6 +157,14 @@ export function buildServer(db: Database.Database): FastifyInstance {
     return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id)
   })
 
+  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/heartbeat', (req) => {
+    const id = Number(req.params.id)
+    db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+    if (a) emit(a.board_id, 'agent', a)
+    return a ?? {}
+  })
+
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/pulse', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)

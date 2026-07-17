@@ -6,6 +6,7 @@ const MARKER = 'orchestra hook'
 const HOOKS: Record<string, any> = {
   SessionStart: { hooks: [{ type: 'command', command: `${MARKER} session-start` }] },
   PostToolUse: { matcher: '*', hooks: [{ type: 'command', command: `${MARKER} post-tool-use` }] },
+  UserPromptSubmit: { hooks: [{ type: 'command', command: `${MARKER} user-prompt-submit` }] },
   Stop: { hooks: [{ type: 'command', command: `${MARKER} stop` }] },
   SessionEnd: { hooks: [{ type: 'command', command: `${MARKER} session-end` }] },
 }
