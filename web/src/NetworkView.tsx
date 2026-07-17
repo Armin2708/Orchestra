@@ -1,73 +1,148 @@
-import React from 'react'
-import { Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
+import React, { useEffect, useRef, useState } from 'react'
+import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
 import { STATUS } from './Board'
 
-type Pos = { x: number; y: number }
+// svg logical space — stretches to the container, positions are normalized 0..1
+const W = 1000, H = 600
+
+type Norm = { x: number; y: number }
+
+function loadPos(boardId: number): Record<string, Norm> {
+  try { return JSON.parse(localStorage.getItem(`orchestra-net-${boardId}`) ?? '{}') } catch { return {} }
+}
+
+const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T') + 'Z').getTime()
 
 export function NetworkView({ snap, onOpenCard, onOpenAgent }:
   { snap: Snapshot; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void }) {
-  const W = 860, H = 520
+  const boardId = snap.board.id
   const agents = snap.agents.filter((a) => a.status !== 'gone')
+  const wrap = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<Record<string, Norm>>(() => loadPos(boardId))
+  const [openThread, setOpenThread] = useState<Thread | null>(null)
+  const [promptFor, setPromptFor] = useState<Agent | null>(null)
+  const [prompt, setPrompt] = useState('')
+  const [reply, setReply] = useState('')
+  const drag = useRef<{ name: string; moved: boolean } | null>(null)
 
-  // "you" sits at the center; agents ring around it
-  const pos = new Map<string, Pos>()
-  pos.set('you', { x: W / 2, y: H / 2 })
-  agents.forEach((a, i) => {
-    const angle = (2 * Math.PI * i) / Math.max(agents.length, 1) - Math.PI / 2
-    pos.set(a.name, {
-      x: W / 2 + Math.cos(angle) * (W / 2 - 150),
-      y: H / 2 + Math.sin(angle) * (H / 2 - 110),
-    })
+  useEffect(() => setPos(loadPos(boardId)), [boardId])
+
+  // default layout: you center, agents ringed
+  const place = (name: string, i: number, n: number): Norm => {
+    if (pos[name]) return pos[name]
+    if (name === 'you') return { x: 0.5, y: 0.5 }
+    const angle = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2
+    return { x: 0.5 + Math.cos(angle) * 0.34, y: 0.5 + Math.sin(angle) * 0.36 }
+  }
+  const nodes = new Map<string, Norm>()
+  nodes.set('you', place('you', 0, 1))
+  agents.forEach((a, i) => nodes.set(a.name, place(a.name, i, agents.length)))
+
+  const startDrag = (name: string) => (e: React.PointerEvent) => {
+    e.preventDefault()
+    drag.current = { name, moved: false }
+    ;(e.target as Element).setPointerCapture?.(e.pointerId)
+  }
+  const onMove = (e: React.PointerEvent) => {
+    if (!drag.current || !wrap.current) return
+    const r = wrap.current.getBoundingClientRect()
+    drag.current.moved = true
+    const next = {
+      x: Math.min(0.96, Math.max(0.04, (e.clientX - r.left) / r.width)),
+      y: Math.min(0.92, Math.max(0.06, (e.clientY - r.top) / r.height)),
+    }
+    setPos((p) => ({ ...p, [drag.current!.name]: next }))
+  }
+  const endDrag = (a?: Agent) => () => {
+    if (!drag.current) return
+    const wasDrag = drag.current.moved
+    drag.current = null
+    setPos((p) => { localStorage.setItem(`orchestra-net-${boardId}`, JSON.stringify(p)); return p })
+    if (!wasDrag && a) setPromptFor(a) // click (no movement) opens the prompt box
+  }
+
+  // one edge per question; answered ones linger green for 3 minutes, then vanish
+  const edges = (snap.threads as Thread[]).filter((t) => {
+    const src = t.from_name ?? 'you', dst = t.to_name ?? 'you'
+    if (src === dst || !nodes.has(src) || !nodes.has(dst)) return false
+    if (!t.answered) return true
+    const last = t.replies[t.replies.length - 1]
+    return last ? ageMs(last.created_at) < 180_000 : false
   })
 
-  // aggregate threads into edges between participants
-  type Edge = { a: string; b: string; total: number; open: number }
-  const edges = new Map<string, Edge>()
-  for (const t of snap.threads as Thread[]) {
-    const a = t.from_name ?? 'you'
-    const b = t.to_name ?? 'you'
-    if (a === b || !pos.has(a) || !pos.has(b)) continue
-    const key = [a, b].sort().join('→')
-    const e = edges.get(key) ?? { a, b, total: 0, open: 0 }
-    e.total++
-    if (!t.answered) e.open++
-    edges.set(key, e)
+  const sendPrompt = async () => {
+    if (!promptFor || !prompt.trim()) return
+    await api('POST', '/messages', { board_id: boardId, to: promptFor.name, body: prompt.trim() })
+    setPrompt(''); setPromptFor(null)
+  }
+  const sendReply = async () => {
+    if (!openThread || !reply.trim()) return
+    await api('POST', '/messages', { board_id: boardId, body: reply.trim(), reply_to: openThread.id })
+    setReply(''); setOpenThread(null)
   }
 
   const cardsFor = (name: string) =>
     snap.cards.filter((c) => c.owner === name && c.column !== 'done').slice(0, 3)
 
+  const P = (name: string) => nodes.get(name)!
+
   return (
-    <div className="network" style={{ aspectRatio: `${W} / ${H}` }}>
+    <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()} style={{ aspectRatio: `${W} / ${H}` }}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        {[...edges.values()].map((e) => {
-          const pa = pos.get(e.a)!, pb = pos.get(e.b)!
-          const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2
-          return (
-            <g key={`${e.a}${e.b}`}>
-              <line x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-                className={e.open > 0 ? 'edge open' : 'edge'} />
-              <circle cx={mx} cy={my} r={13} className={e.open > 0 ? 'edge-bubble open' : 'edge-bubble'} />
-              <text x={mx} y={my + 4} className="edge-count">{e.open > 0 ? e.open : e.total}</text>
-            </g>
-          )
-        })}
+        <defs>
+          <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d9a13b" />
+          </marker>
+          <marker id="arrow-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a9e5f" />
+          </marker>
+        </defs>
+        {(() => {
+          // spread multiple questions between the same pair onto parallel curves
+          const byPair = new Map<string, number>()
+          return edges.map((t) => {
+            const src = t.from_name ?? 'you', dst = t.to_name ?? 'you'
+            const key = [src, dst].sort().join('→')
+            const idx = byPair.get(key) ?? 0
+            byPair.set(key, idx + 1)
+            const a = P(src), b = P(dst)
+            const x1 = (a.x + (b.x - a.x) * 0.12) * W, y1 = (a.y + (b.y - a.y) * 0.14) * H
+            const x2 = (a.x + (b.x - a.x) * 0.86) * W, y2 = (a.y + (b.y - a.y) * 0.84) * H
+            // perpendicular offset: 0, +52, -52, +104, ...
+            const off = (idx % 2 === 0 ? 1 : -1) * Math.ceil(idx / 2) * 104 + (idx === 0 ? 0 : 0)
+            const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1
+            const nx = -dy / len, ny = dx / len
+            const cx = (x1 + x2) / 2 + nx * off * 1.6, cy = (y1 + y2) / 2 + ny * off * 1.6
+            // point on the quadratic at t=0.5 — where the question box sits
+            const mx = 0.25 * x1 + 0.5 * cx + 0.25 * x2
+            const my = 0.25 * y1 + 0.5 * cy + 0.25 * y2
+            const label = t.body.length > 26 ? t.body.slice(0, 26) + '…' : t.body
+            const cls = t.answered ? 'done' : 'open'
+            return (
+              <g key={t.id} className={`q-edge ${cls}`} onClick={() => { setOpenThread(t); setReply('') }}>
+                <path d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`} fill="none" className={`edge ${cls}`} markerEnd={`url(#arrow-${cls})`} />
+                <rect x={mx - 92} y={my - 15} width={184} height={30} rx={7} className={`q-box ${cls}`} />
+                <text x={mx} y={my + 4} className={`q-text ${cls}`}>{label}</text>
+              </g>
+            )
+          })
+        })()}
       </svg>
 
       {/* you */}
-      <div className="net-node you" style={{ left: `${(pos.get('you')!.x / W) * 100}%`, top: `${(pos.get('you')!.y / H) * 100}%` }}>
-        <span className="net-avatar human">you</span>
+      <div className="net-node" style={{ left: `${P('you').x * 100}%`, top: `${P('you').y * 100}%` }}>
+        <span className="net-avatar human" onPointerDown={startDrag('you')} onPointerUp={endDrag()}>you</span>
       </div>
 
       {agents.map((a) => {
-        const p = pos.get(a.name)!
+        const p = P(a.name)
         const mine = cardsFor(a.name)
         return (
-          <div key={a.id} className="net-node" style={{ left: `${(p.x / W) * 100}%`, top: `${(p.y / H) * 100}%` }}>
-            <span className={`net-avatar ${a.status} ${a.kind === 'hired' ? 'hired clickable' : ''}`}
+          <div key={a.id} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
+            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-              title={a.kind === 'hired' ? `${a.name} · open console` : a.name}
-              onClick={a.kind === 'hired' ? () => onOpenAgent(a) : undefined}>
+              title={`${a.name} — drag to move, click to prompt`}
+              onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}>
               {initials(a.name)}
               <i className={`presence ${a.status}`} />
             </span>
@@ -82,7 +157,6 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
                   </button>
                 )
               })}
-              {mine.length === 0 && <span className="net-idle">no active task</span>}
             </div>
           </div>
         )
@@ -90,10 +164,44 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
 
       {agents.length === 0 && <p className="col-empty net-empty">No agents online — hire one or open a Claude session here.</p>}
 
+      {promptFor && (
+        <div className="net-prompt">
+          <span className="net-prompt-title">
+            <i className="avatar mini" style={{ background: agentWash(promptFor.name), color: agentInk(promptFor.name) }}>{initials(promptFor.name)}</i>
+            {promptFor.name}
+          </span>
+          <input autoFocus value={prompt}
+            placeholder={promptFor.kind === 'hired' ? 'Prompt this agent — delivered instantly' : 'Ask or instruct — delivered via its next turn'}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') sendPrompt(); if (e.key === 'Escape') setPromptFor(null) }} />
+          <button className="btn primary" onClick={sendPrompt}>Send</button>
+          {promptFor.kind === 'hired' && <button className="btn ghost" onClick={() => { onOpenAgent(promptFor); setPromptFor(null) }}>Console</button>}
+          <button className="btn ghost" onClick={() => setPromptFor(null)}>×</button>
+        </div>
+      )}
+
+      {openThread && (
+        <div className="net-thread">
+          <p className="net-thread-q"><b>{openThread.from_name ?? 'you'}</b> → <b>{openThread.to_name ?? 'everyone'}</b>: {openThread.body}</p>
+          {openThread.replies.map((r) => (
+            <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
+          ))}
+          {!openThread.answered && (
+            <div className="add-form">
+              <input autoFocus value={reply} placeholder="Answer this question"
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') sendReply(); if (e.key === 'Escape') setOpenThread(null) }} />
+              <button className="btn primary" onClick={sendReply}>Reply</button>
+            </div>
+          )}
+          <button className="btn ghost" onClick={() => setOpenThread(null)}>Close</button>
+        </div>
+      )}
+
       <div className="net-legend">
         <span><i className="leg-line open" /> open question</span>
-        <span><i className="leg-line" /> answered</span>
-        <span><i className="net-dot" style={{ background: '#956400' }} /> working</span>
+        <span><i className="leg-line done" /> answered (fades after 3 min)</span>
+        <span>drag circles · click to prompt</span>
       </div>
     </div>
   )

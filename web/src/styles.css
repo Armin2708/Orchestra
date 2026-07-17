@@ -163,12 +163,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* ── Network view ────────────────────────────────── */
 .network { position: relative; width: 100%; }
 .network > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.edge { stroke: #ddd9d0; stroke-width: 1.5; }
-.edge.open { stroke: #d9a13b; stroke-width: 2; stroke-dasharray: 6 4; animation: edge-flow 1.2s linear infinite; }
+.edge { stroke-width: 1.8; }
+.edge.open { stroke: #d9a13b; stroke-dasharray: 6 4; animation: edge-flow 1.2s linear infinite; }
+.edge.done { stroke: #3a9e5f; }
 @keyframes edge-flow { to { stroke-dashoffset: -10; } }
-.edge-bubble { fill: var(--surface); stroke: #ddd9d0; stroke-width: 1; }
-.edge-bubble.open { stroke: #d9a13b; }
-.edge-count { font-size: 11px; font-family: 'SF Mono', ui-monospace, monospace; fill: var(--ink-soft); text-anchor: middle; }
+.q-edge { cursor: pointer; }
+.q-box { fill: var(--surface); stroke-width: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.06)); }
+.q-box.open { stroke: #d9a13b; }
+.q-box.done { stroke: #3a9e5f; fill: #EDF3EC; }
+.q-edge.done { animation: q-fade 0.6s; }
+.q-text { font-size: 12px; text-anchor: middle; }
+.q-text.open { fill: #6b5b1f; }
+.q-text.done { fill: #346538; }
+@keyframes q-fade { from { opacity: 0; } }
 .net-node {
   position: absolute; transform: translate(-50%, -50%);
   display: flex; flex-direction: column; align-items: center; gap: 5px;
@@ -176,12 +183,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .net-avatar {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 46px; height: 46px; border-radius: 14px;
+  width: 52px; height: 52px; border-radius: 50%;
   font-size: 15px; font-weight: 600; box-shadow: var(--shadow-hover);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: grab; touch-action: none; user-select: none;
 }
+.net-avatar:active { cursor: grabbing; }
 .net-avatar.hired { box-shadow: 0 0 0 2px var(--ink); }
-.net-avatar.clickable { cursor: pointer; }
 .net-avatar.human { background: var(--ink); color: #fff; font-size: 12px; width: 52px; height: 52px; border-radius: 50%; }
 .net-avatar .presence {
   position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px;
@@ -404,3 +412,15 @@ textarea {
 @media (max-width: 640px) {
   .board { grid-template-columns: 1fr; }
 }
+
+/* network prompt + thread popovers */
+.net-prompt, .net-thread {
+  position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%);
+  width: min(560px, 92%); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lift, 0 8px 30px rgba(0,0,0,0.1));
+  padding: 12px 14px; display: flex; gap: 8px; align-items: center; z-index: 5;
+}
+.net-thread { flex-direction: column; align-items: stretch; max-height: 60%; overflow-y: auto; }
+.net-prompt-title { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; flex-shrink: 0; }
+.net-prompt input { flex: 1; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; font: inherit; font-size: 13px; }
+.net-thread-q { font-size: 13px; }
