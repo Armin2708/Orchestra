@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
+import { isSimilar } from './similar.js'
 import { removeAgentCards } from './reaper.js'
 import { VERSION } from './version.js'
 
@@ -93,6 +94,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     listCards(db, card.board_id).filter((o) =>
       o.id !== card.id && o.column !== 'done' && o.owner !== card.owner &&
       pathsIntersect(card.paths, o.paths))
+  const similarFor = (card: any, overlaps: any[]) => {
+    const seen = new Set(overlaps.map((o) => o.id))
+    const text = `${card.title} ${card.description}`
+    return listCards(db, card.board_id).filter((o) =>
+      o.id !== card.id && !seen.has(o.id) && o.column !== 'done' && o.owner !== card.owner &&
+      isSimilar(text, `${o.title} ${o.description}`))
+  }
   const logEvent = (card_id: number, agent_id: number | null, type: string, payload: unknown = {}) =>
     db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
       .run(card_id, agent_id, type, JSON.stringify(payload))
@@ -109,7 +117,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const card = getCard(Number(lastInsertRowid))
       logEvent(card.id, owner?.id ?? null, 'created', { title })
       emit(board_id, 'card', card)
-      return { card, overlaps: overlapsFor(card) }
+      const overlaps = overlapsFor(card)
+      return { card, overlaps, similar: similarFor(card, overlaps) }
     })
 
   server.patch<{ Params: { id: string }; Body: { title?: string; description?: string; paths?: string[]; column?: string; agent?: string } }>(
@@ -127,7 +136,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const actor = agentByName(card.board_id, agent)
       logEvent(card.id, actor?.id ?? null, 'updated', req.body)
       emit(card.board_id, 'card', updated)
-      return { card: updated, overlaps: overlapsFor(updated) }
+      const overlaps = overlapsFor(updated)
+      return { card: updated, overlaps, similar: similarFor(updated, overlaps) }
     })
 
   server.post<{ Params: { id: string }; Body: { column: string; agent?: string } }>(

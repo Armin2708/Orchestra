@@ -48,11 +48,12 @@ const ensureSession = async (input: any): Promise<Session | undefined> =>
 
 const rules = (me: string) => `orchestra rules (coordination board for this project — these are standing instructions):
 - You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.
+- REQUIRED before starting any task: read the board below and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict with what you're about to do, you MUST ask its owner what they're covering BEFORE you start: orchestra ask <agent-name> "<question>" --from ${me}. Wait for the answer, then scope your work to not duplicate theirs.
 - REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
   orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress --agent ${me}
+  If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
 - Keep your card updated as work progresses: orchestra card update <id> --desc "<what you're doing now>" --agent ${me}; move it (orchestra card move <id> done|review|blocked --agent ${me}) when status changes. Move to done when finished.
-- Check the board below; do NOT touch paths claimed by another active card without asking first.
-- To ask a neighbor: orchestra ask <agent-name> "<question>" --from ${me}. Replies arrive automatically.`
+- Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.`
 
 async function sessionStart(input: any): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
