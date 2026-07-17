@@ -1,7 +1,9 @@
 import Fastify, { FastifyInstance } from 'fastify'
 import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { VERSION } from './version.js'
@@ -172,6 +174,26 @@ export function buildServer(db: Database.Database): FastifyInstance {
     emit(a.board_id, 'agent', a)
     return a
   })
+
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/events', (req, reply) => {
+    const boardId = Number(req.params.id)
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache', connection: 'keep-alive',
+    })
+    const onEvent = (e: { board_id: number; type: string; data: unknown }) => {
+      if (e.board_id === boardId) reply.raw.write(`data: ${JSON.stringify(e)}\n\n`)
+    }
+    server.bus.on('event', onEvent)
+    const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000)
+    req.raw.on('close', () => { server.bus.off('event', onEvent); clearInterval(ping) })
+  })
+
+  // static web UI (built by Task 13; 404s harmlessly before that)
+  const webDist = fileURLToPath(new URL('../web/dist', import.meta.url))
+  if (fs.existsSync(webDist)) {
+    server.register(import('@fastify/static'), { root: webDist })
+  }
 
   return server
 }
