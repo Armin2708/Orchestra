@@ -10,14 +10,24 @@ import { removeAgentCards } from './reaper.js'
 import { VERSION } from './version.js'
 
 export type Bus = EventEmitter
+// minimal surface the server needs from the conductor (injected by the daemon)
+export interface ConductorLike {
+  isHired(agentId: number): boolean
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string }): any
+  deliver(agentId: number, msg: any): boolean
+  task(agentId: number, text: string): boolean
+  transcript(agentId: number): any[]
+  fire(agentId: number): Promise<boolean>
+}
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
 }
 
-export function buildServer(db: Database.Database): FastifyInstance {
+export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike): FastifyInstance {
   const server = Fastify()
   server.decorate('db', db)
   server.decorate('bus', new EventEmitter())
+  const maestro = conductor?.(server.bus)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
 
@@ -146,10 +156,56 @@ export function buildServer(db: Database.Database): FastifyInstance {
         INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, body, reply_to)
         VALUES (?, ?, ?, ?, ?, ?)`)
         .run(board_id, fromA?.id ?? null, toA?.id ?? null, card_id ?? null, body, reply_to ?? null)
-      const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid))
+      let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
+      // hired agents get instant delivery — no waiting for a hook to fire
+      const targets = new Set<number>()
+      if (toA && maestro?.isHired(toA.id)) targets.add(toA.id)
+      if (reply_to) {
+        const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
+        if (orig?.from_agent_id && maestro?.isHired(orig.from_agent_id)) targets.add(orig.from_agent_id)
+      }
+      for (const id of targets) {
+        if (maestro!.deliver(id, { ...msg, from_name: fromA?.name ?? null })) {
+          db.prepare(`UPDATE messages SET delivered_at=datetime('now') WHERE id=?`).run(msg.id)
+        }
+      }
+      if (targets.size) msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
       emit(board_id, 'message', msg)
       return msg
     })
+
+  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string } }>(
+    '/api/v1/boards/:id/hire', (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      const agent = maestro.hire({
+        boardId: board.id,
+        cwd: req.body?.cwd ?? board.project_path,
+        name: req.body?.name,
+        model: req.body?.model,
+      })
+      emit(board.id, 'agent', agent)
+      return agent
+    })
+
+  server.post<{ Params: { id: string }; Body: { text: string } }>(
+    '/api/v1/agents/:id/task', (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const ok = maestro.task(Number(req.params.id), req.body.text)
+      return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
+    })
+
+  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/fire', async (req, reply) => {
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+    const ok = await maestro.fire(Number(req.params.id))
+    return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
+  })
+
+  server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+    return maestro.transcript(Number(req.params.id))
+  })
 
   const inboxSql = `
     SELECT m.*, fa.name AS from_name FROM messages m

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap } from './reaper.js'
+import { Conductor } from './conductor.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -17,7 +18,7 @@ export const baseUrl = () => `http://127.0.0.1:${port()}`
 
 export async function serve(): Promise<void> {
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
-  const server = buildServer(db)
+  const server = buildServer(db, (bus) => new Conductor(db, bus))
   await server.listen({ host: '127.0.0.1', port: port() })
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   setInterval(() => reap(db), 60_000)

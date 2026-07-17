@@ -97,12 +97,23 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
               <header className="project-head">
                 <h2>{s.board.name}</h2>
                 <RemoveProject boardId={s.board.id} onChange={onChange} />
+                <button className="hire-btn" title="Spawn an autonomous agent on this project"
+                  onClick={async () => { await api('POST', `/boards/${s.board.id}/hire`, {}); onChange() }}>
+                  + Hire
+                </button>
                 <div className="project-crew">
                   {agents.map((a) => (
-                    <span key={a.id} className={`avatar ${a.status}`} title={`${a.name} · ${a.status}`}
-                      style={{ background: agentWash(a.name), color: agentInk(a.name) }}>
-                      {initials(a.name)}
-                      <i className="presence" />
+                    <span key={a.id} className="crew-slot">
+                      <span className={`avatar ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
+                        title={`${a.name} · ${a.status}${a.kind === 'hired' ? ' · hired' : ''}`}
+                        style={{ background: agentWash(a.name), color: agentInk(a.name) }}>
+                        {initials(a.name)}
+                        <i className="presence" />
+                      </span>
+                      {a.kind === 'hired' && (
+                        <button className="icon-x fire" title={`Fire ${a.name}`}
+                          onClick={async () => { await api('POST', `/agents/${a.id}/fire`); onChange() }}>×</button>
+                      )}
                     </span>
                   ))}
                   {agents.length === 0 && <span className="ask-none">no agents online</span>}

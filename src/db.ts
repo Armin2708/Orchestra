@@ -51,5 +51,6 @@ export function openDb(file: string): Database.Database {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `)
+  try { db.exec(`ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'session'`) } catch { /* exists */ }
   return db
 }

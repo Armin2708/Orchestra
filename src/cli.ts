@@ -92,6 +92,32 @@ program.command('snapshot').option('--board <id>').action(async (o) => {
   console.log(JSON.stringify(snap, null, 2))
 })
 
+program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
+  .option('--name <name>').option('--model <m>').option('--cwd <dir>')
+  .action(async (o) => {
+    await up(); const b = await board()
+    const a = await api('POST', `/boards/${b.id}/hire`, { name: o.name, model: o.model, cwd: o.cwd })
+    console.log(`hired ${a.name} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
+  })
+program.command('task <name> <text>').description('give a hired agent a task')
+  .action(async (name, text) => {
+    await up(); const b = await board()
+    const snap = await api('GET', `/boards/${b.id}/snapshot`)
+    const a = snap.agents.find((x: any) => x.name === name)
+    if (!a) { console.error(`no agent named ${name}`); process.exit(1) }
+    await api('POST', `/agents/${a.id}/task`, { text })
+    console.log(`tasked ${name}`)
+  })
+program.command('fire <name>').description('stop a hired agent (its cards are removed)')
+  .action(async (name) => {
+    await up(); const b = await board()
+    const snap = await api('GET', `/boards/${b.id}/snapshot`)
+    const a = snap.agents.find((x: any) => x.name === name)
+    if (!a) { console.error(`no agent named ${name}`); process.exit(1) }
+    await api('POST', `/agents/${a.id}/fire`)
+    console.log(`fired ${name}`)
+  })
+
 program.command('hook <event>').action(async (event) => { await runHook(event) })
 program.command('install').option('--project', 'install into ./.claude instead of ~/.claude')
   .action((o) => installHooks(o.project ? 'project' : 'global'))
