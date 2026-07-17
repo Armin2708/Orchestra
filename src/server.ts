@@ -166,6 +166,13 @@ export function buildServer(db: Database.Database): FastifyInstance {
     return { agent: a, messages }
   })
 
+  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/leave', (req) => {
+    db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(Number(req.params.id))
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+    emit(a.board_id, 'agent', a)
+    return a
+  })
+
   return server
 }
 
