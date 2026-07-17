@@ -11,13 +11,14 @@ export type Card = { id: number; title: string; description: string; column: str
 export type Agent = { id: number; name: string; status: string; last_seen: string }
 export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[] }
 
-// deterministic identity color per agent name
+// deterministic identity color per agent name — muted, editorial
 export function agentHue(name: string): number {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
   return (h % 12) * 30 // 12 well-separated hues
 }
-export const agentColor = (name: string) => `hsl(${agentHue(name)} 58% 44%)`
+export const agentInk = (name: string) => `hsl(${agentHue(name)} 42% 34%)`
+export const agentWash = (name: string) => `hsl(${agentHue(name)} 45% 94%)`
 export const initials = (name: string) =>
   name.split('-').map((w) => w[0]?.toUpperCase() ?? '').slice(0, 2).join('')
 

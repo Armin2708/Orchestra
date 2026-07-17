@@ -1,6 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, Snapshot, agentColor, initials } from './api'
+import { api, Snapshot, agentInk, agentWash, initials } from './api'
 import { Board } from './Board'
+
+const Mark = () => (
+  <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
+    <rect width="32" height="32" rx="8" fill="#111"/>
+    <rect x="7" y="9" width="5" height="14" rx="1.5" fill="#F7F6F3"/>
+    <rect x="14" y="9" width="5" height="9" rx="1.5" fill="#F7F6F3"/>
+    <rect x="21" y="9" width="5" height="11" rx="1.5" fill="#F7F6F3"/>
+  </svg>
+)
 
 export function App() {
   const [boards, setBoards] = useState<any[]>([])
@@ -36,15 +45,15 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo">🎛️</span>
+          <Mark />
           <div>
             <h1>{snap?.board.name ?? 'agentboard'}</h1>
             <p className="sub">
-              {total} card{total === 1 ? '' : 's'} · {activeAgents.length} agent{activeAgents.length === 1 ? '' : 's'} on the board
+              {total} card{total === 1 ? '' : 's'} · {activeAgents.length} agent{activeAgents.length === 1 ? '' : 's'} active
             </p>
           </div>
         </div>
-        <div className="progress" title={`${done}/${total} done`}>
+        <div className="progress" title={`${done} of ${total} done`}>
           <div className="progress-track">
             <div className="progress-fill" style={{ width: total ? `${(done / total) * 100}%` : '0%' }} />
           </div>
@@ -53,7 +62,7 @@ export function App() {
         <div className="crew">
           {activeAgents.map((a) => (
             <span key={a.id} className={`avatar ${a.status}`} title={`${a.name} · ${a.status}`}
-              style={{ background: agentColor(a.name) }}>
+              style={{ background: agentWash(a.name), color: agentInk(a.name) }}>
               {initials(a.name)}
               <i className="presence" />
             </span>
@@ -74,9 +83,9 @@ function GettingStarted() {
   return (
     <div className="empty-hero">
       <div className="empty-card">
-        <span className="empty-logo">🎛️</span>
+        <Mark />
         <h1>No boards yet</h1>
-        <p>A board appears the moment an agent joins a project. Open a Claude Code session in any repo, or from a terminal run:</p>
+        <p>A board appears the moment an agent joins a project. Open a Claude Code session in any repo, or run:</p>
         <pre>cd your-project{'\n'}agentboard join</pre>
         <p className="hint">This page updates live — leave it open.</p>
       </div>

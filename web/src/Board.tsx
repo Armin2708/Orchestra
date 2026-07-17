@@ -1,14 +1,14 @@
 import React, { useState } from 'react'
-import { api, Card, Snapshot, agentColor, initials, timeAgo } from './api'
+import { api, Card, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
 import { CardDrawer } from './CardDrawer'
 
 const COLUMNS = ['backlog', 'in_progress', 'blocked', 'review', 'done'] as const
-const META: Record<string, { label: string; hue: number; hint: string }> = {
-  backlog: { label: 'Backlog', hue: 226, hint: 'Queue up work for your agents' },
-  in_progress: { label: 'In progress', hue: 32, hint: 'Nothing being worked on yet' },
-  blocked: { label: 'Blocked', hue: 351, hint: 'No blockers — good' },
-  review: { label: 'Review', hue: 266, hint: 'Nothing waiting on review' },
-  done: { label: 'Done', hue: 152, hint: 'Finished cards land here' },
+const META: Record<string, { label: string; dot: string; hint: string }> = {
+  backlog: { label: 'Backlog', dot: '#8d8a83', hint: 'Queue up work for your agents' },
+  in_progress: { label: 'In progress', dot: '#956400', hint: 'Nothing being worked on yet' },
+  blocked: { label: 'Blocked', dot: '#9f2f2d', hint: 'No blockers' },
+  review: { label: 'Review', dot: '#1f6c9f', hint: 'Nothing waiting on review' },
+  done: { label: 'Done', dot: '#346538', hint: 'Finished cards land here' },
 }
 
 export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
@@ -45,7 +45,7 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
         <div className="questions-strip">
           {snap.open_questions.map((q) => (
             <span key={q.id} className="question-chip" title={q.body}>
-              <b>{q.from_name ?? 'you'}</b> asked <b>{q.to_name ?? 'everyone'}</b>: {q.body}
+              <b>{q.from_name ?? 'you'}</b>&nbsp;asked&nbsp;<b>{q.to_name ?? 'everyone'}</b>: {q.body}
             </span>
           ))}
         </div>
@@ -57,12 +57,11 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
           const cards = snap.cards.filter((c) => c.column === col)
           return (
             <section key={col} className={overCol === col ? 'col drop-target' : 'col'}
-              style={{ ['--h' as any]: m.hue }}
               onDragOver={(e) => { e.preventDefault(); setOverCol(col) }}
               onDragLeave={() => setOverCol(null)}
               onDrop={(e) => drop(col, e)}>
               <header className="col-head">
-                <span className="col-dot" />
+                <span className="col-dot" style={{ background: m.dot }} />
                 <h3>{m.label}</h3>
                 <span className="col-count">{cards.length}</span>
               </header>
@@ -70,7 +69,7 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
               <div className="col-cards">
                 {cards.map((c, i) => (
                   <article key={c.id} className="card" draggable
-                    style={{ ['--owner' as any]: c.owner ? agentColor(c.owner) : 'hsl(40 8% 72%)', ['--i' as any]: i }}
+                    style={{ ['--i' as any]: i }}
                     onClick={() => setOpen(c)}
                     onDragStart={(e) => e.dataTransfer.setData('text/card-id', String(c.id))}>
                     <h4>{c.title}</h4>
@@ -83,7 +82,10 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
                     )}
                     <footer>
                       {c.owner
-                        ? <span className="owner"><i className="avatar mini" style={{ background: agentColor(c.owner) }}>{initials(c.owner)}</i>{c.owner}</span>
+                        ? <span className="owner">
+                            <i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>
+                            {c.owner}
+                          </span>
                         : <span className="owner unowned">unassigned</span>}
                       <time>{timeAgo(c.updated_at)}</time>
                     </footer>
@@ -94,13 +96,13 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
 
               {adding === col ? (
                 <div className="add-form">
-                  <input autoFocus value={newTitle} placeholder="Card title…"
+                  <input autoFocus value={newTitle} placeholder="Card title"
                     onChange={(e) => setNewTitle(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') addCard(col); if (e.key === 'Escape') setAdding(null) }} />
                   <button className="btn primary" onClick={() => addCard(col)}>Add</button>
                 </div>
               ) : (
-                <button className="add-card" onClick={() => { setAdding(col); setNewTitle('') }}>+ Add card</button>
+                <button className="add-card" onClick={() => { setAdding(col); setNewTitle('') }}>+ New card</button>
               )}
             </section>
           )
@@ -110,19 +112,19 @@ export function Board({ snap, onChange }: { snap: Snapshot; onChange: () => void
       <div className="ask-dock">
         {askTo === null ? (
           <div className="ask-row">
-            <span className="ask-label">Ping an agent</span>
+            <span className="ask-label">Ask an agent</span>
             {askable.length === 0 && <span className="ask-none">no one online</span>}
             {askable.map((a) => (
               <button key={a.id} className="agent-chip" onClick={() => setAskTo(a.name)}>
-                <i className="avatar mini" style={{ background: agentColor(a.name) }}>{initials(a.name)}</i>
+                <i className="avatar mini" style={{ background: agentWash(a.name), color: agentInk(a.name) }}>{initials(a.name)}</i>
                 {a.name}
               </button>
             ))}
           </div>
         ) : (
           <div className="ask-row open">
-            <i className="avatar mini" style={{ background: agentColor(askTo) }}>{initials(askTo)}</i>
-            <input autoFocus value={askBody} placeholder={`Ask ${askTo} anything — delivered into their context`}
+            <i className="avatar mini" style={{ background: agentWash(askTo), color: agentInk(askTo) }}>{initials(askTo)}</i>
+            <input autoFocus value={askBody} placeholder={`Ask ${askTo} — delivered into their context`}
               onChange={(e) => setAskBody(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') ask(); if (e.key === 'Escape') setAskTo(null) }} />
             <button className="btn primary" onClick={ask}>Send</button>

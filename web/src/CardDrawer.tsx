@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { api, Card, agentColor, initials, timeAgo } from './api'
+import { api, Card, agentInk, agentWash, initials, timeAgo } from './api'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
@@ -25,19 +25,16 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
     setEditingDesc(false); onChange()
   }
 
-  const ownerColor = card.owner ? agentColor(card.owner) : 'hsl(40 8% 72%)'
-
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="drawer" style={{ ['--owner' as any]: ownerColor }}>
-        <div className="drawer-band" />
+      <aside className="drawer">
         <button className="close" onClick={onClose} aria-label="Close">×</button>
-        <p className="drawer-kicker">card #{card.id} · {card.column.replace('_', ' ')}</p>
+        <p className="drawer-kicker">Card #{card.id} · {card.column.replace('_', ' ')}</p>
         <h2>{card.title}</h2>
         <p className="drawer-owner">
           {card.owner
-            ? <><i className="avatar mini" style={{ background: ownerColor }}>{initials(card.owner)}</i> {card.owner}</>
+            ? <><i className="avatar mini" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>{initials(card.owner)}</i> {card.owner}</>
             : 'unassigned'} · updated {timeAgo(card.updated_at)}
         </p>
 
@@ -61,7 +58,7 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
         <ol className="timeline">
           {events.map((e) => (
             <li key={e.id}>
-              <i className="tl-dot" style={{ background: e.agent ? agentColor(e.agent) : 'hsl(40 8% 72%)' }} />
+              <i className="tl-dot" style={{ background: e.agent ? agentInk(e.agent) : '#c9c5bc' }} />
               <span><b>{e.agent ?? 'you'}</b> {EVENT_VERB[e.type] ?? e.type} <time>{timeAgo(e.created_at)}</time></span>
             </li>
           ))}
@@ -69,7 +66,7 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
         </ol>
 
         <h3>Message {card.owner ?? 'the board'}</h3>
-        <textarea value={comment} placeholder="Lands in the agent's context within ~30s"
+        <textarea value={comment} placeholder="Lands in the agent's context within about 30 seconds"
           onChange={(e) => setComment(e.target.value)} />
         <button className="btn primary" onClick={send}>Send</button>
       </aside>
