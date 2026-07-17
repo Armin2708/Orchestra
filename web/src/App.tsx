@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api, Snapshot } from './api'
 import { ProjectGrid } from './Board'
+import { RoadmapView } from './RoadmapView'
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -19,6 +20,9 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
+  const [view, setView] = useState<'board' | 'roadmap'>(() =>
+    (localStorage.getItem('orchestra-view') as 'board' | 'roadmap') ?? 'board')
+  const pickView = (v: 'board' | 'roadmap') => { setView(v); localStorage.setItem('orchestra-view', v) }
   const pick = (f: number | 'all') => { setFocus(f); setMenuOpen(false); localStorage.setItem('orchestra-focus', String(f)) }
 
   // default to the first project (network view) rather than the all-projects grid
@@ -81,8 +85,14 @@ export function App() {
             )}
           </div>
         </div>
+        <nav className="view-tabs">
+          <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
+          <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
+        </nav>
       </header>
-      <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+      {view === 'board'
+        ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+        : <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
     </div>
   )
 }
