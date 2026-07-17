@@ -96,7 +96,9 @@ export class Conductor {
         ...(opts.model ? { model: opts.model } : {}),
         permissionMode: 'bypassPermissions',
         systemPrompt: { type: 'preset', preset: 'claude_code', append: rules(name) },
-        env: { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name },
+        // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
+        // instead of minting a second "session" agent for the SDK subprocess
+        env: { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name },
       } as any,
     })
 

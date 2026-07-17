@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
-import { reap } from './reaper.js'
+import { reap, removeAgentCards } from './reaper.js'
 import { Conductor } from './conductor.js'
 
 export function dataDir(): string {
@@ -18,6 +18,11 @@ export const baseUrl = () => `http://127.0.0.1:${port()}`
 
 export async function serve(): Promise<void> {
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
+  // hired agents live in this process — anything left from a previous daemon is dead
+  for (const g of db.prepare(`SELECT id FROM agents WHERE kind='hired' AND status != 'gone'`).all() as { id: number }[]) {
+    removeAgentCards(db, g.id)
+    db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(g.id)
+  }
   const server = buildServer(db, (bus) => new Conductor(db, bus))
   await server.listen({ host: '127.0.0.1', port: port() })
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
