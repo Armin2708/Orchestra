@@ -14,6 +14,11 @@ export const Mark = () => (
 export function App() {
   const [snaps, setSnaps] = useState<Snapshot[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [focus, setFocus] = useState<number | 'all'>(() => {
+    const saved = localStorage.getItem('orchestra-focus')
+    return saved && saved !== 'all' ? Number(saved) : 'all'
+  })
+  const pick = (f: number | 'all') => { setFocus(f); localStorage.setItem('orchestra-focus', String(f)) }
 
   const refresh = useCallback(async () => {
     const boards = await api('GET', '/boards')
@@ -40,6 +45,8 @@ export function App() {
 
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
   const cards = snaps.flatMap((s) => s.cards)
+  const visible = focus === 'all' ? snaps : snaps.filter((s) => s.board.id === focus)
+  const shown = visible.length > 0 ? visible : snaps // focused board was removed — fall back
 
   return (
     <div className="app">
@@ -54,7 +61,19 @@ export function App() {
           </div>
         </div>
       </header>
-      <ProjectGrid snaps={snaps} onChange={refresh} />
+      {snaps.length > 1 && (
+        <nav className="project-tabs">
+          <button className={focus === 'all' ? 'tab active' : 'tab'} onClick={() => pick('all')}>All projects</button>
+          {snaps.map((s) => (
+            <button key={s.board.id} className={focus === s.board.id ? 'tab active' : 'tab'}
+              onClick={() => pick(s.board.id)}>
+              {s.board.name}
+              <span className="tab-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+      <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
     </div>
   )
 }

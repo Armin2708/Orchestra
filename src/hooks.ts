@@ -1,7 +1,15 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { api } from './client.js'
 import { dataDir, ensureDaemon } from './daemon.js'
+
+// throwaway sessions in temp dirs shouldn't create phantom boards
+export function isThrowawayCwd(cwd: string): boolean {
+  const real = (p: string) => { try { return fs.realpathSync(p) } catch { return p } }
+  const c = real(cwd)
+  return c.startsWith(real(os.tmpdir())) || c.startsWith('/private/var/folders/') || c.startsWith('/var/folders/')
+}
 
 export const _internals = {
   readStdin(): Promise<string> {
@@ -22,6 +30,7 @@ const loadSession = (id: string): Session | undefined => {
 
 async function registerSession(input: any): Promise<Session | undefined> {
   if (!input.session_id) return undefined
+  if (isThrowawayCwd(input.cwd ?? process.cwd())) return undefined
   if (!(await ensureDaemon())) return undefined
   const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
   const agent = await api('POST', '/agents/register', {
@@ -46,6 +55,7 @@ const rules = (me: string) => `orchestra rules (coordination board for this proj
 - To ask a neighbor: orchestra ask <agent-name> "<question>" --from ${me}. Replies arrive automatically.`
 
 async function sessionStart(input: any): Promise<void> {
+  if (isThrowawayCwd(input.cwd ?? process.cwd())) return
   if (!(await ensureDaemon())) return
   const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
   const agent = await api('POST', '/agents/register', {

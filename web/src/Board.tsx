@@ -60,7 +60,7 @@ function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () =>
   )
 }
 
-export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
+export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
   const [open, setOpen] = useState<{ card: Card; boardId: number } | null>(null)
   const [terminal, setTerminal] = useState<Agent | null>(null)
   const [askTo, setAskTo] = useState<{ name: string; boardId: number } | null>(null)
@@ -89,7 +89,7 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
 
   return (
     <>
-      <main className="projects">
+      <main className={focused ? 'projects focused' : 'projects'}>
         {snaps.map((s) => {
           const agents = s.agents.filter((a) => a.status !== 'gone')
           const cards = [...s.cards].sort((a, b) => ORDER.indexOf(a.column) - ORDER.indexOf(b.column))

@@ -61,7 +61,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--surface); font: inherit;
 }
 
+/* ── Project tabs ────────────────────────────────── */
+.project-tabs {
+  max-width: 1400px; margin: 0 auto; padding: 0 40px 16px;
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.tab {
+  border: 1px solid transparent; background: none; color: var(--ink-soft);
+  border-radius: 9999px; padding: 5px 14px; font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 7px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tab:hover { background: rgba(0, 0, 0, 0.04); color: var(--ink); }
+.tab.active { background: var(--ink); color: #fff; }
+.tab-count {
+  font-size: 10.5px; font-family: 'SF Mono', ui-monospace, monospace;
+  background: rgba(0, 0, 0, 0.08); border-radius: 9999px; padding: 1px 7px;
+}
+.tab.active .tab-count { background: rgba(255, 255, 255, 0.2); }
+
 /* ── Projects ────────────────────────────────────── */
+.projects.focused { grid-template-columns: 1fr; max-width: 860px; }
 .projects {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px;
   align-items: start; max-width: 1400px; margin: 0 auto; padding: 8px 40px 130px;
