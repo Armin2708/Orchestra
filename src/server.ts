@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { generateName } from './names.js'
+import { pathsIntersect } from './overlap.js'
 import { VERSION } from './version.js'
 
 export type Bus = EventEmitter
@@ -61,6 +62,72 @@ export function buildServer(db: Database.Database): FastifyInstance {
         ORDER BY m.id`).all(id),
     }
   })
+
+  const COLUMNS = ['backlog', 'in_progress', 'blocked', 'review', 'done']
+  const agentByName = (board_id: number, name?: string) =>
+    name ? (db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name) as any) : undefined
+  const getCard = (id: number) => {
+    const c = db.prepare(`SELECT c.*, a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(id) as any
+    return c && { ...c, column: c.column_name, paths: JSON.parse(c.paths) }
+  }
+  const overlapsFor = (card: any) =>
+    listCards(db, card.board_id).filter((o) =>
+      o.id !== card.id && o.column !== 'done' && o.owner !== card.owner &&
+      pathsIntersect(card.paths, o.paths))
+  const logEvent = (card_id: number, agent_id: number | null, type: string, payload: unknown = {}) =>
+    db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
+      .run(card_id, agent_id, type, JSON.stringify(payload))
+
+  server.post<{ Body: { board_id: number; title: string; description?: string; paths?: string[]; agent?: string; column?: string } }>(
+    '/api/v1/cards', (req, reply) => {
+      const { board_id, title, description = '', paths = [], agent, column = 'backlog' } = req.body
+      if (!COLUMNS.includes(column)) return reply.code(400).send({ error: 'invalid column' })
+      const owner = agentByName(board_id, agent)
+      const { lastInsertRowid } = db.prepare(`
+        INSERT INTO cards (board_id, title, description, column_name, owner_agent_id, paths)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(board_id, title, description, column, owner?.id ?? null, JSON.stringify(paths))
+      const card = getCard(Number(lastInsertRowid))
+      logEvent(card.id, owner?.id ?? null, 'created', { title })
+      emit(board_id, 'card', card)
+      return { card, overlaps: overlapsFor(card) }
+    })
+
+  server.patch<{ Params: { id: string }; Body: { title?: string; description?: string; paths?: string[]; column?: string; agent?: string } }>(
+    '/api/v1/cards/:id', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      const { title, description, paths, column, agent } = req.body
+      if (column && !COLUMNS.includes(column)) return reply.code(400).send({ error: 'invalid column' })
+      db.prepare(`
+        UPDATE cards SET title=coalesce(?, title), description=coalesce(?, description),
+          paths=coalesce(?, paths), column_name=coalesce(?, column_name), updated_at=datetime('now')
+        WHERE id=?`)
+        .run(title ?? null, description ?? null, paths ? JSON.stringify(paths) : null, column ?? null, card.id)
+      const updated = getCard(card.id)
+      const actor = agentByName(card.board_id, agent)
+      logEvent(card.id, actor?.id ?? null, 'updated', req.body)
+      emit(card.board_id, 'card', updated)
+      return { card: updated, overlaps: overlapsFor(updated) }
+    })
+
+  server.post<{ Params: { id: string }; Body: { column: string; agent?: string } }>(
+    '/api/v1/cards/:id/move', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      if (!COLUMNS.includes(req.body.column)) return reply.code(400).send({ error: 'invalid column' })
+      db.prepare(`UPDATE cards SET column_name=?, updated_at=datetime('now') WHERE id=?`)
+        .run(req.body.column, card.id)
+      const updated = getCard(card.id)
+      const actor = agentByName(card.board_id, req.body.agent)
+      logEvent(card.id, actor?.id ?? null, 'moved', { to: req.body.column })
+      emit(card.board_id, 'card', updated)
+      return { card: updated }
+    })
+
+  server.get<{ Params: { id: string } }>('/api/v1/cards/:id/events', (req) =>
+    db.prepare(`SELECT e.*, a.name AS agent FROM card_events e LEFT JOIN agents a ON a.id=e.agent_id WHERE card_id=? ORDER BY e.id`)
+      .all(Number(req.params.id)))
 
   return server
 }
