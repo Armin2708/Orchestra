@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
 import { CardDrawer } from './CardDrawer'
 import { AgentTerminal } from './AgentTerminal'
+import { NetworkView } from './NetworkView'
 
 function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onChange: () => void }) {
   const [reply, setReply] = useState('')
@@ -67,6 +68,12 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   const [askBody, setAskBody] = useState('')
   const [adding, setAdding] = useState<number | null>(null)
   const [newTitle, setNewTitle] = useState('')
+  const [netView, setNetView] = useState<Set<number>>(() => new Set())
+  const toggleNet = (id: number) => setNetView((prev) => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
 
   const ask = async () => {
     if (!askTo || !askBody.trim()) return
@@ -99,6 +106,11 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               <header className="project-head">
                 <h2>{s.board.name}</h2>
                 <RemoveProject boardId={s.board.id} onChange={onChange} />
+                <button className={netView.has(s.board.id) ? 'view-toggle active' : 'view-toggle'}
+                  title="Toggle network view — who's talking to whom"
+                  onClick={() => toggleNet(s.board.id)}>
+                  {netView.has(s.board.id) ? 'List' : 'Network'}
+                </button>
                 <button className="hire-btn" title="Spawn an autonomous agent on this project"
                   onClick={async () => { await api('POST', `/boards/${s.board.id}/hire`, {}); onChange() }}>
                   + Hire
@@ -123,6 +135,11 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                 </div>
               </header>
 
+              {netView.has(s.board.id) ? (
+                <NetworkView snap={s}
+                  onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
+                  onOpenAgent={(a) => setTerminal(a)} />
+              ) : (<>
               {threads.length > 0 && (
                 <div className="threads">
                   {threads.map((t) => <ThreadView key={t.id} t={t} boardId={s.board.id} onChange={onChange} />)}
@@ -172,6 +189,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               ) : (
                 <button className="add-card" onClick={() => { setAdding(s.board.id); setNewTitle('') }}>+ New card</button>
               )}
+              </>)}
             </section>
           )
         })}

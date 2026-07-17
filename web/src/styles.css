@@ -146,6 +146,62 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .crew-slot:hover .fire { opacity: 1; }
 .avatar.clickable { cursor: pointer; transition: transform 0.15s; }
 .avatar.clickable:hover { transform: scale(1.08); }
+.view-toggle {
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft);
+  border-radius: 9999px; padding: 3px 12px; font-size: 12px; font-weight: 500;
+  transition: border-color 0.15s, color 0.15s;
+}
+.view-toggle:hover { border-color: #ccc8bf; color: var(--ink); }
+.view-toggle.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ── Network view ────────────────────────────────── */
+.network { position: relative; width: 100%; }
+.network > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.edge { stroke: #ddd9d0; stroke-width: 1.5; }
+.edge.open { stroke: #d9a13b; stroke-width: 2; stroke-dasharray: 6 4; animation: edge-flow 1.2s linear infinite; }
+@keyframes edge-flow { to { stroke-dashoffset: -10; } }
+.edge-bubble { fill: var(--surface); stroke: #ddd9d0; stroke-width: 1; }
+.edge-bubble.open { stroke: #d9a13b; }
+.edge-count { font-size: 11px; font-family: 'SF Mono', ui-monospace, monospace; fill: var(--ink-soft); text-anchor: middle; }
+.net-node {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  max-width: 170px; text-align: center;
+}
+.net-avatar {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 46px; height: 46px; border-radius: 14px;
+  font-size: 15px; font-weight: 600; box-shadow: var(--shadow-hover);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.net-avatar.hired { box-shadow: 0 0 0 2px var(--ink); }
+.net-avatar.clickable { cursor: pointer; }
+.net-avatar.human { background: var(--ink); color: #fff; font-size: 12px; width: 52px; height: 52px; border-radius: 50%; }
+.net-avatar .presence {
+  position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px;
+  border-radius: 50%; border: 2px solid var(--surface); background: #b8b4ac;
+}
+.net-avatar .presence.active { background: #346538; }
+.net-avatar .presence.idle { background: #956400; }
+.net-name { font-size: 12px; font-weight: 600; }
+.net-cards { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+.net-card {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 7px; padding: 3px 9px; font-size: 11px; max-width: 165px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.net-card:hover { border-color: #ccc8bf; box-shadow: var(--shadow); }
+.net-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.net-idle { font-size: 10.5px; color: #b8b4ac; font-style: italic; }
+.net-empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.net-legend {
+  position: absolute; left: 8px; bottom: 4px; display: flex; gap: 14px;
+  font-size: 11px; color: var(--ink-soft); align-items: center;
+}
+.net-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.leg-line { display: inline-block; width: 18px; height: 0; border-top: 2px solid #ddd9d0; }
+.leg-line.open { border-top: 2px dashed #d9a13b; }
 
 /* ── Agent console ───────────────────────────────── */
 .terminal {
