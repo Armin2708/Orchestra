@@ -11,6 +11,13 @@ const envAgent = () => process.env.ORCHESTRA_AGENT
 
 async function up() { if (!(await ensureDaemon())) { console.error('daemon unreachable'); process.exit(1) } }
 async function board() { return api('POST', '/boards/resolve', { project_path: projectPath() }) }
+// explicit flag > env > sole active agent on the board
+async function inferAgent(boardId: number, explicit?: string): Promise<string | undefined> {
+  if (explicit ?? envAgent()) return explicit ?? envAgent()
+  const snap = await api('GET', `/boards/${boardId}/snapshot`)
+  const live = snap.agents.filter((a: any) => a.status !== 'gone')
+  return live.length === 1 ? live[0].name : undefined
+}
 
 program.command('serve').description('run daemon in foreground').action(async () => {
   await serve(); console.log(`orchestra on ${baseUrl()}`)
@@ -44,7 +51,7 @@ const printOverlaps = (overlaps: any[]) => {
 card.command('create <title>').option('--desc <d>').option('--paths <p>', '', csv)
   .option('--column <c>').option('--agent <a>').action(async (title, o) => {
     await up(); const b = await board()
-    const r = await api('POST', '/cards', { board_id: b.id, title, description: o.desc, paths: o.paths, column: o.column, agent: o.agent ?? envAgent() })
+    const r = await api('POST', '/cards', { board_id: b.id, title, description: o.desc, paths: o.paths, column: o.column, agent: await inferAgent(b.id, o.agent) })
     console.log(`card #${r.card.id} created [${r.card.column}]`); printOverlaps(r.overlaps)
   })
 card.command('update <id>').option('--title <t>').option('--desc <d>').option('--paths <p>', '', csv)
@@ -61,12 +68,12 @@ card.command('move <id> <column>').option('--agent <a>').action(async (id, colum
 
 program.command('ask <to> <body>').option('--card <id>').option('--from <a>').action(async (to, body, o) => {
   await up(); const b = await board()
-  const m = await api('POST', '/messages', { board_id: b.id, from: o.from ?? envAgent(), to, body, card_id: o.card ? Number(o.card) : undefined })
+  const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, body, card_id: o.card ? Number(o.card) : undefined })
   console.log(`asked ${to} (msg #${m.id})`)
 })
 program.command('reply <msgId> <body>').option('--from <a>').action(async (msgId, body, o) => {
   await up(); const b = await board()
-  const m = await api('POST', '/messages', { board_id: b.id, from: o.from ?? envAgent(), body, reply_to: Number(msgId) })
+  const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body, reply_to: Number(msgId) })
   console.log(`replied (msg #${m.id})`)
 })
 

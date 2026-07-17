@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
+import { removeAgentCards } from './reaper.js'
 import { VERSION } from './version.js'
 
 export type Bus = EventEmitter
@@ -219,9 +220,12 @@ export function buildServer(db: Database.Database): FastifyInstance {
   })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/leave', (req) => {
-    db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(Number(req.params.id))
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+    const id = Number(req.params.id)
+    removeAgentCards(db, id) // gone agents leave a clean board
+    db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
     emit(a.board_id, 'agent', a)
+    emit(a.board_id, 'card', { pruned: id })
     return a
   })
 

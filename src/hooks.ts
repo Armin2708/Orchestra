@@ -20,13 +20,13 @@ const loadSession = (id: string): Session | undefined => {
   try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
 }
 
-const RULES = `orchestra rules (coordination board for this project — these are standing instructions):
+const rules = (me: string) => `orchestra rules (coordination board for this project — these are standing instructions):
+- You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.
 - REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
-  orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress
-- Keep your card updated (orchestra card update/move) as scope or status changes; move it to done when finished.
+  orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress --agent ${me}
+- Keep your card updated as work progresses: orchestra card update <id> --desc "<what you're doing now>" --agent ${me}; move it (orchestra card move <id> done|review|blocked --agent ${me}) when status changes. Move to done when finished.
 - Check the board below; do NOT touch paths claimed by another active card without asking first.
-- To ask a neighbor: orchestra ask <agent-name> "<question>". Replies arrive automatically.
-- Your identity is in $ORCHESTRA_AGENT / $ORCHESTRA_AGENT_ID (also echoed here).`
+- To ask a neighbor: orchestra ask <agent-name> "<question>" --from ${me}. Replies arrive automatically.`
 
 async function sessionStart(input: any): Promise<void> {
   if (!(await ensureDaemon())) return
@@ -38,7 +38,7 @@ async function sessionStart(input: any): Promise<void> {
   fs.writeFileSync(sessFile(input.session_id),
     JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id }))
   const snap = await api('GET', `/boards/${board.id}/snapshot`)
-  const lines = [RULES, '', `You are agent "${agent.name}" (id ${agent.id}) on board "${board.name}".`]
+  const lines = [rules(agent.name), '', `You are agent "${agent.name}" (id ${agent.id}) on board "${board.name}".`]
   for (const a of snap.agents.filter((x: any) => x.id !== agent.id && x.status !== 'gone'))
     lines.push(`- agent ${a.name}: ${a.status}`)
   for (const c of snap.cards.filter((c: any) => c.column !== 'done'))
@@ -63,14 +63,23 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
     `orchestra message from ${m.from_name ?? 'human'}: "${m.body}"` +
     (m.reply_to ? ` (this answers your msg #${m.reply_to})`
       : ` — answer it now with: orchestra reply ${m.id} "<answer>", then continue your task.`))
-  // one-time nudge if the agent is working without a card on the board
+  // one-time nudge if the agent is working without a card; recurring nudge if its card is stale
   const nudged = sessFile(input.session_id) + '.nudged'
-  if (!fs.existsSync(nudged)) {
+  const stale = sessFile(input.session_id) + '.stale'
+  const firstCheck = !fs.existsSync(nudged)
+  let staleCheck = false
+  try { staleCheck = Date.now() - fs.statSync(stale).mtimeMs > 600_000 } catch { staleCheck = true }
+  if (firstCheck || staleCheck) {
     const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
     const mine = snap.cards.filter((c: any) => c.owner === sess.agent_name && c.column !== 'done')
-    fs.writeFileSync(nudged, '')
-    if (mine.length === 0) {
-      lines.push('Reminder: you have no card on the orchestra board. Register what you are working on now: orchestra card create "<short title>" --desc "<scope>" --paths <paths> --column in_progress')
+    fs.writeFileSync(nudged, ''); fs.writeFileSync(stale, '')
+    if (mine.length === 0 && firstCheck) {
+      lines.push(`Reminder: you have no card on the orchestra board. Register what you are working on now: orchestra card create "<short title>" --desc "<scope>" --paths <paths> --column in_progress --agent ${sess.agent_name}`)
+    } else if (mine.length > 0 && staleCheck && !firstCheck) {
+      const old = mine.filter((c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime() > 600_000)
+      if (old.length > 0) {
+        lines.push(`Board status check: card ${old.map((c: any) => `#${c.id}`).join(', ')} hasn't been updated in over 10 minutes. Update it to reflect where you are: orchestra card update <id> --desc "<current step>" --agent ${sess.agent_name} (or move it if the status changed).`)
+      }
     }
   }
   if (lines.length === 0) return
@@ -102,7 +111,7 @@ async function sessionEnd(input: any): Promise<void> {
   const sess = loadSession(input.session_id)
   if (!sess) return
   await api('POST', `/agents/${sess.agent_id}/leave`)
-  for (const suffix of ['', '.throttle', '.nudged'])
+  for (const suffix of ['', '.throttle', '.nudged', '.stale'])
     fs.rmSync(sessFile(input.session_id) + suffix, { force: true })
 }
 
