@@ -17,7 +17,15 @@ program.command('serve').description('run daemon in foreground').action(async ()
 })
 program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
 
-program.command('join').option('--name <name>').option('--session <id>').action(async (o) => {
+program.command('join').description('register this agent session on the project board (agents only)')
+  .option('--name <name>').option('--session <id>')
+  .option('--force', 'allow joining from outside an agent session (scripts/CI)')
+  .action(async (o) => {
+  if (!process.env.CLAUDECODE && !o.force && !process.env.ORCHESTRA_FORCE_JOIN) {
+    console.error('join runs inside an agent session — open a Claude Code session and it joins automatically via hooks.')
+    console.error('Scripting a headless agent? Use --force.')
+    process.exit(1)
+  }
   await up()
   const b = await board()
   const a = await api('POST', '/agents/register', { board_id: b.id, name: o.name ?? process.env.ORCHESTRA_NAME, session_id: o.session })

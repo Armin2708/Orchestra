@@ -52,7 +52,7 @@ Claude session A      Claude session B        You (browser)
 |---|---|
 | `orchestra serve` | Run the daemon in the foreground (hooks auto-start it otherwise) |
 | `orchestra stop` | Stop the daemon |
-| `orchestra join [--name X]` | Register this session's agent on the project board and print a snapshot |
+| `orchestra join [--name X]` | Agent-only: register the current agent session on the board (hooks run it automatically; `--force` for headless scripts) |
 | `orchestra card create <title> [--desc D] [--paths a,b] [--column C]` | Create a card; prints overlap warnings |
 | `orchestra card update <id> [...]` | Update title/description/paths/column |
 | `orchestra card move <id> <column>` | Move a card (`backlog`, `in_progress`, `blocked`, `review`, `done`) |

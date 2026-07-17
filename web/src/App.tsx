@@ -65,8 +65,8 @@ function GettingStarted() {
       <div className="empty-card">
         <Mark />
         <h1>No projects yet</h1>
-        <p>A project appears the moment an agent joins it. Open a Claude Code session in any repo, or run:</p>
-        <pre>cd your-project{'\n'}orchestra join</pre>
+        <p>A project appears the moment an agent joins it. Open a Claude Code session in any repo and it joins on its own:</p>
+        <pre>cd your-project{'\n'}claude</pre>
         <p className="hint">This page updates live — leave it open.</p>
       </div>
     </div>
