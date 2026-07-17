@@ -20,9 +20,10 @@ const loadSession = (id: string): Session | undefined => {
   try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
 }
 
-const RULES = `orchestra rules (coordination board for this project):
-- Before starting work: orchestra card create "<title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress
-- Keep your card updated (orchestra card update/move) as scope or status changes.
+const RULES = `orchestra rules (coordination board for this project — these are standing instructions):
+- REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
+  orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress
+- Keep your card updated (orchestra card update/move) as scope or status changes; move it to done when finished.
 - Check the board below; do NOT touch paths claimed by another active card without asking first.
 - To ask a neighbor: orchestra ask <agent-name> "<question>". Replies arrive automatically.
 - Your identity is in $ORCHESTRA_AGENT / $ORCHESTRA_AGENT_ID (also echoed here).`
@@ -56,11 +57,21 @@ async function postToolUse(input: any): Promise<void> {
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`)
-  if (r.messages.length === 0) return
-  const ctx = r.messages.map((m: any) =>
-    `📨 orchestra message from ${m.from_name ?? 'human'}: ${m.body}` +
-    (m.reply_to ? ` (reply to your msg #${m.reply_to})` : ` — reply with: orchestra reply ${m.id} "..."`)).join('\n')
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: ctx } }))
+  const lines = r.messages.map((m: any) =>
+    `orchestra message from ${m.from_name ?? 'human'}: ${m.body}` +
+    (m.reply_to ? ` (reply to your msg #${m.reply_to})` : ` — reply with: orchestra reply ${m.id} "..."`))
+  // one-time nudge if the agent is working without a card on the board
+  const nudged = sessFile(input.session_id) + '.nudged'
+  if (!fs.existsSync(nudged)) {
+    const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
+    const mine = snap.cards.filter((c: any) => c.owner === sess.agent_name && c.column !== 'done')
+    fs.writeFileSync(nudged, '')
+    if (mine.length === 0) {
+      lines.push('Reminder: you have no card on the orchestra board. Register what you are working on now: orchestra card create "<short title>" --desc "<scope>" --paths <paths> --column in_progress')
+    }
+  }
+  if (lines.length === 0) return
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: lines.join('\n') } }))
 }
 
 async function stop(input: any): Promise<void> {
@@ -72,7 +83,8 @@ async function sessionEnd(input: any): Promise<void> {
   const sess = loadSession(input.session_id)
   if (!sess) return
   await api('POST', `/agents/${sess.agent_id}/leave`)
-  fs.rmSync(sessFile(input.session_id), { force: true })
+  for (const suffix of ['', '.throttle', '.nudged'])
+    fs.rmSync(sessFile(input.session_id) + suffix, { force: true })
 }
 
 export async function runHook(event: string): Promise<void> {
