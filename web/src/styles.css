@@ -239,16 +239,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 /* ── Agent console — claude code style ───────────── */
 .terminal {
-  position: fixed; inset: 0; z-index: 40;
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+  width: min(680px, 100vw);
   background: #262624; color: #DED9D1;
   display: flex; justify-content: center;
-  animation: fade 0.2s var(--ease);
+  border-left: 1px solid #3a3733;
+  box-shadow: -18px 0 50px rgba(0, 0, 0, 0.35);
+  animation: slide-in 0.28s var(--ease);
   font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
   font-size: 13px; line-height: 1.65;
 }
 .terminal-col {
-  width: min(960px, 100%); display: flex; flex-direction: column;
-  padding: 14px 28px 18px;
+  width: 100%; display: flex; flex-direction: column;
+  padding: 14px 22px 16px;
 }
 .cc-head {
   display: flex; align-items: center; gap: 10px; padding: 4px 0 12px;
