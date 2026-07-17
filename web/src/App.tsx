@@ -18,7 +18,13 @@ export function App() {
     const saved = localStorage.getItem('orchestra-focus')
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
-  const pick = (f: number | 'all') => { setFocus(f); localStorage.setItem('orchestra-focus', String(f)) }
+  const [menuOpen, setMenuOpen] = useState(false)
+  const pick = (f: number | 'all') => { setFocus(f); setMenuOpen(false); localStorage.setItem('orchestra-focus', String(f)) }
+
+  // default to the first project (network view) rather than the all-projects grid
+  useEffect(() => {
+    if (focus === 'all' && !localStorage.getItem('orchestra-focus') && snaps[0]) pick(snaps[0].board.id)
+  }, [snaps.length])
 
   const refresh = useCallback(async () => {
     const boards = await api('GET', '/boards')
@@ -53,26 +59,29 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <Mark />
-          <div>
-            <h1>Orchestra</h1>
+          <div className="brand-picker">
+            <button className="brand-btn" onClick={() => setMenuOpen((o) => !o)}>
+              <h1>{focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Orchestra'}</h1>
+              <span className="brand-caret">▾</span>
+            </button>
             <p className="sub">
               {snaps.length} project{snaps.length === 1 ? '' : 's'} · {agents.length} agent{agents.length === 1 ? '' : 's'} active · {cards.length} card{cards.length === 1 ? '' : 's'}
             </p>
+            {menuOpen && (
+              <div className="brand-menu">
+                <button className={focus === 'all' ? 'brand-item active' : 'brand-item'} onClick={() => pick('all')}>All projects</button>
+                {snaps.map((s) => (
+                  <button key={s.board.id} className={focus === s.board.id ? 'brand-item active' : 'brand-item'}
+                    onClick={() => pick(s.board.id)}>
+                    {s.board.name}
+                    <span className="brand-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </header>
-      {snaps.length > 1 && (
-        <nav className="project-tabs">
-          <button className={focus === 'all' ? 'tab active' : 'tab'} onClick={() => pick('all')}>All projects</button>
-          {snaps.map((s) => (
-            <button key={s.board.id} className={focus === s.board.id ? 'tab active' : 'tab'}
-              onClick={() => pick(s.board.id)}>
-              {s.board.name}
-              <span className="tab-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
-            </button>
-          ))}
-        </nav>
-      )}
       <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
     </div>
   )

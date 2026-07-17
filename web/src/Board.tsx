@@ -114,8 +114,9 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   const [askBody, setAskBody] = useState('')
   const [adding, setAdding] = useState<number | null>(null)
   const [newTitle, setNewTitle] = useState('')
-  const [netView, setNetView] = useState<Set<number>>(() => new Set())
-  const toggleNet = (id: number) => setNetView((prev) => {
+  const [listView, setListView] = useState<Set<number>>(() => new Set())
+  const isNet = (id: number) => !listView.has(id)
+  const toggleNet = (id: number) => setListView((prev) => {
     const next = new Set(prev)
     next.has(id) ? next.delete(id) : next.add(id)
     return next
@@ -152,10 +153,10 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               <header className="project-head">
                 <h2>{s.board.name}</h2>
                 <RemoveProject boardId={s.board.id} onChange={onChange} />
-                <button className={netView.has(s.board.id) ? 'view-toggle active' : 'view-toggle'}
-                  title="Toggle network view — who's talking to whom"
+                <button className="view-toggle"
+                  title="Switch between the network map and the list"
                   onClick={() => toggleNet(s.board.id)}>
-                  {netView.has(s.board.id) ? 'List' : 'Network'}
+                  {isNet(s.board.id) ? 'List' : 'Network'}
                 </button>
                 <button className="hire-btn" title="Spawn an autonomous agent on this project"
                   onClick={async () => { await api('POST', `/boards/${s.board.id}/hire`, {}); onChange() }}>
@@ -181,7 +182,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                 </div>
               </header>
 
-              {netView.has(s.board.id) ? (
+              {isNet(s.board.id) ? (
                 <NetworkView snap={s}
                   onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
                   onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })} />

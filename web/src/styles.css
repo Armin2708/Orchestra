@@ -564,3 +564,26 @@ textarea {
 @media (max-width: 640px) {
   .board { grid-template-columns: 1fr; }
 }
+
+/* ── Brand project picker ────────────────────────── */
+.brand-picker { position: relative; }
+.brand-btn { display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 0; text-align: left; }
+.brand-btn h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.brand-caret { color: var(--ink-soft); font-size: 11px; }
+.brand-menu {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; min-width: 240px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08); padding: 6px; display: grid; gap: 2px;
+}
+.brand-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: none; background: none; border-radius: 8px; padding: 8px 12px;
+  font: inherit; font-size: 13.5px; text-align: left;
+}
+.brand-item:hover { background: rgba(0, 0, 0, 0.04); }
+.brand-item.active { background: var(--ink); color: #fff; }
+.brand-count {
+  font-size: 10.5px; font-family: 'SF Mono', ui-monospace, monospace;
+  background: rgba(0, 0, 0, 0.07); border-radius: 9999px; padding: 1px 7px;
+}
+.brand-item.active .brand-count { background: rgba(255, 255, 255, 0.2); }
