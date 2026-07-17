@@ -87,7 +87,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
   const P = (name: string) => nodes.get(name)!
 
   return (
-    <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()} style={{ aspectRatio: `${W} / ${H}` }}>
+    <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
         <defs>
           <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

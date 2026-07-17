@@ -13,14 +13,17 @@
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+html, body, #root { height: 100%; }
 body {
   font-family: 'SF Pro Display', -apple-system, 'Helvetica Neue', sans-serif;
   font-size: 14px; line-height: 1.6;
   background: var(--bg);
-  min-height: 100dvh;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
+.app { display: flex; flex-direction: column; height: 100dvh; }
+.topbar, .project-tabs { flex-shrink: 0; }
 code, kbd, time, .col-count, .progress-label { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 button { font: inherit; cursor: pointer; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
@@ -83,19 +86,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* ── Projects ────────────────────────────────────── */
 .projects.focused { grid-template-columns: 1fr; }
 .projects {
+  flex: 1; min-height: 0; overflow-y: auto;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 20px;
-  align-items: start; padding: 4px 32px 130px;
+  align-items: start; padding: 4px 32px 96px;
 }
+.projects.focused { align-items: stretch; }
 .project {
   background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
-  padding: 20px 20px 16px; display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 12px;
   box-shadow: var(--shadow);
+  max-height: calc(100dvh - 200px); overflow: hidden;
 }
+.projects.focused .project { height: calc(100dvh - 200px); }
 .project-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .project-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .project-crew { display: flex; }
 .project-crew .avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
-.threads { display: grid; gap: 8px; }
+.threads { display: grid; gap: 8px; overflow-y: auto; max-height: 230px; flex-shrink: 0; }
 .thread {
   background: #FBF3DB; border-radius: var(--radius-sm);
   padding: 8px 12px; font-size: 12px; line-height: 1.5;
@@ -161,7 +168,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .view-toggle.active { background: var(--ink); color: #fff; border-color: var(--ink); }
 
 /* ── Network view ────────────────────────────────── */
-.network { position: relative; width: 100%; }
+.network { position: relative; width: 100%; flex: 1; min-height: 440px; }
 .network > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .edge { stroke-width: 1.8; }
 .edge.open { stroke: #d9a13b; stroke-dasharray: 6 4; animation: edge-flow 1.2s linear infinite; }
@@ -256,7 +263,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .terminal-input textarea::placeholder { color: #8d8a83; }
 .terminal-input .btn.primary { background: #E8E4DA; color: #1B1A17; align-self: flex-end; }
 .terminal-input .btn.primary:hover { background: #fff; }
-.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; overflow-y: auto; min-height: 0; align-content: start; }
 .col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
 
 .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
