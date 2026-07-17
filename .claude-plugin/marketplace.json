@@ -1,11 +1,13 @@
 {
   "name": "orchestra",
-  "owner": { "name": "Armin2708" },
+  "owner": {
+    "name": "Armin2708"
+  },
   "plugins": [
     {
-      "name": "agentboard",
+      "name": "orchestra",
       "source": "./",
-      "description": "Live kanban coordination board for Claude Code agents — auto-register sessions, scope cards, overlap warnings, agent-to-agent Q&A, live web UI."
+      "description": "Orchestra \u2014 live project board for Claude Code agents: auto-register sessions, scope cards, overlap warnings, agent-to-agent Q&A, live web UI."
     }
   ]
 }

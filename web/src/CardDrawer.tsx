@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api, Card, agentInk, agentWash, initials, timeAgo } from './api'
+import { STATUS } from './Board'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
@@ -30,8 +31,18 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
       <div className="scrim" onClick={onClose} />
       <aside className="drawer">
         <button className="close" onClick={onClose} aria-label="Close">×</button>
-        <p className="drawer-kicker">Card #{card.id} · {card.column.replace('_', ' ')}</p>
+        <p className="drawer-kicker">Card #{card.id}</p>
         <h2>{card.title}</h2>
+        <div className="status-row">
+          {Object.entries(STATUS).map(([key, st]) => (
+            <button key={key}
+              className={`status-chip pick ${card.column === key ? 'active' : ''}`}
+              style={card.column === key ? { background: st.bg, color: st.ink } : undefined}
+              onClick={async () => { await api('POST', `/cards/${card.id}/move`, { column: key }); onChange() }}>
+              {st.label}
+            </button>
+          ))}
+        </div>
         <p className="drawer-owner">
           {card.owner
             ? <><i className="avatar mini" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>{initials(card.owner)}</i> {card.owner}</>

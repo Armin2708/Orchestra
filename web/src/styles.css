@@ -61,36 +61,41 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--surface); font: inherit;
 }
 
-/* ── Questions strip ─────────────────────────────── */
-.questions-strip {
-  max-width: 1400px; margin: 0 auto; padding: 0 40px 14px;
-  display: flex; gap: 8px; overflow-x: auto;
-}
-.question-chip {
-  flex-shrink: 0; max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  display: inline-flex; align-items: baseline;
-  background: #FBF3DB; color: #956400;
-  border-radius: 9999px; padding: 5px 14px; font-size: 12px;
-}
-
-/* ── Board ───────────────────────────────────────── */
-.board {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px;
+/* ── Projects ────────────────────────────────────── */
+.projects {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px;
   align-items: start; max-width: 1400px; margin: 0 auto; padding: 8px 40px 130px;
 }
-.col {
-  display: flex; flex-direction: column; gap: 12px;
-  border-radius: var(--radius);
-  padding: 4px;
-  transition: background 0.2s;
+.project {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  padding: 20px 20px 16px; display: flex; flex-direction: column; gap: 14px;
+  box-shadow: var(--shadow);
 }
-.col.drop-target { background: rgba(0, 0, 0, 0.03); }
-.col-head { display: flex; align-items: center; gap: 8px; padding: 2px 6px; }
-.col-dot { width: 7px; height: 7px; border-radius: 50%; }
-.col-head h3 { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); }
-.col-count { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
-.col-cards { display: flex; flex-direction: column; gap: 10px; }
-.col-empty { font-size: 12.5px; color: #b8b4ac; padding: 16px 6px; text-align: center; }
+.project-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.project-crew { display: flex; }
+.project-crew .avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
+.project-questions { display: grid; gap: 6px; }
+.question-line {
+  background: #FBF3DB; color: #956400;
+  border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12px; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.project-cards { display: flex; flex-direction: column; gap: 10px; }
+.col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
+
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.status-chip {
+  flex-shrink: 0; border-radius: 9999px; padding: 2px 10px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+}
+.status-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.status-chip.pick { border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft); padding: 4px 12px; transition: border-color 0.15s; }
+.status-chip.pick:hover { border-color: #ccc8bf; }
+.status-chip.pick.active { border-color: transparent; }
+.chip-project { color: #b8b4ac; font-size: 10.5px; margin-left: 2px; }
+.card.is-done { opacity: 0.55; }
+.card.is-done:hover { opacity: 1; }
 
 /* ── Card ────────────────────────────────────────── */
 .card {
@@ -99,13 +104,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--radius);
   padding: 14px 16px 12px;
   box-shadow: var(--shadow);
-  cursor: grab; display: grid; gap: 8px;
+  cursor: pointer; display: grid; gap: 8px;
   animation: card-in 0.5s var(--ease) both;
   animation-delay: calc(var(--i) * 60ms);
   transition: box-shadow 0.2s, border-color 0.2s, transform 0.2s;
 }
 .card:hover { box-shadow: var(--shadow-hover); border-color: #ddd9d0; transform: translateY(-1px); }
-.card:active { cursor: grabbing; transform: scale(0.98); }
+.card:active { transform: scale(0.99); }
 @keyframes card-in { from { opacity: 0; transform: translateY(12px); } }
 .card h4 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; text-wrap: pretty; }
 .card-desc {

@@ -8,15 +8,15 @@ import { buildServer } from './server.js'
 import { reap } from './reaper.js'
 
 export function dataDir(): string {
-  const d = process.env.AGENTBOARD_HOME ?? path.join(os.homedir(), '.agentboard')
+  const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
   fs.mkdirSync(d, { recursive: true })
   return d
 }
-export function port(): number { return Number(process.env.AGENTBOARD_PORT ?? 4750) }
+export function port(): number { return Number(process.env.ORCHESTRA_PORT ?? 4750) }
 export const baseUrl = () => `http://127.0.0.1:${port()}`
 
 export async function serve(): Promise<void> {
-  const db = openDb(path.join(dataDir(), 'agentboard.db'))
+  const db = openDb(path.join(dataDir(), 'orchestra.db'))
   const server = buildServer(db)
   await server.listen({ host: '127.0.0.1', port: port() })
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export AGENTBOARD_HOME=$(mktemp -d) AGENTBOARD_PORT=4788
+export ORCHESTRA_HOME=$(mktemp -d) ORCHESTRA_PORT=4788
 CLI="npx tsx src/cli.ts"
 $CLI serve & DPID=$!; sleep 1
 trap "kill $DPID 2>/dev/null" EXIT

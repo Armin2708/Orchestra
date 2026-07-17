@@ -4,11 +4,11 @@ import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
 it('resolves data dir and port from env', () => {
-  process.env.AGENTBOARD_HOME = '/tmp/abtest'
-  process.env.AGENTBOARD_PORT = '5999'
+  process.env.ORCHESTRA_HOME = '/tmp/abtest'
+  process.env.ORCHESTRA_PORT = '5999'
   expect(dataDir()).toBe('/tmp/abtest')
   expect(port()).toBe(5999)
-  delete process.env.AGENTBOARD_HOME; delete process.env.AGENTBOARD_PORT
+  delete process.env.ORCHESTRA_HOME; delete process.env.ORCHESTRA_PORT
 })
 
 it('serves SSE with correct content type', async () => {

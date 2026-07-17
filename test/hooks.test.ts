@@ -8,13 +8,13 @@ import { buildServer } from '../src/server.js'
 let server: any, port: number, home: string
 beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-'))
-  process.env.AGENTBOARD_HOME = home
+  process.env.ORCHESTRA_HOME = home
   server = buildServer(openDb(':memory:'))
   await server.listen({ host: '127.0.0.1', port: 0 })
   port = server.server.address().port
-  process.env.AGENTBOARD_PORT = String(port)
+  process.env.ORCHESTRA_PORT = String(port)
 })
-afterAll(async () => { await server.close(); delete process.env.AGENTBOARD_HOME; delete process.env.AGENTBOARD_PORT })
+afterAll(async () => { await server.close(); delete process.env.ORCHESTRA_HOME; delete process.env.ORCHESTRA_PORT })
 
 it('session-start registers and prints rules; post-tool-use delivers pings', async () => {
   const hooks = await import('../src/hooks.js')
@@ -23,7 +23,7 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
   await hooks.runHook('session-start')
-  expect(out.join('\n')).toContain('agentboard rules')
+  expect(out.join('\n')).toContain('orchestra rules')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess1.json'), 'utf8'))
   expect(sess.agent_id).toBeGreaterThan(0)
 
@@ -40,8 +40,8 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
 
 it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
-  process.env.AGENTBOARD_PORT = '1' // nothing listening
+  process.env.ORCHESTRA_PORT = '1' // nothing listening
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue('{"session_id":"sessX","cwd":"/tmp"}')
   await expect(hooks.runHook('post-tool-use')).resolves.toBeUndefined()
-  process.env.AGENTBOARD_PORT = String(port)
+  process.env.ORCHESTRA_PORT = String(port)
 })

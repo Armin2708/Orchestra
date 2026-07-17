@@ -5,22 +5,22 @@ import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
 
-const program = new Command().name('agentboard').version(VERSION)
+const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
-const envAgent = () => process.env.AGENTBOARD_AGENT
+const envAgent = () => process.env.ORCHESTRA_AGENT
 
 async function up() { if (!(await ensureDaemon())) { console.error('daemon unreachable'); process.exit(1) } }
 async function board() { return api('POST', '/boards/resolve', { project_path: projectPath() }) }
 
 program.command('serve').description('run daemon in foreground').action(async () => {
-  await serve(); console.log(`agentboard on ${baseUrl()}`)
+  await serve(); console.log(`orchestra on ${baseUrl()}`)
 })
 program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
 
 program.command('join').option('--name <name>').option('--session <id>').action(async (o) => {
   await up()
   const b = await board()
-  const a = await api('POST', '/agents/register', { board_id: b.id, name: o.name ?? process.env.AGENTBOARD_NAME, session_id: o.session })
+  const a = await api('POST', '/agents/register', { board_id: b.id, name: o.name ?? process.env.ORCHESTRA_NAME, session_id: o.session })
   console.log(`AGENT_ID=${a.id} AGENT_NAME=${a.name} BOARD_ID=${b.id}`)
   const snap = await api('GET', `/boards/${b.id}/snapshot`)
   for (const ag of snap.agents.filter((x: any) => x.status !== 'gone' && x.id !== a.id))
@@ -64,7 +64,7 @@ program.command('reply <msgId> <body>').option('--from <a>').action(async (msgId
 
 program.command('pulse').option('--agent-id <id>').action(async (o) => {
   await up()
-  const id = o.agentId ?? process.env.AGENTBOARD_AGENT_ID
+  const id = o.agentId ?? process.env.ORCHESTRA_AGENT_ID
   if (!id) return
   const r = await api('POST', `/agents/${id}/pulse`)
   for (const m of r.messages) console.log(`[${m.from_name ?? 'human'}] ${m.body} (msg #${m.id})`)

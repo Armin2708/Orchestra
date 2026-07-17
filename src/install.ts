@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const MARKER = 'agentboard hook'
+const MARKER = 'orchestra hook'
 const HOOKS: Record<string, any> = {
   SessionStart: { hooks: [{ type: 'command', command: `${MARKER} session-start` }] },
   PostToolUse: { matcher: '*', hooks: [{ type: 'command', command: `${MARKER} post-tool-use` }] },
@@ -27,7 +27,7 @@ export function installHooks(scope: 'global' | 'project', settingsPath = default
     if (!s.hooks[event].some(hasMarker)) s.hooks[event].push(entry)
   }
   fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + '\n')
-  console.log(`agentboard hooks installed in ${settingsPath}`)
+  console.log(`orchestra hooks installed in ${settingsPath}`)
 }
 
 export function uninstallHooks(scope: 'global' | 'project', settingsPath = defaultPath(scope)): void {
@@ -38,5 +38,5 @@ export function uninstallHooks(scope: 'global' | 'project', settingsPath = defau
     if (s.hooks[event].length === 0) delete s.hooks[event]
   }
   fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + '\n')
-  console.log(`agentboard hooks removed from ${settingsPath}`)
+  console.log(`orchestra hooks removed from ${settingsPath}`)
 }

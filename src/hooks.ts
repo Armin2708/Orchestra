@@ -20,18 +20,18 @@ const loadSession = (id: string): Session | undefined => {
   try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
 }
 
-const RULES = `agentboard rules (coordination board for this project):
-- Before starting work: agentboard card create "<title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress
-- Keep your card updated (agentboard card update/move) as scope or status changes.
+const RULES = `orchestra rules (coordination board for this project):
+- Before starting work: orchestra card create "<title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress
+- Keep your card updated (orchestra card update/move) as scope or status changes.
 - Check the board below; do NOT touch paths claimed by another active card without asking first.
-- To ask a neighbor: agentboard ask <agent-name> "<question>". Replies arrive automatically.
-- Your identity is in $AGENTBOARD_AGENT / $AGENTBOARD_AGENT_ID (also echoed here).`
+- To ask a neighbor: orchestra ask <agent-name> "<question>". Replies arrive automatically.
+- Your identity is in $ORCHESTRA_AGENT / $ORCHESTRA_AGENT_ID (also echoed here).`
 
 async function sessionStart(input: any): Promise<void> {
   if (!(await ensureDaemon())) return
   const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
   const agent = await api('POST', '/agents/register', {
-    board_id: board.id, session_id: input.session_id, name: process.env.AGENTBOARD_NAME,
+    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME,
   })
   fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
   fs.writeFileSync(sessFile(input.session_id),
@@ -58,8 +58,8 @@ async function postToolUse(input: any): Promise<void> {
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`)
   if (r.messages.length === 0) return
   const ctx = r.messages.map((m: any) =>
-    `📨 agentboard message from ${m.from_name ?? 'human'}: ${m.body}` +
-    (m.reply_to ? ` (reply to your msg #${m.reply_to})` : ` — reply with: agentboard reply ${m.id} "..."`)).join('\n')
+    `📨 orchestra message from ${m.from_name ?? 'human'}: ${m.body}` +
+    (m.reply_to ? ` (reply to your msg #${m.reply_to})` : ` — reply with: orchestra reply ${m.id} "..."`)).join('\n')
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: ctx } }))
 }
 

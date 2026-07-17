@@ -14,10 +14,10 @@ it('installs idempotently, preserves existing hooks, uninstalls cleanly', () => 
   const s = JSON.parse(fs.readFileSync(f, 'utf8'))
   expect(s.hooks.SessionStart).toHaveLength(1)
   expect(s.hooks.Stop).toHaveLength(2) // existing + ours
-  expect(JSON.stringify(s)).toContain('agentboard hook post-tool-use')
+  expect(JSON.stringify(s)).toContain('orchestra hook post-tool-use')
 
   uninstallHooks('global', f)
   const s2 = JSON.parse(fs.readFileSync(f, 'utf8'))
-  expect(JSON.stringify(s2)).not.toContain('agentboard hook')
+  expect(JSON.stringify(s2)).not.toContain('orchestra hook')
   expect(s2.hooks.Stop).toHaveLength(1) // existing preserved
 })
