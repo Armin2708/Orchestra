@@ -5,7 +5,7 @@ import { generateName } from './names.js'
 import { removeAgentCards } from './reaper.js'
 import { port } from './daemon.js'
 
-type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error'; text: string }
+type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user'; text: string }
 
 type Hired = {
   agentId: number
@@ -104,7 +104,7 @@ export class Conductor {
 
     const hired: Hired = {
       agentId: agent.id, boardId: opts.boardId, name, cwd: opts.cwd,
-      push: input.push, end: input.end,
+      push: (text: string) => { log('user', text); input.push(text) }, end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
     }

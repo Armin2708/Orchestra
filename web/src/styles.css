@@ -124,6 +124,48 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   width: 15px; height: 15px; font-size: 11px; line-height: 1; padding: 0;
 }
 .crew-slot:hover .fire { opacity: 1; }
+.avatar.clickable { cursor: pointer; transition: transform 0.15s; }
+.avatar.clickable:hover { transform: scale(1.08); }
+
+/* ── Agent console ───────────────────────────────── */
+.terminal {
+  position: fixed; top: 0; right: 0; z-index: 40;
+  width: min(560px, 100vw); height: 100dvh;
+  background: #1B1A17; color: #E8E4DA;
+  display: flex; flex-direction: column;
+  animation: slide-in 0.3s var(--ease);
+}
+.terminal-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.terminal-title { font-weight: 600; font-size: 14px; }
+.terminal-head .close {
+  position: static; margin-left: auto; background: none; border: 1px solid rgba(255,255,255,0.14);
+  color: #b8b4ac; width: 28px; height: 28px; border-radius: 8px; font-size: 15px;
+}
+.terminal-head .close:hover { color: #fff; }
+.terminal-scroll {
+  flex: 1; overflow-y: auto; padding: 18px 20px;
+  font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12.5px; line-height: 1.7; display: flex; flex-direction: column; gap: 10px;
+}
+.terminal-scroll p { white-space: pre-wrap; word-break: break-word; }
+.tl-user { color: #F2C464; }
+.tl-text { color: #E8E4DA; }
+.tl-status { color: #8d8a83; font-style: italic; }
+.tl-error { color: #ff8a80; }
+.terminal-input {
+  display: flex; gap: 8px; padding: 14px 20px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.terminal-input textarea {
+  flex: 1; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #E8E4DA; min-height: 44px;
+}
+.terminal-input textarea::placeholder { color: #8d8a83; }
+.terminal-input .btn.primary { background: #E8E4DA; color: #1B1A17; align-self: flex-end; }
+.terminal-input .btn.primary:hover { background: #fff; }
 .project-cards { display: flex; flex-direction: column; gap: 10px; }
 .col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
 

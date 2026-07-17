@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { api, Card, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
 import { CardDrawer } from './CardDrawer'
+import { AgentTerminal } from './AgentTerminal'
 
 function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onChange: () => void }) {
   const [reply, setReply] = useState('')
@@ -61,6 +62,7 @@ function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () =>
 
 export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
   const [open, setOpen] = useState<{ card: Card; boardId: number } | null>(null)
+  const [terminal, setTerminal] = useState<Agent | null>(null)
   const [askTo, setAskTo] = useState<{ name: string; boardId: number } | null>(null)
   const [askBody, setAskBody] = useState('')
   const [adding, setAdding] = useState<number | null>(null)
@@ -104,9 +106,10 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
                 <div className="project-crew">
                   {agents.map((a) => (
                     <span key={a.id} className="crew-slot">
-                      <span className={`avatar ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
-                        title={`${a.name} · ${a.status}${a.kind === 'hired' ? ' · hired' : ''}`}
-                        style={{ background: agentWash(a.name), color: agentInk(a.name) }}>
+                      <span className={`avatar ${a.status} ${a.kind === 'hired' ? 'hired clickable' : ''}`}
+                        title={a.kind === 'hired' ? `${a.name} · ${a.status} · open console` : `${a.name} · ${a.status}`}
+                        style={{ background: agentWash(a.name), color: agentInk(a.name) }}
+                        onClick={a.kind === 'hired' ? () => setTerminal(a) : undefined}>
                         {initials(a.name)}
                         <i className="presence" />
                       </span>
@@ -201,6 +204,7 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
         onClose={() => setOpen(null)} onChange={onChange} />}
+      {terminal && <AgentTerminal agent={terminal} onClose={() => setTerminal(null)} onChange={onChange} />}
     </>
   )
 }
