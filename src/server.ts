@@ -158,6 +158,47 @@ export function buildServer(db: Database.Database): FastifyInstance {
     return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id)
   })
 
+  server.delete<{ Params: { id: string } }>('/api/v1/messages/:id', (req, reply) => {
+    const id = Number(req.params.id)
+    const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(id) as any
+    if (!msg) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM messages WHERE reply_to=?`).run(id)
+    db.prepare(`DELETE FROM messages WHERE id=?`).run(id)
+    emit(msg.board_id, 'message', { deleted: id })
+    return { ok: true }
+  })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/cards/:id', (req, reply) => {
+    const card = db.prepare(`SELECT * FROM cards WHERE id=?`).get(Number(req.params.id)) as any
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM card_events WHERE card_id=?`).run(card.id)
+    db.prepare(`UPDATE messages SET card_id=NULL WHERE card_id=?`).run(card.id)
+    db.prepare(`DELETE FROM cards WHERE id=?`).run(card.id)
+    emit(card.board_id, 'card', { deleted: card.id })
+    return { ok: true }
+  })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/agents/:id', (req, reply) => {
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+    if (!a) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`UPDATE cards SET owner_agent_id=NULL WHERE owner_agent_id=?`).run(a.id)
+    db.prepare(`DELETE FROM agents WHERE id=?`).run(a.id)
+    emit(a.board_id, 'agent', { deleted: a.id })
+    return { ok: true }
+  })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/boards/:id', (req, reply) => {
+    const id = Number(req.params.id)
+    if (!db.prepare(`SELECT 1 FROM boards WHERE id=?`).get(id)) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM messages WHERE board_id=?`).run(id)
+    db.prepare(`DELETE FROM card_events WHERE card_id IN (SELECT id FROM cards WHERE board_id=?)`).run(id)
+    db.prepare(`DELETE FROM cards WHERE board_id=?`).run(id)
+    db.prepare(`DELETE FROM agents WHERE board_id=?`).run(id)
+    db.prepare(`DELETE FROM boards WHERE id=?`).run(id)
+    emit(id, 'board', { deleted: id })
+    return { ok: true }
+  })
+
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/heartbeat', (req) => {
     const id = Number(req.params.id)
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)

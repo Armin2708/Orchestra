@@ -12,6 +12,7 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
   const [comment, setComment] = useState('')
   const [editingDesc, setEditingDesc] = useState(false)
   const [desc, setDesc] = useState(card.description)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   useEffect(() => { api('GET', `/cards/${card.id}/events`).then(setEvents) }, [card.id, card.updated_at])
   useEffect(() => { setDesc(card.description) }, [card.description])
@@ -80,6 +81,19 @@ export function CardDrawer({ card, boardId, onClose, onChange }:
         <textarea value={comment} placeholder="Lands in the agent's context within about 30 seconds"
           onChange={(e) => setComment(e.target.value)} />
         <button className="btn primary" onClick={send}>Send</button>
+
+        <div className="drawer-footer">
+          {confirmDelete ? (
+            <>
+              <button className="btn danger" onClick={async () => {
+                await api('DELETE', `/cards/${card.id}`); onClose(); onChange()
+              }}>Delete card permanently</button>
+              <button className="btn ghost" onClick={() => setConfirmDelete(false)}>Keep it</button>
+            </>
+          ) : (
+            <button className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete card</button>
+          )}
+        </div>
       </aside>
     </>
   )

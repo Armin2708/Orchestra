@@ -19,6 +19,8 @@ function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onCh
         <span className={`status-chip ${t.answered ? 'chip-answered' : 'chip-open'}`}>
           {t.answered ? 'Answered' : 'Open'}
         </span>
+        <button className="icon-x" title="Delete question"
+          onClick={async () => { await api('DELETE', `/messages/${t.id}`); onChange() }}>×</button>
       </div>
       {t.replies.map((r) => (
         <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
@@ -45,6 +47,17 @@ export const STATUS: Record<string, { label: string; bg: string; ink: string }> 
   done: { label: 'Done', bg: '#EDF3EC', ink: '#346538' },
 }
 const ORDER = ['in_progress', 'blocked', 'review', 'backlog', 'done']
+
+function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () => void }) {
+  const [arming, setArming] = useState(false)
+  if (!arming) return <button className="icon-x quiet" title="Remove project from board" onClick={() => setArming(true)}>×</button>
+  return (
+    <span className="confirm-remove">
+      <button className="btn danger" onClick={async () => { await api('DELETE', `/boards/${boardId}`); onChange() }}>Remove?</button>
+      <button className="btn ghost" onClick={() => setArming(false)}>Keep</button>
+    </span>
+  )
+}
 
 export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
   const [open, setOpen] = useState<{ card: Card; boardId: number } | null>(null)
@@ -83,6 +96,7 @@ export function ProjectGrid({ snaps, onChange }: { snaps: Snapshot[]; onChange: 
             <section key={s.board.id} className="project">
               <header className="project-head">
                 <h2>{s.board.name}</h2>
+                <RemoveProject boardId={s.board.id} onChange={onChange} />
                 <div className="project-crew">
                   {agents.map((a) => (
                     <span key={a.id} className={`avatar ${a.status}`} title={`${a.name} · ${a.status}`}
