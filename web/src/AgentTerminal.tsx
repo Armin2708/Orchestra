@@ -27,6 +27,8 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const firstScroll = useRef(true)
+  useEffect(() => { firstScroll.current = true }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
   useEffect(() => {
@@ -87,10 +89,15 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
 
   const working = hired && turn !== null
 
-  // auto-follow only when already near the bottom — manual scrolling stays untouched
+  // on open: jump straight to the latest messages; afterwards auto-follow only near the bottom
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    if (firstScroll.current && convo.length > 0) {
+      el.scrollTo({ top: el.scrollHeight })
+      firstScroll.current = false
+      return
+    }
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140
     if (nearBottom) el.scrollTo({ top: el.scrollHeight })
   }, [convo.length, working])
