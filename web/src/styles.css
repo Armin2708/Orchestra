@@ -292,3 +292,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: #6f6b64; font-size: 11.5px;
 }
 .cc-thinking { color: #8a867e; font-style: italic; }
+.cc-welcome {
+  border: 1px solid #4a463f; border-radius: 8px;
+  padding: 10px 16px; margin-bottom: 6px; width: fit-content; min-width: 340px;
+}
+.cc-welcome p { color: #DED9D1; }
+.cc-logo { color: #D97757; display: inline-block; min-width: 14px; }
+.cc-welcome-sub { color: #6f6b64; font-size: 12px; margin-top: 2px; }
+.cc-star-frame { color: #D97757; display: inline-block; min-width: 14px; }

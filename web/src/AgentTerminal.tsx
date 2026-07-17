@@ -11,6 +11,13 @@ const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolatin
 const fmtTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
+// the claude spinner glyph frames
+const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+const BOOT_MSGS = [
+  'Warming up the orchestra…', 'Tuning instruments…', 'Raising the baton…',
+  'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
+]
+
 export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
@@ -40,6 +47,18 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
     const t = setInterval(() => setGerund(GERUNDS[Math.floor(Math.random() * GERUNDS.length)]), 9000)
     return () => clearInterval(t)
   }, [turn !== null])
+
+  // session is booting until the SDK reports init
+  const booting = hired && !lines.some((l) => l.kind === 'status' && l.text.startsWith('session started')) &&
+    !lines.some((l) => l.kind === 'text' || l.kind === 'tool')
+  const [frame, setFrame] = useState(0)
+  useEffect(() => {
+    if (!booting && !turn) return
+    const t = setInterval(() => setFrame((f) => f + 1), 220)
+    return () => clearInterval(t)
+  }, [booting, turn !== null])
+  const star = STARS[frame % STARS.length]
+  const bootMsg = BOOT_MSGS[Math.floor(frame / 14) % BOOT_MSGS.length]
 
   const convo: Line[] = hired ? lines : [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
@@ -106,15 +125,24 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
           </header>
 
           <div className="terminal-scroll" ref={scrollRef}>
+            {hired && (
+              <div className="cc-welcome">
+                <p><span className="cc-logo">{booting ? star : '✻'}</span> Welcome to <b>Orchestra</b>!</p>
+                <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
+              </div>
+            )}
             {convo.map(renderLine)}
-            {convo.length === 0 && (
+            {booting && (
+              <p className="cc-spinner"><span className="cc-star-frame">{star}</span> {bootMsg}</p>
+            )}
+            {!booting && convo.length === 0 && (
               <p className="cc-status">
                 {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
               </p>
             )}
             {working && turn && (
               <p className="cc-spinner">
-                <span className="cc-star">✳</span> {gerund}… ({fmtSecs(turn.secs)}
+                <span className="cc-star-frame">{star}</span> {gerund}… ({fmtSecs(turn.secs)}
                 {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>}
                 {' · '}<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt)
               </p>
