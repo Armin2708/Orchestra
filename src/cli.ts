@@ -165,6 +165,14 @@ program.command('ideas').description('list roadmap ideas').action(async () => {
   for (const i of snap.ideas ?? []) console.log(`#${i.id} ${i.text.split('\n')[0]}`)
 })
 
+program.command('shipped <cardId> <hash>').description('record the merge commit that shipped a card')
+  .option('--from <a>').action(async (cardId, hash, o) => {
+    await up()
+    const r = await api('POST', `/cards/${cardId}/shipped`, { hash, by: o.from ?? envAgent() })
+    const p = JSON.parse(r.event.payload)
+    console.log(`card #${cardId} shipped @ ${p.hash} "${p.subject}"${r.created ? '' : ' (already recorded)'}`)
+  })
+
 program.command('note <text>').description('post a note to the board (visible to everyone as a thread)')
   .option('--from <a>').action(async (text, o) => {
     await up(); const b = await board()
