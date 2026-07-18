@@ -266,6 +266,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}
         boardId={terminal.boardId}
         threads={(snaps.find((s) => s.board.id === terminal.boardId)?.threads ?? []) as Thread[]}
+        cards={snaps.find((s) => s.board.id === terminal.boardId)?.cards ?? []}
         onClose={() => setTerminal(null)} onChange={onChange} />}
     </>
   )

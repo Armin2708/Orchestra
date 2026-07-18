@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, Agent, Thread } from './api'
+import { api, Agent, Card, Thread } from './api'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -18,8 +18,8 @@ const BOOT_MSGS = [
   'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
 ]
 
-export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
-  { agent: Agent; boardId: number; threads: Thread[]; onClose: () => void; onChange: () => void }) {
+export function AgentTerminal({ agent, boardId, threads, cards = [], onClose, onChange }:
+  { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
@@ -153,6 +153,22 @@ export function AgentTerminal({ agent, boardId, threads, onClose, onChange }:
             <span className="cc-head-star">✻</span>
             <span>{agent.name}</span>
             <span className="cc-head-dim">{hired ? `hired agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
+            {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
+              <select className="cc-assign" defaultValue=""
+                title="Assign a ticket — the agent gets briefed and starts"
+                onChange={async (e) => {
+                  const id = Number(e.target.value)
+                  e.target.value = ''
+                  if (!id) return
+                  try { await api('POST', `/cards/${id}/assign`, { agent: agent.name }) } catch { /* locked */ }
+                  onChange()
+                }}>
+                <option value="" disabled>assign ticket…</option>
+                {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
+                  <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
+                ))}
+              </select>
+            )}
             <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>
           </header>
 

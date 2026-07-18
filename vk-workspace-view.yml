@@ -1,0 +1,164 @@
+- generic [ref=e1]:
+  - generic [ref=e217]:
+    - navigation [ref=e219]:
+      - button "Archive" [ref=e864] [cursor=pointer]
+      - paragraph [ref=e221]: vk/0449-add-a-single-lin
+      - generic [ref=e222]:
+        - button "Hide Left Sidebar" [ref=e223] [cursor=pointer]
+        - button "Toggle Chat Panel" [disabled] [ref=e226]
+        - button "Toggle Changes Panel" [ref=e867] [cursor=pointer]
+        - button "Toggle Logs Panel" [ref=e870] [cursor=pointer]
+        - button "Toggle Preview Panel" [ref=e873] [cursor=pointer]
+        - button "Hide Right Sidebar" [ref=e876] [cursor=pointer]
+        - button "Open Command Bar" [ref=e880] [cursor=pointer]
+        - button "Give Feedback" [ref=e883] [cursor=pointer]
+        - button "Workspaces Guide" [ref=e886] [cursor=pointer]
+        - button "Settings" [ref=e889] [cursor=pointer]
+    - generic [ref=e245]:
+      - generic [ref=e246]:
+        - paragraph [ref=e247]: Local
+        - button "Local workspaces" [ref=e249] [cursor=pointer]
+      - generic [ref=e252]:
+        - paragraph [ref=e253]: Remote
+        - button "Pair a remote device" [ref=e255] [cursor=pointer]
+      - generic [ref=e258]:
+        - paragraph [ref=e259]: Projects
+        - button "Sign in to view projects" [ref=e261] [cursor=pointer]
+      - generic [ref=e264]:
+        - button "Sign in" [ref=e265] [cursor=pointer]
+        - link "Star on GitHub" [ref=e268] [cursor=pointer]:
+          - /url: https://github.com/BloopAI/vibe-kanban
+          - generic [ref=e271]: 27k
+        - link "Join our Discord" [ref=e274] [cursor=pointer]:
+          - /url: https://discord.gg/AC4nwVtJM3
+          - generic [ref=e277]: "189"
+        - paragraph [ref=e278]: v0.1.44
+    - generic [ref=e280]:
+      - generic [ref=e282]:
+        - generic [ref=e283]:
+          - generic [ref=e286]:
+            - generic [ref=e287]: Workspaces
+            - generic [ref=e288]:
+              - button [ref=e289] [cursor=pointer]
+              - button [ref=e292] [cursor=pointer]
+          - generic [ref=e295]:
+            - textbox "Search..." [ref=e298]
+            - generic [ref=e300]:
+              - button "Sort workspaces" [ref=e301] [cursor=pointer]
+              - button "Filter workspaces" [ref=e304] [cursor=pointer]
+        - generic [ref=e308]:
+          - generic [ref=e309]:
+            - button "Needs Attention" [ref=e311] [cursor=pointer]
+            - generic [ref=e316]: No workspaces
+          - generic [ref=e318]:
+            - button "Running" [ref=e320] [cursor=pointer]
+            - generic [ref=e893]:
+              - button "Add a single line \"hello from vibe kanban\" to README.md. Do nothing else." [ref=e895] [cursor=pointer]
+              - button "More actions" [ref=e904] [cursor=pointer]
+          - generic [ref=e327]:
+            - button "Idle" [ref=e329] [cursor=pointer]
+            - generic [ref=e334]: No workspaces
+        - button "View Archive 0" [ref=e337] [cursor=pointer]:
+          - generic [ref=e340]: View Archive
+          - generic [ref=e341]: "0"
+      - generic [ref=e908]:
+        - main [ref=e912]:
+          - generic [ref=e916]:
+            - generic [ref=e919]:
+              - generic [ref=e923]:
+                - generic [ref=e924]: Setup Script
+                - generic [ref=e925]: No setup script configured. Setup scripts run before the coding agent starts.
+              - button "Configure" [ref=e926] [cursor=pointer]
+            - generic [ref=e932]:
+              - button "You Reset Edit message" [expanded] [ref=e933] [cursor=pointer]:
+                - generic [ref=e936]: You
+                - generic [ref=e937]:
+                  - button "Reset" [ref=e938]
+                  - button "Edit message" [ref=e941]
+              - generic [ref=e948]:
+                - button "Copy as Markdown" [ref=e949] [cursor=pointer]
+                - textbox "Markdown content" [ref=e955]:
+                  - paragraph [ref=e956]: Add a single line "hello from vibe kanban" to README.md. Do nothing else.
+            - 'button "System: hook_started" [ref=e1118] [cursor=pointer]'
+            - 'button "System: hook_started" [ref=e1124] [cursor=pointer]'
+            - 'button "System: hook_started" [ref=e1130] [cursor=pointer]'
+            - 'button "System: hook_started" [ref=e1136] [cursor=pointer]'
+            - 'button "System: hook_started" [ref=e1142] [cursor=pointer]'
+            - 'button "System: hook_response" [ref=e1148] [cursor=pointer]'
+            - 'button "System: hook_response" [ref=e1154] [cursor=pointer]'
+            - 'button "System: hook_response" [ref=e1160] [cursor=pointer]'
+            - 'button "System: hook_progress" [ref=e1166] [cursor=pointer]'
+            - 'button "System: hook_response" [ref=e1172] [cursor=pointer]'
+            - 'button "System: hook_response" [ref=e1178] [cursor=pointer]'
+            - button "requesting" [ref=e1184] [cursor=pointer]
+          - generic [ref=e966]:
+            - button "Choose File" [ref=e967]
+            - generic [ref=e968]:
+              - button "0 files changed+0-0" [ref=e970] [cursor=pointer]:
+                - generic [ref=e971]:
+                  - text: 0 files changed
+                  - generic [ref=e972]:
+                    - generic [ref=e973]: "+0"
+                    - generic [ref=e974]: "-0"
+              - generic [ref=e975]:
+                - button "Go to previous message" [ref=e977] [cursor=pointer]
+                - img "Claude Code" [ref=e980]
+                - button "Tasks" [disabled] [ref=e982]
+                - img "Context usage" [ref=e985]
+                - button "Latest" [ref=e989] [cursor=pointer]
+            - generic [ref=e993]:
+              - generic [ref=e995]:
+                - textbox "Markdown editor" [active] [ref=e996]
+                - generic: Continue working on this task...
+              - generic [ref=e997]:
+                - generic [ref=e998]:
+                  - button [ref=e999] [cursor=pointer]
+                  - button "Opus · High" [ref=e1002] [cursor=pointer]
+                  - button [ref=e1006] [cursor=pointer]
+                  - button "Default" [ref=e1009] [cursor=pointer]
+                  - button "Attach file" [ref=e1013] [cursor=pointer]
+                  - button "Start Review" [disabled] [ref=e1016]
+                - generic [ref=e1019]:
+                  - button "Queue" [disabled] [ref=e1020]
+                  - button "Stop" [ref=e1021] [cursor=pointer]
+          - generic [ref=e1031]:
+            - generic [ref=e1032]:
+              - button "Open in IntelliJ IDEA" [ref=e1034] [cursor=pointer]:
+                - img "IntelliJ IDEA" [ref=e1035]
+              - button "Copy path" [ref=e1037] [cursor=pointer]
+            - generic [ref=e1041]:
+              - button "Start dev server" [ref=e1043] [cursor=pointer]
+              - button "Toggle Preview Panel" [ref=e1047] [cursor=pointer]
+              - button "Toggle Changes Panel" [ref=e1051] [cursor=pointer]
+        - generic [ref=e1056]:
+          - generic [ref=e1058]:
+            - button "Git" [ref=e1060] [cursor=pointer]
+            - generic [ref=e1067]:
+              - generic [ref=e1068]:
+                - generic [ref=e1069]: vk-teardown-repo
+                - generic [ref=e1070]:
+                  - button "main" [ref=e1072] [cursor=pointer]
+                  - button "More actions" [ref=e1078] [cursor=pointer]
+                - generic [ref=e1083]:
+                  - button "Open pull request" [ref=e1084] [cursor=pointer]
+                  - button [ref=e1085] [cursor=pointer]
+              - generic [ref=e1088]:
+                - paragraph [ref=e1092]: Working Branch
+                - generic [ref=e1093]: vk/0449-add-a-single-lin
+          - button "Terminal" [ref=e1100] [cursor=pointer]:
+            - button [ref=e1103]
+          - button "Notes" [ref=e1111] [cursor=pointer]
+  - generic:
+    - generic:
+      - generic:
+        - generic: Organization
+        - button
+      - button "Workspaces"
+      - generic:
+        - generic:
+          - paragraph: Kanban Boards
+          - paragraph: Sign in to organise your coding agents with kanban boards.
+          - generic:
+            - button "Sign in"
+  - listbox "Typeahead menu"
+  - listbox "Typeahead menu"
