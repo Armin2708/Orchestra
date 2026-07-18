@@ -60,7 +60,10 @@ export type SystemInfo = {
   usage: {
     five_hour: { utilization: number; resets_at: string | null }
     seven_day: { utilization: number; resets_at: string | null }
+    stale_since?: string // present when the daemon serves the last cached payload
   } | null
+  usage_error?: 'keychain' | 'offline' | 'none' | null
+  usage_error_since?: string | null
   injected?: { chars: number; tokens: number; count: number }
 }
 

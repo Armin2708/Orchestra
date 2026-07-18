@@ -976,6 +976,10 @@ textarea {
 .meter.low .meter-bar i { background: #C4554D; }
 .meter.low .meter-val { color: #9F2F2D; }
 .meter-reset { font-size: 10px; color: #9b968e; font-variant-numeric: tabular-nums; }
+/* usage degradation (#49): stale = cached numbers dimmed; degraded = no numbers at all */
+.meter.stale .meter-bar i { opacity: 0.4; }
+.meter.stale .meter-val, .meter.stale .meter-reset { color: #9b968e; }
+.meter.degraded .meter-val { color: #9b968e; font-weight: 500; font-style: italic; }
 
 /* kill agent: hover ✕ on the circle, anchored confirm, dissolve on the way out */
 .net-kill {

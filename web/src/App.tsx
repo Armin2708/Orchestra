@@ -222,11 +222,14 @@ function SystemMeter({ boards }: { boards: number[] }) {
   const at = (iso: string | null) => iso
     ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : null
+  const remedy = 'restart orchestra from an interactive terminal (orchestra restart) and choose "Always Allow" on the keychain prompt'
+  const stale = sys?.usage?.stale_since
   const win = (label: string, w: { utilization: number; resets_at: string | null }) => {
     const used = Math.round(w.utilization)
     const reset = at(w.resets_at)
+    const staleNote = stale ? ` — cached ${at(stale)}, live fetch failing (${sys!.usage_error}); ${remedy}` : ''
     return (
-      <span className={`meter ${used >= 85 ? 'low' : ''}`} title={`${label} limit: ${used}% used${reset ? ` — resets ${reset}` : ''}`}>
+      <span className={`meter ${used >= 85 ? 'low' : ''} ${stale ? 'stale' : ''}`} title={`${label} limit: ${used}% used${reset ? ` — resets ${reset}` : ''}${staleNote}`}>
         <span className="meter-label">{label}</span>
         <span className="meter-bar"><i style={{ width: `${Math.min(100, used)}%` }} /></span>
         <span className="meter-val">{used}%</span>
@@ -242,6 +245,13 @@ function SystemMeter({ boards }: { boards: number[] }) {
       </span>
       {sys.usage && win('5h', sys.usage.five_hour)}
       {sys.usage && win('week', sys.usage.seven_day)}
+      {!sys.usage && sys.usage_error && (
+        <span className="meter degraded"
+          title={`Claude usage unavailable (${sys.usage_error})${sys.usage_error_since ? ` since ${at(sys.usage_error_since)}` : ''} — ${remedy}.`}>
+          <span className="meter-label">usage</span>
+          <span className="meter-val">unavailable ({sys.usage_error})</span>
+        </span>
+      )}
       {sys.injected && sys.injected.count > 0 && (
         <span className="meter"
           title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)${inj && inj.by_agent.length > 0 ? ` — top agents: ${inj.by_agent.slice(0, 5).map((a) => `${a.agent_name} ${fmtTokens(a.tokens)}`).join(', ')}` : ''}`}>
