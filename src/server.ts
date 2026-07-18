@@ -236,14 +236,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     logEvent(card.id, agentRow.id, 'updated', { assigned_to: agentRow.name })
     emit(card.board_id, 'card', updated)
     const brief = assignmentBrief(updated)
-    if (maestro?.isHired(agentRow.id)) {
-      maestro.task(agentRow.id, brief)
-    } else {
-      const { lastInsertRowid } = db.prepare(`
-        INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
-        .run(card.board_id, agentRow.id, card.id, brief)
-      emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
+    // every assignment is a board message — the you→agent arrow shows for all agent kinds
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
+      .run(card.board_id, agentRow.id, card.id, brief)
+    let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
+    if (maestro?.isHired(agentRow.id) && maestro.deliver(agentRow.id, { ...msg, from_name: null })) {
+      db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(msg.id, agentRow.id)
+      db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(msg.id)
+      msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
     }
+    emit(card.board_id, 'message', msg)
     return updated
   }
 

@@ -8,8 +8,8 @@ it('ideas promote to tickets and assignment briefs the agent', async () => {
   const stub = (_bus: Bus): ConductorLike => ({
     isHired: (id) => Boolean(db.prepare(`SELECT 1 FROM agents WHERE id=? AND kind='hired'`).get(id)),
     hire: () => ({}),
-    deliver: () => true,
-    task: (id, text) => { tasked.push({ id, text }); return true },
+    deliver: (id, msg) => { tasked.push({ id, text: msg.body }); return true },
+    task: () => true,
     transcript: () => ({ lines: [], working: null }),
     interruptAgent: async () => true,
     fire: async () => true,
