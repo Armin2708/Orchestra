@@ -122,6 +122,8 @@ program.command('snapshot').option('--board <id>').option('--full', 'complete bo
     console.log(`#${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`)
   for (const q of snap.open_questions)
     console.log(`Q#${q.id} ${q.from_name ?? 'human'} → ${q.to_name ?? 'all'}: ${q.body.length > 140 ? q.body.slice(0, 140) + '…' : q.body}`)
+  for (const m of (snap.dead_letters ?? []).filter((m: any) => !m.bounced))
+    console.log(`✖#${m.id} undelivered to ${m.to_name} (gone), from ${m.from_name ?? 'human'}: ${m.body.length > 100 ? m.body.slice(0, 100) + '…' : m.body}`)
   console.log(`(descriptions, milestones, ideas, threads: orchestra snapshot --full)`)
 })
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar, isShippedMatch } from './similar.js'
-import { removeAgentCards } from './reaper.js'
+import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
@@ -126,6 +126,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         LEFT JOIN agents ta ON ta.id = m.to_agent_id
         WHERE m.board_id=? AND m.reply_to IS NULL
           AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id)
+        ORDER BY m.id`).all(id),
+      // undelivered mail to agents who already left — actionable, not just history
+      dead_letters: db.prepare(`
+        SELECT m.*, fa.name AS from_name, ta.name AS to_name,
+          EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) AS bounced
+        FROM messages m
+        JOIN agents ta ON ta.id = m.to_agent_id AND ta.status='gone'
+        LEFT JOIN agents fa ON fa.id = m.from_agent_id
+        WHERE m.board_id=? AND m.delivered_at IS NULL
         ORDER BY m.id`).all(id),
       threads: listThreads(db, id),
     }
@@ -478,6 +487,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const fromA = agentByName(board_id, from), toA = agentByName(board_id, to)
       // a typo'd recipient must fail loudly, not silently become a broadcast
       if (to && !toA) return reply.code(400).send({ error: `no agent named "${to}" on this board` })
+      // a gone recipient would leave the message undelivered forever — refuse up front
+      if (toA && toA.status === 'gone')
+        return reply.code(409).send({ error: `agent "${to}" is gone — the message would never be delivered; ask a live agent or post to the board (no --to)` })
       // a reply without an explicit recipient targets the original sender, not the whole board
       let toId = toA?.id ?? null
       if (toId === null && reply_to) {
@@ -649,6 +661,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     removeAgentCards(db, id) // gone agents leave a clean board
     db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+    for (const bounce of bounceDeadLetters(db, id) as any[]) {
+      // hired senders hear the bounce immediately; session senders get it on next pulse
+      const sender = bounce.to_agent_id
+      if (sender && maestro?.isHired(sender) && maestro.deliver(sender, { ...bounce, from_name: null })) {
+        db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(bounce.id, sender)
+        db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(bounce.id)
+      }
+      emit(a.board_id, 'message', bounce)
+    }
     emit(a.board_id, 'agent', a)
     emit(a.board_id, 'card', { pruned: id })
     return a

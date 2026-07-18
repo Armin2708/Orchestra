@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { generateName } from './names.js'
-import { removeAgentCards } from './reaper.js'
+import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { port } from './daemon.js'
 import { conductorRules } from './rules.js'
 
@@ -326,6 +326,14 @@ export class Conductor {
         if (hired.cardId !== null) this.finalizeLaunch(hired)
         removeAgentCards(this.db, agent.id)
         this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
+        for (const bounce of bounceDeadLetters(this.db, agent.id) as any[]) {
+          const sender = bounce.to_agent_id
+          if (sender && this.isHired(sender) && this.deliver(sender, { ...bounce, from_name: null })) {
+            this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(bounce.id, sender)
+            this.db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(bounce.id)
+          }
+          this.emit(opts.boardId, 'message', bounce)
+        }
         const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
         this.emit(opts.boardId, 'agent', a)
         this.emit(opts.boardId, 'card', { pruned: agent.id })
