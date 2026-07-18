@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, setToken, streamUrl, Snapshot , SystemInfo } from './api'
+import { api, ApiError, setToken, streamUrl, Snapshot , SystemInfo, Telemetry } from './api'
 import { ProjectGrid } from './Board'
 import { RoadmapView } from './RoadmapView'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
@@ -104,7 +104,7 @@ export function App() {
             )}
           </div>
         </div>
-        <SystemMeter />
+        <SystemMeter boards={snaps.map((s) => s.board.id)} />
         <nav className="view-tabs">
           <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
           <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
@@ -181,8 +181,9 @@ function GettingStarted() {
 const fmtTokens = (t: number) =>
   t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t)
 
-function SystemMeter() {
+function SystemMeter({ boards }: { boards: number[] }) {
   const [sys, setSys] = useState<SystemInfo | null>(null)
+  const [inj, setInj] = useState<Telemetry | null>(null)
   useEffect(() => {
     let dead = false
     const load = () => api('GET', '/system').then((s) => { if (!dead) setSys(s) }).catch(() => {})
@@ -190,6 +191,33 @@ function SystemMeter() {
     const t = setInterval(load, 60_000)
     return () => { dead = true; clearInterval(t) }
   }, [])
+  // injected-context accounting; daemons without the telemetry route just hide the stat
+  const boardKey = boards.join(',')
+  useEffect(() => {
+    let dead = false
+    const load = async () => {
+      const parts: Telemetry[] = (await Promise.all(
+        boardKey.split(',').filter(Boolean).map((id) => api('GET', `/boards/${id}/telemetry`).catch(() => null)),
+      )).filter(Boolean)
+      if (dead || parts.length === 0) return
+      const agents = new Map<string, number>()
+      for (const p of parts) for (const a of p.by_agent) agents.set(a.agent_name, (agents.get(a.agent_name) ?? 0) + a.tokens)
+      setInj({
+        total: {
+          chars: parts.reduce((n, p) => n + p.total.chars, 0),
+          tokens: parts.reduce((n, p) => n + p.total.tokens, 0),
+          count: parts.reduce((n, p) => n + p.total.count, 0),
+        },
+        by_event: [],
+        by_agent: [...agents].map(([agent_name, tokens]) => ({ agent_id: 0, agent_name, tokens, chars: 0, count: 0 }))
+          .sort((a, b) => b.tokens - a.tokens),
+        days: [],
+      })
+    }
+    load()
+    const t = setInterval(load, 60_000)
+    return () => { dead = true; clearInterval(t) }
+  }, [boardKey])
   if (!sys) return null
   const at = (iso: string | null) => iso
     ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -215,7 +243,8 @@ function SystemMeter() {
       {sys.usage && win('5h', sys.usage.five_hour)}
       {sys.usage && win('week', sys.usage.seven_day)}
       {sys.injected && sys.injected.count > 0 && (
-        <span className="meter" title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)`}>
+        <span className="meter"
+          title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)${inj && inj.by_agent.length > 0 ? ` — top agents: ${inj.by_agent.slice(0, 5).map((a) => `${a.agent_name} ${fmtTokens(a.tokens)}`).join(', ')}` : ''}`}>
           <span className="meter-label">injected</span>
           <span className="meter-val">{fmtTokens(sys.injected.tokens)} tok</span>
         </span>
