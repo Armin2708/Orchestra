@@ -27,6 +27,9 @@ export interface ConductorLike {
   fire(agentId: number): Promise<boolean>
   launch(req: { boardId: number; cardId: number; cwd: string; brief: string }): any
   isLaunched(cardId: number): boolean
+  // optional so existing test stubs stay valid; the real Conductor implements both
+  setPermissionMode?(agentId: number, mode: string): Promise<boolean>
+  resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
@@ -554,6 +557,27 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const ok = await maestro.fire(Number(req.params.id))
     return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
   })
+
+  // live-switch a hired agent's permission mode (persisted for daemon-restart resume)
+  const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'plan']
+  server.post<{ Params: { id: string }; Body: { mode?: string } | null }>(
+    '/api/v1/agents/:id/permission-mode', async (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const mode = req.body?.mode ?? ''
+      if (!PERMISSION_MODES.includes(mode)) return reply.code(400).send({ error: `mode must be one of: ${PERMISSION_MODES.join(', ')}` })
+      const ok = (await maestro.setPermissionMode?.(Number(req.params.id), mode)) ?? false
+      return ok ? { ok: true, mode } : reply.code(404).send({ error: 'not a hired agent' })
+    })
+
+  // answer a pending canUseTool ask surfaced in the terminal
+  server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string } | null }>(
+    '/api/v1/agents/:id/permissions/:requestId', (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const behavior = req.body?.behavior
+      if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
+      const ok = maestro.resolvePermission?.(Number(req.params.id), req.params.requestId, behavior, req.body?.message) ?? false
+      return ok ? { ok: true } : reply.code(404).send({ error: 'no pending permission request with that id' })
+    })
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
