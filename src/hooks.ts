@@ -76,11 +76,21 @@ async function sessionStart(input: any): Promise<void> {
   console.log(lines.join('\n'))
 }
 
+// events that only ever fire in the main conversation may adopt a missing transcript_path
+// (heals session files written before the field existed)
+function stampTranscript(sess: Session, input: any): void {
+  if (!sess.transcript_path && input.transcript_path) {
+    sess.transcript_path = input.transcript_path
+    try { fs.writeFileSync(sessFile(input.session_id), JSON.stringify(sess)) } catch { /* best effort */ }
+  }
+}
+
 async function deliver(input: any, hookEventName: string, throttleMs: number): Promise<void> {
   const sess = await ensureSession(input)
   if (!sess) return
-  // hooks also fire inside subagents (Task tool) — heartbeat, but never consume the parent's
-  // board messages there: injected context would vanish into the subagent's transcript
+  if (hookEventName === 'UserPromptSubmit') stampTranscript(sess, input)
+  // hooks also fire inside subagents (Task tool) — report presence and heartbeat, but never
+  // consume the parent's board messages: injected context would vanish into the subagent's transcript
   if (sess.transcript_path && input.transcript_path && sess.transcript_path !== input.transcript_path) {
     const key = String(input.transcript_path).split('/').pop()?.slice(0, 24) ?? 'sub'
     await api('POST', `/agents/${sess.agent_id}/subping`, { key }).catch(() => {})
@@ -129,6 +139,7 @@ const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
 async function stop(input: any): Promise<void> {
   const sess = await ensureSession(input)
   if (!sess) return
+  stampTranscript(sess, input)
   // heartbeat only — pulse would consume undelivered messages with no way to show them
   await api('POST', `/agents/${sess.agent_id}/heartbeat`)
   if (input.stop_hook_active) return // already continued once for this — never loop
