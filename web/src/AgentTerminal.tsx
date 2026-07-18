@@ -178,6 +178,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 ))}
               </select>
             )}
+            {hired && (
+              <button className="cc-close" title="Stop this agent — terminates its session; a launched ticket moves to blocked"
+                onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>■ stop</button>
+            )}
             {!embedded && <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
 

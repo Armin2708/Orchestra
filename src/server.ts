@@ -22,6 +22,8 @@ export interface ConductorLike {
   transcript(agentId: number): any
   interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
+  launch(req: { boardId: number; cardId: number; cwd: string; brief: string }): any
+  isLaunched(cardId: number): boolean
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
@@ -319,17 +321,27 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   // ── roadmap: ideas → tickets → assignment ─────────────────────────────
-  const assignmentBrief = (card: any) => {
+  const prereqNote = (card: any) => {
     const prereqs = prereqSteps(card)
-    const prereqNote = prereqs.length
+    return prereqs.length
       ? ` Heads-up: earlier steps of this milestone are still open: ${prereqs.map((p) =>
           `#${p.id} "${p.title}" (${p.owner ?? 'unassigned'}, ${p.column_name})`).join('; ')}. ` +
         `They are prerequisites in spirit, not blockers — contact their owners first (orchestra ask <owner> "...") to agree boundaries and interfaces, then work in parallel where safe.`
       : ''
-    return `You've been assigned card #${card.id}: "${card.title}".` +
-      (card.description ? ` Scope: ${card.description}.` : '') + prereqNote +
-      ` Start now; keep the card updated (orchestra card update ${card.id} / orchestra card move ${card.id} <column>) and move it to done when finished.`
   }
+  const assignmentBrief = (card: any) =>
+    `You've been assigned card #${card.id}: "${card.title}".` +
+    (card.description ? ` Scope: ${card.description}.` : '') + prereqNote(card) +
+    ` Start now; keep the card updated (orchestra card update ${card.id} / orchestra card move ${card.id} <column>) and move it to done when finished.`
+
+  // launched agents never self-report done — the daemon parks the card in review for a human
+  const launchBrief = (card: any) =>
+    `You've been launched on card #${card.id}: "${card.title}".` +
+    (card.description ? ` Scope: ${card.description}.` : '') + prereqNote(card) +
+    ` This card is already registered to you and in in_progress — do NOT create another card for this work.` +
+    ` Work the ticket autonomously to completion; do not wait for human input.` +
+    ` When you finish, do NOT move the card to done or review yourself — end your final message with a short summary of what you changed and how you verified it; the daemon parks the card in review for human approval.` +
+    ` If you cannot complete the ticket, state exactly what blocked you and stop.`
 
   const notifyAssignment = (card: any, agentRow: any) => {
     db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
@@ -395,6 +407,19 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
     if (agentRow.name === 'strategist' || agentRow.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })
     return { card: notifyAssignment(card, agentRow) }
+  })
+
+  // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
+  server.post<{ Params: { id: string } }>('/api/v1/cards/:id/launch', (req, reply) => {
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+    const card = getCard(Number(req.params.id))
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    if (card.column === 'done') return reply.code(400).send({ error: 'card is already done' })
+    if (maestro.isLaunched(card.id)) return reply.code(409).send({ error: 'card already launched or queued' })
+    if (card.owner_agent_id && maestro.isHired(card.owner_agent_id))
+      return reply.code(409).send({ error: `already being worked by ${card.owner}` })
+    const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
+    return maestro.launch({ boardId: card.board_id, cardId: card.id, cwd: board.project_path, brief: launchBrief(card) })
   })
 
   server.get<{ Params: { id: string } }>('/api/v1/cards/:id/events', (req) =>

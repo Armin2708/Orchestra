@@ -37,7 +37,14 @@ type Hired = {
   sessionTokens: number
   model: string | null
   ephemeral: boolean
+  // launched-on-ticket agents carry their card through to review/blocked on exit
+  cardId: number | null
+  outcome: 'success' | 'error' | null
+  reason: string
+  summary: string
 }
+
+type LaunchRequest = { boardId: number; cardId: number; cwd: string; brief: string }
 
 const strategistRules = (me: string) => `You are "${me}", this project's strategist — a specialist in brainstorming, product research, and writing tickets that other agents can execute from directly. You NEVER modify files; you research and produce roadmap material.
 How you work:
@@ -103,6 +110,7 @@ function createInput() {
 
 export class Conductor {
   private hired = new Map<number, Hired>()
+  private launchQueue: LaunchRequest[] = []
 
   constructor(private db: Database.Database, private bus: EventEmitter) {}
 
@@ -119,6 +127,88 @@ export class Conductor {
 
   list(boardId: number): number[] {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
+  }
+
+  private cardRow(id: number): any {
+    const c = this.db.prepare(`SELECT c.*, a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(id) as any
+    return c && { ...c, column: c.column_name, paths: JSON.parse(c.paths) }
+  }
+  private logCardEvent(cardId: number, agentId: number | null, type: string, payload: unknown = {}) {
+    this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
+      .run(cardId, agentId, type, JSON.stringify(payload))
+  }
+  private maxLaunched(): number {
+    const n = Number(process.env.ORCHESTRA_MAX_LAUNCHED ?? 3)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3
+  }
+  private launchedCount(): number {
+    return [...this.hired.values()].filter((h) => h.cardId !== null).length
+  }
+
+  isLaunched(cardId: number): boolean {
+    return [...this.hired.values()].some((h) => h.cardId === cardId) ||
+      this.launchQueue.some((q) => q.cardId === cardId)
+  }
+
+  // a daemon restart resumes launched agents with cardId lost to memory — re-adopt the
+  // ticket from the db, or the agent's eventual exit would delete it via removeAgentCards
+  adoptLaunch(agentId: number): void {
+    const h = this.hired.get(agentId)
+    if (!h || h.cardId !== null) return
+    const c = this.db.prepare(`SELECT c.id FROM cards c
+      JOIN card_events e ON e.card_id=c.id AND e.type='launched' AND e.agent_id=?
+      WHERE c.owner_agent_id=? AND c.column_name='in_progress'`).get(agentId, agentId) as any
+    if (c) h.cardId = c.id
+  }
+
+
+  launch(req: LaunchRequest): any {
+    if (this.launchedCount() >= this.maxLaunched()) {
+      // one queue slot per card — relaunching a queued ticket must not double-book it
+      if (!this.launchQueue.some((q) => q.cardId === req.cardId)) this.launchQueue.push(req)
+      const position = this.launchQueue.findIndex((q) => q.cardId === req.cardId) + 1
+      this.emit(req.boardId, 'launch', { card_id: req.cardId, status: 'queued', position })
+      this.logCardEvent(req.cardId, null, 'launch_queued', { position })
+      return { queued: true, position }
+    }
+    return this.startLaunch(req)
+  }
+
+  private startLaunch(req: LaunchRequest): any {
+    const agent = this.hire({ boardId: req.boardId, cwd: req.cwd })
+    const h = this.hired.get(agent.id)!
+    h.cardId = req.cardId
+    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
+      .run(agent.id, req.cardId)
+    this.logCardEvent(req.cardId, agent.id, 'launched', { agent: agent.name })
+    this.emit(req.boardId, 'card', this.cardRow(req.cardId))
+    this.emit(req.boardId, 'launch', { card_id: req.cardId, agent_id: agent.id, agent_name: agent.name, status: 'started' })
+    h.push(req.brief)
+    return { agent, card: this.cardRow(req.cardId) }
+  }
+
+  // the ticket must survive its agent: park it in review/blocked and release ownership
+  // BEFORE removeAgentCards deletes everything the exiting agent still owns
+  private finalizeLaunch(h: Hired): void {
+    const card = this.cardRow(h.cardId!)
+    if (!card) return
+    const outcome = h.outcome ?? 'error'
+    const reason = h.reason || (outcome === 'success' ? 'finished' : 'agent exited unexpectedly')
+    const to = card.column === 'done' ? 'done' : outcome === 'success' ? 'review' : 'blocked'
+    this.db.prepare(`UPDATE cards SET owner_agent_id=NULL, column_name=?, updated_at=datetime('now') WHERE id=?`)
+      .run(to, card.id)
+    this.logCardEvent(card.id, h.agentId, 'agent_exit', { outcome, reason, to, agent: h.name })
+    this.emit(h.boardId, 'card', this.cardRow(card.id))
+    this.emit(h.boardId, 'launch', {
+      card_id: card.id, agent_id: h.agentId, agent_name: h.name,
+      status: 'finished', outcome, reason, to_column: to, summary: h.summary,
+    })
+  }
+
+  private drainQueue(): void {
+    while (this.launchQueue.length && this.launchedCount() < this.maxLaunched()) {
+      this.startLaunch(this.launchQueue.shift()!)
+    }
   }
 
   hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string }): any {
@@ -171,6 +261,7 @@ export class Conductor {
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false,
+      cardId: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
     log('status', opts.resumeSession ? `resumed in ${opts.cwd} (previous session continues)` : `hired in ${opts.cwd}`)
@@ -206,17 +297,31 @@ export class Conductor {
             this.touch(agent.id, 'idle')
             // one-shot agents (idea auditors) dissolve after their turn
             if (hired.ephemeral) void this.fire(agent.id)
+            // launched agents work one ticket run, then their card gets parked
+            if (hired.cardId !== null && hired.outcome === null) {
+              hired.outcome = m.subtype === 'success' ? 'success' : 'error'
+              hired.reason = m.subtype === 'success' ? 'finished' : `agent turn ended: ${m.subtype ?? 'unknown error'}`
+              hired.summary = typeof m.result === 'string' && m.result ? m.result
+                : [...transcript].reverse().find((l) => l.kind === 'text')?.text ?? ''
+              void this.fire(agent.id)
+            }
           }
         }
       } catch (e: any) {
         log('error', String(e?.message ?? e))
+        if (hired.cardId !== null && hired.outcome === null) {
+          hired.outcome = 'error'
+          hired.reason = String(e?.message ?? e)
+        }
       } finally {
         this.hired.delete(agent.id)
+        if (hired.cardId !== null) this.finalizeLaunch(hired)
         removeAgentCards(this.db, agent.id)
         this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
         const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
         this.emit(opts.boardId, 'agent', a)
         this.emit(opts.boardId, 'card', { pruned: agent.id })
+        if (hired.cardId !== null) this.drainQueue()
       }
     })()
 
@@ -266,6 +371,8 @@ export class Conductor {
   async fire(agentId: number): Promise<boolean> {
     const h = this.hired.get(agentId)
     if (!h) return false
+    // a launched agent killed before finishing was stopped by a human
+    if (h.cardId !== null && h.outcome === null) { h.outcome = 'error'; h.reason = 'stopped by user' }
     await h.interrupt()
     h.end() // input stream closes → query ends → finally block cleans up
     return true

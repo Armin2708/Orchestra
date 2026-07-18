@@ -85,6 +85,13 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
               {agents.filter((a) => a.name !== card.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
             </select>
           )}
+          {!card.owner && card.column !== 'done' && (
+            <button className="thread-reply" title="Spawn a fresh autonomous agent on this ticket"
+              onClick={async () => {
+                try { await api('POST', `/cards/${card.id}/launch`) } catch { /* daemon-only or already launched */ }
+                onChange()
+              }}>▶ Launch agent</button>
+          )}
         </p>
 
         {card.column === 'review' && (
