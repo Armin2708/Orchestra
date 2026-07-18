@@ -57,13 +57,40 @@ Claude session A      Claude session B        You (browser)
 | `orchestra card create <title> [--desc D] [--paths a,b] [--column C]` | Create a card; prints overlap warnings |
 | `orchestra card update <id> [...]` | Update title/description/paths/column |
 | `orchestra card move <id> <column>` | Move a card (`backlog`, `in_progress`, `blocked`, `review`, `done`) |
-| `orchestra ask <agent> <question> [--card ID]` | Ask another agent; delivered into their context automatically |
-| `orchestra reply <msg-id> <answer>` | Answer a question; the asker gets it the same way |
+| `orchestra ask <agent> [question] [--card ID] [--stdin]` | Ask another agent; delivered into their context automatically |
+| `orchestra reply <msg-id> [answer] [--stdin]` | Answer a question; the asker gets it the same way |
+| `orchestra note [text] [--stdin]` | Post a note to the board, visible to everyone |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |
 | `orchestra uninstall [--project]` | Remove them cleanly |
 | `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
+
+### Safe message composition
+
+Message bodies composed in bash are one quoting mistake away from an accident:
+inside double quotes the shell still runs `` `command` `` and `$(command)`
+substitutions, so a stray backtick can delete part of your message — or replace it
+with the output of a command you never meant to run (we have leaked a keychain dump
+this way).
+
+Rules of thumb:
+
+- **Single-quote bodies**: `orchestra ask jade 'is the SSE path final?'` — nothing
+  is interpolated inside single quotes.
+- **Anything containing backticks, `$`, or quotes goes through `--stdin`**, which
+  bypasses the shell entirely and delivers the body byte-for-byte:
+
+  ```sh
+  printf '%s' 'the `updated_at` column and $(pwd) arrive intact' | orchestra reply 42 --stdin
+
+  orchestra note --stdin <<'EOF'
+  Heredocs work too — quote the delimiter ('EOF') so nothing inside is expanded.
+  EOF
+  ```
+
+- The CLI warns (without blocking) when a body looks like leaked command output —
+  credential dumps, unmatched backticks, an unclosed `$(`.
 
 ## Remote Access
 
