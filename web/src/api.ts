@@ -1,12 +1,29 @@
+export const getToken = () => localStorage.getItem('orchestra-token') ?? ''
+export const setToken = (t: string) => localStorage.setItem('orchestra-token', t)
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message) }
+}
+
 export const api = async (method: string, p: string, body?: unknown) => {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers.authorization = `Bearer ${token}`
+  // fastify rejects bodyless requests that carry a json content-type
+  if (body !== undefined) headers['content-type'] = 'application/json'
   const res = await fetch(`/api/v1${p}`, {
     method,
-    // fastify rejects bodyless requests that carry a json content-type
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new ApiError(res.status, await res.text())
   return res.json()
+}
+
+// EventSource can't set headers — the daemon accepts ?token= on SSE routes
+export const streamUrl = () => {
+  const token = getToken()
+  return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : '/api/v1/events'
 }
 
 export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null }
