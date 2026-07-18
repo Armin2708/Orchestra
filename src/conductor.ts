@@ -28,6 +28,11 @@ function resultSummary(content: unknown): string {
 export const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'plan'] as const
 export type HiredPermissionMode = (typeof PERMISSION_MODES)[number]
 
+// the SDK's effort ladder — a spawn param, not switchable mid-session, so changing it
+// means restart-with-resume (see setEffort)
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortLevel = (typeof EFFORT_LEVELS)[number]
+
 type PendingPermission = {
   id: string
   tool: string
@@ -54,6 +59,11 @@ type Hired = {
   turnTokens: number
   sessionTokens: number
   model: string | null
+  effort: EffortLevel | null
+  models: any[]
+  role?: 'strategist' | 'auditor'
+  // an effort restart supersedes this session — its exit must leave cards/queue untouched
+  handoff: boolean
   ephemeral: boolean
   subs: Map<string, string>
   // launched-on-ticket agents carry their card through to review/blocked on exit
@@ -225,7 +235,7 @@ export class Conductor {
     }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string }): any {
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -279,12 +289,14 @@ export class Conductor {
       })
     }
 
+    const effort: EffortLevel | null = EFFORT_LEVELS.includes(opts.effort as EffortLevel) ? opts.effort as EffortLevel : null
     const q = query({
       prompt: input.stream(),
       options: {
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.resumeSession ? { resume: opts.resumeSession } : {}),
+        ...(effort ? { effort } : {}),
         permissionMode,
         canUseTool,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
@@ -308,6 +320,7 @@ export class Conductor {
       pending,
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
+      effort, models: [], role: opts.role, handoff: false,
       cardId: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
@@ -320,6 +333,8 @@ export class Conductor {
             hired.model = m.model ?? null
             // remember the sdk session so a daemon restart can resume this agent with its memory intact
             if (m.session_id) this.db.prepare(`UPDATE agents SET sdk_session=? WHERE id=?`).run(m.session_id, agent.id)
+            // model catalog (incl. per-model effort levels) for the terminal's selectors
+            void Promise.resolve((q as any).supportedModels?.()).then((ms) => { hired.models = ms ?? [] }).catch(() => {})
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
           } else if (m.type === 'assistant') {
             if (hired.turnStart === null) hired.turnStart = Date.now()
@@ -374,13 +389,17 @@ export class Conductor {
       } finally {
         hired.pending.clear()
         this.hired.delete(agent.id)
-        if (hired.cardId !== null) this.finalizeLaunch(hired)
-        removeAgentCards(this.db, agent.id)
-        this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
-        const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
-        this.emit(opts.boardId, 'agent', a)
-        this.emit(opts.boardId, 'card', { pruned: agent.id })
-        if (hired.cardId !== null) this.drainQueue()
+        // an effort restart supersedes this session: the replacement re-registers the same
+        // agent row and inherits the ticket, so the exit path must not park, prune, or drain
+        if (!hired.handoff) {
+          if (hired.cardId !== null) this.finalizeLaunch(hired)
+          removeAgentCards(this.db, agent.id)
+          this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
+          const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
+          this.emit(opts.boardId, 'agent', a)
+          this.emit(opts.boardId, 'card', { pruned: agent.id })
+          if (hired.cardId !== null) this.drainQueue()
+        }
       }
     })()
 
@@ -407,15 +426,61 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string }; permissions?: Omit<PendingPermission, 'finish'>[] } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; effort: string | null; models: any[] }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
-      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode },
+      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, effort: h.effort, models: h.models },
       permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
     }
+  }
+
+  // live-switch the model for subsequent turns; persisted so a daemon restart resumes with it
+  async setModel(agentId: number, model: string): Promise<boolean> {
+    const h = this.hired.get(agentId)
+    if (!h || !model) return false
+    try { await h.query.setModel(model) } catch { return false }
+    h.model = model
+    this.db.prepare(`UPDATE agents SET model=? WHERE id=?`).run(model, agentId)
+    h.transcript.push({ at: new Date().toISOString(), kind: 'status', text: `model → ${model} (takes effect next turn)` })
+    this.emit(h.boardId, 'transcript', { agent_id: agentId })
+    this.emit(h.boardId, 'agent_model', { agent_id: agentId, model })
+    return true
+  }
+
+  // effort is a spawn param (no mid-session setter in the SDK) — changing it restarts the
+  // session with resume, carrying ticket, permission mode, model, and transcript history
+  async setEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
+    const h = this.hired.get(agentId)
+    if (!h) return 'not-found'
+    if (!EFFORT_LEVELS.includes(level as EffortLevel)) return 'bad-level'
+    if (h.turnStart !== null) return 'busy' // mirror the launch gate: never yank a running turn
+    const row = this.db.prepare(`SELECT sdk_session FROM agents WHERE id=?`).get(agentId) as any
+    if (!row?.sdk_session) return 'no-session' // nothing to resume — a restart would drop the conversation
+
+    const prior = { cardId: h.cardId, model: h.model, permissionMode: h.permissionMode, role: h.role, lines: [...h.transcript] }
+    h.handoff = true
+    await h.interrupt()
+    h.end() // input stream closes → query ends → finally tears down without touching cards
+    for (let i = 0; i < 250 && this.hired.has(agentId); i++) await new Promise((r) => setTimeout(r, 20))
+    if (this.hired.has(agentId)) { h.handoff = false; return 'busy' } // teardown stuck; leave the session alone
+
+    this.hire({
+      boardId: h.boardId, cwd: h.cwd, name: h.name, role: prior.role,
+      resumeSession: row.sdk_session, permissionMode: prior.permissionMode,
+      model: prior.model ?? undefined, effort: level,
+    })
+    const nh = this.hired.get(agentId)
+    if (!nh) return 'not-found' // respawn failed; agent row already re-marked active by hire's upsert
+    nh.cardId = prior.cardId // launched tickets ride through the restart
+    nh.transcript.unshift(...prior.lines.slice(-400))
+    nh.transcript.push({ at: new Date().toISOString(), kind: 'status', text: `effort → ${level} (session restarted with conversation resumed)` })
+    this.db.prepare(`UPDATE agents SET effort=? WHERE id=?`).run(level, agentId)
+    this.emit(nh.boardId, 'transcript', { agent_id: agentId })
+    this.emit(nh.boardId, 'agent_effort', { agent_id: agentId, effort: level })
+    return 'ok'
   }
 
   // live-switch the SDK session's permission mode; persisted so a daemon restart resumes with it
