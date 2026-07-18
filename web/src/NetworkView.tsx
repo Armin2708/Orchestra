@@ -10,8 +10,9 @@ function loadPos(boardId: number): Record<string, Norm> {
 
 const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T') + 'Z').getTime()
 
-export function NetworkView({ snap, onOpenCard, onOpenAgent }:
-  { snap: Snapshot; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void }) {
+export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
+  { snap: Snapshot; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void }) {
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
   const boardId = snap.board.id
   const agents = snap.agents.filter((a) => a.status !== 'gone')
   const wrap = useRef<HTMLDivElement>(null)
@@ -149,10 +150,19 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent }:
         const mine = cardsFor(a.name)
         return (
           <div key={a.id} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
-            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
+            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-              title={`${a.name} — drag to move, click to open console`}
-              onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}>
+              title={`${a.name} — drag to move, click to open console, drop a ticket to assign`}
+              onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}
+              onDragOver={(e) => { e.preventDefault(); setDropTarget(a.name) }}
+              onDragLeave={() => setDropTarget(null)}
+              onDrop={async (e) => {
+                e.preventDefault(); setDropTarget(null)
+                const id = Number(e.dataTransfer.getData('text/ticket-id'))
+                if (!id) return
+                try { await api('POST', `/cards/${id}/assign`, { agent: a.name }) } catch { /* locked */ }
+                onChange?.()
+              }}>
               {initials(a.name)}
               <i className={`presence ${a.status}`} />
             </span>

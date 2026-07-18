@@ -96,6 +96,45 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
   )
 }
 
+function TicketRail({ snap, onOpen }: { snap: Snapshot; onOpen: (c: Card) => void }) {
+  const open = snap.cards.filter((c) => c.column !== 'done')
+  const doneSteps = new Set(snap.cards.filter((c) => c.column === 'done').map((c) => c.id))
+  const locked = (c: Card) => Boolean(c.milestone_id && snap.cards.some((o) =>
+    o.milestone_id === c.milestone_id && (o.step_order ?? 0) < (c.step_order ?? 0) && o.column !== 'done'))
+  if (open.length === 0) return (
+    <aside className="ticket-rail"><p className="rail-empty">No open tickets — add some on the Roadmap.</p></aside>
+  )
+  return (
+    <aside className="ticket-rail">
+      <p className="rail-head">Tickets <span className="rm-count">{open.length}</span></p>
+      {open.map((c) => {
+        const st = STATUS[c.column] ?? STATUS.backlog
+        const isLocked = locked(c)
+        return (
+          <article key={c.id} className={`t-card ${isLocked ? 'locked' : ''}`}
+            draggable={!isLocked}
+            onClick={() => onOpen(c)}
+            onDragStart={(e) => e.dataTransfer.setData('text/ticket-id', String(c.id))}
+            style={{ ['--st' as any]: st.ink }}
+            title={isLocked ? 'Locked — complete the previous milestone step first' : 'Drag onto an agent to assign'}>
+            <div className="t-top">
+              <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '🔒 ' : ''}{st.label}</span>
+            </div>
+            <h4>{c.title}</h4>
+            {c.description && <p className="t-desc">{c.description}</p>}
+            <footer>
+              {c.owner
+                ? <span className="owner"><i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>{c.owner.split('-')[0]}</span>
+                : <span className="owner unowned">drag → agent</span>}
+              <time>{timeAgo(c.updated_at)}</time>
+            </footer>
+          </article>
+        )
+      })}
+    </aside>
+  )
+}
+
 function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () => void }) {
   const [arming, setArming] = useState(false)
   if (!arming) return <button className="icon-x quiet" title="Remove project from board" onClick={() => setArming(true)}>×</button>
@@ -183,9 +222,13 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               </header>
 
               {isNet(s.board.id) ? (
-                <NetworkView snap={s}
-                  onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
-                  onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })} />
+                <div className="net-wrap">
+                  <TicketRail snap={s} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} />
+                  <NetworkView snap={s}
+                    onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
+                    onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}
+                    onChange={onChange} />
+                </div>
               ) : (<>
               <IdeaStrip snap={s} onChange={onChange} />
               {threads.length > 0 && (
