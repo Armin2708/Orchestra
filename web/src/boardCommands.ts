@@ -62,6 +62,7 @@ export async function runBoardCommand(line: string, ctx: BoardCmdCtx): Promise<s
         const out = [`card #${r.card.id} created [${r.card.column}] ${r.card.title}`]
         for (const o of r.overlaps ?? []) out.push(`⚠ overlap with #${o.id} "${o.title}"${o.owner ? ` (${o.owner})` : ''}`)
         for (const s of r.similar ?? []) out.push(`≈ similar to #${s.id} "${s.title}"${s.owner ? ` (${s.owner})` : ''}`)
+        for (const d of r.done_similar ?? []) out.push(`✓ already shipped? #${d.id} "${d.title}" is done`)
         return out
       }
       case '/ask': {
@@ -102,6 +103,10 @@ export async function runBoardCommand(line: string, ctx: BoardCmdCtx): Promise<s
         return [`✗ unknown board command ${verb}`]
     }
   } catch (e: any) {
-    return [`✗ ${String(e?.message ?? e).slice(0, 200)}`]
+    // daemon errors arrive as JSON bodies (e.g. #47's 409 gone-recipient) — show the text, not the wrapper
+    const raw = String(e?.message ?? e)
+    let msg = raw
+    try { msg = JSON.parse(raw)?.error ?? raw } catch { /* not a json body */ }
+    return [`✗ ${msg.slice(0, 200)}`]
   }
 }

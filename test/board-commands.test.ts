@@ -109,6 +109,19 @@ it('API failures come back as inline ✗ lines, never thrown', async () => {
   expect(await runBoardCommand('/ask x y', ctx(api))).toEqual(['✗ unauthorized'])
 })
 
+it("JSON error bodies surface their error text — e.g. #47's 409 gone-recipient on /ask", async () => {
+  const { api } = fakeApi({ 'POST /messages': new Error('{"error":"recipient amber-osprey is gone; message dead-lettered"}') })
+  expect(await runBoardCommand('/ask amber-osprey hi', ctx(api)))
+    .toEqual(['✗ recipient amber-osprey is gone; message dead-lettered'])
+})
+
+it('/card create surfaces the done_similar already-shipped warning', async () => {
+  const { api } = fakeApi({ 'POST /cards': { card: { id: 51, title: 'push notifs', column: 'backlog' },
+    overlaps: [], similar: [], done_similar: [{ id: 32, title: 'push notifications' }] } })
+  expect(await runBoardCommand('/card push notifs', ctx(api)))
+    .toEqual(['card #51 created [backlog] push notifs', '✓ already shipped? #32 "push notifications" is done'])
+})
+
 // ── server: hire route passes resume + permission mode through to the conductor ──
 
 it('POST /boards/:id/hire forwards resumeSession and permissionMode', async () => {
