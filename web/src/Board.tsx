@@ -81,15 +81,20 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
       </div>
       {(snap.ideas ?? []).length > 0 && (
         <div className="idea-chips">
-          {(snap.ideas ?? []).map((i) => (
-            <span key={i.id} className="idea">
+          {(snap.ideas ?? []).map((i) => {
+            const auditing = snap.agents.some((a) => a.name === `auditor-${i.id}` && a.status !== 'gone')
+            return (
+            <span key={i.id} className={auditing ? 'idea auditing' : 'idea'}>
               <span className="idea-text" title={i.text}>{i.text.split('\n')[0]}</span>
-              <button className="thread-reply" title="Strategist audits it and writes the full ticket"
-                onClick={() => toStrategist(i)}>✳ ticket</button>
+              {auditing
+                ? <span className="rm-idea-auditing"><span className="rm-idea-star">✳</span> auditing…</span>
+                : <button className="thread-reply" title="An auditor audits it and writes the full ticket"
+                onClick={() => toStrategist(i)}>✳ ticket</button>}
               <button className="icon-x" title="Delete idea"
                 onClick={async () => { await api('DELETE', `/ideas/${i.id}`); onChange() }}>×</button>
             </span>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

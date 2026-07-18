@@ -150,17 +150,25 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
 
       <h3 className="rm-h">Ideas <span className="rm-count">{(snap.ideas ?? []).length}</span></h3>
       <div className="rm-ideas">
-        {(snap.ideas ?? []).map((i) => (
-          <button key={i.id} className="rm-idea" onClick={() => setOpenIdea(i)}>
+        {(snap.ideas ?? []).map((i) => {
+          const auditor = snap.agents.find((a) => a.name === `auditor-${i.id}` && a.status !== 'gone')
+          return (
+          <button key={i.id} className={auditor ? 'rm-idea auditing' : 'rm-idea'} onClick={() => setOpenIdea(i)}>
             <p className="rm-idea-title">{i.text.split('\n')[0]}</p>
             {i.text.includes('\n') && <p className="rm-idea-desc">{i.text.split('\n').slice(1).join(' ')}</p>}
-            <span className="rm-idea-open">open ›</span>
+            {auditor
+              ? <span className="rm-idea-auditing"><span className="rm-idea-star">✳</span> auditing…</span>
+              : <span className="rm-idea-open">open ›</span>}
           </button>
-        ))}
+          )
+        })}
         {(snap.ideas ?? []).length === 0 && <p className="col-empty">No ideas yet — brainstorm above.</p>}
       </div>
       {openIdea && <IdeaModal idea={(snap.ideas ?? []).find((x) => x.id === openIdea.id) ?? openIdea}
-        boardId={snap.board.id} onClose={() => setOpenIdea(null)} onChange={onChange} />}
+        boardId={snap.board.id}
+        auditor={snap.agents.find((a) => a.name === `auditor-${openIdea.id}` && a.status !== 'gone')}
+        onWatch={onOpenAgent}
+        onClose={() => setOpenIdea(null)} onChange={onChange} />}
 
       <h3 className="rm-h">Tickets <span className="rm-count">{tickets.length}</span></h3>
       <div className="rm-tickets">
@@ -206,8 +214,8 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
   )
 }
 
-function IdeaModal({ idea, boardId, onClose, onChange }:
-  { idea: Idea; boardId: number; onClose: () => void; onChange: () => void }) {
+function IdeaModal({ idea, boardId, auditor, onWatch, onClose, onChange }:
+  { idea: Idea; boardId: number; auditor?: Agent; onWatch?: (a: Agent) => void; onClose: () => void; onChange: () => void }) {
   const [title, ...rest] = idea.text.split('\n')
   const body = rest.join('\n').trim()
   const [sending, setSending] = useState(false)
@@ -231,10 +239,19 @@ function IdeaModal({ idea, boardId, onClose, onChange }:
         <h3>{title}</h3>
         {body ? <p className="idea-modal-body">{body}</p> : <p className="idea-modal-body empty">No details yet — send it to the strategist to audit and spec it.</p>}
         <div className="idea-modal-actions">
+          {auditor ? (
+            <>
+              <button className="btn primary" onClick={() => { onWatch?.(auditor); onClose() }}>
+                <span className="rm-idea-star">✳</span> Auditor at work — watch
+              </button>
+              <span className="idea-modal-hint">it's validating this idea against the repo right now</span>
+            </>
+          ) : (<>
           <button className="btn primary" disabled={sending} onClick={sendToStrategist}>
             {sending ? '✳ Spawning auditor…' : '✳ Audit → ticket'}
           </button>
           <span className="idea-modal-hint">spawns a dedicated auditor — audit several ideas in parallel</span>
+          </>)}
           <span className="idea-modal-spacer" />
           <button className="btn ghost danger-text" onClick={async () => {
             await api('DELETE', `/ideas/${idea.id}`); onClose(); onChange()
