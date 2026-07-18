@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
-import { reap, removeAgentCards } from './reaper.js'
+import { reap } from './reaper.js'
 import { Conductor } from './conductor.js'
 import { ensureToken } from './token.js'
 import { registerPush } from './push.js'
@@ -27,15 +27,29 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
-  // hired agents live in this process — anything left from a previous daemon is dead
-  for (const g of db.prepare(`SELECT id FROM agents WHERE kind='hired' AND status != 'gone'`).all() as { id: number }[]) {
-    removeAgentCards(db, g.id)
-    db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(g.id)
-  }
   const token = authDisabled() ? undefined : ensureToken()
-  const server = buildServer(db, (bus) => new Conductor(db, bus), { token })
+  let maestro: Conductor | undefined
+  const server = buildServer(db, (bus) => (maestro = new Conductor(db, bus)), { token })
   registerPush(server)
   await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
+  // resurrect hired agents from before the restart — sessions resume, cards and work persist
+  const survivors = db.prepare(`
+    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, b.project_path
+    FROM agents a JOIN boards b ON b.id = a.board_id
+    WHERE a.kind='hired' AND a.status != 'gone'`).all() as any[]
+  for (const s of survivors) {
+    if (s.name.startsWith('auditor-')) { // one-shot auditors don't outlive a restart
+      db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
+      continue
+    }
+    try {
+      maestro!.hire({ boardId: s.board_id, cwd: s.project_path, name: s.name,
+        role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined })
+    } catch {
+      // could not respawn — keep the agent's cards, just mark it gone
+      db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
+    }
+  }
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   setInterval(() => reap(db), 60_000)
 }

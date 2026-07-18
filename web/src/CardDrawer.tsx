@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, agentInk, agentWash, initials, timeAgo } from './api'
 import { STATUS } from './Board'
 
@@ -17,6 +17,15 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   useEffect(() => { api('GET', `/cards/${card.id}/events`).then(setEvents) }, [card.id, card.updated_at])
   useEffect(() => { setDesc(card.description) }, [card.description])
 
+  // modal behavior: take focus on open, close on Escape
+  const panelRef = useRef<HTMLElement>(null)
+  useEffect(() => { panelRef.current?.focus() }, [])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const send = async () => {
     if (!comment.trim()) return
     await api('POST', '/messages', { board_id: boardId, to: card.owner ?? undefined, card_id: card.id, body: comment.trim() })
@@ -30,7 +39,8 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="drawer">
+      <aside className="drawer" ref={panelRef} tabIndex={-1}
+        role="dialog" aria-modal="true" aria-label={`Card #${card.id} — ${card.title}`}>
         <button className="close" onClick={onClose} aria-label="Close">×</button>
         <p className="drawer-kicker">Card #{card.id}</p>
         <h2>{card.title}</h2>
