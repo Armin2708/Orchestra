@@ -24,6 +24,19 @@ function resultSummary(content: unknown): string {
   return lines.length > 1 ? `${first}  … +${lines.length - 1} lines` : first
 }
 
+// modes the board can switch a hired agent between; anything else stays bypass
+export const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'plan'] as const
+export type HiredPermissionMode = (typeof PERMISSION_MODES)[number]
+
+type PendingPermission = {
+  id: string
+  tool: string
+  summary: string
+  title: string | null
+  at: string
+  finish: (allow: boolean, message?: string) => void
+}
+
 type Hired = {
   agentId: number
   boardId: number
@@ -32,6 +45,10 @@ type Hired = {
   push: (text: string) => void
   end: () => void
   interrupt: () => Promise<void>
+  // live SDK handle — shared control surface (setPermissionMode here, setModel for #41); never serialize it
+  query: any
+  permissionMode: HiredPermissionMode
+  pending: Map<string, PendingPermission>
   transcript: TranscriptLine[]
   turnStart: number | null
   turnTokens: number
@@ -208,7 +225,7 @@ export class Conductor {
     }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any {
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -233,13 +250,43 @@ export class Conductor {
       this.emit(opts.boardId, 'transcript', { agent_id: agent.id })
     }
 
+    const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
+      ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
+    const pending = new Map<string, PendingPermission>()
+    // non-bypass modes deny tools unless a canUseTool handler answers — park each ask as a
+    // pending request the board resolves via approve/deny buttons in the terminal
+    const canUseTool = (toolName: string, toolInput: Record<string, unknown>, o: any): Promise<any> => {
+      const id = String(o?.toolUseID ?? o?.requestId ?? `${Date.now()}-${pending.size}`)
+      const summary = toolSummary(toolName, toolInput)
+      log('status', `permission requested: ${o?.title ?? summary}`)
+      this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, tool: toolName, summary, title: o?.title ?? null, status: 'pending' })
+      return new Promise((resolve) => {
+        pending.set(id, {
+          id, tool: toolName, summary, title: o?.title ?? null, at: new Date().toISOString(),
+          finish: (allow, message) => {
+            pending.delete(id)
+            log('status', `permission ${allow ? 'allowed' : 'denied'}: ${summary}`)
+            this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, status: allow ? 'allowed' : 'denied' })
+            resolve(allow ? { behavior: 'allow', updatedInput: toolInput } : { behavior: 'deny', message: message || 'denied from the board' })
+          },
+        })
+        // an interrupted turn withdraws its asks — fail closed, leave no orphan buttons
+        o?.signal?.addEventListener?.('abort', () => {
+          if (!pending.delete(id)) return
+          this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, status: 'withdrawn' })
+          resolve({ behavior: 'deny', message: 'permission request aborted' })
+        })
+      })
+    }
+
     const q = query({
       prompt: input.stream(),
       options: {
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.resumeSession ? { resume: opts.resumeSession } : {}),
-        permissionMode: 'bypassPermissions',
+        permissionMode,
+        canUseTool,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
         // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
         // instead of minting a second "session" agent for the SDK subprocess
@@ -256,6 +303,9 @@ export class Conductor {
       },
       end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
+      query: q,
+      permissionMode,
+      pending,
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       cardId: null, outcome: null, reason: '', summary: '',
@@ -322,6 +372,7 @@ export class Conductor {
           hired.reason = String(e?.message ?? e)
         }
       } finally {
+        hired.pending.clear()
         this.hired.delete(agent.id)
         if (hired.cardId !== null) this.finalizeLaunch(hired)
         removeAgentCards(this.db, agent.id)
@@ -356,14 +407,34 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number } } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
-      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens },
+      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode },
+      permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
     }
+  }
+
+  // live-switch the SDK session's permission mode; persisted so a daemon restart resumes with it
+  async setPermissionMode(agentId: number, mode: string): Promise<boolean> {
+    const h = this.hired.get(agentId)
+    if (!h || !PERMISSION_MODES.includes(mode as HiredPermissionMode)) return false
+    try { await h.query.setPermissionMode(mode) } catch { return false }
+    h.permissionMode = mode as HiredPermissionMode
+    this.db.prepare(`UPDATE agents SET permission_mode=? WHERE id=?`).run(mode, agentId)
+    h.transcript.push({ at: new Date().toISOString(), kind: 'status', text: `permission mode → ${mode}` })
+    this.emit(h.boardId, 'permission_mode', { agent_id: agentId, mode })
+    return true
+  }
+
+  resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean {
+    const p = this.hired.get(agentId)?.pending.get(requestId)
+    if (!p) return false
+    p.finish(behavior === 'allow', message)
+    return true
   }
 
   async interruptAgent(agentId: number): Promise<boolean> {

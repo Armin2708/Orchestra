@@ -305,7 +305,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-welcome-sub { color: #6f6b64; font-size: 12px; margin-top: 2px; }
 .cc-star-frame { color: #D97757; display: inline-block; min-width: 14px; }
 .cc-mode { color: #D97757; }
+.cc-mode-select {
+  background: none; border: none; color: #D97757; font: inherit;
+  padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px;
+}
+.cc-mode-select:focus-visible { outline: 1px solid #D97757; outline-offset: 2px; }
 .cc-dim { color: #6f6b64; }
+
+/* pending canUseTool asks — approve/deny inline, like a claude-code permission prompt */
+.cc-perm {
+  border: 1px solid #D97757; border-radius: 8px; background: rgba(217, 119, 87, 0.07);
+  padding: 10px 14px; margin: 8px 0; width: fit-content; max-width: 100%; min-width: 280px;
+}
+.cc-perm-title { color: #DED9D1; margin: 0 0 8px; overflow-wrap: anywhere; }
+.cc-perm-actions { display: flex; gap: 8px; }
+.cc-perm-actions button {
+  font: inherit; font-size: 12.5px; border-radius: 6px; padding: 4px 12px; cursor: pointer;
+  background: none;
+}
+.cc-perm-allow { border: 1px solid #7d9c6f; color: #a4c797; }
+.cc-perm-allow:hover { background: rgba(125, 156, 111, 0.15); }
+.cc-perm-deny { border: 1px solid #b3564a; color: #d99a91; }
+.cc-perm-deny:hover { background: rgba(179, 86, 74, 0.15); }
 
 /* ── Roadmap ideas ───────────────────────────────── */
 .ideas { display: grid; gap: 8px; }

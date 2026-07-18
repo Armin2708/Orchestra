@@ -34,7 +34,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   // resurrect hired agents from before the restart — sessions resume, cards and work persist
   const survivors = db.prepare(`
-    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, b.project_path
+    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode, b.project_path
     FROM agents a JOIN boards b ON b.id = a.board_id
     WHERE a.kind='hired' AND a.status != 'gone'`).all() as any[]
   for (const s of survivors) {
@@ -44,7 +44,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     }
     try {
       maestro!.hire({ boardId: s.board_id, cwd: s.project_path, name: s.name,
-        role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined })
+        role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined,
+        permissionMode: s.permission_mode ?? undefined })
       maestro!.adoptLaunch(s.id)
     } catch {
       // could not respawn — keep the agent's cards, just mark it gone

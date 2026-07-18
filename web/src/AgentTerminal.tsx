@@ -11,6 +11,35 @@ const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolatin
 const fmtTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
+// a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
+type PendingPermission = { id: string; tool: string; summary: string; title: string | null; at: string }
+
+// permission modes the daemon accepts (POST /agents/:id/permission-mode)
+const PERMISSION_MODES = [
+  { value: 'bypassPermissions', icon: '⏵⏵', label: 'bypass permissions', hint: 'runs autonomously' },
+  { value: 'acceptEdits', icon: '⏵', label: 'accept edits', hint: 'edits auto-approved · other tools ask below' },
+  { value: 'plan', icon: '⏸', label: 'plan mode', hint: 'read-only · tools ask below' },
+]
+
+// container for the mode toggle — #40's command menu and #41's model/effort selectors slot in beside it
+function PermissionModeHint({ agentId, mode, onChange }: { agentId: number; mode: string; onChange: () => void }) {
+  const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
+  return (
+    <span className="cc-mode">
+      {m.icon}{' '}
+      <select className="cc-mode-select" value={m.value} aria-label="Permission mode"
+        title="Permission mode — applies live to this agent's session"
+        onChange={async (e) => {
+          try { await api('POST', `/agents/${agentId}/permission-mode`, { mode: e.target.value }) } catch { /* agent gone or daemon too old */ }
+          onChange()
+        }}>
+        {PERMISSION_MODES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+      </select>
+      <span className="cc-dim">({m.hint})</span>
+    </span>
+  )
+}
+
 // the claude spinner glyph frames
 const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const BOOT_MSGS = [
@@ -23,7 +52,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string } | null>(null)
+  const [perms, setPerms] = useState<PendingPermission[]>([])
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -55,8 +85,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })
       setInfo((prev) => {
         const i = r.info ?? null
-        if (prev && i && prev.tokens === i.tokens && prev.model === i.model) return prev
+        if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode) return prev
         return i
+      })
+      setPerms((prev) => {
+        const next: PendingPermission[] = r.permissions ?? []
+        return (prev.length === next.length && prev.every((p, idx) => p.id === next[idx]?.id)) ? prev : next
       })
     }).catch(() => {})
     load()
@@ -119,6 +153,11 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
   const interrupt = async () => {
     if (hired && working) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
+  }
+
+  const decide = async (requestId: string, behavior: 'allow' | 'deny') => {
+    try { await api('POST', `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`, { behavior }) } catch { /* already resolved */ }
+    setPerms((prev) => prev.filter((p) => p.id !== requestId))
   }
 
   const renderLine = (l: Line, i: number) => {
@@ -201,6 +240,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
               </p>
             )}
+            {hired && perms.map((p) => (
+              <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
+                <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
+                <div className="cc-perm-actions">
+                  <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
+                  <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+                </div>
+              </div>
+            ))}
             {working && turn && (
               <p className="cc-spinner">
                 <span className="cc-star-frame">{star}</span> {gerund}… (<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · {fmtSecs(turn.secs)}
@@ -218,7 +266,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
           <div className="cc-hints">
             {hired
-              ? <span className="cc-mode">⏵⏵ bypass permissions on <span className="cc-dim">(hired agents run autonomously)</span></span>
+              ? <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'} onChange={onChange} />
               : <span>enter to send · shift+enter for newline</span>}
             <span>
               {info?.cwd ?? ''}{info?.model ? ` · ${info.model}` : ''}
