@@ -216,3 +216,62 @@ it('POST /cards/:id/launch rejects double launches and works without a conductor
   const { card: c2 } = (await bare.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: 1, title: 'y' } })).json()
   expect((await bare.inject({ method: 'POST', url: `/api/v1/cards/${c2.id}/launch` })).statusCode).toBe(501)
 })
+
+it('a fired agent\'s authored backlog ticket survives unowned with history intact', async () => {
+  const t = setup()
+  const res = t.conductor.hire({ boardId: 1, cwd: '/p' })
+  // the agent authored a ticket mid-session — cli inferAgent claimed ownership for it
+  const { lastInsertRowid } = t.db.prepare(
+    `INSERT INTO cards (board_id, title, owner_agent_id) VALUES (1, 'future work', ?)`).run(res.id)
+  const id = Number(lastInsertRowid)
+  t.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, 'created', '{}')`).run(id, res.id)
+
+  await t.conductor.fire(res.id)
+  t.sessions[0].close()
+  await until(() => !t.conductor.isHired(res.id))
+
+  expect(t.card(id)).toBeDefined() // the ticket outlives its author
+  expect(t.card(id).column_name).toBe('backlog')
+  expect(t.card(id).owner_agent_id).toBeNull()
+  expect(t.cardEvents(id)).toHaveLength(1)
+})
+
+it('an ephemeral auditor dissolving leaves its created ticket on the board', async () => {
+  const t = setup()
+  const res = t.conductor.hire({ boardId: 1, cwd: '/p', role: 'auditor', ephemeral: true })
+  // auditors get no ORCHESTRA_AGENT, so cli card create cannot auto-claim ownership
+  const env = (query as any).mock.calls.at(-1)[0].options.env
+  expect(env.ORCHESTRA_AGENT).toBeUndefined()
+  expect(env.ORCHESTRA_NAME).toBe(res.name) // hook identity stays intact
+
+  // worst case: ownership got attributed anyway — the ticket must still survive the dissolve
+  const { lastInsertRowid } = t.db.prepare(
+    `INSERT INTO cards (board_id, title, owner_agent_id) VALUES (1, 'audited ticket', ?)`).run(res.id)
+  const id = Number(lastInsertRowid)
+  t.sessions[0].emit({ type: 'result', subtype: 'success', result: 'audited' }) // ephemeral → self-fire
+  t.sessions[0].close()
+  await until(() => !t.conductor.isHired(res.id))
+
+  expect(t.card(id)).toBeDefined()
+  expect(t.card(id).owner_agent_id).toBeNull()
+})
+
+it('a launched agent authoring a side ticket parks its own card once and leaves the ticket', async () => {
+  const t = setup()
+  const id = t.mkCard('the ticket')
+  const res = t.conductor.launch({ boardId: 1, cardId: id, cwd: '/p', brief: 'work it' })
+  const side = Number(t.db.prepare(
+    `INSERT INTO cards (board_id, title, owner_agent_id) VALUES (1, 'follow-up idea', ?)`).run(res.agent.id).lastInsertRowid)
+
+  t.sessions[0].emit({ type: 'result', subtype: 'success', result: 'done' })
+  t.sessions[0].close()
+  await until(() => t.card(id)?.column_name === 'review')
+
+  // the launched ticket landed in review exactly once, history intact
+  expect(t.db.prepare(`SELECT COUNT(*) n FROM cards WHERE title='the ticket'`).get()).toMatchObject({ n: 1 })
+  expect(t.card(id).owner_agent_id).toBeNull()
+  expect(t.cardEvents(id).some((e) => e.type === 'agent_exit')).toBe(true)
+  // and the side ticket the agent authored survives, released to the pool
+  expect(t.card(side)).toBeDefined()
+  expect(t.card(side).owner_agent_id).toBeNull()
+})

@@ -98,7 +98,8 @@ How you work — in order:
 1. VALIDATE: research the repo (relevant source files, docs, recent git log) to judge whether the idea is feasible, already implemented, or contradicted by how the code actually works.
 2. CHECK FOR OVERLAP: run orchestra snapshot and compare the idea against existing cards and milestones — if a ticket already covers it, do NOT duplicate; remove the idea (orchestra idea-done <id>) and report why.
 3. SPEC: if it survives, write ONE ticket as a ready-to-run prompt for the implementing agent:
-   orchestra card create "<title>" --desc "OBJECTIVE: <one sentence>. CONTEXT: <exact files, patterns, constraints you verified>. REQUIREMENTS: <essentials, separated by ';'>. DONE WHEN: <verifiable acceptance criteria>." --paths <files/globs you verified>
+   orchestra card create "<title>" --desc "OBJECTIVE: <one sentence>. CONTEXT: <exact files, patterns, constraints you verified>. REQUIREMENTS: <essentials, separated by ';'>. DONE WHEN: <verifiable acceptance criteria>." --paths <files/globs you verified> --no-owner
+   (--no-owner keeps the ticket unassigned so it stays on the board after you dissolve — never claim it yourself)
 4. CONSUME: remove the source idea with orchestra idea-done <idea-id>.
 5. REPORT — REQUIRED, your console vanishes when you finish, so the report must live on the board:
    orchestra note "audit idea #<id>: <created ticket #N | rejected — reason | duplicate of card #N>" --from ${me}
@@ -292,6 +293,13 @@ export class Conductor {
     }
 
     const effort: EffortLevel | null = EFFORT_LEVELS.includes(opts.effort as EffortLevel) ? opts.effort as EffortLevel : null
+
+    // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
+    // instead of minting a second "session" agent for the SDK subprocess
+    const env: Record<string, string | undefined> = { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name }
+    // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
+    // cannot auto-claim ownership, so their cards are born unowned
+    if (opts.role === 'auditor') delete env.ORCHESTRA_AGENT
     const q = query({
       prompt: input.stream(),
       options: {
@@ -302,9 +310,7 @@ export class Conductor {
         permissionMode,
         canUseTool,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
-        // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
-        // instead of minting a second "session" agent for the SDK subprocess
-        env: { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name },
+        env,
       } as any,
     })
 
