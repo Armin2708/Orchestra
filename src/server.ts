@@ -438,6 +438,18 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return a
   })
 
+  // one global stream — browsers cap per-host connections, so per-board streams starve the app
+  server.get('/api/v1/events', (req, reply) => {
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache', connection: 'keep-alive',
+    })
+    const onEvent = (e: unknown) => reply.raw.write(`data: ${JSON.stringify(e)}\n\n`)
+    server.bus.on('event', onEvent)
+    const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000)
+    req.raw.on('close', () => { server.bus.off('event', onEvent); clearInterval(ping) })
+  })
+
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/events', (req, reply) => {
     const boardId = Number(req.params.id)
     reply.raw.writeHead(200, {

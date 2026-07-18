@@ -39,16 +39,17 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    let sources: EventSource[] = []
-    refresh().then((boards) => {
-      sources = boards.map((b: any) => {
-        const es = new EventSource(`/api/v1/boards/${b.id}/events`)
-        es.onmessage = () => refresh()
-        return es
-      })
-    }).catch(() => setLoaded(true))
+    refresh().catch(() => setLoaded(true))
+    // a single stream for everything — per-board streams exhaust the browser connection limit
+    const es = new EventSource('/api/v1/events')
+    let pending: number | undefined
+    es.onmessage = () => {
+      // debounce bursts of events into one refresh
+      if (pending) return
+      pending = window.setTimeout(() => { pending = undefined; refresh() }, 300)
+    }
     const poll = setInterval(refresh, 30_000) // pick up newly created boards
-    return () => { sources.forEach((s) => s.close()); clearInterval(poll) }
+    return () => { es.close(); clearInterval(poll); if (pending) clearTimeout(pending) }
   }, [refresh])
 
   if (loaded && snaps.length === 0) return <GettingStarted />
