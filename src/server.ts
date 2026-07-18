@@ -18,7 +18,7 @@ export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike {
   isHired(agentId: number): boolean
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean }): any
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any
@@ -517,7 +517,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return msg
     })
 
-  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean } }>(
+  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
@@ -529,6 +529,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         model: req.body?.model,
         role: req.body?.role,
         ephemeral: req.body?.ephemeral,
+        // /resume revives a stopped agent with its memory and permission mode intact (#44)
+        resumeSession: req.body?.resumeSession,
+        permissionMode: req.body?.permissionMode,
       })
       emit(board.id, 'agent', agent)
       return agent
