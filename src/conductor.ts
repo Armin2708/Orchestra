@@ -4,6 +4,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import { generateName } from './names.js'
 import { removeAgentCards } from './reaper.js'
 import { port } from './daemon.js'
+import { conductorRules } from './rules.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -75,18 +76,7 @@ How you work — in order:
    Then stop; you will be released.
 Be skeptical and precise: a thin idea deserves interrogation of the codebase, not a thin ticket. Do not brainstorm new ideas, do not create milestones, do not take tickets.`
 
-const rules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
-Orchestra board rules (standing instructions):
-- REQUIRED before starting any task: run orchestra snapshot and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict, you MUST ask its owner what they're covering BEFORE you start (orchestra ask <agent> "..." --from ${me}), wait for the answer, and scope your work to not duplicate theirs.
-- REQUIRED: when you receive a task, BEFORE your first file edit, register it:
-  orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress --agent ${me}
-  If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
-- Keep the card updated as you progress (orchestra card update/move --agent ${me}); move it to done when finished.
-- Do NOT touch paths claimed by another active card without asking first.
-- If your assignment mentions open prerequisite steps, message their owners FIRST (orchestra ask) to agree boundaries and interfaces — then build in parallel against the agreed contract instead of waiting.
-- Messages from the board arrive directly in this conversation; answer questions promptly with: orchestra reply <msg-id> "<answer>" --from ${me}, then continue your task.
-- SUBAGENTS: spawn them freely for parallel work — they operate under YOUR identity and YOUR card. Tell every subagent in its prompt: do NOT run orchestra commands (no cards, no asks, no replies) — board coordination belongs to you, the parent. Summarize subagent results on your card as you go.
-- If the orchestra command is missing, use: npx -y orchestra-board`
+const rules = conductorRules
 
 // pushable async-generator bridge into the SDK's streaming input
 function createInput() {

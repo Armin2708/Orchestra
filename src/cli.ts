@@ -111,11 +111,18 @@ program.command('pulse').option('--agent-id <id>').action(async (o) => {
   for (const m of r.messages) console.log(`[${m.from_name ?? 'human'}] ${m.body} (msg #${m.id})`)
 })
 
-program.command('snapshot').option('--board <id>').action(async (o) => {
+program.command('snapshot').option('--board <id>').option('--full', 'complete board state as JSON').action(async (o) => {
   await up()
   const b = o.board ? { id: Number(o.board) } : await board()
   const snap = await api('GET', `/boards/${b.id}/snapshot`)
-  console.log(JSON.stringify(snap, null, 2))
+  if (o.full) return console.log(JSON.stringify(snap, null, 2))
+  const active = snap.agents.filter((a: any) => a.status !== 'gone')
+  console.log(`board "${snap.board.name}" — ${active.length} active agent(s): ${active.map((a: any) => a.name).join(', ') || '-'}`)
+  for (const c of snap.cards.filter((c: any) => c.column !== 'done'))
+    console.log(`#${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`)
+  for (const q of snap.open_questions)
+    console.log(`Q#${q.id} ${q.from_name ?? 'human'} → ${q.to_name ?? 'all'}: ${q.body.length > 140 ? q.body.slice(0, 140) + '…' : q.body}`)
+  console.log(`(descriptions, milestones, ideas, threads: orchestra snapshot --full)`)
 })
 
 program.command('idea <text>').description('add a roadmap idea (first line = title)')

@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { api } from './client.js'
 import { dataDir, ensureDaemon } from './daemon.js'
+import { hookRules, verbose } from './rules.js'
 
 // throwaway sessions in temp dirs shouldn't create phantom boards
 export function isThrowawayCwd(cwd: string): boolean {
@@ -46,15 +47,45 @@ async function registerSession(input: any): Promise<Session | undefined> {
 const ensureSession = async (input: any): Promise<Session | undefined> =>
   loadSession(input.session_id) ?? registerSession(input)
 
-const rules = (me: string) => `orchestra rules (coordination board for this project — these are standing instructions):
-- You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.
-- REQUIRED before starting any task: read the board below and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict with what you're about to do, you MUST ask its owner what they're covering BEFORE you start: orchestra ask <agent-name> "<question>" --from ${me}. Wait for the answer, then scope your work to not duplicate theirs.
-- REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
-  orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress --agent ${me}
-  If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
-- Keep your card updated as work progresses: orchestra card update <id> --desc "<what you're doing now>" --agent ${me}; move it (orchestra card move <id> done|review|blocked --agent ${me}) when status changes. Move to done when finished.
-- Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.
-- SUBAGENTS: spawn them freely — they work under YOUR identity and card. Instruct each one: do NOT run orchestra commands; board coordination belongs to you, the parent.`
+// a card matters to this session if any of its claimed paths could collide with files under cwd
+const touchesCwd = (paths: string[], root: string, cwd: string): boolean => {
+  if (cwd === root) return paths.length > 0
+  return paths.some((p) => {
+    const abs = path.resolve(root, p)
+    return abs === cwd || abs.startsWith(cwd + path.sep) || cwd.startsWith(abs + path.sep)
+  })
+}
+
+const cardLine = (c: any, full: boolean) => {
+  if (full) return `- card #${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`
+  const paths = c.paths.slice(0, 2).join(', ') + (c.paths.length > 2 ? ` +${c.paths.length - 2}` : '')
+  return `- #${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) ${paths || '-'}`
+}
+const questionLine = (q: any, full: boolean) => full
+  ? `- open question #${q.id} from ${q.from_name ?? 'human'} to ${q.to_name ?? 'all'}: ${q.body}`
+  : `- Q#${q.id} ${q.from_name ?? 'human'}→${q.to_name ?? 'all'}: ${q.body.length > 120 ? q.body.slice(0, 120) + '…' : q.body}`
+
+// pure renderer, exported for tests and A/B token measurement (card #38)
+export function renderSessionStart(agent: { id: number; name: string }, board: any, snap: any, cwd: string): string {
+  const me = agent.name
+  const full = verbose()
+  const others = snap.agents.filter((x: any) => x.id !== agent.id && x.status !== 'gone')
+  const lines = [hookRules(me), '', `You are agent "${me}" (id ${agent.id}) on board "${board.name}".`]
+  if (full) {
+    for (const a of others) lines.push(`- agent ${a.name}: ${a.status}`)
+    for (const c of snap.cards.filter((c: any) => c.column !== 'done')) lines.push(cardLine(c, full))
+    for (const q of snap.open_questions) lines.push(questionLine(q, full))
+  } else {
+    lines.push(`- ${others.length} other active agent(s) — orchestra snapshot --full for the list`)
+    const root = board.project_path ?? cwd
+    for (const c of snap.cards.filter((c: any) =>
+      c.column !== 'done' && (!c.owner || c.owner === me || touchesCwd(c.paths, root, cwd))))
+      lines.push(cardLine(c, full))
+    for (const q of snap.open_questions.filter((q: any) => !q.to_name || q.to_name === me))
+      lines.push(questionLine(q, full))
+  }
+  return lines.join('\n')
+}
 
 async function sessionStart(input: any): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
@@ -67,13 +98,7 @@ async function sessionStart(input: any): Promise<void> {
   fs.writeFileSync(sessFile(input.session_id),
     JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }))
   const snap = await api('GET', `/boards/${board.id}/snapshot`)
-  const lines = [rules(agent.name), '', `You are agent "${agent.name}" (id ${agent.id}) on board "${board.name}".`]
-  for (const a of snap.agents.filter((x: any) => x.id !== agent.id && x.status !== 'gone'))
-    lines.push(`- agent ${a.name}: ${a.status}`)
-  for (const c of snap.cards.filter((c: any) => c.column !== 'done'))
-    lines.push(`- card #${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`)
-  for (const q of snap.open_questions) lines.push(`- open question #${q.id} from ${q.from_name ?? 'human'} to ${q.to_name ?? 'all'}: ${q.body}`)
-  console.log(lines.join('\n'))
+  console.log(renderSessionStart(agent, board, snap, input.cwd ?? process.cwd()))
 }
 
 const cardAgeMs = (c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime()
