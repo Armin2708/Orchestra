@@ -27,9 +27,11 @@ export interface ConductorLike {
   fire(agentId: number): Promise<boolean>
   launch(req: { boardId: number; cardId: number; cwd: string; brief: string }): any
   isLaunched(cardId: number): boolean
-  // optional so existing test stubs stay valid; the real Conductor implements both
+  // optional so existing test stubs stay valid; the real Conductor implements all of these
   setPermissionMode?(agentId: number, mode: string): Promise<boolean>
   resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean
+  setModel?(agentId: number, model: string): Promise<boolean>
+  setEffort?(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
@@ -580,6 +582,32 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
       const ok = maestro.resolvePermission?.(Number(req.params.id), req.params.requestId, behavior, req.body?.message) ?? false
       return ok ? { ok: true } : reply.code(404).send({ error: 'no pending permission request with that id' })
+    })
+
+  // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)
+  server.post<{ Params: { id: string }; Body: { model?: string } | null }>(
+    '/api/v1/agents/:id/model', async (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const model = req.body?.model
+      if (!model || typeof model !== 'string') return reply.code(400).send({ error: 'model is required' })
+      const ok = (await maestro.setModel?.(Number(req.params.id), model)) ?? false
+      return ok ? { ok: true, model } : reply.code(404).send({ error: 'not a hired agent' })
+    })
+
+  // change reasoning effort — a spawn param, so the daemon restarts the session with resume;
+  // 409 while a turn is running, mirroring the launch gate
+  const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+  server.post<{ Params: { id: string }; Body: { level?: string } | null }>(
+    '/api/v1/agents/:id/effort', async (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const level = req.body?.level ?? ''
+      if (!EFFORT_LEVELS.includes(level)) return reply.code(400).send({ error: `level must be one of: ${EFFORT_LEVELS.join(', ')}` })
+      const r = (await maestro.setEffort?.(Number(req.params.id), level)) ?? 'not-found'
+      if (r === 'ok') return { ok: true, level }
+      if (r === 'busy') return reply.code(409).send({ error: 'agent is mid-turn — wait or interrupt, then retry' })
+      if (r === 'no-session') return reply.code(409).send({ error: 'agent has no resumable session yet — send a first prompt before changing effort' })
+      if (r === 'bad-level') return reply.code(400).send({ error: `level must be one of: ${EFFORT_LEVELS.join(', ')}` })
+      return reply.code(404).send({ error: 'not a hired agent' })
     })
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {

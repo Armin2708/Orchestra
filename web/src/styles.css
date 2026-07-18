@@ -336,6 +336,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px;
 }
 .cc-mode-select:focus-visible { outline: 1px solid #D97757; outline-offset: 2px; }
+.cc-controls { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cc-model-effort { display: inline-flex; align-items: center; gap: 6px; }
+/* segmented effort control — a restart-with-resume, so it dims while a turn runs */
+.cc-effort { display: inline-flex; border: 1px solid #3a372f; border-radius: 6px; overflow: hidden; }
+.cc-effort-btn {
+  background: none; border: none; color: #6f6b64; font: inherit; font-size: 11px;
+  padding: 1px 7px; cursor: pointer; border-right: 1px solid #3a372f;
+}
+.cc-effort-btn:last-child { border-right: none; }
+.cc-effort-btn:hover:not(:disabled) { color: #e8e4dc; }
+.cc-effort-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.cc-effort-on { background: rgba(217, 119, 87, 0.18); color: #D97757; }
 .cc-dim { color: #6f6b64; }
 
 /* orchestra-source badge in the #40 slash menu (menu renders .cc-cmd-badge[data-source]) */

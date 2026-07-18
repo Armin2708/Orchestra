@@ -26,6 +26,50 @@ const PERMISSION_MODES = [
   { value: 'plan', icon: '⏸', label: 'plan mode', hint: 'read-only · tools ask below' },
 ]
 
+// a model entry from the SDK's supportedModels(), surfaced via transcript info
+type ModelInfo = { model: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
+
+// model dropdown + segmented effort control — slots in beside PermissionModeHint (#45 contract).
+// model switches apply next turn; effort restarts the session with the conversation resumed.
+function ModelEffortControls({ agentId, info, working, onChange }: {
+  agentId: number
+  info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
+  working: boolean
+  onChange: () => void
+}) {
+  const models = info?.models ?? []
+  if (models.length === 0) return null
+  const current = models.find((m) => m.model === info?.model || m.resolvedModel === info?.model)
+  const levels = current?.supportedEffortLevels ?? []
+  return (
+    <span className="cc-model-effort">
+      <select className="cc-mode-select" value={current?.model ?? ''} aria-label="Model"
+        title="Model — applies from the next turn"
+        onChange={async (e) => {
+          try { await api('POST', `/agents/${agentId}/model`, { model: e.target.value }) } catch { /* agent gone */ }
+          onChange()
+        }}>
+        {!current && <option value="">{info?.model ?? 'model…'}</option>}
+        {models.map((m) => <option key={m.model} value={m.model}>{m.displayName ?? m.model}</option>)}
+      </select>
+      {levels.length > 0 && (
+        <span className="cc-effort" role="group" aria-label="Reasoning effort"
+          title={working ? 'Effort — wait for the turn to finish' : 'Effort — restarts the session, conversation resumes'}>
+          {levels.map((l) => (
+            <button key={l} disabled={working}
+              className={`cc-effort-btn${(info?.effort ?? '') === l ? ' cc-effort-on' : ''}`}
+              onClick={async () => {
+                if ((info?.effort ?? '') === l) return
+                try { await api('POST', `/agents/${agentId}/effort`, { level: l }) } catch { /* mid-turn (409) or agent gone */ }
+                onChange()
+              }}>{l === 'medium' ? 'med' : l}</button>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
 // container for the mode toggle — #40's command menu and #41's model/effort selectors slot in beside it
 function PermissionModeHint({ agentId, mode, onChange }: { agentId: number; mode: string; onChange: () => void }) {
   const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
@@ -57,7 +101,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[] } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[] } | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
   const [localLines, setLocalLines] = useState<Line[]>([])
@@ -96,7 +140,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         const i = r.info ?? null
         if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
           (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
-          prev.commands?.[0]?.description === i.commands?.[0]?.description) return prev
+          prev.commands?.[0]?.description === i.commands?.[0]?.description &&
+          prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0)) return prev
         return i
       })
       setPerms((prev) => {
@@ -338,10 +383,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
           <div className="cc-hints">
             {hired
-              ? <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'} onChange={onChange} />
+              ? <span className="cc-controls">
+                  <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'} onChange={onChange} />
+                  <ModelEffortControls agentId={agent.id} info={info} working={working} onChange={onChange} />
+                </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span>
-              {info?.cwd ?? ''}{info?.model ? ` · ${info.model}` : ''}
+              {info?.cwd ?? ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
               {info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
             </span>
