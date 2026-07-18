@@ -253,6 +253,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     emit(idea.board_id, 'card', card)
     const agentRow = agentByName(idea.board_id, req.body?.agent)
     if (req.body?.agent && !agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
+    if (agentRow?.name === 'strategist') return reply.code(400).send({ error: 'the strategist brainstorms and writes tickets — it does not take them' })
     if (agentRow) card = notifyAssignment(card, agentRow)
     return { card }
   })
@@ -263,6 +264,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (isLocked(card)) return reply.code(409).send({ error: 'step is locked — complete its prerequisites first' })
     const agentRow = agentByName(card.board_id, req.body.agent)
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
+    if (agentRow.name === 'strategist') return reply.code(400).send({ error: 'the strategist brainstorms and writes tickets — it does not take them' })
     return { card: notifyAssignment(card, agentRow) }
   })
 

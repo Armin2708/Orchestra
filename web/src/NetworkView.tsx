@@ -154,10 +154,11 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
               title={`${a.name} — drag to move, click to open console, drop a ticket to assign`}
               onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}
-              onDragOver={(e) => { e.preventDefault(); setDropTarget(a.name) }}
+              onDragOver={(e) => { if (a.name === 'strategist') return; e.preventDefault(); setDropTarget(a.name) }}
               onDragLeave={() => setDropTarget(null)}
               onDrop={async (e) => {
                 e.preventDefault(); setDropTarget(null)
+                if (a.name === 'strategist') return
                 const id = Number(e.dataTransfer.getData('text/ticket-id'))
                 if (!id) return
                 try { await api('POST', `/cards/${id}/assign`, { agent: a.name }) } catch { /* locked */ }

@@ -79,8 +79,9 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
   const [text, setText] = useState('')
   const [brainstorm, setBrainstorm] = useState('')
   const [briefing, setBriefing] = useState(false)
-  const agents = snap.agents.filter((a) => a.status !== 'gone')
-  const strategist = agents.find((a) => a.name === 'strategist')
+  const allLive = snap.agents.filter((a) => a.status !== 'gone')
+  const strategist = allLive.find((a) => a.name === 'strategist')
+  const agents = allLive.filter((a) => a.name !== 'strategist') // the strategist writes tickets, it doesn't take them
 
   const askStrategist = async () => {
     if (!brainstorm.trim() || briefing) return

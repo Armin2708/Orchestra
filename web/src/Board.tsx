@@ -303,7 +303,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
       </div>
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
-        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone')}
+        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist')}
         onClose={() => setOpen(null)} onChange={onChange} />}
       {terminal && <AgentTerminal
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}
