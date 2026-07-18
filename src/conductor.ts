@@ -49,6 +49,8 @@ type Hired = {
   query: any
   permissionMode: HiredPermissionMode
   pending: Map<string, PendingPermission>
+  // this session's slash commands, kept fresh by init + commands_changed (REPLACE semantics)
+  commands: { name: string; description: string }[]
   transcript: TranscriptLine[]
   turnStart: number | null
   turnTokens: number
@@ -306,6 +308,7 @@ export class Conductor {
       query: q,
       permissionMode,
       pending,
+      commands: [],
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       cardId: null, outcome: null, reason: '', summary: '',
@@ -320,7 +323,20 @@ export class Conductor {
             hired.model = m.model ?? null
             // remember the sdk session so a daemon restart can resume this agent with its memory intact
             if (m.session_id) this.db.prepare(`UPDATE agents SET sdk_session=? WHERE id=?`).run(m.session_id, agent.id)
+            // init carries names only; supportedCommands() backfills descriptions (best effort —
+            // don't overwrite if a commands_changed replacement raced ahead of the resolution)
+            hired.commands = (m.slash_commands ?? []).map((n: string) => ({ name: n, description: '' }))
+            const fromInit = hired.commands
+            Promise.resolve((q as any).supportedCommands?.())
+              .then((cmds: any) => {
+                if (Array.isArray(cmds) && hired.commands === fromInit)
+                  hired.commands = cmds.map((c: any) => ({ name: c.name, description: c.description ?? '' }))
+              })
+              .catch(() => { /* older CLI without the control request */ })
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
+          } else if (m.type === 'system' && m.subtype === 'commands_changed') {
+            // mid-session push (e.g. skills discovered while working) — REPLACE the cached list
+            hired.commands = (m.commands ?? []).map((c: any) => ({ name: c.name, description: c.description ?? '' }))
           } else if (m.type === 'assistant') {
             if (hired.turnStart === null) hired.turnStart = Date.now()
             hired.turnTokens += m.message?.usage?.output_tokens ?? 0
@@ -407,13 +423,13 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string }; permissions?: Omit<PendingPermission, 'finish'>[] } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[] }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
-      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode },
+      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, commands: h.commands },
       permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
     }
   }

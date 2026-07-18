@@ -14,6 +14,10 @@ const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `
 // a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
 type PendingPermission = { id: string; tool: string; summary: string; title: string | null; at: string }
 
+// a slash-menu entry; source 'sdk' = the session's real command list, anything else
+// (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
+export type CommandItem = { name: string; description: string; source: string }
+
 // permission modes the daemon accepts (POST /agents/:id/permission-mode)
 const PERMISSION_MODES = [
   { value: 'bypassPermissions', icon: '⏵⏵', label: 'bypass permissions', hint: 'runs autonomously' },
@@ -47,12 +51,12 @@ const BOOT_MSGS = [
   'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
 ]
 
-export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, onClose, onChange }:
-  { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; onClose: () => void; onChange: () => void }) {
+export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = [], onClose, onChange }:
+  { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[] } | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
@@ -85,7 +89,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })
       setInfo((prev) => {
         const i = r.info ?? null
-        if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode) return prev
+        if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
+          (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
+          prev.commands?.[0]?.description === i.commands?.[0]?.description) return prev
         return i
       })
       setPerms((prev) => {
@@ -149,6 +155,37 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (hired) await api('POST', `/agents/${agent.id}/task`, { text: input.trim() })
     else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: input.trim() })
     setInput(''); onChange()
+  }
+
+  // slash-command menu: open while a hired agent's input is a bare /prefix (no space yet)
+  const [menuIdx, setMenuIdx] = useState(0)
+  const [menuHidden, setMenuHidden] = useState(false) // escape dismisses; typing re-opens
+  const menuItems: CommandItem[] = [
+    ...(info?.commands ?? []).map((c) => ({ ...c, source: 'sdk' })),
+    ...extraCommands,
+  ]
+  const slashTerm = hired && input.startsWith('/') && !/[\s]/.test(input) ? input.slice(1) : null
+  const filtered = slashTerm !== null
+    ? menuItems.filter((c) => c.name.toLowerCase().startsWith(slashTerm.toLowerCase()))
+    : []
+  const menuOpen = filtered.length > 0 && !menuHidden
+  useEffect(() => { setMenuIdx(0); setMenuHidden(false) }, [slashTerm])
+
+  // complete into the textarea only — never send; execution stays in send() (contract w/ #44)
+  const complete = (c: CommandItem) => {
+    setInput(`/${c.name} `)
+    inputRef.current?.focus()
+  }
+
+  const promptKeys = (e: React.KeyboardEvent) => {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % filtered.length); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIdx((i) => (i - 1 + filtered.length) % filtered.length); return }
+      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); complete(filtered[Math.min(menuIdx, filtered.length - 1)]); return }
+      // dismiss the menu only — must not bubble to the terminal's interrupt/close handler
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenuHidden(true); return }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
   const interrupt = async () => {
@@ -257,12 +294,29 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             )}
           </div>
 
-          <div className="cc-promptbox">
-            <span className="cc-prompt-caret">&gt;</span>
-            <textarea ref={inputRef} autoFocus value={input} rows={1}
-              placeholder=""
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
+          <div className="cc-prompt-wrap">
+            {menuOpen && (
+              <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
+                {filtered.slice(0, 10).map((c, i) => (
+                  <div key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
+                    className={i === menuIdx ? 'cc-slash-item active' : 'cc-slash-item'}
+                    onMouseEnter={() => setMenuIdx(i)}
+                    onMouseDown={(e) => { e.preventDefault(); complete(c) }}>
+                    <span className="cc-slash-name">/{c.name}</span>
+                    {c.source !== 'sdk' && <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>}
+                    <span className="cc-slash-desc">{c.description}</span>
+                  </div>
+                ))}
+                {filtered.length > 10 && <div className="cc-slash-more">… {filtered.length - 10} more — keep typing</div>}
+              </div>
+            )}
+            <div className="cc-promptbox">
+              <span className="cc-prompt-caret">&gt;</span>
+              <textarea ref={inputRef} autoFocus value={input} rows={1}
+                placeholder=""
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={promptKeys} />
+            </div>
           </div>
           <div className="cc-hints">
             {hired
