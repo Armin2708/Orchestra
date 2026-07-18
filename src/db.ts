@@ -58,6 +58,16 @@ export function openDb(file: string): Database.Database {
     delivered_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (message_id, agent_id)
   );
+  CREATE TABLE IF NOT EXISTS review_decisions (
+    id INTEGER PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES boards(id),
+    card_id INTEGER NOT NULL REFERENCES cards(id),
+    milestone_id INTEGER,
+    step_order INTEGER,
+    decision TEXT NOT NULL,
+    note TEXT,
+    decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY,
     board_id INTEGER NOT NULL REFERENCES boards(id),

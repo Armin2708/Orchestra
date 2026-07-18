@@ -24,6 +24,16 @@ function MilestoneQuest({ m, cards, agents, onChange }:
     try { await api('POST', `/cards/${cardId}/assign`, { agent }) } catch { /* locked */ }
     onChange()
   }
+  const approve = async (cardId: number) => {
+    try { await api('POST', `/cards/${cardId}/approve`, {}) } catch { /* raced */ }
+    onChange()
+  }
+  const sendBack = async (cardId: number) => {
+    const note = window.prompt('Send back with a note for the agent:')
+    if (!note?.trim()) return
+    try { await api('POST', `/cards/${cardId}/send-back`, { note: note.trim() }) } catch { /* raced */ }
+    onChange()
+  }
 
   let blocked = false
   return (
@@ -46,22 +56,30 @@ function MilestoneQuest({ m, cards, agents, onChange }:
         {steps.map((s) => {
           const locked = blocked
           if (s.column !== 'done') blocked = true
-          const state = s.column === 'done' ? 'done' : locked ? 'chained' : s.column === 'in_progress' ? 'active' : 'open'
+          const state = s.column === 'done' ? 'done' : s.column === 'review' ? 'review' : locked ? 'chained' : s.column === 'in_progress' ? 'active' : 'open'
           return (
             <li key={s.id} className={`quest-step ${state}`}>
               <span className="step-mark">
-                {state === 'done' ? '✓' : state === 'chained' ? '🔗' : state === 'active' ? '●' : '○'}
+                {state === 'done' ? '✓' : state === 'review' ? '👀' : state === 'chained' ? '🔗' : state === 'active' ? '●' : '○'}
               </span>
               <span className="step-title">{s.title}</span>
               {s.owner && <span className="owner"><i className="avatar mini" style={{ background: agentWash(s.owner), color: agentInk(s.owner) }}>{initials(s.owner)}</i>{s.owner}</span>}
-              {state !== 'done' && agents.length > 0 && (
+              {state === 'review' && (
+                <span className="review-actions">
+                  <button className="btn primary review-approve" onClick={() => approve(s.id)}>Approve</button>
+                  <button className="btn ghost review-sendback" onClick={() => sendBack(s.id)}>Send back</button>
+                </span>
+              )}
+              {state !== 'done' && state !== 'review' && agents.length > 0 && (
                 <select className="assign-select" defaultValue=""
                   onChange={(e) => { assign(s.id, e.target.value); e.target.value = '' }}>
                   <option value="" disabled>assign…</option>
                   {agents.filter((a) => a.name !== s.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
                 </select>
               )}
-              {locked && !s.owner && <span className="step-lockhint">coordinates with earlier steps</span>}
+              {locked && steps.some((p) => (p.step_order ?? 0) < (s.step_order ?? 0) && p.column === 'review')
+                ? <span className="step-lockhint">unlocks after review approval</span>
+                : locked && !s.owner && <span className="step-lockhint">coordinates with earlier steps</span>}
             </li>
           )
         })}
