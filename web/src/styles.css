@@ -338,6 +338,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-mode-select:focus-visible { outline: 1px solid #D97757; outline-offset: 2px; }
 .cc-dim { color: #6f6b64; }
 
+/* orchestra-source badge in the #40 slash menu (menu renders .cc-cmd-badge[data-source]) */
+.cc-cmd-badge[data-source='orchestra'] {
+  border: 1px solid #D97757; color: #D97757; border-radius: 4px;
+  font-size: 9.5px; padding: 0 4px; margin-left: 6px;
+  text-transform: uppercase; letter-spacing: 0.04em; vertical-align: 1px;
+}
+
 /* pending canUseTool asks — approve/deny inline, like a claude-code permission prompt */
 .cc-perm {
   border: 1px solid #D97757; border-radius: 8px; background: rgba(217, 119, 87, 0.07);

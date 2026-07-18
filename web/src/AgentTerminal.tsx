@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread } from './api'
+import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -51,13 +52,17 @@ const BOOT_MSGS = [
   'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
 ]
 
-export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = [], onClose, onChange }:
+export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
   const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[] } | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
+  // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
+  const [localLines, setLocalLines] = useState<Line[]>([])
+  const echoLocal = (kind: Line['kind'], text: string) =>
+    setLocalLines((prev) => [...prev.slice(-99), { at: new Date().toISOString(), kind, text }])
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -70,7 +75,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
   }, [input])
-  useEffect(() => { firstScroll.current = true }, [agent.id])
+  useEffect(() => { firstScroll.current = true; setLocalLines([]) }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
   useEffect(() => {
@@ -123,7 +128,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const star = STARS[frame % STARS.length]
   const bootMsg = BOOT_MSGS[Math.floor(frame / 14) % BOOT_MSGS.length]
 
-  const convo: Line[] = hired ? lines : [...threads]
+  // interleave local command echo with the streamed transcript by timestamp
+  const convo: Line[] = hired ? (localLines.length
+    ? [...lines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
+    : lines) : [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
     .flatMap((t) => [
@@ -151,9 +159,19 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   }, [convo.length, working])
 
   const send = async () => {
-    if (!input.trim()) return
-    if (hired) await api('POST', `/agents/${agent.id}/task`, { text: input.trim() })
-    else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: input.trim() })
+    const text = input.trim()
+    if (!text) return
+    // orchestra commands run daemon-direct — claimed here, never posted to the agent (#44)
+    if (hired && isBoardCommand(text)) {
+      setInput('')
+      echoLocal('user', text)
+      const out = await runBoardCommand(text, { boardId, agent, cards, api })
+      out.forEach((t) => echoLocal('status', t))
+      onChange()
+      return
+    }
+    if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
+    else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
     setInput(''); onChange()
   }
 
