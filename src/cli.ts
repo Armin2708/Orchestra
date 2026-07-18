@@ -5,6 +5,8 @@ import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
 import { ensureToken } from './token.js'
+import { pairUrl, startRemote, stopRemote } from './remote.js'
+import qrcode from 'qrcode-terminal'
 
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
@@ -28,6 +30,23 @@ program.command('serve').description('run daemon in foreground')
 program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
 program.command('token').description('print the API token (paste it into the web UI login)')
   .action(() => console.log(ensureToken()))
+
+program.command('remote').description('expose the board over a secure tunnel and pair your phone with a QR scan')
+  .option('--stop', 'tear the tunnel down')
+  .action(async (o) => {
+    if (o.stop) {
+      const s = stopRemote()
+      console.log(s ? `remote access stopped — ${s.provider} tunnel down` : 'remote access is not running')
+      return
+    }
+    const { state, reused } = await startRemote()
+    const url = pairUrl(state)
+    console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
+    console.log('scan to open the board on your phone, signed in — the QR embeds your token, treat it like a password:\n')
+    qrcode.generate(url, { small: true })
+    console.log(`\n${url}`)
+    console.log('stop with: orchestra remote --stop')
+  })
 
 program.command('join').description('register this agent session on the project board (agents only)')
   .option('--name <name>').option('--session <id>')
