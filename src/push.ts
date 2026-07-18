@@ -169,6 +169,9 @@ export function registerPush(server: FastifyInstance, opts: PushOptions = {}) {
   // review gates (card #19) emit richer context than the bare column change
   const onReview = (data: any) => {
     if (data?.status !== 'awaiting_approval' || !data.card_id) return
+    // the gate fires for any entry into review — including the human's own drag,
+    // which shouldn't ping the human's phone
+    if (!movedByAgent(data.card_id)) return
     notify(`card:${data.card_id}`, {
       title: `${data.card_title ?? `Card #${data.card_id}`} awaits your approval`,
       body: data.summary ?? `${data.agent_name ?? 'an agent'} finished this step`,
