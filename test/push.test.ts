@@ -116,16 +116,24 @@ it('pushes a question addressed to the user but not replies or agent-to-agent ma
   expect(sent[0].payload.body).toContain('Which DB')
 })
 
-it('pushes on review-gate awaiting_approval events', async () => {
-  const { server, sent } = harness()
+it('pushes on review-gate events for agent-parked cards, once per burst', async () => {
+  let t = 0
+  const { server, sent } = harness({ now: () => t })
   await server.ready()
+  const { card } = await seedBoard(server)
   await subscribeDevice(server)
-  server.bus.emit('event', { board_id: 1, type: 'review', data: { card_id: 7, card_title: 'Gate step', agent_name: 'test-fox', status: 'awaiting_approval', summary: 'built the thing' } })
-  server.bus.emit('event', { board_id: 1, type: 'review', data: { card_id: 7, status: 'approved' } })
+  // an agent parking the card emits 'card' + 'review' back-to-back — one push, not two
+  await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/move`, payload: { column: 'review', agent: 'test-fox' } })
   await flush()
   expect(sent).toHaveLength(1)
-  expect(sent[0].payload.title).toContain('Gate step')
-  expect(sent[0].payload.url).toBe('/?card=7')
+  // a later gate event (e.g. conductor enrichment after agent exit) carries rich context
+  t += 31_000
+  server.bus.emit('event', { board_id: card.board_id, type: 'review', data: { card_id: card.id, card_title: 'Gate step', agent_name: 'test-fox', status: 'awaiting_approval', summary: 'built the thing' } })
+  server.bus.emit('event', { board_id: card.board_id, type: 'review', data: { card_id: card.id, status: 'approved' } })
+  await flush()
+  expect(sent).toHaveLength(2)
+  expect(sent[1].payload.title).toContain('Gate step')
+  expect(sent[1].payload.url).toBe(`/?card=${card.id}`)
 })
 
 it('collapses bursts per card and enforces the global per-minute cap', async () => {
