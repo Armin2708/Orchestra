@@ -1107,3 +1107,37 @@ textarea {
 .timeline-sentinel { text-align: center; padding: 14px 0; font-size: 11.5px; color: var(--ink-soft); }
 .timeline-item.src-review .timeline-summary { font-weight: 550; }
 .timeline-item.src-milestone .timeline-summary { font-weight: 600; }
+
+/* ---- Shipped view (#51) ---- */
+.shiplog { padding: 20px 28px 60px; max-width: 1040px; margin: 0 auto; width: 100%; }
+.shiplog-project h2 { margin: 18px 0 10px; font-size: 17px; }
+.shiplog-list { display: flex; flex-direction: column; gap: 2px; }
+.shiplog-entry { border-radius: 8px; background: #fff; border: 1px solid #ECEAE4; }
+.shiplog-entry.unmatched { background: transparent; border-color: transparent; opacity: 0.62; }
+.shiplog-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.shiplog-caret { color: #A8A49B; font-size: 10px; width: 12px; flex: none; }
+.shiplog-hash { font-family: ui-monospace, monospace; font-size: 11px; color: #8A867D; flex: none; }
+.shiplog-subject { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+.shiplog-card-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: #4A4640; background: #F1EFE9; border-radius: 999px; padding: 2px 8px; flex: none; }
+.shiplog-stat { font-family: ui-monospace, monospace; font-size: 11px; color: #A8A49B; flex: none; }
+.shiplog-date { font-size: 11px; color: #A8A49B; flex: none; }
+.shiplog-detail { padding: 4px 12px 12px 30px; display: flex; flex-direction: column; gap: 8px; }
+.shiplog-card { background: #FAF9F6; border: 1px solid #ECEAE4; border-radius: 8px; padding: 8px 10px; }
+.shiplog-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.shiplog-card-link { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; font-weight: 600; color: #1F5FBF; cursor: pointer; }
+.shiplog-card-link:hover { text-decoration: underline; }
+.shiplog-card-title { font-size: 13px; font-weight: 600; }
+.shiplog-decision { font-size: 11px; font-weight: 600; }
+.shiplog-decision.approve { color: #2E7D46; }
+.shiplog-decision.send_back { color: #B4551E; }
+.shiplog-verified { font-size: 11px; color: #6B675F; }
+.shiplog-summary { margin: 6px 0 0; font-size: 12.5px; color: #55524B; white-space: pre-wrap; }
+.shiplog-body { margin: 0; font-size: 12px; color: #6B675F; white-space: pre-wrap; font-family: inherit; }
+.shiplog-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.shiplog-files li { display: flex; justify-content: space-between; gap: 12px; font-size: 11.5px; }
+.shiplog-files code { font-family: ui-monospace, monospace; color: #55524B; overflow-wrap: anywhere; }
+.shiplog-more { align-self: center; margin: 14px auto 0; display: block; }
+@media (max-width: 640px) {
+  .shiplog { padding: 12px 12px 60px; }
+  .shiplog-date, .shiplog-row .shiplog-stat { display: none; }
+}

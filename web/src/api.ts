@@ -91,6 +91,12 @@ export type SystemInfo = {
 
 export type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
 
+// GET /boards/:id/shipped — annotated commit history joined with cards
+export type ShipFile = { path: string; insertions: number; deletions: number }
+export type ShipCard = { id: number; title: string; agent: string | null; summary: string | null; decision: 'approve' | 'send_back' | null; matched_by: 'shipped' | 'ref' }
+export type ShipCommit = { hash: string; short: string; date: string; author: string; subject: string; body: string; files: ShipFile[]; insertions: number; deletions: number; cards: ShipCard[] }
+export type ShipLog = { head: string | null; commits: ShipCommit[]; offset: number; limit: number; has_more: boolean; error?: string }
+
 // GET /boards/:id/telemetry — injected-context accounting (tokens = ceil(chars/4))
 export type TelemetryCount = { chars: number; tokens: number; count: number }
 export type Telemetry = {
