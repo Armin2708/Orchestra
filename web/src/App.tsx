@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, setToken, streamUrl, Snapshot } from './api'
+import { api, ApiError, setToken, streamUrl, Snapshot , SystemInfo } from './api'
 import { ProjectGrid } from './Board'
 import { RoadmapView } from './RoadmapView'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
@@ -104,6 +104,7 @@ export function App() {
             )}
           </div>
         </div>
+        <SystemMeter />
         <nav className="view-tabs">
           <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
           <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
@@ -173,6 +174,41 @@ function GettingStarted() {
         <pre>cd your-project{'\n'}claude</pre>
         <p className="hint">This page updates live — leave it open.</p>
       </div>
+    </div>
+  )
+}
+
+function SystemMeter() {
+  const [sys, setSys] = useState<SystemInfo | null>(null)
+  useEffect(() => {
+    let dead = false
+    const load = () => api('GET', '/system').then((s) => { if (!dead) setSys(s) }).catch(() => {})
+    load()
+    const t = setInterval(load, 60_000)
+    return () => { dead = true; clearInterval(t) }
+  }, [])
+  if (!sys) return null
+  const at = (iso: string | null) => iso
+    ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : null
+  const win = (label: string, w: { utilization: number; resets_at: string | null }) => {
+    const left = Math.max(0, Math.round(100 - w.utilization))
+    return (
+      <span className={`meter ${left <= 15 ? 'low' : ''}`} title={`${label} limit: ${Math.round(w.utilization)}% used${at(w.resets_at) ? ` — resets ${at(w.resets_at)}` : ''}`}>
+        <span className="meter-label">{label}</span>
+        <span className="meter-bar"><i style={{ width: `${Math.min(100, w.utilization)}%` }} /></span>
+        <span className="meter-val">{left}%</span>
+      </span>
+    )
+  }
+  return (
+    <div className="sysmeter">
+      <span className="meter" title={`${sys.hired} hired agents running — this machine (${sys.hardware.cores} cores, ${sys.hardware.total_gb}GB) can comfortably run about ${sys.hardware.capacity}`}>
+        <span className="meter-label">agents</span>
+        <span className="meter-val">{sys.hired}/{sys.hardware.capacity}</span>
+      </span>
+      {sys.usage && win('5h', sys.usage.five_hour)}
+      {sys.usage && win('week', sys.usage.seven_day)}
     </div>
   )
 }

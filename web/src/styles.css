@@ -960,3 +960,18 @@ textarea {
 .net-badge.free { background: #EDF3EC; color: #346538; }
 @keyframes badge-pulse { 50% { transform: scale(1.18); } }
 .net-avatar.asking { box-shadow: 0 0 0 3px rgba(217, 161, 59, 0.35); }
+
+/* topbar system meter: agent capacity + Claude usage windows */
+.sysmeter {
+  display: flex; align-items: center; gap: 18px; margin-left: auto; margin-right: 18px;
+  font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+}
+.meter { display: inline-flex; align-items: center; gap: 7px; cursor: default; }
+.meter-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; color: #9b968e; }
+.meter-bar {
+  width: 52px; height: 5px; border-radius: 3px; background: #ECEAE5; overflow: hidden;
+}
+.meter-bar i { display: block; height: 100%; border-radius: 3px; background: #b8b4ac; transition: width 0.6s var(--ease); }
+.meter-val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+.meter.low .meter-bar i { background: #C4554D; }
+.meter.low .meter-val { color: #9F2F2D; }

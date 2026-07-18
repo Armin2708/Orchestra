@@ -11,6 +11,7 @@ import { removeAgentCards } from './reaper.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
+import { hardware, claudeUsage } from './system.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -54,6 +55,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     server.bus.emit('event', { board_id, type, data })
 
   server.get('/health', () => ({ ok: true, version: VERSION }))
+
+  server.get('/api/v1/system', async () => ({
+    hardware: hardware(),
+    hired: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status != 'gone'`).get() as any).c,
+    usage: await claudeUsage(),
+  }))
 
   // terminal sessions report their live subagents via hook pings; entries expire quickly
   const termSubs = new Map<number, Map<string, number>>()

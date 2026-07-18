@@ -9,11 +9,13 @@ export function removeAgentCards(db: Database.Database, agentId: number): void {
 }
 
 export function reap(db: Database.Database): void {
+  // hired agents live inside the daemon and only quiet down between tasks — they leave
+  // when fired (or when resurrection fails), never by staleness
   const goners = db.prepare(`SELECT id FROM agents
-    WHERE status != 'gone' AND last_seen < datetime('now', '-30 minutes')`).all() as { id: number }[]
+    WHERE status != 'gone' AND kind != 'hired' AND last_seen < datetime('now', '-30 minutes')`).all() as { id: number }[]
   for (const g of goners) removeAgentCards(db, g.id)
   db.prepare(`UPDATE agents SET status='gone'
-    WHERE status != 'gone' AND last_seen < datetime('now', '-30 minutes')`).run()
+    WHERE status != 'gone' AND kind != 'hired' AND last_seen < datetime('now', '-30 minutes')`).run()
   db.prepare(`UPDATE agents SET status='idle'
     WHERE status = 'active' AND last_seen < datetime('now', '-5 minutes')`).run()
 }
