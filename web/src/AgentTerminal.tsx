@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
+import { followIntent } from './follow'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -67,6 +68,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
+  // follow intent recorded at user-scroll time — appends fire no scroll event, so any
+  // size of growth keeps following until the user deliberately scrolls away (#48)
+  const followRef = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // grow the prompt box with its content, up to a cap — like the real cli
   useEffect(() => {
@@ -75,7 +79,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
   }, [input])
-  useEffect(() => { firstScroll.current = true; setLocalLines([]) }, [agent.id])
+  useEffect(() => { firstScroll.current = true; followRef.current = true; setLocalLines([]) }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
   useEffect(() => {
@@ -145,18 +149,31 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
   const working = hired && turn !== null
 
-  // on open: jump straight to the latest messages; afterwards auto-follow only near the bottom
+  // on open: jump straight to the latest messages; afterwards follow the stream while the
+  // user's recorded intent says so. Depends on the last line's text too — at the 500-line
+  // transcript cap (and for streaming same-line growth) content changes while length doesn't.
+  const lastLineText = convo[convo.length - 1]?.text
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     if (firstScroll.current && convo.length > 0) {
       el.scrollTo({ top: el.scrollHeight })
       firstScroll.current = false
+      followRef.current = true
       return
     }
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140
-    if (nearBottom) el.scrollTo({ top: el.scrollHeight })
-  }, [convo.length, working])
+    if (followRef.current) el.scrollTo({ top: el.scrollHeight })
+  }, [convo.length, lastLineText, working])
+
+  // intent updates only on real scroll interactions; programmatic scrollTo lands at the
+  // bottom and re-records "following", so the two stay consistent
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    followRef.current = followIntent(el.scrollHeight - el.scrollTop - el.clientHeight, followRef.current)
+  }
+  // a wheel-up is an unambiguous "let me read" — honor it before the position crosses the band
+  const onWheel = (e: React.WheelEvent) => { if (e.deltaY < 0) followRef.current = false }
 
   const send = async () => {
     const text = input.trim()
@@ -279,7 +296,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             {!embedded && <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
 
-          <div className="terminal-scroll" ref={scrollRef}>
+          <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
             {hired && (
               <div className="cc-welcome">
                 <p><span className="cc-logo">{booting ? star : '✻'}</span> Welcome to <b>Orchestra</b>!</p>
