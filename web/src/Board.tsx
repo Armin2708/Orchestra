@@ -116,6 +116,13 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
       title={isLocked ? 'Has open prerequisite steps — the assignee will coordinate with their owners' : 'Drag onto an agent to assign'}>
       <div className="t-top">
         <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '⛓ ' : ''}{st.label}</span>
+        {!c.owner && c.column !== 'done' && (
+          <button className="thread-reply" title="Launch an autonomous agent on this ticket"
+            onClick={async (e) => {
+              e.stopPropagation()
+              try { await api('POST', `/cards/${c.id}/launch`) } catch { /* daemon-only or already launched */ }
+            }}>▶ Launch</button>
+        )}
       </div>
       <h4>{c.title}</h4>
       {c.description && <p className="t-desc">{c.description}</p>}
