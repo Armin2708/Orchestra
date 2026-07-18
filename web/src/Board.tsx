@@ -212,6 +212,23 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   const askable = snaps.flatMap((s) =>
     s.agents.filter((a) => a.status !== 'gone').map((a) => ({ ...a, boardId: s.board.id, project: s.board.name })))
 
+  // a push-notification tap lands on /?card=<id> — open that card's drawer once
+  const deepLinked = React.useRef(false)
+  React.useEffect(() => {
+    if (deepLinked.current) return
+    const id = Number(new URLSearchParams(location.search).get('card'))
+    if (!id) { deepLinked.current = true; return }
+    for (const s of snaps) {
+      const c = s.cards.find((x) => x.id === id)
+      if (c) {
+        setOpen({ card: c, boardId: s.board.id })
+        deepLinked.current = true
+        history.replaceState(null, '', location.pathname) // a refresh shouldn't re-open it
+        break
+      }
+    }
+  }, [snaps])
+
   const openCard = open
     ? snaps.find((s) => s.board.id === open.boardId)?.cards.find((c) => c.id === open.card.id) ?? open.card
     : null

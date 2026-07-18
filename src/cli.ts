@@ -163,6 +163,19 @@ program.command('fire <name>').description('stop a hired agent (its cards are re
     console.log(`fired ${name}`)
   })
 
+program.command('notify').description('phone notifications: show status, set the ntfy.sh fallback, or send a test')
+  .option('--ntfy <topic>', 'also push via https://ntfy.sh/<topic> (for phones without the PWA)')
+  .option('--off', 'disable the ntfy fallback')
+  .option('--test', 'send a test notification to every subscribed device')
+  .action(async (o) => {
+    await up()
+    if (o.ntfy) console.log(`ntfy fallback set: https://ntfy.sh/${(await api('POST', '/push/ntfy', { topic: o.ntfy })).ntfy_topic}`)
+    if (o.off) { await api('POST', '/push/ntfy', { topic: null }); console.log('ntfy fallback disabled') }
+    if (o.test) { await api('POST', '/push/test'); console.log('test notification sent') }
+    const s = await api('GET', '/push/status')
+    console.log(`devices subscribed: ${s.subscriptions} · ntfy: ${s.ntfy_topic ? `https://ntfy.sh/${s.ntfy_topic}` : 'off'} · links point to ${s.public_base}`)
+  })
+
 program.command('hook <event>').action(async (event) => { await runHook(event) })
 program.command('install').option('--project', 'install into ./.claude instead of ~/.claude')
   .action((o) => installHooks(o.project ? 'project' : 'global'))

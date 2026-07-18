@@ -1,4 +1,5 @@
 // Orchestra service worker — cached app shell, network-first for the API.
+importScripts('/sw-push.js') // push + notificationclick handlers (card #20)
 const SHELL_CACHE = 'orchestra-shell-v1'
 const API_CACHE = 'orchestra-api-v1'
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png']
