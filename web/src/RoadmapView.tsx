@@ -77,6 +77,7 @@ function MilestoneQuest({ m, cards, agents, onChange }:
 
 function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }: { snap: Snapshot; onChange: () => void; onOpenAgent: (a: Agent) => void; hideBrainstorm?: boolean }) {
   const [text, setText] = useState('')
+  const [openIdea, setOpenIdea] = useState<Idea | null>(null)
   const [brainstorm, setBrainstorm] = useState('')
   const [briefing, setBriefing] = useState(false)
   const allLive = snap.agents.filter((a) => a.status !== 'gone')
@@ -101,10 +102,6 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
     if (!text.trim()) return
     await api('POST', '/ideas', { board_id: snap.board.id, text: text.trim() })
     setText(''); onChange()
-  }
-  const promote = async (idea: Idea, agent: string) => {
-    await api('POST', `/ideas/${idea.id}/promote`, agent ? { agent } : {})
-    onChange()
   }
   const assign = async (cardId: number, agent: string) => {
     if (!agent) return
@@ -154,22 +151,16 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
       <h3 className="rm-h">Ideas <span className="rm-count">{(snap.ideas ?? []).length}</span></h3>
       <div className="rm-ideas">
         {(snap.ideas ?? []).map((i) => (
-          <div key={i.id} className="rm-idea">
+          <button key={i.id} className="rm-idea" onClick={() => setOpenIdea(i)}>
             <p className="rm-idea-title">{i.text.split('\n')[0]}</p>
             {i.text.includes('\n') && <p className="rm-idea-desc">{i.text.split('\n').slice(1).join(' ')}</p>}
-            <div className="rm-idea-actions">
-              <select defaultValue="" onChange={(e) => { if (e.target.value !== '') promote(i, e.target.value === '·' ? '' : e.target.value) }}>
-                <option value="" disabled>→ ticket</option>
-                <option value="·">unassigned</option>
-                {agents.map((a) => <option key={a.id} value={a.name}>assign {a.name}</option>)}
-              </select>
-              <button className="icon-x" title="Delete idea"
-                onClick={async () => { await api('DELETE', `/ideas/${i.id}`); onChange() }}>×</button>
-            </div>
-          </div>
+            <span className="rm-idea-open">open ›</span>
+          </button>
         ))}
         {(snap.ideas ?? []).length === 0 && <p className="col-empty">No ideas yet — brainstorm above.</p>}
       </div>
+      {openIdea && <IdeaModal idea={(snap.ideas ?? []).find((x) => x.id === openIdea.id) ?? openIdea}
+        agents={agents} onClose={() => setOpenIdea(null)} onChange={onChange} />}
 
       <h3 className="rm-h">Tickets <span className="rm-count">{tickets.length}</span></h3>
       <div className="rm-tickets">
@@ -212,6 +203,36 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') add() }} />
     </div>
+  )
+}
+
+function IdeaModal({ idea, agents, onClose, onChange }:
+  { idea: Idea; agents: { id: number; name: string }[]; onClose: () => void; onChange: () => void }) {
+  const [title, ...rest] = idea.text.split('\n')
+  const body = rest.join('\n').trim()
+  const promote = async (agent: string) => {
+    await api('POST', `/ideas/${idea.id}/promote`, agent ? { agent } : {})
+    onClose(); onChange()
+  }
+  return (
+    <>
+      <div className="idea-scrim" onClick={onClose} />
+      <div className="idea-modal" role="dialog">
+        <span className="idea-modal-kicker">✳ roadmap idea · {timeAgo(idea.created_at)}</span>
+        <h3>{title}</h3>
+        {body ? <p className="idea-modal-body">{body}</p> : <p className="idea-modal-body empty">No details yet — promote it or refine it with the strategist.</p>}
+        <div className="idea-modal-actions">
+          <button className="btn primary" onClick={() => promote('')}>→ Ticket</button>
+          {agents.map((a) => (
+            <button key={a.id} className="agent-chip" onClick={() => promote(a.name)}>→ {a.name}</button>
+          ))}
+          <span className="idea-modal-spacer" />
+          <button className="btn ghost danger-text" onClick={async () => {
+            await api('DELETE', `/ideas/${idea.id}`); onClose(); onChange()
+          }}>Delete</button>
+        </div>
+      </div>
+    </>
   )
 }
 
