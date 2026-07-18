@@ -75,7 +75,7 @@ function MilestoneQuest({ m, cards, agents, onChange }:
   )
 }
 
-function ProjectRoadmap({ snap, onChange, onOpenAgent }: { snap: Snapshot; onChange: () => void; onOpenAgent: (a: Agent) => void }) {
+function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }: { snap: Snapshot; onChange: () => void; onOpenAgent: (a: Agent) => void; hideBrainstorm?: boolean }) {
   const [text, setText] = useState('')
   const [brainstorm, setBrainstorm] = useState('')
   const [briefing, setBriefing] = useState(false)
@@ -117,7 +117,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent }: { snap: Snapshot; onCha
     <section className="rm-project">
       <h2>{snap.board.name}</h2>
 
-      <div className="rm-brainstorm">
+      {!hideBrainstorm && <div className="rm-brainstorm">
         <span className="rm-spark">✻</span>
         <input value={brainstorm}
           placeholder={strategist ? `Ask ${'strategist'} to brainstorm — it researches the repo and adds ideas below` : 'Ask Claude to brainstorm — hires a strategist agent for this project'}
@@ -133,7 +133,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent }: { snap: Snapshot; onCha
         <button className="btn primary" disabled={briefing} onClick={askStrategist}>
           {briefing ? 'Briefing…' : strategist?.status === 'active' ? 'Working…' : 'Brainstorm'}
         </button>
-      </div>
+      </div>}
 
       <div className="rm-composer">
         <textarea value={text} rows={2}
@@ -214,11 +214,76 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
   )
 }
 
+const MODES: { key: string; label: string; prompt: string }[] = [
+  { key: 'milestone', label: '⛳ Milestone', prompt: 'MODE: Milestone planning. Interview me briefly about the goal, propose an ordered step plan, and once I agree create it with orchestra milestone + orchestra step (each step in your ticket prompt format).' },
+  { key: 'feature', label: '✦ Feature', prompt: 'MODE: Feature brainstorm. Explore the feature with me, research the repo for grounding, record promising directions with orchestra idea, and turn well-defined ones into tickets in your prompt format.' },
+  { key: 'tickets', label: '▤ Tickets', prompt: 'MODE: Ticket writing. Turn what we discuss into tickets using your OBJECTIVE/CONTEXT/REQUIREMENTS/DONE WHEN format with researched paths.' },
+  { key: 'debug', label: '⚑ Debug', prompt: 'MODE: Debug. Ask me for the symptoms, investigate the repo read-only, and produce a diagnosis ticket: findings in CONTEXT, fix plan in REQUIREMENTS, verification in DONE WHEN.' },
+  { key: 'refine', label: '✎ Refine', prompt: 'MODE: Refine. Ask me which ticket to refine (id or title), read the board, then rewrite it with orchestra card update in your prompt format and summarize the changes.' },
+]
+
+function BrainstormWorkspace({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const strategist = snap.agents.find((a) => a.name === 'strategist' && a.status !== 'gone')
+
+  const ensureStrategist = async (): Promise<Agent> => {
+    if (strategist) return strategist
+    return api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
+  }
+  const startMode = async (prompt: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const agent = await ensureStrategist()
+      await api('POST', `/agents/${agent.id}/task`, { text: prompt })
+    } finally { setBusy(false); onChange() }
+  }
+
+  return (
+    <div className="rm-right">
+      <div className="rm-modes">
+        {MODES.map((m) => (
+          <button key={m.key} className="mode-chip" disabled={busy} onClick={() => startMode(m.prompt)}>{m.label}</button>
+        ))}
+      </div>
+      {strategist ? (
+        <AgentTerminal embedded agent={strategist} boardId={snap.board.id}
+          threads={snap.threads as Thread[]} cards={snap.cards}
+          onClose={() => {}} onChange={onChange} />
+      ) : (
+        <div className="rm-placeholder">
+          <p><span className="rm-spark">✻</span> Pick a mode above to wake the strategist.</p>
+          <p className="rm-placeholder-sub">It researches this repo, brainstorms with you, and builds the roadmap on the left as you talk.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function RoadmapView({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
   const [term, setTerm] = useState<{ agent: Agent; boardId: number } | null>(null)
   const liveAgent = term
     ? snaps.find((s) => s.board.id === term.boardId)?.agents.find((a) => a.id === term.agent.id) ?? term.agent
     : null
+
+  if (focused && snaps.length === 1) {
+    const s = snaps[0]
+    return (
+      <main className="rm-split">
+        <div className="rm-left">
+          <ProjectRoadmap snap={s} onChange={onChange} hideBrainstorm
+            onOpenAgent={(a) => setTerm({ agent: a, boardId: s.board.id })} />
+        </div>
+        <BrainstormWorkspace snap={s} onChange={onChange} />
+        {term && liveAgent && <AgentTerminal
+          agent={liveAgent} boardId={term.boardId}
+          threads={(snaps.find((x) => x.board.id === term.boardId)?.threads ?? []) as Thread[]}
+          cards={snaps.find((x) => x.board.id === term.boardId)?.cards ?? []}
+          onClose={() => setTerm(null)} onChange={onChange} />}
+      </main>
+    )
+  }
+
   return (
     <main className={focused ? 'roadmap focused' : 'roadmap'}>
       {snaps.map((s) => <ProjectRoadmap key={s.board.id} snap={s} onChange={onChange}

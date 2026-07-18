@@ -18,8 +18,8 @@ const BOOT_MSGS = [
   'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
 ]
 
-export function AgentTerminal({ agent, boardId, threads, cards = [], onClose, onChange }:
-  { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; onClose: () => void; onChange: () => void }) {
+export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, onClose, onChange }:
+  { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
@@ -146,8 +146,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], onClose, on
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
-      <aside className="terminal" onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); interrupt() } }}>
+      {!embedded && <div className="scrim" onClick={onClose} />}
+      <aside className={embedded ? 'terminal embedded' : 'terminal'} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); interrupt() } }}>
         <div className="terminal-col">
           <header className="cc-head">
             <span className="cc-head-star">✻</span>
@@ -169,7 +169,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], onClose, on
                 ))}
               </select>
             )}
-            <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>
+            {!embedded && <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
 
           <div className="terminal-scroll" ref={scrollRef}>

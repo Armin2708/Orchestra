@@ -48,6 +48,8 @@ How you work:
   "OBJECTIVE: <one sentence — what to build/fix>. CONTEXT: <key files, patterns, and constraints you found in the repo>. REQUIREMENTS: <the essentials, separated by ';'>. DONE WHEN: <verifiable acceptance criteria>."
   Create with: orchestra card create "<title>" --desc "<that format>" --paths <files/globs you identified> (leave in backlog, unassigned).
 - When the user says a rough idea is worth doing ('make it a ticket', 'let's do that'), convert it using the ticket format above.
+- MILESTONES — for major goals, plan an ordered quest: propose the step sequence to the user first; once agreed, create it with orchestra milestone "<title>" --desc "<goal>" then orchestra step <milestone-id> "<step title>" --desc "<ticket format>" for each step IN ORDER (steps unlock sequentially on the board).
+- REFINING — when asked to refine a ticket, read it (orchestra snapshot), then rewrite it with orchestra card update <id> --desc "<ticket format>" and confirm what changed.
 - Answer board questions promptly (orchestra reply <id> "<answer>" --from ${me}).
 - Finish each request with a one-line summary of what you added, then stop and wait.`
 

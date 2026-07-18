@@ -106,6 +106,19 @@ program.command('ideas').description('list roadmap ideas').action(async () => {
   for (const i of snap.ideas ?? []) console.log(`#${i.id} ${i.text.split('\n')[0]}`)
 })
 
+program.command('milestone <title>').description('create a milestone (a major goal made of ordered steps)')
+  .option('--desc <d>').action(async (title, o) => {
+    await up(); const b = await board()
+    const m = await api('POST', '/milestones', { board_id: b.id, title, description: o.desc })
+    console.log(`milestone #${m.id} "${m.title}" created — add steps with: orchestra step ${m.id} "<title>" --desc "<prompt>"`)
+  })
+program.command('step <milestoneId> <title>').description('append an ordered step to a milestone')
+  .option('--desc <d>').action(async (milestoneId, title, o) => {
+    await up()
+    const r = await api('POST', `/milestones/${milestoneId}/steps`, { title, description: o.desc })
+    console.log(`step #${r.card.id} added (order ${r.card.step_order})`)
+  })
+
 program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
   .option('--name <name>').option('--model <m>').option('--cwd <dir>')
   .action(async (o) => {
