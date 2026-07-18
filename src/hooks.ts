@@ -22,7 +22,7 @@ export const _internals = {
   },
 }
 
-type Session = { agent_id: number; agent_name: string; board_id: number }
+type Session = { agent_id: number; agent_name: string; board_id: number; transcript_path?: string }
 const sessFile = (id: string) => path.join(dataDir(), 'sessions', `${id}.json`)
 const loadSession = (id: string): Session | undefined => {
   try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
@@ -36,7 +36,7 @@ async function registerSession(input: any): Promise<Session | undefined> {
   const agent = await api('POST', '/agents/register', {
     board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME,
   })
-  const sess: Session = { agent_id: agent.id, agent_name: agent.name, board_id: board.id }
+  const sess: Session = { agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }
   fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
   fs.writeFileSync(sessFile(input.session_id), JSON.stringify(sess))
   return sess
@@ -53,7 +53,8 @@ const rules = (me: string) => `orchestra rules (coordination board for this proj
   orchestra card create "<short title>" --desc "<scope>" --paths <comma,separated,paths> --column in_progress --agent ${me}
   If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
 - Keep your card updated as work progresses: orchestra card update <id> --desc "<what you're doing now>" --agent ${me}; move it (orchestra card move <id> done|review|blocked --agent ${me}) when status changes. Move to done when finished.
-- Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.`
+- Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.
+- SUBAGENTS: spawn them freely — they work under YOUR identity and card. Instruct each one: do NOT run orchestra commands; board coordination belongs to you, the parent.`
 
 async function sessionStart(input: any): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
@@ -64,7 +65,7 @@ async function sessionStart(input: any): Promise<void> {
   })
   fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
   fs.writeFileSync(sessFile(input.session_id),
-    JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id }))
+    JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }))
   const snap = await api('GET', `/boards/${board.id}/snapshot`)
   const lines = [rules(agent.name), '', `You are agent "${agent.name}" (id ${agent.id}) on board "${board.name}".`]
   for (const a of snap.agents.filter((x: any) => x.id !== agent.id && x.status !== 'gone'))
@@ -78,6 +79,12 @@ async function sessionStart(input: any): Promise<void> {
 async function deliver(input: any, hookEventName: string, throttleMs: number): Promise<void> {
   const sess = await ensureSession(input)
   if (!sess) return
+  // hooks also fire inside subagents (Task tool) — heartbeat, but never consume the parent's
+  // board messages there: injected context would vanish into the subagent's transcript
+  if (sess.transcript_path && input.transcript_path && sess.transcript_path !== input.transcript_path) {
+    await api('POST', `/agents/${sess.agent_id}/heartbeat`).catch(() => {})
+    return
+  }
   const throttle = sessFile(input.session_id) + '.throttle'
   if (throttleMs > 0) {
     try {

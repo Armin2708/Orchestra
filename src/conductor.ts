@@ -84,6 +84,7 @@ Orchestra board rules (standing instructions):
 - Do NOT touch paths claimed by another active card without asking first.
 - If your assignment mentions open prerequisite steps, message their owners FIRST (orchestra ask) to agree boundaries and interfaces — then build in parallel against the agreed contract instead of waiting.
 - Messages from the board arrive directly in this conversation; answer questions promptly with: orchestra reply <msg-id> "<answer>" --from ${me}, then continue your task.
+- SUBAGENTS: spawn them freely for parallel work — they operate under YOUR identity and YOUR card. Tell every subagent in its prompt: do NOT run orchestra commands (no cards, no asks, no replies) — board coordination belongs to you, the parent. Summarize subagent results on your card as you go.
 - If the orchestra command is missing, use: npx -y orchestra-board`
 
 // pushable async-generator bridge into the SDK's streaming input
