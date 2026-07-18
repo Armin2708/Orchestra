@@ -904,3 +904,24 @@ textarea {
 }
 
 @keyframes sheet-up { from { transform: translateY(28px); opacity: 0; } }
+
+/* ── Review gates — approve / send back a step parked in review ── */
+.review-panel { border: 1px solid #e6d9ad; background: #fbf6e8; border-radius: 10px; padding: 12px 14px; margin: 14px 0 4px; }
+.review-panel h3 { margin: 0 0 8px; }
+.review-summary { white-space: pre-wrap; margin: 0 0 8px; }
+.review-diffstat { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #fff; border: 1px solid #eee6cf; border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: 0 0 10px; }
+.review-note { width: 100%; box-sizing: border-box; }
+.review-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.review-history { list-style: none; padding: 0; margin: 0 0 12px; }
+.review-history li { padding: 3px 0; }
+.review-history li.approved b { color: #2e7d4f; }
+.review-history li.sent-back b { color: #a15c00; }
+.quest-step.review { background: #fbf6e8; border-radius: 8px; }
+
+/* mobile: full-width 44px review actions (see the ≤768px conventions above) */
+@media (max-width: 768px) {
+  .review-actions .review-approve, .review-actions .review-sendback { min-height: 44px; flex: 1; }
+  .review-note { font-size: 16px; }
+  .quest-step.review { flex-wrap: wrap; }
+  .quest-step.review .review-actions { width: 100%; }
+}

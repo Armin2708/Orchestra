@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, Agent, Card, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, ReviewDecision, agentInk, agentWash, initials, timeAgo } from './api'
 import { STATUS } from './Board'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
+  review_request: 'parked it for review', review_decision: 'recorded a review decision',
 }
 
 export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
@@ -13,8 +14,11 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   const [editingDesc, setEditingDesc] = useState(false)
   const [desc, setDesc] = useState(card.description)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [reviews, setReviews] = useState<ReviewDecision[]>([])
+  const [reviewNote, setReviewNote] = useState('')
 
   useEffect(() => { api('GET', `/cards/${card.id}/events`).then(setEvents) }, [card.id, card.updated_at])
+  useEffect(() => { api('GET', `/cards/${card.id}/reviews`).then(setReviews).catch(() => {}) }, [card.id, card.updated_at])
   useEffect(() => { setDesc(card.description) }, [card.description])
 
   // modal behavior: take focus on open, close on Escape
@@ -34,6 +38,18 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   const saveDesc = async () => {
     await api('PATCH', `/cards/${card.id}`, { description: desc })
     setEditingDesc(false); onChange()
+  }
+  const latestRequest = [...events].reverse().find((e) => e.type === 'review_request')
+  let reviewReq: { summary?: string; diffstat?: string } | null = null
+  try { reviewReq = latestRequest ? JSON.parse(latestRequest.payload) : null } catch { /* legacy payload */ }
+  const approve = async () => {
+    await api('POST', `/cards/${card.id}/approve`, reviewNote.trim() ? { note: reviewNote.trim() } : {})
+    setReviewNote(''); onChange()
+  }
+  const sendBack = async () => {
+    if (!reviewNote.trim()) return
+    await api('POST', `/cards/${card.id}/send-back`, { note: reviewNote.trim() })
+    setReviewNote(''); onChange()
   }
 
   return (
@@ -70,6 +86,35 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
             </select>
           )}
         </p>
+
+        {card.column === 'review' && (
+          <section className="review-panel">
+            <h3>Needs your review</h3>
+            {reviewReq?.summary && <p className="review-summary">{reviewReq.summary}</p>}
+            {reviewReq?.diffstat && <pre className="review-diffstat">{reviewReq.diffstat}</pre>}
+            <textarea className="review-note" rows={2} value={reviewNote}
+              placeholder="Note for the agent — optional on approve, required to send back"
+              onChange={(e) => setReviewNote(e.target.value)} />
+            <div className="review-actions">
+              <button className="btn primary review-approve" onClick={approve}>Approve</button>
+              <button className="btn ghost review-sendback" disabled={!reviewNote.trim()} onClick={sendBack}>Send back</button>
+            </div>
+          </section>
+        )}
+        {reviews.length > 0 && (
+          <>
+            <h3>Review history</h3>
+            <ol className="review-history">
+              {reviews.map((d) => (
+                <li key={d.id} className={d.decision === 'approve' ? 'approved' : 'sent-back'}>
+                  <b>{d.decision === 'approve' ? '✓ Approved' : '↩ Sent back'}</b>
+                  {d.note && <span className="review-hist-note"> — {d.note}</span>}
+                  <time> {timeAgo(d.decided_at)}</time>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
 
         <h3>Scope</h3>
         {editingDesc ? (
