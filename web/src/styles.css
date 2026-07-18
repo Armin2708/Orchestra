@@ -556,6 +556,23 @@ textarea {
 
 .empty-card .hint { font-size: 12px; }
 
+.login-form { display: flex; gap: 8px; width: 100%; }
+
+.login-input {
+  flex: 1; padding: 10px 12px; font-size: 13px; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-family: 'SF Mono', 'JetBrains Mono', monospace;
+}
+
+.login-input:focus { outline: none; border-color: var(--ink-soft); }
+
+.login-btn {
+  padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--surface); background: var(--ink); border: none; border-radius: var(--radius-sm);
+}
+
+.login-btn:disabled { opacity: 0.4; cursor: default; }
+
 
 @media (max-width: 1100px) {
   .board { grid-template-columns: repeat(2, 1fr); }

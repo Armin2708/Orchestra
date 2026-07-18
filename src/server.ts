@@ -8,6 +8,7 @@ import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar } from './similar.js'
 import { removeAgentCards } from './reaper.js'
+import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 
 export type Bus = EventEmitter
@@ -25,10 +26,25 @@ declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
 }
 
-export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike): FastifyInstance {
+export interface ServerOptions { token?: string }
+
+export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
   const server = Fastify()
   server.decorate('db', db)
   server.decorate('bus', new EventEmitter())
+  if (opts.token) {
+    const expected = opts.token
+    // /health and the static UI stay open — the UI is where you enter the token
+    server.addHook('onRequest', async (req, reply) => {
+      if (!req.url.startsWith('/api/')) return
+      const auth = req.headers.authorization
+      const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined
+      // EventSource can't set headers, so SSE clients pass ?token= instead
+      const query = (req.query ?? {}) as Record<string, string>
+      if (tokenEquals(bearer ?? query.token, expected)) return
+      return reply.code(401).send({ error: 'unauthorized' })
+    })
+  }
   const maestro = conductor?.(server.bus)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })

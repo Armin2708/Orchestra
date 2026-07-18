@@ -7,6 +7,7 @@ import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, removeAgentCards } from './reaper.js'
 import { Conductor } from './conductor.js'
+import { ensureToken } from './token.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -16,15 +17,23 @@ export function dataDir(): string {
 export function port(): number { return Number(process.env.ORCHESTRA_PORT ?? 4750) }
 export const baseUrl = () => `http://127.0.0.1:${port()}`
 
-export async function serve(): Promise<void> {
+export const authDisabled = () => process.env.ORCHESTRA_NO_AUTH === '1'
+
+export interface ServeOptions { expose?: boolean }
+
+export async function serve(opts: ServeOptions = {}): Promise<void> {
+  // an exposed daemon is remote code execution for anyone who can reach the port
+  if (opts.expose && authDisabled())
+    throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
   // hired agents live in this process — anything left from a previous daemon is dead
   for (const g of db.prepare(`SELECT id FROM agents WHERE kind='hired' AND status != 'gone'`).all() as { id: number }[]) {
     removeAgentCards(db, g.id)
     db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(g.id)
   }
-  const server = buildServer(db, (bus) => new Conductor(db, bus))
-  await server.listen({ host: '127.0.0.1', port: port() })
+  const token = authDisabled() ? undefined : ensureToken()
+  const server = buildServer(db, (bus) => new Conductor(db, bus), { token })
+  await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   setInterval(() => reap(db), 60_000)
 }

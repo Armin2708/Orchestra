@@ -4,6 +4,7 @@ import { api, projectPath } from './client.js'
 import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
+import { ensureToken } from './token.js'
 
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
@@ -19,10 +20,14 @@ async function inferAgent(boardId: number, explicit?: string): Promise<string | 
   return live.length === 1 ? live[0].name : undefined
 }
 
-program.command('serve').description('run daemon in foreground').action(async () => {
-  await serve(); console.log(`orchestra on ${baseUrl()}`)
-})
+program.command('serve').description('run daemon in foreground')
+  .option('--expose', 'listen on all interfaces instead of localhost (requires token auth)')
+  .action(async (o) => {
+    await serve({ expose: o.expose }); console.log(`orchestra on ${baseUrl()}${o.expose ? ' (exposed on all interfaces)' : ''}`)
+  })
 program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
+program.command('token').description('print the API token (paste it into the web UI login)')
+  .action(() => console.log(ensureToken()))
 
 program.command('join').description('register this agent session on the project board (agents only)')
   .option('--name <name>').option('--session <id>')

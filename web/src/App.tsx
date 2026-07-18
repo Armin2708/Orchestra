@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, Snapshot } from './api'
+import { api, ApiError, setToken, streamUrl, Snapshot } from './api'
 import { ProjectGrid } from './Board'
 import { RoadmapView } from './RoadmapView'
 
@@ -15,6 +15,7 @@ export const Mark = () => (
 export function App() {
   const [snaps, setSnaps] = useState<Snapshot[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [needsAuth, setNeedsAuth] = useState(false)
   const [focus, setFocus] = useState<number | 'all'>(() => {
     const saved = localStorage.getItem('orchestra-focus')
     return saved && saved !== 'all' ? Number(saved) : 'all'
@@ -31,17 +32,25 @@ export function App() {
   }, [snaps.length])
 
   const refresh = useCallback(async () => {
-    const boards = await api('GET', '/boards')
-    const all = await Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`)))
-    setSnaps(all)
-    setLoaded(true)
-    return boards
+    try {
+      const boards = await api('GET', '/boards')
+      const all = await Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`)))
+      setSnaps(all)
+      setNeedsAuth(false)
+      return boards
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) setNeedsAuth(true)
+      return []
+    } finally {
+      setLoaded(true)
+    }
   }, [])
 
   useEffect(() => {
-    refresh().catch(() => setLoaded(true))
+    if (needsAuth) return // no stream until the token is accepted
+    refresh()
     // a single stream for everything — per-board streams exhaust the browser connection limit
-    const es = new EventSource('/api/v1/events')
+    const es = new EventSource(streamUrl())
     let pending: number | undefined
     es.onmessage = () => {
       // debounce bursts of events into one refresh
@@ -50,8 +59,9 @@ export function App() {
     }
     const poll = setInterval(refresh, 30_000) // pick up newly created boards
     return () => { es.close(); clearInterval(poll); if (pending) clearTimeout(pending) }
-  }, [refresh])
+  }, [refresh, needsAuth])
 
+  if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
   if (loaded && snaps.length === 0) return <GettingStarted />
 
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
@@ -94,6 +104,26 @@ export function App() {
       {view === 'board'
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
         : <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
+    </div>
+  )
+}
+
+function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
+  const [token, setTokenInput] = useState('')
+  return (
+    <div className="empty-hero">
+      <div className="empty-card">
+        <Mark />
+        <h1>Connect to Orchestra</h1>
+        <p>This daemon requires a token. Print it from the machine running Orchestra:</p>
+        <pre>orchestra token</pre>
+        <form className="login-form" onSubmit={(e) => { e.preventDefault(); if (token.trim()) onSubmit(token.trim()) }}>
+          <input className="login-input" type="password" placeholder="Paste token" autoFocus
+            value={token} onChange={(e) => setTokenInput(e.target.value)} />
+          <button className="login-btn" type="submit" disabled={!token.trim()}>Connect</button>
+        </form>
+        <p className="hint">Stored only in this browser. You won't be asked again.</p>
+      </div>
     </div>
   )
 }
