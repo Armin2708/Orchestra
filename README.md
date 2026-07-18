@@ -62,6 +62,37 @@ Claude session A      Claude session B        You (browser)
 | `orchestra snapshot` | Dump the board state as JSON |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |
 | `orchestra uninstall [--project]` | Remove them cleanly |
+| `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
+
+## Remote Access
+
+`orchestra remote` puts the board on your phone:
+
+```
+orchestra remote
+```
+
+It starts (or attaches to) the daemon with token auth enforced, opens a tunnel
+with tooling you already have — `tailscale serve` if Tailscale is installed
+(preferred: private to your tailnet), otherwise a `cloudflared` quick tunnel —
+and prints the public URL plus a QR code. The QR embeds the URL *and* your API
+token (`https://…/#token=…`), so one scan opens the board on your phone already
+signed in; the web app stores the token and strips it from the address bar.
+Install the board as an app from your phone browser's share menu — it's a PWA.
+
+Notes:
+
+- The daemon keeps listening only on `127.0.0.1`; the tunnel terminates TLS and
+  forwards to localhost. It is never exposed without token auth (`orchestra
+  remote` refuses to run with `ORCHESTRA_NO_AUTH=1`).
+- Treat the QR/URL like a password — anyone who scans it has your token. Quick
+  tunnel URLs are random and die with `--stop`.
+- The current tunnel is recorded in `~/.orchestra/remote.json` (`provider`,
+  `url`, `pid`) for other features that need the public base URL.
+
+```
+orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tailscale serve)
+```
 
 ## Configuration
 
