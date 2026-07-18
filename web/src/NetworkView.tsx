@@ -15,20 +15,24 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [killing, setKilling] = useState<Agent | null>(null)
   const [dying, setDying] = useState<number | null>(null)
+  // dissolved agents stay hidden until the snapshot actually drops them,
+  // otherwise they'd pop back for a frame between the animation and the refresh
+  const [dead, setDead] = useState<Set<number>>(() => new Set())
 
   const kill = async (a: Agent) => {
     setKilling(null)
     setDying(a.id)
     await new Promise((r) => setTimeout(r, 380)) // let the dissolve play
+    setDead((d) => new Set(d).add(a.id))
+    setDying(null)
     try {
       if (a.kind === 'hired') await api('POST', `/agents/${a.id}/fire`)
       else await api('DELETE', `/agents/${a.id}`)
     } catch { /* already gone */ }
-    setDying(null)
     onChange?.()
   }
   const boardId = snap.board.id
-  const agents = snap.agents.filter((a) => a.status !== 'gone')
+  const agents = snap.agents.filter((a) => a.status !== 'gone').filter((a) => !dead.has(a.id))
   const wrap = useRef<HTMLDivElement>(null)
   // real pixel size of the canvas — svg renders 1:1, so text and arrows never distort
   const [size, setSize] = useState({ w: 1000, h: 600 })
