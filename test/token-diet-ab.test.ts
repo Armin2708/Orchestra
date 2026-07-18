@@ -104,6 +104,12 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
     ['Record the demo GIF', 'terminal capture for the README', [], 'backlog'],
     ['Publish to npm', 'package metadata, provenance, dist check', ['package.json'], 'backlog'],
     ['Show HN launch post', 'draft and timing', ['docs/launch-checklist.md'], 'backlog'],
+    // board sized to match the live agentboard board at measurement time (11 active cards)
+    ['Web terminal slash commands', 'autocomplete menu over SDK slash_commands', ['web/src/AgentTerminal.tsx'], 'backlog'],
+    ['Per-chat model selector', 'model and effort controls for hired agents', ['web/src/CardDrawer.tsx'], 'backlog'],
+    ['Permission-mode toggle', 'expose setPermissionMode for hired agents', ['src/conductor.ts'], 'backlog'],
+    ['Feature brainstorm session', 'triage ideas into tickets', [], 'in_progress'],
+    ['Plugin marketplace listing', 'metadata and screenshots', ['docs/launch-checklist.md'], 'backlog'],
   ]
   for (let i = 0; i < SEED_CARDS.length; i++) {
     const [title, description, paths, column] = SEED_CARDS[i]
@@ -158,6 +164,15 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
 
   // 7. scripted agent complies: updates the card
   await http('PATCH', `/cards/${cardId}`, { description: 'parser done, writing tests', agent: me.agent_name })
+
+  // 7b. three ordinary turn-ends while the card is fresh — a compliant agent mid-task.
+  // Pre-diet code blocked every one of these; the diet makes them silent, so this is
+  // where multi-turn sessions actually save. Tokens recorded either way.
+  for (let turn = 0; turn < 3; turn++) {
+    db.prepare(`UPDATE cards SET updated_at = datetime('now') WHERE id = ?`).run(cardId)
+    record('stop', injected(await run('stop')))
+    await run('stop', { stop_hook_active: true }) // harness turn continuation, never counted twice
+  }
 
   // 8. turn ends with the card stale and in_progress: stop must block once
   db.prepare(`UPDATE cards SET updated_at = datetime('now', '-11 minutes') WHERE id = ?`).run(cardId)

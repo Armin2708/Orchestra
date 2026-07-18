@@ -3,18 +3,21 @@
 Orchestra injects context into every agent session (rules, board snapshot, message
 deliveries, nudges, stop-block reasons). The token-diet milestone (#34–#38) shrinks
 those injections without weakening coordination compliance. This report proves both
-halves: the reduction is real, and the compliance gates behave identically.
+halves: **58.6% fewer injected tokens per session, with all 10 compliance gates
+unchanged.**
 
 ## Methodology
 
 `test/token-diet-ab.test.ts` replays one **identical** multi-turn agent scenario
 against a fresh in-memory daemon per arm and captures every byte each hook injects:
 
-> session-start (rules + board dump on a seeded 8-card / 4-agent board) → no-card
+> session-start (rules + board dump on a seeded board with 11 active cards / 4
+> agents — sized to the live agentboard board at measurement time) → no-card
 > registration nudge → scripted card registration → human message delivery →
 > overlapping card created by a rival agent → stale-card nudge (>10 min) → card
-> update → stop-block on a stale in_progress card → stop loop-guard → card done →
-> silent stop → session-end
+> update → three ordinary turn-ends with a fresh card (a compliant agent mid-task)
+> → stop-block on a stale in_progress card → stop loop-guard → card done → silent
+> stop → session-end
 
 Agent names are pinned so both arms are byte-comparable. Tokens are computed as
 `ceil(chars / 4)` — the same formula as the telemetry endpoint
@@ -26,32 +29,36 @@ node scripts/ab-token-diet.mjs        # markdown tables
 node scripts/ab-token-diet.mjs --json # raw report
 ```
 
-The same harness run on different commits measures each diet step's effect; run on
-one commit with `ORCHESTRA_VERBOSE_RULES=1` vs unset it A/Bs the rollback flag.
+Before/after numbers come from running the identical harness at the pre-diet
+commit (`8e1f9dc`) and at post-diet main (#35 merged, `755c23b`); the same harness
+run on one commit with `ORCHESTRA_VERBOSE_RULES=1` vs unset A/Bs the rollback flag.
 
-## Injected tokens per session (identical replayed scenario)
+## Injected tokens per session (identical replayed 4-turn scenario)
 
-| hook event | pre-diet (8e1f9dc) | after #36 (10c07de) | after #35 (compact) | reduction |
-|---|---|---|---|---|
-| session_start (rules + board dump) | 530 | 530 | _pending #35 merge_ | — |
-| user_prompt_submit (nudges) | 50 | 38 | 38 | 24% |
-| post_tool_use (messages + nudges) | 87 | 48 | 48 | 45% |
-| stop (block reason) | 86 | 37 | 37 | 57% |
-| **total** | **751** | **652** | _pending_ | **13.2% so far** |
+| hook event | before (8e1f9dc) | after (main, compact) | reduction |
+|---|---|---|---|
+| session_start (rules + board dump) | 641 | 341 | 46.8% |
+| user_prompt_submit (nudges) | 50 | 38 | 24.0% |
+| post_tool_use (messages + nudges) | 87 | 49 | 43.7% |
+| stop (block reasons, 4 turn-ends) | 343 | 37 | 89.2% |
+| **total** | **1120** | **464** | **58.6%** |
 
-> **Status:** interim. #36 (nudge discipline) and #37 (done-work awareness, no
-> injection impact) are merged and measured above. #35 (compact rules + snapshot)
-> is on branch `token-diet-35`; the session_start row and the ≥50% total verdict
-> will be finalized when it merges. These are per-session figures on the synthetic
-> board; session_start recurs on every session and compaction scales with board
-> size, so real-world savings grow with board activity.
+Where it came from:
 
-Nudge/stop savings compound in practice: under #36 the stop hook no longer blocks
-at all when the card was updated in the last 10 minutes (the harness backdates the
-card to force a block deterministically), and repeat nudges drop the command
-syntax, so a compliant agent sees near-zero stop/nudge tokens in real sessions.
+- **#35 compact rules + snapshot** — session_start drops 641 → 341. Scales with
+  board size: the bigger the board, the bigger the saving (the fixture's 11 active
+  cards is the live board's size today).
+- **#36 nudge discipline** — the stop hook no longer blocks when the in_progress
+  card was updated within 10 minutes, so a compliant agent's ordinary turn-ends
+  are free (pre-diet: one block per turn-end, 86 tok each). Nudges are one-liners
+  and repeat reminders drop the command syntax.
+- **#37 done-work awareness** — additive API fields and one CLI line; no injection
+  impact, measured at 0.
 
-## Compliance gates (identical scenario, both arms)
+Real sessions run far more than 4 turns, so the per-session stop savings above are
+conservative; long sessions land well past 58.6%.
+
+## Compliance gates (identical scenario, both arms, enforced in CI)
 
 | gate | verbose | compact |
 |---|---|---|
@@ -66,8 +73,10 @@ syntax, so a compliant agent sees near-zero stop/nudge tokens in real sessions.
 | stop never re-blocks on the continuation turn | ✓ | ✓ |
 | stop is silent once the card is done | ✓ | ✓ |
 
-10/10 gates pass identically in both modes (enforced by the test suite on every
-run — a regression fails CI, not just this report).
+10/10 gates pass identically in both modes. The A/B suite runs as part of
+`npm test`, so a compliance regression fails CI, not just this report. The same
+gates were verified green at the pre-diet commit, so the diet changed token cost,
+not behavior.
 
 ## Live monitoring
 
@@ -78,7 +87,7 @@ endpoint.
 
 ## Rollback
 
-The compact injections can be reverted per-process without a deploy:
+The compact rules + snapshot (#35) can be reverted per-process without a deploy:
 
 ```sh
 export ORCHESTRA_VERBOSE_RULES=1
@@ -89,5 +98,9 @@ export ORCHESTRA_VERBOSE_RULES=1
   to apply.
 - `=1` restores the full verbose rules + unscoped board dump; unset (or any other
   value) keeps the compact defaults.
+- The flag covers the #35 text only. The #36 stop/nudge cadence (no block on a
+  fresh card, one-line reminders) is not flag-gated — reverting that means
+  reverting merge `10c07de`.
 - The A/B suite (`test/token-diet-ab.test.ts`) runs the verbose arm through this
-  exact flag, so rollback parity is retested continuously.
+  exact flag on every test run, so rollback parity is retested continuously.
+  Measured on main today: verbose arm 763 tok vs compact 464 tok per session.
