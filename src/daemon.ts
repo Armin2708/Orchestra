@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
-import { reap } from './reaper.js'
+import { reap, bounceDeadLetters } from './reaper.js'
 import { Conductor } from './conductor.js'
 import { ensureToken } from './token.js'
 import { registerPush } from './push.js'
@@ -40,6 +40,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   for (const s of survivors) {
     if (s.name.startsWith('auditor-')) { // one-shot auditors don't outlive a restart
       db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
+      bounceDeadLetters(db, s.id)
       continue
     }
     try {
@@ -51,6 +52,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     } catch {
       // could not respawn — keep the agent's cards, just mark it gone
       db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
+      bounceDeadLetters(db, s.id)
     }
   }
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
