@@ -192,12 +192,14 @@ function SystemMeter() {
     ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : null
   const win = (label: string, w: { utilization: number; resets_at: string | null }) => {
-    const left = Math.max(0, Math.round(100 - w.utilization))
+    const used = Math.round(w.utilization)
+    const reset = at(w.resets_at)
     return (
-      <span className={`meter ${left <= 15 ? 'low' : ''}`} title={`${label} limit: ${Math.round(w.utilization)}% used${at(w.resets_at) ? ` — resets ${at(w.resets_at)}` : ''}`}>
+      <span className={`meter ${used >= 85 ? 'low' : ''}`} title={`${label} limit: ${used}% used${reset ? ` — resets ${reset}` : ''}`}>
         <span className="meter-label">{label}</span>
-        <span className="meter-bar"><i style={{ width: `${Math.min(100, w.utilization)}%` }} /></span>
-        <span className="meter-val">{left}%</span>
+        <span className="meter-bar"><i style={{ width: `${Math.min(100, used)}%` }} /></span>
+        <span className="meter-val">{used}%</span>
+        {reset && <span className="meter-reset">↺ {reset}</span>}
       </span>
     )
   }

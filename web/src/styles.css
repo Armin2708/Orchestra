@@ -975,3 +975,4 @@ textarea {
 .meter-val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
 .meter.low .meter-bar i { background: #C4554D; }
 .meter.low .meter-val { color: #9F2F2D; }
+.meter-reset { font-size: 10px; color: #9b968e; font-variant-numeric: tabular-nums; }
