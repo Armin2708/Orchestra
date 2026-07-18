@@ -147,7 +147,16 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   return (
     <>
       {!embedded && <div className="scrim" onClick={onClose} />}
-      <aside className={embedded ? 'terminal embedded' : 'terminal'} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); interrupt() } }}>
+      <aside className={embedded ? 'terminal embedded' : 'terminal'}
+        role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true}
+        aria-label={`${agent.name} console`}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          // esc interrupts a working agent; otherwise it closes, as the header promises
+          if (hired && working) interrupt()
+          else if (!embedded) onClose()
+        }}>
         <div className="terminal-col">
           <header className="cc-head">
             <span className="cc-head-star">✻</span>

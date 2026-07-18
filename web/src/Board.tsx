@@ -16,17 +16,19 @@ function ThreadView({ t, boardId, onChange }: { t: Thread; boardId: number; onCh
   const title = t.body.length > 64 ? t.body.slice(0, 64) + '…' : t.body
   return (
     <div className={`thread ${t.answered ? 'answered' : ''} ${expanded ? 'expanded' : ''}`}>
-      <button className="thread-q" onClick={() => setExpanded(!expanded)}>
-        <span className="thread-text">
-          <b>{t.from_name ?? 'you'}</b> → <b>{t.to_name ?? 'everyone'}</b>: {expanded ? t.body : title}
-        </span>
-        <span className={`status-chip ${t.answered ? 'chip-answered' : 'chip-open'}`}>
-          {t.answered ? 'Answered' : 'Open'}
-        </span>
-        <span className="thread-caret">{expanded ? '▾' : '▸'}</span>
-        <span className="icon-x" role="button" title="Delete question"
-          onClick={async (e) => { e.stopPropagation(); await api('DELETE', `/messages/${t.id}`); onChange() }}>×</span>
-      </button>
+      <div className="thread-head">
+        <button className="thread-q" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
+          <span className="thread-text">
+            <b>{t.from_name ?? 'you'}</b> → <b>{t.to_name ?? 'everyone'}</b>: {expanded ? t.body : title}
+          </span>
+          <span className={`status-chip ${t.answered ? 'chip-answered' : 'chip-open'}`}>
+            {t.answered ? 'Answered' : 'Open'}
+          </span>
+          <span className="thread-caret">{expanded ? '▾' : '▸'}</span>
+        </button>
+        <button className="icon-x" title="Delete question" aria-label="Delete question"
+          onClick={async () => { if (!window.confirm('Delete this question?')) return; await api('DELETE', `/messages/${t.id}`); onChange() }}>×</button>
+      </div>
       {expanded && <>
         {t.replies.map((r) => (
           <p key={r.id} className="thread-a"><b>{r.from_name ?? 'you'}</b>: {r.body}</p>
@@ -106,7 +108,9 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
   return (
     <article className={`t-card ${isLocked ? 'locked' : ''}`}
       draggable={!isLocked}
+      role="button" tabIndex={0}
       onClick={() => onOpen(c)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(c) } }}
       onDragStart={(e) => e.dataTransfer.setData('text/ticket-id', String(c.id))}
       style={{ ['--st' as any]: st.ink }}
       title={isLocked ? 'Locked — complete the previous milestone step first' : 'Drag onto an agent to assign'}>
@@ -238,14 +242,19 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                     <span key={a.id} className="crew-slot">
                       <span className={`avatar clickable ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
                         title={`${a.name} · ${a.status} · open console`}
+                        role="button" tabIndex={0} aria-label={`Open ${a.name}'s console`}
                         style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-                        onClick={() => setTerminal({ agent: a, boardId: s.board.id })}>
+                        onClick={() => setTerminal({ agent: a, boardId: s.board.id })}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTerminal({ agent: a, boardId: s.board.id }) } }}>
                         {initials(a.name)}
                         <i className="presence" />
                       </span>
                       {a.kind === 'hired' && (
-                        <button className="icon-x fire" title={`Fire ${a.name}`}
-                          onClick={async () => { await api('POST', `/agents/${a.id}/fire`); onChange() }}>×</button>
+                        <button className="icon-x fire" title={`Fire ${a.name}`} aria-label={`Fire ${a.name}`}
+                          onClick={async () => {
+                            if (!window.confirm(`Fire ${a.name}? Its running session is killed.`)) return
+                            await api('POST', `/agents/${a.id}/fire`); onChange()
+                          }}>×</button>
                       )}
                     </span>
                   ))}
@@ -275,7 +284,9 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                   return (
                     <article key={c.id} className={`card ${c.column === 'done' ? 'is-done' : ''}`}
                       style={{ ['--i' as any]: i, ['--st' as any]: st.ink }}
-                      onClick={() => setOpen({ card: c, boardId: s.board.id })}>
+                      role="button" tabIndex={0}
+                      onClick={() => setOpen({ card: c, boardId: s.board.id })}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen({ card: c, boardId: s.board.id }) } }}>
                       <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{st.label}</span>
                       <h4>{c.title}</h4>
                       <footer>

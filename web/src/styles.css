@@ -816,3 +816,91 @@ textarea {
 .rail-mile-flag { font-size: 14px; }
 .rail-mile-title { flex: 1; font-size: 12.5px; font-weight: 600; line-height: 1.3; }
 .rail-mile-steps { display: flex; flex-direction: column; gap: 8px; padding-left: 8px; border-left: 2px solid var(--line); margin-left: 6px; }
+
+/* ── Thread header (delete sits beside the toggle, not inside it) ── */
+.thread-head { display: flex; align-items: center; gap: 6px; }
+.thread-head .thread-q { flex: 1; min-width: 0; }
+
+/* ── Touch devices — visible + reachable controls ── */
+@media (pointer: coarse) {
+  /* hover-revealed controls have no hover on touch */
+  .icon-x.quiet, .crew-slot .fire, .rm-idea-open { opacity: 1; }
+  /* 44px hit area for small icon buttons without changing their visuals */
+  .icon-x, .crew-slot .fire, .drawer .close, .cc-close, .avatar.clickable, .thread-reply {
+    position: relative;
+  }
+  .icon-x::before, .crew-slot .fire::before, .drawer .close::before, .cc-close::before,
+  .avatar.clickable::before, .thread-reply::before {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
+  }
+}
+
+/* ── Mobile (≤768px) — swipeable single-column board, full-screen sheets ── */
+@media (max-width: 768px) {
+  .topbar { padding: 14px 16px 10px; gap: 12px; flex-wrap: wrap; }
+  .topbar h1, .brand-btn h1 { font-size: 17px; }
+  .view-tabs { margin-left: 0; }
+  .brand-menu { max-width: calc(100vw - 32px); }
+
+  /* comfortable touch targets */
+  .btn, .tab, .view-toggle, .hire-btn, .brand-item, .add-card,
+  .status-chip.pick, .agent-chip, .mode-chip, .login-btn, .rail-mile-head { min-height: 44px; }
+  input, select, textarea { font-size: 16px; } /* stops iOS focus zoom */
+  .assign-select, .cc-assign { min-height: 34px; }
+
+  /* board: one project per screen, swipe between them */
+  .projects, .projects.focused {
+    display: flex; overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
+    gap: 12px; padding: 4px 16px calc(90px + env(safe-area-inset-bottom));
+  }
+  .project {
+    flex: 0 0 100%; min-width: 0; scroll-snap-align: center;
+    height: auto; max-height: none; padding: 14px 14px 12px;
+  }
+  .projects.focused .project { height: auto; }
+  .project-head { flex-wrap: wrap; }
+  .project-cards { grid-template-columns: 1fr; }
+
+  /* network view stacks: swipeable ticket rail above the canvas */
+  .net-wrap { flex-direction: column; }
+  .ticket-rail {
+    width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+    padding: 2px 2px 8px; scroll-snap-type: x proximity;
+  }
+  .ticket-rail .t-card { min-width: 230px; scroll-snap-align: start; }
+  .rail-mile { min-width: 250px; }
+  .rail-mile-steps { flex-direction: row; overflow-x: auto; padding-left: 0; border-left: none; margin-left: 0; }
+  .network { min-height: 340px; }
+
+  /* roadmap: single column; brainstorm workspace stacks under the plan */
+  .roadmap, .roadmap.focused { grid-template-columns: 1fr; padding: 4px 16px calc(90px + env(safe-area-inset-bottom)); }
+  .rm-split { flex-direction: column; overflow-y: auto; padding: 4px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .rm-left { flex: none; overflow: visible; }
+  .rm-right { width: 100%; min-width: 0; min-height: 62dvh; }
+  .rm-ideas { grid-template-columns: 1fr 1fr; }
+
+  /* card drawer becomes a full-screen sheet */
+  .drawer {
+    inset: 0; width: 100%; height: 100dvh; border-left: none;
+    padding: 24px 20px calc(40px + env(safe-area-inset-bottom));
+    animation: sheet-up 0.3s var(--ease);
+  }
+  .drawer .close { top: 14px; right: 14px; width: 36px; height: 36px; }
+
+  /* agent console fills the screen, prompt pinned to the bottom */
+  .terminal { width: 100vw; border-left: none; }
+  .terminal:not(.embedded) .terminal-col { height: 100%; }
+  .terminal-col { padding: 10px 14px calc(14px + env(safe-area-inset-bottom)); }
+  .cc-welcome { min-width: 0; }
+  .cc-head { flex-wrap: wrap; }
+
+  .ask-dock { width: calc(100vw - 24px); bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .ask-row { flex-wrap: nowrap; overflow-x: auto; }
+  .ask-row .agent-chip { flex-shrink: 0; }
+  .idea-modal { width: calc(100vw - 24px); max-height: 82dvh; }
+  .empty-card { padding: 36px 24px; }
+}
+
+@keyframes sheet-up { from { transform: translateY(28px); opacity: 0; } }
