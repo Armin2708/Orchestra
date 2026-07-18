@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { api, ApiError, setToken, streamUrl, Snapshot } from './api'
 import { ProjectGrid } from './Board'
 import { RoadmapView } from './RoadmapView'
+import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -25,6 +26,13 @@ export function App() {
     (localStorage.getItem('orchestra-view') as 'board' | 'roadmap') ?? 'board')
   const pickView = (v: 'board' | 'roadmap') => { setView(v); localStorage.setItem('orchestra-view', v) }
   const pick = (f: number | 'all') => { setFocus(f); setMenuOpen(false); localStorage.setItem('orchestra-focus', String(f)) }
+
+  // a notification tap lands on /?board=<id>[&card=<id>] — focus that board;
+  // the card param is picked up by ProjectGrid once snapshots arrive
+  useEffect(() => {
+    const b = Number(new URLSearchParams(location.search).get('board'))
+    if (b) { setFocus(b); localStorage.setItem('orchestra-focus', String(b)) }
+  }, [])
 
   // default to the first project (network view) rather than the all-projects grid
   useEffect(() => {
@@ -99,12 +107,39 @@ export function App() {
         <nav className="view-tabs">
           <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
           <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
+          <PushBell />
         </nav>
       </header>
       {view === 'board'
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
         : <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
     </div>
+  )
+}
+
+// per-device opt-in for phone notifications — the subscription lives in this browser
+function PushBell() {
+  const [state, setState] = useState<'unsupported' | 'off' | 'on' | 'busy'>('unsupported')
+  useEffect(() => {
+    if (pushSupported()) isSubscribed().then((on) => setState(on ? 'on' : 'off'))
+  }, [])
+  if (state === 'unsupported') return null
+  const toggle = async () => {
+    const prev = state
+    setState('busy')
+    try {
+      if (prev === 'on') { await unsubscribe(); setState('off') }
+      else { await subscribe(); setState('on') }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+      setState(prev)
+    }
+  }
+  return (
+    <button className="tab" onClick={toggle} disabled={state === 'busy'} aria-pressed={state === 'on'}
+      title={state === 'on' ? 'Notifications on for this device — tap to turn off' : 'Notify this device when agents finish, block, or ask'}>
+      {state === 'on' ? '🔔' : '🔕'}
+    </button>
   )
 }
 

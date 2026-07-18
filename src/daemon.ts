@@ -8,6 +8,7 @@ import { buildServer } from './server.js'
 import { reap, removeAgentCards } from './reaper.js'
 import { Conductor } from './conductor.js'
 import { ensureToken } from './token.js'
+import { registerPush } from './push.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -33,6 +34,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   }
   const token = authDisabled() ? undefined : ensureToken()
   const server = buildServer(db, (bus) => new Conductor(db, bus), { token })
+  registerPush(server)
   await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   setInterval(() => reap(db), 60_000)
