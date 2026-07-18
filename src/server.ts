@@ -78,6 +78,64 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/telemetry', (req) =>
     boardTelemetry(db, Number(req.params.id)))
 
+  // board-wide activity feed: card events, review decisions, messages, milestones merged
+  // reverse-chronologically. Cursor pages on (ts, source, id) strictly-less-than, so rows
+  // inserted mid-walk (always newer) can never duplicate or shift an older page.
+  server.get<{ Params: { id: string }; Querystring: { cursor?: string; limit?: string; agent?: string; card?: string; type?: string } }>(
+    '/api/v1/boards/:id/timeline', (req, reply) => {
+      const boardId = Number(req.params.id)
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50))
+      let cur: { ts: string; source: string; id: number } | null = null
+      if (req.query.cursor) {
+        try {
+          const [ts, source, id] = JSON.parse(Buffer.from(req.query.cursor, 'base64url').toString('utf8'))
+          cur = { ts, source, id: Number(id) }
+        } catch { return reply.code(400).send({ error: 'bad cursor' }) }
+      }
+      const rows = db.prepare(`
+        SELECT * FROM (
+          SELECT e.created_at AS ts, 'card' AS source, e.id AS id, e.type AS type, a.name AS agent,
+                 e.card_id AS card_id, c.title AS card_title, e.payload AS detail, NULL AS peer
+          FROM card_events e JOIN cards c ON c.id = e.card_id LEFT JOIN agents a ON a.id = e.agent_id
+          WHERE c.board_id = @board
+          UNION ALL
+          SELECT r.decided_at, 'review', r.id, r.decision, NULL, r.card_id, c.title, r.note, NULL
+          FROM review_decisions r LEFT JOIN cards c ON c.id = r.card_id
+          WHERE r.board_id = @board
+          UNION ALL
+          SELECT m.created_at, 'message', m.id, 'message', fa.name, m.card_id, mc.title, m.body, ta.name
+          FROM messages m LEFT JOIN agents fa ON fa.id = m.from_agent_id
+            LEFT JOIN agents ta ON ta.id = m.to_agent_id LEFT JOIN cards mc ON mc.id = m.card_id
+          WHERE m.board_id = @board
+          UNION ALL
+          SELECT ms.created_at, 'milestone', ms.id, 'milestone', NULL, NULL, ms.title, ms.description, NULL
+          FROM milestones ms WHERE ms.board_id = @board
+        )
+        WHERE (@curTs IS NULL OR ts < @curTs OR (ts = @curTs AND (source < @curSrc OR (source = @curSrc AND id < @curId))))
+          AND (@agent IS NULL OR agent = @agent OR peer = @agent)
+          AND (@card IS NULL OR card_id = @card)
+          AND (@type IS NULL OR type = @type OR source = @type)
+        ORDER BY ts DESC, source DESC, id DESC
+        LIMIT @lim`).all({
+        board: boardId,
+        curTs: cur?.ts ?? null, curSrc: cur?.source ?? null, curId: cur?.id ?? null,
+        agent: req.query.agent ?? null,
+        card: req.query.card ? Number(req.query.card) : null,
+        type: req.query.type ?? null,
+        lim: limit + 1,
+      }) as any[]
+      const has_more = rows.length > limit
+      const page = rows.slice(0, limit)
+      const items = page.map((r) => ({
+        ts: r.ts, source: r.source, id: r.id, type: r.type, agent: r.agent,
+        card_id: r.card_id, card_title: r.card_title, summary: timelineSummary(r),
+      }))
+      const last = page[page.length - 1]
+      const next_cursor = has_more && last
+        ? Buffer.from(JSON.stringify([last.ts, last.source, last.id])).toString('base64url') : null
+      return { items, next_cursor, has_more }
+    })
+
   // terminal sessions report their live subagents via hook pings; entries expire quickly
   const termSubs = new Map<number, Map<string, number>>()
   const liveTermSubs = (agentId: number): { key: string; label: string }[] => {
@@ -783,6 +841,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   }
 
   return server
+}
+
+// one human-readable line per feed item; payloads are stored as JSON strings
+function timelineSummary(r: { source: string; type: string; agent: string | null; card_title: string | null; detail: string | null; peer: string | null }): string {
+  const clip = (s: string, n = 140) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
+  if (r.source === 'message') return clip(`${r.agent ?? 'human'} → ${r.peer ?? 'all'}: ${r.detail ?? ''}`)
+  if (r.source === 'review') return clip(`${r.type === 'approve' ? 'approved' : 'sent back'} "${r.card_title ?? '?'}"${r.detail ? ` — ${r.detail}` : ''}`)
+  if (r.source === 'milestone') return clip(`milestone "${r.card_title ?? ''}"${r.detail ? ` — ${r.detail}` : ''}`)
+  let p: any = {}
+  try { p = JSON.parse(r.detail ?? '{}') } catch { /* raw payload stays out of the summary */ }
+  const title = r.card_title ? `"${r.card_title}"` : ''
+  if (r.type === 'created') return clip(`created ${title}`)
+  if (r.type === 'moved') return clip(`moved ${title}${p.from ? ` ${p.from}` : ''}${p.to ? ` → ${p.to}` : ''}`)
+  if (r.type === 'shipped') return clip(`shipped ${title}${p.hash ? ` @ ${String(p.hash).slice(0, 7)}` : ''}${p.subject ? ` — ${p.subject}` : ''}`)
+  return clip(`${r.type} ${title}`)
 }
 
 export function listThreads(db: Database.Database, boardId: number) {

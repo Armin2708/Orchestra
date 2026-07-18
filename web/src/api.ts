@@ -54,6 +54,26 @@ export function timeAgo(sqlUtc: string): string {
   return `${Math.floor(s / 86400)}d ago`
 }
 
+// GET /boards/:id/timeline — merged activity feed, cursor-paged
+export type TimelineItem = {
+  ts: string; source: 'card' | 'review' | 'message' | 'milestone'; id: number; type: string
+  agent: string | null; card_id: number | null; card_title: string | null; summary: string
+}
+export type TimelinePage = { items: TimelineItem[]; next_cursor: string | null; has_more: boolean }
+export const fetchTimeline = (
+  boardId: number,
+  opts: { cursor?: string; limit?: number; agent?: string; card?: number; type?: string } = {},
+): Promise<TimelinePage> => {
+  const q = new URLSearchParams()
+  if (opts.cursor) q.set('cursor', opts.cursor)
+  if (opts.limit) q.set('limit', String(opts.limit))
+  if (opts.agent) q.set('agent', opts.agent)
+  if (opts.card) q.set('card', String(opts.card))
+  if (opts.type) q.set('type', opts.type)
+  const qs = q.toString()
+  return api('GET', `/boards/${boardId}/timeline${qs ? `?${qs}` : ''}`)
+}
+
 export type SystemInfo = {
   hardware: { cores: number; total_gb: number; capacity: number }
   hired: number
