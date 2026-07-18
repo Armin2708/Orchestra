@@ -52,6 +52,7 @@ Claude session A      Claude session B        You (browser)
 |---|---|
 | `orchestra serve` | Run the daemon in the foreground (hooks auto-start it otherwise) |
 | `orchestra stop` | Stop the daemon |
+| `orchestra restart [--force]` | Gracefully restart the daemon; defers while hired agents are live |
 | `orchestra join [--name X]` | Agent-only: register the current agent session on the board (hooks run it automatically; `--force` for headless scripts) |
 | `orchestra card create <title> [--desc D] [--paths a,b] [--column C]` | Create a card; prints overlap warnings |
 | `orchestra card update <id> [...]` | Update title/description/paths/column |
@@ -118,6 +119,8 @@ npm rm -g orchestra-board
 **What about folders that aren't git repos?** The board is keyed by the git root when there is one, otherwise by the directory itself.
 
 **Can I use it without the hooks?** Yes — the CLI works standalone, and instructing agents via CLAUDE.md to run `orchestra join` / `card` / `ask` works too. Hooks just make it automatic.
+
+**The usage meters say "unavailable (keychain)" — why?** On macOS the daemon reads Claude Code's OAuth token from the keychain, and that grant is per-binary: upgrading orchestra (e.g. via `npx`) invalidates it, and a daemon started headlessly can't answer the keychain prompt. Run `orchestra restart` from an interactive terminal and choose **Always Allow** when macOS asks. Until then the meters show the last known values dimmed (stale) or an "unavailable" pill with the reason.
 
 ## License
 

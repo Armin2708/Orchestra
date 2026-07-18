@@ -57,12 +57,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/health', () => ({ ok: true, version: VERSION }))
 
-  server.get('/api/v1/system', async () => ({
-    hardware: hardware(),
-    hired: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status != 'gone'`).get() as any).c,
-    usage: await claudeUsage(),
-    injected: injectedTotal(db),
-  }))
+  server.get('/api/v1/system', async () => {
+    const u = await claudeUsage(db)
+    return {
+      hardware: hardware(),
+      hired: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status != 'gone'`).get() as any).c,
+      usage: u.usage,
+      usage_error: u.usage_error,
+      usage_error_since: u.usage_error_since,
+      injected: injectedTotal(db),
+    }
+  })
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/telemetry', (req) =>
     boardTelemetry(db, Number(req.params.id)))

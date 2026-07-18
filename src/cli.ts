@@ -28,6 +28,22 @@ program.command('serve').description('run daemon in foreground')
     await serve({ expose: o.expose }); console.log(`orchestra on ${baseUrl()}${o.expose ? ' (exposed on all interfaces)' : ''}`)
   })
 program.command('stop').action(() => { console.log(stopDaemon() ? 'stopped' : 'not running') })
+program.command('restart').description('gracefully restart the daemon — defers while hired agents are live')
+  .option('--force', 'restart anyway (hired agents resume from saved sessions; one-shot auditors do not survive)')
+  .action(async (o) => {
+    const alive = async () => { try { return (await (await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(300) })).json()).ok === true } catch { return false } }
+    if (await alive()) {
+      const sys = await api('GET', '/system').catch(() => undefined)
+      if (!o.force && sys && sys.hired > 0) {
+        console.error(`deferred: ${sys.hired} hired agent(s) still live — drain them first or use --force.`)
+        console.error('Run the restart from an interactive terminal so you can approve the keychain prompt ("Always Allow") for the usage meters.')
+        process.exit(1)
+      }
+      stopDaemon()
+      for (let i = 0; i < 50 && (await alive()); i++) await new Promise((r) => setTimeout(r, 100))
+    }
+    console.log((await ensureDaemon()) ? `daemon restarted on ${baseUrl()}` : 'daemon failed to restart')
+  })
 program.command('token').description('print the API token (paste it into the web UI login)')
   .action(() => console.log(ensureToken()))
 
