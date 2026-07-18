@@ -100,6 +100,12 @@ program.command('idea <text>').description('add a roadmap idea (first line = tit
     const i = await api('POST', '/ideas', { board_id: b.id, text: o.desc ? `${text}\n${o.desc}` : text })
     console.log(`idea #${i.id} added to the roadmap`)
   })
+program.command('idea-done <id>').description('remove a roadmap idea (after converting it to a ticket)')
+  .action(async (id) => {
+    await up()
+    await api('DELETE', `/ideas/${id}`)
+    console.log(`idea #${id} removed from the roadmap`)
+  })
 program.command('ideas').description('list roadmap ideas').action(async () => {
   await up(); const b = await board()
   const snap = await api('GET', `/boards/${b.id}/snapshot`)

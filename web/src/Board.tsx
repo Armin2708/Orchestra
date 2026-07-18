@@ -63,8 +63,12 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
     await api('POST', '/ideas', { board_id: snap.board.id, text: text.trim() })
     setText(''); onChange()
   }
-  const promote = async (idea: Idea, agent: string) => {
-    await api('POST', `/ideas/${idea.id}/promote`, agent ? { agent } : {})
+  const toStrategist = async (idea: Idea) => {
+    let agent: any = null
+    try { agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' }) } catch { return }
+    await api('POST', `/agents/${agent.id}/task`, {
+      text: `Ticket request: turn roadmap idea #${idea.id} into a proper ticket. Idea text: """${idea.text}""". Audit it against the repo, enrich it, create the ticket in your format with the right --paths, then remove the idea with orchestra idea-done ${idea.id} and report the ticket id.`,
+    })
     onChange()
   }
   return (
@@ -80,12 +84,8 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
           {(snap.ideas ?? []).map((i) => (
             <span key={i.id} className="idea">
               <span className="idea-text" title={i.text}>{i.text.split('\n')[0]}</span>
-              <select defaultValue="" title="Turn into a ticket"
-                onChange={(e) => { if (e.target.value !== '') promote(i, e.target.value === '·' ? '' : e.target.value) }}>
-                <option value="" disabled>→ ticket</option>
-                <option value="·">unassigned</option>
-                {agents.map((a) => <option key={a.id} value={a.name}>assign {a.name}</option>)}
-              </select>
+              <button className="thread-reply" title="Strategist audits it and writes the full ticket"
+                onClick={() => toStrategist(i)}>✳ ticket</button>
               <button className="icon-x" title="Delete idea"
                 onClick={async () => { await api('DELETE', `/ideas/${i.id}`); onChange() }}>×</button>
             </span>

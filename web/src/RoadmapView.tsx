@@ -160,7 +160,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
         {(snap.ideas ?? []).length === 0 && <p className="col-empty">No ideas yet — brainstorm above.</p>}
       </div>
       {openIdea && <IdeaModal idea={(snap.ideas ?? []).find((x) => x.id === openIdea.id) ?? openIdea}
-        agents={agents} onClose={() => setOpenIdea(null)} onChange={onChange} />}
+        boardId={snap.board.id} onClose={() => setOpenIdea(null)} onChange={onChange} />}
 
       <h3 className="rm-h">Tickets <span className="rm-count">{tickets.length}</span></h3>
       <div className="rm-tickets">
@@ -206,13 +206,21 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
   )
 }
 
-function IdeaModal({ idea, agents, onClose, onChange }:
-  { idea: Idea; agents: { id: number; name: string }[]; onClose: () => void; onChange: () => void }) {
+function IdeaModal({ idea, boardId, onClose, onChange }:
+  { idea: Idea; boardId: number; onClose: () => void; onChange: () => void }) {
   const [title, ...rest] = idea.text.split('\n')
   const body = rest.join('\n').trim()
-  const promote = async (agent: string) => {
-    await api('POST', `/ideas/${idea.id}/promote`, agent ? { agent } : {})
-    onClose(); onChange()
+  const [sending, setSending] = useState(false)
+  const sendToStrategist = async () => {
+    if (sending) return
+    setSending(true)
+    try {
+      const agent = await api('POST', `/boards/${boardId}/hire`, { name: 'strategist', role: 'strategist' })
+      await api('POST', `/agents/${agent.id}/task`, {
+        text: `Ticket request: turn roadmap idea #${idea.id} into a proper ticket. Idea text: <<<${idea.text}>>>. Audit it against the repo, enrich it, create the ticket in your format with the right --paths, then remove the idea with orchestra idea-done ${idea.id} and report the ticket id.`,
+      })
+      onClose(); onChange()
+    } finally { setSending(false) }
   }
   return (
     <>
@@ -220,12 +228,12 @@ function IdeaModal({ idea, agents, onClose, onChange }:
       <div className="idea-modal" role="dialog">
         <span className="idea-modal-kicker">✳ roadmap idea · {timeAgo(idea.created_at)}</span>
         <h3>{title}</h3>
-        {body ? <p className="idea-modal-body">{body}</p> : <p className="idea-modal-body empty">No details yet — promote it or refine it with the strategist.</p>}
+        {body ? <p className="idea-modal-body">{body}</p> : <p className="idea-modal-body empty">No details yet — send it to the strategist to audit and spec it.</p>}
         <div className="idea-modal-actions">
-          <button className="btn primary" onClick={() => promote('')}>→ Ticket</button>
-          {agents.map((a) => (
-            <button key={a.id} className="agent-chip" onClick={() => promote(a.name)}>→ {a.name}</button>
-          ))}
+          <button className="btn primary" disabled={sending} onClick={sendToStrategist}>
+            {sending ? '✳ Sending…' : '✳ Ticket via strategist'}
+          </button>
+          <span className="idea-modal-hint">audits the idea, researches the repo, writes the full ticket</span>
           <span className="idea-modal-spacer" />
           <button className="btn ghost danger-text" onClick={async () => {
             await api('DELETE', `/ideas/${idea.id}`); onClose(); onChange()
