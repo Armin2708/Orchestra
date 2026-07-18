@@ -20,6 +20,7 @@ export interface ConductorLike {
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any
+  subagents(agentId: number): { key: string; label: string }[]
   interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
   launch(req: { boardId: number; cardId: number; cwd: string; brief: string }): any
@@ -53,6 +54,16 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     server.bus.emit('event', { board_id, type, data })
 
   server.get('/health', () => ({ ok: true, version: VERSION }))
+
+  // terminal sessions report their live subagents via hook pings; entries expire quickly
+  const termSubs = new Map<number, Map<string, number>>()
+  const liveTermSubs = (agentId: number): { key: string; label: string }[] => {
+    const m = termSubs.get(agentId)
+    if (!m) return []
+    const now = Date.now()
+    for (const [k, t] of m) if (now - t > 90_000) m.delete(k)
+    return [...m.keys()].map((key) => ({ key, label: 'subagent' }))
+  }
 
   server.post<{ Body: { project_path: string } }>('/api/v1/boards/resolve', (req) => {
     const p = req.body.project_path
@@ -90,7 +101,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const id = Number(req.params.id)
     return {
       board: db.prepare(`SELECT * FROM boards WHERE id=?`).get(id),
-      agents: db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id),
+      agents: (db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id) as any[]).map((a) => ({
+        ...a,
+        subagents: maestro?.isHired(a.id) ? maestro.subagents(a.id) : liveTermSubs(a.id),
+      })),
       cards: listCards(db, id),
       ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
       milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=? ORDER BY id`).all(id),
@@ -571,6 +585,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     db.prepare(`DELETE FROM agents WHERE board_id=?`).run(id)
     db.prepare(`DELETE FROM boards WHERE id=?`).run(id)
     emit(id, 'board', { deleted: id })
+    return { ok: true }
+  })
+
+  server.post<{ Params: { id: string }; Body: { key?: string } }>('/api/v1/agents/:id/subping', (req) => {
+    const id = Number(req.params.id)
+    if (!termSubs.has(id)) termSubs.set(id, new Map())
+    termSubs.get(id)!.set(String(req.body?.key ?? 'sub'), Date.now())
+    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+    if (a) emit(a.board_id, 'agent', { id, subs: true })
     return { ok: true }
   })
 

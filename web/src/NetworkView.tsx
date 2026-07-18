@@ -148,9 +148,12 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
       {agents.map((a) => {
         const p = P(a.name)
         const mine = cardsFor(a.name)
+        const asking = (snap.threads as Thread[]).some((t) => !t.answered && t.from_name === a.name)
+        const free = a.status !== 'active' && mine.length === 0
+        const subs = a.subagents ?? []
         return (
           <div key={a.id} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
-            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
+            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
               title={`${a.name} — drag to move, click to open console, drop a ticket to assign`}
               onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}
@@ -166,8 +169,14 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
               }}>
               {initials(a.name)}
               <i className={`presence ${a.status}`} />
+              {asking && <i className="net-badge ask">?</i>}
+              {!asking && free && <i className="net-badge free">✓</i>}
+              {subs.slice(0, 3).map((sb, i) => (
+                <i key={sb.key} className={`net-sub s${i}`} title={`subagent: ${sb.label}`} />
+              ))}
+              {subs.length > 3 && <i className="net-sub more" title={`${subs.length} subagents`}>{subs.length}</i>}
             </span>
-            <span className="net-name">{a.name}</span>
+            <span className="net-name">{a.name}{subs.length > 0 ? ` +${subs.length}` : ''}</span>
             <div className="net-cards">
               {mine.map((c) => {
                 const st = STATUS[c.column] ?? STATUS.backlog

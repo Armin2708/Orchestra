@@ -934,3 +934,29 @@ textarea {
 .rail-done-owner { font-size: 10.5px; color: #b8b4ac; }
 .rail-restore { border: none; background: none; color: #346538; font-size: 14px; padding: 0 2px; }
 .rail-restore:hover { transform: scale(1.15); }
+
+/* subagent satellites + state badges */
+.net-sub {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--surface); border: 1.5px solid #b8b4ac;
+  animation: sub-pop 0.3s var(--ease);
+}
+.net-sub.s0 { top: -7px; left: -9px; }
+.net-sub.s1 { top: 4px; left: -15px; }
+.net-sub.s2 { top: 15px; left: -12px; }
+.net-sub.more {
+  top: -7px; left: -9px; width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-style: normal; color: var(--ink-soft);
+}
+@keyframes sub-pop { from { transform: scale(0); } }
+.net-badge {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-style: normal; font-weight: 700;
+  border: 2px solid var(--surface);
+}
+.net-badge.ask { background: #FBF3DB; color: #956400; animation: badge-pulse 1.2s ease-in-out infinite; }
+.net-badge.free { background: #EDF3EC; color: #346538; }
+@keyframes badge-pulse { 50% { transform: scale(1.18); } }
+.net-avatar.asking { box-shadow: 0 0 0 3px rgba(217, 161, 59, 0.35); }

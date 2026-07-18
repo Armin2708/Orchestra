@@ -27,7 +27,7 @@ export const streamUrl = () => {
 }
 
 export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null }
-export type Agent = { id: number; name: string; status: string; last_seen: string; kind?: string; board_id?: number }
+export type Agent = { id: number; name: string; status: string; last_seen: string; kind?: string; board_id?: number; subagents?: { key: string; label: string }[] }
 export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }
 export type ReviewDecision = { id: number; board_id: number; card_id: number; card_title?: string; milestone_id: number | null; step_order: number | null; decision: 'approve' | 'send_back'; note: string | null; decided_at: string }

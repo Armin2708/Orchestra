@@ -37,6 +37,7 @@ type Hired = {
   sessionTokens: number
   model: string | null
   ephemeral: boolean
+  subs: Map<string, string>
   // launched-on-ticket agents carry their card through to review/blocked on exit
   cardId: number | null
   outcome: 'success' | 'error' | null
@@ -125,6 +126,11 @@ export class Conductor {
   }
 
   isHired(agentId: number): boolean { return this.hired.has(agentId) }
+
+  subagents(agentId: number): { key: string; label: string }[] {
+    const h = this.hired.get(agentId)
+    return h ? [...h.subs.entries()].map(([key, label]) => ({ key, label })) : []
+  }
 
   list(boardId: number): number[] {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
@@ -261,7 +267,7 @@ export class Conductor {
       end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
-      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false,
+      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       cardId: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
@@ -283,18 +289,29 @@ export class Conductor {
             for (const b of blocks) {
               if (b.type === 'text' && b.text) log('text', b.text)
               else if (b.type === 'thinking' && b.thinking?.trim()) log('thinking', b.thinking)
-              else if (b.type === 'tool_use') log('tool', toolSummary(b.name, b.input))
+              else if (b.type === 'tool_use') {
+                if (b.name === 'Task') {
+                  const label = b.input?.description ?? b.input?.subagent_type ?? 'subagent'
+                  hired.subs.set(b.id, String(label).slice(0, 40))
+                  this.emit(opts.boardId, 'agent', { id: agent.id, subs: true })
+                }
+                log('tool', toolSummary(b.name, b.input))
+              }
             }
             this.touch(agent.id, 'active')
           } else if (m.type === 'user') {
             for (const b of (Array.isArray(m.message?.content) ? m.message.content : [])) {
-              if (b.type === 'tool_result') log('tool_result', resultSummary(b.content))
+              if (b.type === 'tool_result') {
+                if (b.tool_use_id && hired.subs.delete(b.tool_use_id)) this.emit(opts.boardId, 'agent', { id: agent.id, subs: true })
+                log('tool_result', resultSummary(b.content))
+              }
             }
           } else if (m.type === 'result') {
             const secs = m.duration_ms ? ` · ${(m.duration_ms / 1000).toFixed(1)}s` : ''
             log('status', `turn finished (${m.subtype ?? 'done'})${secs}`)
             hired.turnStart = null
             hired.turnTokens = 0
+            hired.subs.clear()
             this.touch(agent.id, 'idle')
             // one-shot agents (idea auditors) dissolve after their turn
             if (hired.ephemeral) void this.fire(agent.id)

@@ -82,7 +82,8 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   // hooks also fire inside subagents (Task tool) — heartbeat, but never consume the parent's
   // board messages there: injected context would vanish into the subagent's transcript
   if (sess.transcript_path && input.transcript_path && sess.transcript_path !== input.transcript_path) {
-    await api('POST', `/agents/${sess.agent_id}/heartbeat`).catch(() => {})
+    const key = String(input.transcript_path).split('/').pop()?.slice(0, 24) ?? 'sub'
+    await api('POST', `/agents/${sess.agent_id}/subping`, { key }).catch(() => {})
     return
   }
   const throttle = sessFile(input.session_id) + '.throttle'

@@ -169,6 +169,7 @@ it('POST /cards/:id/launch wires the route to the conductor with a review-parkin
     deliver: () => true,
     task: () => true,
     transcript: () => ({ lines: [], working: null }),
+    subagents: () => [],
     interruptAgent: async () => true,
     fire: async () => true,
     launch: (req) => { calls.push(req); return { agent: { id: 1 } } },
@@ -198,7 +199,8 @@ it('POST /cards/:id/launch wires the route to the conductor with a review-parkin
 it('POST /cards/:id/launch rejects double launches and works without a conductor', async () => {
   const stub: ConductorLike = {
     isHired: () => false, hire: () => ({}), deliver: () => true, task: () => true,
-    transcript: () => ({ lines: [], working: null }), interruptAgent: async () => true,
+    transcript: () => ({ lines: [], working: null }), subagents: () => [],
+    interruptAgent: async () => true,
     fire: async () => true, launch: () => ({ agent: {} }), isLaunched: () => true,
   }
   const db = openDb(':memory:')

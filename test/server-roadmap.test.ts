@@ -11,6 +11,7 @@ it('ideas promote to tickets and assignment briefs the agent', async () => {
     deliver: (id, msg) => { tasked.push({ id, text: msg.body }); return true },
     task: () => true,
     transcript: () => ({ lines: [], working: null }),
+    subagents: () => [],
     interruptAgent: async () => true,
     fire: async () => true,
   })
