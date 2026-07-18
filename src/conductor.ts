@@ -121,7 +121,7 @@ export class Conductor {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string }): any {
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -133,9 +133,9 @@ export class Conductor {
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))
     }
     const { lastInsertRowid } = this.db.prepare(`
-      INSERT INTO agents (board_id, name, session_id, kind) VALUES (?, ?, ?, 'hired')
-      ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'), kind='hired'
-    `).run(opts.boardId, name, `hired:${Date.now()}`)
+      INSERT INTO agents (board_id, name, session_id, kind, role) VALUES (?, ?, ?, 'hired', ?)
+      ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'), kind='hired', role=excluded.role
+    `).run(opts.boardId, name, `hired:${Date.now()}`, opts.role ?? null)
     const agent = this.db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name) as any
 
     const input = createInput()
@@ -151,6 +151,7 @@ export class Conductor {
       options: {
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.resumeSession ? { resume: opts.resumeSession } : {}),
         permissionMode: 'bypassPermissions',
         systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
         // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
@@ -172,13 +173,15 @@ export class Conductor {
       turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false,
     }
     this.hired.set(agent.id, hired)
-    log('status', `hired in ${opts.cwd}`)
+    log('status', opts.resumeSession ? `resumed in ${opts.cwd} (previous session continues)` : `hired in ${opts.cwd}`)
 
     void (async () => {
       try {
         for await (const m of q as AsyncIterable<any>) {
           if (m.type === 'system' && m.subtype === 'init') {
             hired.model = m.model ?? null
+            // remember the sdk session so a daemon restart can resume this agent with its memory intact
+            if (m.session_id) this.db.prepare(`UPDATE agents SET sdk_session=? WHERE id=?`).run(m.session_id, agent.id)
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
           } else if (m.type === 'assistant') {
             if (hired.turnStart === null) hired.turnStart = Date.now()

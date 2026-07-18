@@ -83,5 +83,7 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'session'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN milestone_id INTEGER`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN step_order INTEGER`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN role TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN sdk_session TEXT`) } catch { /* exists */ }
   return db
 }
