@@ -13,6 +13,7 @@ import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
+import { recordShipped } from './shipped.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -490,6 +491,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.get<{ Params: { id: string } }>('/api/v1/cards/:id/events', (req) =>
     db.prepare(`SELECT e.*, a.name AS agent FROM card_events e LEFT JOIN agents a ON a.id=e.agent_id WHERE card_id=? ORDER BY e.id`)
       .all(Number(req.params.id)))
+
+  // ground-truth merge record from the integrator; thin wrapper over recordShipped (#54)
+  server.post<{ Params: { id: string }; Body: { hash: string; by?: string } }>(
+    '/api/v1/cards/:id/shipped', async (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      if (!req.body?.hash) return reply.code(400).send({ error: 'hash required' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
+      const by = req.body.by ?? null
+      const r = await recordShipped(db, server.bus, card, board.project_path,
+        { hash: req.body.hash, by, agentId: agentByName(card.board_id, by ?? undefined)?.id ?? null })
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      return r
+    })
 
   server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number } }>(
     '/api/v1/messages', (req, reply) => {
