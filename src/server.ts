@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
-import { isSimilar } from './similar.js'
+import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards } from './reaper.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
@@ -144,6 +144,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       o.id !== card.id && !seen.has(o.id) && o.column !== 'done' && o.owner !== card.owner &&
       isSimilar(text, `${o.title} ${o.description}`))
   }
+  // done cards from the last 30 days that look like the same work already shipped
+  const DONE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+  const doneSimilarFor = (card: any) => {
+    const text = `${card.title} ${card.description}`
+    return listCards(db, card.board_id).filter((o) =>
+      o.id !== card.id && o.column === 'done' &&
+      Date.now() - Date.parse(`${o.updated_at.replace(' ', 'T')}Z`) <= DONE_WINDOW_MS &&
+      isShippedMatch(text, `${o.title} ${o.description}`))
+  }
   const logEvent = (card_id: number, agent_id: number | null, type: string, payload: unknown = {}) =>
     db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
       .run(card_id, agent_id, type, JSON.stringify(payload))
@@ -161,7 +170,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       logEvent(card.id, owner?.id ?? null, 'created', { title })
       emit(board_id, 'card', card)
       const overlaps = overlapsFor(card)
-      return { card, overlaps, similar: similarFor(card, overlaps) }
+      return { card, overlaps, similar: similarFor(card, overlaps), done_similar: doneSimilarFor(card) }
     })
 
   server.patch<{ Params: { id: string }; Body: { title?: string; description?: string; paths?: string[]; column?: string; agent?: string } }>(
@@ -180,7 +189,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       logEvent(card.id, actor?.id ?? null, 'updated', req.body)
       emit(card.board_id, 'card', updated)
       const overlaps = overlapsFor(updated)
-      return { card: updated, overlaps, similar: similarFor(updated, overlaps) }
+      return { card: updated, overlaps, similar: similarFor(updated, overlaps), done_similar: doneSimilarFor(updated) }
     })
 
   server.post<{ Params: { id: string }; Body: { column: string; agent?: string } }>(
@@ -418,7 +427,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (req.body?.agent && !agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
     if (agentRow?.name === 'strategist' || agentRow?.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })
     if (agentRow) card = notifyAssignment(card, agentRow)
-    return { card }
+    return { card, done_similar: doneSimilarFor(card) }
   })
 
   server.post<{ Params: { id: string }; Body: { agent: string } }>('/api/v1/cards/:id/assign', (req, reply) => {

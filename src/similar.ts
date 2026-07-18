@@ -28,3 +28,12 @@ export function isSimilar(a: string, b: string): boolean {
   for (const t of ta) if (tb.has(t)) shared++
   return shared >= 2 && shared / Math.min(ta.size || 1, tb.size || 1) >= 0.4
 }
+
+// stricter bar than isSimilar: done cards trigger a "already shipped" warning,
+// so false positives on legitimately repeated work are worse than misses
+export function isShippedMatch(a: string, b: string): boolean {
+  const ta = tokens(a), tb = tokens(b)
+  let shared = 0
+  for (const t of ta) if (tb.has(t)) shared++
+  return shared >= 3 && shared / Math.min(ta.size || 1, tb.size || 1) >= 0.6
+}

@@ -69,21 +69,22 @@ program.command('join').description('register this agent session on the project 
 })
 
 const card = program.command('card')
-const printOverlaps = (overlaps: any[], similar: any[] = []) => {
+const printOverlaps = (overlaps: any[], similar: any[] = [], doneSimilar: any[] = []) => {
   for (const o of overlaps) console.log(`⚠ overlap with card #${o.id} "${o.title}" (${o.owner}) on ${o.paths.join(', ')}`)
   for (const s of similar) console.log(`≈ similar work in progress: card #${s.id} "${s.title}" (${s.owner}) — check with them before proceeding: orchestra ask ${s.owner} "..."`)
+  for (const d of doneSimilar) console.log(`≈ looks already shipped: card #${d.id} "${d.title}" (done) — verify with git log before starting`)
 }
 card.command('create <title>').option('--desc <d>').option('--paths <p>', '', csv)
   .option('--column <c>').option('--agent <a>').action(async (title, o) => {
     await up(); const b = await board()
     const r = await api('POST', '/cards', { board_id: b.id, title, description: o.desc, paths: o.paths, column: o.column, agent: await inferAgent(b.id, o.agent) })
-    console.log(`card #${r.card.id} created [${r.card.column}]`); printOverlaps(r.overlaps, r.similar)
+    console.log(`card #${r.card.id} created [${r.card.column}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
   })
 card.command('update <id>').option('--title <t>').option('--desc <d>').option('--paths <p>', '', csv)
   .option('--column <c>').option('--agent <a>').action(async (id, o) => {
     await up()
     const r = await api('PATCH', `/cards/${id}`, { title: o.title, description: o.desc, paths: o.paths, column: o.column, agent: o.agent ?? envAgent() })
-    console.log(`card #${r.card.id} updated [${r.card.column}]`); printOverlaps(r.overlaps, r.similar)
+    console.log(`card #${r.card.id} updated [${r.card.column}]`); printOverlaps(r.overlaps, r.similar, r.done_similar)
   })
 card.command('move <id> <column>').option('--agent <a>').action(async (id, column, o) => {
   await up()
