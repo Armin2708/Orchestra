@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { api, Card, Idea, Milestone, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, Idea, Milestone, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
+import { AgentTerminal } from './AgentTerminal'
 import { STATUS } from './Board'
 
 const ORDER = ['backlog', 'in_progress', 'blocked', 'review', 'done']
@@ -74,7 +75,7 @@ function MilestoneQuest({ m, cards, agents, onChange }:
   )
 }
 
-function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
+function ProjectRoadmap({ snap, onChange, onOpenAgent }: { snap: Snapshot; onChange: () => void; onOpenAgent: (a: Agent) => void }) {
   const [text, setText] = useState('')
   const [brainstorm, setBrainstorm] = useState('')
   const [briefing, setBriefing] = useState(false)
@@ -88,9 +89,10 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
       let agent = strategist
       if (!agent) agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
       await api('POST', `/agents/${agent!.id}/task`, {
-        text: `Brainstorm request from the roadmap: "${brainstorm.trim()}". Research the repo as needed and add your ideas to the roadmap with orchestra idea. Finish with a one-line summary and stop.`,
+        text: `Brainstorm request from the roadmap: "${brainstorm.trim()}". Research the repo as needed, think with me, and add your ideas to the roadmap with orchestra idea (or tickets in your prompt format when they're well-defined). Finish with a one-line summary.`,
       })
       setBrainstorm('')
+      onOpenAgent(agent!) // watch the whole conversation in its console
     } finally { setBriefing(false); onChange() }
   }
 
@@ -121,6 +123,13 @@ function ProjectRoadmap({ snap, onChange }: { snap: Snapshot; onChange: () => vo
           placeholder={strategist ? `Ask ${'strategist'} to brainstorm — it researches the repo and adds ideas below` : 'Ask Claude to brainstorm — hires a strategist agent for this project'}
           onChange={(e) => setBrainstorm(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') askStrategist() }} />
+        {strategist && (
+          <button className="agent-chip" title="Open the strategist's console"
+            onClick={() => onOpenAgent(strategist)}>
+            <i className="avatar mini" style={{ background: agentWash(strategist.name), color: agentInk(strategist.name) }}>{initials(strategist.name)}</i>
+            console
+          </button>
+        )}
         <button className="btn primary" disabled={briefing} onClick={askStrategist}>
           {briefing ? 'Briefing…' : strategist?.status === 'active' ? 'Working…' : 'Brainstorm'}
         </button>
@@ -206,9 +215,20 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
 }
 
 export function RoadmapView({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
+  const [term, setTerm] = useState<{ agent: Agent; boardId: number } | null>(null)
+  const liveAgent = term
+    ? snaps.find((s) => s.board.id === term.boardId)?.agents.find((a) => a.id === term.agent.id) ?? term.agent
+    : null
   return (
     <main className={focused ? 'roadmap focused' : 'roadmap'}>
-      {snaps.map((s) => <ProjectRoadmap key={s.board.id} snap={s} onChange={onChange} />)}
+      {snaps.map((s) => <ProjectRoadmap key={s.board.id} snap={s} onChange={onChange}
+        onOpenAgent={(a) => setTerm({ agent: a, boardId: s.board.id })} />)}
+      {term && liveAgent && <AgentTerminal
+        agent={liveAgent}
+        boardId={term.boardId}
+        threads={(snaps.find((s) => s.board.id === term.boardId)?.threads ?? []) as Thread[]}
+        cards={snaps.find((s) => s.board.id === term.boardId)?.cards ?? []}
+        onClose={() => setTerm(null)} onChange={onChange} />}
     </main>
   )
 }
