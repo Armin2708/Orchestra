@@ -156,6 +156,11 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
         <button className="btn primary" onClick={send}>Send</button>
 
         <div className="drawer-footer">
+          {card.column === 'done' && (
+            <button className="btn primary" onClick={async () => {
+              await api('POST', `/cards/${card.id}/restore`); onClose(); onChange()
+            }}>↺ Restore to backlog</button>
+          )}
           {confirmDelete ? (
             <>
               <button className="btn danger" onClick={async () => {

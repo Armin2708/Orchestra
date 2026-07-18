@@ -46,4 +46,10 @@ it('ideas promote to tickets and assignment briefs the agent', async () => {
 
   // unknown agent fails loudly
   expect((await s.inject({ method: 'POST', url: `/api/v1/cards/${r.card.id}/assign`, payload: { agent: 'ghost' } })).statusCode).toBe(400)
+
+  // done cards can be restored: back to backlog, unowned
+  await s.inject({ method: 'POST', url: `/api/v1/cards/${r.card.id}/move`, payload: { column: 'done' } })
+  const restored = (await s.inject({ method: 'POST', url: `/api/v1/cards/${r.card.id}/restore` })).json()
+  expect(restored.card.column).toBe('backlog')
+  expect(restored.card.owner).toBeNull()
 })

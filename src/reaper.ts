@@ -1,9 +1,11 @@
 import type Database from 'better-sqlite3'
 
 export function removeAgentCards(db: Database.Database, agentId: number): void {
-  db.prepare(`DELETE FROM card_events WHERE card_id IN (SELECT id FROM cards WHERE owner_agent_id=?)`).run(agentId)
-  db.prepare(`UPDATE messages SET card_id=NULL WHERE card_id IN (SELECT id FROM cards WHERE owner_agent_id=?)`).run(agentId)
-  db.prepare(`DELETE FROM cards WHERE owner_agent_id=?`).run(agentId)
+  // completed cards are history — they stay on the board; only unfinished work leaves with the agent
+  const sel = `SELECT id FROM cards WHERE owner_agent_id=? AND column_name != 'done'`
+  db.prepare(`DELETE FROM card_events WHERE card_id IN (${sel})`).run(agentId)
+  db.prepare(`UPDATE messages SET card_id=NULL WHERE card_id IN (${sel})`).run(agentId)
+  db.prepare(`DELETE FROM cards WHERE owner_agent_id=? AND column_name != 'done'`).run(agentId)
 }
 
 export function reap(db: Database.Database): void {

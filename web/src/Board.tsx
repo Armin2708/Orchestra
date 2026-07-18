@@ -136,8 +136,10 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
   )
 }
 
-function TicketRail({ snap, onOpen }: { snap: Snapshot; onOpen: (c: Card) => void }) {
+function TicketRail({ snap, onOpen, onChange }: { snap: Snapshot; onOpen: (c: Card) => void; onChange?: () => void }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set())
+  const [showDone, setShowDone] = useState(false)
+  const done = snap.cards.filter((c) => c.column === 'done').sort((a, b) => b.id - a.id)
   const toggle = (id: number) => setCollapsed((prev) => {
     const next = new Set(prev)
     next.has(id) ? next.delete(id) : next.add(id)
@@ -174,6 +176,28 @@ function TicketRail({ snap, onOpen }: { snap: Snapshot; onOpen: (c: Card) => voi
       ))}
       {loose.length > 0 && <p className="rail-head">Tickets <span className="rm-count">{loose.length}</span></p>}
       {loose.map((c) => <RailCard key={c.id} c={c} isLocked={false} onOpen={onOpen} />)}
+      {done.length > 0 && (
+        <div className="rail-mile">
+          <button className="rail-mile-head" onClick={() => setShowDone((v) => !v)}>
+            <span className="rail-mile-flag">✓</span>
+            <span className="rail-mile-title">Completed</span>
+            <span className="rm-count">{done.length}</span>
+            <span className="thread-caret">{showDone ? '▾' : '▸'}</span>
+          </button>
+          {showDone && (
+            <div className="rail-mile-steps">
+              {done.map((c) => (
+                <div key={c.id} className="rail-done" onClick={() => onOpen(c)}>
+                  <span className="rail-done-title">{c.title}</span>
+                  {c.owner && <span className="rail-done-owner">{c.owner.split('-')[0]}</span>}
+                  <button className="rail-restore" title="Restore to backlog for reassignment"
+                    onClick={async (e) => { e.stopPropagation(); await api('POST', `/cards/${c.id}/restore`); onChange?.() }}>↺</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </aside>
   )
 }
@@ -288,7 +312,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
 
               {isNet(s.board.id) ? (
                 <div className="net-wrap">
-                  <TicketRail snap={s} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} />
+                  <TicketRail snap={s} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} onChange={onChange} />
                   <NetworkView snap={s}
                     onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
                     onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}

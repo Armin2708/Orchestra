@@ -422,6 +422,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return maestro.launch({ boardId: card.board_id, cardId: card.id, cwd: board.project_path, brief: launchBrief(card) })
   })
 
+  // bring a completed card back to the backlog, unowned, ready to reassign
+  server.post<{ Params: { id: string } }>('/api/v1/cards/:id/restore', (req, reply) => {
+    const card = getCard(Number(req.params.id))
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`UPDATE cards SET column_name='backlog', owner_agent_id=NULL, updated_at=datetime('now') WHERE id=?`).run(card.id)
+    const updated = getCard(card.id)
+    logEvent(card.id, null, 'restored', { from: card.column })
+    emit(card.board_id, 'card', updated)
+    return { card: updated }
+  })
+
   server.get<{ Params: { id: string } }>('/api/v1/cards/:id/events', (req) =>
     db.prepare(`SELECT e.*, a.name AS agent FROM card_events e LEFT JOIN agents a ON a.id=e.agent_id WHERE card_id=? ORDER BY e.id`)
       .all(Number(req.params.id)))
