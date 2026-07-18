@@ -104,14 +104,14 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
 function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen: (c: Card) => void }) {
   const st = STATUS[c.column] ?? STATUS.backlog
   return (
-    <article className={`t-card ${isLocked ? 'locked' : ''}`}
-      draggable={!isLocked}
+    <article className={`t-card ${isLocked ? 'chained' : ''}`}
+      draggable
       onClick={() => onOpen(c)}
       onDragStart={(e) => e.dataTransfer.setData('text/ticket-id', String(c.id))}
       style={{ ['--st' as any]: st.ink }}
-      title={isLocked ? 'Locked — complete the previous milestone step first' : 'Drag onto an agent to assign'}>
+      title={isLocked ? 'Has open prerequisite steps — the assignee will coordinate with their owners' : 'Drag onto an agent to assign'}>
       <div className="t-top">
-        <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '🔒 ' : ''}{st.label}</span>
+        <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '⛓ ' : ''}{st.label}</span>
       </div>
       <h4>{c.title}</h4>
       {c.description && <p className="t-desc">{c.description}</p>}

@@ -173,12 +173,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { card: updated }
     })
 
-  // a step is locked while an earlier step of the same milestone isn't done
-  const isLocked = (card: any): boolean => {
-    if (!card.milestone_id || card.step_order == null) return false
-    return Boolean(db.prepare(`
-      SELECT 1 FROM cards WHERE milestone_id=? AND step_order < ? AND column_name != 'done' LIMIT 1`)
-      .get(card.milestone_id, card.step_order))
+  // earlier milestone steps aren't hard blocks — they're context the assignee must coordinate on
+  const prereqSteps = (card: any): any[] => {
+    if (!card.milestone_id || card.step_order == null) return []
+    return db.prepare(`
+      SELECT c.id, c.title, c.column_name, a.name AS owner FROM cards c
+      LEFT JOIN agents a ON a.id = c.owner_agent_id
+      WHERE c.milestone_id=? AND c.step_order < ? AND c.column_name != 'done'
+      ORDER BY c.step_order`).all(card.milestone_id, card.step_order)
   }
 
   server.post<{ Body: { board_id: number; title: string; description?: string } }>('/api/v1/milestones', (req) => {
@@ -215,10 +217,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   // ── roadmap: ideas → tickets → assignment ─────────────────────────────
-  const assignmentBrief = (card: any) =>
-    `You've been assigned card #${card.id}: "${card.title}".` +
-    (card.description ? ` Scope: ${card.description}.` : '') +
-    ` Start now; keep the card updated (orchestra card update ${card.id} / orchestra card move ${card.id} <column>) and move it to done when finished.`
+  const assignmentBrief = (card: any) => {
+    const prereqs = prereqSteps(card)
+    const prereqNote = prereqs.length
+      ? ` Heads-up: earlier steps of this milestone are still open: ${prereqs.map((p) =>
+          `#${p.id} "${p.title}" (${p.owner ?? 'unassigned'}, ${p.column_name})`).join('; ')}. ` +
+        `They are prerequisites in spirit, not blockers — contact their owners first (orchestra ask <owner> "...") to agree boundaries and interfaces, then work in parallel where safe.`
+      : ''
+    return `You've been assigned card #${card.id}: "${card.title}".` +
+      (card.description ? ` Scope: ${card.description}.` : '') + prereqNote +
+      ` Start now; keep the card updated (orchestra card update ${card.id} / orchestra card move ${card.id} <column>) and move it to done when finished.`
+  }
 
   const notifyAssignment = (card: any, agentRow: any) => {
     db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
@@ -277,7 +286,6 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.post<{ Params: { id: string }; Body: { agent: string } }>('/api/v1/cards/:id/assign', (req, reply) => {
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
-    if (isLocked(card)) return reply.code(409).send({ error: 'step is locked — complete its prerequisites first' })
     const agentRow = agentByName(card.board_id, req.body.agent)
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
     if (agentRow.name === 'strategist' || agentRow.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })

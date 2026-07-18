@@ -694,7 +694,7 @@ textarea {
 .quest-step.active { background: #FBF3DB; }
 .quest-step.done { color: var(--ink-soft); }
 .quest-step.done .step-title { text-decoration: line-through; text-decoration-color: #bcd9c0; }
-.quest-step.locked { opacity: 0.55; }
+.quest-step.chained { opacity: 0.75; }
 .step-mark { width: 18px; text-align: center; flex-shrink: 0; }
 .quest-step.done .step-mark { color: #346538; font-weight: 700; }
 .quest-step.active .step-mark { color: #956400; }
@@ -732,7 +732,7 @@ textarea {
 }
 .t-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-hover); }
 .t-card:active { cursor: grabbing; }
-.t-card.locked { opacity: 0.55; cursor: not-allowed; }
+.t-card.chained { opacity: 0.85; }
 .t-card h4 { font-size: 13px; font-weight: 600; line-height: 1.35; }
 .t-desc { font-size: 11.5px; color: var(--ink-soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .t-card footer { display: flex; align-items: center; justify-content: space-between; }

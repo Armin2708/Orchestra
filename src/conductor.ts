@@ -75,6 +75,7 @@ Orchestra board rules (standing instructions):
   If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
 - Keep the card updated as you progress (orchestra card update/move --agent ${me}); move it to done when finished.
 - Do NOT touch paths claimed by another active card without asking first.
+- If your assignment mentions open prerequisite steps, message their owners FIRST (orchestra ask) to agree boundaries and interfaces — then build in parallel against the agreed contract instead of waiting.
 - Messages from the board arrive directly in this conversation; answer questions promptly with: orchestra reply <msg-id> "<answer>" --from ${me}, then continue your task.
 - If the orchestra command is missing, use: npx -y orchestra-board`
 

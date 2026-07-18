@@ -46,22 +46,22 @@ function MilestoneQuest({ m, cards, agents, onChange }:
         {steps.map((s) => {
           const locked = blocked
           if (s.column !== 'done') blocked = true
-          const state = s.column === 'done' ? 'done' : locked ? 'locked' : s.column === 'in_progress' ? 'active' : 'open'
+          const state = s.column === 'done' ? 'done' : locked ? 'chained' : s.column === 'in_progress' ? 'active' : 'open'
           return (
             <li key={s.id} className={`quest-step ${state}`}>
               <span className="step-mark">
-                {state === 'done' ? '✓' : state === 'locked' ? '🔒' : state === 'active' ? '●' : '○'}
+                {state === 'done' ? '✓' : state === 'chained' ? '🔗' : state === 'active' ? '●' : '○'}
               </span>
               <span className="step-title">{s.title}</span>
               {s.owner && <span className="owner"><i className="avatar mini" style={{ background: agentWash(s.owner), color: agentInk(s.owner) }}>{initials(s.owner)}</i>{s.owner}</span>}
-              {state !== 'done' && !locked && agents.length > 0 && (
+              {state !== 'done' && agents.length > 0 && (
                 <select className="assign-select" defaultValue=""
                   onChange={(e) => { assign(s.id, e.target.value); e.target.value = '' }}>
                   <option value="" disabled>assign…</option>
                   {agents.filter((a) => a.name !== s.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
                 </select>
               )}
-              {locked && <span className="step-lockhint">complete previous step</span>}
+              {locked && !s.owner && <span className="step-lockhint">coordinates with earlier steps</span>}
             </li>
           )
         })}
