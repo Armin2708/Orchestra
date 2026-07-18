@@ -13,6 +13,20 @@ const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T')
 export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
   { snap: Snapshot; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [killing, setKilling] = useState<Agent | null>(null)
+  const [dying, setDying] = useState<number | null>(null)
+
+  const kill = async (a: Agent) => {
+    setKilling(null)
+    setDying(a.id)
+    await new Promise((r) => setTimeout(r, 380)) // let the dissolve play
+    try {
+      if (a.kind === 'hired') await api('POST', `/agents/${a.id}/fire`)
+      else await api('DELETE', `/agents/${a.id}`)
+    } catch { /* already gone */ }
+    setDying(null)
+    onChange?.()
+  }
   const boardId = snap.board.id
   const agents = snap.agents.filter((a) => a.status !== 'gone')
   const wrap = useRef<HTMLDivElement>(null)
@@ -152,7 +166,21 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
         const free = a.status !== 'active' && mine.length === 0
         const subs = a.subagents ?? []
         return (
-          <div key={a.id} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
+          <div key={a.id} className={`net-node ${dying === a.id ? 'dying' : ''}`} style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
+            <button className="net-kill" title={a.kind === 'hired' ? `Fire ${a.name}` : `Remove ${a.name} from the board`}
+              onClick={(e) => { e.stopPropagation(); setKilling(killing?.id === a.id ? null : a) }}>✕</button>
+            {killing?.id === a.id && (
+              <div className="kill-confirm" onClick={(e) => e.stopPropagation()}>
+                <p className="kill-title">{a.kind === 'hired' ? `Fire ${a.name}?` : `Remove ${a.name}?`}</p>
+                <p className="kill-sub">{a.kind === 'hired'
+                  ? 'Ends its session now. Finished cards stay; unfinished ones are removed.'
+                  : 'Removes it from the board only — the terminal session keeps running. Its cards stay, unowned.'}</p>
+                <div className="kill-actions">
+                  <button className="kill-go" onClick={() => kill(a)}>{a.kind === 'hired' ? 'Fire' : 'Remove'}</button>
+                  <button className="kill-keep" onClick={() => setKilling(null)}>Keep</button>
+                </div>
+              </div>
+            )}
             <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
               title={`${a.name} — drag to move, click to open console, drop a ticket to assign`}
