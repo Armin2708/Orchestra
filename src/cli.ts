@@ -117,6 +117,13 @@ program.command('ideas').description('list roadmap ideas').action(async () => {
   for (const i of snap.ideas ?? []) console.log(`#${i.id} ${i.text.split('\n')[0]}`)
 })
 
+program.command('note <text>').description('post a note to the board (visible to everyone as a thread)')
+  .option('--from <a>').action(async (text, o) => {
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body: text })
+    console.log(`note posted (msg #${m.id})`)
+  })
+
 program.command('milestone <title>').description('create a milestone (a major goal made of ordered steps)')
   .option('--desc <d>').action(async (title, o) => {
     await up(); const b = await board()
