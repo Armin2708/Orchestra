@@ -8,6 +8,7 @@ import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar } from './similar.js'
 import { removeAgentCards } from './reaper.js'
+import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 
@@ -160,7 +161,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   server.post<{ Params: { id: string }; Body: { column: string; agent?: string } }>(
-    '/api/v1/cards/:id/move', (req, reply) => {
+    '/api/v1/cards/:id/move', async (req, reply) => {
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (!COLUMNS.includes(req.body.column)) return reply.code(400).send({ error: 'invalid column' })
@@ -170,6 +171,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const actor = agentByName(card.board_id, req.body.agent)
       logEvent(card.id, actor?.id ?? null, 'moved', { to: req.body.column })
       emit(card.board_id, 'card', updated)
+      if (req.body.column === 'review') await requestReview(updated, null, updated.owner)
       return { card: updated }
     })
 
@@ -182,6 +184,106 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       WHERE c.milestone_id=? AND c.step_order < ? AND c.column_name != 'done'
       ORDER BY c.step_order`).all(card.milestone_id, card.step_order)
   }
+
+  // ── review gates: a finished step parks in review; a human approves or sends it back ──
+  const boardPath = (board_id: number) =>
+    (db.prepare(`SELECT project_path FROM boards WHERE id=?`).get(board_id) as any)?.project_path ?? ''
+
+  // enrich a card entering review with the agent's summary + changed paths, once per review cycle
+  const requestReview = async (card: any, summary: string | null, agentName: string | null) => {
+    if (hasOpenReviewRequest(db, card.id)) return
+    const stat = await diffStat(boardPath(card.board_id)).catch(() => '')
+    logEvent(card.id, null, 'review_request', { summary, diffstat: stat })
+    emit(card.board_id, 'review', {
+      card_id: card.id, card_title: card.title,
+      milestone_id: card.milestone_id ?? null, step_order: card.step_order ?? null,
+      agent_name: agentName, status: 'awaiting_approval', summary, diffstat: stat,
+    })
+  }
+
+  // launched agents finishing a step already park the card in review (conductor exit) — enrich it here
+  server.bus.on('event', (e: any) => {
+    if (e?.type !== 'launch' || e?.data?.status !== 'finished' || e?.data?.to_column !== 'review') return
+    const card = getCard(e.data.card_id)
+    if (card) void requestReview(card, e.data.summary ?? null, e.data.agent_name ?? null)
+  })
+
+  // the gate: a milestone step can't be launched while an earlier step awaits completion or approval
+  server.addHook('onRequest', async (req, reply) => {
+    const m = req.method === 'POST' && /^\/api\/(?:v1\/)?cards\/(\d+)\/launch$/.exec(req.url.split('?')[0])
+    if (!m) return
+    const card = getCard(Number(m[1]))
+    if (!card) return
+    const blocking = prereqSteps(card)
+    if (blocking.length) {
+      return reply.code(409).send({
+        error: 'step locked — earlier milestone steps need approval first',
+        blocking: blocking.map((b) => ({ id: b.id, title: b.title, column: b.column_name })),
+      })
+    }
+  })
+
+  const reviewEvent = (card: any, status: string, extra: Record<string, unknown> = {}) =>
+    emit(card.board_id, 'review', {
+      card_id: card.id, card_title: card.title,
+      milestone_id: card.milestone_id ?? null, step_order: card.step_order ?? null,
+      agent_name: card.owner ?? null, status, ...extra,
+    })
+
+  server.post<{ Params: { id: string }; Body: { note?: string } }>(
+    '/api/v1/cards/:id/approve', async (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
+      const note = req.body?.note?.trim() || null
+      const decision = recordDecision(db, card, 'approve', note)
+      logEvent(card.id, null, 'review_decision', { decision: 'approve', note })
+      db.prepare(`UPDATE cards SET column_name='done', updated_at=datetime('now') WHERE id=?`).run(card.id)
+      const updated = getCard(card.id)
+      emit(card.board_id, 'card', updated)
+      reviewEvent(updated, 'approved', { note })
+      const unlocked = card.milestone_id != null && card.step_order != null
+        ? db.prepare(`SELECT id, title, column_name FROM cards WHERE milestone_id=? AND step_order > ? ORDER BY step_order LIMIT 1`)
+            .get(card.milestone_id, card.step_order) ?? null
+        : null
+      return { card: updated, decision, unlocked }
+    })
+
+  server.post<{ Params: { id: string }; Body: { note: string } }>(
+    '/api/v1/cards/:id/send-back', async (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
+      const note = req.body?.note?.trim()
+      if (!note) return reply.code(400).send({ error: 'send-back requires a note for the agent' })
+      const decision = recordDecision(db, card, 'send_back', note)
+      logEvent(card.id, null, 'review_decision', { decision: 'send_back', note })
+      db.prepare(`UPDATE cards SET column_name='in_progress', updated_at=datetime('now') WHERE id=?`).run(card.id)
+      const updated = getCard(card.id)
+      emit(card.board_id, 'card', updated)
+      // the reviewer's note reaches the agent through the normal message flow
+      if (updated.owner_agent_id) {
+        const body = `Review feedback on card #${card.id} "${card.title}": ${note} — the card is back in in_progress; address the feedback and move it to review again when ready.`
+        const { lastInsertRowid } = db.prepare(`
+          INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
+          .run(card.board_id, updated.owner_agent_id, card.id, body)
+        let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
+        if (maestro?.isHired(updated.owner_agent_id) && maestro.deliver(updated.owner_agent_id, { ...msg, from_name: null })) {
+          db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(msg.id, updated.owner_agent_id)
+          db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(msg.id)
+          msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
+        }
+        emit(card.board_id, 'message', msg)
+      }
+      reviewEvent(updated, 'sent_back', { note })
+      return { card: updated, decision }
+    })
+
+  server.get<{ Params: { id: string } }>('/api/v1/cards/:id/reviews', (req) =>
+    listCardDecisions(db, Number(req.params.id)))
+
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/reviews', (req) =>
+    listBoardDecisions(db, Number(req.params.id)))
 
   server.post<{ Body: { board_id: number; title: string; description?: string } }>('/api/v1/milestones', (req) => {
     const { board_id, title, description = '' } = req.body
