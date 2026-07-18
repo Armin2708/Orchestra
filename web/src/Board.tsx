@@ -101,41 +101,68 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
   )
 }
 
+function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen: (c: Card) => void }) {
+  const st = STATUS[c.column] ?? STATUS.backlog
+  return (
+    <article className={`t-card ${isLocked ? 'locked' : ''}`}
+      draggable={!isLocked}
+      onClick={() => onOpen(c)}
+      onDragStart={(e) => e.dataTransfer.setData('text/ticket-id', String(c.id))}
+      style={{ ['--st' as any]: st.ink }}
+      title={isLocked ? 'Locked — complete the previous milestone step first' : 'Drag onto an agent to assign'}>
+      <div className="t-top">
+        <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '🔒 ' : ''}{st.label}</span>
+      </div>
+      <h4>{c.title}</h4>
+      {c.description && <p className="t-desc">{c.description}</p>}
+      <footer>
+        {c.owner
+          ? <span className="owner"><i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>{c.owner.split('-')[0]}</span>
+          : <span className="owner unowned">drag → agent</span>}
+        <time>{timeAgo(c.updated_at)}</time>
+      </footer>
+    </article>
+  )
+}
+
 function TicketRail({ snap, onOpen }: { snap: Snapshot; onOpen: (c: Card) => void }) {
-  const open = snap.cards.filter((c) => c.column !== 'done')
-  const doneSteps = new Set(snap.cards.filter((c) => c.column === 'done').map((c) => c.id))
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set())
+  const toggle = (id: number) => setCollapsed((prev) => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
   const locked = (c: Card) => Boolean(c.milestone_id && snap.cards.some((o) =>
     o.milestone_id === c.milestone_id && (o.step_order ?? 0) < (c.step_order ?? 0) && o.column !== 'done'))
-  if (open.length === 0) return (
+  const loose = snap.cards.filter((c) => c.column !== 'done' && !c.milestone_id)
+  const milestones = (snap.milestones ?? []).map((m) => {
+    const steps = snap.cards.filter((c) => c.milestone_id === m.id)
+      .sort((a, b) => (a.step_order ?? 0) - (b.step_order ?? 0))
+    return { m, steps, open: steps.filter((s) => s.column !== 'done'), done: steps.filter((s) => s.column === 'done').length }
+  }).filter((g) => g.steps.length > 0)
+  if (loose.length === 0 && milestones.length === 0) return (
     <aside className="ticket-rail"><p className="rail-empty">No open tickets — add some on the Roadmap.</p></aside>
   )
   return (
     <aside className="ticket-rail">
-      <p className="rail-head">Tickets <span className="rm-count">{open.length}</span></p>
-      {open.map((c) => {
-        const st = STATUS[c.column] ?? STATUS.backlog
-        const isLocked = locked(c)
-        return (
-          <article key={c.id} className={`t-card ${isLocked ? 'locked' : ''}`}
-            draggable={!isLocked}
-            onClick={() => onOpen(c)}
-            onDragStart={(e) => e.dataTransfer.setData('text/ticket-id', String(c.id))}
-            style={{ ['--st' as any]: st.ink }}
-            title={isLocked ? 'Locked — complete the previous milestone step first' : 'Drag onto an agent to assign'}>
-            <div className="t-top">
-              <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '🔒 ' : ''}{st.label}</span>
+      {milestones.map(({ m, steps, open: openSteps, done }) => (
+        <div key={m.id} className="rail-mile">
+          <button className="rail-mile-head" onClick={() => toggle(m.id)}>
+            <span className="rail-mile-flag">{done === steps.length ? '🏆' : '⛳'}</span>
+            <span className="rail-mile-title">{m.title}</span>
+            <span className="rm-count">{done}/{steps.length}</span>
+            <span className="thread-caret">{collapsed.has(m.id) ? '▸' : '▾'}</span>
+          </button>
+          {!collapsed.has(m.id) && (
+            <div className="rail-mile-steps">
+              {openSteps.map((c) => <RailCard key={c.id} c={c} isLocked={locked(c)} onOpen={onOpen} />)}
+              {openSteps.length === 0 && <p className="rail-empty">All steps complete 🏆</p>}
             </div>
-            <h4>{c.title}</h4>
-            {c.description && <p className="t-desc">{c.description}</p>}
-            <footer>
-              {c.owner
-                ? <span className="owner"><i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>{c.owner.split('-')[0]}</span>
-                : <span className="owner unowned">drag → agent</span>}
-              <time>{timeAgo(c.updated_at)}</time>
-            </footer>
-          </article>
-        )
-      })}
+          )}
+        </div>
+      ))}
+      {loose.length > 0 && <p className="rail-head">Tickets <span className="rm-count">{loose.length}</span></p>}
+      {loose.map((c) => <RailCard key={c.id} c={c} isLocked={false} onOpen={onOpen} />)}
     </aside>
   )
 }
