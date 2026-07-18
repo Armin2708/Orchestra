@@ -61,4 +61,5 @@ export type SystemInfo = {
     five_hour: { utilization: number; resets_at: string | null }
     seven_day: { utilization: number; resets_at: string | null }
   } | null
+  injected?: { chars: number; tokens: number; count: number }
 }

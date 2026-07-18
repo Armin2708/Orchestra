@@ -174,6 +174,37 @@ it('self-heals a lost session file and keeps the same agent identity', async () 
   expect(healed.agent_name).toBe(orig.agent_name) // same identity, not a new agent
 })
 
+it('spools injected-context telemetry and flushes it on the next daemon call', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess6', cwd: '/tmp' }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start') // emits rules+board dump, spooled locally
+  const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess6.json'), 'utf8'))
+  const sessionStartChars = out.join('\n').length
+  expect(fs.existsSync(path.join(home, 'sessions', 'sess6.json.tel'))).toBe(true)
+
+  await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, to: sess.agent_name, body: 'ping' }),
+  })
+  const read = async () => {
+    const t = await (await fetch(`http://127.0.0.1:${port}/api/v1/boards/${sess.board_id}/telemetry`)).json()
+    return { total: t.total, byEvent: Object.fromEntries(t.by_event.map((e: any) => [e.hook_event, e])) }
+  }
+  const before = await read() // earlier sessions in this file share the board — diff, don't assert absolutes
+  await hooks.runHook('post-tool-use')  // pulse flushes session_start; its own emission spools
+  await hooks.runHook('user-prompt-submit') // next pulse flushes post_tool_use
+  const after = await read()
+
+  const delta = (ev: string, field: string) => (after.byEvent[ev]?.[field] ?? 0) - (before.byEvent[ev]?.[field] ?? 0)
+  expect(delta('session_start', 'chars')).toBe(sessionStartChars)
+  expect(delta('session_start', 'tokens')).toBe(Math.ceil(sessionStartChars / 4))
+  expect(delta('post_tool_use', 'tokens')).toBeGreaterThan(0)
+  expect(after.total.count - before.total.count).toBeGreaterThanOrEqual(2)
+})
+
 it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
   process.env.ORCHESTRA_PORT = '1' // nothing listening
