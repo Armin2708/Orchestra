@@ -63,3 +63,12 @@ export type SystemInfo = {
   } | null
   injected?: { chars: number; tokens: number; count: number }
 }
+
+// GET /boards/:id/telemetry — injected-context accounting (tokens = ceil(chars/4))
+export type TelemetryCount = { chars: number; tokens: number; count: number }
+export type Telemetry = {
+  total: TelemetryCount
+  by_event: ({ hook_event: string } & TelemetryCount)[]
+  by_agent: ({ agent_id: number; agent_name: string } & TelemetryCount)[]
+  days: ({ day: string } & TelemetryCount)[]
+}
