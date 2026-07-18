@@ -47,6 +47,24 @@ async function registerSession(input: any): Promise<Session | undefined> {
 const ensureSession = async (input: any): Promise<Session | undefined> =>
   loadSession(input.session_id) ?? registerSession(input)
 
+// injected-token telemetry: spool emissions locally and flush them on the next daemon
+// call the hook already makes (pulse/heartbeat/leave) — never an extra blocking request
+const telFile = (id: string) => sessFile(id) + '.tel'
+function spool(sessionId: string, event: string, text: string): void {
+  try {
+    fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
+    fs.appendFileSync(telFile(sessionId), JSON.stringify({ event, chars: text.length }) + '\n')
+  } catch { /* best effort */ }
+}
+function takeSpool(sessionId: string): { event: string; chars: number }[] | undefined {
+  try {
+    const raw = fs.readFileSync(telFile(sessionId), 'utf8')
+    fs.rmSync(telFile(sessionId), { force: true })
+    const entries = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    return entries.length ? entries : undefined
+  } catch { return undefined }
+}
+
 // a card matters to this session if any of its claimed paths could collide with files under cwd
 const touchesCwd = (paths: string[], root: string, cwd: string): boolean => {
   if (cwd === root) return paths.length > 0
@@ -98,7 +116,9 @@ async function sessionStart(input: any): Promise<void> {
   fs.writeFileSync(sessFile(input.session_id),
     JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }))
   const snap = await api('GET', `/boards/${board.id}/snapshot`)
-  console.log(renderSessionStart(agent, board, snap, input.cwd ?? process.cwd()))
+  const text = renderSessionStart(agent, board, snap, input.cwd ?? process.cwd())
+  spool(input.session_id, 'session_start', text)
+  console.log(text)
 }
 
 const cardAgeMs = (c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime()
@@ -131,7 +151,7 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   }
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
-  const r = await api('POST', `/agents/${sess.agent_id}/pulse`)
+  const r = await api('POST', `/agents/${sess.agent_id}/pulse`, { telemetry: takeSpool(input.session_id) })
   const lines = r.messages.map((m: any) =>
     `orchestra message from ${m.from_name ?? 'human'}: "${m.body}"` +
     (m.reply_to ? ` (this answers your msg #${m.reply_to})`
@@ -158,6 +178,7 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   }
   if (lines.length === 0) return
   const additionalContext = lines.join('\n')
+  spool(input.session_id, hookEventName === 'UserPromptSubmit' ? 'user_prompt_submit' : 'post_tool_use', additionalContext)
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }))
 }
 
@@ -170,7 +191,7 @@ async function stop(input: any): Promise<void> {
   if (!sess) return
   stampTranscript(sess, input)
   // heartbeat only — pulse would consume undelivered messages with no way to show them
-  await api('POST', `/agents/${sess.agent_id}/heartbeat`)
+  await api('POST', `/agents/${sess.agent_id}/heartbeat`, { telemetry: takeSpool(input.session_id) })
   if (input.stop_hook_active) return // already continued once for this — never loop
   const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
   // a card touched in the last 10 minutes is proof of board discipline — don't burn a turn on it
@@ -179,14 +200,15 @@ async function stop(input: any): Promise<void> {
   if (mine.length === 0) return
   const ids = mine.map((c: any) => `#${c.id} "${c.title}"`).join(', ')
   const reason = `Card ${ids} still in_progress — move it (orchestra card move <id> done|review|blocked) or update it, then finish.`
+  spool(input.session_id, 'stop', reason)
   console.log(JSON.stringify({ decision: 'block', reason }))
 }
 
 async function sessionEnd(input: any): Promise<void> {
   const sess = loadSession(input.session_id)
   if (!sess) return
-  await api('POST', `/agents/${sess.agent_id}/leave`)
-  for (const suffix of ['', '.throttle', '.nudged', '.stale'])
+  await api('POST', `/agents/${sess.agent_id}/leave`, { telemetry: takeSpool(input.session_id) })
+  for (const suffix of ['', '.throttle', '.nudged', '.stale', '.tel'])
     fs.rmSync(sessFile(input.session_id) + suffix, { force: true })
 }
 

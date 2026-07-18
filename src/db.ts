@@ -68,6 +68,16 @@ export function openDb(file: string): Database.Database {
     note TEXT,
     decided_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS token_telemetry (
+    board_id INTEGER NOT NULL,
+    agent_id INTEGER NOT NULL,
+    hook_event TEXT NOT NULL,
+    day TEXT NOT NULL,
+    chars INTEGER NOT NULL DEFAULT 0,
+    tokens INTEGER NOT NULL DEFAULT 0,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, agent_id, hook_event, day)
+  );
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY,
     board_id INTEGER NOT NULL REFERENCES boards(id),

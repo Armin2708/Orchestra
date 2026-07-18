@@ -12,6 +12,7 @@ import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, list
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
+import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -60,7 +61,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     hardware: hardware(),
     hired: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status != 'gone'`).get() as any).c,
     usage: await claudeUsage(),
+    injected: injectedTotal(db),
   }))
+
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/telemetry', (req) =>
+    boardTelemetry(db, Number(req.params.id)))
 
   // terminal sessions report their live subagents via hook pings; entries expire quickly
   const termSubs = new Map<number, Map<string, number>>()
@@ -613,17 +618,19 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/heartbeat', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/heartbeat', (req) => {
     const id = Number(req.params.id)
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+    if (a && req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
     if (a) emit(a.board_id, 'agent', a)
     return a ?? {}
   })
 
-  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/pulse', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/pulse', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
+    if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
     // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
     const messages = db.prepare(inboxSql +
       ` AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.id AND d.agent_id = ?) ORDER BY m.id`)
@@ -635,8 +642,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { agent: a, messages }
   })
 
-  server.post<{ Params: { id: string } }>('/api/v1/agents/:id/leave', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/leave', (req) => {
     const id = Number(req.params.id)
+    const boardOf = db.prepare(`SELECT board_id FROM agents WHERE id=?`).get(id) as any
+    if (boardOf && req.body?.telemetry) recordTelemetry(db, boardOf.board_id, id, req.body.telemetry)
     removeAgentCards(db, id) // gone agents leave a clean board
     db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any

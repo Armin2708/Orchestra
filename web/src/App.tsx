@@ -178,6 +178,9 @@ function GettingStarted() {
   )
 }
 
+const fmtTokens = (t: number) =>
+  t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t)
+
 function SystemMeter() {
   const [sys, setSys] = useState<SystemInfo | null>(null)
   useEffect(() => {
@@ -211,6 +214,12 @@ function SystemMeter() {
       </span>
       {sys.usage && win('5h', sys.usage.five_hour)}
       {sys.usage && win('week', sys.usage.seven_day)}
+      {sys.injected && sys.injected.count > 0 && (
+        <span className="meter" title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)`}>
+          <span className="meter-label">injected</span>
+          <span className="meter-val">{fmtTokens(sys.injected.tokens)} tok</span>
+        </span>
+      )}
     </div>
   )
 }
