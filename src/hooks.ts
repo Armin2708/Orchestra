@@ -76,6 +76,8 @@ async function sessionStart(input: any): Promise<void> {
   console.log(lines.join('\n'))
 }
 
+const cardAgeMs = (c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime()
+
 // events that only ever fire in the main conversation may adopt a missing transcript_path
 // (heals session files written before the field existed)
 function stampTranscript(sess: Session, input: any): void {
@@ -119,17 +121,19 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
     const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
     const mine = snap.cards.filter((c: any) => c.owner === sess.agent_name && c.column !== 'done')
     fs.writeFileSync(nudged, ''); fs.writeFileSync(stale, '')
+    // full command syntax only in the session's first reminder; later nudges stay terse
     if (mine.length === 0 && firstCheck) {
-      lines.push(`Reminder: you have no card on the orchestra board. Register what you are working on now: orchestra card create "<short title>" --desc "<scope>" --paths <paths> --column in_progress --agent ${sess.agent_name}`)
+      lines.push(`Reminder: no orchestra card yet — register now: orchestra card create "<title>" --desc "<scope>" --paths <paths> --column in_progress --agent ${sess.agent_name}`)
     } else if (mine.length > 0 && staleCheck && !firstCheck) {
-      const old = mine.filter((c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime() > 600_000)
+      const old = mine.filter((c: any) => cardAgeMs(c) > 600_000)
       if (old.length > 0) {
-        lines.push(`Board status check: card ${old.map((c: any) => `#${c.id}`).join(', ')} hasn't been updated in over 10 minutes. Update it to reflect where you are: orchestra card update <id> --desc "<current step>" --agent ${sess.agent_name} (or move it if the status changed).`)
+        lines.push(`Card ${old.map((c: any) => `#${c.id}`).join(', ')} not updated in 10+ minutes — update or move it.`)
       }
     }
   }
   if (lines.length === 0) return
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: lines.join('\n') } }))
+  const additionalContext = lines.join('\n')
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }))
 }
 
 // pulse is a ~1ms localhost call — keep the throttle just tight enough to survive tool bursts
@@ -144,15 +148,13 @@ async function stop(input: any): Promise<void> {
   await api('POST', `/agents/${sess.agent_id}/heartbeat`)
   if (input.stop_hook_active) return // already continued once for this — never loop
   const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
-  const mine = snap.cards.filter((c: any) => c.owner === sess.agent_name && c.column === 'in_progress')
+  // a card touched in the last 10 minutes is proof of board discipline — don't burn a turn on it
+  const mine = snap.cards.filter((c: any) =>
+    c.owner === sess.agent_name && c.column === 'in_progress' && cardAgeMs(c) > 600_000)
   if (mine.length === 0) return
   const ids = mine.map((c: any) => `#${c.id} "${c.title}"`).join(', ')
-  console.log(JSON.stringify({
-    decision: 'block',
-    reason: `Orchestra board check before you finish: your card(s) ${ids} are still marked in_progress. ` +
-      `If the work is done: orchestra card move <id> done. Waiting on review: orchestra card move <id> review. ` +
-      `Blocked: orchestra card move <id> blocked. Only mid-task and pausing for the user? Leave it and finish your reply.`,
-  }))
+  const reason = `Card ${ids} still in_progress — move it (orchestra card move <id> done|review|blocked) or update it, then finish.`
+  console.log(JSON.stringify({ decision: 'block', reason }))
 }
 
 async function sessionEnd(input: any): Promise<void> {

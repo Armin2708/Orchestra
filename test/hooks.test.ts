@@ -5,11 +5,15 @@ import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
-let server: any, port: number, home: string
+let server: any, port: number, home: string, db: any
+const backdateCard = (id: number, minutes: number) =>
+  db.prepare(`UPDATE cards SET updated_at = datetime('now', ?) WHERE id = ?`).run(`-${minutes} minutes`, id)
 beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-'))
+  delete process.env.ORCHESTRA_NAME // an inherited agent name would collapse every test session into one agent
   process.env.ORCHESTRA_HOME = home
-  server = buildServer(openDb(':memory:'))
+  db = openDb(':memory:')
+  server = buildServer(db)
   await server.listen({ host: '127.0.0.1', port: 0 })
   port = server.server.address().port
   process.env.ORCHESTRA_PORT = String(port)
@@ -70,21 +74,77 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
 
   await hooks.runHook('session-start')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess3.json'), 'utf8'))
-  await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
+  const { card } = await (await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ board_id: sess.board_id, title: 'Fix parser', column: 'in_progress', agent: sess.agent_name }),
-  })
+  })).json()
 
+  // freshly created card — the agent just touched the board, don't burn a turn
+  out.length = 0
+  await hooks.runHook('stop')
+  expect(out.join('\n')).toBe('')
+
+  // stale card — now the block fires, with a one-line reason
+  backdateCard(card.id, 20)
   out.length = 0
   await hooks.runHook('stop')
   const payload = JSON.parse(out.join('\n'))
   expect(payload.decision).toBe('block')
   expect(payload.reason).toContain('Fix parser')
+  expect(payload.reason).not.toContain('\n')
+
+  // agent updates the card, then stops — recently-updated skip kicks in again
+  backdateCard(card.id, 20)
+  await fetch(`http://127.0.0.1:${port}/api/v1/cards/${card.id}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ description: 'halfway through', agent: sess.agent_name }),
+  })
+  out.length = 0
+  await hooks.runHook('stop')
+  expect(out.join('\n')).toBe('')
 
   // second stop (continuation) must not loop
+  backdateCard(card.id, 20)
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: '/tmp', stop_hook_active: true }))
   out.length = 0
   await hooks.runHook('stop')
+  expect(out.join('\n')).toBe('')
+})
+
+it('nudges are one-liners: syntax only on first reminder, stale nudge once per window', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess5', cwd: '/tmp' }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start')
+  const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess5.json'), 'utf8'))
+
+  // first check, no card — one line, full create syntax allowed exactly here
+  out.length = 0
+  await hooks.runHook('user-prompt-submit')
+  const first = JSON.parse(out.join('\n')).hookSpecificOutput.additionalContext
+  expect(first).toContain('orchestra card create')
+  expect(first).not.toContain('\n')
+
+  // stale card, later window — one short line, no command syntax repeated
+  const { card } = await (await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, title: 'Long task', column: 'in_progress', agent: sess.agent_name }),
+  })).json()
+  backdateCard(card.id, 20)
+  const past = new Date(Date.now() - 700_000)
+  fs.utimesSync(path.join(home, 'sessions', 'sess5.json.stale'), past, past)
+  out.length = 0
+  await hooks.runHook('user-prompt-submit')
+  const staleNudge = JSON.parse(out.join('\n')).hookSpecificOutput.additionalContext
+  expect(staleNudge).toContain(`#${card.id}`)
+  expect(staleNudge).not.toContain('orchestra card')
+  expect(staleNudge).not.toContain('\n')
+
+  // same window again — silence
+  out.length = 0
+  await hooks.runHook('user-prompt-submit')
   expect(out.join('\n')).toBe('')
 })
 
