@@ -150,6 +150,18 @@ export class Conductor {
       this.launchQueue.some((q) => q.cardId === cardId)
   }
 
+  // a daemon restart resumes launched agents with cardId lost to memory — re-adopt the
+  // ticket from the db, or the agent's eventual exit would delete it via removeAgentCards
+  adoptLaunch(agentId: number): void {
+    const h = this.hired.get(agentId)
+    if (!h || h.cardId !== null) return
+    const c = this.db.prepare(`SELECT c.id FROM cards c
+      JOIN card_events e ON e.card_id=c.id AND e.type='launched' AND e.agent_id=?
+      WHERE c.owner_agent_id=? AND c.column_name='in_progress'`).get(agentId, agentId) as any
+    if (c) h.cardId = c.id
+  }
+
+
   launch(req: LaunchRequest): any {
     if (this.launchedCount() >= this.maxLaunched()) {
       // one queue slot per card — relaunching a queued ticket must not double-book it

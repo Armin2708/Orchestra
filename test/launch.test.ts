@@ -142,6 +142,25 @@ it('caps concurrent launches and drains the queue on exit', async () => {
   await until(() => t.card(b).column_name === 'review')
 })
 
+it('adoptLaunch re-binds a resumed agent to its ticket so exit parks instead of deleting', async () => {
+  const t = setup()
+  const id = t.mkCard('survivor')
+  const res = t.conductor.launch({ boardId: 1, cardId: id, cwd: '/p', brief: 'go' })
+  t.sessions[0].close() // daemon dies mid-run: session ends with no result message
+
+  await until(() => !t.conductor.isHired(res.agent.id))
+  // simulate the restart resurrect loop: re-hire by name, then re-adopt from the db
+  // (the crash-exit already parked the card; put it back the way a restart finds it)
+  t.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress' WHERE id=?`).run(res.agent.id, id)
+  const again = t.conductor.hire({ boardId: 1, cwd: '/p', name: res.agent.name })
+  t.conductor.adoptLaunch(again.id)
+
+  t.sessions[1].emit({ type: 'result', subtype: 'success', result: 'resumed and finished' })
+  t.sessions[1].close()
+  await until(() => t.card(id)?.column_name === 'review')
+  expect(t.card(id).owner_agent_id).toBeNull()
+})
+
 it('POST /cards/:id/launch wires the route to the conductor with a review-parking brief', async () => {
   const calls: any[] = []
   const stub: ConductorLike = {

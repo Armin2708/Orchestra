@@ -45,6 +45,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     try {
       maestro!.hire({ boardId: s.board_id, cwd: s.project_path, name: s.name,
         role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined })
+      maestro!.adoptLaunch(s.id)
     } catch {
       // could not respawn — keep the agent's cards, just mark it gone
       db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
