@@ -82,7 +82,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
   const [briefing, setBriefing] = useState(false)
   const allLive = snap.agents.filter((a) => a.status !== 'gone')
   const strategist = allLive.find((a) => a.name === 'strategist')
-  const agents = allLive.filter((a) => a.name !== 'strategist') // the strategist writes tickets, it doesn't take them
+  const agents = allLive.filter((a) => a.name !== 'strategist' && !a.name.startsWith('auditor-')) // the strategist writes tickets, it doesn't take them
 
   const askStrategist = async () => {
     if (!brainstorm.trim() || briefing) return
@@ -215,9 +215,10 @@ function IdeaModal({ idea, boardId, onClose, onChange }:
     if (sending) return
     setSending(true)
     try {
-      const agent = await api('POST', `/boards/${boardId}/hire`, { name: 'strategist', role: 'strategist' })
+      // each idea gets its own one-shot auditor so several audits run in parallel
+      const agent = await api('POST', `/boards/${boardId}/hire`, { name: `auditor-${idea.id}`, role: 'auditor', ephemeral: true })
       await api('POST', `/agents/${agent.id}/task`, {
-        text: `Ticket request: turn roadmap idea #${idea.id} into a proper ticket. Idea text: <<<${idea.text}>>>. Audit it against the repo, enrich it, create the ticket in your format with the right --paths, then remove the idea with orchestra idea-done ${idea.id} and report the ticket id.`,
+        text: `Ticket request: turn roadmap idea #${idea.id} into a proper ticket. Idea text: <<<${idea.text}>>>. Audit it against the repo, enrich it, create the ticket in your format with the right --paths, then remove the idea with orchestra idea-done ${idea.id} and report the ticket id. This is your only task.`,
       })
       onClose(); onChange()
     } finally { setSending(false) }
@@ -231,9 +232,9 @@ function IdeaModal({ idea, boardId, onClose, onChange }:
         {body ? <p className="idea-modal-body">{body}</p> : <p className="idea-modal-body empty">No details yet — send it to the strategist to audit and spec it.</p>}
         <div className="idea-modal-actions">
           <button className="btn primary" disabled={sending} onClick={sendToStrategist}>
-            {sending ? '✳ Sending…' : '✳ Ticket via strategist'}
+            {sending ? '✳ Spawning auditor…' : '✳ Audit → ticket'}
           </button>
-          <span className="idea-modal-hint">audits the idea, researches the repo, writes the full ticket</span>
+          <span className="idea-modal-hint">spawns a dedicated auditor — audit several ideas in parallel</span>
           <span className="idea-modal-spacer" />
           <button className="btn ghost danger-text" onClick={async () => {
             await api('DELETE', `/ideas/${idea.id}`); onClose(); onChange()

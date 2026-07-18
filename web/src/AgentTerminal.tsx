@@ -153,7 +153,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <span className="cc-head-star">✻</span>
             <span>{agent.name}</span>
             <span className="cc-head-dim">{hired ? `hired agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
-            {agent.name !== 'strategist' && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
+            {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
               <select className="cc-assign" defaultValue=""
                 title="Assign a ticket — the agent gets briefed and starts"
                 onChange={async (e) => {

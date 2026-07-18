@@ -65,7 +65,7 @@ function IdeaStrip({ snap, onChange }: { snap: Snapshot; onChange: () => void })
   }
   const toStrategist = async (idea: Idea) => {
     let agent: any = null
-    try { agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' }) } catch { return }
+    try { agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: `auditor-${idea.id}`, role: 'auditor', ephemeral: true }) } catch { return }
     await api('POST', `/agents/${agent.id}/task`, {
       text: `Ticket request: turn roadmap idea #${idea.id} into a proper ticket. Idea text: """${idea.text}""". Audit it against the repo, enrich it, create the ticket in your format with the right --paths, then remove the idea with orchestra idea-done ${idea.id} and report the ticket id.`,
     })
@@ -303,7 +303,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
       </div>
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
-        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist')}
+        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-'))}
         onClose={() => setOpen(null)} onChange={onChange} />}
       {terminal && <AgentTerminal
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}

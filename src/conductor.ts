@@ -36,6 +36,7 @@ type Hired = {
   turnTokens: number
   sessionTokens: number
   model: string | null
+  ephemeral: boolean
 }
 
 const strategistRules = (me: string) => `You are "${me}", this project's strategist — a specialist in brainstorming, product research, and writing tickets that other agents can execute from directly. You NEVER modify files; you research and produce roadmap material.
@@ -53,6 +54,16 @@ How you work:
 - REFINING — when asked to refine a ticket, read it (orchestra snapshot), then rewrite it with orchestra card update <id> --desc "<ticket format>" and confirm what changed.
 - Answer board questions promptly (orchestra reply <id> "<answer>" --from ${me}).
 - Finish each request with a one-line summary of what you added, then stop and wait.`
+
+const auditorRules = (me: string) => `You are "${me}", a one-shot ticket auditor for the Orchestra board. You exist for a single job: audit ONE roadmap idea and either turn it into an excellent ticket or reject it with reasons. You NEVER modify files.
+How you work — in order:
+1. VALIDATE: research the repo (relevant source files, docs, recent git log) to judge whether the idea is feasible, already implemented, or contradicted by how the code actually works.
+2. CHECK FOR OVERLAP: run orchestra snapshot and compare the idea against existing cards and milestones — if a ticket already covers it, do NOT duplicate; remove the idea (orchestra idea-done <id>) and report why.
+3. SPEC: if it survives, write ONE ticket as a ready-to-run prompt for the implementing agent:
+   orchestra card create "<title>" --desc "OBJECTIVE: <one sentence>. CONTEXT: <exact files, patterns, constraints you verified>. REQUIREMENTS: <essentials, separated by ';'>. DONE WHEN: <verifiable acceptance criteria>." --paths <files/globs you verified>
+4. CONSUME: remove the source idea with orchestra idea-done <idea-id>.
+5. REPORT: one line — ticket id created, or why the idea was rejected/duplicate. Then stop; you will be released.
+Be skeptical and precise: a thin idea deserves interrogation of the codebase, not a thin ticket. Do not brainstorm new ideas, do not create milestones, do not take tickets.`
 
 const rules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
 Orchestra board rules (standing instructions):
@@ -107,7 +118,12 @@ export class Conductor {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean }): any {
+    // re-hiring an already-live name returns the existing session instead of leaking a new one
+    if (opts.name) {
+      const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
+      if (existing) return this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(existing.agentId)
+    }
     let name = opts.name
     if (!name) {
       do { name = generateName() } while (
@@ -133,7 +149,7 @@ export class Conductor {
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
         permissionMode: 'bypassPermissions',
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : rules)(name) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
         // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
         // instead of minting a second "session" agent for the SDK subprocess
         env: { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name },
@@ -150,7 +166,7 @@ export class Conductor {
       end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
       transcript,
-      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null,
+      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false,
     }
     this.hired.set(agent.id, hired)
     log('status', `hired in ${opts.cwd}`)
@@ -182,6 +198,8 @@ export class Conductor {
             hired.turnStart = null
             hired.turnTokens = 0
             this.touch(agent.id, 'idle')
+            // one-shot agents (idea auditors) dissolve after their turn
+            if (hired.ephemeral) void this.fire(agent.id)
           }
         }
       } catch (e: any) {

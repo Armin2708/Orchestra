@@ -15,7 +15,7 @@ export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike {
   isHired(agentId: number): boolean
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' }): any
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean }): any
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any
@@ -269,7 +269,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     emit(idea.board_id, 'card', card)
     const agentRow = agentByName(idea.board_id, req.body?.agent)
     if (req.body?.agent && !agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
-    if (agentRow?.name === 'strategist') return reply.code(400).send({ error: 'the strategist brainstorms and writes tickets — it does not take them' })
+    if (agentRow?.name === 'strategist' || agentRow?.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })
     if (agentRow) card = notifyAssignment(card, agentRow)
     return { card }
   })
@@ -280,7 +280,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (isLocked(card)) return reply.code(409).send({ error: 'step is locked — complete its prerequisites first' })
     const agentRow = agentByName(card.board_id, req.body.agent)
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
-    if (agentRow.name === 'strategist') return reply.code(400).send({ error: 'the strategist brainstorms and writes tickets — it does not take them' })
+    if (agentRow.name === 'strategist' || agentRow.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })
     return { card: notifyAssignment(card, agentRow) }
   })
 
@@ -330,7 +330,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return msg
     })
 
-  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' } }>(
+  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
@@ -341,6 +341,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         name: req.body?.name,
         model: req.body?.model,
         role: req.body?.role,
+        ephemeral: req.body?.ephemeral,
       })
       emit(board.id, 'agent', agent)
       return agent
