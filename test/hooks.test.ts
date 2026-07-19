@@ -6,6 +6,7 @@ import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
 let server: any, port: number, home: string, db: any
+const projectRoot = process.cwd()
 const backdateCard = (id: number, minutes: number) =>
   db.prepare(`UPDATE cards SET updated_at = datetime('now', ?) WHERE id = ?`).run(`-${minutes} minutes`, id)
 beforeAll(async () => {
@@ -22,7 +23,7 @@ afterAll(async () => { await server.close(); delete process.env.ORCHESTRA_HOME; 
 
 it('session-start registers and prints rules; post-tool-use delivers pings', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess1', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess1', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -44,7 +45,7 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
 
 it('stop does not consume messages; user-prompt-submit delivers them', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess2', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess2', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -68,7 +69,7 @@ it('stop does not consume messages; user-prompt-submit delivers them', async () 
 
 it('stop blocks once to demand a status update on in_progress cards', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -105,7 +106,7 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
 
   // second stop (continuation) must not loop
   backdateCard(card.id, 20)
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: '/tmp', stop_hook_active: true }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: projectRoot, stop_hook_active: true }))
   out.length = 0
   await hooks.runHook('stop')
   expect(out.join('\n')).toBe('')
@@ -113,7 +114,7 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
 
 it('nudges are one-liners: syntax only on first reminder, stale nudge once per window', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess5', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess5', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -151,7 +152,7 @@ it('nudges are one-liners: syntax only on first reminder, stale nudge once per w
 
 it('self-heals a lost session file and keeps the same agent identity', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess4', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess4', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -177,7 +178,7 @@ it('self-heals a lost session file and keeps the same agent identity', async () 
 
 it('spools injected-context telemetry and flushes it on the next daemon call', async () => {
   const hooks = await import('../src/hooks.js')
-  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess6', cwd: '/tmp' }))
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess6', cwd: projectRoot }))
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
@@ -212,4 +213,10 @@ it('never throws when daemon is down', async () => {
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue('{"session_id":"sessX","cwd":"/tmp"}')
   await expect(hooks.runHook('post-tool-use')).resolves.toBeUndefined()
   process.env.ORCHESTRA_PORT = String(port)
+})
+
+it('keeps the hook harness outside the throwaway-directory guard on every platform', async () => {
+  const hooks = await import('../src/hooks.js')
+  expect(hooks.isThrowawayCwd(os.tmpdir())).toBe(true)
+  expect(hooks.isThrowawayCwd(projectRoot)).toBe(false)
 })

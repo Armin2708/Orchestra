@@ -57,13 +57,14 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
   }
 
   const hooks = await import('../src/hooks.js')
+  const projectRoot = process.cwd()
   const out: string[] = []
   const logSpy = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { out.push(String(s)) })
   cleanups.push(() => logSpy.mockRestore())
   const sid = `ab-${mode}-main`
   const stdin = vi.spyOn(hooks._internals, 'readStdin')
   const run = async (event: string, input: Record<string, unknown> = {}) => {
-    stdin.mockResolvedValue(JSON.stringify({ session_id: sid, cwd: '/tmp', ...input }))
+    stdin.mockResolvedValue(JSON.stringify({ session_id: sid, cwd: projectRoot, ...input }))
     out.length = 0
     await hooks.runHook(event)
     return out.join('\n')
@@ -91,7 +92,7 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
 
   // 0. seed a representative board (agents, cards, an open question) so the
   // session-start dump reflects a mid-project board, not an empty one
-  const board = await http('POST', '/boards/resolve', { project_path: '/tmp' })
+  const board = await http('POST', '/boards/resolve', { project_path: projectRoot })
   // fixed names everywhere — random name lengths would skew the char counts between arms
   const seedAgents = await Promise.all(['seed-alpha', 'seed-bravo', 'seed-charlie'].map((name, i) =>
     http('POST', '/agents/register', { board_id: board.id, session_id: `ab-${mode}-seed-${i}`, name })))
