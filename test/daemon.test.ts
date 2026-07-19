@@ -49,13 +49,38 @@ it('restores provider identity and resolves Codex threads across legacy and Agen
   expect(codexTokenBudgetForThread(db, 'thread-job')).toBe(250)
 })
 
-it('sanitizes Claude and Orchestra credentials without stripping Codex authentication', () => {
+it('forwards only the environment Codex needs plus explicit safe opt-ins', () => {
   expect(sanitizedCodexEnvironment({
     PATH: '/bin',
+    Path: 'C:\\Windows\\System32',
+    USERPROFILE: 'C:\\Users\\codex',
     CODEX_HOME: '/codex',
     OPENAI_API_KEY: 'kept-for-app-server',
+    LC_ALL: 'C.UTF-8',
+    ORCHESTRA_CODEX_FORWARD_ENV: 'CUSTOM_CA_HINT,AWS_SECRET_ACCESS_KEY,INVALID-NAME',
+    CUSTOM_CA_HINT: 'explicitly-forwarded',
+    AWS_SECRET_ACCESS_KEY: 'explicitly-forwarded',
+    DATABASE_URL: 'not-forwarded',
     ORCHESTRA_TOKEN: 'removed',
     ANTHROPIC_API_KEY: 'removed',
     CLAUDE_CODE_OAUTH_TOKEN: 'removed',
-  })).toEqual({ PATH: '/bin', CODEX_HOME: '/codex', OPENAI_API_KEY: 'kept-for-app-server' })
+  })).toEqual({
+    PATH: '/bin',
+    Path: 'C:\\Windows\\System32',
+    USERPROFILE: 'C:\\Users\\codex',
+    CODEX_HOME: '/codex',
+    OPENAI_API_KEY: 'kept-for-app-server',
+    LC_ALL: 'C.UTF-8',
+    CUSTOM_CA_HINT: 'explicitly-forwarded',
+    AWS_SECRET_ACCESS_KEY: 'explicitly-forwarded',
+  })
+})
+
+it('never forwards Claude or Orchestra credentials even when explicitly requested', () => {
+  expect(sanitizedCodexEnvironment({
+    ORCHESTRA_CODEX_FORWARD_ENV: 'ORCHESTRA_TOKEN,ANTHROPIC_API_KEY,CLAUDE_CONFIG_DIR',
+    ORCHESTRA_TOKEN: 'removed',
+    ANTHROPIC_API_KEY: 'removed',
+    CLAUDE_CONFIG_DIR: 'removed',
+  })).toEqual({})
 })

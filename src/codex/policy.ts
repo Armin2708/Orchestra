@@ -7,10 +7,18 @@ import { CODEX_REQUEST_UNHANDLED } from './client.js'
 const commandText = (params: unknown): string | null => {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return null
   const command = (params as Record<string, unknown>).command
-  if (typeof command === 'string' && command.trim()) return command.trim()
+  if (typeof command === 'string' && command.trim()) {
+    const value = command.trim()
+    // A glob that allows the leading command must not accidentally bless a second
+    // shell program (for example `npm test && rm ...`). Compound shell syntax stays
+    // a human approval unless/until policies model each command and redirection.
+    if (/[\r\n;&|<>`]/.test(value) || value.includes('$(')) return null
+    return value
+  }
   if (Array.isArray(command) && command.every((part) => typeof part === 'string')) {
     const joined = command.join(' ').trim()
-    return joined || null
+    if (!joined || /[\r\n;&|<>`]/.test(joined) || joined.includes('$(')) return null
+    return joined
   }
   return null
 }
@@ -48,8 +56,11 @@ export function codexApprovalPolicyHandler(db: Database.Database): CodexDriverAp
       { policy_id: string | null } | undefined
     if (!row?.policy_id) return CODEX_REQUEST_UNHANDLED
     const operation = operationFor(request)
-    // A configured policy with malformed or insufficient native data fails closed.
-    if (!operation) return { decision: 'decline' }
+    // User questions and MCP elicitations are not filesystem/command policy operations;
+    // leave them pending for a human. Malformed policy-bound operations still fail closed.
+    if (!operation) return request.kind === 'command' || request.kind === 'file-change'
+      ? { decision: 'decline' }
+      : CODEX_REQUEST_UNHANDLED
     try {
       const evaluation = evaluatePolicy(db, row.policy_id, operation)
       if (evaluation.decision === 'allow') return { decision: 'accept' }

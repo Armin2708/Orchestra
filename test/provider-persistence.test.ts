@@ -12,7 +12,7 @@ import {
   readProviderModelCache,
   writeProviderModelCache,
 } from '../src/agent-providers.js'
-import { fromCodexUsage, providerBoardUsage, recordProviderUsage } from '../src/usage.js'
+import { fromCodexUsage, providerBoardUsage, recordProviderUsage, usageTotal } from '../src/usage.js'
 
 it('backfills legacy Claude identity and keeps subsequent SDK session writes synchronized', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-provider-db-'))
@@ -62,11 +62,12 @@ it('persists Codex identity and reported token totals without double-counting ca
   recordProviderUsage(db, 1, 1, usage)
 
   expect(db.prepare(`SELECT provider, total_tokens, input_tokens, cached_input_tokens,
-    output_tokens, reasoning_output_tokens FROM agent_usage`).get()).toMatchObject({
+    cache_read, output_tokens, reasoning_output_tokens FROM agent_usage`).get()).toMatchObject({
       provider: 'codex', total_tokens: 150, input_tokens: 100, cached_input_tokens: 80,
-      output_tokens: 50, reasoning_output_tokens: 20,
+      cache_read: 0, output_tokens: 50, reasoning_output_tokens: 20,
     })
   expect(providerBoardUsage(db, 1).total).toMatchObject({ total_tokens: 150, input_tokens: 100 })
+  expect(usageTotal(db)).toMatchObject({ input_tokens: 100, cache_read: 0, output_tokens: 50 })
 })
 
 it('keeps provider model caches isolated and normalizes app-server reasoning options', () => {
@@ -108,7 +109,33 @@ it('namespaces ambient registrations by provider and refuses provider identity c
   expect(codex.statusCode).toBe(200)
   expect(codex.json()).toMatchObject({
     provider: 'codex', session_id: 'shared-looking-id', external_session_id: 'shared-looking-id',
+    session_token: expect.any(String),
   })
+
+  const takeover = await server.inject({
+    method: 'POST',
+    url: '/api/v1/agents/register',
+    payload: { board_id: board.id, provider: 'codex', session_id: 'different-id', name: 'ambient-owl' },
+  })
+  expect(takeover.statusCode).toBe(409)
+  const duplicateIdentity = await server.inject({
+    method: 'POST',
+    url: '/api/v1/agents/register',
+    payload: { board_id: board.id, provider: 'codex', session_id: 'shared-looking-id', name: 'other-owl' },
+  })
+  expect(duplicateIdentity.statusCode).toBe(409)
+  expect((await server.inject({
+    method: 'POST',
+    url: `/api/v1/agents/${codex.json().id}/heartbeat`,
+    payload: { provider: 'claude', session_id: 'shared-looking-id', session_token: codex.json().session_token },
+  })).statusCode).toBe(403)
+  expect((await server.inject({
+    method: 'POST',
+    url: `/api/v1/agents/${codex.json().id}/heartbeat`,
+    payload: {
+      provider: 'codex', session_id: 'shared-looking-id', session_token: codex.json().session_token,
+    },
+  })).statusCode).toBe(200)
 
   const collision = await server.inject({
     method: 'POST',

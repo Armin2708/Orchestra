@@ -38,6 +38,8 @@ type Session = {
   agent_name: string
   board_id: number
   provider: HookProvider
+  session_id: string
+  session_token: string
   transcript_path?: string
 }
 const safeSessionId = (id: string) => encodeURIComponent(id)
@@ -50,9 +52,26 @@ const sessFile = (provider: HookProvider, id: string) => provider === 'claude'
 const loadSession = (provider: HookProvider, id: string): Session | undefined => {
   try {
     const session = JSON.parse(fs.readFileSync(sessFile(provider, id), 'utf8'))
-    return { ...session, provider: session.provider ?? provider }
+    if (session.provider !== provider || session.session_id !== id || typeof session.session_token !== 'string')
+      return undefined
+    return session
   } catch { return undefined }
 }
+
+const saveSession = (provider: HookProvider, session: Session): void => {
+  const file = sessFile(provider, session.session_id)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(session), { mode: 0o600 })
+  // `mode` only applies when Node creates the file. Upgrade legacy session files
+  // explicitly so a newly-added bearer token never remains in a prior 0644 file.
+  fs.chmodSync(file, 0o600)
+}
+
+const sessionIdentity = (session: Session) => ({
+  provider: session.provider,
+  session_id: session.session_id,
+  session_token: session.session_token,
+})
 
 async function registerSession(input: any, provider: HookProvider): Promise<Session | undefined> {
   if (!input.session_id) return undefined
@@ -62,12 +81,13 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
   const agent = await api('POST', '/agents/register', {
     board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
   })
+  if (typeof agent.session_token !== 'string') return undefined
   const sess: Session = {
     agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
+    session_id: input.session_id, session_token: agent.session_token,
     transcript_path: input.transcript_path,
   }
-  fs.mkdirSync(path.dirname(sessFile(provider, input.session_id)), { recursive: true })
-  fs.writeFileSync(sessFile(provider, input.session_id), JSON.stringify(sess))
+  saveSession(provider, sess)
   return sess
 }
 
@@ -137,20 +157,15 @@ export function renderSessionStart(agent: { id: number; name: string }, board: a
 
 async function sessionStart(input: any, provider: HookProvider): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
-  if (!(await ensureDaemon())) return
-  const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
-  const agent = await api('POST', '/agents/register', {
-    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
-  })
-  const sessionPath = sessFile(provider, input.session_id)
-  fs.mkdirSync(path.dirname(sessionPath), { recursive: true })
-  fs.writeFileSync(sessionPath,
-    JSON.stringify({
-      agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
-      transcript_path: input.transcript_path,
-    }))
-  const snap = await api('GET', `/boards/${board.id}/snapshot`)
-  const text = renderSessionStart(agent, board, snap, input.cwd ?? process.cwd())
+  const session = await registerSession(input, provider)
+  if (!session) return
+  const snap = await api('GET', `/boards/${session.board_id}/snapshot`)
+  const text = renderSessionStart(
+    { id: session.agent_id, name: session.agent_name },
+    snap.board,
+    snap,
+    input.cwd ?? process.cwd(),
+  )
   spool(provider, input.session_id, 'session_start', text)
   if (provider === 'codex') {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
@@ -166,7 +181,7 @@ const cardAgeMs = (c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T
 function stampTranscript(sess: Session, input: any, provider: HookProvider): void {
   if (!sess.transcript_path && input.transcript_path) {
     sess.transcript_path = input.transcript_path
-    try { fs.writeFileSync(sessFile(provider, input.session_id), JSON.stringify(sess)) } catch { /* best effort */ }
+    try { saveSession(provider, sess) } catch { /* best effort */ }
   }
 }
 
@@ -178,7 +193,9 @@ async function deliver(input: any, hookEventName: string, throttleMs: number, pr
   // consume the parent's board messages: injected context would vanish into the subagent's transcript
   if (sess.transcript_path && input.transcript_path && sess.transcript_path !== input.transcript_path) {
     const key = String(input.transcript_path).split('/').pop()?.slice(0, 24) ?? 'sub'
-    await api('POST', `/agents/${sess.agent_id}/subping`, { key, provider }).catch(() => {})
+    await api('POST', `/agents/${sess.agent_id}/subping`, {
+      key, state: 'started', ...sessionIdentity(sess),
+    }).catch(() => {})
     return
   }
   const throttle = sessFile(provider, input.session_id) + '.throttle'
@@ -190,7 +207,7 @@ async function deliver(input: any, hookEventName: string, throttleMs: number, pr
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`, {
-    provider, telemetry: takeSpool(provider, input.session_id),
+    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
   })
   const lines = r.messages.map((m: any) => {
     const from = m.from_name ?? 'human'
@@ -241,7 +258,7 @@ async function stop(input: any, provider: HookProvider): Promise<void> {
   stampTranscript(sess, input, provider)
   // heartbeat only — pulse would consume undelivered messages with no way to show them
   await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
-    provider, telemetry: takeSpool(provider, input.session_id),
+    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
   })
   if (input.stop_hook_active) return // already continued once for this — never loop
   const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
@@ -267,7 +284,7 @@ async function sessionEnd(input: any, provider: HookProvider): Promise<void> {
   const sess = loadSession(provider, input.session_id)
   if (!sess) return
   await api('POST', `/agents/${sess.agent_id}/leave`, {
-    provider, telemetry: takeSpool(provider, input.session_id),
+    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
   })
   for (const suffix of ['', '.throttle', '.nudged', '.stale', '.tel'])
     fs.rmSync(sessFile(provider, input.session_id) + suffix, { force: true })
@@ -277,7 +294,7 @@ async function providerHeartbeat(input: any, provider: HookProvider): Promise<Se
   const sess = await ensureSession(input, provider)
   if (!sess) return undefined
   await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
-    provider, telemetry: takeSpool(provider, input.session_id),
+    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
   })
   return sess
 }
@@ -289,7 +306,9 @@ async function subagentPresence(input: any, provider: HookProvider, state: 'star
     input.agent_id ?? input.subagent_id ?? input.agent_type ?? input.subagent_type ??
     input.transcript_path ?? `${provider}-subagent`,
   ).split('/').pop()?.slice(0, 64) ?? `${provider}-subagent`
-  await api('POST', `/agents/${sess.agent_id}/subping`, { key, provider, state }).catch(() => {})
+  await api('POST', `/agents/${sess.agent_id}/subping`, {
+    key, state, ...sessionIdentity(sess),
+  }).catch(() => {})
 }
 
 export async function runHook(event: string, requestedProvider?: string): Promise<void> {

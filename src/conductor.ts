@@ -494,11 +494,22 @@ export class Conductor {
       do { name = generateName() } while (
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))
     }
-    const { lastInsertRowid } = this.db.prepare(`
-      INSERT INTO agents (board_id, name, session_id, kind, role, provider) VALUES (?, ?, ?, 'hired', ?, 'claude')
+    this.db.prepare(`
+      INSERT INTO agents (
+        board_id, name, session_id, kind, role, provider, sdk_session, external_session_id
+      ) VALUES (?, ?, ?, 'hired', ?, 'claude', ?, ?)
       ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'),
-        kind='hired', role=excluded.role, provider='claude'
-    `).run(opts.boardId, name, `hired:${Date.now()}`, opts.role ?? null)
+        session_id=excluded.session_id, kind='hired', role=excluded.role, provider='claude',
+        sdk_session=excluded.sdk_session, external_session_id=excluded.external_session_id,
+        provider_state_json='{}', hook_token_hash=NULL
+    `).run(
+      opts.boardId,
+      name,
+      `hired:${Date.now()}`,
+      opts.role ?? null,
+      opts.resumeSession ?? null,
+      opts.resumeSession ?? null,
+    )
     const agent = this.db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name) as any
 
     const input = createInput()
@@ -960,6 +971,18 @@ export class Conductor {
     await h.interrupt()
     h.end() // input stream closes → query ends → finally block cleans up
     return true
+  }
+
+  /** End local SDK streams while preserving provider sessions and board ownership for daemon resume. */
+  async detachAll(): Promise<void> {
+    const active = [...this.hired.values()]
+    await Promise.all(active.map(async (h) => {
+      h.handoff = true
+      await h.interrupt()
+      h.end()
+    }))
+    for (let i = 0; i < 250 && this.hired.size > 0; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20))
   }
 
   async shutdown(): Promise<void> {

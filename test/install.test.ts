@@ -55,7 +55,7 @@ describe('provider hook installation', () => {
     expect(claude.hooks.SessionEnd).toHaveLength(1)
     expect(codex.description).toBe('keep me')
     expect(codex.hooks.Stop).toHaveLength(2)
-    expect(codex.hooks.SessionStart[0].matcher).toBe('startup|resume')
+    expect(codex.hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
     expect(Object.keys(codex.hooks).sort()).toEqual([
       'PermissionRequest', 'PostToolUse', 'SessionStart', 'Stop',
       'SubagentStart', 'SubagentStop', 'UserPromptSubmit',
@@ -88,6 +88,12 @@ describe('provider hook installation', () => {
     expect(fs.existsSync(claudePath)).toBe(false)
     expect(read(codexPath).hooks.SessionEnd).toBeUndefined()
     log.mockRestore()
+  })
+
+  it('honors CODEX_HOME for global Codex hooks', () => {
+    const codexHome = temp()
+    expect(hookSettingsPath('global', 'codex', { codexHome }))
+      .toBe(path.join(codexHome, 'hooks.json'))
   })
 
   it('treats old provider-less Orchestra entries as Claude during upgrades and uninstall', () => {

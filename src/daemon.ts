@@ -83,13 +83,36 @@ export const codexTokenBudgetForThread = (db: Database.Database, threadId: strin
   return row?.budget_tokens ?? null
 }
 
-export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv =>
-  Object.fromEntries(Object.entries(source).filter(([key, value]) =>
+const CODEX_ENV_ALLOWLIST = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM',
+  'LANG', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORGANIZATION', 'OPENAI_ORG_ID', 'OPENAI_PROJECT',
+  'CODEX_API_KEY',
+  'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE',
+  'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+])
+
+const codexEnvironmentDenied = (key: string): boolean => {
+  const normalized = key.toUpperCase()
+  return normalized === 'ORCHESTRA_TOKEN'
+    || normalized === 'ORCHESTRA_CODEX_FORWARD_ENV'
+    || normalized === 'CLAUDECODE'
+    || normalized.startsWith('ANTHROPIC_')
+    || normalized.startsWith('CLAUDE_')
+}
+
+export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const requested = new Set((source.ORCHESTRA_CODEX_FORWARD_ENV ?? '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))
+  return Object.fromEntries(Object.entries(source).filter(([key, value]) =>
     value !== undefined
-    && key !== 'ORCHESTRA_TOKEN'
-    && key !== 'CLAUDECODE'
-    && !key.startsWith('ANTHROPIC_')
-    && !key.startsWith('CLAUDE_')))
+    && !codexEnvironmentDenied(key)
+    && (CODEX_ENV_ALLOWLIST.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_') || requested.has(key))))
+}
 
 export async function serve(opts: ServeOptions = {}): Promise<void> {
   // an exposed daemon is remote code execution for anyone who can reach the port
@@ -97,6 +120,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
   const token = authDisabled() ? undefined : ensureToken()
+  const lease = acquireDaemonLease(db)
   let maestro: Conductor | undefined
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
@@ -115,38 +139,47 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     onApprovalRequest: codexApprovalPolicyHandler(db),
   })
   const codexProvider = new CodexProviderService(db, codexRpc, codexSupervisor, { command: codexCommand })
-  const codexReady = await codexProvider.initialize()
-  if (codexReady) agentOs.registerDriver(codexDriver)
-  const server = buildServer(db, (bus) => {
-    agentOs.setBus(bus)
-    maestro = new Conductor(db, bus)
-    agentOs.registerClaude(maestro)
-    const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
-    manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider)
-    return manager
-  }, {
-    token,
-    autowakeAt: () => autowake?.scheduledAt() ?? null,
-    agentOs: {
-      runtime: agentOs.adapter,
-      jobExecutor: agentOs.jobExecutor,
-      scheduler,
-      drivers: () => agentOs.descriptors(),
-    },
-  })
-  const lease = acquireDaemonLease(db)
-  let reapTimer: ReturnType<typeof setInterval> | undefined
-  let schedulerTimer: ReturnType<typeof setInterval> | undefined
-  let closing = false
   let runtimesClosed = false
   const shutdownRuntimes = async () => {
     if (runtimesClosed) return
     runtimesClosed = true
     await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
+    await codexDriver.detachAll().catch(() => undefined)
     codexDriver.dispose()
     codexProvider.dispose()
     await codexSupervisor.stop().catch(() => undefined)
   }
+  let codexReady = false
+  let server: ReturnType<typeof buildServer>
+  try {
+    codexReady = await codexProvider.initialize()
+    if (codexReady) agentOs.registerDriver(codexDriver)
+    server = buildServer(db, (bus) => {
+      agentOs.setBus(bus)
+      maestro = new Conductor(db, bus)
+      agentOs.registerClaude(maestro)
+      const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
+      manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor)
+      return manager
+    }, {
+      token,
+      autowakeAt: () => autowake?.scheduledAt() ?? null,
+      agentOs: {
+        runtime: agentOs.adapter,
+        jobExecutor: agentOs.jobExecutor,
+        scheduler,
+        drivers: () => agentOs.descriptors(),
+      },
+    })
+    registerPush(server)
+  } catch (error) {
+    await shutdownRuntimes()
+    lease.release()
+    throw error
+  }
+  let reapTimer: ReturnType<typeof setInterval> | undefined
+  let schedulerTimer: ReturnType<typeof setInterval> | undefined
+  let closing = false
   const close = () => {
     if (closing) return
     closing = true
@@ -163,7 +196,6 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     await shutdownRuntimes()
     lease.release()
   })
-  registerPush(server)
   try {
     await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   } catch (error) {

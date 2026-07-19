@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { expect, it } from 'vitest'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
+import { writeProviderModelCache } from '../src/agent-providers.js'
 import { createAgentOsRuntime } from '../src/agent-os/runtime-integration.js'
 import { openDb } from '../src/db.js'
 import {
@@ -28,9 +29,13 @@ class FakeCodexDriver implements ManagedAgentDriver {
   readonly id = 'codex'
   readonly launches: DriverLaunchRequest[] = []
   readonly sends: Array<[string, string]> = []
+  readonly interrupts: string[] = []
   readonly updates: Array<[string, Record<string, unknown>]> = []
   readonly approvals: Array<[string, string, string, string | undefined]> = []
+  readonly approvalAnswers: Array<Record<string, string[]> | undefined> = []
+  readonly detaches: string[] = []
   readonly sessions = new Map<string, DriverSession>()
+  updateError: Error | null = null
   private readonly feeds = new Map<string, Feed>()
   private sequence = 0
 
@@ -73,11 +78,19 @@ class FakeCodexDriver implements ManagedAgentDriver {
   }
 
   async interrupt(sessionId: string): Promise<void> {
+    this.interrupts.push(sessionId)
     this.emit(sessionId, { type: 'status', data: 'interrupted', metadata: { turnActive: false } })
   }
 
   async stop(sessionId: string): Promise<void> {
     this.emit(sessionId, { type: 'exit', data: 'Codex session stopped' })
+    const feed = this.feeds.get(sessionId)
+    if (feed) { feed.closed = true; feed.waiting.splice(0).forEach((wake) => wake()) }
+  }
+
+  async detach(sessionId: string): Promise<void> {
+    this.detaches.push(sessionId)
+    this.emit(sessionId, { type: 'exit', data: 'Codex session detached', metadata: { detached: true } })
     const feed = this.feeds.get(sessionId)
     if (feed) { feed.closed = true; feed.waiting.splice(0).forEach((wake) => wake()) }
   }
@@ -93,6 +106,7 @@ class FakeCodexDriver implements ManagedAgentDriver {
   }
 
   async updateSession(sessionId: string, update: Record<string, unknown>): Promise<void> {
+    if (this.updateError) throw this.updateError
     this.updates.push([sessionId, update])
   }
 
@@ -101,8 +115,10 @@ class FakeCodexDriver implements ManagedAgentDriver {
     requestId: string,
     decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
     message?: string,
+    answers?: Record<string, string[]>,
   ): Promise<boolean> {
     this.approvals.push([sessionId, requestId, decision, message])
+    this.approvalAnswers.push(answers)
     return true
   }
 
@@ -136,7 +152,8 @@ const claudeStub = (db: ReturnType<typeof openDb>) => {
       calls.push(options)
       db.prepare(`INSERT INTO agents (board_id, name, kind, provider, status)
         VALUES (?, ?, 'hired', 'claude', 'active')
-        ON CONFLICT(board_id, name) DO UPDATE SET status='active', provider='claude'`)
+        ON CONFLICT(board_id, name) DO UPDATE SET status='active', provider='claude',
+          sdk_session=NULL, external_session_id=NULL, provider_state_json='{}'`)
         .run(options.boardId, options.name ?? `claude-${calls.length}`)
       const row = db.prepare('SELECT * FROM agents WHERE board_id=? ORDER BY id DESC LIMIT 1').get(options.boardId) as any
       live.add(row.id)
@@ -207,6 +224,20 @@ it('routes the stored worker default to Codex and queues work until the thread i
   ])
 })
 
+it('detaches managed Codex threads on daemon shutdown without marking agents gone', async () => {
+  const t = setup()
+  const agent = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'resumable-codex' })
+  await until(() => t.driver.launches.length === 1)
+
+  await t.manager.shutdown()
+
+  expect(t.driver.detaches).toEqual(['codex:1'])
+  expect(t.db.prepare('SELECT status, external_session_id FROM agents WHERE id=?').get(agent.id))
+    .toMatchObject({ status: 'active', external_session_id: 'thread-1' })
+  expect(JSON.parse((t.db.prepare('SELECT provider_state_json FROM agents WHERE id=?').get(agent.id) as any).provider_state_json))
+    .toMatchObject({ lifecycle: 'detached', thread_id: 'thread-1' })
+})
+
 it('never falls back to Claude when the selected Codex provider is unavailable', () => {
   const db = openDb(':memory:')
   db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/project', 'project')").run()
@@ -250,8 +281,95 @@ it('uses specialist provider defaults for verifier agents', async () => {
   const verifier = t.manager.hire({ boardId: 1, cwd: '/project', role: 'verifier', ephemeral: true })
   expect(verifier.provider).toBe('codex')
   await until(() => t.driver.launches.length === 1)
-  expect(t.driver.launches[0]).toMatchObject({ model: 'gpt-5.4' })
-  expect(t.driver.launches[0].metadata).toMatchObject({ role: 'verifier', effort: 'medium' })
+  expect(t.driver.launches[0]).toMatchObject({ model: 'gpt-5.4', accessProfile: 'read_only' })
+  expect(t.driver.launches[0].metadata).toMatchObject({
+    role: 'verifier',
+    effort: 'medium',
+    developerInstructions: expect.stringMatching(/read-only.*never modify files/i),
+  })
+})
+
+it('does not let a stable specialist name pin an old provider default', () => {
+  const t = setup()
+  t.db.prepare(`INSERT INTO agents (board_id, name, kind, role, status, provider, external_session_id)
+    VALUES (1, 'stable-verifier', 'hired', 'verifier', 'gone', 'codex', 'old-codex-thread')`).run()
+  writeAgentDefaults(t.db, {
+    worker: { provider: 'codex', model: null, effort: null },
+    specialist: { provider: 'claude', model: 'claude-specialist', effort: null },
+  })
+
+  const agent = t.manager.hire({ boardId: 1, cwd: '/project', name: 'stable-verifier', role: 'verifier' })
+
+  expect(agent).toMatchObject({ provider: 'claude', external_session_id: null, access_profile: 'read_only' })
+  expect(t.claude.calls[0]).toMatchObject({ model: 'claude-specialist', permissionMode: 'plan' })
+})
+
+it('clears stale Codex session state on a fresh same-name rehire', async () => {
+  const t = setup()
+  const first = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'fresh-codex' })
+  await until(() => t.driver.launches.length === 1)
+  t.driver.emit('codex:1', {
+    type: 'status', data: 'usage',
+    metadata: { tokenUsage: { total: { totalTokens: 10, inputTokens: 6, outputTokens: 4 } } },
+  })
+  await until(() => t.manager.transcript(first.id).info.tokens === 10)
+  expect(await t.manager.fire(first.id)).toBe(true)
+
+  const fresh = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'fresh-codex' })
+  expect(fresh).toMatchObject({ external_session_id: null, status: 'starting' })
+  expect(JSON.parse(fresh.provider_state_json)).toMatchObject({ lifecycle: 'starting', active_turn_id: null })
+  expect(JSON.parse(fresh.provider_state_json)).not.toHaveProperty('usage_total')
+  await until(() => t.driver.launches.length === 2)
+  expect(t.db.prepare('SELECT external_session_id FROM agents WHERE id=?').get(first.id))
+    .toMatchObject({ external_session_id: 'thread-2' })
+})
+
+it('enforces one owner and one active consumer for every resumed Codex thread', async () => {
+  const t = setup()
+  const owner = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'thread-owner' })
+  await until(() => t.driver.launches.length === 1)
+  await t.manager.fire(owner.id)
+
+  expect(() => t.manager.hire({
+    boardId: 1, cwd: '/project', provider: 'codex', name: 'thread-thief', resumeSession: 'thread-1',
+  })).toThrow(/already belongs to agent thread-owner/)
+
+  t.db.prepare(`INSERT INTO workspaces
+    (id, board_id, name, kind, root_path, base_ref) VALUES ('owned-workspace', 1, 'owned', 'shared', '/project', 'HEAD')`).run()
+  t.db.prepare(`INSERT INTO agent_sessions
+    (id, workspace_id, provider, external_id, status) VALUES ('owned-session', 'owned-workspace', 'codex', 'agent-os-thread', 'running')`).run()
+  expect(() => t.manager.hire({
+    boardId: 1, cwd: '/project', provider: 'codex', name: 'agent-os-thief', resumeSession: 'agent-os-thread',
+  })).toThrow(/active Agent OS job/)
+})
+
+it('reapplies persisted overrides on resume and refuses to persist rejected live updates', async () => {
+  const t = setup()
+  await t.driver.launch({ workspaceId: 'legacy-agent:44', cwd: '/project', externalId: 'thread-resume' })
+  t.db.prepare(`INSERT INTO agents
+    (id, board_id, name, kind, status, provider, external_session_id, access_profile, model, effort)
+    VALUES (44, 1, 'resume-codex', 'hired', 'active', 'codex', 'thread-resume', 'read_only', 'gpt-resume', 'high')`).run()
+  const resumed = t.manager.hire({
+    boardId: 1,
+    cwd: '/project',
+    name: 'resume-codex',
+    provider: 'codex',
+    resumeSession: 'thread-resume',
+    accessProfile: 'read_only',
+    model: 'gpt-resume',
+    effort: 'high',
+  })
+  await until(() => t.driver.updates.length === 1)
+  expect(t.driver.updates[0]).toEqual(['codex:1', {
+    model: 'gpt-resume', effort: 'high', accessProfile: 'read_only',
+  }])
+
+  t.driver.updateError = new Error('provider rejected update')
+  expect(await t.manager.setModel(resumed.id, 'rejected-model')).toBe(false)
+  expect(await t.manager.setEffort(resumed.id, 'ultra')).toBe('bad-level')
+  expect(await t.manager.setAccessProfile(resumed.id, 'full_access')).toBe(false)
+  expect(t.db.prepare('SELECT model, effort, access_profile FROM agents WHERE id=?').get(resumed.id))
+    .toMatchObject({ model: 'gpt-resume', effort: 'high', access_profile: 'read_only' })
 })
 
 it('parks Codex on a retrying provider limit and restores active state when the turn resumes', async () => {
@@ -358,8 +476,26 @@ it('accepts provider and access-profile controls through the server API', async 
   })
   expect(approval.statusCode).toBe(200)
   expect(driver.approvals).toEqual([['codex:1', 'approval-1', 'allow_session', undefined]])
+  expect(driver.approvalAnswers).toEqual([undefined])
   expect((await server.inject({
     method: 'POST', url: `/api/v1/agents/${id}/approvals/missing`, payload: { decision: 'forever' },
+  })).statusCode).toBe(400)
+  driver.emit('codex:1', {
+    type: 'tool',
+    data: 'answer questions',
+    metadata: { approval: true, kind: 'approval', requestId: 'questions-1', approvalKind: 'user-input' },
+  })
+  await until(() => manager.transcript(id).permissions.some((permission: any) => permission.id === 'questions-1'))
+  expect((await server.inject({
+    method: 'POST',
+    url: `/api/v1/agents/${id}/approvals/questions-1`,
+    payload: { decision: 'allow', answers: { framework: ['React'], notes: ['Accessible'] } },
+  })).statusCode).toBe(200)
+  expect(driver.approvalAnswers.at(-1)).toEqual({ framework: ['React'], notes: ['Accessible'] })
+  expect((await server.inject({
+    method: 'POST',
+    url: `/api/v1/agents/${id}/approvals/missing`,
+    payload: { decision: 'allow', answers: { bad: [42] } },
   })).statusCode).toBe(400)
 
   const bad = await server.inject({
@@ -433,6 +569,83 @@ it('runs a durable Agent OS Codex job through completion, usage, identity, and c
   await runtime.shutdown()
 })
 
+it('routes board controls and transcripts to Agent OS-owned Codex agents', async () => {
+  const db = openDb(':memory:')
+  db.prepare('INSERT INTO boards (id, project_path, name) VALUES (1, ?, ?)').run(process.cwd(), 'project')
+  const bus = new EventEmitter()
+  const runtime = createAgentOsRuntime(db)
+  runtime.setBus(bus)
+  const driver = new FakeCodexDriver()
+  runtime.registerDriver(driver)
+  const manager = new ProviderAgentManager(
+    db,
+    bus,
+    claudeStub(db).stub,
+    new CodexManagedAgentRuntime(db, bus, driver),
+    undefined,
+    runtime.jobExecutor,
+  )
+  writeProviderModelCache(db, [{
+    id: 'gpt-controlled', model: 'gpt-controlled', displayName: 'GPT Controlled',
+    supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
+  }], 'codex')
+  const workspace = await runtime.workspaceManager.create({
+    boardId: 1,
+    name: 'controlled-codex',
+    kind: 'shared',
+    rootPath: process.cwd(),
+    baseRef: 'HEAD',
+  })
+  const job = runtime.scheduler.create({ boardId: 1, workspaceId: workspace.id, provider: 'codex', maxAttempts: 1 })
+  await runtime.scheduler.tick()
+  await until(() => driver.launches.length === 1)
+  const agentId = Number(driver.launches[0].metadata?.agentId)
+
+  expect(manager.isHired(agentId)).toBe(true)
+  expect(manager.task(agentId, 'continue from the board')).toBe(true)
+  await until(() => driver.sends.some(([, text]) => text === 'continue from the board'))
+  driver.emit('codex:1', { type: 'output', data: 'Agent OS output is visible' })
+  await until(() => manager.transcript(agentId).lines.some((line: any) => line.text === 'Agent OS output is visible'))
+  expect(manager.transcript(agentId).info).toMatchObject({
+    provider: 'codex', accessProfile: 'workspace_write',
+    models: [expect.objectContaining({ value: 'gpt-controlled', supportedEffortLevels: ['high'] })],
+  })
+
+  expect(await manager.setModel(agentId, 'gpt-controlled')).toBe(true)
+  expect(await manager.setEffort(agentId, 'high')).toBe('ok')
+  expect(await manager.setAccessProfile(agentId, 'read_only')).toBe(true)
+  expect(driver.updates.slice(-3)).toEqual([
+    ['codex:1', { model: 'gpt-controlled' }],
+    ['codex:1', { effort: 'high' }],
+    ['codex:1', { accessProfile: 'read_only' }],
+  ])
+
+  driver.emit('codex:1', {
+    type: 'tool',
+    data: 'approve command',
+    metadata: { approval: true, kind: 'approval', requestId: 'agent-os-approval', approvalKind: 'command' },
+  })
+  await until(() => manager.transcript(agentId).permissions.length === 1)
+  expect(await manager.resolveApproval(agentId, 'agent-os-approval', 'allow')).toBe(true)
+  expect(driver.approvals.at(-1)).toEqual(['codex:1', 'agent-os-approval', 'allow', undefined])
+  expect(await manager.interruptAgent(agentId)).toBe(true)
+  expect(driver.interrupts).toContain('codex:1')
+  expect(await manager.fire(agentId)).toBe(true)
+  await until(() => runtime.scheduler.get(job.id)?.status === 'cancelled')
+  expect(manager.isHired(agentId)).toBe(false)
+
+  // Reusing the durable agent name for a fresh non-Agent-OS session must route
+  // controls to the new runtime, not its historical job session.
+  const name = (db.prepare('SELECT name FROM agents WHERE id=?').get(agentId) as { name: string }).name
+  await until(() => (db.prepare('SELECT status FROM agents WHERE id=?').get(agentId) as { status: string }).status === 'gone')
+  const rehired = manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name })
+  expect(rehired.id).toBe(agentId)
+  await until(() => driver.launches.length === 2)
+  expect(manager.task(agentId, 'fresh session control')).toBe(true)
+  await until(() => driver.sends.some(([sessionId, text]) => sessionId === 'codex:2' && text === 'fresh session control'))
+  await runtime.shutdown()
+})
+
 it('interrupts an Agent OS Codex job at its durable token budget and rejects unsupported cost budgets', async () => {
   const db = openDb(':memory:')
   db.prepare('INSERT INTO boards (id, project_path, name) VALUES (1, ?, ?)').run(process.cwd(), 'project')
@@ -479,6 +692,51 @@ it('interrupts an Agent OS Codex job at its durable token budget and rejects uns
   expect(runtime.scheduler.get(costJob.id)?.error).toMatch(/authoritative cost budget/)
   expect(driver.launches).toHaveLength(1)
   await runtime.shutdown()
+})
+
+it('preserves a running Agent OS Codex job when the daemon detaches its driver', async () => {
+  const db = openDb(':memory:')
+  db.prepare('INSERT INTO boards (id, project_path, name) VALUES (1, ?, ?)').run(process.cwd(), 'project')
+  const runtime = createAgentOsRuntime(db)
+  const driver = new FakeCodexDriver()
+  runtime.registerDriver(driver)
+  const workspace = await runtime.workspaceManager.create({
+    boardId: 1,
+    name: 'codex-detach-workspace',
+    kind: 'shared',
+    rootPath: process.cwd(),
+    baseRef: 'HEAD',
+  })
+  const job = runtime.scheduler.create({
+    boardId: 1,
+    workspaceId: workspace.id,
+    provider: 'codex',
+    maxAttempts: 1,
+  })
+  await runtime.scheduler.tick()
+  await until(() => driver.launches.length === 1)
+  const session = db.prepare("SELECT id, agent_id FROM agent_sessions WHERE json_extract(context_json, '$.job_id')=?")
+    .get(job.id) as { id: string; agent_id: number }
+
+  await runtime.shutdown()
+  await driver.detach('codex:1')
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  expect(runtime.scheduler.get(job.id)).toMatchObject({ status: 'running' })
+  expect(db.prepare('SELECT status FROM agent_sessions WHERE id=?').get(session.id)).toMatchObject({ status: 'running' })
+  expect(db.prepare('SELECT status FROM agents WHERE id=?').get(session.agent_id)).toMatchObject({ status: 'active' })
+
+  db.prepare(`UPDATE agents SET model='gpt-restored', effort='high', access_profile='read_only' WHERE id=?`)
+    .run(session.agent_id)
+  driver.updates.length = 0
+  const resumedRuntime = createAgentOsRuntime(db)
+  resumedRuntime.registerDriver(driver)
+
+  expect(await resumedRuntime.reconcileJobs()).toEqual({ resumed: [job.id], recovered: [] })
+  expect(driver.updates).toEqual([['codex:1', {
+    model: 'gpt-restored', effort: 'high', accessProfile: 'read_only',
+  }]])
+  await resumedRuntime.shutdown()
 })
 
 it('requeues a managed Codex job cleanly when its provider is unavailable during restart', async () => {

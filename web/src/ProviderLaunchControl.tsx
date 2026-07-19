@@ -23,26 +23,25 @@ export function ProviderLaunchControl({
   stopPropagation?: boolean
   onLaunch: (body: ProviderLaunchBody) => Promise<void>
 }) {
-  const available = providers.filter((provider) => provider.available)
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
   const [accessProfile, setAccessProfile] = useState<AccessProfile | ''>('')
   const [launching, setLaunching] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const selectedProvider = available.find((candidate) => candidate.id === provider)
+  const selectedProvider = providers.find((candidate) => candidate.id === provider)
   const selectedModel = selectedProvider?.models.find((candidate) => candidate.value === model)
   const effortLevels = [...new Set(
     (selectedModel ? [selectedModel] : selectedProvider?.models ?? [])
       .flatMap((candidate) => candidate.supportedEffortLevels ?? []),
   )]
-  const canSelectModel = !!selectedProvider && hasAgentCapability(
+  const canSelectModel = !!selectedProvider?.available && hasAgentCapability(
     selectedProvider.capabilities, 'model', selectedProvider.id,
   ) && selectedProvider.models.length > 0
-  const canSelectEffort = !!selectedProvider && hasAgentCapability(
+  const canSelectEffort = !!selectedProvider?.available && hasAgentCapability(
     selectedProvider.capabilities, 'effort', selectedProvider.id,
   ) && effortLevels.length > 0
-  const canSelectAccess = !!selectedProvider && hasAgentCapability(
+  const canSelectAccess = !!selectedProvider?.available && hasAgentCapability(
     selectedProvider.capabilities, 'access_profile', selectedProvider.id,
   )
 
@@ -84,13 +83,17 @@ export function ProviderLaunchControl({
         disabled={launching} onClick={launch}>
         {launching ? 'Starting…' : label}
       </button>
-      {available.length > 0 && (
+      {providers.length > 0 && (
         <label className="provider-launch-override">
           <span className="sr-only">Provider override</span>
           <select value={provider} aria-label={`${label} provider override`} title="Optional provider override"
             onChange={(event) => changeProvider(event.target.value)}>
             <option value="">Default</option>
-            {available.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+            {providers.map((candidate) => (
+              <option key={candidate.id} value={candidate.id} disabled={!candidate.available}>
+                {candidate.name}{candidate.available ? '' : ' (unavailable)'}
+              </option>
+            ))}
           </select>
         </label>
       )}
@@ -136,7 +139,7 @@ export function ProviderLaunchControl({
           </span>
         </details>
       )}
-      {error && <span className="sr-only" role="alert">{error}</span>}
+      {error && <span className="provider-launch-error" role="alert">{error}</span>}
     </div>
   )
 }

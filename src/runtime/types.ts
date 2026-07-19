@@ -217,5 +217,7 @@ export interface AgentDriver {
   send(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
   stop(sessionId: string): Promise<void>
+  /** Release this process's subscription without terminating the resumable provider session. */
+  detach?(sessionId: string): Promise<void>
   events(sessionId: string): AsyncIterable<DriverEvent>
 }

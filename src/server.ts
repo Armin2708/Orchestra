@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
@@ -45,13 +46,14 @@ export interface ConductorLike extends AgentSessionControlHost {
   // optional so existing test stubs stay valid; the real Conductor implements all of these
   setPermissionMode?(agentId: number, mode: string): Promise<boolean>
   resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean | Promise<boolean>
-  resolveApproval?(agentId: number, requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel', message?: string): boolean | Promise<boolean>
+  resolveApproval?(agentId: number, requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel', message?: string, answers?: Record<string, string[]>): boolean | Promise<boolean>
   setAccessProfile?(agentId: number, profile: AccessProfile): Promise<boolean>
   setModel?(agentId: number, model: string): Promise<boolean>
   setEffort?(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
   providerCatalog?(): Promise<AgentProviderCatalog[]>
   capabilities?(agentId: number): string[]
   adoptLaunch?(agentId: number): void
+  detachAll?(): Promise<void>
   shutdown?(): Promise<void>
 }
 declare module 'fastify' {
@@ -197,6 +199,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     for (const [k, t] of m) if (now - t > 90_000) m.delete(k)
     return [...m.keys()].map((key) => ({ key, label: 'subagent' }))
   }
+  const hookTokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
+  const hookAgent = (agentId: number, body: Record<string, unknown> | null | undefined) => {
+    const agent = db.prepare('SELECT * FROM agents WHERE id=?').get(agentId) as any
+    if (!agent || agent.kind !== 'session') return null
+    // Name-only legacy API registrations have no provider session to steal and keep
+    // their historical bodyless lifecycle contract. Every real hook session is bound.
+    if (!agent.hook_token_hash && !agent.external_session_id) return agent
+    const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : ''
+    const sessionId = typeof body?.session_id === 'string' ? body.session_id : ''
+    const token = typeof body?.session_token === 'string' ? body.session_token : ''
+    if (!provider || !sessionId || !token || provider !== agent.provider || sessionId !== agent.external_session_id)
+      return null
+    return tokenEquals(hookTokenHash(token), String(agent.hook_token_hash ?? '')) ? agent : null
+  }
 
   server.post<{ Body: { project_path: string } }>('/api/v1/boards/resolve', (req) => {
     const p = req.body.project_path
@@ -215,30 +231,44 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         return reply.code(400).send({ error: 'invalid provider id' })
       const provider = requestedProvider ?? 'claude'
       const externalSessionId = req.body.external_session_id ?? session_id ?? null
+      if (externalSessionId !== null && (typeof externalSessionId !== 'string' || !externalSessionId.trim() || externalSessionId.length > 512))
+        return reply.code(400).send({ error: 'session_id must be a non-empty string of 512 characters or fewer' })
       let name = req.body.name
-      if (!name && session_id) {
-        // same session re-registering (e.g. lost session file) keeps its identity
-        const existing = db.prepare(`SELECT name FROM agents WHERE board_id=? AND provider=? AND session_id=?`)
-          .get(board_id, provider, session_id) as any
-        if (existing) name = existing.name
+      const identity = externalSessionId ? db.prepare(`SELECT * FROM agents WHERE provider=? AND external_session_id=?`)
+        .get(provider, externalSessionId) as any : undefined
+      if (identity) {
+        if (identity.kind !== 'session' || identity.board_id !== board_id || (name && name !== identity.name))
+          return reply.code(409).send({ error: 'provider session identity is already bound to another agent' })
+        name = identity.name
       }
       if (!name) {
         do { name = generateName() } while (
           db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(board_id, name))
       }
-      const named = db.prepare('SELECT provider FROM agents WHERE board_id=? AND name=?').get(board_id, name) as
-        { provider: string } | undefined
-      if (named && named.provider !== provider)
-        return reply.code(409).send({ error: `agent ${name} is already registered with provider ${named.provider}` })
-      db.prepare(`
-        INSERT INTO agents (board_id, name, session_id, provider, external_session_id) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(board_id, name) DO UPDATE SET
-          session_id=excluded.session_id, external_session_id=COALESCE(excluded.external_session_id, agents.external_session_id),
-          status='active', last_seen=datetime('now')
-      `).run(board_id, name, session_id ?? null, provider, externalSessionId)
-      const agent = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name)
+      const named = db.prepare('SELECT * FROM agents WHERE board_id=? AND name=?').get(board_id, name) as any
+      const sameIdentity = !!named && identity?.id === named.id
+      const legacyNameOnly = !!named && !externalSessionId && !named.external_session_id && named.kind === 'session'
+      if (named && !sameIdentity && !legacyNameOnly)
+        return reply.code(409).send({ error: `agent ${name} is already registered with another session` })
+      const sessionToken = externalSessionId ? randomBytes(32).toString('base64url') : null
+      const tokenHash = sessionToken ? hookTokenHash(sessionToken) : null
+      try {
+        db.prepare(`
+          INSERT INTO agents (board_id, name, session_id, provider, external_session_id, hook_token_hash)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(board_id, name) DO UPDATE SET
+            session_id=excluded.session_id, external_session_id=excluded.external_session_id,
+            hook_token_hash=excluded.hook_token_hash, status='active', last_seen=datetime('now')
+        `).run(board_id, name, session_id ?? null, provider, externalSessionId, tokenHash)
+      } catch (error) {
+        if (String(error).includes('UNIQUE constraint failed'))
+          return reply.code(409).send({ error: 'provider session identity is already registered' })
+        throw error
+      }
+      const stored = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name) as any
+      const { hook_token_hash: _secretHash, ...agent } = stored
       emit(board_id, 'agent', agent)
-      return agent
+      return { ...agent, ...(sessionToken ? { session_token: sessionToken } : {}) }
     })
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/snapshot', (req) => {
@@ -734,8 +764,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (!card) return reply.code(404).send({ error: 'not found' })
     if (card.column === 'done') return reply.code(400).send({ error: 'card is already done' })
     if (maestro.isLaunched(card.id)) return reply.code(409).send({ error: 'card already launched or queued' })
-    if (card.owner_agent_id && maestro.isHired(card.owner_agent_id))
-      return reply.code(409).send({ error: `already being worked by ${card.owner}` })
+    if (card.owner_agent_id) {
+      const owner = db.prepare('SELECT name, kind, status FROM agents WHERE id=?').get(card.owner_agent_id) as
+        { name: string; kind: string; status: string } | undefined
+      if (maestro.isHired(card.owner_agent_id) || (owner?.kind === 'hired' && owner.status !== 'gone'))
+        return reply.code(409).send({ error: `already being worked by ${owner?.name ?? card.owner}` })
+    }
     if (req.body?.access_profile !== undefined && !ACCESS_PROFILES.includes(req.body.access_profile))
       return reply.code(400).send({ error: `access_profile must be one of: ${ACCESS_PROFILES.join(', ')}` })
     if (req.body?.effort !== undefined && !/^[a-zA-Z0-9_-]{1,40}$/.test(req.body.effort))
@@ -941,18 +975,27 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return ok ? { ok: true } : reply.code(404).send({ error: 'no pending permission request with that id' })
     })
 
-  server.post<{ Params: { id: string; requestId: string }; Body: { decision?: string; message?: string } | null }>(
+  server.post<{ Params: { id: string; requestId: string }; Body: { decision?: string; message?: string; answers?: Record<string, unknown> } | null }>(
     '/api/v1/agents/:id/approvals/:requestId', async (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const decision = req.body?.decision
       const decisions = ['allow', 'allow_session', 'deny', 'cancel'] as const
       if (!decision || !decisions.includes(decision as (typeof decisions)[number]))
         return reply.code(400).send({ error: `decision must be one of: ${decisions.join(', ')}` })
+      const rawAnswers = req.body?.answers
+      if (rawAnswers !== undefined && (
+        !rawAnswers || typeof rawAnswers !== 'object' || Array.isArray(rawAnswers)
+        || Object.keys(rawAnswers).length > 50
+        || Object.values(rawAnswers).some((value) => !Array.isArray(value)
+          || value.length > 50
+          || value.some((answer) => typeof answer !== 'string' || answer.length > 8_000))
+      )) return reply.code(400).send({ error: 'answers must map question ids to bounded string arrays' })
       const ok = (await maestro.resolveApproval?.(
         Number(req.params.id),
         req.params.requestId,
         decision as (typeof decisions)[number],
         req.body?.message,
+        rawAnswers as Record<string, string[]> | undefined,
       )) ?? false
       return ok ? { ok: true, decision } : reply.code(404).send({ error: 'no compatible pending approval request with that id' })
     })
@@ -1046,26 +1089,32 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { key?: string } }>('/api/v1/agents/:id/subping', (req) => {
+  server.post<{ Params: { id: string }; Body: { key?: string; state?: string; provider?: string; session_id?: string; session_token?: string } }>('/api/v1/agents/:id/subping', (req, reply) => {
     const id = Number(req.params.id)
+    const a = hookAgent(id, req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     if (!termSubs.has(id)) termSubs.set(id, new Map())
-    termSubs.get(id)!.set(String(req.body?.key ?? 'sub'), Date.now())
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
-    if (a) emit(a.board_id, 'agent', { id, subs: true })
+    const key = String(req.body?.key ?? 'sub')
+    if (req.body?.state === 'stopped') termSubs.get(id)!.delete(key)
+    else termSubs.get(id)!.set(key, Date.now())
+    emit(a.board_id, 'agent', { id, subs: termSubs.get(id)!.size > 0 })
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/heartbeat', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
     const id = Number(req.params.id)
+    const a = hookAgent(id, req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
-    if (a && req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
-    if (a) emit(a.board_id, 'agent', a)
-    return a ?? {}
+    if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
+    const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id)
+    emit(a.board_id, 'agent', updated)
+    return updated
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/pulse', (req) => {
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/pulse', (req, reply) => {
+    const a = hookAgent(Number(req.params.id), req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
     if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
     // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
@@ -1079,10 +1128,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { agent: a, messages }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/leave', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/leave', (req, reply) => {
     const id = Number(req.params.id)
-    const boardOf = db.prepare(`SELECT board_id FROM agents WHERE id=?`).get(id) as any
-    if (boardOf && req.body?.telemetry) recordTelemetry(db, boardOf.board_id, id, req.body.telemetry)
+    const bound = hookAgent(id, req.body)
+    if (!bound) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
+    if (req.body?.telemetry) recordTelemetry(db, bound.board_id, id, req.body.telemetry)
     removeAgentCards(db, id) // gone agents leave a clean board
     db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any

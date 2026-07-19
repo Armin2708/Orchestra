@@ -248,7 +248,26 @@ export type AgentProviderCatalog = {
   available: boolean
   capabilities?: string[] | Record<string, boolean>
   auth_state?: 'authenticated' | 'unauthenticated' | 'unavailable' | string
-  health?: 'ready' | 'degraded' | 'unavailable' | string
+  auth?: {
+    status: 'authenticated' | 'unauthenticated' | 'unknown' | string
+    updated_at: string
+    account?: string
+    detail?: string
+  }
+  health?: {
+    available: boolean
+    status: 'ready' | 'degraded' | 'unavailable' | string
+    updated_at: string
+    version?: string
+    detail?: string
+  } | 'ready' | 'degraded' | 'unavailable' | string
+  usage?: {
+    updated_at: string
+    stale?: boolean
+    rate_limits?: unknown
+    usage?: unknown
+    detail?: string
+  }
   usage_health?: 'live' | 'stale' | 'unavailable' | string
   rate_limit_health?: 'live' | 'stale' | 'unavailable' | string
   models: AgentProviderModel[]

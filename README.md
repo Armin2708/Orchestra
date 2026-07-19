@@ -37,10 +37,16 @@ Start a new Codex session in the project, then open `/hooks` once to review and 
 **Manual install (npm):**
 
 ```bash
-npm i -g orchestra-board   # or: npx orchestra-board serve
+npm i -g orchestra-board
 orchestra install --provider both  # Claude + Codex hooks; global by default
 orchestra serve &    # or let the hooks auto-start it
 open http://localhost:4750
+```
+
+For a zero-install run, invoke the package's `orchestra` binary explicitly:
+
+```bash
+npx --yes --package orchestra-board orchestra serve
 ```
 
 For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
@@ -182,6 +188,8 @@ orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tai
 | `ORCHESTRA_PORT` | `4750` | Daemon port |
 | `ORCHESTRA_HOME` | `~/.orchestra` | Data directory (SQLite db, pidfile, session files) |
 | `ORCHESTRA_NAME` | auto-generated | Fix an agent name for a terminal (`export ORCHESTRA_NAME=lead-otter`) |
+| `ORCHESTRA_CODEX_COMMAND` | `codex` | Codex CLI executable used for the supervised app-server |
+| `ORCHESTRA_CODEX_FORWARD_ENV` | empty | Comma-separated extra environment-variable names to pass to app-server deliberately |
 
 ## Uninstall
 

@@ -43,6 +43,7 @@ import {
   WorkspaceManager,
 } from '../runtime/index.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
+import { readProviderModelCache } from '../agent-providers.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -561,6 +562,8 @@ type LiveJob = { driver: AgentDriver; session: DriverSession }
 /** Executes durable jobs through provider-neutral drivers and completes them from driver events. */
 export class AgentOsJobExecutor implements JobExecutor {
   private readonly live = new Map<string, LiveJob>()
+  private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
+  private readonly managedSubagents = new Map<number, Map<string, string>>()
   private scheduler?: JobScheduler
   private shuttingDown = false
 
@@ -581,6 +584,170 @@ export class AgentOsJobExecutor implements JobExecutor {
 
   prepareShutdown(): void {
     this.shuttingDown = true
+  }
+
+  ownsAgent(agentId: number): boolean {
+    return !!this.controlForAgent(agentId)
+  }
+
+  isHiredAgent(agentId: number): boolean {
+    const control = this.controlForAgent(agentId)
+    return !!control?.live && ['running', 'cancelling'].includes(control.job.status)
+  }
+
+  isLaunchedCard(cardId: number): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM jobs
+      WHERE card_id=? AND status IN ('queued','running','cancelling') LIMIT 1`).get(cardId)
+  }
+
+  taskAgent(agentId: number, text: string): boolean {
+    const control = this.controlForAgent(agentId)
+    if (!control?.live || !text) return false
+    void control.live.driver.send(control.live.session.id, text).catch((error) => {
+      this.recordDriverEvent(control.job, control.sessionId, {
+        sessionId: control.live!.session.id,
+        seq: Date.now(),
+        type: 'error',
+        at: new Date().toISOString(),
+        data: error instanceof Error ? error.message : String(error),
+        metadata: { control: 'task' },
+      })
+    })
+    return true
+  }
+
+  deliverAgent(agentId: number, message: any): boolean {
+    const from = message?.from_name ? ` from ${message.from_name}` : ''
+    const kind = message?.kind === 'notify' ? 'notification' : message?.kind === 'task' ? 'task' : 'message'
+    return this.taskAgent(agentId, `orchestra ${kind}${from}: ${String(message?.body ?? '')}`)
+  }
+
+  transcriptAgent(agentId: number): any {
+    const control = this.controlForAgent(agentId)
+    if (!control) return { lines: [], working: null, permissions: [] }
+    const rows = this.db.prepare(`SELECT kind, payload, created_at FROM (
+      SELECT rowid, kind, payload, created_at FROM os_events
+      WHERE session_id=? AND kind LIKE 'driver.%' ORDER BY rowid DESC LIMIT 500
+    ) ORDER BY rowid`).all(control.sessionId) as Array<{ kind: string; payload: string; created_at: string }>
+    const lines = rows.flatMap((row) => {
+      let payload: Record<string, unknown>
+      try { payload = JSON.parse(row.payload) as Record<string, unknown> } catch { return [] }
+      const text = typeof payload.data === 'string' ? payload.data : ''
+      if (!text) return []
+      const eventType = row.kind.slice('driver.'.length)
+      const kind = eventType === 'error' ? 'error'
+        : eventType === 'tool' ? 'tool'
+          : eventType === 'output' ? 'text' : 'status'
+      return [{ at: row.created_at, kind, text, metadata: payload.metadata ?? {} }]
+    })
+    const agent = this.db.prepare('SELECT model, effort, access_profile FROM agents WHERE id=?').get(agentId) as
+      { model: string | null; effort: string | null; access_profile: string | null } | undefined
+    const accessProfile = agent?.access_profile ?? 'workspace_write'
+    return {
+      lines,
+      working: control.live ? { secs: 0, tokens: control.job.spent_tokens } : null,
+      info: {
+        provider: control.job.provider,
+        model: agent?.model ?? control.job.model,
+        effort: agent?.effort ?? null,
+        accessProfile,
+        permissionMode: accessProfile === 'read_only' ? 'plan'
+          : accessProfile === 'full_access' ? 'bypassPermissions' : 'acceptEdits',
+        tokens: control.job.spent_tokens,
+        models: readProviderModelCache(this.db, control.job.provider)?.models ?? [],
+        capabilities: [
+          'steering', 'approvals', 'model', 'effort', 'rate_limits', 'usage', 'diffs', 'plans',
+          'subagents', 'access_profile', 'interrupt', 'stop',
+        ],
+      },
+      permissions: [...(this.pendingApprovals.get(agentId)?.values() ?? [])],
+    }
+  }
+
+  subagentsForAgent(agentId: number): { key: string; label: string }[] {
+    return [...(this.managedSubagents.get(agentId)?.entries() ?? [])].map(([key, label]) => ({ key, label }))
+  }
+
+  async interruptManagedAgent(agentId: number): Promise<boolean> {
+    const control = this.controlForAgent(agentId)
+    if (!control?.live) return false
+    await control.live.driver.interrupt(control.live.session.id)
+    return true
+  }
+
+  async fireManagedAgent(agentId: number): Promise<boolean> {
+    const control = this.controlForAgent(agentId)
+    if (!control || !this.scheduler || !['queued', 'running', 'cancelling'].includes(control.job.status)) return false
+    try { await this.scheduler.cancel(control.job.id); return true }
+    catch { return false }
+  }
+
+  async setManagedAgentModel(agentId: number, model: string): Promise<boolean> {
+    if (!model.trim()) return false
+    const control = this.controlForAgent(agentId)
+    const update = control?.live && (control.live.driver as AgentDriver & {
+      updateSession?(sessionId: string, patch: { model: string }): Promise<void>
+    }).updateSession
+    if (!control?.live || !update) return false
+    try { await update.call(control.live.driver, control.live.session.id, { model }) }
+    catch { return false }
+    this.db.prepare('UPDATE jobs SET model=? WHERE id=?').run(model, control.job.id)
+    this.db.prepare('UPDATE agent_sessions SET model=?, updated_at=datetime(\'now\') WHERE id=?').run(model, control.sessionId)
+    this.db.prepare('UPDATE agents SET model=?, last_seen=datetime(\'now\') WHERE id=?').run(model, agentId)
+    return true
+  }
+
+  async setManagedAgentEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
+    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(level)) return 'bad-level'
+    const control = this.controlForAgent(agentId)
+    if (!control) return 'not-found'
+    const update = control.live && (control.live.driver as AgentDriver & {
+      updateSession?(sessionId: string, patch: { effort: string }): Promise<void>
+    }).updateSession
+    if (!control.live || !update) return 'no-session'
+    try { await update.call(control.live.driver, control.live.session.id, { effort: level }) }
+    catch { return 'bad-level' }
+    this.db.prepare('UPDATE agents SET effort=?, last_seen=datetime(\'now\') WHERE id=?').run(level, agentId)
+    return 'ok'
+  }
+
+  async setManagedAgentAccess(
+    agentId: number,
+    profile: 'read_only' | 'workspace_write' | 'full_access',
+  ): Promise<boolean> {
+    if (!['read_only', 'workspace_write', 'full_access'].includes(profile)) return false
+    const control = this.controlForAgent(agentId)
+    const update = control?.live && (control.live.driver as AgentDriver & {
+      updateSession?(sessionId: string, patch: { accessProfile: typeof profile }): Promise<void>
+    }).updateSession
+    if (!control?.live || !update) return false
+    try { await update.call(control.live.driver, control.live.session.id, { accessProfile: profile }) }
+    catch { return false }
+    this.db.prepare('UPDATE agents SET access_profile=?, last_seen=datetime(\'now\') WHERE id=?').run(profile, agentId)
+    return true
+  }
+
+  async resolveManagedApproval(
+    agentId: number,
+    requestId: string,
+    decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
+    message?: string,
+    answers?: Record<string, string[]>,
+  ): Promise<boolean> {
+    const control = this.controlForAgent(agentId)
+    const resolve = control?.live && (control.live.driver as AgentDriver & {
+      resolveApproval?(
+        sessionId: string,
+        id: string,
+        choice: 'allow' | 'allow_session' | 'deny' | 'cancel',
+        detail?: string,
+        answers?: Record<string, string[]>,
+      ): Promise<boolean>
+    }).resolveApproval
+    if (!control?.live || !resolve || !this.pendingApprovals.get(agentId)?.has(requestId)) return false
+    const ok = await resolve.call(control.live.driver, control.live.session.id, requestId, decision, message, answers)
+    if (ok) this.pendingApprovals.get(agentId)?.delete(requestId)
+    return ok
   }
 
   async reconcileRunningJobs(): Promise<{ resumed: string[]; recovered: string[] }> {
@@ -609,6 +776,26 @@ export class AgentOsJobExecutor implements JobExecutor {
       try {
         const session = await driver.attach(sessionRow.external_id)
         if (!session) throw new Error('provider session is no longer live')
+        if (sessionRow.provider === 'codex') {
+          const update = (driver as AgentDriver & {
+            updateSession?(sessionId: string, patch: {
+              model?: string
+              effort?: string
+              accessProfile?: 'read_only' | 'workspace_write' | 'full_access'
+            }): Promise<void>
+          }).updateSession
+          const patch = {
+            ...(sessionRow.model ? { model: sessionRow.model } : {}),
+            ...(sessionRow.effort ? { effort: sessionRow.effort } : {}),
+            ...(sessionRow.access_profile ? { accessProfile: sessionRow.access_profile } : {}),
+          }
+          if (!update) throw new Error('Codex driver cannot restore persisted session overrides')
+          await update.call(driver, session.id, patch)
+        }
+        if (sessionRow.provider === 'claude') {
+          await driver.send(session.id,
+            'The Orchestra daemon restarted while this durable job was active. Continue the existing job from the current workspace and conversation state; verify prior work before making further changes, then complete the assignment.')
+        }
         this.db.prepare("UPDATE agent_sessions SET status='running', updated_at=datetime('now') WHERE id=?")
           .run(sessionRow.id)
         this.live.set(job.id, { driver, session })
@@ -647,7 +834,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     this.assertCardClaimable(job)
     const cwd = this.workspaces.root(workspace)
     const managedAgentId = !capabilities.rawTerminal && capabilities.managesAgentIdentity !== true
-      ? this.prepareManagedAgent(effectiveJob, cwd, contract?.policy_id ? 'workspace_write' : 'full_access')
+      ? this.prepareManagedAgent(effectiveJob, cwd, 'workspace_write')
       : null
     const request = job.provider === 'shell'
       ? this.shellRequest(effectiveJob, workspace, contract, cwd)
@@ -658,9 +845,9 @@ export class AgentOsJobExecutor implements JobExecutor {
           name: job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
           prompt: this.prompt(job, contract),
           ...(job.model ? { model: job.model } : {}),
-          accessProfile: contract?.policy_id ? 'workspace_write' as const : 'full_access' as const,
+          accessProfile: 'workspace_write' as const,
           ...(job.provider === 'claude'
-            ? { permissionMode: contract?.policy_id ? 'default' : 'bypassPermissions' }
+            ? { permissionMode: 'default' }
             : {}),
           ...(budgetCents !== null ? { maxBudgetUsd: Math.max(0.01, (budgetCents - job.spent_cents) / 100) } : {}),
           ...(budgetTokens !== null ? { taskBudgetTokens: Math.max(1, budgetTokens - job.spent_tokens) } : {}),
@@ -830,6 +1017,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     initialAccountedCents = 0,
   ): Promise<void> {
     let failure: string | undefined
+    let detached = false
     let accountedTokens = Math.max(0, initialAccountedTokens)
     let accountedCents = Math.max(0, initialAccountedCents)
     let stopRequested = false
@@ -870,7 +1058,9 @@ export class AgentOsJobExecutor implements JobExecutor {
         }
         if (event.type === 'exit') {
           const exitCode = Number(event.metadata?.exitCode)
-          if (this.shuttingDown || event.data.includes('process.stopped')) {
+          if (event.metadata?.detached === true || this.shuttingDown) {
+            detached = true
+          } else if (event.data.includes('process.stopped')) {
             failure = 'job interrupted by daemon shutdown or an explicit process stop'
           } else if (event.data.includes('failed') || event.data.includes('lost') || (Number.isFinite(exitCode) && exitCode !== 0)) {
             failure = event.data || `process exited with code ${exitCode}`
@@ -886,6 +1076,7 @@ export class AgentOsJobExecutor implements JobExecutor {
       failure = error instanceof Error ? error.message : String(error)
     } finally {
       this.live.delete(job.id)
+      if (detached || this.shuttingDown) return
       this.db.prepare(`UPDATE agent_sessions SET status=?, updated_at=datetime('now') WHERE id=?`)
         .run(failure ? 'failed' : 'stopped', sessionId)
       const current = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
@@ -1014,6 +1205,7 @@ export class AgentOsJobExecutor implements JobExecutor {
   }
 
   private recordDriverEvent(job: Job, sessionId: string, event: DriverEvent): void {
+    this.trackManagedEvent(sessionId, event)
     const current = this.db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(job.id) as { workspace_id: string | null } | undefined
     new EventStore(this.db).append({
       boardId: job.board_id,
@@ -1032,10 +1224,69 @@ export class AgentOsJobExecutor implements JobExecutor {
     })
   }
 
-  private sessionForJob(jobId: string): { id: string; provider: string; external_id: string | null } | undefined {
-    return this.db.prepare(`SELECT id, provider, external_id FROM agent_sessions
-      WHERE json_extract(context_json, '$.job_id')=? ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
-      .get(jobId) as { id: string; provider: string; external_id: string | null } | undefined
+  private sessionForJob(jobId: string): {
+    id: string
+    provider: string
+    external_id: string | null
+    model: string | null
+    effort: string | null
+    access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+  } | undefined {
+    return this.db.prepare(`SELECT s.id, s.provider, s.external_id,
+      COALESCE(a.model, s.model) AS model, a.effort, a.access_profile
+      FROM agent_sessions s LEFT JOIN agents a ON a.id=s.agent_id
+      WHERE json_extract(s.context_json, '$.job_id')=?
+      ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId) as {
+        id: string
+        provider: string
+        external_id: string | null
+        model: string | null
+        effort: string | null
+        access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+      } | undefined
+  }
+
+  private controlForAgent(agentId: number): { job: Job; sessionId: string; live?: LiveJob } | undefined {
+    const row = this.db.prepare(`SELECT s.id AS session_id, j.* FROM agent_sessions s
+      JOIN jobs j ON j.id=json_extract(s.context_json, '$.job_id')
+      JOIN agents a ON a.id=s.agent_id
+      WHERE s.agent_id=? AND a.session_id=('agent-os:' || j.id)
+      ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as
+      (Record<string, unknown> & { session_id: string }) | undefined
+    if (!row) return undefined
+    const job = mapRuntimeJob(row)
+    return { job, sessionId: String(row.session_id), live: this.live.get(job.id) }
+  }
+
+  private trackManagedEvent(sessionId: string, event: DriverEvent): void {
+    const row = this.db.prepare('SELECT agent_id FROM agent_sessions WHERE id=?').get(sessionId) as
+      { agent_id: number | null } | undefined
+    if (!row?.agent_id) return
+    const agentId = row.agent_id
+    const metadata = event.metadata ?? {}
+    const requestId = typeof metadata.requestId === 'string' ? metadata.requestId : undefined
+    if (requestId && (metadata.approval === true || metadata.kind === 'approval')) {
+      const approvals = this.pendingApprovals.get(agentId) ?? new Map<string, Record<string, unknown>>()
+      approvals.set(requestId, {
+        id: requestId,
+        at: event.at,
+        title: `${String(metadata.approvalKind ?? 'tool').replaceAll('-', ' ')} approval`,
+        summary: event.data,
+        ...metadata,
+      })
+      this.pendingApprovals.set(agentId, approvals)
+    }
+    const subagentId = typeof metadata.subagentId === 'string' ? metadata.subagentId : undefined
+    if (subagentId && metadata.subagentStatus === 'started') {
+      const subagents = this.managedSubagents.get(agentId) ?? new Map<string, string>()
+      subagents.set(subagentId, String(metadata.label ?? 'subagent'))
+      this.managedSubagents.set(agentId, subagents)
+    }
+    if (subagentId && metadata.subagentStatus === 'stopped') this.managedSubagents.get(agentId)?.delete(subagentId)
+    if (event.type === 'exit') {
+      this.pendingApprovals.delete(agentId)
+      this.managedSubagents.delete(agentId)
+    }
   }
 
   private markSessionFailed(id: string): void {

@@ -258,6 +258,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .provider-launch-config-panel select:focus-visible { outline: 2px solid rgba(54, 101, 56, .2); outline-offset: 1px; }
 .provider-launch-card .provider-launch-config-panel { right: auto; left: 0; }
+.provider-launch-error {
+  position: absolute; z-index: 29; top: calc(100% + 6px); right: 0; width: max-content; max-width: 280px;
+  border: 1px solid #d7aaa4; border-radius: 7px; background: #fff4f2; color: #8f2d2a;
+  padding: 6px 8px; font-size: 10px; line-height: 1.35; box-shadow: 0 5px 16px rgba(104, 36, 33, .12);
+}
+.provider-launch-card .provider-launch-error { right: auto; left: 0; }
 .t-top > .provider-launch { margin-left: auto; }
 .avatar.hired { box-shadow: 0 0 0 1.5px var(--ink) !important; }
 .crew-slot .fire {
@@ -497,6 +503,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-perm-deny { border: 1px solid #b3564a; color: #d99a91; }
 .cc-perm-deny:hover { background: rgba(179, 86, 74, 0.15); }
 .cc-perm-external { color: #999489; font-size: 11.5px; }
+.cc-inline-control-error { color: #d99a91; font-size: 10.5px; max-width: 360px; }
+.cc-user-input { display: grid; gap: 10px; min-width: min(440px, 72vw); }
+.cc-user-input-question { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+.cc-user-input-question legend { color: #DED9D1; font-weight: 600; }
+.cc-user-input-question p { color: #aaa49a; font-size: 12px; margin: 0; }
+.cc-user-input-question select,
+.cc-user-input-question input[type="text"],
+.cc-user-input-question input[type="password"],
+.cc-user-input-question input[type="number"],
+.cc-user-input-question input[type="email"],
+.cc-user-input-question input[type="url"],
+.cc-user-input-question input[type="date"],
+.cc-user-input-question input[type="datetime-local"],
+.cc-user-input-question textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid #5f5b55; border-radius: 5px;
+  background: #242320; color: #e5e0d8; padding: 6px 8px; font: inherit;
+}
+.cc-user-input-question textarea { resize: vertical; }
+.cc-user-input-option { display: flex; align-items: flex-start; gap: 7px; color: #c9c3ba; font-size: 12px; }
+.cc-perm-actions button:disabled { opacity: 0.45; cursor: default; }
+.cc-perm-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 /* ── Roadmap ideas ───────────────────────────────── */
 .ideas { display: grid; gap: 8px; }

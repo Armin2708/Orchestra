@@ -227,6 +227,31 @@ it('POST /cards/:id/launch rejects double launches and works without a conductor
   expect((await bare.inject({ method: 'POST', url: `/api/v1/cards/${c2.id}/launch` })).statusCode).toBe(501)
 })
 
+it('POST /cards/:id/launch rejects a persisted live owner even before runtime reconciliation', async () => {
+  const stub: ConductorLike = {
+    isHired: () => false,
+    hire: () => ({}),
+    deliver: () => true,
+    task: () => true,
+    transcript: () => ({ lines: [], working: null }),
+    subagents: () => [],
+    interruptAgent: async () => true,
+    fire: async () => true,
+    launch: () => ({ agent: {} }),
+    isLaunched: () => false,
+  }
+  const db = openDb(':memory:')
+  const server = buildServer(db, () => stub)
+  await server.ready()
+  db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/p', 'p')").run()
+  const ownerId = Number(db.prepare(`INSERT INTO agents
+    (board_id, name, kind, status, provider) VALUES (1, 'agent-os-owner', 'hired', 'active', 'codex')`).run().lastInsertRowid)
+  const cardId = Number(db.prepare(`INSERT INTO cards
+    (board_id, title, owner_agent_id, column_name) VALUES (1, 'owned', ?, 'in_progress')`).run(ownerId).lastInsertRowid)
+
+  expect((await server.inject({ method: 'POST', url: `/api/v1/cards/${cardId}/launch` })).statusCode).toBe(409)
+})
+
 it('a fired agent\'s authored backlog ticket survives unowned with history intact', async () => {
   const t = setup()
   const res = t.conductor.hire({ boardId: 1, cwd: '/p' })

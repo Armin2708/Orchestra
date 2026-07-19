@@ -74,6 +74,10 @@ export function recordProviderUsage(
   usage: ProviderUsageSplit,
 ): void {
   if (usage.total_tokens <= 0 && usage.cost_cents == null) return
+  // Claude reports cache reads as a separate additive bucket. Codex reports cached
+  // input as a subset of input_tokens, so mirroring it into the legacy additive
+  // cache_read column would inflate usageTotal()/boardUsage() rollups.
+  const legacyCacheRead = usage.provider === 'codex' ? 0 : usage.cached_input_tokens
   db.prepare(`
     INSERT INTO agent_usage (
       board_id, agent_id, day, provider, input_tokens, cache_read, cache_creation, output_tokens,
@@ -98,7 +102,7 @@ export function recordProviderUsage(
       agentId,
       usage.provider,
       usage.input_tokens,
-      usage.cached_input_tokens,
+      legacyCacheRead,
       usage.cache_creation_input_tokens,
       usage.output_tokens,
       usage.total_tokens,

@@ -27,8 +27,134 @@ const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}
 
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
-// a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
-type PendingPermission = { id: string; tool: string; summary: string; title: string | null; at: string }
+const controlErrorText = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : 'Provider control failed'
+  try { return JSON.parse(raw).error ?? raw } catch { return raw }
+}
+
+type PendingQuestionOption = { label?: string; description?: string }
+type PendingQuestion = {
+  id: string
+  header?: string
+  question?: string
+  options?: PendingQuestionOption[] | null
+  isOther?: boolean
+  isSecret?: boolean
+  multiple?: boolean
+  multiSelect?: boolean
+  required?: boolean
+  defaultAnswers?: string[]
+  inputType?: 'text' | 'number' | 'email' | 'url' | 'date' | 'datetime-local'
+  minimum?: number
+  maximum?: number
+  step?: number
+}
+
+// A provider approval or structured user-input request waiting in the terminal.
+type PendingPermission = {
+  id: string
+  tool?: string
+  summary: string
+  title: string | null
+  at: string
+  approvalKind?: string
+  questions?: PendingQuestion[]
+  native?: { questions?: PendingQuestion[] }
+  elicitationMode?: string | null
+  serverName?: string | null
+  url?: string | null
+}
+
+const questionsFor = (permission: PendingPermission): PendingQuestion[] =>
+  permission.questions ?? permission.native?.questions ?? []
+
+function UserInputApproval({ permission, onSubmit, onCancel }: {
+  permission: PendingPermission
+  onSubmit: (answers: Record<string, string[]>) => Promise<void>
+  onCancel: () => Promise<void>
+}) {
+  const questions = questionsFor(permission)
+  const [answers, setAnswers] = useState<Record<string, string[]>>(() => Object.fromEntries(
+    questions.filter((question) => question.defaultAnswers?.length)
+      .map((question) => [question.id, question.defaultAnswers!]),
+  ))
+  const [customAnswers, setCustomAnswers] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+  const ready = questions.length > 0 && questions.every((question) => question.required === false
+    || (answers[question.id] ?? []).some((answer) => answer.trim()))
+  const single = (id: string, value: string) => setAnswers((previous) => ({
+    ...previous,
+    [id]: value ? [value] : [],
+  }))
+  const toggle = (id: string, value: string, checked: boolean) => setAnswers((previous) => ({
+    ...previous,
+    [id]: checked
+      ? [...(previous[id] ?? []).filter((answer) => answer !== value), value]
+      : (previous[id] ?? []).filter((answer) => answer !== value),
+  }))
+  const choose = (id: string, value: string) => {
+    const custom = value === '__orchestra_custom_answer__'
+    setCustomAnswers((previous) => ({ ...previous, [id]: custom }))
+    single(id, custom ? '' : value)
+  }
+  return (
+    <div className="cc-user-input">
+      {questions.map((question) => {
+        const options = (question.options ?? []).filter((option) => option.label)
+        const multiple = question.multiple === true || question.multiSelect === true
+        return (
+          <fieldset key={question.id} className="cc-user-input-question">
+            <legend>{question.header ?? question.question ?? question.id}</legend>
+            {question.header && question.question && <p>{question.question}</p>}
+            {options.length > 0 && multiple ? options.map((option) => (
+              <label key={option.label} className="cc-user-input-option">
+                <input type="checkbox" checked={(answers[question.id] ?? []).includes(option.label!)}
+                  onChange={(event) => toggle(question.id, option.label!, event.target.checked)} />
+                <span><b>{option.label}</b>{option.description ? ` — ${option.description}` : ''}</span>
+              </label>
+            )) : options.length > 0 ? (
+              <>
+                <select value={customAnswers[question.id] ? '__orchestra_custom_answer__' : answers[question.id]?.[0] ?? ''}
+                  onChange={(event) => choose(question.id, event.target.value)}>
+                  <option value="">Choose…</option>
+                  {options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}
+                  {question.isOther && <option value="__orchestra_custom_answer__">Other…</option>}
+                </select>
+                {customAnswers[question.id] && (
+                  <input type={question.isSecret ? 'password' : 'text'} autoComplete="off"
+                    aria-label={`${question.header ?? question.question ?? question.id} custom answer`}
+                    value={answers[question.id]?.[0] ?? ''}
+                    onChange={(event) => single(question.id, event.target.value)} />
+                )}
+              </>
+            ) : question.isSecret ? (
+              <input type="password" autoComplete="off"
+                aria-label={question.header ?? question.question ?? question.id}
+                value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            ) : question.inputType && question.inputType !== 'text' ? (
+              <input type={question.inputType} autoComplete="off"
+                aria-label={question.header ?? question.question ?? question.id}
+                min={question.minimum} max={question.maximum} step={question.step}
+                value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            ) : (
+              <textarea rows={2} value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            )}
+          </fieldset>
+        )
+      })}
+      <div className="cc-perm-actions">
+        <button className="cc-perm-allow" disabled={!ready || busy} onClick={async () => {
+          setBusy(true)
+          try { await onSubmit(answers) } finally { setBusy(false) }
+        }}>✓ submit answers</button>
+        <button className="cc-perm-deny" disabled={busy} onClick={onCancel}>cancel</button>
+      </div>
+    </div>
+  )
+}
 
 // a slash-menu entry; source 'sdk' = the session's real command list, anything else
 // (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
@@ -62,14 +188,15 @@ type TranscriptInfo = {
 const modelValue = (model: ModelInfo) => model.value ?? model.model ?? model.resolvedModel ?? ''
 
 // model dropdown + segmented effort control — slots in beside PermissionModeHint (#45 contract).
-// model switches apply next turn; effort restarts the session with the conversation resumed.
-function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange }: {
+// Provider controls persist immediately and apply to the next turn.
+function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange, onError }: {
   agentId: number
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
   working: boolean
   canSelectModel: boolean
   canSetEffort: boolean
   onChange: () => void
+  onError: (message: string | null) => void
 }) {
   const models = info?.models ?? []
   if (models.length === 0 || (!canSelectModel && !canSetEffort)) return null
@@ -81,8 +208,10 @@ function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEff
         <select className="cc-mode-select" value={current ? modelValue(current) : ''} aria-label="Model"
           title="Model — applies from the next turn"
           onChange={async (e) => {
-            try { await api('POST', `/agents/${agentId}/model`, { model: e.target.value }) } catch { /* agent gone */ }
-            onChange()
+            try {
+              await api('POST', `/agents/${agentId}/model`, { model: e.target.value })
+              onError(null); onChange()
+            } catch (error) { onError(controlErrorText(error)) }
           }}>
           {!current && <option value="">{info?.model ?? 'model…'}</option>}
           {models.map((model) => {
@@ -93,14 +222,16 @@ function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEff
       )}
       {levels.length > 0 && (
         <span className="cc-effort" role="group" aria-label="Reasoning effort"
-          title={working ? 'Effort — wait for the turn to finish' : 'Effort — restarts the session, conversation resumes'}>
+          title={working ? 'Effort — wait for the turn to finish' : 'Effort — applies from the next turn'}>
           {levels.map((l) => (
             <button key={l} disabled={working}
               className={`cc-effort-btn${(info?.effort ?? '') === l ? ' cc-effort-on' : ''}`}
               onClick={async () => {
                 if ((info?.effort ?? '') === l) return
-                try { await api('POST', `/agents/${agentId}/effort`, { level: l }) } catch { /* mid-turn (409) or agent gone */ }
-                onChange()
+                try {
+                  await api('POST', `/agents/${agentId}/effort`, { level: l })
+                  onError(null); onChange()
+                } catch (error) { onError(controlErrorText(error)) }
               }}>{l === 'medium' ? 'med' : l}</button>
           ))}
         </span>
@@ -110,18 +241,25 @@ function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEff
 }
 
 // Neutral access profiles map to each provider's native sandbox and approval policy.
-function PermissionModeHint({ agentId, profile, onChange }: { agentId: number; profile: AccessProfile; onChange: () => void }) {
+function PermissionModeHint({ agentId, profile, onChange, onError }: {
+  agentId: number
+  profile: AccessProfile
+  onChange: () => void
+  onError: (message: string | null) => void
+}) {
   const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
   return (
     <span className={`cc-mode${profile === 'full_access' ? ' cc-mode-danger' : ''}`}>
       {selected.icon}{' '}
       <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
-        title="Access profile — applies live to this agent's provider sandbox"
+        title="Access profile — applies from the next provider turn"
         onChange={async (e) => {
           const next = e.target.value as AccessProfile
           if (next === 'full_access' && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
-          try { await api('POST', `/agents/${agentId}/access-profile`, { profile: next }) } catch { /* agent gone or capability changed */ }
-          onChange()
+          try {
+            await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
+            onError(null); onChange()
+          } catch (error) { onError(controlErrorText(error)) }
         }}>
         {ACCESS_PROFILES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
       </select>
@@ -158,6 +296,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const followRef = useRef(true)
   const [following, setFollowing] = useState(true)
   const [controlPanel, setControlPanel] = useState<AgentControlPanelName | null>(null)
+  const [controlError, setControlError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // grow the prompt box with its content, up to a cap — like the real cli
   useEffect(() => {
@@ -171,6 +310,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     followRef.current = true
     setFollowing(true)
     setControlPanel(null)
+    setControlError(null)
     setLocalLines([])
   }, [agent.id])
 
@@ -325,6 +465,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     const nativePanel = hired ? panelForSlashInput(text) : null
     if (nativePanel) {
       setInput('')
+      if (provider !== 'claude' && nativePanel !== 'model') {
+        echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
+        return
+      }
       setControlPanel(nativePanel)
       return
     }
@@ -367,6 +511,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (nativePanel) {
       setInput('')
       setMenuHidden(true)
+      if (provider !== 'claude' && nativePanel !== 'model') {
+        echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
+        return
+      }
       setControlPanel(nativePanel)
       return
     }
@@ -388,13 +536,20 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (hired && working && canInterrupt) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
   }
 
-  const decide = async (requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel') => {
+  const decide = async (
+    requestId: string,
+    decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
+    answers?: Record<string, string[]>,
+  ) => {
     const path = provider === 'codex'
       ? `/agents/${agent.id}/approvals/${encodeURIComponent(requestId)}`
       : `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`
-    const body = provider === 'codex' ? { decision } : { behavior: decision }
-    try { await api('POST', path, body) } catch { /* already resolved */ }
-    setPerms((prev) => prev.filter((p) => p.id !== requestId))
+    const body = provider === 'codex' ? { decision, ...(answers ? { answers } : {}) } : { behavior: decision }
+    try {
+      await api('POST', path, body)
+      setControlError(null)
+      setPerms((prev) => prev.filter((p) => p.id !== requestId))
+    } catch (error) { setControlError(controlErrorText(error)) }
   }
 
   const renderLine = (l: Line, i: number) => {
@@ -483,10 +638,23 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 {hired && perms.map((p) => (
                   <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
                     <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
-                    {canApprove ? (
+                    {p.approvalKind === 'mcp-elicitation' && p.serverName && (
+                      <p className="cc-perm-external">Requested by MCP server <b>{p.serverName}</b>.</p>
+                    )}
+                    {p.approvalKind === 'mcp-elicitation' && p.url && (
+                      <p><a className="cc-perm-link" href={p.url} target="_blank" rel="noreferrer noopener">Open the provider sign-in page ↗</a></p>
+                    )}
+                    {canApprove && provider === 'codex'
+                      && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
+                      && questionsFor(p).length > 0 ? (
+                      <UserInputApproval permission={p}
+                        onSubmit={(answers) => decide(p.id, 'allow', answers)}
+                        onCancel={() => decide(p.id, 'cancel')} />
+                    ) : canApprove ? (
                       <div className="cc-perm-actions">
                         <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
-                        {provider === 'codex' && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
+                        {provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
+                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
                         <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
                       </div>
                     ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
@@ -535,9 +703,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <div className="cc-hints">
             {hired
               ? <span className="cc-controls">
-                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile} onChange={onChange} />}
+                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile}
+                    onChange={onChange} onError={setControlError} />}
                   <ModelEffortControls agentId={agent.id} info={info} working={working}
-                    canSelectModel={canSelectModel} canSetEffort={canSetEffort} onChange={onChange} />
+                    canSelectModel={canSelectModel} canSetEffort={canSetEffort}
+                    onChange={onChange} onError={setControlError} />
+                  {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span>

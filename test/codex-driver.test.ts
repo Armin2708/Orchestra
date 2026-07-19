@@ -124,10 +124,11 @@ class FakeService {
   emitLifecycle(type: CodexSupervisorLifecycleEvent['type']): void {
     const event: CodexSupervisorLifecycleEvent = {
       type,
-      state: type === 'connected' ? 'running' : 'restarting',
+      state: type === 'connected' ? 'running' : type === 'restart_exhausted' ? 'failed' : 'restarting',
       at: '2026-07-19T12:00:00.000Z',
       generation: 2,
       attempt: 1,
+      ...(type === 'restart_exhausted' ? { error: 'restart budget exhausted' } : {}),
     }
     for (const listener of [...this.lifecycle]) listener(event)
   }
@@ -231,6 +232,64 @@ describe('Codex AgentDriver lifecycle', () => {
     expect(service.reads).toEqual(['thread-existing'])
     await driver.send(session!.id, 'continue')
     expect(service.steers).toEqual([{ threadId: 'thread-existing', turnId: 'turn-active', input: 'continue' }])
+    await expect(driver.attach('thread-existing')).rejects.toThrow('already attached by this daemon')
+  })
+
+  it('replays a terminal turn found while attaching so durable consumers cannot hang', async () => {
+    const service = new FakeService()
+    service.readThreadValue = thread('thread-completed', [
+      { id: 'turn-completed-offline', items: [], status: 'completed', error: null },
+    ])
+    const driver = new CodexAgentDriver({
+      service: service.asPort(),
+      workspaceForThread: () => 'workspace-completed',
+    })
+    drivers.push(driver)
+
+    const session = await driver.attach('thread-completed')
+    const event = await next(driver.events(session!.id)[Symbol.asyncIterator]())
+
+    expect(event).toMatchObject({
+      type: 'status', data: 'Codex turn completed',
+      metadata: {
+        method: 'turn/completed', turnId: 'turn-completed-offline', turnCompleted: true,
+        replayed: true, reconnectReason: 'daemon-attach',
+      },
+    })
+  })
+
+  it('reports interrupted turns as failures to durable job consumers', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-interrupted', cwd: '/repo', prompt: 'work' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+
+    service.emit('turn/completed', {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', items: [], status: 'interrupted', error: null },
+    })
+
+    expect(await next(iterator)).toMatchObject({
+      type: 'error', data: 'Codex turn interrupted',
+      metadata: { turnCompleted: true, status: 'interrupted' },
+    })
+  })
+
+  it('detaches without interrupting the active turn so the thread remains resumable', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-detach', cwd: '/repo', prompt: 'keep working' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+
+    await driver.detach(session.id)
+
+    expect(service.interrupts).toEqual([])
+    expect(service.unsubscribes).toEqual(['thread-new'])
+    expect(await untilExit(iterator)).toMatchObject({
+      type: 'exit', data: 'Codex session detached', metadata: { detached: true, unsubscribeStatus: 'unsubscribed' },
+    })
   })
 
   it('returns null for a missing thread and requires a workspace resolver for durable attach', async () => {
@@ -276,6 +335,60 @@ describe('Codex AgentDriver lifecycle', () => {
     expect(await next(iterator)).toMatchObject({
       type: 'status', data: 'Codex session resumed after app-server reconnect', metadata: { reconnected: true },
     })
+  })
+
+  it('replays a turn that completed while the app-server was reconnecting', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-replay', cwd: '/repo', prompt: 'work' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+    service.readThreadValue = thread('thread-new', [
+      { id: 'turn-1', items: [], status: 'completed', error: null },
+    ])
+
+    await expect(driver.reconcileSessions()).resolves.toEqual({ resumed: ['thread-new'], failed: [] })
+    expect(await next(iterator)).toMatchObject({ type: 'status', metadata: { reconnected: true } })
+    expect(await next(iterator)).toMatchObject({
+      type: 'status', data: 'Codex turn completed',
+      metadata: { turnCompleted: true, replayed: true, reconnectReason: 'app-server-reconnect' },
+    })
+  })
+
+  it('terminalizes a session when reconnect recovery fails instead of leaving its event stream open', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-lost', cwd: '/repo' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+    service.resumeError = new Error('app-server could not restore the thread')
+
+    await expect(driver.reconcileSessions()).resolves.toEqual({ resumed: [], failed: ['thread-new'] })
+    expect(await next(iterator)).toMatchObject({ type: 'error', metadata: { reconnected: false } })
+    expect(await next(iterator)).toMatchObject({
+      type: 'exit', data: 'Codex session lost after reconnect failure',
+      metadata: { lost: true, reconnectFailed: true },
+    })
+    await expect(iterator.next()).resolves.toMatchObject({ done: true })
+  })
+
+  it('terminalizes active sessions when app-server restart attempts are exhausted', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-exhausted', cwd: '/repo' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+
+    service.emitLifecycle('restart_exhausted')
+
+    expect(await next(iterator)).toMatchObject({
+      type: 'error', data: 'restart budget exhausted', metadata: { restartExhausted: true },
+    })
+    expect(await next(iterator)).toMatchObject({
+      type: 'exit', data: 'Codex session lost after app-server restart exhaustion',
+      metadata: { lost: true, reconnectFailed: true, restartExhausted: true },
+    })
+    await expect(iterator.next()).resolves.toMatchObject({ done: true })
   })
 })
 
@@ -414,6 +527,133 @@ describe('Codex AgentDriver event normalization', () => {
     await expect(driver.resolveApproval(session.id, 'deferred-approval', 'allow_session')).resolves.toBe(true)
     await expect(pendingResponse).resolves.toEqual({ decision: 'acceptForSession' })
     await expect(driver.resolveApproval(session.id, 'deferred-approval', 'deny')).resolves.toBe(false)
+
+    const userInputResponse = service.request({
+      id: 'deferred-user-input',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'thread-new',
+        turnId: 'turn-1',
+        itemId: 'question-1',
+        questions: [
+          { id: 'framework', header: 'Framework', question: 'Which framework?', options: [{ label: 'React' }] },
+          { id: 'notes', header: 'Notes', question: 'Any constraints?' },
+        ],
+      },
+      receivedAt: '2026-07-19T12:00:00.000Z',
+    })
+    const userInputEvent = await next(iterator)
+    expect(userInputEvent).toMatchObject({ metadata: { approvalKind: 'user-input' } })
+    expect(userInputEvent.metadata?.questions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'framework', question: 'Which framework?' }),
+    ]))
+    await expect(driver.resolveApproval(
+      session.id,
+      'deferred-user-input',
+      'allow',
+      undefined,
+      { framework: ['React'], notes: ['Keep it accessible'] },
+    )).resolves.toBe(true)
+    await expect(userInputResponse).resolves.toEqual({
+      answers: {
+        framework: { answers: ['React'] },
+        notes: { answers: ['Keep it accessible'] },
+      },
+    })
+  })
+
+  it('bridges MCP form and URL elicitations through the approval stream', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({
+      service: service.asPort(),
+      onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+      now: () => new Date('2026-07-19T12:00:00.000Z'),
+    })
+    drivers.push(driver)
+    const session = await driver.launch({ workspaceId: 'workspace-mcp', cwd: '/repo' })
+    const iterator = driver.events(session.id)[Symbol.asyncIterator]()
+
+    await expect(service.request({
+      id: 'current-time',
+      method: 'currentTime/read',
+      params: { threadId: 'thread-new' },
+      receivedAt: '2026-07-19T12:00:00.000Z',
+    })).resolves.toEqual({ currentTimeAt: 1_784_462_400 })
+
+    const formResponse = service.request({
+      id: 'mcp-form',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-new',
+        turnId: 'turn-1',
+        serverName: 'github',
+        mode: 'form',
+        _meta: null,
+        message: 'Choose connection settings',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', title: 'Project', enum: ['orchestra', 'other'] },
+            retries: { type: 'integer', title: 'Retries', minimum: 0, maximum: 5, default: 2 },
+            publish: { type: 'boolean', title: 'Publish results' },
+            scopes: { type: 'array', title: 'Scopes', items: { type: 'string', enum: ['read', 'write'] } },
+            note: { type: 'string', title: 'Optional note' },
+          },
+          required: ['project', 'retries'],
+        },
+      },
+      receivedAt: '2026-07-19T12:00:00.000Z',
+    })
+    const formEvent = await next(iterator)
+    expect(formEvent).toMatchObject({
+      type: 'tool',
+      data: 'Choose connection settings',
+      metadata: {
+        approvalKind: 'mcp-elicitation',
+        elicitationMode: 'form',
+        serverName: 'github',
+      },
+    })
+    expect(formEvent.metadata?.questions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'project', required: true, options: [{ label: 'orchestra' }, { label: 'other' }] }),
+      expect.objectContaining({ id: 'retries', inputType: 'number', defaultAnswers: ['2'], step: 1 }),
+      expect.objectContaining({ id: 'publish', required: false, options: expect.any(Array) }),
+      expect.objectContaining({ id: 'scopes', multiple: true }),
+    ]))
+    await expect(driver.resolveApproval(session.id, 'mcp-form', 'allow', undefined, {
+      project: ['orchestra'],
+      retries: ['2'],
+      publish: ['true'],
+      scopes: ['read', 'write'],
+      note: [],
+    })).resolves.toBe(true)
+    await expect(formResponse).resolves.toEqual({
+      action: 'accept',
+      content: { project: 'orchestra', retries: 2, publish: true, scopes: ['read', 'write'] },
+      _meta: null,
+    })
+
+    const urlResponse = service.request({
+      id: 'mcp-url',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-new', turnId: null, serverName: 'github', mode: 'url', _meta: null,
+        message: 'Sign in to GitHub', url: 'https://github.com/login/oauth/authorize', elicitationId: 'oauth-1',
+      },
+      receivedAt: '2026-07-19T12:00:00.000Z',
+    })
+    expect(await next(iterator)).toMatchObject({
+      data: 'Sign in to GitHub',
+      metadata: {
+        approvalKind: 'mcp-elicitation',
+        elicitationMode: 'url',
+        serverName: 'github',
+        url: 'https://github.com/login/oauth/authorize',
+        elicitationId: 'oauth-1',
+      },
+    })
+    await expect(driver.resolveApproval(session.id, 'mcp-url', 'allow')).resolves.toBe(true)
+    await expect(urlResponse).resolves.toEqual({ action: 'accept', content: null, _meta: null })
   })
 
   it('interrupts an active turn when its enforceable token budget is reached', async () => {

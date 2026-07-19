@@ -260,6 +260,27 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '003-provider-session-ownership',
+    apply(db) {
+      db.exec(`
+        UPDATE agent_sessions AS session
+          SET status='failed', updated_at=datetime('now')
+          WHERE session.status='running' AND session.external_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM agent_sessions newer
+              WHERE newer.provider=session.provider
+                AND newer.external_id=session.external_id
+                AND newer.status='running'
+                AND (newer.updated_at > session.updated_at
+                  OR (newer.updated_at = session.updated_at AND newer.rowid > session.rowid))
+            );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_active_provider_external
+          ON agent_sessions(provider, external_id)
+          WHERE external_id IS NOT NULL AND status='running';
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

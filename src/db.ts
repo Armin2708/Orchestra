@@ -125,14 +125,23 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN external_session_id TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN provider_state_json TEXT NOT NULL DEFAULT '{}'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN access_profile TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN hook_token_hash TEXT`) } catch { /* exists */ }
   // Keep the Claude SDK session column for one compatibility window. New provider
   // integrations use the namespaced provider + external_session_id identity.
   db.exec(`
     UPDATE agents SET provider='claude' WHERE provider IS NULL OR trim(provider)='';
     UPDATE agents SET external_session_id=sdk_session
-      WHERE provider='claude' AND external_session_id IS NULL AND sdk_session IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS agents_provider_session_idx
-      ON agents(provider, external_session_id);
+      WHERE provider='claude' AND external_session_id IS NULL AND sdk_session IS NOT NULL
+        AND id=(SELECT MAX(candidate.id) FROM agents candidate
+          WHERE candidate.provider='claude' AND candidate.sdk_session=agents.sdk_session);
+    UPDATE agents SET external_session_id=NULL
+      WHERE external_session_id IS NOT NULL
+        AND id NOT IN (SELECT MAX(candidate.id) FROM agents candidate
+          WHERE candidate.external_session_id IS NOT NULL
+          GROUP BY candidate.provider, candidate.external_session_id);
+    DROP INDEX IF EXISTS agents_provider_session_idx;
+    CREATE UNIQUE INDEX IF NOT EXISTS agents_provider_session_idx
+      ON agents(provider, external_session_id) WHERE external_session_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS agents_board_provider_status_idx
       ON agents(board_id, provider, status);
     CREATE TRIGGER IF NOT EXISTS agents_sync_claude_session_insert
@@ -162,6 +171,7 @@ export function openDb(file: string): Database.Database {
       WHERE total_tokens=0 AND (input_tokens + cache_read + cache_creation + output_tokens) > 0;
     UPDATE agent_usage SET cached_input_tokens=cache_read
       WHERE cached_input_tokens=0 AND cache_read > 0;
+    UPDATE agent_usage SET cache_read=0, cache_creation=0 WHERE provider='codex';
     CREATE INDEX IF NOT EXISTS agent_usage_board_provider_day_idx
       ON agent_usage(board_id, provider, day);
   `)

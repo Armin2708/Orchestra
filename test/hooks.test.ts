@@ -43,6 +43,24 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
   expect(payload.hookSpecificOutput.additionalContext).toContain('status?')
 })
 
+it('upgrades legacy hook session files to owner-only permissions before storing a token', async () => {
+  const hooks = await import('../src/hooks.js')
+  const sessionDir = path.join(home, 'sessions')
+  const sessionPath = path.join(sessionDir, 'sess-permissions.json')
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(sessionPath, '{}', { mode: 0o644 })
+  fs.chmodSync(sessionPath, 0o644)
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({
+    session_id: 'sess-permissions', cwd: projectRoot,
+  }))
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+
+  await hooks.runHook('session-start')
+
+  expect(fs.statSync(sessionPath).mode & 0o777).toBe(0o600)
+  expect(JSON.parse(fs.readFileSync(sessionPath, 'utf8')).session_token).toEqual(expect.any(String))
+})
+
 it('queued notifications arrive on a natural hook turn without requesting a reply', async () => {
   const hooks = await import('../src/hooks.js')
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess-notify', cwd: projectRoot }))

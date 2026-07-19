@@ -12,7 +12,7 @@ export interface HookInstallOptions {
   /** Test/embedding override; normal CLI installs use the provider defaults. */
   settingsPaths?: Partial<Record<HookProvider, string>>
   /** Test/embedding override for resolving global and project locations. */
-  roots?: { home?: string; cwd?: string }
+  roots?: { home?: string; cwd?: string; codexHome?: string }
 }
 
 const MARKER = 'orchestra hook'
@@ -29,7 +29,7 @@ const CLAUDE_HOOKS: Record<string, any> = {
 
 const CODEX_HOOKS: Record<string, any> = {
   SessionStart: {
-    matcher: 'startup|resume',
+    matcher: 'startup|resume|clear|compact',
     hooks: [{ type: 'command', command: command('session-start', 'codex') }],
   },
   PostToolUse: { matcher: '*', hooks: [{ type: 'command', command: command('post-tool-use', 'codex') }] },
@@ -48,9 +48,12 @@ export function hookSettingsPath(
   roots: HookInstallOptions['roots'] = {},
 ): string {
   const root = scope === 'global' ? (roots?.home ?? os.homedir()) : (roots?.cwd ?? process.cwd())
-  return provider === 'claude'
-    ? path.join(root, '.claude', 'settings.json')
-    : path.join(root, '.codex', 'hooks.json')
+  if (provider === 'claude') return path.join(root, '.claude', 'settings.json')
+  if (scope === 'project') return path.join(root, '.codex', 'hooks.json')
+  const codexHome = roots?.codexHome
+    ?? (roots?.home === undefined ? process.env.CODEX_HOME : undefined)
+    ?? path.join(root, '.codex')
+  return path.join(codexHome, 'hooks.json')
 }
 
 const markerProvider = (entry: any): HookProvider | undefined => {

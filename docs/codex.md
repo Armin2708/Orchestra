@@ -24,6 +24,8 @@ orchestra restart
 
 Use only Codex hooks with `--provider codex`, or project-local hook configuration with `--project`.
 Project/plugin hooks must be reviewed in Codex `/hooks` after the project is trusted.
+Global hook installation honors `CODEX_HOME` when it is set. Orchestra's bundled manifests invoke
+the exact package version they shipped with rather than downloading a mutable `latest` release.
 
 Confirm the daemon sees both providers:
 
@@ -76,15 +78,26 @@ Orchestra maps neutral access profiles to Codex policy explicitly:
 | `full_access` | `danger-full-access` | `on-request` |
 
 `full_access` is never inferred from Claude's `bypassPermissions`; it requires an explicit selection
-and warning confirmation. The daemon strips Orchestra/Claude credentials from the app-server child
-environment while preserving Codex/OpenAI authentication variables. It reads login state only with
-app-server `account/read`; it does not parse Codex auth files.
+and warning confirmation. Agent OS launches default to `workspace_write`, even when no task policy is
+attached. Specialist roles default to `read_only` and receive their role contract as Codex developer
+instructions.
 
-Command, file-change, permissions, and user-input requests appear in the agent terminal. Codex
-supports allow once, allow for session, deny, and cancel through the provider-neutral approval API.
+The app-server child receives a small environment allowlist: OS/process basics, locale, proxy/CA,
+`CODEX_HOME`, XDG paths, and Codex/OpenAI authentication variables. It does not inherit unrelated
+database, cloud, GitHub, Orchestra, Anthropic, or Claude secrets. If a custom installation needs an
+additional variable, opt it in by name—for example
+`ORCHESTRA_CODEX_FORWARD_ENV=MY_CORPORATE_CA_HINT`—then restart Orchestra. Orchestra/Claude secrets
+remain blocked even if named there. Login state is read only with app-server `account/read`; Orchestra
+does not parse Codex auth files.
+
+Command, file-change, permissions, structured user-input, and MCP elicitation requests appear in
+the agent terminal. Multi-question requests retain their individual answers. MCP forms preserve
+string, number, integer, boolean, enum, and multi-select values; URL elicitations expose the native
+sign-in link and return the user's decision to app-server. Codex supports allow once, allow for
+session, deny, and cancel through the provider-neutral approval API where the native request does.
 When an Agent OS task contract has a policy, unambiguous allow/deny decisions are applied before
-human prompting; unmatched `ask` decisions remain pending, and malformed policy-bound requests fail
-closed.
+human prompting; unmatched `ask` decisions and interactive questions remain pending, and malformed
+command/file policy requests fail closed.
 
 ## Lifecycle and recovery
 
@@ -92,7 +105,11 @@ One daemon owns one app-server and multiplexes all Codex threads. It uses JSONL 
 bounded frames, request timeouts, stderr diagnostics, bidirectional approval requests, graceful
 shutdown, and bounded exponential restart backoff.
 
-Native thread/turn/item IDs, event cursor, completed-item dedupe set, usage totals, model, effort,
+Graceful daemon shutdown detaches local subscriptions without interrupting provider turns or marking
+durable jobs failed. The next daemon exclusively reattaches each native thread. A failed reconnect is
+terminalized and handed to normal job recovery instead of leaving an open event stream forever.
+
+Native thread/turn/item IDs, completed-item dedupe set, usage totals, model, effort,
 access profile, card/workspace mapping, and rate-limit pause snapshot are durable. On an app-server
 restart, known threads are resumed and read before events continue. On an Orchestra restart, legacy
 board agents and Agent OS jobs take separate single-consumer recovery paths, avoiding duplicate

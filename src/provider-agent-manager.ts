@@ -73,6 +73,7 @@ export interface ManagedAgentDriver extends AgentDriver {
     requestId: string,
     decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
     message?: string,
+    answers?: Record<string, string[]>,
   ): Promise<boolean>
 }
 
@@ -102,6 +103,28 @@ export type ProviderLaunchRequest = {
   model?: string
   effort?: string
   accessProfile?: AccessProfile
+}
+
+export interface AgentOsAgentControl {
+  ownsAgent(agentId: number): boolean
+  isHiredAgent(agentId: number): boolean
+  isLaunchedCard(cardId: number): boolean
+  taskAgent(agentId: number, text: string): boolean
+  deliverAgent(agentId: number, message: any): boolean
+  transcriptAgent(agentId: number): any
+  subagentsForAgent(agentId: number): { key: string; label: string }[]
+  interruptManagedAgent(agentId: number): Promise<boolean>
+  fireManagedAgent(agentId: number): Promise<boolean>
+  setManagedAgentModel(agentId: number, model: string): Promise<boolean>
+  setManagedAgentEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
+  setManagedAgentAccess(agentId: number, profile: AccessProfile): Promise<boolean>
+  resolveManagedApproval(
+    agentId: number,
+    requestId: string,
+    decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
+    message?: string,
+    answers?: Record<string, string[]>,
+  ): Promise<boolean>
 }
 
 type TranscriptLine = {
@@ -134,6 +157,7 @@ type CodexState = {
   cardFinalized: boolean
   ended: boolean
   stopping: boolean
+  detaching: boolean
   sending: Promise<void>
   lastEventSeq: number
   rateLimitPause: { at: string; snapshot?: unknown } | null
@@ -185,6 +209,13 @@ const safeProvider = (value: string): string => {
 const isAccessProfile = (value: unknown): value is AccessProfile =>
   typeof value === 'string' && ACCESS_PROFILES.includes(value as AccessProfile)
 
+const codexRoleInstructions = (role: SpecialistRole | undefined, name: string): string | undefined => {
+  if (role === 'strategist') return `You are "${name}", this project's Orchestra strategist. You are read-only: never modify files. Research the repository, help the user refine ideas, and create concrete backlog cards with orchestra CLI commands only when requested. Make each card implementation-ready with OBJECTIVE, CONTEXT, REQUIREMENTS, and DONE WHEN sections. Do not implement the cards yourself.`
+  if (role === 'auditor') return `You are "${name}", a one-shot Orchestra ticket auditor. You are read-only: never modify files. Audit exactly one roadmap idea against the repository and existing board work. Either create one implementation-ready, unassigned card and consume the idea, or reject/mark it duplicate with evidence. Record the result on the board, then stop.`
+  if (role === 'verifier') return `You are "${name}", a one-shot Orchestra delivery verifier. You are read-only: never modify files, create cards, move cards, approve, or ship. Inspect the actual delivered diff and test results against every acceptance criterion. Submit exactly one evidence-backed pass, gaps, or fail report using the command in your brief, then stop.`
+  return undefined
+}
+
 /** Board-facing lifecycle for Codex threads, backed by the provider-neutral AgentDriver. */
 export class CodexManagedAgentRuntime {
   private readonly states = new Map<number, CodexState>()
@@ -214,13 +245,15 @@ export class CodexManagedAgentRuntime {
       do { name = generateName() } while (
         this.db.prepare('SELECT 1 FROM agents WHERE board_id=? AND name=?').get(options.boardId, name))
     }
-    const existing = this.db.prepare('SELECT id, provider, provider_state_json FROM agents WHERE board_id=? AND name=?')
-      .get(options.boardId, name) as { id: number; provider: string; provider_state_json: string } | undefined
-    if (existing && existing.provider !== CODEX_PROVIDER_ID)
+    const existing = this.db.prepare('SELECT id, provider, status, provider_state_json FROM agents WHERE board_id=? AND name=?')
+      .get(options.boardId, name) as { id: number; provider: string; status: string; provider_state_json: string } | undefined
+    if (existing && existing.provider !== CODEX_PROVIDER_ID && existing.status !== 'gone')
       throw new Error(`agent ${name} already belongs to provider ${existing.provider}`)
 
-    const prior = parseObject(existing?.provider_state_json)
-    const accessProfile = options.accessProfile ?? 'workspace_write'
+    const resumeSession = options.resumeSession?.trim() || undefined
+    if (resumeSession) this.assertResumeOwnership(resumeSession, existing?.id)
+    const prior = resumeSession ? parseObject(existing?.provider_state_json) : {}
+    const accessProfile = options.accessProfile ?? (options.role ? 'read_only' : 'workspace_write')
     const stateJson = JSON.stringify({
       ...prior,
       cwd: options.cwd,
@@ -235,7 +268,8 @@ export class CodexManagedAgentRuntime {
       ) VALUES (?, ?, ?, 'hired', ?, 'starting', 'codex', ?, ?, ?, ?, ?)
       ON CONFLICT(board_id, name) DO UPDATE SET
         session_id=excluded.session_id, kind='hired', role=excluded.role, status='starting',
-        provider='codex', external_session_id=COALESCE(excluded.external_session_id, agents.external_session_id),
+        provider='codex', external_session_id=excluded.external_session_id,
+        sdk_session=NULL, hook_token_hash=NULL,
         provider_state_json=excluded.provider_state_json, access_profile=excluded.access_profile,
         model=excluded.model, effort=excluded.effort, last_seen=datetime('now')
     `).run(
@@ -243,7 +277,7 @@ export class CodexManagedAgentRuntime {
       name,
       `hired:codex:${Date.now()}`,
       options.role ?? null,
-      options.resumeSession ?? null,
+      resumeSession ?? null,
       stateJson,
       accessProfile,
       options.model ?? null,
@@ -278,6 +312,7 @@ export class CodexManagedAgentRuntime {
       cardFinalized: false,
       ended: false,
       stopping: false,
+      detaching: false,
       sending: Promise.resolve(),
       lastEventSeq: 0,
       rateLimitPause: prior.rate_limit_pause && typeof prior.rate_limit_pause === 'object'
@@ -285,9 +320,9 @@ export class CodexManagedAgentRuntime {
         : null,
     }
     this.states.set(state.agentId, state)
-    this.log(state, 'status', options.resumeSession ? `resuming Codex thread in ${options.cwd}` : `starting Codex in ${options.cwd}`)
+    this.log(state, 'status', resumeSession ? `resuming Codex thread in ${options.cwd}` : `starting Codex in ${options.cwd}`)
     this.emitAgent(state)
-    void this.start(state, options.resumeSession).catch((error) => this.failStart(state, error))
+    void this.start(state, resumeSession).catch((error) => this.failStart(state, error))
     return row
   }
 
@@ -408,8 +443,10 @@ export class CodexManagedAgentRuntime {
   async setModel(agentId: number, model: string): Promise<boolean> {
     const state = this.states.get(agentId)
     if (!state || state.ended || !model.trim()) return false
-    if (state.session && this.driver.updateSession)
-      await this.driver.updateSession(state.session.id, { model }).catch(() => undefined)
+    if (state.session && this.driver.updateSession) {
+      try { await this.driver.updateSession(state.session.id, { model }) }
+      catch { return false }
+    }
     state.model = model
     this.db.prepare('UPDATE agents SET model=? WHERE id=?').run(model, agentId)
     this.log(state, 'status', `model → ${model} (takes effect next turn)`)
@@ -421,8 +458,10 @@ export class CodexManagedAgentRuntime {
     const state = this.states.get(agentId)
     if (!state || state.ended) return 'not-found'
     if (!/^[a-zA-Z0-9_-]{1,40}$/.test(level)) return 'bad-level'
-    if (state.session && this.driver.updateSession)
-      await this.driver.updateSession(state.session.id, { effort: level }).catch(() => undefined)
+    if (state.session && this.driver.updateSession) {
+      try { await this.driver.updateSession(state.session.id, { effort: level }) }
+      catch { return 'bad-level' }
+    }
     state.effort = level
     this.db.prepare('UPDATE agents SET effort=? WHERE id=?').run(level, agentId)
     this.log(state, 'status', `reasoning effort → ${level} (takes effect next turn)`)
@@ -433,8 +472,10 @@ export class CodexManagedAgentRuntime {
   async setAccessProfile(agentId: number, profile: AccessProfile): Promise<boolean> {
     const state = this.states.get(agentId)
     if (!state || state.ended || !isAccessProfile(profile)) return false
-    if (state.session && this.driver.updateSession)
-      await this.driver.updateSession(state.session.id, { accessProfile: profile }).catch(() => undefined)
+    if (state.session && this.driver.updateSession) {
+      try { await this.driver.updateSession(state.session.id, { accessProfile: profile }) }
+      catch { return false }
+    }
     state.accessProfile = profile
     this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
     this.log(state, 'status', `access profile → ${profile} (takes effect next turn)`)
@@ -456,24 +497,27 @@ export class CodexManagedAgentRuntime {
     requestId: string,
     decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
     message?: string,
+    answers?: Record<string, string[]>,
   ): Promise<boolean> {
     const state = this.states.get(agentId)
     if (!state?.session || !state.pending.has(requestId) || !this.driver.resolveApproval) return false
-    const ok = await this.driver.resolveApproval(state.session.id, requestId, decision, message)
+    const ok = await this.driver.resolveApproval(state.session.id, requestId, decision, message, answers)
     if (ok) state.pending.delete(requestId)
     return ok
   }
 
   async shutdown(): Promise<void> {
     await Promise.allSettled([...this.states.values()].filter((state) => !state.ended).map(async (state) => {
-      state.stopping = true
-      if (state.session) await this.driver.stop(state.session.id)
-      this.finish(state, 'error', 'daemon shutdown')
+      state.detaching = true
+      this.persist(state)
+      if (state.session && this.driver.detach) await this.driver.detach(state.session.id)
+      this.persist(state)
     }))
   }
 
   private async start(state: CodexState, externalId?: string): Promise<void> {
     let session = externalId ? await this.driver.attach(externalId) : null
+    const attached = !!session
     if (!session) {
       session = await this.driver.launch({
         workspaceId: `legacy-agent:${state.agentId}`,
@@ -483,11 +527,29 @@ export class CodexManagedAgentRuntime {
         ...(externalId ? { externalId } : {}),
         ...(state.model ? { model: state.model } : {}),
         accessProfile: state.accessProfile,
-        metadata: { agentId: state.agentId, cardId: state.cardId, role: state.role ?? null, effort: state.effort },
+        metadata: {
+          agentId: state.agentId,
+          cardId: state.cardId,
+          role: state.role ?? null,
+          effort: state.effort,
+          ...(codexRoleInstructions(state.role, state.name)
+            ? { developerInstructions: codexRoleInstructions(state.role, state.name) }
+            : {}),
+        },
       })
     }
-    if (state.ended) {
-      await this.driver.stop(session.id).catch(() => undefined)
+    if (attached && this.driver.updateSession) await this.driver.updateSession(session.id, {
+      ...(state.model ? { model: state.model } : {}),
+      ...(state.effort ? { effort: state.effort } : {}),
+      accessProfile: state.accessProfile,
+    })
+    if (state.ended || state.detaching) {
+      state.session = session
+      this.db.prepare(`UPDATE agents SET external_session_id=?, last_seen=datetime('now') WHERE id=?`)
+        .run(session.externalId, state.agentId)
+      if (state.detaching && this.driver.detach) await this.driver.detach(session.id).catch(() => undefined)
+      else await this.driver.stop(session.id).catch(() => undefined)
+      this.persist(state)
       return
     }
     state.session = session
@@ -501,7 +563,7 @@ export class CodexManagedAgentRuntime {
   }
 
   private flush(state: CodexState): void {
-    if (!state.session || state.ended) return
+    if (!state.session || state.ended || state.detaching) return
     state.sending = state.sending.then(async () => {
       while (state.session && state.queue.length && !state.ended) {
         const text = state.queue[0]
@@ -518,7 +580,7 @@ export class CodexManagedAgentRuntime {
     let sawExit = false
     try {
       for await (const event of this.driver.events(session.id)) {
-        if (state.ended || state.session?.id !== session.id) return
+        if (state.ended || state.detaching || state.session?.id !== session.id) return
         state.lastEventSeq = Math.max(state.lastEventSeq, event.seq)
         if (this.isDuplicateCompletedItem(state, event)) continue
         this.applyEvent(state, event)
@@ -536,6 +598,10 @@ export class CodexManagedAgentRuntime {
       this.log(state, 'error', error instanceof Error ? error.message : String(error))
       sawExit = true
     } finally {
+      if (state.detaching) {
+        this.persist(state)
+        return
+      }
       if (sawExit && !state.ended) this.finish(
         state,
         state.cardFinalized ? 'success' : 'error',
@@ -628,7 +694,7 @@ export class CodexManagedAgentRuntime {
   }
 
   private failStart(state: CodexState, error: unknown): void {
-    if (state.ended) return
+    if (state.ended || state.detaching) return
     const detail = error instanceof Error ? error.message : String(error)
     this.log(state, 'error', `Codex failed to start: ${detail}`)
     this.finish(state, 'error', detail)
@@ -690,7 +756,7 @@ export class CodexManagedAgentRuntime {
       cwd: state.cwd,
       card_id: state.cardId,
       branch: state.branch,
-      lifecycle: state.ended ? 'stopped' : state.session ? 'active' : 'starting',
+      lifecycle: state.ended ? 'stopped' : state.detaching ? 'detached' : state.session ? 'active' : 'starting',
       usage_total: state.usageTotal,
       rate_limit_pause: state.rateLimitPause,
     }
@@ -728,6 +794,20 @@ export class CodexManagedAgentRuntime {
     if (!state || state.ended) throw new Error(`Codex agent is not live: ${agentId}`)
     return state
   }
+
+  private assertResumeOwnership(externalId: string, existingAgentId?: number): void {
+    const owner = this.db.prepare(`SELECT id, name FROM agents
+      WHERE provider=? AND external_session_id=? LIMIT 1`).get(CODEX_PROVIDER_ID, externalId) as
+      { id: number; name: string } | undefined
+    if (owner && owner.id !== existingAgentId)
+      throw new Error(`Codex thread ${externalId} already belongs to agent ${owner.name}`)
+    const durable = this.db.prepare(`SELECT agent_id FROM agent_sessions
+      WHERE provider=? AND external_id=? AND status='running'
+      ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(CODEX_PROVIDER_ID, externalId) as
+      { agent_id: number | null } | undefined
+    if (durable)
+      throw new Error(`Codex thread ${externalId} is already attached to an active Agent OS job`)
+  }
 }
 
 type QueuedLaunch = ProviderLaunchRequest & { provider: string }
@@ -743,6 +823,7 @@ export class ProviderAgentManager implements ConductorLike {
     private readonly claude: ConductorLike,
     private readonly codex?: CodexManagedAgentRuntime,
     private readonly codexService?: AgentProviderService & { isRuntimeAvailable?(): boolean },
+    private readonly agentOs?: AgentOsAgentControl,
   ) {
     bus.on('event', (event: any) => {
       if (event?.type === 'launch' && event?.data?.status === 'finished') void this.drainQueue()
@@ -751,7 +832,9 @@ export class ProviderAgentManager implements ConductorLike {
 
   isHired(agentId: number): boolean {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.isHired(agentId) ?? false
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.isHiredAgent(agentId)
+        : this.codex?.isHired(agentId) ?? false
       : this.claude.isHired(agentId)
   }
 
@@ -789,22 +872,30 @@ export class ProviderAgentManager implements ConductorLike {
     return this.launchQueue.some((request) => request.cardId === cardId)
       || this.claude.isLaunched(cardId)
       || (this.codex?.isLaunched(cardId) ?? false)
+      || (this.agentOs?.isLaunchedCard(cardId) ?? false)
   }
 
   deliver(agentId: number, message: any): boolean {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.deliver(agentId, message) ?? false
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.deliverAgent(agentId, message)
+        : this.codex?.deliver(agentId, message) ?? false
       : this.claude.deliver(agentId, message)
   }
 
   task(agentId: number, text: string): boolean {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.task(agentId, text) ?? false
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.taskAgent(agentId, text)
+        : this.codex?.task(agentId, text) ?? false
       : this.claude.task(agentId, text)
   }
 
   transcript(agentId: number): any {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) return this.codex?.transcript(agentId) ?? { lines: [], working: null }
+    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+      if (this.usesAgentOs(agentId)) return this.agentOs!.transcriptAgent(agentId)
+      return this.codex?.transcript(agentId) ?? { lines: [], working: null }
+    }
     const transcript = this.claude.transcript(agentId)
     const row = this.agentRow(agentId)
     return {
@@ -820,19 +911,25 @@ export class ProviderAgentManager implements ConductorLike {
 
   subagents(agentId: number): { key: string; label: string }[] {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.subagents(agentId) ?? []
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.subagentsForAgent(agentId)
+        : this.codex?.subagents(agentId) ?? []
       : this.claude.subagents(agentId)
   }
 
   interruptAgent(agentId: number): Promise<boolean> {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.interruptAgent(agentId) ?? Promise.resolve(false)
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.interruptManagedAgent(agentId)
+        : this.codex?.interruptAgent(agentId) ?? Promise.resolve(false)
       : this.claude.interruptAgent(agentId)
   }
 
   fire(agentId: number): Promise<boolean> {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.fire(agentId) ?? Promise.resolve(false)
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.fireManagedAgent(agentId)
+        : this.codex?.fire(agentId) ?? Promise.resolve(false)
       : this.claude.fire(agentId)
   }
 
@@ -848,16 +945,20 @@ export class ProviderAgentManager implements ConductorLike {
 
   async setAccessProfile(agentId: number, profile: AccessProfile): Promise<boolean> {
     if (!isAccessProfile(profile)) return false
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID)
+    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+      if (this.usesAgentOs(agentId)) return this.agentOs!.setManagedAgentAccess(agentId, profile)
       return this.codex?.setAccessProfile(agentId, profile) ?? false
+    }
     const ok = (await this.claude.setPermissionMode?.(agentId, permissionModeForAccess(profile))) ?? false
     if (ok) this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
     return ok
   }
 
   async resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): Promise<boolean> {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID)
+    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+      if (this.usesAgentOs(agentId)) return this.agentOs!.resolveManagedApproval(agentId, requestId, behavior, message)
       return this.codex?.resolvePermission(agentId, requestId, behavior, message) ?? false
+    }
     return this.claude.resolvePermission?.(agentId, requestId, behavior, message) ?? false
   }
 
@@ -866,22 +967,29 @@ export class ProviderAgentManager implements ConductorLike {
     requestId: string,
     decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
     message?: string,
+    answers?: Record<string, string[]>,
   ): Promise<boolean> {
     if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID)
-      return this.codex?.resolveApproval(agentId, requestId, decision, message) ?? false
+      return this.usesAgentOs(agentId)
+        ? this.agentOs!.resolveManagedApproval(agentId, requestId, decision, message, answers)
+        : this.codex?.resolveApproval(agentId, requestId, decision, message, answers) ?? false
     if (decision !== 'allow' && decision !== 'deny') return false
     return this.claude.resolvePermission?.(agentId, requestId, decision, message) ?? false
   }
 
   setModel(agentId: number, model: string): Promise<boolean> {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.setModel(agentId, model) ?? Promise.resolve(false)
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.setManagedAgentModel(agentId, model)
+        : this.codex?.setModel(agentId, model) ?? Promise.resolve(false)
       : this.claude.setModel?.(agentId, model) ?? Promise.resolve(false)
   }
 
   setEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.codex?.setEffort(agentId, level) ?? Promise.resolve('not-found')
+      ? this.usesAgentOs(agentId)
+        ? this.agentOs!.setManagedAgentEffort(agentId, level)
+        : this.codex?.setEffort(agentId, level) ?? Promise.resolve('not-found')
       : this.claude.setEffort?.(agentId, level) ?? Promise.resolve('not-found')
   }
 
@@ -889,15 +997,36 @@ export class ProviderAgentManager implements ConductorLike {
     return enabledCapabilities(this.providerForAgent(agentId) === CODEX_PROVIDER_ID ? CODEX_CAPABILITIES : CLAUDE_CAPABILITIES)
   }
 
+  mcpStatus(agentId: number): Promise<unknown | null> {
+    if (this.providerForAgent(agentId) !== 'claude') return Promise.resolve(null)
+    return this.claude.mcpStatus?.(agentId) ?? Promise.resolve(null)
+  }
+
+  toggleMcpServer(agentId: number, name: string, enabled: boolean): Promise<unknown | null> {
+    if (this.providerForAgent(agentId) !== 'claude') return Promise.resolve(null)
+    return this.claude.toggleMcpServer?.(agentId, name, enabled) ?? Promise.resolve(null)
+  }
+
+  reconnectMcpServer(agentId: number, name: string): Promise<unknown | null> {
+    if (this.providerForAgent(agentId) !== 'claude') return Promise.resolve(null)
+    return this.claude.reconnectMcpServer?.(agentId, name) ?? Promise.resolve(null)
+  }
+
+  reloadPlugins(agentId: number): Promise<unknown | null> {
+    if (this.providerForAgent(agentId) !== 'claude') return Promise.resolve(null)
+    return this.claude.reloadPlugins?.(agentId) ?? Promise.resolve(null)
+  }
+
   async providerCatalog(): Promise<AgentProviderCatalog[]> {
     const claude = await this.claude.providerCatalog?.() ?? []
+    const codexRuntimeAvailable = !!this.codex && (this.codexService?.isRuntimeAvailable?.() ?? true)
     let codex: AgentProviderCatalog
     if (this.codexService) {
       try { codex = await this.codexService.catalog() }
       catch (error) {
         const cached = readProviderModelCache(this.db, CODEX_PROVIDER_ID)
         codex = codexProviderCatalog({
-          available: !!this.codex,
+          available: codexRuntimeAvailable,
           models: cached?.models ?? [],
           source: cached ? 'cache' : 'unavailable',
           updatedAt: cached?.updated_at ?? null,
@@ -908,7 +1037,7 @@ export class ProviderAgentManager implements ConductorLike {
     } else {
       const cached = readProviderModelCache(this.db, CODEX_PROVIDER_ID)
       codex = codexProviderCatalog({
-        available: !!this.codex,
+        available: codexRuntimeAvailable,
         models: cached?.models ?? [],
         source: cached ? 'cache' : 'unavailable',
         updatedAt: cached?.updated_at ?? null,
@@ -925,21 +1054,26 @@ export class ProviderAgentManager implements ConductorLike {
   }
 
   async shutdown(): Promise<void> {
+    const detachClaude = (this.claude as ConductorLike & { detachAll?(): Promise<void> }).detachAll
     await Promise.allSettled([
-      (this.claude as ConductorLike & { shutdown?(): Promise<void> }).shutdown?.() ?? Promise.resolve(),
+      detachClaude
+        ? detachClaude.call(this.claude)
+        : (this.claude as ConductorLike & { shutdown?(): Promise<void> }).shutdown?.() ?? Promise.resolve(),
       this.codex?.shutdown() ?? Promise.resolve(),
     ])
   }
 
   private resolveHire(options: ProviderHireOptions): ProviderHireOptions & { provider: string; accessProfile: AccessProfile } {
-    const stored = options.name
+    const stored = options.resumeSession && options.name
       ? this.db.prepare('SELECT provider, access_profile FROM agents WHERE board_id=? AND name=?').get(options.boardId, options.name) as
         { provider: string; access_profile: string | null } | undefined
       : undefined
     const profile = options.resumeSession ? null : defaultsForRole(this.db, options.role)
     const provider = safeProvider(options.provider ?? stored?.provider ?? profile?.provider ?? 'claude')
     const matchingProfile = profile?.provider === provider ? profile : null
-    const defaultAccess: AccessProfile = provider === CODEX_PROVIDER_ID ? 'workspace_write' : 'full_access'
+    const defaultAccess: AccessProfile = options.role
+      ? 'read_only'
+      : provider === CODEX_PROVIDER_ID ? 'workspace_write' : 'full_access'
     const storedAccess = isAccessProfile(stored?.access_profile) ? stored.access_profile : undefined
     const accessProfile = options.accessProfile ?? accessForPermissionMode(options.permissionMode) ?? storedAccess ?? defaultAccess
     return {
@@ -1019,6 +1153,10 @@ export class ProviderAgentManager implements ConductorLike {
 
   private providerForAgent(agentId: number): string {
     return safeProvider(this.agentRow(agentId)?.provider ?? 'claude')
+  }
+
+  private usesAgentOs(agentId: number): boolean {
+    return this.agentOs?.ownsAgent(agentId) ?? false
   }
 
   private agentRow(agentId: number): any {

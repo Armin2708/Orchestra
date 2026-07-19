@@ -35,7 +35,7 @@ export type CodexLaunchPolicy = {
   approvalPolicy?: CodexApprovalPolicy
 }
 
-export type CodexDriverApprovalKind = 'command' | 'file-change' | 'permissions' | 'user-input'
+export type CodexDriverApprovalKind = 'command' | 'file-change' | 'permissions' | 'user-input' | 'mcp-elicitation'
 
 export type CodexDriverApprovalRequest = {
   kind: CodexDriverApprovalKind
@@ -73,6 +73,7 @@ export type CodexSessionUpdate = {
 }
 
 export type CodexApprovalDecision = 'allow' | 'allow_session' | 'deny' | 'cancel'
+export type CodexApprovalAnswers = Record<string, string[]>
 
 export type CodexSessionReconcileResult = {
   resumed: string[]
@@ -107,6 +108,7 @@ const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
   'item/fileChange/requestApproval': 'file-change',
   'item/permissions/requestApproval': 'permissions',
   'item/tool/requestUserInput': 'user-input',
+  'mcpServer/elicitation/request': 'mcp-elicitation',
 }
 
 export class CodexAgentDriver implements AgentDriver {
@@ -131,6 +133,23 @@ export class CodexAgentDriver implements AgentDriver {
       this.subscriptions.push(options.service.onLifecycle((event) => {
         if (event.type === 'connected' && this.sessionsByThread.size > 0) {
           void this.reconcileSessions().catch(() => {})
+        } else if (event.type === 'restart_exhausted') {
+          for (const state of this.sessionsByThread.values()) {
+            if (state.stopped) continue
+            const detail = event.error || 'Codex app-server restart attempts were exhausted'
+            state.session.status = 'lost'
+            this.emitEvent(state, 'error', detail, {
+              method: 'orchestra/restartExhausted',
+              params: { threadId: state.threadId },
+              receivedAt: event.at,
+            }, { reconnected: false, restartExhausted: true })
+            this.stopState(state, 'Codex session lost after app-server restart exhaustion', {
+              lost: true,
+              reconnectFailed: true,
+              restartExhausted: true,
+              error: detail,
+            })
+          }
         }
       }))
     }
@@ -196,7 +215,8 @@ export class CodexAgentDriver implements AgentDriver {
 
   async attach(externalId: string): Promise<DriverSession | null> {
     const existing = this.sessionsByThread.get(externalId)
-    if (existing && !existing.stopped) return existing.session
+    if (existing && !existing.stopped)
+      throw new Error(`Codex thread ${externalId} is already attached by this daemon`)
     let resumed
     try {
       resumed = await this.options.service.resumeThread(externalId)
@@ -219,6 +239,7 @@ export class CodexAgentDriver implements AgentDriver {
     const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
     if (activeTurn) this.setActiveTurn(state, activeTurn.id)
     this.registerState(state)
+    if (!activeTurn) this.replayTerminalTurn(state, thread, 'daemon-attach')
     return state.session
   }
 
@@ -270,6 +291,30 @@ export class CodexAgentDriver implements AgentDriver {
     if (failure) throw failure
   }
 
+  async detach(sessionId: string): Promise<void> {
+    const state = this.required(sessionId)
+    if (state.stopped) return
+    let failure: unknown
+    let unsubscribeStatus: string | null = null
+    try {
+      unsubscribeStatus = (await this.options.service.unsubscribeThread(state.threadId)).status
+    } catch (error) {
+      failure = error
+    }
+    this.stopState(state, 'Codex session detached', {
+      detached: true,
+      unsubscribeStatus,
+      ...(failure ? { detachError: failure instanceof Error ? failure.message : String(failure) } : {}),
+    })
+    if (failure) throw failure
+  }
+
+  async detachAll(): Promise<void> {
+    await Promise.all([...this.sessions.values()]
+      .filter((state) => !state.stopped)
+      .map((state) => this.detach(state.session.id)))
+  }
+
   async updateSession(sessionId: string, patch: CodexSessionUpdate): Promise<void> {
     const state = this.required(sessionId)
     if (state.stopped) throw new Error(`Codex session is stopped: ${sessionId}`)
@@ -298,11 +343,12 @@ export class CodexAgentDriver implements AgentDriver {
     requestId: string,
     decision: CodexApprovalDecision,
     message?: string,
+    answers?: CodexApprovalAnswers,
   ): Promise<boolean> {
     const state = this.sessions.get(sessionId)
     const pending = state?.pendingApprovals.get(requestId)
     if (!state || !pending || state.stopped) return false
-    const response = this.approvalResponse(pending, decision, message)
+    const response = this.approvalResponse(pending, decision, message, answers)
     if (response === CODEX_REQUEST_UNHANDLED) return false
     clearTimeout(pending.timer)
     state.pendingApprovals.delete(requestId)
@@ -328,7 +374,7 @@ export class CodexAgentDriver implements AgentDriver {
   dispose(): void {
     for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe()
     for (const state of this.sessions.values()) {
-      if (!state.stopped) this.stopState(state, 'Codex driver disposed')
+      if (!state.stopped) this.stopState(state, 'Codex driver disposed', { detached: true })
     }
   }
 
@@ -386,6 +432,7 @@ export class CodexAgentDriver implements AgentDriver {
     const states = [...this.sessionsByThread.values()].filter((state) => !state.stopped)
     await Promise.all(states.map(async (state) => {
       try {
+        const priorActiveTurnId = state.activeTurnId
         const resumed = await this.options.service.resumeThread(state.threadId)
         const read = await this.options.service.readThread(state.threadId, true)
         if (state.stopped) return
@@ -407,6 +454,7 @@ export class CodexAgentDriver implements AgentDriver {
           params: { threadId: state.threadId, turnId: activeTurn?.id ?? null },
           receivedAt: this.now().toISOString(),
         }, { reconnected: true })
+        if (!activeTurn && priorActiveTurnId) this.replayTerminalTurn(state, thread, 'app-server-reconnect')
       } catch (error) {
         if (state.stopped) return
         state.session.status = 'lost'
@@ -416,6 +464,11 @@ export class CodexAgentDriver implements AgentDriver {
           params: { threadId: state.threadId },
           receivedAt: this.now().toISOString(),
         }, { reconnected: false })
+        this.stopState(state, 'Codex session lost after reconnect failure', {
+          lost: true,
+          reconnectFailed: true,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     }))
     result.resumed.sort()
@@ -460,11 +513,13 @@ export class CodexAgentDriver implements AgentDriver {
         const turn = isRecord(params.turn) ? params.turn as CodexTurn : null
         const turnId = turn && typeof turn.id === 'string' ? turn.id : this.turnId(params)
         if (!turnId || state.activeTurnId === turnId) this.setActiveTurn(state, null)
-        const failed = turn?.status === 'failed'
+        const failed = turn?.status === 'failed' || turn?.status === 'interrupted'
         this.emitEvent(
           state,
           failed ? 'error' : 'status',
-          failed ? this.turnError(turn) : `Codex turn ${String(turn?.status ?? 'completed')}`,
+          turn?.status === 'interrupted'
+            ? 'Codex turn interrupted'
+            : failed ? this.turnError(turn) : `Codex turn ${String(turn?.status ?? 'completed')}`,
           notification,
           { turnCompleted: true, turnActive: false, status: turn?.status ?? 'completed' },
         )
@@ -540,6 +595,9 @@ export class CodexAgentDriver implements AgentDriver {
   }
 
   private async acceptServerRequest(request: CodexServerRequest): Promise<CodexServerRequestHandlerResult> {
+    if (request.method === 'currentTime/read') {
+      return { currentTimeAt: Math.floor(this.now().getTime() / 1_000) }
+    }
     const kind = APPROVAL_METHODS[request.method]
     if (!kind || !isRecord(request.params)) return CODEX_REQUEST_UNHANDLED
     const threadId = typeof request.params.threadId === 'string' ? request.params.threadId : null
@@ -548,7 +606,16 @@ export class CodexAgentDriver implements AgentDriver {
     if (!state || state.stopped) return CODEX_REQUEST_UNHANDLED
     const turnId = typeof request.params.turnId === 'string' ? request.params.turnId : null
     const itemId = typeof request.params.itemId === 'string' ? request.params.itemId : null
-    this.emitEvent(state, 'tool', `Codex ${kind} approval requested`, {
+    const elicitationQuestions = kind === 'mcp-elicitation'
+      ? this.elicitationQuestions(request.params)
+      : []
+    const questions = kind === 'user-input' && Array.isArray(request.params.questions)
+      ? request.params.questions
+      : elicitationQuestions
+    const requestText = kind === 'mcp-elicitation' && typeof request.params.message === 'string'
+      ? request.params.message
+      : `Codex ${kind} approval requested`
+    this.emitEvent(state, 'tool', requestText, {
       method: request.method,
       params: request.params,
       receivedAt: request.receivedAt,
@@ -558,6 +625,13 @@ export class CodexAgentDriver implements AgentDriver {
       requestId: String(request.id),
       approvalKind: kind,
       approvalRequest: { kind, requestId: request.id, turnId, itemId },
+      ...(questions.length > 0 ? { questions } : {}),
+      ...(kind === 'mcp-elicitation' ? {
+        elicitationMode: typeof request.params.mode === 'string' ? request.params.mode : null,
+        serverName: typeof request.params.serverName === 'string' ? request.params.serverName : null,
+        url: this.elicitationUrl(request.params.url),
+        elicitationId: typeof request.params.elicitationId === 'string' ? request.params.elicitationId : null,
+      } : {}),
     })
     if (this.options.onApprovalRequest) {
       const handled = await this.options.onApprovalRequest({
@@ -593,6 +667,35 @@ export class CodexAgentDriver implements AgentDriver {
     timer.unref?.()
     state.pendingApprovals.set(requestId, { kind, params: request.params, deferred: response, timer })
     return response.promise
+  }
+
+  private replayTerminalTurn(
+    state: CodexSessionState,
+    thread: CodexThread,
+    reason: 'daemon-attach' | 'app-server-reconnect',
+  ): void {
+    const turn = thread.turns.at(-1)
+    if (!turn || !['completed', 'failed', 'interrupted'].includes(turn.status)) return
+    const failed = turn.status === 'failed' || turn.status === 'interrupted'
+    this.emitEvent(
+      state,
+      failed ? 'error' : 'status',
+      turn.status === 'interrupted'
+        ? 'Codex turn interrupted'
+        : failed ? this.turnError(turn) : `Codex turn ${turn.status}`,
+      {
+        method: 'turn/completed',
+        params: { threadId: state.threadId, turnId: turn.id, turn },
+        receivedAt: this.now().toISOString(),
+      },
+      {
+        turnCompleted: true,
+        turnActive: false,
+        status: turn.status,
+        replayed: true,
+        reconnectReason: reason,
+      },
+    )
   }
 
   private acceptItem(
@@ -751,6 +854,7 @@ export class CodexAgentDriver implements AgentDriver {
     pending: Pick<PendingApproval, 'kind' | 'params'>,
     decision: CodexApprovalDecision,
     message?: string,
+    suppliedAnswers?: CodexApprovalAnswers,
   ): unknown {
     if (pending.kind === 'command' || pending.kind === 'file-change') {
       return {
@@ -767,13 +871,134 @@ export class CodexAgentDriver implements AgentDriver {
         scope: decision === 'allow_session' ? 'session' : 'turn',
       }
     }
+    if (pending.kind === 'mcp-elicitation') {
+      const accepted = decision === 'allow' || decision === 'allow_session'
+      return {
+        action: accepted ? 'accept' : decision === 'deny' ? 'decline' : 'cancel',
+        content: accepted && pending.params.mode !== 'url'
+          ? this.elicitationContent(pending.params, suppliedAnswers, message)
+          : null,
+        _meta: null,
+      }
+    }
     const answers: Record<string, { answers: string[] }> = {}
     if ((decision === 'allow' || decision === 'allow_session') && Array.isArray(pending.params.questions)) {
       for (const question of pending.params.questions) {
-        if (isRecord(question) && typeof question.id === 'string') answers[question.id] = { answers: message ? [message] : [] }
+        if (isRecord(question) && typeof question.id === 'string') {
+          const supplied = suppliedAnswers?.[question.id]
+          answers[question.id] = {
+            answers: Array.isArray(supplied)
+              ? supplied.filter((answer): answer is string => typeof answer === 'string')
+              : message ? [message] : [],
+          }
+        }
       }
     }
     return { answers }
+  }
+
+  private elicitationQuestions(params: Record<string, unknown>): Record<string, unknown>[] {
+    if (params.mode !== 'form' && params.mode !== 'openai/form') return []
+    const schema = isRecord(params.requestedSchema) ? params.requestedSchema : null
+    if (!schema || !isRecord(schema.properties)) return []
+    const properties = schema.properties
+    const required = new Set(Array.isArray(schema.required)
+      ? schema.required.filter((value): value is string => typeof value === 'string')
+      : [])
+    return Object.entries(properties).flatMap(([id, raw]) => {
+      if (!isRecord(raw)) return []
+      const multiple = raw.type === 'array'
+      const optionSource = multiple && isRecord(raw.items) ? raw.items : raw
+      const options = this.elicitationOptions(optionSource)
+      const defaultValue = raw.default
+      const defaultAnswers = Array.isArray(defaultValue)
+        ? defaultValue.filter((value): value is string => typeof value === 'string')
+        : typeof defaultValue === 'string' || typeof defaultValue === 'number' || typeof defaultValue === 'boolean'
+          ? [String(defaultValue)]
+          : []
+      return [{
+        id,
+        header: typeof raw.title === 'string' && raw.title.trim() ? raw.title : id,
+        ...(typeof raw.description === 'string' && raw.description.trim() ? { question: raw.description } : {}),
+        required: required.has(id),
+        multiple,
+        ...(options.length > 0 ? { options } : {}),
+        ...(defaultAnswers.length > 0 ? { defaultAnswers } : {}),
+        isSecret: raw.format === 'password' || raw.isSecret === true || raw.writeOnly === true,
+        inputType: raw.type === 'number' || raw.type === 'integer'
+          ? 'number'
+          : raw.format === 'email' ? 'email'
+            : raw.format === 'uri' ? 'url'
+              : raw.format === 'date' ? 'date'
+                : raw.format === 'date-time' ? 'datetime-local' : 'text',
+        ...(typeof raw.minimum === 'number' ? { minimum: raw.minimum } : {}),
+        ...(typeof raw.maximum === 'number' ? { maximum: raw.maximum } : {}),
+        ...(raw.type === 'integer' ? { step: 1 } : {}),
+      }]
+    })
+  }
+
+  private elicitationOptions(schema: Record<string, unknown>): Array<{ label: string; description?: string }> {
+    if (Array.isArray(schema.enum)) {
+      const names = Array.isArray(schema.enumNames) ? schema.enumNames : []
+      return schema.enum.flatMap((value, index) => typeof value === 'string'
+        ? [{ label: value, ...(typeof names[index] === 'string' && names[index] !== value
+          ? { description: names[index] }
+          : {}) }]
+        : [])
+    }
+    const titled = Array.isArray(schema.oneOf) ? schema.oneOf
+      : Array.isArray(schema.anyOf) ? schema.anyOf : []
+    const values = titled.flatMap((option) => isRecord(option) && typeof option.const === 'string'
+      ? [{
+          label: option.const,
+          ...(typeof option.title === 'string' && option.title !== option.const
+            ? { description: option.title }
+            : {}),
+        }]
+      : [])
+    if (values.length > 0) return values
+    if (schema.type === 'boolean') return [{ label: 'true', description: 'Yes' }, { label: 'false', description: 'No' }]
+    return []
+  }
+
+  private elicitationUrl(value: unknown): string | null {
+    if (typeof value !== 'string') return null
+    try {
+      const parsed = new URL(value)
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.toString() : null
+    } catch {
+      return null
+    }
+  }
+
+  private elicitationContent(
+    params: Record<string, unknown>,
+    suppliedAnswers?: CodexApprovalAnswers,
+    message?: string,
+  ): Record<string, unknown> {
+    const schema = isRecord(params.requestedSchema) ? params.requestedSchema : null
+    const properties = schema && isRecord(schema.properties) ? schema.properties : null
+    if (!properties) return {}
+    const content: Record<string, unknown> = {}
+    for (const [id, raw] of Object.entries(properties)) {
+      if (!isRecord(raw)) continue
+      const answers = Array.isArray(suppliedAnswers?.[id])
+        ? suppliedAnswers[id].filter((answer): answer is string => typeof answer === 'string' && answer.length > 0)
+        : message ? [message] : []
+      if (answers.length === 0) continue
+      if (raw.type === 'array') {
+        content[id] = answers
+      } else if (raw.type === 'boolean') {
+        content[id] = answers[0] === 'true'
+      } else if (raw.type === 'number' || raw.type === 'integer') {
+        const value = Number(answers[0])
+        if (Number.isFinite(value)) content[id] = raw.type === 'integer' ? Math.trunc(value) : value
+      } else {
+        content[id] = answers[0]
+      }
+    }
+    return content
   }
 
   private cancelPendingApprovals(state: CodexSessionState): void {
