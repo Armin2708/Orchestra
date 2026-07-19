@@ -342,8 +342,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       if (!alive) return
       const next: Line[] = r.lines ?? r
       // avoid re-rendering the whole history when nothing changed — keeps scrolling smooth
-      setLines((prev) => (prev.length === next.length &&
-        prev[prev.length - 1]?.text === next[next.length - 1]?.text) ? prev : [...next])
+      setLines((prev) => (prev.length === next.length && prev.every((line, index) =>
+        line.kind === next[index]?.kind && line.text === next[index]?.text && line.at === next[index]?.at)) ? prev : [...next])
       setTurn((prev) => {
         const w = r.working ?? null
         if (!prev && !w) return prev

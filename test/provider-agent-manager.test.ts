@@ -224,6 +224,44 @@ it('routes the stored worker default to Codex and queues work until the thread i
   ])
 })
 
+it('renders Codex streaming output as a readable transcript instead of a protocol event log', async () => {
+  const t = setup()
+  const agent = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'readable-codex' })
+  await until(() => t.driver.launches.length === 1)
+
+  t.driver.emit('codex:1', {
+    type: 'status', data: 'mcpServer/startupStatus/updated',
+    metadata: { method: 'mcpServer/startupStatus/updated', unknownNativeEvent: true },
+  })
+  t.driver.emit('codex:1', {
+    type: 'status', data: 'Codex token usage updated',
+    metadata: {
+      method: 'thread/tokenUsage/updated',
+      tokenUsage: { total: { totalTokens: 7, inputTokens: 4, outputTokens: 3 } },
+    },
+  })
+  for (const [seq, delta] of ['Hello', '!', ' I', ' am', ' Codex', '.'].entries()) {
+    t.driver.emit('codex:1', {
+      type: 'output', data: delta,
+      metadata: { method: 'item/agentMessage/delta', itemId: 'message-1', seq },
+    })
+  }
+  t.driver.emit('codex:1', {
+    type: 'status', data: 'Codex turn completed',
+    metadata: { method: 'turn/completed', turnCompleted: true, turnActive: false, status: 'completed' },
+  })
+
+  await until(() => t.manager.transcript(agent.id).lines.some((line: any) => line.text === 'Hello! I am Codex.'))
+  const transcript = t.manager.transcript(agent.id)
+  expect(transcript.info.tokens).toBe(7)
+  expect(transcript.lines.filter((line: any) => line.kind === 'text')).toEqual([
+    expect.objectContaining({ text: 'Hello! I am Codex.' }),
+  ])
+  expect(transcript.lines.map((line: any) => line.text)).not.toContain('mcpServer/startupStatus/updated')
+  expect(transcript.lines.map((line: any) => line.text)).not.toContain('Codex token usage updated')
+  expect(transcript.lines.map((line: any) => line.text)).toContain('turn finished (completed)')
+})
+
 it('detaches managed Codex threads on daemon shutdown without marking agents gone', async () => {
   const t = setup()
   const agent = t.manager.hire({ boardId: 1, cwd: '/project', provider: 'codex', name: 'resumable-codex' })
@@ -604,8 +642,19 @@ it('routes board controls and transcripts to Agent OS-owned Codex agents', async
   expect(manager.isHired(agentId)).toBe(true)
   expect(manager.task(agentId, 'continue from the board')).toBe(true)
   await until(() => driver.sends.some(([, text]) => text === 'continue from the board'))
-  driver.emit('codex:1', { type: 'output', data: 'Agent OS output is visible' })
+  driver.emit('codex:1', {
+    type: 'status', data: 'hook/started', metadata: { method: 'hook/started', unknownNativeEvent: true },
+  })
+  driver.emit('codex:1', {
+    type: 'output', data: 'Agent OS output ',
+    metadata: { method: 'item/agentMessage/delta', itemId: 'agent-os-message' },
+  })
+  driver.emit('codex:1', {
+    type: 'output', data: 'is visible',
+    metadata: { method: 'item/agentMessage/delta', itemId: 'agent-os-message' },
+  })
   await until(() => manager.transcript(agentId).lines.some((line: any) => line.text === 'Agent OS output is visible'))
+  expect(manager.transcript(agentId).lines.map((line: any) => line.text)).not.toContain('hook/started')
   expect(manager.transcript(agentId).info).toMatchObject({
     provider: 'codex', accessProfile: 'workspace_write',
     models: [expect.objectContaining({ value: 'gpt-controlled', supportedEffortLevels: ['high'] })],

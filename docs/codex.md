@@ -39,6 +39,11 @@ version, models, capabilities, usage, and rate limits. Account email and reset-c
 are intentionally omitted. If Orchestra uses bearer authentication, include the same token as the
 web client.
 
+The header's **Usage** control combines Claude's subscription windows with every Codex rate-limit
+bucket returned by app-server, including model-specific pools. Hover, focus, or click it to inspect
+percent used, reset time, ChatGPT plan, stale/error state, available reset credits, and the Codex
+lifetime token total. The compact button shows the highest current utilization across providers.
+
 ## Choose Codex
 
 Set worker and specialist defaults in Settings, use the provider selector beside **Hire** or a card
@@ -98,6 +103,12 @@ session, deny, and cancel through the provider-neutral approval API where the na
 When an Agent OS task contract has a policy, unambiguous allow/deny decisions are applied before
 human prompting; unmatched `ask` decisions and interactive questions remain pending, and malformed
 command/file policy requests fail closed.
+
+The terminal is a semantic transcript, not an app-server protocol console. Assistant, reasoning,
+and command-output deltas are coalesced into stable entries; tool start/completion updates replace
+their prior entry; token counters, thread state, hooks, MCP startup notifications, and unknown native
+events stay out of the visible feed. State transitions, approvals, errors, usage accounting, and the
+Agent OS raw event log remain intact for control and recovery.
 
 ## Lifecycle and recovery
 

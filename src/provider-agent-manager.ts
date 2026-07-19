@@ -16,6 +16,7 @@ import { bounceDeadLetters, removeAgentCards } from './reaper.js'
 import type { ConductorLike } from './server.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import type { AgentDriver, DriverEvent, DriverSession } from './runtime/index.js'
+import { appendDriverTranscript, type DriverTranscriptLine } from './runtime/transcript.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from './usage.js'
 
 export const ACCESS_PROFILES = ['read_only', 'workspace_write', 'full_access'] as const
@@ -127,12 +128,7 @@ export interface AgentOsAgentControl {
   ): Promise<boolean>
 }
 
-type TranscriptLine = {
-  at: string
-  kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'
-  text: string
-  metadata?: Record<string, unknown>
-}
+type TranscriptLine = DriverTranscriptLine
 
 type CodexState = {
   agentId: number
@@ -320,7 +316,7 @@ export class CodexManagedAgentRuntime {
         : null,
     }
     this.states.set(state.agentId, state)
-    this.log(state, 'status', resumeSession ? `resuming Codex thread in ${options.cwd}` : `starting Codex in ${options.cwd}`)
+    this.log(state, 'status', resumeSession ? `resumed in ${options.cwd} (previous session continues)` : `hired in ${options.cwd}`)
     this.emitAgent(state)
     void this.start(state, resumeSession).catch((error) => this.failStart(state, error))
     return row
@@ -555,7 +551,7 @@ export class CodexManagedAgentRuntime {
     state.session = session
     this.db.prepare(`UPDATE agents SET status='active', external_session_id=?, last_seen=datetime('now') WHERE id=?`)
       .run(session.externalId, state.agentId)
-    this.log(state, 'status', `Codex thread ready · ${session.externalId}`)
+    this.log(state, 'status', `session started${state.model ? ` · ${state.model}` : ''} · ${state.cwd}`)
     this.persist(state)
     this.emitAgent(state)
     void this.watch(state, session)
@@ -645,12 +641,9 @@ export class CodexManagedAgentRuntime {
       : metadata.usageTotal
     if (rawUsage) this.recordUsageDelta(state, rawUsage)
 
-    const kind: TranscriptLine['kind'] = event.type === 'error' ? 'error'
-      : event.type === 'status' ? 'status'
-        : event.type === 'tool' ? 'tool'
-          : metadata.kind === 'reasoning' ? 'thinking'
-            : 'text'
-    if (event.data) this.log(state, kind, event.data, metadata)
+    if (appendDriverTranscript(state.transcript, event)) {
+      this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+    }
     this.persist(state)
   }
 

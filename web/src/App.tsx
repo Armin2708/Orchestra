@@ -7,6 +7,7 @@ import { NeedsYou } from './NeedsYou'
 import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
+import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
 import './messages.css'
 import './agentOs.css'
 
@@ -239,6 +240,64 @@ function WakeButton({ boards, sys, reload }: { boards: number[]; sys: SystemInfo
   )
 }
 
+const usageReset = (iso: string | null) => iso
+  ? new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+  : null
+
+function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
+  const providers = subscriptionUsage(sys)
+  const highest = highestSubscriptionUsage(providers)
+  const renderProvider = (provider: SubscriptionUsageProvider) => (
+    <section className={`usage-provider${provider.stale ? ' is-stale' : ''}`} key={provider.id}>
+      <header>
+        <strong>{provider.name}</strong>
+        {provider.account && <span>{provider.account}</span>}
+        {provider.stale && <em>cached</em>}
+      </header>
+      {provider.windows.map((window) => {
+        const reset = usageReset(window.resetsAt)
+        return (
+          <div className={`usage-window${window.used >= 85 ? ' is-high' : ''}`} key={window.id}>
+            <div className="usage-window-copy">
+              <span>{window.label}</span>
+              <b>{Math.round(window.used)}%</b>
+              {reset && <small>resets {reset}</small>}
+            </div>
+            <span className="usage-window-bar" aria-hidden="true"><i style={{ width: `${window.used}%` }} /></span>
+          </div>
+        )
+      })}
+      {provider.detail && <p>{provider.detail}</p>}
+      {provider.windows.length === 0 && !provider.detail && <p>No subscription limit data available.</p>}
+      {(provider.lifetimeTokens !== undefined || provider.resetCredits !== undefined) && (
+        <footer>
+          {provider.lifetimeTokens !== undefined && <span>{fmtTokens(provider.lifetimeTokens)} lifetime tokens</span>}
+          {provider.resetCredits !== undefined && <span>{provider.resetCredits} reset credit{provider.resetCredits === 1 ? '' : 's'}</span>}
+        </footer>
+      )}
+    </section>
+  )
+  return (
+    <details className="usage-menu">
+      <summary className={`meter meter-usage${highest !== null && highest >= 85 ? ' low' : ''}`}
+        aria-label="AI subscription usage">
+        <span className="meter-label">usage</span>
+        <span className="meter-val">{highest === null ? '—' : `${Math.round(highest)}%`}</span>
+        <span className="usage-caret" aria-hidden="true">⌄</span>
+      </summary>
+      <div className="usage-popover" role="dialog" aria-label="AI subscription usage details">
+        <div className="usage-popover-head">
+          <strong>Subscription usage</strong>
+          <span>Live provider limits</span>
+        </div>
+        {providers.length > 0 ? providers.map(renderProvider) : (
+          <p className="usage-empty">No subscription usage is available.</p>
+        )}
+      </div>
+    </details>
+  )
+}
+
 function SystemMeter({ boards }: { boards: number[] }) {
   const [sys, setSys] = useState<SystemInfo | null>(null)
   const [inj, setInj] = useState<Telemetry | null>(null)
@@ -276,24 +335,6 @@ function SystemMeter({ boards }: { boards: number[] }) {
     return () => { dead = true; clearInterval(t) }
   }, [boardKey])
   if (!sys) return null
-  const at = (iso: string | null) => iso
-    ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    : null
-  const remedy = 'restart orchestra from an interactive terminal (orchestra restart) and choose "Always Allow" on the keychain prompt'
-  const stale = sys?.usage?.stale_since
-  const win = (label: string, w: { utilization: number; resets_at: string | null }) => {
-    const used = Math.round(w.utilization)
-    const reset = at(w.resets_at)
-    const staleNote = stale ? ` — cached ${at(stale)}, live fetch failing (${sys!.usage_error}); ${remedy}` : ''
-    return (
-      <span className={`meter ${used >= 85 ? 'low' : ''} ${stale ? 'stale' : ''}`} title={`${label} limit: ${used}% used${reset ? ` — resets ${reset}` : ''}${staleNote}`}>
-        <span className="meter-label">{label}</span>
-        <span className="meter-bar"><i style={{ width: `${Math.min(100, used)}%` }} /></span>
-        <span className="meter-val">{used}%</span>
-        {reset && <span className="meter-reset">↺ {reset}</span>}
-      </span>
-    )
-  }
   return (
     <div className="sysmeter">
       <span className="meter" title={`${sys.hired} hired agents running — this machine (${sys.hardware.cores} cores, ${sys.hardware.total_gb}GB) can comfortably run about ${sys.hardware.capacity}`}>
@@ -301,15 +342,7 @@ function SystemMeter({ boards }: { boards: number[] }) {
         <span className="meter-val">{sys.hired}/{sys.hardware.capacity}</span>
       </span>
       <WakeButton boards={boards} sys={sys} reload={loadSys} />
-      {sys.usage && win('5h', sys.usage.five_hour)}
-      {sys.usage && win('week', sys.usage.seven_day)}
-      {!sys.usage && sys.usage_error && (
-        <span className="meter degraded"
-          title={`Claude usage unavailable (${sys.usage_error})${sys.usage_error_since ? ` since ${at(sys.usage_error_since)}` : ''} — ${remedy}.`}>
-          <span className="meter-label">usage</span>
-          <span className="meter-val">unavailable ({sys.usage_error})</span>
-        </span>
-      )}
+      <SubscriptionUsage sys={sys} />
       {sys.injected && sys.injected.count > 0 && (
         <span className="meter"
           title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)${inj && inj.by_agent.length > 0 ? ` — top agents: ${inj.by_agent.slice(0, 5).map((a) => `${a.agent_name} ${fmtTokens(a.tokens)}`).join(', ')}` : ''}`}>

@@ -106,6 +106,13 @@ export const fetchTimeline = (
   return api('GET', `/boards/${boardId}/timeline${qs ? `?${qs}` : ''}`)
 }
 
+export type SystemProviderInfo = {
+  id: string
+  name: string
+  auth?: { status?: string; account?: string; detail?: string }
+  usage?: unknown
+}
+
 export type SystemInfo = {
   hardware: { cores: number; total_gb: number; capacity: number }
   hired: number
@@ -119,6 +126,7 @@ export type SystemInfo = {
   injected?: { chars: number; tokens: number; count: number }
   // real API tokens consumed by hired agents (SDK usage reports) — distinct from the injected estimate
   agent_usage?: UsageSplit
+  providers?: SystemProviderInfo[]
   // agents paused by usage limits + when the daemon's autowake timer resumes them (#62)
   paused_limit?: number
   autowake_at?: string | null

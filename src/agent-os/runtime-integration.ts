@@ -42,6 +42,7 @@ import {
   type WorkspaceStore,
   WorkspaceManager,
 } from '../runtime/index.js'
+import { projectDriverTranscript } from '../runtime/transcript.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
 import { readProviderModelCache } from '../agent-providers.js'
 
@@ -627,19 +628,26 @@ export class AgentOsJobExecutor implements JobExecutor {
     if (!control) return { lines: [], working: null, permissions: [] }
     const rows = this.db.prepare(`SELECT kind, payload, created_at FROM (
       SELECT rowid, kind, payload, created_at FROM os_events
-      WHERE session_id=? AND kind LIKE 'driver.%' ORDER BY rowid DESC LIMIT 500
+      WHERE session_id=? AND kind LIKE 'driver.%' ORDER BY rowid DESC LIMIT 5000
     ) ORDER BY rowid`).all(control.sessionId) as Array<{ kind: string; payload: string; created_at: string }>
-    const lines = rows.flatMap((row) => {
+    const events = rows.flatMap((row, index): DriverEvent[] => {
       let payload: Record<string, unknown>
       try { payload = JSON.parse(row.payload) as Record<string, unknown> } catch { return [] }
       const text = typeof payload.data === 'string' ? payload.data : ''
       if (!text) return []
       const eventType = row.kind.slice('driver.'.length)
-      const kind = eventType === 'error' ? 'error'
-        : eventType === 'tool' ? 'tool'
-          : eventType === 'output' ? 'text' : 'status'
-      return [{ at: row.created_at, kind, text, metadata: payload.metadata ?? {} }]
+      if (!['output', 'status', 'tool', 'error', 'exit'].includes(eventType)) return []
+      return [{
+        sessionId: control.sessionId,
+        seq: Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : index + 1,
+        type: eventType as DriverEvent['type'],
+        at: row.created_at,
+        data: text,
+        metadata: payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
+          ? payload.metadata as Record<string, unknown> : {},
+      }]
     })
+    const lines = projectDriverTranscript(events)
     const agent = this.db.prepare('SELECT model, effort, access_profile FROM agents WHERE id=?').get(agentId) as
       { model: string | null; effort: string | null; access_profile: string | null } | undefined
     const accessProfile = agent?.access_profile ?? 'workspace_write'
