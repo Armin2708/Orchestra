@@ -215,4 +215,41 @@ describe('Agent OS API', () => {
     }
     expect(written).toEqual(inputs)
   })
+
+  it('launches an interactive shell without requiring a client-selected command', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/shell', 'shell')").run().lastInsertRowid)
+    const workspaceId = 'shell-workspace'
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES (?, ?, 'shell', 'shared', '/shell', 'active')`).run(workspaceId, boardId)
+    let launch: Parameters<AgentOsRuntimeAdapter['spawnProcess']>[0] | null = null
+    const runtime: AgentOsRuntimeAdapter = {
+      spawnProcess: async (input) => {
+        launch = input
+        return {
+          id: 'interactive-shell', workspace_id: workspaceId, name: input.name, command: '/bin/zsh -l',
+          cwd: input.cwd, status: 'running', pid: 123, exit_code: null, cols: input.cols, rows: input.rows,
+          restartable: input.restartable, started_at: '2026-07-19T12:00:00Z', ended_at: null,
+        }
+      },
+      writeProcessInput: async () => {}, resizeProcess: async () => {}, signalProcess: async () => {},
+    }
+    const server = Fastify()
+    server.decorate('bus', new EventEmitter())
+    registerAgentOsRoutes(server, { db, runtime })
+    servers.push(server)
+    await server.ready()
+
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/workspaces/${workspaceId}/processes`,
+      payload: { interactive: true, restartable: true },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json().process).toMatchObject({ name: 'shell', command: '/bin/zsh -l', status: 'running' })
+    expect(launch).toMatchObject({ interactive: true, name: 'shell', cwd: '/shell', restartable: true })
+    expect(launch).not.toHaveProperty('command')
+    const event = db.prepare("SELECT payload FROM os_events WHERE process_id='interactive-shell' AND kind='process.spawned'").get() as { payload: string }
+    expect(JSON.parse(event.payload)).toMatchObject({ command: '/bin/zsh -l', name: 'shell', interactive: true })
+  })
 })

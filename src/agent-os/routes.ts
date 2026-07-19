@@ -47,13 +47,12 @@ export interface AgentOsRuntimeAdapter {
   spawnProcess(input: {
     workspace: Workspace
     name: string
-    command: string
     cwd: string
     env: Record<string, string>
     cols: number
     rows: number
     restartable: boolean
-  }): Promise<ProcessRecord>
+  } & ({ interactive: true; command?: never } | { interactive?: false; command: string })): Promise<ProcessRecord>
   writeProcessInput(processId: string, data: string): Promise<void>
   resizeProcess(processId: string, cols: number, rows: number): Promise<void>
   signalProcess(processId: string, signal: string): Promise<void>
@@ -224,13 +223,19 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     if (!options.runtime) throw new UnsupportedError('process spawning requires the PTY runtime')
     const workspace = requireWorkspace(workspaces, request.params.id)
     const body = objectBody(request.body)
-    const command = requiredString(body.command, 'command')
-    const process = await options.runtime.spawnProcess({ workspace, command,
-      name: stringValue(body.name) ?? command.split(/\s+/)[0], cwd: stringValue(body.cwd) ?? workspace.worktree_path ?? workspace.root_path,
+    const interactive = body.interactive === true
+    const requestedCommand = interactive ? null : requiredString(body.command, 'command')
+    const launch = interactive
+      ? { interactive: true as const }
+      : { interactive: false as const, command: requestedCommand! }
+    const process = await options.runtime.spawnProcess({ workspace, ...launch,
+      name: stringValue(body.name) ?? requestedCommand?.split(/\s+/)[0] ?? 'shell',
+      cwd: stringValue(body.cwd) ?? workspace.worktree_path ?? workspace.root_path,
       env: envObject(body.env), cols: boundedInteger(body.cols, 80, 20, 500, 'cols'),
       rows: boundedInteger(body.rows, 24, 5, 300, 'rows'), restartable: body.restartable === true })
     events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
-      processId: process.id, kind: 'process.spawned', source: 'api', payload: { command, name: process.name } })
+      processId: process.id, kind: 'process.spawned', source: 'api',
+      payload: { command: process.command, name: process.name, interactive } })
     return reply.code(201).send({ process })
   })
 

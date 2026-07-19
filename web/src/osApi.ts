@@ -265,6 +265,15 @@ export type AgentEffort = (typeof AGENT_EFFORT_LEVELS)[number]
 export type AgentDefaultProfile = { provider: string; model: string | null; effort: AgentEffort | null }
 export type AgentDefaults = { worker: AgentDefaultProfile; specialist: AgentDefaultProfile }
 
+type CreateProcessInput = {
+  name?: string
+  cwd?: string
+  env?: Record<string, string>
+  cols?: number
+  rows?: number
+  restartable?: boolean
+} & ({ interactive: true; command?: never } | { interactive?: false; command: string })
+
 const unwrapList = <T>(value: unknown, keys: string[]): T[] => {
   if (Array.isArray(value)) return value as T[]
   if (!value || typeof value !== 'object') return []
@@ -362,9 +371,8 @@ export const osApi = {
 
   listProcesses: async (workspaceId: OsId) =>
     unwrapList<unknown>(await api('GET', `/os/workspaces/${workspaceId}/processes`), ['processes']).map(normalizeProcess),
-  createProcess: async (workspaceId: OsId, input: {
-    name?: string; command: string; cwd?: string; env?: Record<string, string>; cols?: number; rows?: number; restartable?: boolean
-  }) => normalizeProcess(unwrapEntity<unknown>(await api('POST', `/os/workspaces/${workspaceId}/processes`, input), ['process'])),
+  createProcess: async (workspaceId: OsId, input: CreateProcessInput) =>
+    normalizeProcess(unwrapEntity<unknown>(await api('POST', `/os/workspaces/${workspaceId}/processes`, input), ['process'])),
   readProcessOutput: async (processId: OsId, after = 0) => {
     const raw = await api('GET', `/os/processes/${processId}/output?after=${after}`)
     const items = unwrapList<unknown>(raw, ['output', 'chunks']).map(normalizeOutput)

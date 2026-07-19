@@ -134,6 +134,39 @@ describe('Agent OS daemon runtime integration', () => {
     expect(inputEvents.every((event) => !event.payload.includes('hello'))).toBe(true)
   }, 25_000)
 
+  it('starts the host interactive shell and accepts typed commands immediately', async () => {
+    const { boardId, repo, db, server } = await fixture()
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'host-shell', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const started = await server.inject({
+      method: 'POST', url: `/api/v1/os/workspaces/${workspace.id}/processes`,
+      payload: { interactive: true, restartable: true, cols: 100, rows: 30 },
+    })
+    expect(started.statusCode).toBe(201)
+    expect(started.json().process).toMatchObject({ name: 'shell', status: 'running', restartable: true })
+    const processId = started.json().process.id as string
+
+    const command = process.platform === 'win32' ? 'echo ORCHESTRA_INTERACTIVE_OK\r' : 'echo $((20+22))\r'
+    expect((await server.inject({
+      method: 'POST', url: `/api/v1/os/processes/${processId}/input`, payload: { data: command },
+    })).statusCode).toBe(200)
+    await until(async () => {
+      const page = await server.inject({ method: 'GET', url: `/api/v1/os/processes/${processId}/output` })
+      const output = page.json().output.map((chunk: any) => chunk.data).join('')
+      return process.platform === 'win32' ? output.includes('ORCHESTRA_INTERACTIVE_OK') : output.includes('42\r\n')
+    })
+
+    const recipe = JSON.parse((db.prepare('SELECT recipe_json FROM processes WHERE id=?').get(processId) as { recipe_json: string }).recipe_json)
+    expect(recipe).toMatchObject({ shell: false, args: process.platform === 'win32' ? [] : ['-l'], restartable: true })
+    await server.inject({ method: 'POST', url: `/api/v1/os/processes/${processId}/input`, payload: { data: 'exit\r' } })
+    await until(() => {
+      const row = db.prepare('SELECT status FROM processes WHERE id=?').get(processId) as { status: string }
+      return ['exited', 'failed'].includes(row.status)
+    })
+  }, 25_000)
+
   it('captures tracked and untracked changes, then forks and reapplies the checkpoint patch safely', async () => {
     const { boardId, cardId, repo, db, server } = await fixture()
     const created = await server.inject({

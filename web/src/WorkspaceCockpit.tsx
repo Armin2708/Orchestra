@@ -232,8 +232,11 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 
   const scopedProcessData = useMemo(() => processes.data.filter((process) =>
     String(process.workspace_id) === String(selected?.id ?? '')), [processes.data, selected?.id])
-  const scopedProcesses = useMemo<Resource<WorkspaceProcess[]>>(() => ({ ...processes, data: scopedProcessData }),
-    [processes.status, processes.error, scopedProcessData])
+  const scopedProcesses = useMemo<Resource<WorkspaceProcess[]>>(() => ({
+    ...processes,
+    status: resourceWorkspaceRef.current === String(selected?.id ?? '') ? processes.status : 'loading',
+    data: scopedProcessData,
+  }), [processes.status, processes.error, scopedProcessData, selected?.id])
 
   useEffect(() => {
     if (processes.status !== 'ready') return
@@ -496,6 +499,39 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
 }) {
   const [command, setCommand] = useState('')
   const [starting, setStarting] = useState(false)
+  const [openingShell, setOpeningShell] = useState(false)
+  const openingShellRef = useRef(false)
+  const autoShellWorkspaceRef = useRef<string | null>(null)
+
+  const openShell = useCallback(async () => {
+    if (openingShellRef.current) return
+    openingShellRef.current = true
+    setOpeningShell(true)
+    try {
+      const created = await osApi.createProcess(workspace.id, {
+        name: 'shell', interactive: true,
+        cwd: workspace.worktree_path ?? workspace.root_path,
+        cols: 100, rows: 30, restartable: true,
+      })
+      await onProcessesChanged()
+      onAttach(created)
+      onError(null)
+      window.requestAnimationFrame(() => terminalRef.current?.focus())
+    } catch (error) { onError(errorMessage(error, 'The interactive shell could not start.')) }
+    finally {
+      openingShellRef.current = false
+      setOpeningShell(false)
+    }
+  }, [onAttach, onError, onProcessesChanged, terminalRef, workspace.id, workspace.root_path, workspace.worktree_path])
+
+  useEffect(() => {
+    if (processes.status !== 'ready') return
+    if (processes.data.some((process) => ['running', 'starting', 'stopping'].includes(process.status))) return
+    const workspaceId = String(workspace.id)
+    if (autoShellWorkspaceRef.current === workspaceId) return
+    autoShellWorkspaceRef.current = workspaceId
+    void openShell()
+  }, [openShell, processes.data, processes.status, workspace.id])
 
   const run = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -530,14 +566,17 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
             </button>
           ))}
         </div>
-        {activeProcess && (
-          <div className="os-process-actions">
+        <div className="os-process-actions">
+          <button onClick={() => void openShell()} disabled={openingShell} title="Open the host's interactive shell">
+            <OsIcon name="terminal" size={12} /> {openingShell ? 'Opening' : 'New shell'}
+          </button>
+          {activeProcess && <>
             <span className="os-process-facts">PID {activeProcess.pid ?? '—'} · exit {activeProcess.exit_code ?? '—'}</span>
             {['running', 'starting', 'stopping'].includes(activeProcess.status) ? (
               <><button onClick={() => onSignal(activeProcess, 'SIGINT')}>Interrupt</button><button onClick={() => onSignal(activeProcess, 'SIGTERM')}>Stop</button></>
             ) : activeProcess.restartable ? <button onClick={() => onRestart(activeProcess)}>Restart</button> : null}
-          </div>
-        )}
+          </>}
+        </div>
       </header>
       {processes.status === 'error' && <div className="os-inline-error" role="alert">{processes.error}</div>}
       <ProcessTerminal ref={terminalRef} process={activeProcess} onProcessChanged={onProcessesChanged} />
