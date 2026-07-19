@@ -9,7 +9,7 @@ import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { port } from './daemon.js'
 import { conductorRules, outputDiscipline } from './rules.js'
-import { autoshipEnabled } from './shipqueue.js'
+import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -228,7 +228,7 @@ export class Conductor {
     let branch: string | null = null
     if (autoshipEnabled()) {
       const name = `card-${req.cardId}`
-      const wt = path.join(req.cwd, '..', `${path.basename(req.cwd)}-card-${req.cardId}`)
+      const wt = cardWorktree(req.cwd, req.cardId)
       try {
         if (!existsSync(wt)) {
           try { execFileSync('git', ['worktree', 'add', wt, '-b', name], { cwd: req.cwd, timeout: 30_000 }) }
