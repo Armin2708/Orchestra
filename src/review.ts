@@ -11,8 +11,15 @@ export async function diffStat(cwd: string, branch?: string | null): Promise<str
   if (branch) {
     const ref = await git(['rev-parse', '--verify', `${branch}^{commit}`])
     if (ref.ok) {
-      const delivery = await git(['diff', '--stat', `main...${branch}`])
-      return delivery.out || `branch ${branch}: no changes relative to main`
+      const remoteHead = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+      const bases = ['main', remoteHead.out, 'master', 'HEAD'].filter(Boolean)
+      let base = 'HEAD'
+      for (const candidate of bases) {
+        if ((await git(['rev-parse', '--verify', `${candidate}^{commit}`])).ok) { base = candidate; break }
+      }
+      const delivery = await git(['diff', '--stat', `${base}...${branch}`])
+      if (!delivery.ok) return ''
+      return delivery.out || `branch ${branch}: no changes relative to ${base}`
     }
   }
   const working = await git(['diff', '--stat', 'HEAD'])

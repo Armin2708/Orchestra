@@ -106,7 +106,7 @@ it('a conductor launch-finished event enriches the parked card', async () => {
 it('diffStat reports changed paths inside a git repo', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-review-'))
   const git = (...args: string[]) => execFileSync('git', args, { cwd: dir })
-  git('init'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
+  git('init', '--initial-branch=master'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
   fs.writeFileSync(path.join(dir, 'a.txt'), 'one\n')
   git('add', '.'); git('commit', '-m', 'init')
   fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\n')
