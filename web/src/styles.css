@@ -219,11 +219,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .crew-slot { position: relative; display: inline-flex; }
 .avatar.hired { box-shadow: 0 0 0 1.5px var(--ink) !important; }
 .crew-slot .fire {
-  position: absolute; top: -7px; right: -4px; opacity: 0;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 50%;
-  width: 15px; height: 15px; font-size: 11px; line-height: 1; padding: 0;
+  position: absolute; top: -10px; right: -9px;
+  width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  color: #8F2D2A; background: #FDEBEC; border: 1px solid #DDAAA7;
+  box-shadow: 0 2px 8px rgba(104, 36, 33, 0.12);
+  font-size: 14px; font-weight: 700; line-height: 1;
+  opacity: 0; transform: scale(0.78); pointer-events: none;
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease), color 0.16s, background 0.16s, border-color 0.16s;
 }
-.crew-slot:hover .fire { opacity: 1; }
+.crew-slot:hover .fire, .crew-slot:focus-within .fire { opacity: 1; transform: scale(1); pointer-events: auto; }
+.crew-slot .fire:hover { color: var(--surface); background: #9F2F2D; border-color: #9F2F2D; }
 .avatar.clickable { cursor: pointer; transition: transform 0.15s; }
 .avatar.clickable:hover { transform: scale(1.08); }
 /* ── Network view ────────────────────────────────── */
@@ -1013,14 +1018,15 @@ textarea {
 /* ── Touch devices — visible + reachable controls ── */
 @media (pointer: coarse) {
   /* hover-revealed controls have no hover on touch */
-  .icon-x.quiet, .crew-slot .fire, .rm-idea-open { opacity: 1; }
+  .icon-x.quiet, .crew-slot .fire, .net-kill, .rm-idea-open { opacity: 1; }
+  .crew-slot .fire, .net-kill { transform: scale(1); pointer-events: auto; }
   .board-cursor-lens { display: none; }
   .board-control { min-width: 44px; height: 44px; }
   /* 44px hit area for small icon buttons without changing their visuals */
-  .icon-x, .crew-slot .fire, .drawer .close, .cc-close, .avatar.clickable, .thread-reply {
+  .icon-x, .drawer .close, .cc-close, .avatar.clickable, .thread-reply {
     position: relative;
   }
-  .icon-x::before, .crew-slot .fire::before, .drawer .close::before, .cc-close::before,
+  .icon-x::before, .crew-slot .fire::before, .net-kill::before, .drawer .close::before, .cc-close::before,
   .avatar.clickable::before, .thread-reply::before {
     content: ''; position: absolute; left: 50%; top: 50%;
     width: 44px; height: 44px; transform: translate(-50%, -50%);
@@ -1207,13 +1213,16 @@ textarea {
 
 /* kill agent: hover ✕ on the circle, anchored confirm, dissolve on the way out */
 .net-kill {
-  position: absolute; top: -4px; left: 6px; width: 20px; height: 20px; border-radius: 50%;
-  border: 1px solid #EAEAEA; background: var(--surface); color: #9b968e;
-  font-size: 10px; line-height: 1; cursor: pointer; z-index: 4;
-  opacity: 0; transform: scale(0.7); transition: all 0.15s var(--ease);
+  position: absolute; top: -11px; left: calc(50% + 9px); z-index: 4;
+  width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  border: 1px solid #DDAAA7; background: #FDEBEC; color: #8F2D2A;
+  box-shadow: 0 2px 10px rgba(104, 36, 33, 0.13);
+  font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer;
+  opacity: 0; transform: scale(0.78); pointer-events: none;
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease), color 0.16s, background 0.16s, border-color 0.16s;
 }
-.net-node:hover .net-kill { opacity: 1; transform: scale(1); }
-.net-kill:hover { border-color: #C4554D; color: #9F2F2D; background: #FDEBEC; }
+.net-node:hover .net-kill, .net-node:focus-within .net-kill { opacity: 1; transform: scale(1); pointer-events: auto; }
+.net-kill:hover { border-color: #9F2F2D; color: var(--surface); background: #9F2F2D; }
 .kill-confirm {
   position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
   width: 216px; padding: 12px 14px; z-index: 9;
