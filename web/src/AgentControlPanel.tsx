@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import type { AgentControlPanelName } from './agentTerminalControls'
+import { sessionModelValue, type AgentControlPanelName } from './agentTerminalControls'
 import './agentTerminalControls.css'
 
 export type SessionModel = {
-  model: string
+  value?: string
+  model?: string
   resolvedModel?: string
   displayName?: string
   description?: string
@@ -29,8 +30,8 @@ const readableError = (error: unknown) => {
 }
 
 const titles: Record<AgentControlPanelName, { title: string; hint: string }> = {
-  model: { title: 'Select model', hint: 'Switch between Claude models for this session.' },
-  mcp: { title: 'Manage MCP servers', hint: 'Live connections for this Claude session.' },
+  model: { title: 'Select model', hint: 'Switch the model used by this session.' },
+  mcp: { title: 'Manage MCP servers', hint: 'Live connections for this session.' },
   plugin: { title: 'Plugins', hint: 'Installed plugins reported by this session.' },
 }
 
@@ -54,6 +55,10 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
   const [error, setError] = useState<string | null>(null)
   const panelRef = useRef<HTMLElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const isCurrentModel = (model: SessionModel) => {
+    const value = sessionModelValue(model)
+    return value !== '' && (value === currentModel || model.resolvedModel === currentModel)
+  }
 
   const loadMcp = async () => {
     setLoading(true); setError(null)
@@ -76,7 +81,7 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
   }
 
   useEffect(() => {
-    const currentModelIndex = models.findIndex((model) => model.model === currentModel || model.resolvedModel === currentModel)
+    const currentModelIndex = models.findIndex(isCurrentModel)
     setCursor(panel === 'model' ? Math.max(0, currentModelIndex) : 0)
     setPluginQuery('')
     if (panel === 'mcp') void loadMcp()
@@ -100,16 +105,21 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
   }
 
   const selectModel = async (model: SessionModel) => {
-    const selected = model.model === currentModel || model.resolvedModel === currentModel
+    const value = sessionModelValue(model)
+    const selected = isCurrentModel(model)
     if (selected || busy) return
-    setBusy(`model:${model.model}`); setError(null)
+    if (!value) {
+      setError('This model entry has no provider identifier. Refresh the session and try again.')
+      return
+    }
+    setBusy(`model:${value}`); setError(null)
     try {
-      await api('POST', `/agents/${agentId}/model`, { model: model.model })
+      await api('POST', `/agents/${agentId}/model`, { model: value })
       onChange(); onClose()
     } catch (cause) { setError(readableError(cause)); setBusy(null) }
   }
 
-  const selectedModel = models.find((model) => model.model === currentModel || model.resolvedModel === currentModel)
+  const selectedModel = models.find(isCurrentModel)
   const effortLevels = selectedModel?.supportedEffortLevels ?? []
   const changeEffort = async (level: string) => {
     if (working || busy || level === currentEffort) return
@@ -191,7 +201,7 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
             <strong>Plugins</strong><span>Installed</span><span>Errors ({pluginErrors})</span>
           </nav>
           <label className="cc-plugin-search">
-            <span aria-hidden="true">⌕</span>
+            <span>Filter</span>
             <input ref={searchRef} value={pluginQuery} placeholder="Search…" aria-label="Search installed plugins"
               onChange={(event) => { setPluginQuery(event.target.value); setCursor(0) }} />
           </label>
@@ -199,30 +209,32 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
       )}
 
       {error && <p className="cc-control-error" role="alert">{error}</p>}
-      {loading && <p className="cc-control-empty"><span className="cc-control-spinner" aria-hidden="true">✻</span> Loading…</p>}
+      {loading && <div className="cc-control-loading" aria-label="Loading session controls">
+        <span /><span /><span />
+      </div>}
 
       {!loading && panel === 'model' && (
         <>
           <div className="cc-control-list" role="listbox" aria-label="Available models">
             {models.map((model, index) => {
-              const selected = model.model === currentModel || model.resolvedModel === currentModel
+              const value = sessionModelValue(model)
+              const selected = isCurrentModel(model)
               const active = index === cursor
               return (
-                <button type="button" role="option" aria-selected={selected} key={model.model}
+                <button type="button" role="option" aria-selected={selected} key={value || `model-${index}`}
                   className={`cc-control-row${selected ? ' selected' : ''}${active ? ' active' : ''}`}
                   onMouseEnter={() => setCursor(index)} onClick={() => void selectModel(model)}>
-                  <span className="cc-control-marker" aria-hidden="true">{active ? '❯' : ''}</span>
                   <span className="cc-control-number">{index + 1}.</span>
-                  <span className="cc-control-copy"><b>{model.displayName ?? model.model}</b>{model.description && <small>{model.description}</small>}</span>
-                  <em>{busy === `model:${model.model}` ? 'switching…' : selected ? '✔' : ''}</em>
+                  <span className="cc-control-copy"><b>{model.displayName ?? (value || 'Unnamed model')}</b>{model.description && <small>{model.description}</small>}</span>
+                  <em>{busy === `model:${value}` ? 'switching…' : selected ? 'current' : ''}</em>
                 </button>
               )
             })}
-            {models.length === 0 && <p className="cc-control-empty">Claude has not reported any models for this session yet.</p>}
+            {models.length === 0 && <p className="cc-control-empty">The provider has not reported any models for this session yet.</p>}
           </div>
           {effortLevels.length > 0 && (
             <div className="cc-control-effort" aria-label="Reasoning effort">
-              <span><i aria-hidden="true">●</i> {currentEffort ?? 'default'} effort</span>
+              <span>{currentEffort ?? 'default'} effort</span>
               <div role="group">
                 {effortLevels.map((level) => <button type="button" key={level} disabled={working || busy !== null}
                   className={level === currentEffort ? 'active' : ''} onClick={() => void changeEffort(level)}>{level}</button>)}
@@ -239,7 +251,6 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
             {servers.map((server, index) => (
               <div className={`cc-control-row${index === cursor ? ' active' : ''}`} key={server.name}
                 role="option" aria-selected={index === cursor} onMouseEnter={() => setCursor(index)}>
-                <span className="cc-control-marker" aria-hidden="true">{index === cursor ? '❯' : ''}</span>
                 <span className="cc-control-copy">
                   <b>{server.name} <i className={`cc-control-status ${server.status}`} /></b>
                   <small>{server.error || [server.status, server.scope, server.tools?.length != null ? `${server.tools.length} tools` : ''].filter(Boolean).join(' · ')}</small>
@@ -265,8 +276,6 @@ export function AgentControlPanel({ agentId, panel, models, currentModel, curren
             {visiblePlugins.map((plugin, index) => (
               <div className={`cc-control-row${index === cursor ? ' active' : ''}`} key={`${plugin.name}:${plugin.path ?? ''}`}
                 role="option" aria-selected={index === cursor} onMouseEnter={() => setCursor(index)}>
-                <span className="cc-control-marker" aria-hidden="true">{index === cursor ? '❯' : ''}</span>
-                <span className="cc-control-glyph" aria-hidden="true">◉</span>
                 <span className="cc-control-copy"><b>{plugin.name}</b><small>{[plugin.source, plugin.path].filter(Boolean).join(' · ')}</small></span>
                 <em>loaded</em>
               </div>

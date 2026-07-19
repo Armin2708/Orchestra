@@ -3,15 +3,18 @@ import { api, Agent, Card, Thread } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { followIntent } from './follow'
 import { AgentControlPanel } from './AgentControlPanel'
-import { normalizeSlashCommandName, panelForSlashCommand, panelForSlashInput, type AgentControlPanelName } from './agentTerminalControls'
+import {
+  localConsoleCommand,
+  normalizeSlashCommandName,
+  panelForSlashCommand,
+  panelForSlashInput,
+  sessionModelValue,
+  uniqueSlashCommands,
+  type AgentControlPanelName,
+} from './agentTerminalControls'
 import './claudeTerminal.css'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
-
-// claude-code's whimsical working gerunds
-const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolating', 'Ruminating',
-  'Marinating', 'Brewing', 'Conjuring', 'Scheming', 'Tinkering', 'Musing', 'Whirring', 'Puzzling',
-  'Simmering', 'Crunching', 'Weaving', 'Hatching', 'Composing', 'Orchestrating', 'Grooving', 'Vibing']
 
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
@@ -29,18 +32,23 @@ type PendingPermission = { id: string; tool: string; summary: string; title: str
 // (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
 export type CommandItem = { name: string; description: string; source: string }
 
-// permission modes the daemon accepts (POST /agents/:id/permission-mode)
-const PERMISSION_MODES = [
-  { value: 'bypassPermissions', icon: '⏵⏵', label: 'bypass permissions', hint: 'runs autonomously' },
-  { value: 'acceptEdits', icon: '⏵', label: 'accept edits', hint: 'edits auto-approved · other tools ask below' },
-  { value: 'plan', icon: '⏸', label: 'plan', hint: 'read-only · tools ask below' },
+const LOCAL_CONSOLE_COMMANDS: CommandItem[] = [
+  { name: 'commands', description: 'show only the actions available in this console', source: 'orchestra' },
+  { name: 'status', description: 'show this session’s model, mode, and location', source: 'orchestra' },
+  { name: 'usage', description: 'show token and cost accounting for this session', source: 'orchestra' },
+  { name: 'clear', description: 'clear this console view without erasing session memory', source: 'orchestra' },
 ]
 
-// a model entry from the SDK's supportedModels(), surfaced via transcript info
-type ModelInfo = { model: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
+// permission modes the daemon accepts (POST /agents/:id/permission-mode)
+const PERMISSION_MODES = [
+  { value: 'bypassPermissions', label: 'autonomous', hint: 'runs without approval prompts' },
+  { value: 'acceptEdits', label: 'edit', hint: 'edits auto-approved · other tools ask below' },
+  { value: 'plan', label: 'plan', hint: 'read-only · tools ask below' },
+]
 
-// Claude Code keeps effort as a compact status above the prompt. Clicking it opens the
-// same model picker as /model; the picker owns model and effort changes.
+// Model catalogs use `value`; `model` remains accepted for older daemon payloads.
+type ModelInfo = { value?: string; model?: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
+
 function ModelEffortControls({ info, onOpen }: {
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
   onOpen: () => void
@@ -50,36 +58,27 @@ function ModelEffortControls({ info, onOpen }: {
   return (
     <button type="button" className="cc-effort-status" onClick={onOpen}
       aria-label={`Open model and effort picker. Current effort: ${info?.effort ?? 'default'}`}>
-      <span aria-hidden="true">●</span> {info?.effort ?? 'default'} <span className="cc-dim">· /effort</span>
+      Effort: {info?.effort ?? 'default'} <span className="cc-dim">· models</span>
     </button>
   )
 }
 
-// Claude Code cycles modes instead of exposing a browser-native select. The parent owns the
-// API call so click and Shift+Tab share one path.
 function PermissionModeHint({ mode, onCycle }: { mode: string; onCycle: () => void }) {
   const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
   return (
     <button type="button" className={`cc-mode cc-mode-${m.value}`} onClick={onCycle}
       title={`${m.hint}. Shift+Tab to cycle.`}>
-      <span aria-hidden="true">{m.icon}</span> {m.label} mode on <span className="cc-dim">(shift+tab to cycle)</span>
+      Access: {m.label} <span className="cc-dim">· Shift+Tab to change</span>
     </button>
   )
 }
-
-// the claude spinner glyph frames
-const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
-const BOOT_MSGS = [
-  'Warming up the orchestra…', 'Tuning instruments…', 'Raising the baton…',
-  'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
-]
 
 export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[]; usage?: { turn: UsageSplit; session: UsageSplit } } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[]; costUsd?: number; usage?: { turn: UsageSplit; session: UsageSplit } } | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
   const [localLines, setLocalLines] = useState<Line[]>([])
@@ -90,7 +89,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
   const [historyDraft, setHistoryDraft] = useState('')
   const [transcriptExpanded, setTranscriptExpanded] = useState(false)
-  const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
+  const [clearedAt, setClearedAt] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
@@ -117,6 +118,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     setHistoryIdx(null)
     setHistoryDraft('')
     setTranscriptExpanded(false)
+    setClearedAt(null)
+    setSending(false)
+    setSubmitError(null)
   }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
@@ -153,29 +157,11 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     return () => { alive = false; clearInterval(t) }
   }, [agent.id, hired])
 
-  // rotate the working word every so often, like the real thing
-  useEffect(() => {
-    if (!turn) return
-    const t = setInterval(() => setGerund(GERUNDS[Math.floor(Math.random() * GERUNDS.length)]), 9000)
-    return () => clearInterval(t)
-  }, [turn !== null])
-
-  // session is booting until the SDK reports init
-  const booting = hired && !lines.some((l) => l.kind === 'status' && l.text.startsWith('session started')) &&
-    !lines.some((l) => l.kind === 'text' || l.kind === 'tool')
-  const [frame, setFrame] = useState(0)
-  useEffect(() => {
-    if (!booting && !turn) return
-    const t = setInterval(() => setFrame((f) => f + 1), 220)
-    return () => clearInterval(t)
-  }, [booting, turn !== null])
-  const star = STARS[frame % STARS.length]
-  const bootMsg = BOOT_MSGS[Math.floor(frame / 14) % BOOT_MSGS.length]
-
   // interleave local command echo with the streamed transcript by timestamp
+  const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
   const convo: Line[] = hired ? (localLines.length
-    ? [...lines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
-    : lines) : [...threads]
+    ? [...visibleLines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
+    : visibleLines) : [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
     .flatMap((t) => [
@@ -278,43 +264,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     })
   }
 
-  const send = async () => {
-    const text = input.trim()
-    if (!text) return
-    setPromptHistory((prev) => prev[prev.length - 1] === text ? prev : [...prev, text].slice(-100))
-    setHistoryIdx(null)
-    setHistoryDraft('')
-    const nativePanel = hired ? panelForSlashInput(text) : null
-    if (nativePanel) {
-      setInput('')
-      setControlPanel(nativePanel)
-      return
-    }
-    // orchestra commands run daemon-direct — claimed here, never posted to the agent (#44)
-    if (hired && isBoardCommand(text)) {
-      setInput('')
-      echoLocal('user', text)
-      const out = await runBoardCommand(text, { boardId, agent, cards, api })
-      out.forEach((t) => echoLocal('status', t))
-      onChange()
-      return
-    }
-    if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
-    else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
-    setInput(''); onChange()
-  }
-
   // slash-command menu: open while a hired agent's input is a bare /prefix (no space yet)
   const [menuIdx, setMenuIdx] = useState(0)
   const [menuHidden, setMenuHidden] = useState(false) // escape dismisses; typing re-opens
-  const menuItems: CommandItem[] = [
-    ...(info?.commands ?? []).map((c) => ({ ...c, name: normalizeSlashCommandName(c.name), source: 'sdk' })),
+  const menuItems: CommandItem[] = uniqueSlashCommands([
+    ...LOCAL_CONSOLE_COMMANDS,
     ...extraCommands.map((c) => ({ ...c, name: normalizeSlashCommandName(c.name) })),
-  ]
+    ...(info?.commands ?? []).map((c) => ({ ...c, name: normalizeSlashCommandName(c.name), source: 'session' })),
+  ])
   const slashTerm = hired && input.startsWith('/') && !/[\s]/.test(input) ? input.slice(1) : null
   const filtered = slashTerm !== null
     ? menuItems
-      .filter((item, index, all) => all.findIndex((candidate) => candidate.name === item.name) === index)
       .filter((c) => c.name.toLowerCase().includes(slashTerm.toLowerCase()))
       .sort((a, b) => Number(!a.name.toLowerCase().startsWith(slashTerm.toLowerCase())) - Number(!b.name.toLowerCase().startsWith(slashTerm.toLowerCase())))
     : []
@@ -322,9 +282,103 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const menuOpen = visibleCommands.length > 0 && !menuHidden
   useEffect(() => { setMenuIdx(0); setMenuHidden(false) }, [slashTerm])
 
-  // complete into the textarea only — never send; execution stays in send() (contract w/ #44)
+  const activeModel = info?.model ?? null
+  const currentModel = info?.models?.find((model) => {
+    const value = sessionModelValue(model)
+    return value === activeModel || model.resolvedModel === activeModel
+  })
+  const modelLabel = currentModel?.displayName ?? info?.model ?? 'Default model'
+  const cwdLabel = info?.cwd?.replace(/^\/(?:Users|home)\/[^/]+/, '~') ?? ''
+
+  const runLocalConsoleCommand = (command: NonNullable<ReturnType<typeof localConsoleCommand>>, text: string) => {
+    const at = new Date().toISOString()
+    if (command === 'clear') {
+      setClearedAt(at)
+      setLocalLines([{ at, kind: 'status', text: 'Console view cleared. Session memory is unchanged.' }])
+      return
+    }
+
+    echoLocal('user', text)
+    if (command === 'commands') {
+      const available = menuItems.map((item) => `/${item.name} — ${item.description || item.source}`).join('\n')
+      echoLocal('status', `Available in this console:\n${available}`)
+      return
+    }
+    if (command === 'status') {
+      echoLocal('status', [
+        `Agent: ${agent.name} · ${agent.status}`,
+        `Model: ${modelLabel}`,
+        `Access: ${info?.permissionMode ?? 'initializing'}`,
+        cwdLabel ? `Workspace: ${cwdLabel}` : '',
+      ].filter(Boolean).join('\n'))
+      return
+    }
+
+    const session = info?.usage?.session
+    const active = info?.usage?.turn
+    const inputTokens = (session ? usageIn(session) : 0) + (active ? usageIn(active) : 0)
+    const outputTokens = (session?.output_tokens ?? 0) + (active?.output_tokens ?? 0)
+    const cost = typeof info?.costUsd === 'number' && info.costUsd > 0 ? ` · $${info.costUsd.toFixed(4)}` : ''
+    echoLocal('status', `Session usage: ${fmtTokens(inputTokens)} input · ${fmtTokens(outputTokens)} output${cost}`)
+  }
+
+  const send = async () => {
+    const text = input.trim()
+    if (!text || sending) return
+    setSending(true)
+    setSubmitError(null)
+    setPromptHistory((prev) => prev[prev.length - 1] === text ? prev : [...prev, text].slice(-100))
+    setHistoryIdx(null)
+    setHistoryDraft('')
+    try {
+      const nativePanel = hired ? panelForSlashInput(text) : null
+      if (nativePanel) {
+        setInput('')
+        setControlPanel(nativePanel)
+        return
+      }
+
+      const localCommand = hired ? localConsoleCommand(text) : null
+      if (localCommand) {
+        setInput('')
+        runLocalConsoleCommand(localCommand, text)
+        return
+      }
+
+      // Orchestra commands run daemon-direct and never enter the model context.
+      if (hired && isBoardCommand(text)) {
+        setInput('')
+        echoLocal('user', text)
+        const out = await runBoardCommand(text, { boardId, agent, cards, api })
+        out.forEach((line) => echoLocal('status', line))
+        onChange()
+        return
+      }
+
+      const slashName = text.match(/^\/([^\s]+)/)?.[1]?.toLowerCase()
+      const advertised = slashName && menuItems.some((item) => item.name.toLowerCase() === slashName)
+      if (hired && slashName && !advertised) {
+        setInput('')
+        echoLocal('user', text)
+        echoLocal('error', `/${slashName} is not available in this session. Type /commands to see actions that can run here.`)
+        return
+      }
+
+      if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
+      else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
+      setInput('')
+      onChange()
+    } catch (cause) {
+      const raw = cause instanceof Error ? cause.message : 'The message could not be sent.'
+      try { setSubmitError(JSON.parse(raw).error ?? raw) } catch { setSubmitError(raw) }
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // Selecting a command fills the composer. The explicit Send action makes execution clear.
   const complete = (c: CommandItem) => {
-    setInput(`/${c.name} `)
+    setInput(`/${c.name}`)
     inputRef.current?.focus()
   }
 
@@ -380,34 +434,31 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const renderLine = (l: Line, i: number) => {
     switch (l.kind) {
       case 'user':
-        return <div key={i} className="cc-line cc-user"><span className="cc-line-mark" aria-hidden="true">❯</span><p>{l.text}</p></div>
+        return <div key={i} className="cc-line cc-user"><span className="cc-line-mark">YOU</span><p>{l.text}</p></div>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
         const args = paren === -1 ? '' : l.text.slice(paren)
-        return <div key={i} className="cc-line cc-tool"><span className="cc-line-mark tool" aria-hidden="true">⏺</span><p><b>{name}</b>{args}</p></div>
+        return <div key={i} className="cc-line cc-tool"><span className="cc-line-mark">TOOL</span><p><b>{name}</b>{args}</p></div>
       }
       case 'tool_result':
         return <div key={i} className={`cc-line cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}
           title={transcriptExpanded ? undefined : 'Ctrl+O to expand transcript details'}>
-          <span className="cc-line-mark" aria-hidden="true">⎿</span><p>{l.text}</p>
+          <span className="cc-line-mark">RESULT</span><p>{l.text}</p>
         </div>
       case 'thinking':
         return <div key={i} className={`cc-line cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>
-          <span className="cc-line-mark" aria-hidden="true">✻</span><p>{l.text}</p>
+          <span className="cc-line-mark">NOTE</span><p>{l.text}</p>
         </div>
       case 'status':
-        return <div key={i} className="cc-line cc-status"><span className="cc-line-mark" /><p>{l.text}</p></div>
+        return <div key={i} className="cc-line cc-status"><span className="cc-line-mark">SYSTEM</span><p>{l.text}</p></div>
       case 'error':
-        return <div key={i} className="cc-line cc-error"><span className="cc-line-mark" aria-hidden="true">!</span><p>{l.text}</p></div>
+        return <div key={i} className="cc-line cc-error"><span className="cc-line-mark">ERROR</span><p>{l.text}</p></div>
       default:
-        return <div key={i} className="cc-line cc-text"><span className="cc-line-mark" aria-hidden="true">⏺</span><p>{l.text}</p></div>
+        return <div key={i} className="cc-line cc-text"><span className="cc-line-mark">AGENT</span><p>{l.text}</p></div>
     }
   }
-
-  const currentModel = info?.models?.find((model) => model.model === info.model || model.resolvedModel === info.model)
-  const modelLabel = currentModel?.displayName ?? info?.model ?? 'Claude'
-  const cwdLabel = info?.cwd?.replace(/^\/(?:Users|home)\/[^/]+/, '~') ?? ''
+  const hasConversationActivity = convo.some((line) => line.kind !== 'status')
 
   return (
     <>
@@ -436,8 +487,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         <div className="terminal-col">
           <header className="cc-head">
             <div className="cc-head-identity">
-              <span className="cc-head-star" aria-hidden="true">✻</span>
-              <span><strong>{agent.name}</strong><small>{hired ? 'Claude Code agent' : 'board terminal'} · {agent.status}</small></span>
+              <span className="cc-head-kicker">SESSION</span>
+              <span><strong>{agent.name}</strong><small>{hired ? 'Orchestra model session' : 'Board conversation'} · {agent.status}</small></span>
             </div>
             <div className="cc-head-actions">
               {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
@@ -469,32 +520,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <div className="cc-history-shell">
             <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
               <div className="terminal-feed" ref={feedRef}>
-                {hired && (
-                  <div className="cc-welcome">
-                    <div className="cc-claude-mark" aria-hidden="true">
-                      <span>▐▛███▜▌</span>
-                      <span>▝▜█████▛▘</span>
-                      <span>&nbsp; ▘▘ ▝▝</span>
-                    </div>
-                    <div className="cc-welcome-copy">
-                      <p><b>Claude Code</b></p>
-                      <p>{modelLabel}{info?.effort ? ` with ${info.effort} effort` : ''} · {agent.name}</p>
-                      <p title={info?.cwd}>{cwdLabel || 'Starting session…'}</p>
-                    </div>
-                  </div>
-                )}
                 {convo.map(renderLine)}
-                {booting && (
-                  <p className="cc-spinner"><span className="cc-star-frame">{star}</span> {bootMsg}</p>
-                )}
-                {!booting && convo.length === 0 && (
-                  <div className="cc-line cc-status"><span className="cc-line-mark" />
-                    <p>{hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}</p>
+                {!working && !hasConversationActivity && (
+                  <div className="cc-empty">
+                    <strong>{hired ? 'Ready for your first prompt' : 'No messages yet'}</strong>
+                    <p>{hired
+                      ? 'The session is idle and uses no model tokens until you send something. Type / to see actions supported here.'
+                      : `Messages to ${agent.name} will appear here.`}</p>
                   </div>
                 )}
                 {hired && perms.map((p) => (
                   <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
-                    <p className="cc-perm-kicker">Claude wants to use {p.tool}</p>
+                    <p className="cc-perm-kicker">Agent requests access to {p.tool}</p>
                     <p className="cc-perm-title"><b>{p.title ?? p.summary}</b></p>
                     <div className="cc-perm-actions">
                       <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}><span>1.</span> Allow once</button>
@@ -504,14 +541,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   </div>
                 ))}
                 {working && turn && (
-                  <p className="cc-spinner">
-                    <span className="cc-star-frame">{star}</span> {gerund}… (<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · {fmtSecs(turn.secs)}
-                    {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
-                  </p>
+                  <div className="cc-working" role="status">
+                    <span className="cc-working-track" aria-hidden="true"><span /></span>
+                    <span>Working · {fmtSecs(turn.secs)}{turn.tokens > 0 && <> · {fmtTokens(turn.tokens)} output tokens</>}</span>
+                    <button type="button" onClick={interrupt}>Interrupt</button>
+                  </div>
                 )}
               </div>
             </div>
-            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>↓ Jump to latest</button>}
+            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>Latest messages</button>}
           </div>
 
           <div className="cc-prompt-wrap">
@@ -521,20 +559,20 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               onClose={() => { setControlPanel(null); inputRef.current?.focus() }} onChange={onChange} />}
             {menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
+                <div className="cc-slash-heading"><strong>Available actions</strong><span>{filtered.length}</span></div>
                 {visibleCommands.map((c, i) => (
                   <button type="button" key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
                     className={i === menuIdx ? 'cc-slash-item active' : 'cc-slash-item'}
                     onMouseEnter={() => setMenuIdx(i)}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => activateCommand(c)}>
-                    <span className="cc-slash-marker" aria-hidden="true">{i === menuIdx ? '❯' : ''}</span>
                     <span className="cc-slash-name">/{c.name}</span>
-                    {c.source !== 'sdk' && <span className="cc-cmd-badge" data-source={c.source}>[{c.source}]</span>}
+                    <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>
                     <span className="cc-slash-desc">{c.description}</span>
                   </button>
                 ))}
                 <div className="cc-slash-footer">
-                  <span>↑/↓ to navigate · Enter to select · Esc to cancel</span>
+                  <span>Choose an action, then Send to run it</span>
                   {filtered.length > 10 && <span>{filtered.length - 10} more</span>}
                 </div>
               </div>
@@ -543,12 +581,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               <ModelEffortControls info={info} onOpen={() => setControlPanel('model')} />
             </div>}
             <div className="cc-promptbox" data-mode={info?.permissionMode ?? 'bypassPermissions'}>
-              <span className="cc-prompt-caret" aria-hidden="true">❯</span>
+              <span className="cc-prompt-label">MESSAGE</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
-                placeholder={convo.length === 0 ? (hired ? 'Try “review the current changes”' : `Message ${agent.name}`) : ''}
-                onChange={(e) => { setInput(e.target.value); setHistoryIdx(null) }}
+                placeholder={convo.length === 0 ? (hired ? 'Describe what this agent should do…' : `Message ${agent.name}`) : 'Write a follow-up…'}
+                onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
                 onKeyDown={promptKeys} />
+              <button type="button" className="cc-send" disabled={!input.trim() || sending}
+                onClick={() => void send()}>{sending ? 'Sending' : 'Send'}</button>
             </div>
+            {submitError && <p className="cc-submit-error" role="alert">{submitError}</p>}
           </div>
           <div className="cc-statusline">
             <span title={info?.cwd}>{modelLabel}{cwdLabel ? ` · ${cwdLabel}` : ''}</span>
@@ -559,8 +600,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 const inTok = usageIn(s) + usageIn(t), outTok = s.output_tokens + t.output_tokens
                 const cached = inTok > 0 ? Math.round(100 * (s.cache_read + t.cache_read) / inTok) : 0
                 const tip = `real API tokens this session — input ${fmtTokens(s.input_tokens + t.input_tokens)} · cache read ${fmtTokens(s.cache_read + t.cache_read)} · cache write ${fmtTokens(s.cache_creation + t.cache_creation)} · output ${fmtTokens(outTok)} (distinct from the board meter's injected-context estimate)`
-                return <span title={tip}>↑ {fmtTokens(inTok)} in · {cached}% cached · ↓ {fmtTokens(outTok)} out</span>
-              })() : info && info.tokens > 0 ? `↓ ${fmtTokens(info.tokens)} tokens` : ''}
+                return <span title={tip}>{fmtTokens(inTok)} in · {cached}% cached · {fmtTokens(outTok)} out</span>
+              })() : info && info.tokens > 0 ? `${fmtTokens(info.tokens)} output tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
             </span>
           </div>
@@ -569,8 +610,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               ? <PermissionModeHint mode={info?.permissionMode ?? 'bypassPermissions'} onCycle={() => void cyclePermissionMode()} />
               : <span>enter to send · shift+enter for newline</span>}
             <span className="cc-key-hints">
-              <button type="button" onClick={() => setTranscriptExpanded((expanded) => !expanded)}>ctrl+o {transcriptExpanded ? 'compact' : 'details'}</button>
-              {hired && <button type="button" onClick={() => setControlPanel('model')}>alt+p model</button>}
+              <button type="button" onClick={() => setTranscriptExpanded((expanded) => !expanded)}>Details {transcriptExpanded ? 'on' : 'off'}</button>
+              {hired && <button type="button" onClick={() => setControlPanel('model')}>Models</button>}
             </span>
           </div>
         </div>

@@ -480,6 +480,7 @@ export class Conductor {
     const profile = opts.resumeSession ? null : defaultsForRole(this.db, opts.role)
     const providerProfile = profile?.provider === DEFAULT_AGENT_PROVIDER ? profile : null
     const model = opts.model ?? providerProfile?.model ?? undefined
+    const cachedModels = readProviderModelCache(this.db)?.models ?? []
     const requestedEffort = opts.effort ?? providerProfile?.effort ?? undefined
     const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
       ? requestedEffort as EffortLevel : null
@@ -567,7 +568,10 @@ export class Conductor {
     const hired: Hired = {
       agentId: agent.id, boardId: opts.boardId, name, cwd: opts.cwd,
       push: (text: string, excludeMessageId?: number) => {
-        const notifications = this.pendingNotifications(agent.id, excludeMessageId)
+        // SDK slash commands are recognized only when `/command` begins the user message.
+        // Keep queued notifications for the next ordinary prompt instead of prefixing them
+        // and silently turning a supported command into plain text.
+        const notifications = /^\s*\//.test(text) ? [] : this.pendingNotifications(agent.id, excludeMessageId)
         const noticeText = notifications.map((m) =>
           `orchestra notification #${m.id} from ${m.from_name ?? 'human'}: "${m.body}" — no reply required.`).join('\n')
         const payload = noticeText ? `${noticeText}\n\n${text}` : text
@@ -584,8 +588,8 @@ export class Conductor {
       commands: [],
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(), sessionCostUsd: 0,
-      model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
-      effort, models: [], role: opts.role, handoff: false, limitHit: false,
+      model: model ?? null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
+      effort, models: cachedModels, role: opts.role, handoff: false, limitHit: false,
       cardId: opts.cardId ?? null, branch: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
