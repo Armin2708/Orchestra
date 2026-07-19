@@ -17,6 +17,7 @@ import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from '
 import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
+import { registerAgentOsRoutes } from './agent-os/routes.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -1007,6 +1008,16 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     server.bus.on('event', onEvent)
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000)
     req.raw.on('close', () => { server.bus.off('event', onEvent); clearInterval(ping) })
+  })
+
+  registerAgentOsRoutes(server, {
+    db,
+    drivers: () => [
+      { id: 'claude', available: !!maestro, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
+        detail: maestro ? undefined : 'requires the daemon Conductor' },
+      { id: 'shell', available: false, capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
+        detail: 'requires the PTY runtime' },
+    ],
   })
 
   // static web UI (built by Task 13; 404s harmlessly before that)

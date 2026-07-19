@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { applyAgentOsMigrations } from './agent-os/migrations.js'
 
 export function openDb(file: string): Database.Database {
   const db = new Database(file)
@@ -114,5 +115,6 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN model TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN effort TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN branch TEXT`) } catch { /* exists */ }
+  applyAgentOsMigrations(db)
   return db
 }

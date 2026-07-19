@@ -1,0 +1,150 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { openDb } from '../src/db.js'
+import { ArtifactStore } from '../src/agent-os/artifact-store.js'
+import { AttentionService } from '../src/agent-os/attention.js'
+import { CheckpointService } from '../src/agent-os/checkpoints.js'
+import { EvidenceService } from '../src/agent-os/evidence.js'
+import { EventStore } from '../src/agent-os/event-store.js'
+import { evaluatePolicy, PolicyEngine } from '../src/agent-os/policy-engine.js'
+import { Job, JobExecutor, JobScheduler } from '../src/agent-os/scheduler.js'
+import { TaskContractService } from '../src/agent-os/task-contracts.js'
+import { WorkspaceStore } from '../src/agent-os/workspace-store.js'
+
+afterEach(() => { delete process.env.ORCHESTRA_MAX_LAUNCHED })
+
+function fixture() {
+  const db = openDb(':memory:')
+  const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/repo', 'repo')").run().lastInsertRowid)
+  const otherBoardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/other', 'other')").run().lastInsertRowid)
+  const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description, paths)
+    VALUES (?, 'Build kernel', 'Durable services', '["src/**"]')`).run(boardId).lastInsertRowid)
+  const dependencyId = Number(db.prepare(`INSERT INTO cards (board_id, title, paths) VALUES (?, 'Prerequisite', '["test/**"]')`)
+    .run(boardId).lastInsertRowid)
+  const foreignCardId = Number(db.prepare(`INSERT INTO cards (board_id, title) VALUES (?, 'Foreign')`).run(otherBoardId).lastInsertRowid)
+  return { db, boardId, otherBoardId, cardId, dependencyId, foreignCardId }
+}
+
+describe('Agent OS core services', () => {
+  it('stores artifacts durably, defaults task contracts deterministically, and isolates references', () => {
+    const { db, boardId, cardId, dependencyId, foreignCardId } = fixture()
+    const events = new EventStore(db)
+    const workspaces = new WorkspaceStore(db)
+    const workspace = workspaces.create({ boardId, cardId, name: 'kernel', rootPath: '/repo' })
+    const contracts = new TaskContractService(db, events)
+    const initial = contracts.getOrCreate(cardId)
+    expect(initial.objective).toBe('Durable services')
+    expect(initial.base_ref).toBe('HEAD')
+    expect(initial.workspace_id).toBe(workspace.id)
+    expect(contracts.getOrCreate(cardId)).toEqual(initial)
+    expect(() => contracts.put(cardId, { dependencies: [foreignCardId] })).toThrow(/same board/)
+
+    const updated = contracts.put(cardId, { acceptance_criteria: [{ text: 'persists', required: true }],
+      dependencies: [dependencyId], verify_commands: ['npm test'], priority: 7, budget_tokens: 1000 })
+    expect(updated.dependencies).toEqual([dependencyId])
+    expect(updated.verify_commands).toEqual(['npm test'])
+    expect(() => contracts.put(dependencyId, { dependencies: [cardId] })).toThrow(/cycle/)
+
+    const artifacts = new ArtifactStore(db)
+    const artifact = artifacts.create({ boardId, workspaceId: workspace.id, cardId, kind: 'patch', name: 'change.patch', content: 'patch' })
+    workspaces.archive(workspace.id)
+    expect(artifacts.get(artifact.id)?.content).toBe('patch')
+    expect(events.listBoard(boardId).some((event) => event.kind === 'task_contract.updated')).toBe(true)
+  })
+
+  it('evaluates allow, deny, ask, and human-terminal policy outcomes', () => {
+    const { db, boardId } = fixture()
+    const engine = new PolicyEngine(db)
+    const policy = engine.create({ boardId, name: 'safe', fileGlobs: ['src/**', '!src/secrets/**'],
+      commandGlobs: ['npm test'], networkHosts: ['*.example.com'], secretNames: ['PUBLIC_*'] })
+    expect(evaluatePolicy(db, policy.id, { kind: 'filesystem', value: './src/index.ts' }).decision).toBe('allow')
+    expect(engine.evaluate(policy.id, { kind: 'filesystem', value: 'src/secrets/key.txt' }).decision).toBe('deny')
+    expect(engine.evaluate(policy.id, { kind: 'network', value: 'https://api.example.com:443/path' }).decision).toBe('allow')
+    expect(engine.evaluate(policy.id, { kind: 'secret', value: 'DATABASE_URL' }).decision).toBe('ask')
+    expect(engine.evaluate(policy.id, { kind: 'command', value: 'rm -rf build', actor: 'human' }).decision).toBe('allow')
+  })
+
+  it('orders attention by severity and resolves idempotently', () => {
+    const { db, boardId } = fixture()
+    const attention = new AttentionService(db)
+    attention.create({ boardId, kind: 'low', severity: 'low', title: 'Later' })
+    const urgent = attention.create({ boardId, kind: 'critical', severity: 'critical', title: 'Now' })
+    expect(attention.listBoard(boardId).map((item) => item.title)).toEqual(['Now', 'Later'])
+    expect(attention.resolve(urgent.id).status).toBe('resolved')
+    expect(attention.resolve(urgent.id).status).toBe('resolved')
+  })
+
+  it('requires a safe runtime for checkpoint forks and records mock-runtime forks as worktrees', async () => {
+    const { db, boardId, cardId } = fixture()
+    const workspace = new WorkspaceStore(db).create({ boardId, cardId, name: 'source', rootPath: '/repo' })
+    const artifact = new ArtifactStore(db).create({ boardId, workspaceId: workspace.id, cardId,
+      kind: 'patch', name: 'dirty.patch', content: 'diff' })
+    const bare = new CheckpointService(db)
+    const checkpoint = bare.create({ workspaceId: workspace.id, name: 'before refactor', gitHead: 'abc123', patchArtifactId: artifact.id })
+    await expect(bare.fork(checkpoint.id, { name: 'fork' })).rejects.toThrow(/runtime/)
+
+    const service = new CheckpointService(db, async (_checkpoint, request) => ({
+      name: request.name, kind: 'worktree', rootPath: '/repo', worktreePath: '/repo-fork', branch: 'checkpoint-fork', status: 'active',
+    }))
+    const fork = await service.fork(checkpoint.id, { name: 'safe fork' })
+    expect(fork).toMatchObject({ kind: 'worktree', worktree_path: '/repo-fork', status: 'active' })
+  })
+
+  it('schedules by priority, honors dependencies and global capacity, and keeps unsupported providers queued', async () => {
+    process.env.ORCHESTRA_MAX_LAUNCHED = '1'
+    const { db, boardId, cardId, dependencyId } = fixture()
+    new TaskContractService(db).put(cardId, { dependencies: [dependencyId] })
+    const executed: string[] = []
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async (job: Job) => { executed.push(job.id); return { status: 'running' } },
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const waiting = scheduler.create({ boardId, cardId, provider: 'shell', priority: 100 })
+    const high = scheduler.create({ boardId, provider: 'shell', priority: 10 })
+    const low = scheduler.create({ boardId, provider: 'shell', priority: 1 })
+    await scheduler.tick()
+    expect(executed).toEqual([high.id])
+    expect(scheduler.get(waiting.id)?.status).toBe('queued')
+    expect(scheduler.get(low.id)?.status).toBe('queued')
+
+    scheduler.complete(high.id)
+    db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(dependencyId)
+    await scheduler.tick()
+    expect(executed).toEqual([high.id, waiting.id])
+    scheduler.complete(waiting.id)
+    await scheduler.tick()
+    expect(executed).toEqual([high.id, waiting.id, low.id])
+
+    const unsupported = scheduler.create({ boardId, provider: 'future-provider' })
+    scheduler.complete(low.id)
+    await scheduler.tick()
+    expect(scheduler.get(unsupported.id)).toMatchObject({ status: 'queued' })
+    expect(scheduler.get(unsupported.id)?.error).toMatch(/unavailable/)
+    expect(new AttentionService(db).listBoard(boardId).some((item) => item.kind === 'job.unsupported_provider')).toBe(true)
+  })
+
+  it('assembles evidence from records while keeping agent claims explicitly separate', () => {
+    const { db, boardId, cardId } = fixture()
+    const workspace = new WorkspaceStore(db).create({ boardId, cardId, name: 'delivery', rootPath: '/repo' })
+    new TaskContractService(db).put(cardId, { workspace_id: workspace.id, verify_commands: ['npm test'] })
+    const artifacts = new ArtifactStore(db)
+    artifacts.create({ boardId, workspaceId: workspace.id, cardId, kind: 'diff', name: 'delivery.diff',
+      content: 'diff --git a/src/core.ts b/src/core.ts\n--- a/src/core.ts\n+++ b/src/core.ts', metadata: { changed_files: ['src/core.ts'] } })
+    artifacts.create({ boardId, workspaceId: workspace.id, cardId, kind: 'test_report', name: 'vitest.json',
+      mimeType: 'application/json', content: '{"passed":true}' })
+    const events = new EventStore(db)
+    events.append({ boardId, workspaceId: workspace.id, cardId, kind: 'agent.claim', source: 'agent', payload: { claim: 'all tests pass' } })
+    events.append({ boardId, workspaceId: workspace.id, cardId, kind: 'verification.completed', source: 'verifier', payload: { passed: true } })
+    db.prepare("INSERT INTO review_decisions (board_id, card_id, decision, note) VALUES (?, ?, 'approve', 'lgtm')").run(boardId, cardId)
+    db.prepare("INSERT INTO card_events (card_id, type, payload) VALUES (?, 'shipped', '{\"hash\":\"abc123\"}')").run(cardId)
+
+    const service = new EvidenceService(db)
+    const bundle = service.assemble(cardId)
+    expect(bundle.changed_files).toEqual(['src/core.ts'])
+    expect(bundle.claims).toEqual([expect.objectContaining({ claim: 'all tests pass' })])
+    expect(bundle.verification.events).toHaveLength(1)
+    expect(bundle.gaps).toEqual([])
+    const persisted = service.persist(cardId)
+    expect(persisted.artifact.kind).toBe('evidence_bundle')
+  })
+})
