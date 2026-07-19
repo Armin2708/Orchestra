@@ -42,9 +42,19 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   const latestRequest = [...events].reverse().find((e) => e.type === 'review_request')
   let reviewReq: { summary?: string; diffstat?: string } | null = null
   try { reviewReq = latestRequest ? JSON.parse(latestRequest.payload) : null } catch { /* legacy payload */ }
+  const verification = card.verification
   const approve = async () => {
-    await api('POST', `/cards/${card.id}/approve`, reviewNote.trim() ? { note: reviewNote.trim() } : {})
+    // a failed verification demands an explicit confirm; the flag travels to the auto-ship gate
+    const overridingFail = verification?.verdict === 'fail' && !verification.running
+    if (overridingFail && !window.confirm(`The verifier marked this card FAIL. Approve anyway?`)) return
+    const body: any = reviewNote.trim() ? { note: reviewNote.trim() } : {}
+    if (overridingFail) body.confirm = true
+    await api('POST', `/cards/${card.id}/approve`, body)
     setReviewNote(''); onChange()
+  }
+  const runVerify = async () => {
+    try { await api('POST', `/cards/${card.id}/verify`) } catch { /* already running or daemon-only */ }
+    onChange()
   }
   const sendBack = async () => {
     if (!reviewNote.trim()) return
@@ -99,6 +109,33 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
             <h3>Needs your review</h3>
             {reviewReq?.summary && <p className="review-summary">{reviewReq.summary}</p>}
             {reviewReq?.diffstat && <pre className="review-diffstat">{reviewReq.diffstat}</pre>}
+            <div className="verify-block">
+              {verification?.running && <p className="verify-running">◌ verifier running…</p>}
+              {!verification?.running && verification?.verdict && (
+                <>
+                  <p className={`verify-verdict v-${verification.verdict}`}>
+                    {verification.verdict === 'pass' ? '✓ verified' : verification.verdict === 'gaps' ? '△ gaps found' : '✗ verification failed'}
+                    {verification.tested ? ' · tests run' : ''}{verification.by ? ` · by ${verification.by}` : ''}
+                  </p>
+                  {(verification.criteria ?? []).length > 0 && (
+                    <ul className="verify-criteria">
+                      {verification.criteria!.map((c, i) => (
+                        <li key={i} className={c.met === true ? 'crit-met' : c.met === false ? 'crit-unmet' : 'crit-unknown'}>
+                          <span className="crit-mark">{c.met === true ? '✓' : c.met === false ? '✗' : '△'}</span>
+                          <span className="crit-text">{c.text}</span>
+                          {c.evidence && <span className="crit-evidence">{c.evidence}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+              {!verification?.running && (
+                <button className="btn ghost verify-run" onClick={runVerify}>
+                  {verification?.verdict ? '↻ Re-verify' : '◎ Verify delivery'}
+                </button>
+              )}
+            </div>
             <textarea className="review-note" rows={2} value={reviewNote}
               placeholder="Note for the agent — optional on approve, required to send back"
               onChange={(e) => setReviewNote(e.target.value)} />

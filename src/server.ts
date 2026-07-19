@@ -21,7 +21,7 @@ export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike {
   isHired(agentId: number): boolean
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any
   deliver(agentId: number, msg: any): boolean
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any
@@ -200,7 +200,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         ...a,
         subagents: maestro?.isHired(a.id) ? maestro.subagents(a.id) : liveTermSubs(a.id),
       })),
-      cards: listCards(db, id),
+      // review cards carry their latest verification so badges render without extra requests
+      cards: listCards(db, id).map((c) => c.column === 'review' ? { ...c, verification: verificationFor(c.id) } : c),
       ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
       milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=? ORDER BY id`).all(id),
       open_questions: db.prepare(`
@@ -328,7 +329,94 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       milestone_id: card.milestone_id ?? null, step_order: card.step_order ?? null,
       agent_name: agentName, status: 'awaiting_approval', summary, diffstat: stat,
     })
+    // opt-in: every card entering review gets an independent verifier pass (default manual)
+    if (process.env.ORCHESTRA_AUTO_VERIFY === '1') { try { startVerification(getCard(card.id)) } catch { /* manual verify still available */ } }
   }
+
+  // ── delivery verification (#52): an ephemeral verifier checks DONE-WHEN before approval ──
+  const lastEvent = (cardId: number, type: string): any =>
+    db.prepare(`SELECT id, agent_id, payload, created_at FROM card_events WHERE card_id=? AND type=? ORDER BY id DESC LIMIT 1`)
+      .get(cardId, type)
+
+  // latest verdict + running state for badges; newest event wins, a newer request means re-running
+  const verificationFor = (cardId: number): any => {
+    const v = lastEvent(cardId, 'verification')
+    const r = lastEvent(cardId, 'verify_requested')
+    if (!v && !r) return undefined
+    const running = !!r && (!v || r.id > v.id)
+    if (!v) return { running, verdict: null }
+    try {
+      const p = JSON.parse(v.payload)
+      return { running, verdict: p.verdict, tested: !!p.tested, criteria: p.criteria ?? [], at: v.created_at, by: p.by ?? null }
+    } catch { return { running, verdict: null } }
+  }
+
+  // the brief hands the verifier everything location-dependent: criteria source, where the
+  // delivery lives (shipped hash beats heuristics), and the exact report command
+  const verifierBrief = (card: any) => {
+    let hash: string | null = null
+    try { hash = JSON.parse(lastEvent(card.id, 'shipped')?.payload ?? '{}').hash ?? null } catch { /* no shipped record */ }
+    let review: any = null
+    try { review = JSON.parse(lastEvent(card.id, 'review_request')?.payload ?? 'null') } catch { /* legacy */ }
+    return `Verify the delivery of card #${card.id}: "${card.title}".\n` +
+      `CARD DESCRIPTION (derive your criteria from its DONE WHEN, else REQUIREMENTS, else OBJECTIVE):\n${card.description || '(no description — verify the title as a single criterion)'}\n` +
+      (hash ? `SHIPPED COMMIT (ground truth): ${hash} — inspect with: git show ${hash}\n`
+        : `No shipped commit recorded — locate the delivery yourself: recent merges mentioning the card (git log --oneline -20) or the diffstat below.\n`) +
+      (review?.diffstat ? `REVIEW DIFFSTAT:\n${review.diffstat}\n` : '') +
+      (review?.summary ? `CLAIMED SUMMARY (verify, do not trust): ${review.summary}\n` : '') +
+      `REPORT exactly once with this command (fill in the JSON):\n` +
+      `curl -s -X POST -H "authorization: Bearer $(orchestra token)" -H "content-type: application/json" ` +
+      `http://127.0.0.1:$ORCHESTRA_PORT/api/v1/cards/${card.id}/verification ` +
+      `-d '{"criteria":[{"text":"<criterion>","met":true,"evidence":"<one line>"}],"verdict":"pass","tested":true,"by":"<your agent name>"}'`
+  }
+
+  const startVerification = (card: any): any => {
+    const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
+    const agent = maestro!.hire({ boardId: card.board_id, cwd: board.project_path, role: 'verifier', ephemeral: true })
+    logEvent(card.id, agent?.id ?? null, 'verify_requested', { agent: agent?.name ?? null })
+    emit(card.board_id, 'card', { ...getCard(card.id), verification: verificationFor(card.id) })
+    maestro!.task(agent.id, verifierBrief(card))
+    return agent
+  }
+
+  server.post<{ Params: { id: string } }>('/api/v1/cards/:id/verify', (req, reply) => {
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+    const card = getCard(Number(req.params.id))
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
+    const v = verificationFor(card.id)
+    if (v?.running) return reply.code(409).send({ error: 'verification already running' })
+    const agent = startVerification(card)
+    return { ok: true, agent_id: agent.id, agent_name: agent.name }
+  })
+
+  const MET = new Set([true, false, 'unverifiable'])
+  server.post<{ Params: { id: string }; Body: { criteria?: any[]; verdict?: string; tested?: boolean; by?: string } }>(
+    '/api/v1/cards/:id/verification', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      const { verdict, by } = req.body ?? {}
+      if (!['pass', 'gaps', 'fail'].includes(verdict as string))
+        return reply.code(400).send({ error: `verdict must be pass|gaps|fail, got "${verdict}"` })
+      const raw = Array.isArray(req.body?.criteria) ? req.body.criteria : []
+      const criteria = raw
+        .filter((c) => c && typeof c.text === 'string' && MET.has(c.met))
+        .map((c) => ({ text: String(c.text), met: c.met, evidence: String(c.evidence ?? '') }))
+      if (raw.length > 0 && criteria.length === 0)
+        return reply.code(400).send({ error: 'criteria entries need {text, met: true|false|"unverifiable"}' })
+      const tested = req.body?.tested === true
+      logEvent(card.id, null, 'verification', { criteria, verdict, tested, by: by ?? null })
+      const met = criteria.filter((c) => c.met === true).length
+      // the human-readable trail survives the ephemeral verifier: a broadcast board note
+      const noteBody = `verification of card #${card.id} "${card.title}": ${String(verdict).toUpperCase()} — ` +
+        `${met}/${criteria.length} criteria met${tested ? ', test suite run' : ''}${by ? ` (by ${by})` : ''}`
+      const { lastInsertRowid } = db.prepare(`INSERT INTO messages (board_id, card_id, body) VALUES (?, ?, ?)`)
+        .run(card.board_id, card.id, noteBody)
+      emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
+      emit(card.board_id, 'card', { ...card, verification: verificationFor(card.id) })
+      reviewEvent(card, 'verified', { verdict })
+      return { ok: true, verdict, criteria_count: criteria.length }
+    })
 
   // launched agents finishing a step already park the card in review (conductor exit) — enrich it here
   server.bus.on('event', (e: any) => {
@@ -359,18 +447,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       agent_name: card.owner ?? null, status, ...extra,
     })
 
-  server.post<{ Params: { id: string }; Body: { note?: string } }>(
+  server.post<{ Params: { id: string }; Body: { note?: string; confirm?: boolean } }>(
     '/api/v1/cards/:id/approve', async (req, reply) => {
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
       const note = req.body?.note?.trim() || null
+      // approving over a failed verification requires an explicit confirm — consumed by the
+      // auto-ship queue (#59): confirmed:true travels in the decision payload + review event
+      const confirmed = req.body?.confirm === true
       const decision = recordDecision(db, card, 'approve', note)
-      logEvent(card.id, null, 'review_decision', { decision: 'approve', note })
+      logEvent(card.id, null, 'review_decision', { decision: 'approve', note, ...(confirmed ? { confirmed: true } : {}) })
       db.prepare(`UPDATE cards SET column_name='done', updated_at=datetime('now') WHERE id=?`).run(card.id)
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
-      reviewEvent(updated, 'approved', { note })
+      reviewEvent(updated, 'approved', { note, ...(confirmed ? { confirmed: true } : {}) })
       const unlocked = card.milestone_id != null && card.step_order != null
         ? db.prepare(`SELECT id, title, column_name FROM cards WHERE milestone_id=? AND step_order > ? ORDER BY step_order LIMIT 1`)
             .get(card.milestone_id, card.step_order) ?? null
@@ -623,7 +714,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return msg
     })
 
-  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string } }>(
+  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
