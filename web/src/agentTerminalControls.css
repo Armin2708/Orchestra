@@ -1,0 +1,211 @@
+.terminal > .terminal-col {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
+.cc-history-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.cc-history-shell .terminal-scroll {
+  height: 100%;
+}
+
+.terminal-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: min-content;
+}
+
+.cc-follow-latest {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  border: 1px solid #5b554b;
+  border-radius: 999px;
+  background: #34312c;
+  color: #ded9d1;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.3);
+}
+
+.cc-follow-latest:hover,
+.cc-follow-latest:focus-visible {
+  border-color: #d97757;
+  color: #f1ede5;
+  outline: none;
+}
+
+.cc-control-panel {
+  max-height: min(42vh, 330px);
+  margin-bottom: 7px;
+  overflow-y: auto;
+  border: 1px solid #4a463f;
+  border-radius: 8px;
+  background: #211f1c;
+  box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.28);
+}
+
+.cc-control-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #3a3732;
+  background: #211f1c;
+}
+
+.cc-control-head div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cc-control-head strong {
+  color: #ded9d1;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.cc-control-head span,
+.cc-control-row small {
+  color: #777168;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.cc-control-head button {
+  border: 0;
+  background: none;
+  color: #777168;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.cc-control-head button:hover { color: #ded9d1; }
+
+.cc-control-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+.cc-control-row {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #ded9d1;
+  padding: 7px 9px;
+  text-align: left;
+  font: inherit;
+}
+
+button.cc-control-row { cursor: pointer; }
+button.cc-control-row:hover,
+button.cc-control-row:focus-visible,
+.cc-control-row.selected {
+  background: #34312c;
+  outline: none;
+}
+
+.cc-control-row > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cc-control-row b {
+  overflow: hidden;
+  color: #ded9d1;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-control-row.selected b { color: #d97757; }
+
+.cc-control-row em {
+  flex: none;
+  color: #777168;
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.cc-control-actions {
+  display: flex;
+  gap: 5px;
+  flex: none;
+}
+
+.cc-control-actions button,
+.cc-control-refresh {
+  border: 1px solid #4a463f;
+  border-radius: 5px;
+  background: transparent;
+  color: #aaa49a;
+  padding: 3px 7px;
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.cc-control-actions button:hover:not(:disabled),
+.cc-control-refresh:hover { border-color: #777168; color: #ded9d1; }
+.cc-control-actions button:disabled { cursor: wait; opacity: 0.55; }
+.cc-control-refresh { align-self: flex-start; margin: 4px 8px 6px; }
+
+.cc-control-status {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #8a867e;
+}
+
+.cc-control-status.connected { background: #4eaa6e; }
+.cc-control-status.failed { background: #e5716a; }
+.cc-control-status.pending { background: #d9a13b; }
+.cc-control-status.needs-auth { background: #d97757; }
+.cc-control-status.disabled { background: #605c55; }
+
+.cc-control-empty,
+.cc-control-error {
+  margin: 0;
+  padding: 10px 12px;
+  color: #777168;
+  font-size: 11.5px;
+}
+
+.cc-control-error { color: #e5716a; }
+
+/* Slash rows are real buttons now; neutralize browser button chrome. */
+button.cc-slash-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+button.cc-slash-item.active { background: #3a372f; }

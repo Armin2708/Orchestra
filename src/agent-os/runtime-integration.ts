@@ -480,12 +480,22 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
       if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         throw new ValidationError(`process cwd must stay inside workspace execution root ${executionRoot}`)
       }
+      const env = { ...input.workspace.env, ...input.env }
+      const command = input.interactive
+        ? process.platform === 'win32'
+          ? env.ComSpec || env.COMSPEC || process.env.ComSpec || 'cmd.exe'
+          : env.SHELL || process.env.SHELL || '/bin/sh'
+        : input.command
       return mapApiProcess(await layer.supervisor.spawn({
         workspaceId: input.workspace.id,
         name: input.name,
-        command: input.command,
+        command,
+        ...(input.interactive ? {
+          args: process.platform === 'win32' ? [] : ['-l'],
+          shell: false,
+        } : {}),
         cwd,
-        env: { ...input.workspace.env, ...input.env },
+        env,
         cols: input.cols,
         rows: input.rows,
         restartable: input.restartable,

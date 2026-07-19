@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { followIntent } from './follow'
@@ -13,6 +13,8 @@ import {
   ProviderTokenUsage,
   resolveAccessProfile,
 } from './agentProviderUi'
+import { AgentControlPanel } from './AgentControlPanel'
+import { panelForSlashCommand, panelForSlashInput, type AgentControlPanelName } from './agentTerminalControls'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -149,10 +151,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [input, setInput] = useState('')
   const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
   // follow intent recorded at user-scroll time — appends fire no scroll event, so any
   // size of growth keeps following until the user deliberately scrolls away (#48)
   const followRef = useRef(true)
+  const [following, setFollowing] = useState(true)
+  const [controlPanel, setControlPanel] = useState<AgentControlPanelName | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // grow the prompt box with its content, up to a cap — like the real cli
   useEffect(() => {
@@ -161,7 +166,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
   }, [input])
-  useEffect(() => { firstScroll.current = true; followRef.current = true; setLocalLines([]) }, [agent.id])
+  useEffect(() => {
+    firstScroll.current = true
+    followRef.current = true
+    setFollowing(true)
+    setControlPanel(null)
+    setLocalLines([])
+  }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
   useEffect(() => {
@@ -255,31 +266,68 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // user's recorded intent says so. Depends on the last line's text too — at the 500-line
   // transcript cap (and for streaming same-line growth) content changes while length doesn't.
   const lastLineText = convo[convo.length - 1]?.text
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
     if (firstScroll.current && convo.length > 0) {
       el.scrollTo({ top: el.scrollHeight })
       firstScroll.current = false
       followRef.current = true
+      setFollowing(true)
       return
     }
     if (followRef.current) el.scrollTo({ top: el.scrollHeight })
   }, [convo.length, lastLineText, working])
+
+  // Transcript text and tool cards can grow after React commits (font wrapping, async
+  // layout, streamed lines). Observe the rendered feed so following tracks its real size.
+  useEffect(() => {
+    const feed = feedRef.current
+    if (!feed || typeof ResizeObserver === 'undefined') return
+    let frameId = 0
+    const observer = new ResizeObserver(() => {
+      if (!followRef.current) return
+      cancelAnimationFrame(frameId)
+      frameId = requestAnimationFrame(() => {
+        const el = scrollRef.current
+        if (el && followRef.current) el.scrollTo({ top: el.scrollHeight })
+      })
+    })
+    observer.observe(feed)
+    return () => { cancelAnimationFrame(frameId); observer.disconnect() }
+  }, [agent.id])
 
   // intent updates only on real scroll interactions; programmatic scrollTo lands at the
   // bottom and re-records "following", so the two stay consistent
   const onScroll = () => {
     const el = scrollRef.current
     if (!el) return
-    followRef.current = followIntent(el.scrollHeight - el.scrollTop - el.clientHeight, followRef.current)
+    const next = followIntent(el.scrollHeight - el.scrollTop - el.clientHeight, followRef.current)
+    followRef.current = next
+    setFollowing(next)
   }
   // a wheel-up is an unambiguous "let me read" — honor it before the position crosses the band
-  const onWheel = (e: React.WheelEvent) => { if (e.deltaY < 0) followRef.current = false }
+  const onWheel = (e: React.WheelEvent) => {
+    if (e.deltaY >= 0) return
+    followRef.current = false
+    setFollowing(false)
+  }
+
+  const jumpToLatest = () => {
+    followRef.current = true
+    setFollowing(true)
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }
 
   const send = async () => {
     const text = input.trim()
     if (!text) return
+    const nativePanel = hired ? panelForSlashInput(text) : null
+    if (nativePanel) {
+      setInput('')
+      setControlPanel(nativePanel)
+      return
+    }
     // orchestra commands run daemon-direct — claimed here, never posted to the agent (#44)
     if (hired && isBoardCommand(text)) {
       setInput('')
@@ -314,11 +362,22 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     inputRef.current?.focus()
   }
 
+  const activateCommand = (c: CommandItem) => {
+    const nativePanel = panelForSlashCommand(c.name)
+    if (nativePanel) {
+      setInput('')
+      setMenuHidden(true)
+      setControlPanel(nativePanel)
+      return
+    }
+    complete(c)
+  }
+
   const promptKeys = (e: React.KeyboardEvent) => {
     if (menuOpen) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % filtered.length); return }
       if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIdx((i) => (i - 1 + filtered.length) % filtered.length); return }
-      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); complete(filtered[Math.min(menuIdx, filtered.length - 1)]); return }
+      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); activateCommand(filtered[Math.min(menuIdx, filtered.length - 1)]); return }
       // dismiss the menu only — must not bubble to the terminal's interrupt/close handler
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenuHidden(true); return }
     }
@@ -403,54 +462,64 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             {!embedded && <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
 
-          <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
-            {hired && (
-              <div className="cc-welcome">
-                <p><span className="cc-logo">{booting ? star : '✻'}</span> Welcome to <b>Orchestra</b>!</p>
-                <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
-              </div>
-            )}
-            {convo.map(renderLine)}
-            {booting && (
-              <p className="cc-spinner"><span className="cc-star-frame">{star}</span> {bootMsg}</p>
-            )}
-            {!booting && convo.length === 0 && (
-              <p className="cc-status">
-                {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
-              </p>
-            )}
-            {hired && perms.map((p) => (
-              <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
-                <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
-                {canApprove ? (
-                  <div className="cc-perm-actions">
-                    <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
-                    {provider === 'codex' && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
-                    <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+          <div className="cc-history-shell">
+            <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
+              <div className="terminal-feed" ref={feedRef}>
+                {hired && (
+                  <div className="cc-welcome">
+                    <p><span className="cc-logo">{booting ? star : '✻'}</span> Welcome to <b>Orchestra</b>!</p>
+                    <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
                   </div>
-                ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
+                )}
+                {convo.map(renderLine)}
+                {booting && (
+                  <p className="cc-spinner"><span className="cc-star-frame">{star}</span> {bootMsg}</p>
+                )}
+                {!booting && convo.length === 0 && (
+                  <p className="cc-status">
+                    {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
+                  </p>
+                )}
+                {hired && perms.map((p) => (
+                  <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
+                    <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
+                    {canApprove ? (
+                      <div className="cc-perm-actions">
+                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
+                        {provider === 'codex' && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
+                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+                      </div>
+                    ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
+                  </div>
+                ))}
+                {working && turn && (
+                  <p className="cc-spinner">
+                    <span className="cc-star-frame">{star}</span> {gerund}… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
+                    {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
+                  </p>
+                )}
               </div>
-            ))}
-            {working && turn && (
-              <p className="cc-spinner">
-                <span className="cc-star-frame">{star}</span> {gerund}… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
-                {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
-              </p>
-            )}
+            </div>
+            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>↓ Jump to latest</button>}
           </div>
 
           <div className="cc-prompt-wrap">
+            {controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
+              models={(info?.models ?? []).map((model) => ({ ...model, model: modelValue(model) })).filter((model) => model.model)}
+              currentModel={info?.model ?? null}
+              onClose={() => { setControlPanel(null); inputRef.current?.focus() }} onChange={onChange} />}
             {menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
                 {filtered.slice(0, 10).map((c, i) => (
-                  <div key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
+                  <button type="button" key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
                     className={i === menuIdx ? 'cc-slash-item active' : 'cc-slash-item'}
                     onMouseEnter={() => setMenuIdx(i)}
-                    onMouseDown={(e) => { e.preventDefault(); complete(c) }}>
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => activateCommand(c)}>
                     <span className="cc-slash-name">/{c.name}</span>
                     {c.source !== 'sdk' && <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>}
                     <span className="cc-slash-desc">{c.description}</span>
-                  </div>
+                  </button>
                 ))}
                 {filtered.length > 10 && <div className="cc-slash-more">… {filtered.length - 10} more — keep typing</div>}
               </div>

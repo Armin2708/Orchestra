@@ -25,10 +25,11 @@ import {
   ProviderUnavailableError,
   type AccessProfile,
 } from './provider-agent-manager.js'
+import { registerAgentSessionControlRoutes, type AgentSessionControlHost } from './agent-session-controls.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
-export interface ConductorLike {
+export interface ConductorLike extends AgentSessionControlHost {
   isHired(agentId: number): boolean
   hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: AccessProfile; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any
   deliver(agentId: number, msg: any): boolean
@@ -89,6 +90,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
   }
   const maestro = conductor?.(server.bus)
+  registerAgentSessionControlRoutes(server, maestro)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
 
