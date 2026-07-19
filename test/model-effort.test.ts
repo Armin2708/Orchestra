@@ -7,6 +7,7 @@ import { buildServer, ConductorLike } from '../src/server.js'
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }))
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { Conductor, EFFORT_LEVELS } from '../src/conductor.js'
+import { writeAgentDefaults } from '../src/agent-defaults.js'
 
 const MODELS = [
   { model: 'claude-fable-5', displayName: 'Fable 5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
@@ -82,6 +83,42 @@ it('hire passes a validated effort level into the SDK query options', () => {
   const b = t.conductor.hire({ boardId: 1, cwd: '/p', effort: 'ultra' })
   expect(t.queryArgs[1].options.effort).toBeUndefined()
   expect(t.conductor.transcript(b.id).info?.effort).toBeNull()
+})
+
+it('uses worker defaults for board agents and specialist defaults for the roadmap strategist', () => {
+  const t = setup()
+  writeAgentDefaults(t.db, {
+    worker: { model: 'worker-model', effort: 'medium' },
+    specialist: { model: 'specialist-model', effort: 'xhigh' },
+  })
+
+  const worker = t.conductor.hire({ boardId: 1, cwd: '/p' })
+  const strategist = t.conductor.hire({ boardId: 1, cwd: '/p', name: 'strategist', role: 'strategist' })
+
+  expect(t.queryArgs[0].options).toMatchObject({ model: 'worker-model', effort: 'medium' })
+  expect(t.queryArgs[1].options).toMatchObject({ model: 'specialist-model', effort: 'xhigh' })
+  expect(t.conductor.transcript(worker.id).info?.effort).toBe('medium')
+  expect(t.conductor.transcript(strategist.id).info?.effort).toBe('xhigh')
+  expect(t.db.prepare('SELECT model, effort FROM agents WHERE id=?').get(worker.id))
+    .toMatchObject({ model: 'worker-model', effort: 'medium' })
+  expect(t.db.prepare('SELECT model, effort FROM agents WHERE id=?').get(strategist.id))
+    .toMatchObject({ model: 'specialist-model', effort: 'xhigh' })
+})
+
+it('keeps explicit and resumed session configuration ahead of new-agent defaults', () => {
+  const t = setup()
+  writeAgentDefaults(t.db, {
+    worker: { model: 'worker-model', effort: 'high' },
+    specialist: { model: 'specialist-model', effort: 'max' },
+  })
+
+  t.conductor.hire({ boardId: 1, cwd: '/p', name: 'override', model: 'chosen-model', effort: 'low' })
+  t.conductor.hire({ boardId: 1, cwd: '/p', name: 'resumed', resumeSession: 'saved-session' })
+
+  expect(t.queryArgs[0].options).toMatchObject({ model: 'chosen-model', effort: 'low' })
+  expect(t.queryArgs[1].options.resume).toBe('saved-session')
+  expect(t.queryArgs[1].options.model).toBeUndefined()
+  expect(t.queryArgs[1].options.effort).toBeUndefined()
 })
 
 it('supported models surface in transcript info after init', async () => {

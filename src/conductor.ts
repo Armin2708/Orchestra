@@ -11,6 +11,7 @@ import { conductorRules, outputDiscipline } from './rules.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { isUsageLimitError } from './limits.js'
 import { evaluatePolicy, type PolicyOperation } from './agent-os/policy-engine.js'
+import { defaultsForRole } from './agent-defaults.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -418,10 +419,17 @@ export class Conductor {
       this.emit(opts.boardId, 'transcript', { agent_id: agent.id })
     }
 
+    // Defaults only seed fresh sessions. Resume, wake, and effort-handoff paths carry their
+    // persisted configuration explicitly and must not change when an operator edits settings.
+    const profile = opts.resumeSession ? null : defaultsForRole(this.db, opts.role)
+    const model = opts.model ?? profile?.model ?? undefined
+    const requestedEffort = opts.effort ?? profile?.effort ?? undefined
+    const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
+      ? requestedEffort as EffortLevel : null
     const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
       ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
-    this.db.prepare('UPDATE agents SET permission_mode=?, model=COALESCE(?, model) WHERE id=?')
-      .run(permissionMode, opts.model ?? null, agent.id)
+    this.db.prepare('UPDATE agents SET permission_mode=?, model=?, effort=? WHERE id=?')
+      .run(permissionMode, model ?? null, effort, agent.id)
     const pending = new Map<string, PendingPermission>()
     // non-bypass modes deny tools unless a canUseTool handler answers — park each ask as a
     // pending request the board resolves via approve/deny buttons in the terminal
@@ -472,8 +480,6 @@ export class Conductor {
       })
     }
 
-    const effort: EffortLevel | null = EFFORT_LEVELS.includes(opts.effort as EffortLevel) ? opts.effort as EffortLevel : null
-
     // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
     // instead of minting a second "session" agent for the SDK subprocess
     const env: Record<string, string | undefined> = {
@@ -489,7 +495,7 @@ export class Conductor {
       prompt: input.stream(),
       options: {
         cwd: opts.cwd,
-        ...(opts.model ? { model: opts.model } : {}),
+        ...(model ? { model } : {}),
         ...(opts.resumeSession ? { resume: opts.resumeSession } : {}),
         ...(effort ? { effort } : {}),
         permissionMode,

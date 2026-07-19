@@ -13,6 +13,7 @@ import './messages.css'
 import './agentOs.css'
 
 const WorkspaceCockpit = React.lazy(() => import('./WorkspaceCockpit').then((module) => ({ default: module.WorkspaceCockpit })))
+const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -32,7 +33,7 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  type View = 'board' | 'messages' | 'workspaces' | 'roadmap' | 'timeline' | 'shipped'
+  type View = 'board' | 'messages' | 'workspaces' | 'roadmap' | 'timeline' | 'shipped' | 'settings'
   const [view, setView] = useState<View>(() =>
     (localStorage.getItem('orchestra-view') as View) ?? 'board')
   const pickView = (v: View) => { setView(v); localStorage.setItem('orchestra-view', v) }
@@ -81,7 +82,8 @@ export function App() {
   }, [refresh, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
-  if (loaded && snaps.length === 0) return <GettingStarted />
+  if (loaded && snaps.length === 0 && view !== 'settings')
+    return <GettingStarted onSettings={() => pickView('settings')} />
 
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
   const cards = snaps.flatMap((s) => s.cards)
@@ -127,6 +129,7 @@ export function App() {
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
             <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
+            <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
             <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
               if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
               pick(item.board_id)
@@ -148,7 +151,11 @@ export function App() {
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : view === 'timeline'
             ? <TimelineView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-            : <ShippedView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
+            : view === 'shipped'
+              ? <ShippedView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+              : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
+                  <SettingsView />
+                </React.Suspense>}
     </div>
   )
 }
@@ -202,7 +209,7 @@ function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
   )
 }
 
-function GettingStarted() {
+function GettingStarted({ onSettings }: { onSettings: () => void }) {
   return (
     <div className="empty-hero">
       <div className="empty-card">
@@ -210,6 +217,7 @@ function GettingStarted() {
         <h1>No projects yet</h1>
         <p>A project appears the moment an agent joins it. Open a Claude Code session in any repo and it joins on its own:</p>
         <pre>cd your-project{'\n'}claude</pre>
+        <button className="login-btn" type="button" onClick={onSettings}>Configure agent defaults</button>
         <p className="hint">This page updates live — leave it open.</p>
       </div>
     </div>

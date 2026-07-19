@@ -37,6 +37,44 @@ describe('Agent OS API', () => {
       .toBe('agent-os-core')
   })
 
+  it('persists validated worker and specialist agent defaults', async () => {
+    const { server } = await fixture()
+    const initial = await server.inject({ method: 'GET', url: '/api/v1/os/settings/agent-defaults', headers: auth })
+    expect(initial.statusCode).toBe(200)
+    expect(initial.json()).toMatchObject({
+      defaults: {
+        worker: { model: null, effort: null },
+        specialist: { model: null, effort: null },
+      },
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+
+    const saved = await server.inject({
+      method: 'PUT', url: '/api/v1/os/settings/agent-defaults', headers: auth,
+      payload: {
+        worker: { model: '  worker-model  ', effort: 'medium' },
+        specialist: { model: 'specialist-model', effort: 'xhigh' },
+      },
+    })
+    expect(saved.statusCode).toBe(200)
+    expect(saved.json().defaults).toEqual({
+      worker: { model: 'worker-model', effort: 'medium' },
+      specialist: { model: 'specialist-model', effort: 'xhigh' },
+    })
+    expect((await server.inject({ method: 'GET', url: '/api/v1/os/settings/agent-defaults', headers: auth })).json().defaults)
+      .toEqual(saved.json().defaults)
+
+    const invalid = await server.inject({
+      method: 'PUT', url: '/api/v1/os/settings/agent-defaults', headers: auth,
+      payload: {
+        worker: { model: null, effort: 'ultra' },
+        specialist: { model: null, effort: null },
+      },
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json().error).toMatch(/worker effort/)
+  })
+
   it('covers workspace, process, context, contract, evidence, policy, checkpoint, job, conflict, and attention routes', async () => {
     const { db, boardId, otherBoardId, cardId, otherCardId, server } = await fixture()
     const invalid = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`, headers: auth,

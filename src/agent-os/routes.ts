@@ -14,6 +14,12 @@ import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
 import { TaskContractService } from './task-contracts.js'
 import { CreateWorkspace, Workspace, WorkspaceStore } from './workspace-store.js'
+import {
+  AGENT_DEFAULT_EFFORT_LEVELS,
+  AgentDefaultsValidationError,
+  readAgentDefaults,
+  writeAgentDefaults,
+} from '../agent-defaults.js'
 
 export interface ProcessRecord {
   id: string
@@ -112,6 +118,22 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       return reply.code(400).send({ error: error instanceof Error ? error.message : 'request validation failed', code: 'validation_error' })
     }
     return reply.send(error)
+  })
+
+  app.get('/settings/agent-defaults', () => ({
+    defaults: readAgentDefaults(db),
+    effort_levels: AGENT_DEFAULT_EFFORT_LEVELS,
+  }))
+  app.put<{ Body: unknown }>('/settings/agent-defaults', (request) => {
+    try {
+      return {
+        defaults: writeAgentDefaults(db, request.body),
+        effort_levels: AGENT_DEFAULT_EFFORT_LEVELS,
+      }
+    } catch (error) {
+      if (error instanceof AgentDefaultsValidationError) throw new ValidationError(error.message)
+      throw error
+    }
   })
 
   app.get<{ Params: { id: string }; Querystring: { archived?: string; status?: string } }>('/boards/:id/workspaces', (request) => {

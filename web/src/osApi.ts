@@ -238,6 +238,11 @@ export type PluginDescriptor = {
   [key: string]: unknown
 }
 
+export const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type AgentEffort = (typeof AGENT_EFFORT_LEVELS)[number]
+export type AgentDefaultProfile = { model: string | null; effort: AgentEffort | null }
+export type AgentDefaults = { worker: AgentDefaultProfile; specialist: AgentDefaultProfile }
+
 const unwrapList = <T>(value: unknown, keys: string[]): T[] => {
   if (Array.isArray(value)) return value as T[]
   if (!value || typeof value !== 'object') return []
@@ -400,4 +405,8 @@ export const osApi = {
     unwrapList<WorkspaceConflict>(await api('GET', `/os/boards/${boardId}/conflicts`), ['conflicts']),
   listDrivers: async () => unwrapList<DriverCapability>(await api('GET', '/os/drivers'), ['drivers']),
   listPlugins: async () => unwrapList<PluginDescriptor>(await api('GET', '/os/plugins'), ['plugins']),
+  getAgentDefaults: async () =>
+    unwrapEntity<AgentDefaults>(await api('GET', '/os/settings/agent-defaults'), ['defaults']),
+  saveAgentDefaults: async (defaults: AgentDefaults) =>
+    unwrapEntity<AgentDefaults>(await api('PUT', '/os/settings/agent-defaults', defaults), ['defaults']),
 }
