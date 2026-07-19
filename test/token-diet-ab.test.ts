@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
+import { OUTPUT_DISCIPLINE } from '../src/rules.js'
 
 type EventCount = { chars: number; tokens: number; count: number }
 type Compliance = {
@@ -22,6 +23,7 @@ type Compliance = {
   stop_block_fired: boolean
   stop_no_loop_on_active: boolean
   stop_silent_after_done: boolean
+  output_discipline_present: boolean
 }
 type ArmResult = { by_event: Record<string, EventCount>; total: EventCount; compliance: Compliance }
 
@@ -205,6 +207,8 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
       stop_block_fired,
       stop_no_loop_on_active,
       stop_silent_after_done,
+      // #57: the terse-output block rides the session-start rules in BOTH arms
+      output_discipline_present: start.includes(OUTPUT_DISCIPLINE),
     },
   }
 }
@@ -227,6 +231,8 @@ it('identical scenario: compact mode injects fewer tokens with compliance gates 
     reduction_pct: verbose.total.chars === 0 ? 0
       : Math.round((1 - compact.total.chars / verbose.total.chars) * 1000) / 10,
     modes_differ: compact.total.chars !== verbose.total.chars,
+    // #57 additive key: input-side cost of the output-discipline block (per session)
+    output_rules_cost: { chars: OUTPUT_DISCIPLINE.length, tokens: tok(OUTPUT_DISCIPLINE.length) },
   }
   if (process.env.AB_REPORT) fs.writeFileSync(process.env.AB_REPORT, JSON.stringify(report, null, 2))
   // eslint-disable-next-line no-console
