@@ -40,6 +40,19 @@ it('substitutionWarning fires on leak smells and stays silent on prose', () => {
   expect(substitutionWarning('costs $40 and 50% off')).toBeUndefined()
 })
 
+// the rules must teach the safe pattern (teal-ibex's #35 budget test stays untouched:
+// plain compact carries no note — the CLI warning + README teach it at point of failure)
+it('rules teach single-quoting: no double-quoted body examples, stdin note where it fits', async () => {
+  const { compactRules, verboseRules, conductorCompactRules, conductorVerboseRules } = await import('../src/rules.js')
+  const variants = [compactRules, verboseRules, conductorCompactRules, conductorVerboseRules].map((f) => f('probe'))
+  for (const text of variants) {
+    expect(text).not.toMatch(/"</) // "<placeholder>" body in double quotes
+    expect(text).not.toContain('"..."')
+  }
+  for (const text of [verboseRules('probe'), conductorCompactRules('probe'), conductorVerboseRules('probe')])
+    expect(text).toContain('--stdin')
+})
+
 // E2E: printf body | orchestra <cmd> --stdin → byte-identical on the board
 let server: any, port: number, home: string, proj: string
 beforeAll(async () => {

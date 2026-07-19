@@ -104,3 +104,7 @@ export ORCHESTRA_VERBOSE_RULES=1
 - The A/B suite (`test/token-diet-ab.test.ts`) runs the verbose arm through this
   exact flag on every test run, so rollback parity is retested continuously.
   Measured on main today: verbose arm 763 tok vs compact 464 tok per session.
+- 2026-07-19, #53 (shell-safe messages): every example body in the rule variants is
+  single-quoted and the conductor/verbose variants carry a prefer-`--stdin` note —
+  token-neutral for the compact arm (still 464 tok/session; quote swaps are
+  length-preserving, the note lives outside the budgeted compact text).
