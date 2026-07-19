@@ -1,17 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
 import { STATUS } from './Board'
+import { CanvasPoint, CanvasViewport, canvasSceneOffset, screenToCanvasLocal } from './canvasViewport'
 
 type Norm = { x: number; y: number }
+type Point = { x: number; y: number }
 
 function loadPos(boardId: number): Record<string, Norm> {
   try { return JSON.parse(localStorage.getItem(`orchestra-net-${boardId}`) ?? '{}') } catch { return {} }
 }
 
+const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
+
 const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T') + 'Z').getTime()
 
-export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
-  { snap: Snapshot; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void }) {
+export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange }:
+  { snap: Snapshot; viewport: CanvasViewport; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [killing, setKilling] = useState<Agent | null>(null)
   const [dying, setDying] = useState<number | null>(null)
@@ -36,22 +40,45 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
   const wrap = useRef<HTMLDivElement>(null)
   // real pixel size of the canvas — svg renders 1:1, so text and arrows never distort
   const [size, setSize] = useState({ w: 1000, h: 600 })
+  // The network stays in the fixed project layout. Its board-relative origin
+  // lets every graph scene share one pan/zoom while project chrome stays fixed.
+  const [boardOrigin, setBoardOrigin] = useState<CanvasPoint>({ x: 0, y: 0 })
   useEffect(() => {
     if (!wrap.current) return
-    const ro = new ResizeObserver(([e]) => {
-      const { width, height } = e.contentRect
-      if (width > 0 && height > 0) setSize({ w: width, h: height })
-    })
-    ro.observe(wrap.current)
-    return () => ro.disconnect()
-  }, [])
+    const network = wrap.current
+    const board = network.closest('.board-canvas') as HTMLElement | null
+    if (!board) return
+    const measure = () => {
+      const rect = network.getBoundingClientRect()
+      const boardRect = board.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) {
+        setSize((current) => Math.abs(current.w - rect.width) < 0.5 && Math.abs(current.h - rect.height) < 0.5
+          ? current
+          : { w: rect.width, h: rect.height })
+      }
+      const next = { x: rect.left - boardRect.left, y: rect.top - boardRect.top }
+      setBoardOrigin((current) => Math.abs(current.x - next.x) < 0.5 && Math.abs(current.y - next.y) < 0.5
+        ? current
+        : next)
+    }
+    const ro = new ResizeObserver(measure)
+    const observed = [network, board, network.closest('.project'), network.previousElementSibling]
+      .filter((element): element is Element => Boolean(element))
+    observed.forEach((element) => ro.observe(element))
+    window.addEventListener('resize', measure)
+    measure()
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [boardId])
   const W = size.w, H = size.h
   const [pos, setPos] = useState<Record<string, Norm>>(() => loadPos(boardId))
   const [openThread, setOpenThread] = useState<Thread | null>(null)
   const [promptFor, setPromptFor] = useState<Agent | null>(null)
   const [prompt, setPrompt] = useState('')
   const [reply, setReply] = useState('')
-  const drag = useRef<{ name: string; moved: boolean } | null>(null)
+  const drag = useRef<{ name: string; moved: boolean; start: Point } | null>(null)
 
   useEffect(() => setPos(loadPos(boardId)), [boardId])
 
@@ -68,16 +95,25 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
 
   const startDrag = (name: string) => (e: React.PointerEvent) => {
     e.preventDefault()
-    drag.current = { name, moved: false }
+    e.stopPropagation()
+    drag.current = { name, moved: false, start: { x: e.clientX, y: e.clientY } }
     ;(e.target as Element).setPointerCapture?.(e.pointerId)
   }
   const onMove = (e: React.PointerEvent) => {
     if (!drag.current || !wrap.current) return
-    const r = wrap.current.getBoundingClientRect()
+    if (!drag.current.moved && distance(drag.current.start, { x: e.clientX, y: e.clientY }) < 3) return
+    const board = wrap.current.closest('.board-canvas') as HTMLElement | null
+    if (!board) return
+    const rect = board.getBoundingClientRect()
+    const local = screenToCanvasLocal(
+      viewport,
+      { x: e.clientX - rect.left, y: e.clientY - rect.top },
+      boardOrigin,
+    )
     drag.current.moved = true
     const next = {
-      x: Math.min(0.96, Math.max(0.04, (e.clientX - r.left) / r.width)),
-      y: Math.min(0.92, Math.max(0.06, (e.clientY - r.top) / r.height)),
+      x: Math.min(0.96, Math.max(0.04, local.x / W)),
+      y: Math.min(0.92, Math.max(0.06, local.y / H)),
     }
     setPos((p) => ({ ...p, [drag.current!.name]: next }))
   }
@@ -113,19 +149,29 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
     snap.cards.filter((c) => c.owner === name && c.column !== 'done').slice(0, 3)
 
   const P = (name: string) => nodes.get(name)!
+  const graphOffset = canvasSceneOffset(viewport, boardOrigin)
+  const graphStyle = {
+    width: W,
+    height: H,
+    transformOrigin: '0 0',
+    transform: `translate3d(${graphOffset.x}px, ${graphOffset.y}px, 0) scale(${viewport.zoom})`,
+  }
+  const openArrowId = `arrow-open-${boardId}`
+  const doneArrowId = `arrow-done-${boardId}`
 
   return (
-    <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()}>
-      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
-        <defs>
-          <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d9a13b" />
-          </marker>
-          <marker id="arrow-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a9e5f" />
-          </marker>
-        </defs>
-        {(() => {
+    <div className="network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()} onPointerCancel={endDrag()}>
+      <div className="network-scene" style={graphStyle}>
+        <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
+          <defs>
+            <marker id={openArrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d9a13b" />
+            </marker>
+            <marker id={doneArrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a9e5f" />
+            </marker>
+          </defs>
+          {(() => {
           // spread multiple questions between the same pair onto parallel curves
           const byPair = new Map<string, number>()
           return edges.map((t) => {
@@ -149,14 +195,16 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
             const cls = t.answered ? 'done' : 'open'
             return (
               <g key={t.id} className={`q-edge ${cls}`} onClick={() => { setOpenThread(t); setReply('') }}>
-                <path d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`} fill="none" className={`edge ${cls}`} markerEnd={`url(#arrow-${cls})`} />
+                <path d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`} fill="none"
+                  stroke={t.answered ? '#3a9e5f' : '#d9a13b'} vectorEffect="non-scaling-stroke" className={`edge ${cls}`}
+                  markerEnd={`url(#${t.answered ? doneArrowId : openArrowId})`} />
                 <rect x={mx - 92} y={my - 15} width={184} height={30} rx={7} className={`q-box ${cls}`} />
                 <text x={mx} y={my + 4} className={`q-text ${cls}`}>{label}</text>
               </g>
             )
           })
-        })()}
-      </svg>
+          })()}
+        </svg>
 
       {/* you */}
       <div className="net-node" style={{ left: `${P('you').x * 100}%`, top: `${P('you').y * 100}%` }}>
@@ -223,6 +271,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
           </div>
         )
       })}
+      </div>
 
       {agents.length === 0 && <p className="col-empty net-empty">No agents online — hire one or open a Claude session here.</p>}
 
@@ -263,7 +312,7 @@ export function NetworkView({ snap, onOpenCard, onOpenAgent, onChange }:
       <div className="net-legend">
         <span><i className="leg-line open" /> open question</span>
         <span><i className="leg-line done" /> answered (fades after 3 min)</span>
-        <span>drag circles · click to open console</span>
+        <span>drag empty board · wheel or pinch to zoom · drag circles to move</span>
       </div>
     </div>
   )

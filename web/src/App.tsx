@@ -108,14 +108,16 @@ export function App() {
             )}
           </div>
         </div>
-        <SystemMeter boards={snaps.map((s) => s.board.id)} />
-        <nav className="view-tabs">
-          <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
-          <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
-          <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
-          <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
-          <PushBell />
-        </nav>
+        <div className="topbar-actions">
+          <SystemMeter boards={snaps.map((s) => s.board.id)} />
+          <nav className="view-tabs">
+            <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
+            <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
+            <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
+            <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
+            <PushBell />
+          </nav>
+        </div>
       </header>
       {view === 'board'
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
