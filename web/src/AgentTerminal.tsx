@@ -23,7 +23,6 @@ import {
   uniqueSlashCommands,
   type AgentControlPanelName,
 } from './agentTerminalControls'
-import './agentTerminal.css'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -298,7 +297,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [promptHistory, setPromptHistory] = useState<string[]>([])
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
   const [historyDraft, setHistoryDraft] = useState('')
-  const [transcriptExpanded, setTranscriptExpanded] = useState(false)
+  const [transcriptExpanded, setTranscriptExpanded] = useState(true)
   const [clearedAt, setClearedAt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -329,7 +328,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     setPromptHistory([])
     setHistoryIdx(null)
     setHistoryDraft('')
-    setTranscriptExpanded(false)
+    setTranscriptExpanded(true)
     setClearedAt(null)
     setSending(false)
     setSubmitError(null)
@@ -616,7 +615,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     }
   }
 
-  // Selecting a command fills the composer. The explicit Send action makes execution clear.
+  // Selecting a command fills the composer; Enter remains the terminal's send action.
   const complete = (c: CommandItem) => {
     setInput(`/${c.name}`)
     inputRef.current?.focus()
@@ -689,27 +688,25 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const renderLine = (l: Line, i: number) => {
     switch (l.kind) {
       case 'user':
-        return <p key={i} className="cc-user">{l.text}</p>
+        return <p key={i} className="cc-user">&gt; {l.text}</p>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
         const args = paren === -1 ? '' : l.text.slice(paren)
-        return <p key={i} className="cc-tool"><b>{name}</b>{args}</p>
+        return <p key={i} className="cc-tool"><span className="cc-dot tool">⏺</span> <b>{name}</b>{args}</p>
       }
       case 'tool_result':
-        return <p key={i} className={`cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}
-          title={transcriptExpanded ? undefined : 'Ctrl+O to expand transcript details'}>{l.text}</p>
+        return <p key={i} className={`cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}>⎿  {l.text}</p>
       case 'thinking':
-        return <p key={i} className={`cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>{l.text}</p>
+        return <p key={i} className={`cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>✻ {l.text}</p>
       case 'status':
         return <p key={i} className="cc-status">{l.text}</p>
       case 'error':
-        return <p key={i} className="cc-error">{l.text}</p>
+        return <p key={i} className="cc-error">✗ {l.text}</p>
       default:
-        return <p key={i} className="cc-text">{l.text}</p>
+        return <p key={i} className="cc-text"><span className="cc-dot">⏺</span> {l.text}</p>
     }
   }
-  const hasConversationActivity = convo.some((line) => line.kind !== 'status')
 
   return (
     <>
@@ -739,62 +736,57 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         }}>
         <div className="terminal-col">
           <header className="cc-head">
-            <span className="cc-head-status" aria-hidden="true" />
-            <strong>{agent.name}{hired && <> <ProviderBadge provider={provider} compact /></>}</strong>
-            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}` : `board conversation · ${agent.status}`}</span>
-            <div className="cc-head-actions">
-              {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
-                <select className="cc-assign" defaultValue=""
-                  title="Assign a ticket — the agent gets briefed and starts"
-                  aria-label="Assign ticket"
-                  onChange={async (e) => {
-                    const id = Number(e.target.value)
-                    e.target.value = ''
-                    if (!id) return
-                    try { await api('POST', `/cards/${id}/assign`, { agent: agent.name }) } catch { /* locked */ }
-                    onChange()
-                  }}>
-                  <option value="" disabled>assign ticket…</option>
-                  {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
-                    <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
-                  ))}
-                </select>
-              )}
-              {hired && canStop && (
-                <button type="button" className="cc-head-action cc-head-stop"
-                  title="Stop this agent — terminates its session; a launched ticket moves to blocked"
-                  onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>stop</button>
-              )}
-              {!embedded && <button type="button" className="cc-head-close" onClick={onClose} aria-label="Close console" title="Close console">close</button>}
-            </div>
+            <span className="cc-head-star" aria-hidden="true">•</span>
+            <span>{agent.name}</span>
+            {hired && <ProviderBadge provider={provider} compact />}
+            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
+            {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
+              <select className="cc-assign" defaultValue=""
+                title="Assign a ticket — the agent gets briefed and starts"
+                aria-label="Assign ticket"
+                onChange={async (e) => {
+                  const id = Number(e.target.value)
+                  e.target.value = ''
+                  if (!id) return
+                  try { await api('POST', `/cards/${id}/assign`, { agent: agent.name }) } catch { /* locked */ }
+                  onChange()
+                }}>
+                <option value="" disabled>assign ticket…</option>
+                {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
+                  <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
+                ))}
+              </select>
+            )}
+            {hired && canStop && (
+              <button type="button" className="cc-close"
+                title="Stop this agent — terminates its session; a launched ticket moves to blocked"
+                onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>■ stop</button>
+            )}
+            {!embedded && <button type="button" className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
 
           <div className="cc-history-shell">
             <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
               <div className="terminal-feed" ref={feedRef}>
-                {hired && !hasConversationActivity && (
+                {hired && (
                   <div className="cc-welcome">
-                    <p>Welcome to <b>Orchestra</b></p>
-                    <p className="cc-welcome-sub">{agent.name} · {agent.status} · autonomous session</p>
+                    <p>Welcome to <b>Orchestra</b>!</p>
+                    <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
                   </div>
                 )}
                 {convo.map(renderLine)}
-                {!working && !hasConversationActivity && (
-                  <div className="cc-empty">
-                    <strong>{hired ? 'Ready for your first prompt' : 'No messages yet'}</strong>
-                    <p>{hired
-                      ? 'The session is idle and uses no model tokens until you send something. Type / to see actions supported here.'
-                      : `Messages to ${agent.name} will appear here.`}</p>
-                  </div>
+                {!working && convo.length === 0 && (
+                  <p className="cc-status">
+                    {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
+                  </p>
                 )}
                 {hired && perms.map((p) => (
                   <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
-                    <p className="cc-perm-kicker">
-                      {p.approvalKind === 'user-input' ? 'Agent needs your input'
-                        : p.approvalKind === 'mcp-elicitation' ? 'External service requests input'
-                          : `Agent requests access to ${p.tool ?? 'a provider action'}`}
+                    <p className="cc-perm-title">
+                      {p.approvalKind === 'user-input' ? 'input needed'
+                        : p.approvalKind === 'mcp-elicitation' ? 'external input needed'
+                          : `permission needed · ${p.tool ?? 'provider action'}`} · <b>{p.title ?? p.summary}</b>
                     </p>
-                    <p className="cc-perm-title"><b>{p.title ?? p.summary}</b></p>
                     {p.approvalKind === 'mcp-elicitation' && p.serverName && (
                       <p className="cc-perm-external">Requested by MCP server <b>{p.serverName}</b>.</p>
                     )}
@@ -809,29 +801,23 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                         onCancel={() => decide(p.id, 'cancel')} />
                     ) : canApprove ? (
                       <div className="cc-perm-actions">
-                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}><span>1.</span> Allow once</button>
+                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow once</button>
                         {provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
-                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}><span>2.</span> Allow for session</button>}
-                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>
-                          <span>{provider === 'codex' && p.approvalKind !== 'mcp-elicitation' ? '3.' : '2.'}</span> Deny
-                        </button>
+                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow for session</button>}
+                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
                       </div>
                     ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
-                    {canApprove && !(provider === 'codex'
-                      && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
-                      && questionsFor(p).length > 0) && <p className="cc-perm-help">Choose an option to continue</p>}
                   </div>
                 ))}
                 {working && turn && (
-                  <div className="cc-working" role="status">
-                    <span className="cc-working-dot" aria-hidden="true" />
-                    <span>Working · {fmtSecs(turn.secs)}{turn.tokens > 0 && <> · {fmtTokens(turn.tokens)} output tokens</>}</span>
-                    {canInterrupt && <button type="button" onClick={interrupt}>Interrupt</button>}
-                  </div>
+                  <p className="cc-spinner" role="status">
+                    <span className="cc-star cc-star-frame" aria-hidden="true">•</span> Working… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
+                    {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
+                  </p>
                 )}
               </div>
             </div>
-            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>Latest messages</button>}
+            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>↓ Jump to latest</button>}
           </div>
 
           <div className="cc-prompt-wrap">
@@ -852,19 +838,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                     <span className="cc-slash-desc">{c.description}</span>
                   </button>
                 ))}
-                {filtered.length > 10 && <div className="cc-slash-more">{filtered.length - 10} more · keep typing</div>}
+                {filtered.length > 10 && <div className="cc-slash-more">… {filtered.length - 10} more — keep typing</div>}
               </div>
             )}
-            <div className="cc-promptbox" data-mode={accessProfile}>
-              <span className="cc-prompt-caret" aria-hidden="true">›</span>
+            <div className="cc-promptbox">
+              <span className="cc-prompt-caret" aria-hidden="true">&gt;</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
-                placeholder={convo.length === 0 ? (hired ? 'Describe what this agent should do…' : `Message ${agent.name}`) : 'Write a follow-up…'}
+                placeholder=""
                 onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
                 onKeyDown={promptKeys} />
-              <button type="button" className="cc-send" disabled={!input.trim() || sending}
-                onClick={() => void send()}>{sending ? 'sending' : 'send'}</button>
             </div>
-            {submitError && <p className="cc-submit-error" role="alert">{submitError}</p>}
+            {submitError && <p className="cc-error" role="alert">✗ {submitError}</p>}
           </div>
           <div className="cc-hints">
             {hired
@@ -877,8 +861,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
-            <span className="cc-session-meta" title={info?.cwd}>
-              {modelLabel}{cwdLabel ? ` · ${cwdLabel}` : ''}
+            <span title={info?.cwd}>
+              {cwdLabel}{modelLabel ? `${cwdLabel ? ' · ' : ''}${modelLabel}` : ''}
               {info?.usage && providerTokenSummary(provider, [info.usage.session, info.usage.turn]).total > 0 ? (() => {
                 const usage = providerTokenSummary(provider, [info.usage.session, info.usage.turn])
                 const cacheWrite = usage.cacheWrite > 0 ? ` · cache write ${fmtTokens(usage.cacheWrite)}` : ''

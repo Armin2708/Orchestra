@@ -123,6 +123,7 @@
 button.cc-control-row { cursor: pointer; }
 button.cc-control-row:hover,
 button.cc-control-row:focus-visible,
+.cc-control-row.active,
 .cc-control-row.selected {
   background: #34312c;
   outline: none;
@@ -209,3 +210,11 @@ button.cc-slash-item {
 }
 
 button.cc-slash-item.active { background: #3a372f; }
+
+.cc-result.is-collapsed,
+.cc-thinking.is-collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
