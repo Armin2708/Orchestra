@@ -29,6 +29,12 @@ describe('social message feed UI', () => {
     expect(body).toContain('Copy raw')
   })
 
+  it('limits the reply-row grid to direct children so nested clauses keep their width', () => {
+    expect(css).toMatch(/\.message-answers\s*>\s*li\s*\{/)
+    expect(css).not.toMatch(/\.message-answers\s+li\s*\{/)
+    expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.message-answers\s*>\s*li/)
+  })
+
   it('collapses cleanly on mobile and disables ambient motion when requested', () => {
     expect(css).toContain('@media (max-width: 980px)')
     expect(css).toContain('@media (max-width: 640px)')
