@@ -3,8 +3,9 @@
 Orchestra injects context into every agent session (rules, board snapshot, message
 deliveries, nudges, stop-block reasons). The token-diet milestone (#34–#38) shrinks
 those injections without weakening coordination compliance. This report proves both
-halves: **58.6% fewer injected tokens per session, with all 10 compliance gates
-unchanged.**
+halves on the current shipping build: **50.3% fewer injected tokens per session,
+with all 11 compliance gates unchanged.** The ≥50% acceptance target is enforced
+by CI, so documentation can no longer drift ahead of the implementation.
 
 ## Methodology
 
@@ -29,19 +30,29 @@ node scripts/ab-token-diet.mjs        # markdown tables
 node scripts/ab-token-diet.mjs --json # raw report
 ```
 
-Before/after numbers come from running the identical harness at the pre-diet
-commit (`8e1f9dc`) and at post-diet main (#35 merged, `755c23b`); the same harness
-run on one commit with `ORCHESTRA_VERBOSE_RULES=1` vs unset A/Bs the rollback flag.
+The current acceptance measurement runs one build twice: with
+`ORCHESTRA_VERBOSE_RULES=1` and with the flag unset. This directly A/Bs the
+supported rollback mode and fails when compact mode saves less than 50%.
 
-## Injected tokens per session (identical replayed 4-turn scenario)
+## Current shipping gate (identical replayed scenario)
 
-| hook event | before (8e1f9dc) | after (main, compact) | reduction |
+| hook event | verbose | compact | reduction |
 |---|---|---|---|
-| session_start (rules + board dump) | 641 | 341 | 46.8% |
-| user_prompt_submit (nudges) | 50 | 38 | 24.0% |
-| post_tool_use (messages + nudges) | 87 | 49 | 43.7% |
-| stop (block reasons, 4 turn-ends) | 343 | 37 | 89.2% |
-| **total** | **1120** | **464** | **58.6%** |
+| session_start (rules + board dump) | 770 | 322 | 58.2% |
+| user_prompt_submit (nudges) | 38 | 38 | 0% |
+| post_tool_use (messages + nudges) | 49 | 49 | 0% |
+| stop (block reasons, 4 turn-ends) | 37 | 37 | 0% |
+| **total** | **893** | **444** | **50.3%** |
+
+Measured locally on 2026-07-19 by `node scripts/ab-token-diet.mjs`. Per-event
+token counts are rounded independently; the total is calculated from the full
+concatenated character count.
+
+## Historical pre-diet comparison
+
+The same harness at pre-diet commit `8e1f9dc` and post-diet commit `755c23b`
+measured 1120 → 464 tokens (58.6%). That result records the original milestone
+delivery; the current table above is the release gate.
 
 Where it came from:
 
@@ -73,7 +84,7 @@ conservative; long sessions land well past 58.6%.
 | stop never re-blocks on the continuation turn | ✓ | ✓ |
 | stop is silent once the card is done | ✓ | ✓ |
 
-10/10 gates pass identically in both modes. The A/B suite runs as part of
+11/11 gates pass identically in both modes. The A/B suite runs as part of
 `npm test`, so a compliance regression fails CI, not just this report. The same
 gates were verified green at the pre-diet commit, so the diet changed token cost,
 not behavior.
@@ -103,11 +114,11 @@ export ORCHESTRA_VERBOSE_RULES=1
   reverting merge `10c07de`.
 - The A/B suite (`test/token-diet-ab.test.ts`) runs the verbose arm through this
   exact flag on every test run, so rollback parity is retested continuously.
-  Measured on main today: verbose arm 763 tok vs compact 464 tok per session.
+  Measured on the release candidate today: verbose arm 893 tok vs compact 444 tok
+  per session.
 - 2026-07-19, #53 (shell-safe messages): every example body in the rule variants is
   single-quoted and the conductor/verbose variants carry a prefer-`--stdin` note —
-  token-neutral for the compact arm (still 464 tok/session; quote swaps are
-  length-preserving, the note lives outside the budgeted compact text).
+  the safety directive remains present in both modes.
 
 ## Output discipline (#57)
 

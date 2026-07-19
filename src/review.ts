@@ -1,13 +1,23 @@
 import { execFile } from 'node:child_process'
 import type Database from 'better-sqlite3'
 
-// changed-paths summary for a review request — working tree first, else the last commit
-export function diffStat(cwd: string): Promise<string> {
-  const git = (args: string[]) => new Promise<string>((resolve) => {
+// Changed-paths summary for a review request. A card branch is authoritative: review
+// the delivery against main instead of accidentally showing the shared checkout's HEAD.
+export async function diffStat(cwd: string, branch?: string | null): Promise<string> {
+  const git = (args: string[]) => new Promise<{ ok: boolean; out: string }>((resolve) => {
     execFile('git', args, { cwd, timeout: 5_000, maxBuffer: 256 * 1024 },
-      (err, out) => resolve(err ? '' : String(out).trim()))
+      (err, out) => resolve({ ok: !err, out: err ? '' : String(out).trim() }))
   })
-  return git(['diff', '--stat', 'HEAD']).then((s) => s || git(['show', '--stat', '--format=%h %s', 'HEAD']))
+  if (branch) {
+    const ref = await git(['rev-parse', '--verify', `${branch}^{commit}`])
+    if (ref.ok) {
+      const delivery = await git(['diff', '--stat', `main...${branch}`])
+      return delivery.out || `branch ${branch}: no changes relative to main`
+    }
+  }
+  const working = await git(['diff', '--stat', 'HEAD'])
+  if (working.out) return working.out
+  return (await git(['show', '--stat', '--format=%h %s', 'HEAD'])).out
 }
 
 // one open request per review cycle: a request is open until a decision lands after it

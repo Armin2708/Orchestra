@@ -222,15 +222,16 @@ it('identical scenario: compact mode injects fewer tokens with compliance gates 
   for (const [k, v] of Object.entries(verbose.compliance)) expect(v, `verbose ${k}`).toBe(true)
   expect(compact.compliance).toEqual(verbose.compliance)
 
-  // the diet may only shrink injections, never grow them
-  expect(compact.total.chars).toBeLessThanOrEqual(verbose.total.chars)
+  // #38's acceptance target is a real gate, not a documentation-only claim.
+  const reduction_pct = verbose.total.chars === 0 ? 0
+    : Math.round((1 - compact.total.chars / verbose.total.chars) * 1000) / 10
+  expect(reduction_pct).toBeGreaterThanOrEqual(50)
 
   const report = {
     generated_by: 'test/token-diet-ab.test.ts',
     scenario: 'session-start → no-card nudge → register → message delivery → overlap create → stale nudge → update → stop-block → loop-guard → done → session-end',
     verbose, compact,
-    reduction_pct: verbose.total.chars === 0 ? 0
-      : Math.round((1 - compact.total.chars / verbose.total.chars) * 1000) / 10,
+    reduction_pct,
     modes_differ: compact.total.chars !== verbose.total.chars,
     // #57 additive key: input-side cost of the output-discipline block (per session)
     output_rules_cost: { chars: OUTPUT_DISCIPLINE.length, tokens: tok(OUTPUT_DISCIPLINE.length) },

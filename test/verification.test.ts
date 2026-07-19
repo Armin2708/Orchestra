@@ -1,4 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer, ConductorLike, Bus } from '../src/server.js'
 
@@ -168,4 +170,22 @@ it('shipped hash lands in the verifier brief when recorded', async () => {
   await server.inject({ method: 'POST', url: `/api/v1/cards/${c.id}/verify` })
   expect(stub.tasks.at(-1)!.text).toContain(`git show ${'a'.repeat(40)}`)
   await server.close()
+})
+
+it('an unmerged delivery branch is explicit and its worktree is the verifier cwd', async () => {
+  const { db, server, stub, board } = await boot()
+  const c = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+    board_id: board.id, title: 'branch card', column: 'review' } })).json().card
+  db.prepare(`UPDATE cards SET branch=? WHERE id=?`).run(`card-${c.id}`, c.id)
+  const worktree = path.join(path.dirname(board.project_path), `${path.basename(board.project_path)}-card-${c.id}`)
+  fs.mkdirSync(worktree, { recursive: true })
+  try {
+    await server.inject({ method: 'POST', url: `/api/v1/cards/${c.id}/verify` })
+    expect(stub.hires.at(-1)!.opts.cwd).toBe(worktree)
+    expect(stub.tasks.at(-1)!.text).toContain(`DELIVERY BRANCH (ground truth before merge): card-${c.id}`)
+    expect(stub.tasks.at(-1)!.text).toContain(`git diff main...card-${c.id}`)
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true })
+    await server.close()
+  }
 })

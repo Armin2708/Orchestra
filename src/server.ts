@@ -12,7 +12,7 @@ import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, list
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
-import { ShipQueue, ShipHooks, shipGate, autoshipEnabled } from './shipqueue.js'
+import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
 import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
@@ -361,12 +361,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // enrich a card entering review with the agent's summary + changed paths, once per review cycle
   const requestReview = async (card: any, summary: string | null, agentName: string | null) => {
     if (hasOpenReviewRequest(db, card.id)) return
-    const stat = await diffStat(boardPath(card.board_id)).catch(() => '')
-    logEvent(card.id, null, 'review_request', { summary, diffstat: stat })
+    const stat = await diffStat(boardPath(card.board_id), card.branch).catch(() => '')
+    logEvent(card.id, null, 'review_request', { summary, diffstat: stat, branch: card.branch ?? null })
     emit(card.board_id, 'review', {
       card_id: card.id, card_title: card.title,
       milestone_id: card.milestone_id ?? null, step_order: card.step_order ?? null,
       agent_name: agentName, status: 'awaiting_approval', summary, diffstat: stat,
+      branch: card.branch ?? null,
     })
     // opt-in: every card entering review gets an independent verifier pass (default manual)
     if (process.env.ORCHESTRA_AUTO_VERIFY === '1') { try { startVerification(getCard(card.id)) } catch { /* manual verify still available */ } }
@@ -404,7 +405,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return `Verify the delivery of card #${card.id}: "${card.title}".\n` +
       `CARD DESCRIPTION (derive your criteria from its DONE WHEN, else REQUIREMENTS, else OBJECTIVE):\n${card.description || '(no description — verify the title as a single criterion)'}\n` +
       (hash ? `SHIPPED COMMIT (ground truth): ${hash} — inspect with: git show ${hash}\n`
-        : `No shipped commit recorded — locate the delivery yourself: recent merges mentioning the card (git log --oneline -20) or the diffstat below.\n`) +
+        : card.branch
+          ? `DELIVERY BRANCH (ground truth before merge): ${card.branch} — inspect with: git diff main...${card.branch} and git log main..${card.branch}\n`
+          : `No shipped commit or delivery branch recorded — locate the delivery from recent merges mentioning the card (git log --oneline -20) or the diffstat below.\n`) +
       (review?.diffstat ? `REVIEW DIFFSTAT:\n${review.diffstat}\n` : '') +
       (review?.summary ? `CLAIMED SUMMARY (verify, do not trust): ${review.summary}\n` : '') +
       `REPORT exactly once with this command (fill in the JSON):\n` +
@@ -415,7 +418,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   const startVerification = (card: any): any => {
     const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
-    const agent = maestro!.hire({ boardId: card.board_id, cwd: board.project_path, role: 'verifier', ephemeral: true })
+    const worktree = card.branch ? cardWorktree(board.project_path, card.id) : null
+    const cwd = worktree && fs.existsSync(worktree) ? worktree : board.project_path
+    const agent = maestro!.hire({ boardId: card.board_id, cwd, role: 'verifier', ephemeral: true })
     logEvent(card.id, agent?.id ?? null, 'verify_requested', { agent: agent?.name ?? null })
     emit(card.board_id, 'card', { ...getCard(card.id), verification: verificationFor(card.id) })
     maestro!.task(agent.id, verifierBrief(card))

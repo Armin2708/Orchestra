@@ -77,7 +77,7 @@ const touchesCwd = (paths: string[], root: string, cwd: string): boolean => {
 const cardLine = (c: any, full: boolean) => {
   if (full) return `- card #${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) paths: ${c.paths.join(', ') || '-'}`
   const paths = c.paths.slice(0, 2).join(', ') + (c.paths.length > 2 ? ` +${c.paths.length - 2}` : '')
-  return `- #${c.id} [${c.column}] "${c.title}" (${c.owner ?? 'unowned'}) ${paths || '-'}`
+  return `#${c.id} ${c.column} "${c.title}" @${c.owner ?? '-'} ${paths || '-'}`
 }
 const questionLine = (q: any, full: boolean) => full
   ? `- open question #${q.id} from ${q.from_name ?? 'human'} to ${q.to_name ?? 'all'}: ${q.body}`
@@ -88,13 +88,15 @@ export function renderSessionStart(agent: { id: number; name: string }, board: a
   const me = agent.name
   const full = verbose()
   const others = snap.agents.filter((x: any) => x.id !== agent.id && x.status !== 'gone')
-  const lines = [hookRules(me), '', `You are agent "${me}" (id ${agent.id}) on board "${board.name}".`]
+  const lines = [hookRules(me), '', full
+    ? `You are agent "${me}" (id ${agent.id}) on board "${board.name}".`
+    : `Board ${board.name} · ${me}#${agent.id}`]
   if (full) {
     for (const a of others) lines.push(`- agent ${a.name}: ${a.status}`)
     for (const c of snap.cards.filter((c: any) => c.column !== 'done')) lines.push(cardLine(c, full))
     for (const q of snap.open_questions) lines.push(questionLine(q, full))
   } else {
-    lines.push(`- ${others.length} other active agent(s) — orchestra snapshot --full for the list`)
+    lines.push(`Peers:${others.length} · full: orchestra snapshot --full`)
     const root = board.project_path ?? cwd
     for (const c of snap.cards.filter((c: any) =>
       c.column !== 'done' && (!c.owner || c.owner === me || touchesCwd(c.paths, root, cwd))))

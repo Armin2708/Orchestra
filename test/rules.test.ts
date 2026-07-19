@@ -9,15 +9,15 @@ const DIRECTIVES = [
   'orchestra card create',        // register a card...
   '--column in_progress',         // ...in progress...
   '--paths',                      // ...with claimed paths
-  'Before your first file edit',  // ...before edits
+  'Before edit',                  // ...before edits
   'orchestra ask',                // overlap-ask before starting
-  'wait for the answer',
-  '⚠ overlap',
-  '≈ similar',
-  'card update/move',             // keep the card updated / moved
+  'wait',
+  '⚠',
+  '≈',
+  'Card current',                 // keep the card updated / moved
   'done when finished',
-  'paths claimed by another active card', // don't touch claimed paths
-  'Subagents NEVER run orchestra commands', // subagent prohibition
+  'claimed path',                 // don't touch claimed paths
+  'Subagents: no orchestra commands', // subagent prohibition
   'snapshot --full',              // where the full board lives now
 ]
 
@@ -89,13 +89,13 @@ describe('session-start injection', () => {
 
   it('compact keeps unowned cards, own cards, cwd-overlapping cards, and my/broadcast questions', () => {
     const compact = renderSessionStart(me, board, snap, '/proj/src/module2')
-    expect(compact).toContain('- #1 [')  // unowned (i=0)
-    expect(compact).toContain('- #3 [in_progress]') // paths overlap cwd (i=2 → src/module2)
-    expect(compact).not.toContain('- #4 [') // owned by another agent, cwd elsewhere
+    expect(compact).toContain('#1 backlog')  // unowned (i=0)
+    expect(compact).toContain('#3 in_progress') // paths overlap cwd (i=2 → src/module2)
+    expect(compact).not.toContain('#4 backlog') // owned by another agent, cwd elsewhere
     expect(compact).toContain('- Q#1 ') // addressed to me
     expect(compact).toContain('- Q#2 ') // broadcast
     expect(compact).not.toContain('- Q#3 ') // someone else's
-    expect(compact).toContain('6 other active agent(s)')
+    expect(compact).toContain('Peers:6')
     expect(compact).not.toContain('- agent agent-0') // no per-agent list
   })
 })

@@ -7,13 +7,12 @@
 export const verbose = () => process.env.ORCHESTRA_VERBOSE_RULES === '1'
 
 export const compactRules = (me: string) => `orchestra rules:
-- You are "${me}"; always pass --agent/--from ${me}.
-- Before starting: similar/conflicting card → orchestra ask <agent> '...' --from ${me}; wait for the answer.
-- Before your first file edit: orchestra card create '<title>' --desc '<scope>' --paths <p1,p2> --column in_progress --agent ${me}; "⚠ overlap"/"≈ similar" → ask first.
-- orchestra card update/move as you go; move to done when finished.
-- Never touch paths claimed by another active card without asking.
-- Subagents NEVER run orchestra commands — you coordinate.
-- Full board: orchestra snapshot --full`
+- ID=${me}; use --agent/--from.
+- Board first; similar/conflict/claimed path → orchestra ask owner; wait.
+- Before edit: orchestra card create '<title>' --desc '<scope>' --paths <p1,p2> --column in_progress --agent ${me}; ⚠/≈ → ask.
+- Card current; done when finished.
+- Subagents: no orchestra commands.
+- Full: orchestra snapshot --full`
 
 export const verboseRules = (me: string) => `orchestra rules (coordination board for this project — these are standing instructions):
 - You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.

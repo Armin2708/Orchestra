@@ -113,5 +113,13 @@ it('diffStat reports changed paths inside a git repo', async () => {
   expect(await diffStat(dir)).toContain('a.txt')          // working-tree changes
   git('add', '.'); git('commit', '-m', 'change')
   expect(await diffStat(dir)).toContain('a.txt')          // falls back to the last commit
+  const base = String(git('branch', '--show-current')).trim()
+  git('switch', '-c', 'card-77')
+  fs.writeFileSync(path.join(dir, 'delivery.txt'), 'feature\n')
+  git('add', '.'); git('commit', '-m', 'delivery')
+  git('switch', base)
+  const branch = await diffStat(dir, 'card-77')
+  expect(branch).toContain('delivery.txt')                // card branch, not shared HEAD
+  expect(branch).not.toContain('a.txt')
   expect(await diffStat('/nonexistent-path-xyz')).toBe('') // not a repo → empty, not an error
 })
