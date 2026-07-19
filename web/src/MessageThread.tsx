@@ -1,11 +1,13 @@
 import React, { useState } from 'react'
 import { api, ApiError, Thread, timeAgo } from './api'
+import { MessageBody } from './MessageBody'
 import { deliverySummary, MESSAGE_KIND_META, messageKind, messageRoute } from './messageUi'
 
 type Props = {
   thread: Thread
   boardLabel?: string
   cardTitle?: string | null
+  cardTitles?: ReadonlyMap<number, string>
   compact?: boolean
   onChange: () => void | Promise<void>
 }
@@ -16,7 +18,7 @@ const readableError = (error: unknown) => {
   try { return JSON.parse(error.message).error ?? error.message } catch { return error.message }
 }
 
-export function MessageThread({ thread, boardLabel, cardTitle, compact = false, onChange }: Props) {
+export function MessageThread({ thread, boardLabel, cardTitle, cardTitles, compact = false, onChange }: Props) {
   const [replying, setReplying] = useState(false)
   const [reply, setReply] = useState('')
   const [busy, setBusy] = useState(false)
@@ -83,7 +85,7 @@ export function MessageThread({ thread, boardLabel, cardTitle, compact = false, 
         <b>{route.from}</b><span aria-hidden="true">→</span><b>{route.to}</b>
         <time>{timeAgo(thread.created_at)}</time>
       </div>
-      <p className="message-thread-body">{thread.body}</p>
+      <MessageBody message={thread} boardId={thread.board_id} cardTitles={cardTitles} />
 
       <div className="message-delivery-row">
         <span className={`message-delivery tone-${delivery.tone}`}>{delivery.label}</span>
@@ -99,7 +101,7 @@ export function MessageThread({ thread, boardLabel, cardTitle, compact = false, 
                 <span>Answer</span>
                 <time>{timeAgo(answer.created_at)}</time>
               </div>
-              <p>{answer.body}</p>
+              <MessageBody message={answer} boardId={thread.board_id} cardTitles={cardTitles} />
             </li>
           ))}
         </ol>

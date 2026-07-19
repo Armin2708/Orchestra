@@ -74,7 +74,65 @@
 .message-route { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--ink-soft); font-size: 11.5px; }
 .message-route b { color: var(--ink); font-weight: 600; }
 .message-route time { margin-left: auto; color: #9b968e; font-size: 10.5px; }
-.message-thread-body { margin: 9px 0 12px; color: var(--ink); font-size: 14px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-readable { margin: 9px 0 12px; color: var(--ink); }
+.message-readable-heading {
+  margin: 0 0 7px; color: var(--ink-soft); font-size: 10px; font-weight: 680;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.message-readable.tone-positive .message-readable-heading { color: #346538; }
+.message-readable.tone-attention .message-readable-heading { color: #956400; }
+.message-readable.tone-danger .message-readable-heading { color: #9F2F2D; }
+.message-readable-clause, .message-readable-clauses {
+  margin: 0; color: var(--ink); font-size: 14px; line-height: 1.68; overflow-wrap: anywhere;
+}
+.message-readable-clauses { display: grid; gap: 7px; padding: 0; list-style: none; }
+.message-readable-clauses li { position: relative; padding-left: 14px; }
+.message-readable-clauses li::before {
+  content: ''; position: absolute; left: 1px; top: 0.77em; width: 4px; height: 4px;
+  border-radius: 50%; background: #b8b4ac;
+}
+.message-token { vertical-align: baseline; }
+.message-token-card {
+  display: inline; padding: 1px 4px; border-radius: 4px; background: #F4F2ED; color: #4f4b45;
+  font-size: 0.92em; font-weight: 620; text-decoration: none; box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.message-token-card small { color: var(--ink-soft); font: inherit; font-weight: 500; }
+.message-token-card:hover { color: var(--ink); background: #ECE9E2; text-decoration: underline; }
+.message-token-technical {
+  display: inline-flex; align-items: baseline; gap: 4px; margin: 0 1px; padding: 1px 5px;
+  border: 1px solid #e7e3db; border-radius: 4px; background: #FAF9F7; color: var(--ink-soft);
+  font-size: 0.82em; line-height: 1.45;
+}
+.message-token-technical > span { font-size: 0.86em; letter-spacing: 0.035em; text-transform: uppercase; }
+.message-token-technical code { color: #4f4b45; font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; }
+.message-token-receipt, .message-token-status {
+  display: inline-block; padding: 0 4px; border-radius: 4px; font-size: 0.92em; font-weight: 650;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+.message-token-receipt { background: #F1F0EC; color: #65625d; }
+.message-token-status.tone-positive { background: #EDF3EC; color: #346538; }
+.message-token-status.tone-attention { background: #FBF3DB; color: #956400; }
+.message-token-status.tone-danger { background: #FDEBEC; color: #9F2F2D; }
+.message-raw { margin-top: 9px; color: var(--ink-soft); font-size: 10.5px; }
+.message-raw summary {
+  width: max-content; cursor: pointer; color: var(--ink-soft); font-weight: 580;
+  list-style-position: outside; user-select: none;
+}
+.message-raw summary:hover { color: var(--ink); }
+.message-raw-panel { position: relative; margin-top: 7px; }
+.message-raw pre {
+  max-height: 220px; margin: 0; overflow: auto; padding: 10px 74px 10px 11px;
+  border: 1px solid var(--line); border-radius: 6px; background: #F8F7F4; color: #5f5b54;
+  font: 10.5px/1.55 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
+.message-raw-panel button {
+  position: absolute; top: 6px; right: 6px; min-height: 26px; padding: 3px 7px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink-soft);
+  font: inherit; font-size: 9.5px;
+}
+.message-raw-panel button:hover { color: var(--ink); border-color: #ccc8bf; }
 .message-delivery-row { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 10.5px; }
 .message-delivery { padding: 2px 6px; }
 .message-delivery.tone-open { background: #FBF3DB; color: #956400; }
@@ -89,7 +147,9 @@
 .message-answer-meta b { color: var(--ink); font-weight: 600; }
 .message-answer-meta span { text-transform: uppercase; letter-spacing: 0.05em; }
 .message-answer-meta time { margin-left: auto; color: #9b968e; }
-.message-answers p { margin: 5px 0 0; color: var(--ink); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.message-answers .message-readable { margin: 6px 0 0; }
+.message-answers .message-readable-clause, .message-answers .message-readable-clauses { font-size: 13px; line-height: 1.6; }
+.message-answers .message-readable-heading { font-size: 9px; }
 .message-reply-action {
   margin-top: 12px; padding: 0; border: none; background: none; color: #1F6C9F;
   font: inherit; font-size: 11.5px; font-weight: 620;
@@ -157,7 +217,8 @@
 .card-conversation-list { display: grid; gap: 8px; }
 .card-conversation-empty { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
 .card-conversation-loading { color: var(--ink-soft); font-size: 12px; }
-.drawer .message-thread-body { font-size: 12.5px; }
+.drawer .message-readable-clause, .drawer .message-readable-clauses { font-size: 12.5px; }
+.drawer .message-token-card small { display: none; }
 .drawer .message-card-label, .drawer .message-board-label { display: none; }
 .drawer .message-kind-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
