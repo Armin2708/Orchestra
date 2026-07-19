@@ -12,7 +12,7 @@ import {
   uniqueSlashCommands,
   type AgentControlPanelName,
 } from './agentTerminalControls'
-import './claudeTerminal.css'
+import './agentTerminal.css'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -24,6 +24,10 @@ type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: nu
 const usageIn = (u: UsageSplit) => u.input_tokens + u.cache_read + u.cache_creation
 const usageSum = (u?: UsageSplit) => (u ? usageIn(u) + u.output_tokens : 0)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
+const readableError = (cause: unknown) => {
+  const raw = cause instanceof Error ? cause.message : 'The action could not be completed.'
+  try { return JSON.parse(raw).error ?? raw } catch { return raw }
+}
 
 // a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
 type PendingPermission = { id: string; tool: string; summary: string; title: string | null; at: string }
@@ -49,27 +53,80 @@ const PERMISSION_MODES = [
 // Model catalogs use `value`; `model` remains accepted for older daemon payloads.
 type ModelInfo = { value?: string; model?: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
 
-function ModelEffortControls({ info, onOpen }: {
+function ModelEffortControls({ agentId, info, working, onChange, onError }: {
+  agentId: number
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
-  onOpen: () => void
+  working: boolean
+  onChange: () => void
+  onError: (error: unknown) => void
 }) {
   const models = info?.models ?? []
-  if (models.length === 0 && !info?.effort) return null
+  if (models.length === 0) return null
+  const current = models.find((model) => {
+    const value = sessionModelValue(model)
+    return value === info?.model || model.resolvedModel === info?.model
+  })
+  const currentValue = current ? sessionModelValue(current) : info?.model ?? ''
+  const levels = current?.supportedEffortLevels ?? []
   return (
-    <button type="button" className="cc-effort-status" onClick={onOpen}
-      aria-label={`Open model and effort picker. Current effort: ${info?.effort ?? 'default'}`}>
-      Effort: {info?.effort ?? 'default'} <span className="cc-dim">· models</span>
-    </button>
+    <span className="cc-model-effort">
+      <select className="cc-mode-select" value={currentValue} aria-label="Model"
+        title="Model used by this session"
+        onChange={async (event) => {
+          if (!event.target.value) return
+          try {
+            await api('POST', `/agents/${agentId}/model`, { model: event.target.value })
+            onChange()
+          } catch (cause) { onError(cause) }
+        }}>
+        {!current && currentValue && <option value={currentValue}>{currentValue}</option>}
+        {models.map((model, index) => {
+          const value = sessionModelValue(model)
+          return value ? <option key={value || index} value={value}>{model.displayName ?? value}</option> : null
+        })}
+      </select>
+      {levels.length > 0 && (
+        <span className="cc-effort" role="group" aria-label="Reasoning effort"
+          title={working ? 'Wait for the current turn to finish' : 'Change reasoning effort'}>
+          {levels.map((level) => (
+            <button type="button" key={level} disabled={working}
+              className={`cc-effort-btn${(info?.effort ?? '') === level ? ' cc-effort-on' : ''}`}
+              onClick={async () => {
+                if ((info?.effort ?? '') === level) return
+                try {
+                  await api('POST', `/agents/${agentId}/effort`, { level })
+                  onChange()
+                } catch (cause) { onError(cause) }
+              }}>{level === 'medium' ? 'med' : level}</button>
+          ))}
+        </span>
+      )}
+    </span>
   )
 }
 
-function PermissionModeHint({ mode, onCycle }: { mode: string; onCycle: () => void }) {
+function PermissionModeHint({ agentId, mode, onChange, onError }: {
+  agentId: number
+  mode: string
+  onChange: () => void
+  onError: (error: unknown) => void
+}) {
   const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
   return (
-    <button type="button" className={`cc-mode cc-mode-${m.value}`} onClick={onCycle}
-      title={`${m.hint}. Shift+Tab to cycle.`}>
-      Access: {m.label} <span className="cc-dim">· Shift+Tab to change</span>
-    </button>
+    <span className="cc-mode">
+      <span className="cc-mode-dot" aria-hidden="true" />
+      <select className="cc-mode-select" value={m.value} aria-label="Permission mode"
+        title={`${m.hint}. Shift+Tab also cycles modes.`}
+        onChange={async (event) => {
+          try {
+            await api('POST', `/agents/${agentId}/permission-mode`, { mode: event.target.value })
+            onChange()
+          } catch (cause) { onError(cause) }
+        }}>
+        {PERMISSION_MODES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+      </select>
+      <span className="cc-dim">{m.hint}</span>
+    </span>
   )
 }
 
@@ -369,8 +426,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       setInput('')
       onChange()
     } catch (cause) {
-      const raw = cause instanceof Error ? cause.message : 'The message could not be sent.'
-      try { setSubmitError(JSON.parse(raw).error ?? raw) } catch { setSubmitError(raw) }
+      setSubmitError(readableError(cause))
     } finally {
       setSending(false)
     }
@@ -434,28 +490,24 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const renderLine = (l: Line, i: number) => {
     switch (l.kind) {
       case 'user':
-        return <div key={i} className="cc-line cc-user"><span className="cc-line-mark">YOU</span><p>{l.text}</p></div>
+        return <p key={i} className="cc-user">{l.text}</p>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
         const args = paren === -1 ? '' : l.text.slice(paren)
-        return <div key={i} className="cc-line cc-tool"><span className="cc-line-mark">TOOL</span><p><b>{name}</b>{args}</p></div>
+        return <p key={i} className="cc-tool"><b>{name}</b>{args}</p>
       }
       case 'tool_result':
-        return <div key={i} className={`cc-line cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}
-          title={transcriptExpanded ? undefined : 'Ctrl+O to expand transcript details'}>
-          <span className="cc-line-mark">RESULT</span><p>{l.text}</p>
-        </div>
+        return <p key={i} className={`cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}
+          title={transcriptExpanded ? undefined : 'Ctrl+O to expand transcript details'}>{l.text}</p>
       case 'thinking':
-        return <div key={i} className={`cc-line cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>
-          <span className="cc-line-mark">NOTE</span><p>{l.text}</p>
-        </div>
+        return <p key={i} className={`cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>{l.text}</p>
       case 'status':
-        return <div key={i} className="cc-line cc-status"><span className="cc-line-mark">SYSTEM</span><p>{l.text}</p></div>
+        return <p key={i} className="cc-status">{l.text}</p>
       case 'error':
-        return <div key={i} className="cc-line cc-error"><span className="cc-line-mark">ERROR</span><p>{l.text}</p></div>
+        return <p key={i} className="cc-error">{l.text}</p>
       default:
-        return <div key={i} className="cc-line cc-text"><span className="cc-line-mark">AGENT</span><p>{l.text}</p></div>
+        return <p key={i} className="cc-text">{l.text}</p>
     }
   }
   const hasConversationActivity = convo.some((line) => line.kind !== 'status')
@@ -480,16 +532,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           if (e.ctrlKey && key === 'l') {
             e.preventDefault(); jumpToLatest(); return
           }
-          if (e.key === 'Escape' && hired && working) {
-            e.preventDefault(); void interrupt()
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            if (hired && working) void interrupt()
+            else if (!embedded) onClose()
           }
         }}>
         <div className="terminal-col">
           <header className="cc-head">
-            <div className="cc-head-identity">
-              <span className="cc-head-kicker">SESSION</span>
-              <span><strong>{agent.name}</strong><small>{hired ? 'Orchestra model session' : 'Board conversation'} · {agent.status}</small></span>
-            </div>
+            <span className="cc-head-status" aria-hidden="true" />
+            <strong>{agent.name}</strong>
+            <span className="cc-head-dim">{hired ? `hired agent · ${agent.status}` : `board conversation · ${agent.status}`}</span>
             <div className="cc-head-actions">
               {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
                 <select className="cc-assign" defaultValue=""
@@ -513,13 +566,19 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   title="Stop this agent — terminates its session; a launched ticket moves to blocked"
                   onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>stop</button>
               )}
-              {!embedded && <button type="button" className="cc-head-close" onClick={onClose} aria-label="Close console" title="Close console">×</button>}
+              {!embedded && <button type="button" className="cc-head-close" onClick={onClose} aria-label="Close console" title="Close console">close</button>}
             </div>
           </header>
 
           <div className="cc-history-shell">
             <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
               <div className="terminal-feed" ref={feedRef}>
+                {hired && !hasConversationActivity && (
+                  <div className="cc-welcome">
+                    <p>Welcome to <b>Orchestra</b></p>
+                    <p className="cc-welcome-sub">{agent.name} · {agent.status} · autonomous session</p>
+                  </div>
+                )}
                 {convo.map(renderLine)}
                 {!working && !hasConversationActivity && (
                   <div className="cc-empty">
@@ -542,7 +601,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 ))}
                 {working && turn && (
                   <div className="cc-working" role="status">
-                    <span className="cc-working-track" aria-hidden="true"><span /></span>
+                    <span className="cc-working-dot" aria-hidden="true" />
                     <span>Working · {fmtSecs(turn.secs)}{turn.tokens > 0 && <> · {fmtTokens(turn.tokens)} output tokens</>}</span>
                     <button type="button" onClick={interrupt}>Interrupt</button>
                   </div>
@@ -559,7 +618,6 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               onClose={() => { setControlPanel(null); inputRef.current?.focus() }} onChange={onChange} />}
             {menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
-                <div className="cc-slash-heading"><strong>Available actions</strong><span>{filtered.length}</span></div>
                 {visibleCommands.map((c, i) => (
                   <button type="button" key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
                     className={i === menuIdx ? 'cc-slash-item active' : 'cc-slash-item'}
@@ -567,51 +625,44 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => activateCommand(c)}>
                     <span className="cc-slash-name">/{c.name}</span>
-                    <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>
+                    {c.source !== 'session' && <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>}
                     <span className="cc-slash-desc">{c.description}</span>
                   </button>
                 ))}
-                <div className="cc-slash-footer">
-                  <span>Choose an action, then Send to run it</span>
-                  {filtered.length > 10 && <span>{filtered.length - 10} more</span>}
-                </div>
+                {filtered.length > 10 && <div className="cc-slash-more">{filtered.length - 10} more · keep typing</div>}
               </div>
             )}
-            {hired && <div className="cc-prompt-meta">
-              <ModelEffortControls info={info} onOpen={() => setControlPanel('model')} />
-            </div>}
             <div className="cc-promptbox" data-mode={info?.permissionMode ?? 'bypassPermissions'}>
-              <span className="cc-prompt-label">MESSAGE</span>
+              <span className="cc-prompt-caret" aria-hidden="true">›</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
                 placeholder={convo.length === 0 ? (hired ? 'Describe what this agent should do…' : `Message ${agent.name}`) : 'Write a follow-up…'}
                 onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
                 onKeyDown={promptKeys} />
               <button type="button" className="cc-send" disabled={!input.trim() || sending}
-                onClick={() => void send()}>{sending ? 'Sending' : 'Send'}</button>
+                onClick={() => void send()}>{sending ? 'sending' : 'send'}</button>
             </div>
             {submitError && <p className="cc-submit-error" role="alert">{submitError}</p>}
           </div>
-          <div className="cc-statusline">
-            <span title={info?.cwd}>{modelLabel}{cwdLabel ? ` · ${cwdLabel}` : ''}</span>
-            <span>
+          <div className="cc-hints">
+            {hired
+              ? <span className="cc-controls">
+                  <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'}
+                    onChange={onChange} onError={(cause) => setSubmitError(readableError(cause))} />
+                  <ModelEffortControls agentId={agent.id} info={info} working={working} onChange={onChange}
+                    onError={(cause) => setSubmitError(readableError(cause))} />
+                </span>
+              : <span>enter to send · shift+enter for newline</span>}
+            <span className="cc-session-meta" title={info?.cwd}>
+              {cwdLabel || info?.cwd || ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
               {info?.usage && usageSum(info.usage.session) + usageSum(info.usage.turn) > 0 ? (() => {
                 // live turn accrual counts toward the session display so the split never lags the ↓ number
                 const s = info.usage.session, t = info.usage.turn
                 const inTok = usageIn(s) + usageIn(t), outTok = s.output_tokens + t.output_tokens
                 const cached = inTok > 0 ? Math.round(100 * (s.cache_read + t.cache_read) / inTok) : 0
                 const tip = `real API tokens this session — input ${fmtTokens(s.input_tokens + t.input_tokens)} · cache read ${fmtTokens(s.cache_read + t.cache_read)} · cache write ${fmtTokens(s.cache_creation + t.cache_creation)} · output ${fmtTokens(outTok)} (distinct from the board meter's injected-context estimate)`
-                return <span title={tip}>{fmtTokens(inTok)} in · {cached}% cached · {fmtTokens(outTok)} out</span>
-              })() : info && info.tokens > 0 ? `${fmtTokens(info.tokens)} output tokens` : ''}
+                return <span title={tip}> · {fmtTokens(inTok)} in · {cached}% cached · {fmtTokens(outTok)} out</span>
+              })() : info && info.tokens > 0 ? ` · ${fmtTokens(info.tokens)} output tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
-            </span>
-          </div>
-          <div className="cc-hints">
-            {hired
-              ? <PermissionModeHint mode={info?.permissionMode ?? 'bypassPermissions'} onCycle={() => void cyclePermissionMode()} />
-              : <span>enter to send · shift+enter for newline</span>}
-            <span className="cc-key-hints">
-              <button type="button" onClick={() => setTranscriptExpanded((expanded) => !expanded)}>Details {transcriptExpanded ? 'on' : 'off'}</button>
-              {hired && <button type="button" onClick={() => setControlPanel('model')}>Models</button>}
             </span>
           </div>
         </div>
