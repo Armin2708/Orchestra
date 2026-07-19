@@ -21,6 +21,9 @@ export interface AutowakeOptions {
 export class Autowake {
   private timer: ReturnType<typeof setTimeout> | null = null
   private fireAt: number | null = null
+  // Invalidates async schedules/fires that lost a race to a newer reschedule.
+  // A usage-limit wave can emit several limit_pause events in the same tick.
+  private generation = 0
 
   constructor(
     private db: Database.Database,
@@ -41,6 +44,7 @@ export class Autowake {
   pausedCount(): number { return this.pausedBoards().reduce((s, b) => s + b.n, 0) }
   scheduledAt(): string | null { return this.fireAt !== null ? new Date(this.fireAt).toISOString() : null }
   stop(): void {
+    this.generation += 1
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.fireAt = null
@@ -48,22 +52,30 @@ export class Autowake {
 
   async reschedule(): Promise<void> {
     this.stop()
+    const generation = this.generation
     if (!autowakeEnabled() || this.pausedCount() === 0) return
     const now = this.opts.now ?? Date.now
     const usage = await (this.opts.usage ?? claudeUsage)(this.db)
-    const resetsAt = usage.usage?.five_hour?.resets_at ? Date.parse(usage.usage.five_hour.resets_at) : NaN
+    if (generation !== this.generation) return
+    // claudeUsage can return a persisted stale payload while its live poll is offline.
+    // That payload is display-only evidence, never proof that a reset happened.
+    const live = usage.usage_error === null && !usage.usage?.stale_since ? usage.usage : null
+    const resetsAt = live?.five_hour?.resets_at ? Date.parse(live.five_hour.resets_at) : NaN
     // fire past the reset, jittered, so the post-reset poll cannot see a pre-reset cache
     const jitter = this.opts.jitterMs?.() ?? 60_000 + Math.floor(Math.random() * 30_000)
     const at = Number.isFinite(resetsAt)
       ? Math.max(resetsAt, now()) + jitter
       : now() + (this.opts.retryMs ?? 5 * 60_000) // usage unavailable — poll again soon
     this.fireAt = at
-    this.timer = setTimeout(() => void this.fire(), Math.max(0, at - now()))
+    this.timer = setTimeout(() => {
+      if (generation === this.generation) void this.fire()
+    }, Math.max(0, at - now()))
     this.timer.unref?.()
   }
 
   // exposed for tests; production entry is the timer armed by reschedule()
   async fire(): Promise<void> {
+    const generation = this.generation
     this.timer = null
     this.fireAt = null
     if (!autowakeEnabled()) return
@@ -72,7 +84,9 @@ export class Autowake {
     // the reset must be real: a stale clock or lagging poll still showing a saturated
     // window means waking now would just re-kill every agent — skip and re-arm
     const usage = await (this.opts.usage ?? claudeUsage)(this.db)
-    const five = usage.usage?.five_hour
+    if (generation !== this.generation) return
+    const live = usage.usage_error === null && !usage.usage?.stale_since ? usage.usage : null
+    const five = live?.five_hour
     if (!five || five.utilization >= 100) { await this.reschedule(); return }
     let woke = 0
     let queued = 0

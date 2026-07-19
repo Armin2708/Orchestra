@@ -90,6 +90,36 @@ it('skips and reschedules when the window still reads saturated', async () => {
   expect(t.auto.scheduledAt()).not.toBeNull() // re-armed for the next window
 })
 
+it('never treats persisted stale usage as a live reset confirmation', async () => {
+  const stale = usageAt(4, new Date(T0 + 60_000).toISOString())
+  stale.usage!.stale_since = new Date(T0 - 60_000).toISOString()
+  stale.usage_error = 'offline'
+  const t = setup({ usage: () => stale })
+  t.pause('sleepy-otter')
+
+  await t.auto.fire()
+
+  expect(t.woken).toHaveLength(0)
+  expect(t.auto.scheduledAt()).toBe(new Date(T0 + 5 * 60_000).toISOString())
+  t.auto.stop()
+})
+
+it('collapses concurrent reschedules into one live timer', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(T0)
+  let utilization = 100
+  const resets = new Date(T0 + 60_000).toISOString()
+  const t = setup({ usage: () => usageAt(utilization, resets), now: () => Date.now() })
+  t.pause('sleepy-otter')
+
+  await Promise.all([t.auto.reschedule(), t.auto.reschedule()])
+  utilization = 4
+  await vi.advanceTimersByTimeAsync(2 * 60_000)
+
+  expect(t.woken).toEqual([1])
+  t.auto.stop()
+})
+
 it('a queued wake leaves agents paused, so the timer re-arms for the next window', async () => {
   const db = openDb(':memory:')
   const bus = new EventEmitter()
