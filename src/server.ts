@@ -19,10 +19,11 @@ import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
+import { registerAgentSessionControlRoutes, type AgentSessionControlHost } from './agent-session-controls.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
-export interface ConductorLike {
+export interface ConductorLike extends AgentSessionControlHost {
   isHired(agentId: number): boolean
   hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string; cardId?: number }): any
   deliver(agentId: number, msg: any): boolean
@@ -78,6 +79,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
   }
   const maestro = conductor?.(server.bus)
+  registerAgentSessionControlRoutes(server, maestro)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
 

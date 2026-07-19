@@ -809,6 +809,39 @@ export class Conductor {
     }
   }
 
+  async mcpStatus(agentId: number): Promise<unknown | null> {
+    const h = this.hired.get(agentId)
+    if (!h) return null
+    return h.query.mcpServerStatus()
+  }
+
+  async toggleMcpServer(agentId: number, name: string, enabled: boolean): Promise<unknown | null> {
+    const h = this.hired.get(agentId)
+    if (!h) return null
+    await h.query.toggleMcpServer(name, enabled)
+    return h.query.mcpServerStatus()
+  }
+
+  async reconnectMcpServer(agentId: number, name: string): Promise<unknown | null> {
+    const h = this.hired.get(agentId)
+    if (!h) return null
+    await h.query.reconnectMcpServer(name)
+    return h.query.mcpServerStatus()
+  }
+
+  async reloadPlugins(agentId: number): Promise<unknown | null> {
+    const h = this.hired.get(agentId)
+    if (!h) return null
+    const result = await h.query.reloadPlugins()
+    if (Array.isArray(result?.commands)) {
+      h.commands = result.commands
+        .filter((command: any) => typeof command?.name === 'string')
+        .map((command: any) => ({ name: command.name, description: command.description ?? '' }))
+      this.emit(h.boardId, 'transcript', { agent_id: agentId })
+    }
+    return result
+  }
+
   sessionAccounting(agentId: number): { usage: UsageSplit; costUsd: number } | null {
     const active = this.hired.get(agentId)
     if (active) return { usage: { ...active.sessionUsage }, costUsd: active.sessionCostUsd }
