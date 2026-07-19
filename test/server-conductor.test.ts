@@ -46,3 +46,43 @@ it('hire returns 501 when no conductor is wired (test/inject contexts)', async (
   await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
   expect((await s.inject({ method: 'POST', url: '/api/v1/boards/1/hire', payload: {} })).statusCode).toBe(501)
 })
+
+it('never wakes hired agents for announcements or notifications; asks and confirmed swarms are intentional', async () => {
+  const db = openDb(':memory:')
+  let stub!: ReturnType<typeof stubConductor>
+  const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
+  await s.ready()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const a1 = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'amber-fox' } })).json()
+  const a2 = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'jade-lynx' } })).json()
+
+  const note = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', body: 'FYI only',
+  } })).json()
+  const notification = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', to: 'jade-lynx', kind: 'notify', body: 'ownership changed',
+  } })).json()
+  expect(note).toMatchObject({ kind: 'announce', recipient_count: 0, delivered_count: 0 })
+  expect(notification).toMatchObject({ kind: 'notify', recipient_count: 1, delivered_count: 0, delivered_at: null })
+  expect(stub.delivered).toHaveLength(0)
+
+  await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', to: 'jade-lynx', kind: 'ask', body: 'is the interface stable?',
+  } })
+  expect(stub.delivered).toHaveLength(1)
+  expect(stub.delivered[0]).toMatchObject({ id: a2.id, msg: { kind: 'ask' } })
+
+  const denied = await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', kind: 'swarm', body: 'review everything',
+  } })
+  expect(denied.statusCode).toBe(409)
+  expect(stub.delivered).toHaveLength(1)
+
+  const swarm = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', kind: 'swarm', confirm: true, body: 'review everything',
+  } })).json()
+  expect(swarm).toMatchObject({ recipient_count: 1, delivered_count: 1 })
+  expect(stub.delivered).toHaveLength(2)
+  expect(stub.delivered[1]).toMatchObject({ id: a2.id, msg: { kind: 'swarm' } })
+  expect(stub.delivered.some((d) => d.id === a1.id && d.msg.id === swarm.id)).toBe(false)
+})

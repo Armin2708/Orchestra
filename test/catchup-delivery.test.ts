@@ -65,6 +65,26 @@ it('drains mail that arrived while the agent had no live session', () => {
   expect(t.db.prepare(`SELECT * FROM deliveries WHERE message_id=1 AND agent_id=1`).get()).toBeTruthy()
   const userLines = t.conductor.transcript(a.id).lines.filter((l) => l.kind === 'user')
   expect(userLines.some((l) => l.text.includes('still on for the merge?') && l.text.includes('asker-owl'))).toBe(true)
+  expect(userLines.some((l) => l.text.includes('reply required') && l.text.includes('no acknowledgment-only reply'))).toBe(true)
+})
+
+it('queues notifications until the next natural turn and never asks for a reply', () => {
+  const t = setup()
+  t.db.prepare(`INSERT INTO agents (board_id, name, kind, status) VALUES (1, 'echo-fox', 'hired', 'idle')`).run()
+  t.db.prepare(`INSERT INTO agents (board_id, name) VALUES (1, 'notifier-owl')`).run()
+  t.db.prepare(`INSERT INTO messages (board_id, from_agent_id, to_agent_id, kind, body) VALUES (1, 2, 1, 'notify', 'parser ownership moved')`).run()
+
+  const a = t.conductor.hire({ boardId: 1, cwd: '/p', name: 'echo-fox' })
+  expect(t.conductor.transcript(a.id).lines.filter((l) => l.kind === 'user')).toHaveLength(0)
+  expect((t.db.prepare(`SELECT delivered_at FROM messages WHERE id=1`).get() as any).delivered_at).toBeNull()
+
+  expect(t.conductor.task(a.id, 'continue the current task')).toBe(true)
+  const userLines = t.conductor.transcript(a.id).lines.filter((l) => l.kind === 'user')
+  expect(userLines).toHaveLength(1)
+  expect(userLines[0].text).toContain('notification #1 from notifier-owl: "parser ownership moved" — no reply required')
+  expect(userLines[0].text).toContain('continue the current task')
+  expect((t.db.prepare(`SELECT delivered_at FROM messages WHERE id=1`).get() as any).delivered_at).not.toBeNull()
+  expect(t.db.prepare(`SELECT 1 FROM deliveries WHERE message_id=1 AND agent_id=1`).get()).toBeTruthy()
 })
 
 it('leaves bounced and already-delivered mail alone', () => {

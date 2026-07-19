@@ -3,7 +3,7 @@
 Orchestra injects context into every agent session (rules, board snapshot, message
 deliveries, nudges, stop-block reasons). The token-diet milestone (#34–#38) shrinks
 those injections without weakening coordination compliance. This report proves both
-halves on the current shipping build: **50.3% fewer injected tokens per session,
+halves on the current shipping build: **50.1% fewer injected tokens per session,
 with all 11 compliance gates unchanged.** The ≥50% acceptance target is enforced
 by CI, so documentation can no longer drift ahead of the implementation.
 
@@ -40,9 +40,9 @@ supported rollback mode and fails when compact mode saves less than 50%.
 |---|---|---|---|
 | session_start (rules + board dump) | 770 | 322 | 58.2% |
 | user_prompt_submit (nudges) | 38 | 38 | 0% |
-| post_tool_use (messages + nudges) | 49 | 49 | 0% |
+| post_tool_use (messages + nudges) | 51 | 51 | 0% |
 | stop (block reasons, 4 turn-ends) | 37 | 37 | 0% |
-| **total** | **893** | **444** | **50.3%** |
+| **total** | **895** | **447** | **50.1%** |
 
 Measured locally on 2026-07-19 by `node scripts/ab-token-diet.mjs`. Per-event
 token counts are rounded independently; the total is calculated from the full
@@ -96,6 +96,20 @@ injected tokens across boards, with a per-agent breakdown in the tooltip. It rea
 `GET /api/v1/boards/:id/telemetry` and stays hidden on daemons that predate the
 endpoint.
 
+## Fan-out discipline
+
+The larger token risk is multiplicative work, not the small hook payload itself. Message intent is therefore part of the persisted protocol:
+
+| kind | recipients | wake behavior | reply behavior |
+|---|---|---|---|
+| `ask` | one named agent, or the human when targetless | immediate for a hired agent; next hook for a session agent | substantive reply required |
+| `task` | one named agent | immediate | act on it; no acknowledgment |
+| `notify` | one named agent | queued until the next natural turn | no reply |
+| `announce` | board only | never | none |
+| `swarm` | snapshot of currently live agents | requires explicit confirmation, then wakes that snapshot | substantive results only |
+
+Swarm recipient snapshots prevent agents that join later from inheriting old fan-out. Per-recipient delivery rows provide mechanical receipt counts, so generated acknowledgments are unnecessary. Autonomous agents remain unlimited by default; `ORCHESTRA_MAX_LAUNCHED` is an explicit operator override, not a built-in ceiling.
+
 ## Rollback
 
 The compact rules + snapshot (#35) can be reverted per-process without a deploy:
@@ -114,7 +128,7 @@ export ORCHESTRA_VERBOSE_RULES=1
   reverting merge `10c07de`.
 - The A/B suite (`test/token-diet-ab.test.ts`) runs the verbose arm through this
   exact flag on every test run, so rollback parity is retested continuously.
-  Measured on the release candidate today: verbose arm 893 tok vs compact 444 tok
+  Measured on the release candidate today: verbose arm 895 tok vs compact 447 tok
   per session.
 - 2026-07-19, #53 (shell-safe messages): every example body in the rule variants is
   single-quoted and the conductor/verbose variants carry a prefer-`--stdin` note —

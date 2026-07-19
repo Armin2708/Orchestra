@@ -36,6 +36,8 @@ describe('compact rules', () => {
     for (const d of DIRECTIVES) expect(text).toContain(d)
     expect(text).toContain('prerequisite steps')
     expect(text).toContain('orchestra reply <msg-id>')
+    expect(text).toContain('no acknowledgment')
+    expect(text).toContain('Notifications need no reply')
     expect(text).toContain('npx -y orchestra-board')
   })
 

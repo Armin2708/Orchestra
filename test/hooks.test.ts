@@ -43,6 +43,27 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
   expect(payload.hookSpecificOutput.additionalContext).toContain('status?')
 })
 
+it('queued notifications arrive on a natural hook turn without requesting a reply', async () => {
+  const hooks = await import('../src/hooks.js')
+  vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess-notify', cwd: projectRoot }))
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
+
+  await hooks.runHook('session-start')
+  const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess-notify.json'), 'utf8'))
+  await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, to: sess.agent_name, kind: 'notify', body: 'schema owner changed' }),
+  })
+
+  out.length = 0
+  await hooks.runHook('user-prompt-submit')
+  const payload = JSON.parse(out.join('\n'))
+  expect(payload.hookSpecificOutput.additionalContext).toContain('orchestra notification')
+  expect(payload.hookSpecificOutput.additionalContext).toContain('no reply required')
+  expect(payload.hookSpecificOutput.additionalContext).not.toContain('reply required with')
+})
+
 it('stop does not consume messages; user-prompt-submit delivers them', async () => {
   const hooks = await import('../src/hooks.js')
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess2', cwd: projectRoot }))

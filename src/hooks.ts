@@ -154,10 +154,18 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`, { telemetry: takeSpool(input.session_id) })
-  const lines = r.messages.map((m: any) =>
-    `orchestra message from ${m.from_name ?? 'human'}: "${m.body}"` +
-    (m.reply_to ? ` (this answers your msg #${m.reply_to})`
-      : ` — answer it now with: orchestra reply ${m.id} "<answer>", then continue your task.`))
+  const lines = r.messages.map((m: any) => {
+    const from = m.from_name ?? 'human'
+    if (m.reply_to || m.kind === 'reply')
+      return `orchestra reply from ${from}: "${m.body}" (answers your msg #${m.reply_to}) — no response required unless a follow-up is materially needed.`
+    if (m.kind === 'notify')
+      return `orchestra notification #${m.id} from ${from}: "${m.body}" — no reply required.`
+    if (m.kind === 'task')
+      return `orchestra task from ${from}: "${m.body}" — act on it; do not send an acknowledgment-only reply.`
+    if (m.kind === 'swarm')
+      return `explicit orchestra swarm request from ${from}: "${m.body}" — reply only with a substantive result using: orchestra reply ${m.id} '<answer>'; never send an acknowledgment-only reply.`
+    return `direct orchestra ask from ${from}: "${m.body}" — reply required with: orchestra reply ${m.id} '<answer>'; no acknowledgment-only reply.`
+  })
   // one-time nudge if the agent is working without a card; recurring nudge if its card is stale
   const nudged = sessFile(input.session_id) + '.nudged'
   const stale = sessFile(input.session_id) + '.stale'

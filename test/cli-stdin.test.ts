@@ -90,7 +90,32 @@ it('note/reply --stdin deliver byte-identical bodies end to end', async () => {
   const snap = await (await fetch(`http://127.0.0.1:${port}/api/v1/boards/${boards[0].id}/snapshot`)).json() as any
   const thread = snap.threads.find((t: any) => t.id === noteId)
   expect(thread.body).toBe(TRICKY) // byte-identical: backticks and $() intact
+  expect(thread).toMatchObject({ kind: 'announce', recipient_count: 0, delivered_count: 0 })
   expect(thread.replies[0].body).toBe(TRICKY + ' (reply)')
+  expect(thread.replies[0].kind).toBe('reply')
+}, 30_000)
+
+it('agent notifications queue without replies and swarms require confirmation', async () => {
+  const b = await (await fetch(`http://127.0.0.1:${port}/api/v1/boards/resolve`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project_path: fs.realpathSync(proj) }),
+  })).json() as any
+  await fetch(`http://127.0.0.1:${port}/api/v1/agents/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: b.id, name: 'target-owl' }),
+  })
+
+  const notice = await cli(['notify', 'target-owl', '--stdin'], TRICKY)
+  expect(notice.code, notice.err).toBe(0)
+  expect(notice.out).toContain('no reply requested')
+  const noticeRow = (server as any).db.prepare(`SELECT kind, delivered_at FROM messages WHERE body=? ORDER BY id DESC LIMIT 1`).get(TRICKY)
+  expect(noticeRow).toMatchObject({ kind: 'notify', delivered_at: null })
+
+  const denied = await cli(['swarm', 'review the release'])
+  expect(denied.code).toBe(1)
+  expect(denied.err).toContain('confirm=true')
+  const confirmed = await cli(['swarm', 'review the release', '--confirm'])
+  expect(confirmed.code).toBe(0)
+  expect(confirmed.out).toContain('swarm sent to 1 agent')
 }, 30_000)
 
 it('argv body with leak signature warns on stderr but still delivers', async () => {

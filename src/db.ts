@@ -99,10 +99,16 @@ export function openDb(file: string): Database.Database {
     from_agent_id INTEGER,
     to_agent_id INTEGER,
     card_id INTEGER,
+    kind TEXT NOT NULL DEFAULT 'ask',
     body TEXT NOT NULL,
     reply_to INTEGER,
     delivered_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS message_targets (
+    message_id INTEGER NOT NULL,
+    agent_id INTEGER NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
   );
   `)
   try { db.exec(`ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'session'`) } catch { /* exists */ }
@@ -114,5 +120,8 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN model TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN effort TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE cards ADD COLUMN branch TEXT`) } catch { /* exists */ }
+  // Existing targeted mail retains ask semantics. Old targetless rows become inert for
+  // agents because only explicit, snapshotted swarms enter the fan-out inbox path.
+  try { db.exec(`ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'ask'`) } catch { /* exists */ }
   return db
 }

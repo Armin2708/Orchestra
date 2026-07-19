@@ -142,6 +142,16 @@ it('caps concurrent launches and drains the queue on exit', async () => {
   await until(() => t.card(b).column_name === 'review')
 })
 
+it('does not cap agents unless ORCHESTRA_MAX_LAUNCHED is explicitly set', () => {
+  const t = setup()
+  const results = Array.from({ length: 5 }, (_, i) => {
+    const id = t.mkCard(`parallel ${i}`)
+    return t.conductor.launch({ boardId: 1, cardId: id, cwd: '/p', brief: `work ${i}` })
+  })
+  expect(results.every((r) => r.agent)).toBe(true)
+  expect(t.sessions).toHaveLength(5)
+})
+
 it('adoptLaunch re-binds a resumed agent to its ticket so exit parks instead of deleting', async () => {
   const t = setup()
   const id = t.mkCard('survivor')

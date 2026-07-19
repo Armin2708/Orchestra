@@ -51,6 +51,9 @@ export interface ServerOptions {
   autowakeAt?: () => string | null
 }
 
+const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
+type MessageKind = 'ask' | 'reply' | 'task' | 'notify' | 'announce' | 'swarm'
+
 export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
   const server = Fastify()
   server.decorate('db', db)
@@ -225,7 +228,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
         LEFT JOIN agents fa ON fa.id = m.from_agent_id
         LEFT JOIN agents ta ON ta.id = m.to_agent_id
-        WHERE m.board_id=? AND m.reply_to IS NULL
+        WHERE m.board_id=? AND m.kind='ask' AND m.reply_to IS NULL
           AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id)
         ORDER BY m.id`).all(id),
       // undelivered mail to agents who already left — actionable, not just history
@@ -458,7 +461,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       // the human-readable trail survives the ephemeral verifier: a broadcast board note
       const noteBody = `verification of card #${card.id} "${card.title}": ${String(verdict).toUpperCase()} — ` +
         `${met}/${criteria.length} criteria met${tested ? ', test suite run' : ''}${by ? ` (by ${by})` : ''}`
-      const { lastInsertRowid } = db.prepare(`INSERT INTO messages (board_id, card_id, body) VALUES (?, ?, ?)`)
+      const { lastInsertRowid } = db.prepare(`INSERT INTO messages (board_id, card_id, kind, body) VALUES (?, ?, 'announce', ?)`)
         .run(card.board_id, card.id, noteBody)
       emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
       emit(card.board_id, 'card', { ...card, verification: verificationFor(card.id) })
@@ -547,7 +550,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (updated.owner_agent_id) {
         const body = `Review feedback on card #${card.id} "${card.title}": ${note} — the card is back in in_progress; address the feedback and move it to review again when ready.`
         const { lastInsertRowid } = db.prepare(`
-          INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
+          INSERT INTO messages (board_id, to_agent_id, card_id, kind, body) VALUES (?, ?, ?, 'task', ?)`)
           .run(card.board_id, updated.owner_agent_id, card.id, body)
         let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
         if (maestro?.isHired(updated.owner_agent_id) && maestro.deliver(updated.owner_agent_id, { ...msg, from_name: null })) {
@@ -632,7 +635,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const brief = assignmentBrief(updated)
     // every assignment is a board message — the you→agent arrow shows for all agent kinds
     const { lastInsertRowid } = db.prepare(`
-      INSERT INTO messages (board_id, to_agent_id, card_id, body) VALUES (?, ?, ?, ?)`)
+      INSERT INTO messages (board_id, to_agent_id, card_id, kind, body) VALUES (?, ?, ?, 'task', ?)`)
       .run(card.board_id, agentRow.id, card.id, brief)
     let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
     if (maestro?.isHired(agentRow.id) && maestro.deliver(agentRow.id, { ...msg, from_name: null })) {
@@ -731,9 +734,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return r
     })
 
-  server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number } }>(
+  server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number; kind?: MessageKind; confirm?: boolean } }>(
     '/api/v1/messages', (req, reply) => {
-      const { board_id, from, to, card_id, body, reply_to } = req.body
+      const { board_id, from, to, card_id, body, reply_to, confirm } = req.body
+      const requestedKind = req.body.kind
+      if (requestedKind && !MESSAGE_KINDS.has(requestedKind))
+        return reply.code(400).send({ error: `kind must be one of: ${[...MESSAGE_KINDS].join(', ')}` })
+      const kind: MessageKind = reply_to ? 'reply' : (requestedKind ?? (to ? 'ask' : 'announce'))
+      if (reply_to && requestedKind && requestedKind !== 'reply')
+        return reply.code(400).send({ error: 'a message with reply_to must have kind "reply"' })
+      if (!reply_to && kind === 'reply')
+        return reply.code(400).send({ error: 'kind "reply" requires reply_to' })
+      if ((kind === 'notify' || kind === 'task') && !to)
+        return reply.code(400).send({ error: `kind "${kind}" requires exactly one recipient` })
+      if ((kind === 'announce' || kind === 'swarm') && to)
+        return reply.code(400).send({ error: `kind "${kind}" cannot have a recipient` })
       const fromA = agentByName(board_id, from), toA = agentByName(board_id, to)
       // a typo'd recipient must fail loudly, not silently become a broadcast
       if (to && !toA) return reply.code(400).send({ error: `no agent named "${to}" on this board` })
@@ -746,24 +761,29 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
         toId = orig?.from_agent_id ?? null
       }
+      // A swarm is deliberate fan-out to the agents live at send time. Snapshotting the
+      // recipients prevents agents that join later from consuming stale broadcast work.
+      const swarmTargets = kind === 'swarm'
+        ? (db.prepare(`SELECT id FROM agents WHERE board_id=? AND status NOT IN ('gone', 'paused_limit') ORDER BY id`).all(board_id) as any[])
+            .map((a) => Number(a.id)).filter((id) => id !== fromA?.id)
+        : []
+      if (kind === 'swarm' && confirm !== true) {
+        return reply.code(409).send({
+          error: `swarm would wake ${swarmTargets.length} agent${swarmTargets.length === 1 ? '' : 's'}; resend with confirm=true`,
+          recipient_count: swarmTargets.length,
+        })
+      }
       const { lastInsertRowid } = db.prepare(`
-        INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, body, reply_to)
-        VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(board_id, fromA?.id ?? null, toId, card_id ?? null, body, reply_to ?? null)
+        INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, kind, body, reply_to)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(board_id, fromA?.id ?? null, toId, card_id ?? null, kind, body, reply_to ?? null)
       let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
+      const addSwarmTarget = db.prepare(`INSERT INTO message_targets (message_id, agent_id) VALUES (?, ?)`)
+      db.transaction(() => swarmTargets.forEach((id) => addSwarmTarget.run(msg.id, id)))()
       // hired agents get instant delivery — no waiting for a hook to fire
       const targets = new Set<number>()
-      if (toA && maestro?.isHired(toA.id)) targets.add(toA.id)
-      if (reply_to) {
-        const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
-        if (orig?.from_agent_id && maestro?.isHired(orig.from_agent_id)) targets.add(orig.from_agent_id)
-      }
-      if (!toA && !reply_to) {
-        // broadcast: every hired agent on the board except the sender hears it now
-        for (const a of db.prepare(`SELECT id FROM agents WHERE board_id=? AND kind='hired' AND status != 'gone'`).all(board_id) as any[]) {
-          if (a.id !== fromA?.id && maestro?.isHired(a.id)) targets.add(a.id)
-        }
-      }
+      if ((kind === 'ask' || kind === 'reply' || kind === 'task') && toId && maestro?.isHired(toId)) targets.add(toId)
+      if (kind === 'swarm') for (const id of swarmTargets) if (maestro?.isHired(id)) targets.add(id)
       const markDelivered = db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
       for (const id of targets) {
         if (maestro!.deliver(id, { ...msg, from_name: fromA?.name ?? null })) {
@@ -772,6 +792,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         }
       }
       if (targets.size) msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
+      msg.recipient_count = kind === 'swarm' ? swarmTargets.length : toId ? 1 : 0
+      msg.delivered_count = (db.prepare(`SELECT COUNT(*) AS c FROM deliveries WHERE message_id=?`).get(msg.id) as any).c
       emit(board_id, 'message', msg)
       return msg
     })
@@ -881,17 +903,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     WHERE m.board_id = ? AND (m.from_agent_id IS NULL OR m.from_agent_id != ?)
       AND (m.to_agent_id = ?
            OR m.reply_to IN (SELECT id FROM messages WHERE from_agent_id = ?)
-           OR (m.to_agent_id IS NULL AND m.reply_to IS NULL))`
+           OR (m.kind = 'swarm' AND EXISTS (
+             SELECT 1 FROM message_targets mt WHERE mt.message_id=m.id AND mt.agent_id=?)))`
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/inbox', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
-    return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id)
+    return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id, a.id)
   })
 
   server.delete<{ Params: { id: string } }>('/api/v1/messages/:id', (req, reply) => {
     const id = Number(req.params.id)
     const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(id) as any
     if (!msg) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM deliveries WHERE message_id=? OR message_id IN (SELECT id FROM messages WHERE reply_to=?)`).run(id, id)
+    db.prepare(`DELETE FROM message_targets WHERE message_id=? OR message_id IN (SELECT id FROM messages WHERE reply_to=?)`).run(id, id)
     db.prepare(`DELETE FROM messages WHERE reply_to=?`).run(id)
     db.prepare(`DELETE FROM messages WHERE id=?`).run(id)
     emit(msg.board_id, 'message', { deleted: id })
@@ -920,6 +945,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.delete<{ Params: { id: string } }>('/api/v1/boards/:id', (req, reply) => {
     const id = Number(req.params.id)
     if (!db.prepare(`SELECT 1 FROM boards WHERE id=?`).get(id)) return reply.code(404).send({ error: 'not found' })
+    db.prepare(`DELETE FROM deliveries WHERE message_id IN (SELECT id FROM messages WHERE board_id=?)`).run(id)
+    db.prepare(`DELETE FROM message_targets WHERE message_id IN (SELECT id FROM messages WHERE board_id=?)`).run(id)
     db.prepare(`DELETE FROM messages WHERE board_id=?`).run(id)
     db.prepare(`DELETE FROM card_events WHERE card_id IN (SELECT id FROM cards WHERE board_id=?)`).run(id)
     db.prepare(`DELETE FROM cards WHERE board_id=?`).run(id)
@@ -954,7 +981,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
     const messages = db.prepare(inboxSql +
       ` AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.id AND d.agent_id = ?) ORDER BY m.id`)
-      .all(a.board_id, a.id, a.id, a.id, a.id) as any[]
+      .all(a.board_id, a.id, a.id, a.id, a.id, a.id) as any[]
     const mark = db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
     const stamp = db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`)
     db.transaction(() => messages.forEach((m) => { mark.run(m.id, a.id); stamp.run(m.id) }))()
@@ -1035,7 +1062,11 @@ function timelineSummary(r: { source: string; type: string; agent: string | null
 
 export function listThreads(db: Database.Database, boardId: number) {
   const msgs = db.prepare(`
-    SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
+    SELECT m.*, fa.name AS from_name, ta.name AS to_name,
+      CASE WHEN m.to_agent_id IS NOT NULL THEN 1 ELSE
+        (SELECT COUNT(*) FROM message_targets mt WHERE mt.message_id=m.id) END AS recipient_count,
+      (SELECT COUNT(*) FROM deliveries d WHERE d.message_id=m.id) AS delivered_count
+    FROM messages m
     LEFT JOIN agents fa ON fa.id = m.from_agent_id
     LEFT JOIN agents ta ON ta.id = m.to_agent_id
     WHERE m.board_id=? ORDER BY m.id`).all(boardId) as any[]

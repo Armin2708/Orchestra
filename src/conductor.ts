@@ -53,7 +53,7 @@ type Hired = {
   boardId: number
   name: string
   cwd: string
-  push: (text: string) => void
+  push: (text: string, excludeMessageId?: number) => void
   end: () => void
   interrupt: () => Promise<void>
   // live SDK handle — shared control surface (setPermissionMode here, setModel for #41); never serialize it
@@ -191,8 +191,10 @@ export class Conductor {
       .run(cardId, agentId, type, JSON.stringify(payload))
   }
   private maxLaunched(): number {
-    const n = Number(process.env.ORCHESTRA_MAX_LAUNCHED ?? 3)
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3
+    const configured = process.env.ORCHESTRA_MAX_LAUNCHED
+    if (configured === undefined || configured.trim() === '') return Number.POSITIVE_INFINITY
+    const n = Number(configured)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : Number.POSITIVE_INFINITY
   }
   private launchedCount(): number {
     return [...this.hired.values()].filter((h) => h.cardId !== null).length
@@ -442,10 +444,15 @@ export class Conductor {
 
     const hired: Hired = {
       agentId: agent.id, boardId: opts.boardId, name, cwd: opts.cwd,
-      push: (text: string) => {
-        log('user', text)
+      push: (text: string, excludeMessageId?: number) => {
+        const notifications = this.pendingNotifications(agent.id, excludeMessageId)
+        const noticeText = notifications.map((m) =>
+          `orchestra notification #${m.id} from ${m.from_name ?? 'human'}: "${m.body}" — no reply required.`).join('\n')
+        const payload = noticeText ? `${noticeText}\n\n${text}` : text
+        log('user', payload)
         if (hired.turnStart === null) { hired.turnStart = Date.now(); hired.turnTokens = 0 }
-        input.push(text)
+        input.push(payload)
+        if (notifications.length) this.markNotifications(agent.id, notifications.map((m) => m.id))
       },
       end: input.end,
       interrupt: async () => { try { await (q as any).interrupt() } catch { /* already stopped */ } },
@@ -597,11 +604,12 @@ export class Conductor {
   // an effort-restart swap gap or daemon downtime is never in any instant-delivery target set and
   // would strand silently (alive agents aren't dead_letters). Mail already dead-lettered while the
   // agent was gone (has a system bounce reply) stays quiet — the sender was told it went nowhere.
+  // Notifications deliberately stay queued until some other prompt creates a natural turn.
   private deliverPending(agentId: number): void {
     const pending = this.db.prepare(`
       SELECT m.*, fa.name AS from_name FROM messages m
       LEFT JOIN agents fa ON fa.id = m.from_agent_id
-      WHERE m.to_agent_id=? AND m.delivered_at IS NULL
+      WHERE m.to_agent_id=? AND m.delivered_at IS NULL AND m.kind IN ('ask', 'reply', 'task')
         AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id AND r.from_agent_id IS NULL)
       ORDER BY m.id`).all(agentId) as any[]
     const stampDelivery = this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
@@ -613,14 +621,38 @@ export class Conductor {
     }
   }
 
+  private pendingNotifications(agentId: number, excludeMessageId?: number): any[] {
+    return this.db.prepare(`
+      SELECT m.*, fa.name AS from_name FROM messages m
+      LEFT JOIN agents fa ON fa.id=m.from_agent_id
+      WHERE m.to_agent_id=? AND m.kind='notify' AND m.delivered_at IS NULL
+        AND (? IS NULL OR m.id != ?)
+      ORDER BY m.id`).all(agentId, excludeMessageId ?? null, excludeMessageId ?? null) as any[]
+  }
+
+  private markNotifications(agentId: number, messageIds: number[]): void {
+    const mark = this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
+    const stamp = this.db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`)
+    this.db.transaction(() => messageIds.forEach((id) => { mark.run(id, agentId); stamp.run(id) }))()
+  }
+
   // instant delivery — no hooks, straight into the agent's conversation
-  deliver(agentId: number, msg: { id: number; body: string; from_name?: string | null; reply_to?: number | null }): boolean {
+  deliver(agentId: number, msg: { id: number; body: string; kind?: string; from_name?: string | null; reply_to?: number | null }): boolean {
     const h = this.hired.get(agentId)
     if (!h) return false
-    const text = msg.reply_to
-      ? `orchestra message from ${msg.from_name ?? 'human'}: "${msg.body}" (this answers your msg #${msg.reply_to})`
-      : `orchestra message from ${msg.from_name ?? 'human'}: "${msg.body}" — answer it now with: orchestra reply ${msg.id} "<answer>" --from ${h.name}, then continue your task.`
-    h.push(text)
+    let text: string
+    if (msg.reply_to || msg.kind === 'reply') {
+      text = `orchestra reply from ${msg.from_name ?? 'human'}: "${msg.body}" (answers your msg #${msg.reply_to}) — no response required unless a follow-up is materially needed.`
+    } else if (msg.kind === 'task') {
+      text = `orchestra task from ${msg.from_name ?? 'human'}: "${msg.body}" — act on it; do not send an acknowledgment-only reply.`
+    } else if (msg.kind === 'notify') {
+      text = `orchestra notification #${msg.id} from ${msg.from_name ?? 'human'}: "${msg.body}" — no reply required.`
+    } else if (msg.kind === 'swarm') {
+      text = `explicit orchestra swarm request from ${msg.from_name ?? 'human'}: "${msg.body}" — reply only with a substantive result using: orchestra reply ${msg.id} '<answer>' --from ${h.name}; never send an acknowledgment-only reply.`
+    } else {
+      text = `direct orchestra ask from ${msg.from_name ?? 'human'}: "${msg.body}" — reply required with: orchestra reply ${msg.id} '<answer>' --from ${h.name}; no acknowledgment-only reply.`
+    }
+    h.push(text, msg.id)
     this.touch(agentId, 'active')
     return true
   }

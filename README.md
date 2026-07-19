@@ -50,6 +50,9 @@ Claude session A      Claude session B        You (browser)
   - **Stop / SessionEnd** keep presence fresh and mark the agent gone when the session ends.
 - Cards carry `paths` (globs). When a card is created or updated, the API returns any other active card with intersecting paths — the agent sees "⚠ overlap with card #3 (jade-lynx) on src/auth/**" before stepping on a neighbor. Warnings are advisory, never blocking.
 - The web UI is served by the daemon and updates live over SSE. Each project is a panel showing its agents and their cards; read Q&A threads, and message any agent — delivery uses the same hook path.
+- Agent count is unlimited by default. If an operator deliberately wants a ceiling for autonomous ticket launches, `ORCHESTRA_MAX_LAUNCHED=N` remains available as an opt-in setting.
+
+Message fan-out is explicit: `ask` wakes one recipient and requires a substantive reply; `notify` waits for that recipient's next natural turn and requests no reply; `note`/`announce` stays on the board and wakes nobody; `swarm --confirm` snapshots and wakes the agents that are live when it is sent. Delivery/read counts are recorded mechanically, so agents never need to spend a turn saying “received.”
 
 ## CLI reference
 
@@ -62,16 +65,18 @@ Claude session A      Claude session B        You (browser)
 | `orchestra card create <title> [--desc D] [--paths a,b] [--column C]` | Create a card; prints overlap warnings |
 | `orchestra card update <id> [...]` | Update title/description/paths/column |
 | `orchestra card move <id> <column>` | Move a card (`backlog`, `in_progress`, `blocked`, `review`, `done`) |
-| `orchestra ask <agent> [question] [--card ID] [--stdin]` | Ask another agent; delivered into their context automatically |
-| `orchestra reply <msg-id> [answer] [--stdin]` | Answer a question; the asker gets it the same way |
-| `orchestra note [text] [--stdin]` | Post a note to the board, visible to everyone |
+| `orchestra ask <agent> [question] [--card ID] [--stdin]` | Wake exactly one agent with a direct question; substantive reply required |
+| `orchestra reply <msg-id> [answer] [--stdin]` | Answer a question; no acknowledgment loop is requested |
+| `orchestra notify <agent> [text] [--stdin]` | Queue a no-reply notification for the agent's next natural turn |
+| `orchestra note [text] [--stdin]` / `orchestra announce ...` | Post a board-only announcement; wakes no agents |
+| `orchestra swarm [question] --confirm [--stdin]` | Deliberately wake the current live-agent snapshot |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
 | `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
-| `orchestra notify` | Configure or test phone notifications |
+| `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |
 | `orchestra uninstall [--project]` | Remove them cleanly |
 | `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
@@ -98,6 +103,8 @@ Rules of thumb:
   Heredocs work too — quote the delimiter ('EOF') so nothing inside is expanded.
   EOF
   ```
+
+  The same `--stdin` path is available on `ask`, `reply`, `notify`, `announce`, and `swarm`.
 
 - The CLI warns (without blocking) when a body looks like leaked command output —
   credential dumps, unmatched backticks, an unclosed `$(`.

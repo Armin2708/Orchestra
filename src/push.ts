@@ -183,7 +183,7 @@ export function registerPush(server: FastifyInstance, opts: PushOptions = {}) {
   const onMessage = (msg: any) => {
     if (!msg?.id || msg.deleted) return
     // a question for the human: sent by an agent, addressed to no agent, not a reply
-    if (!msg.from_agent_id || msg.to_agent_id || msg.reply_to) return
+    if (msg.kind !== 'ask' || !msg.from_agent_id || msg.to_agent_id || msg.reply_to) return
     const from = (db.prepare(`SELECT name FROM agents WHERE id=?`).get(msg.from_agent_id) as any)?.name ?? 'an agent'
     notify(`msg:${msg.id}`, {
       title: `${from} asked you a question`,

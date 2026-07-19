@@ -117,7 +117,7 @@ program.command('ask <to> [body]').option('--card <id>').option('--from <a>')
   .action(async (to, body, o) => {
     const text = await messageBody(body, o.stdin)
     await up(); const b = await board()
-    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, body: text, card_id: o.card ? Number(o.card) : undefined })
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, kind: 'ask', body: text, card_id: o.card ? Number(o.card) : undefined })
     console.log(`asked ${to} (msg #${m.id})`)
   })
 program.command('reply <msgId> [body]').option('--from <a>')
@@ -125,7 +125,7 @@ program.command('reply <msgId> [body]').option('--from <a>')
   .action(async (msgId, body, o) => {
     const text = await messageBody(body, o.stdin)
     await up(); const b = await board()
-    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body: text, reply_to: Number(msgId) })
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'reply', body: text, reply_to: Number(msgId) })
     console.log(`replied (msg #${m.id})`)
   })
 
@@ -186,8 +186,33 @@ program.command('note [text]').description('post a note to the board (visible to
   .action(async (text, o) => {
     const body = await messageBody(text, o.stdin)
     await up(); const b = await board()
-    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body })
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'announce', body })
     console.log(`note posted (msg #${m.id})`)
+  })
+
+program.command('announce [text]').description('post a board-only announcement; wakes no agents')
+  .option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (text, o) => {
+    const body = await messageBody(text, o.stdin)
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'announce', body })
+    console.log(`announcement posted without waking agents (msg #${m.id})`)
+  })
+
+program.command('swarm [body]').description('ask every currently-live agent; requires explicit fan-out confirmation')
+  .option('--from <a>')
+  .option('--card <id>')
+  .option('--confirm', 'confirm waking every snapshotted recipient')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (body, o) => {
+    const text = await messageBody(body, o.stdin)
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', {
+      board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'swarm', confirm: o.confirm === true,
+      body: text, card_id: o.card ? Number(o.card) : undefined,
+    })
+    console.log(`swarm sent to ${m.recipient_count} agent${m.recipient_count === 1 ? '' : 's'} (msg #${m.id})`)
   })
 
 program.command('milestone <title>').description('create a milestone (a major goal made of ordered steps)')
@@ -237,11 +262,25 @@ program.command('fire <name>').description('stop a hired agent (its cards are re
     console.log(`fired ${name}`)
   })
 
-program.command('notify').description('phone notifications: show status, set the ntfy.sh fallback, or send a test')
+program.command('notify [to] [body]').description('queue an agent notification, or manage phone notifications when no agent is given')
+  .option('--card <id>')
+  .option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
   .option('--ntfy <topic>', 'also push via https://ntfy.sh/<topic> (for phones without the PWA)')
   .option('--off', 'disable the ntfy fallback')
   .option('--test', 'send a test notification to every subscribed device')
-  .action(async (o) => {
+  .action(async (to, body, o) => {
+    if (to) {
+      if (o.ntfy || o.off || o.test) throw new Error('agent notification flags cannot be combined with phone notification flags')
+      const text = await messageBody(body, o.stdin)
+      await up(); const b = await board()
+      const m = await api('POST', '/messages', {
+        board_id: b.id, from: await inferAgent(b.id, o.from), to, kind: 'notify', body: text,
+        card_id: o.card ? Number(o.card) : undefined,
+      })
+      console.log(`notification queued for ${to}; no reply requested (msg #${m.id})`)
+      return
+    }
     await up()
     if (o.ntfy) console.log(`ntfy fallback set: https://ntfy.sh/${(await api('POST', '/push/ntfy', { topic: o.ntfy })).ntfy_topic}`)
     if (o.off) { await api('POST', '/push/ntfy', { topic: null }); console.log('ntfy fallback disabled') }
