@@ -564,6 +564,9 @@ function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
   onCreate: (card?: Card | null) => void
 }) {
   const [filter, setFilter] = useState('')
+  const [infoOpen, setInfoOpen] = useState(false)
+  const openInfo = useCallback(() => setInfoOpen(true), [])
+  const closeInfo = useCallback(() => setInfoOpen(false), [])
   const query = filter.trim().toLowerCase()
   const visible = workspaces.data.filter((workspace) => {
     const card = snaps.find((snapshot) => snapshot.board.id === workspace.board_id)?.cards.find((item) => item.id === workspace.card_id)
@@ -576,10 +579,16 @@ function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
     .slice(0, 12)
 
   return (
-    <aside className="os-workspace-rail">
+    <>
+      <aside className="os-workspace-rail">
       <header>
         <div><p className="os-eyebrow">Runtime</p><h2>Workspaces</h2></div>
-        <button className="os-icon-button" onClick={() => onCreate()} aria-label="Create workspace"><OsIcon name="plus" /></button>
+        <div className="os-rail-actions">
+          <button type="button" className="os-icon-button os-info-button" onClick={openInfo}
+            aria-label="Learn how workspaces work" title="How workspaces work" aria-haspopup="dialog"
+            aria-expanded={infoOpen} aria-controls="workspace-info-dialog"><span aria-hidden="true">i</span></button>
+          <button type="button" className="os-icon-button" onClick={() => onCreate()} aria-label="Create workspace" title="Create workspace"><OsIcon name="plus" /></button>
+        </div>
       </header>
       <label className="os-rail-search">
         <OsIcon name="search" size={14} />
@@ -623,7 +632,9 @@ function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
       <footer>
         <span><kbd>⌘1–7</kbd> panes</span><span><kbd>⌘`</kbd> terminal</span>
       </footer>
-    </aside>
+      </aside>
+      {infoOpen && <WorkspaceInfoDialog onClose={closeInfo} />}
+    </>
   )
 }
 
@@ -696,4 +707,62 @@ function RailSkeleton() {
 
 function WorkspaceStageSkeleton() {
   return <div className="os-stage-skeleton"><header><i /><b /><span /></header><div><PaneSkeleton /><PaneSkeleton /></div></div>
+}
+
+function WorkspaceInfoDialog({ onClose }: { onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useModalFocusTrap(true, dialogRef, onClose, closeRef)
+
+  return (
+    <div className="os-modal-layer">
+      <button className="os-modal-scrim" onClick={onClose} aria-label="Close workspace guide" />
+      <section ref={dialogRef} id="workspace-info-dialog" className="os-info-dialog" role="dialog" aria-modal="true"
+        aria-labelledby="workspace-info-title" aria-describedby="workspace-info-intro" tabIndex={-1}>
+        <header>
+          <div><p className="os-eyebrow">Workspace guide</p><h2 id="workspace-info-title">A durable place for one stream of work</h2></div>
+          <button ref={closeRef} type="button" className="os-icon-button" onClick={onClose} aria-label="Close workspace guide"><OsIcon name="close" /></button>
+        </header>
+        <p className="os-dialog-intro" id="workspace-info-intro">
+          A workspace connects a task to its checkout, terminal processes, agent session, context, safeguards, and proof of work so you can leave and return without losing the thread.
+        </p>
+
+        <ol className="os-info-flow" aria-label="Workspace lifecycle">
+          <li><span>01</span><div><strong>Create</strong><p>Choose an isolated worktree or an intentional shared checkout.</p></div></li>
+          <li><span>02</span><div><strong>Run</strong><p>Start a raw terminal process, a model-backed job, or attach an agent.</p></div></li>
+          <li><span>03</span><div><strong>Inspect</strong><p>Follow output, changes, context, policy decisions, and evidence.</p></div></li>
+          <li><span>04</span><div><strong>Resume</strong><p>Reattach later, restart saved processes, review, then archive safely.</p></div></li>
+        </ol>
+
+        <div className="os-info-details">
+          <section>
+            <h3>What it keeps together</h3>
+            <ul>
+              <li><strong>Execution root</strong><span>Branch, worktree, environment, and listening ports.</span></li>
+              <li><strong>Task runtime</strong><span>Terminal processes, agent conversation, status, and restart recipes.</span></li>
+              <li><strong>Review record</strong><span>Exact diffs, test exits, events, checkpoints, and evidence.</span></li>
+            </ul>
+          </section>
+          <section>
+            <h3>How it helps</h3>
+            <ul>
+              <li><strong>Prevents overlap</strong><span>Worktree isolation lets parallel agents edit without sharing a checkout.</span></li>
+              <li><strong>Makes work recoverable</strong><span>The daemon preserves state even when the browser closes.</span></li>
+              <li><strong>Keeps review honest</strong><span>You see raw terminal output and recorded evidence, not only an agent summary.</span></li>
+            </ul>
+          </section>
+        </div>
+
+        <aside className="os-info-token-note">
+          <span aria-hidden="true">i</span>
+          <p><strong>A workspace is not an agent.</strong> Creating or opening one does not call a model. Tokens are used only when a model-backed agent or job runs; ordinary shell processes use no Claude tokens.</p>
+        </aside>
+
+        <footer>
+          <p>Use a worktree for parallel work. Use the shared checkout only when sharing it is deliberate.</p>
+          <button type="button" className="os-primary-button" onClick={onClose}>Got it</button>
+        </footer>
+      </section>
+    </div>
+  )
 }
