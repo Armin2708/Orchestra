@@ -5,9 +5,14 @@ import { MessagesView } from './MessagesView'
 import { RoadmapView } from './RoadmapView'
 import { TimelineView } from './TimelineView'
 import { ShippedView } from './ShippedView'
+import { NeedsYou } from './NeedsYou'
+import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
 import './messages.css'
+import './agentOs.css'
+
+const WorkspaceCockpit = React.lazy(() => import('./WorkspaceCockpit').then((module) => ({ default: module.WorkspaceCockpit })))
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -27,7 +32,7 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  type View = 'board' | 'messages' | 'roadmap' | 'timeline' | 'shipped'
+  type View = 'board' | 'messages' | 'workspaces' | 'roadmap' | 'timeline' | 'shipped'
   const [view, setView] = useState<View>(() =>
     (localStorage.getItem('orchestra-view') as View) ?? 'board')
   const pickView = (v: View) => { setView(v); localStorage.setItem('orchestra-view', v) }
@@ -118,9 +123,15 @@ export function App() {
             <button className={view === 'messages' ? 'tab active' : 'tab'} onClick={() => pickView('messages')}>
               Messages{openMessages > 0 && <span className="tab-count">{openMessages}</span>}
             </button>
+            <button className={view === 'workspaces' ? 'tab active' : 'tab'} onClick={() => pickView('workspaces')}>Workspaces</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
             <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
+            <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
+              if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
+              pick(item.board_id)
+              pickView('workspaces')
+            }} />
             <PushBell />
           </nav>
         </div>
@@ -129,6 +140,10 @@ export function App() {
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
         : view === 'messages'
           ? <MessagesView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+          : view === 'workspaces'
+            ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading workspace cockpit"><span /><span /><span /></div>}>
+                <WorkspaceCockpit snaps={shown} onChange={refresh} />
+              </React.Suspense>
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : view === 'timeline'
@@ -158,8 +173,11 @@ function PushBell() {
   }
   return (
     <button className="tab" onClick={toggle} disabled={state === 'busy'} aria-pressed={state === 'on'}
+      aria-label={state === 'on' ? 'Turn notifications off for this device' : 'Turn notifications on for this device'}
       title={state === 'on' ? 'Notifications on for this device — tap to turn off' : 'Notify this device when agents finish, block, or ask'}>
-      {state === 'on' ? '🔔' : '🔕'}
+      <OsIcon name="bell" />
+      <span className="sr-only">{state === 'on' ? 'Notifications on' : 'Notifications off'}</span>
+      <span className={`notification-state ${state}`} aria-hidden="true" />
     </button>
   )
 }

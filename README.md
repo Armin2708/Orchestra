@@ -9,6 +9,11 @@ verification, a test-gated auto-ship queue, shipped-commit history, remote phone
 access, push notifications, per-agent token accounting, and manual/automatic wake
 for agents paused by Claude usage limits.
 
+The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
+provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
+checkpoints, durable scheduling, and a single human-attention queue—without removing any CLI or
+raw-terminal capability.
+
 ## Quickstart
 
 **Plug and play (Claude Code plugin — recommended):** inside Claude Code, run
@@ -75,6 +80,9 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
+| `orchestra workspace ...` | Create, inspect, update, or archive Agent OS shared/worktree environments |
+| `orchestra process ...` | Start, attach, restart, resize, signal, and inspect durable PTY processes |
+| `orchestra contract|job|checkpoint|policy|attention ...` | Drive task contracts, scheduling, recovery, policy, and human-attention workflows |
 | `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |

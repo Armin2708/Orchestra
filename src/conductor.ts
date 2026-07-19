@@ -7,10 +7,10 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import { generateName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
-import { port } from './daemon.js'
 import { conductorRules, outputDiscipline } from './rules.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { isUsageLimitError } from './limits.js'
+import { evaluatePolicy, type PolicyOperation } from './agent-os/policy-engine.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -30,8 +30,32 @@ function resultSummary(content: unknown): string {
   return lines.length > 1 ? `${first}  … +${lines.length - 1} lines` : first
 }
 
+function policyOperationForTool(toolName: string, input: Record<string, unknown>, cwd: string): PolicyOperation {
+  const command = input.command
+  if (typeof command === 'string' && command.trim()) return { kind: 'command', value: command, actor: 'agent' }
+
+  const file = input.file_path ?? input.path ?? input.notebook_path
+  if (typeof file === 'string' && file.trim()) {
+    const resolved = path.isAbsolute(file) ? path.normalize(file) : path.resolve(cwd, file)
+    const relative = path.relative(cwd, resolved)
+    const scoped = relative === '' ? '.'
+      : !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative) ? relative : resolved
+    return { kind: 'filesystem', value: scoped.replaceAll('\\', '/'), actor: 'agent' }
+  }
+
+  const url = input.url ?? input.host ?? input.domain
+  if (typeof url === 'string' && url.trim()) return { kind: 'network', value: url, actor: 'agent' }
+
+  const lower = toolName.toLowerCase()
+  const secret = input.secret ?? input.secret_name ?? (lower.includes('secret') ? input.name : undefined)
+  if (typeof secret === 'string' && secret.trim()) return { kind: 'secret', value: secret, actor: 'agent' }
+
+  // Unknown provider tools stay governable through command rules instead of bypassing policy.
+  return { kind: 'command', value: toolName, actor: 'agent' }
+}
+
 // modes the board can switch a hired agent between; anything else stays bypass
-export const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'plan'] as const
+export const PERMISSION_MODES = ['default', 'bypassPermissions', 'acceptEdits', 'plan'] as const
 export type HiredPermissionMode = (typeof PERMISSION_MODES)[number]
 
 // the SDK's effort ladder — a spawn param, not switchable mid-session, so changing it
@@ -70,6 +94,7 @@ type Hired = {
   // messages, session sums authoritative per-turn totals (result usage when present)
   turnUsage: UsageSplit
   sessionUsage: UsageSplit
+  sessionCostUsd: number
   model: string | null
   effort: EffortLevel | null
   models: any[]
@@ -158,6 +183,7 @@ function createInput() {
 
 export class Conductor {
   private hired = new Map<number, Hired>()
+  private completedAccounting = new Map<number, { usage: UsageSplit; costUsd: number }>()
   private launchQueue: LaunchRequest[] = []
 
   constructor(private db: Database.Database, private bus: EventEmitter) {}
@@ -248,7 +274,7 @@ export class Conductor {
         branch = name
       } catch { /* not a git repo or worktree failed — shared checkout, no auto-merge */ }
     }
-    const agent = this.hire({ boardId: req.boardId, cwd })
+    const agent = this.hire({ boardId: req.boardId, cwd, cardId: req.cardId })
     const h = this.hired.get(agent.id)!
     h.cardId = req.cardId
     h.branch = branch
@@ -327,11 +353,12 @@ export class Conductor {
     this.hire({
       boardId: a.board_id, cwd, name: a.name, role: a.role ?? undefined,
       resumeSession: a.sdk_session ?? undefined, permissionMode: a.permission_mode ?? undefined,
-      model: a.model ?? undefined, effort: a.effort ?? undefined,
+      model: a.model ?? undefined, effort: a.effort ?? undefined, cardId: card?.id,
     })
     const h = this.hired.get(agentId)
     if (!h) return 'skipped'
     if (card) {
+      h.branch = card.branch ?? null
       this.db.prepare(`UPDATE cards SET column_name='in_progress', updated_at=datetime('now') WHERE id=?`).run(card.id)
       this.adoptLaunch(agentId)
       this.logCardEvent(card.id, agentId, 'limit_resumed', { agent: a.name })
@@ -366,7 +393,7 @@ export class Conductor {
     return { woke, queued, skipped }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any {
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -393,12 +420,37 @@ export class Conductor {
 
     const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
       ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
+    this.db.prepare('UPDATE agents SET permission_mode=?, model=COALESCE(?, model) WHERE id=?')
+      .run(permissionMode, opts.model ?? null, agent.id)
     const pending = new Map<string, PendingPermission>()
     // non-bypass modes deny tools unless a canUseTool handler answers — park each ask as a
     // pending request the board resolves via approve/deny buttons in the terminal
     const canUseTool = (toolName: string, toolInput: Record<string, unknown>, o: any): Promise<any> => {
       const id = String(o?.toolUseID ?? o?.requestId ?? `${Date.now()}-${pending.size}`)
       const summary = toolSummary(toolName, toolInput)
+      const linkedCardId = opts.cardId ?? (this.db.prepare(`SELECT id FROM cards
+        WHERE owner_agent_id=? AND column_name IN ('in_progress','blocked','review') ORDER BY updated_at DESC, id DESC LIMIT 1`)
+        .get(agent.id) as { id: number } | undefined)?.id
+      const contract = linkedCardId ? this.db.prepare('SELECT policy_id FROM task_contracts WHERE card_id=?')
+        .get(linkedCardId) as { policy_id: string | null } | undefined : undefined
+      if (contract?.policy_id) {
+        try {
+          const evaluation = evaluatePolicy(this.db, contract.policy_id, policyOperationForTool(toolName, toolInput, opts.cwd))
+          log('status', `policy ${evaluation.decision}: ${summary} — ${evaluation.reason}`)
+          this.emit(opts.boardId, 'policy', {
+            agent_id: agent.id,
+            card_id: linkedCardId ?? null,
+            request_id: id,
+            tool: toolName,
+            ...evaluation,
+          })
+          if (evaluation.decision === 'allow') return Promise.resolve({ behavior: 'allow', updatedInput: toolInput })
+          if (evaluation.decision === 'deny') return Promise.resolve({ behavior: 'deny', message: evaluation.reason })
+        } catch (error) {
+          // A malformed or missing policy never silently opens access; the ordinary human ask is the fallback.
+          log('status', `policy evaluation needs review: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       log('status', `permission requested: ${o?.title ?? summary}`)
       this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, tool: toolName, summary, title: o?.title ?? null, status: 'pending' })
       return new Promise((resolve) => {
@@ -424,7 +476,12 @@ export class Conductor {
 
     // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
     // instead of minting a second "session" agent for the SDK subprocess
-    const env: Record<string, string | undefined> = { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name }
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ORCHESTRA_PORT: String(Number(process.env.ORCHESTRA_PORT ?? 4750)),
+      ORCHESTRA_AGENT: name,
+      ORCHESTRA_NAME: name,
+    }
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
     // cannot auto-claim ownership, so their cards are born unowned
     if (opts.role === 'auditor' || opts.role === 'verifier') delete env.ORCHESTRA_AGENT
@@ -437,6 +494,8 @@ export class Conductor {
         ...(effort ? { effort } : {}),
         permissionMode,
         canUseTool,
+        ...(opts.maxBudgetUsd !== undefined ? { maxBudgetUsd: opts.maxBudgetUsd } : {}),
+        ...(opts.taskBudgetTokens !== undefined ? { taskBudget: { total: opts.taskBudgetTokens } } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : opts.role === 'verifier' ? verifierRules : rules)(name) },
         env,
       } as any,
@@ -461,10 +520,10 @@ export class Conductor {
       pending,
       commands: [],
       transcript,
-      turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(),
+      turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(), sessionCostUsd: 0,
       model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: [], role: opts.role, handoff: false, limitHit: false,
-      cardId: null, branch: null, outcome: null, reason: '', summary: '',
+      cardId: opts.cardId ?? null, branch: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
     // every (re-)registration — fresh hire, effort-restart handoff, daemon resurrection, wake —
@@ -527,6 +586,9 @@ export class Conductor {
             const turn = turnUsage(m.usage, hired.turnUsage)
             addUsage(hired.sessionUsage, turn)
             recordUsage(this.db, opts.boardId, agent.id, turn)
+            if (Number.isFinite(Number(m.total_cost_usd)) && Number(m.total_cost_usd) > 0) {
+              hired.sessionCostUsd += Number(m.total_cost_usd)
+            }
             hired.turnUsage = emptyUsage()
             hired.turnStart = null
             hired.turnTokens = 0
@@ -564,9 +626,13 @@ export class Conductor {
         // tokens — flush the in-flight accrual so the daily rollup never undercounts
         if (hasUsage(hired.turnUsage)) {
           recordUsage(this.db, opts.boardId, agent.id, hired.turnUsage)
+          addUsage(hired.sessionUsage, hired.turnUsage)
           hired.turnUsage = emptyUsage()
         }
         hired.pending.clear()
+        this.completedAccounting.delete(agent.id)
+        this.completedAccounting.set(agent.id, { usage: { ...hired.sessionUsage }, costUsd: hired.sessionCostUsd })
+        while (this.completedAccounting.size > 200) this.completedAccounting.delete(this.completedAccounting.keys().next().value!)
         this.hired.delete(agent.id)
         // an effort restart supersedes this session: the replacement re-registers the same
         // agent row and inherits the ticket, so the exit path must not park, prune, or drain —
@@ -665,16 +731,23 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[]; usage: { turn: UsageSplit; session: UsageSplit } }; permissions?: Omit<PendingPermission, 'finish'>[] } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[]; costUsd: number; usage: { turn: UsageSplit; session: UsageSplit } }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
       info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, commands: h.commands, effort: h.effort, models: h.models,
-        usage: { turn: h.turnUsage, session: h.sessionUsage } },
+        costUsd: h.sessionCostUsd, usage: { turn: h.turnUsage, session: h.sessionUsage } },
       permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
     }
+  }
+
+  sessionAccounting(agentId: number): { usage: UsageSplit; costUsd: number } | null {
+    const active = this.hired.get(agentId)
+    if (active) return { usage: { ...active.sessionUsage }, costUsd: active.sessionCostUsd }
+    const completed = this.completedAccounting.get(agentId)
+    return completed ? { usage: { ...completed.usage }, costUsd: completed.costUsd } : null
   }
 
   // live-switch the model for subsequent turns; persisted so a daemon restart resumes with it
@@ -710,7 +783,7 @@ export class Conductor {
     this.hire({
       boardId: h.boardId, cwd: h.cwd, name: h.name, role: prior.role,
       resumeSession: row.sdk_session, permissionMode: prior.permissionMode,
-      model: prior.model ?? undefined, effort: level,
+      model: prior.model ?? undefined, effort: level, cardId: prior.cardId ?? undefined,
     })
     const nh = this.hired.get(agentId)
     if (!nh) return 'not-found' // respawn failed; agent row already re-marked active by hire's upsert

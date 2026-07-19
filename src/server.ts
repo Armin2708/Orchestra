@@ -17,12 +17,13 @@ import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from '
 import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
+import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike {
   isHired(agentId: number): boolean
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string; cardId?: number }): any
   deliver(agentId: number, msg: any): boolean
   // optional: only the real Conductor resumes limit-paused agents (#62)
   wake?(boardId: number): { woke: string[]; queued: string[]; skipped: string[] }
@@ -49,6 +50,9 @@ export interface ServerOptions {
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
   // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
   autowakeAt?: () => string | null
+  // daemon-only Agent OS runtime/driver seams; in-process tests keep the durable read APIs
+  // while unsupported process mutations continue to fail explicitly.
+  agentOs?: Omit<AgentOsRouteOptions, 'db'>
 }
 
 const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
@@ -846,7 +850,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   // live-switch a hired agent's permission mode (persisted for daemon-restart resume)
-  const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'plan']
+  const PERMISSION_MODES = ['default', 'bypassPermissions', 'acceptEdits', 'plan']
   server.post<{ Params: { id: string }; Body: { mode?: string } | null }>(
     '/api/v1/agents/:id/permission-mode', async (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
@@ -1034,6 +1038,18 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     server.bus.on('event', onEvent)
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000)
     req.raw.on('close', () => { server.bus.off('event', onEvent); clearInterval(ping) })
+  })
+
+  const defaultAgentOsDrivers = () => [
+      { id: 'claude', available: !!maestro, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
+        detail: maestro ? undefined : 'requires the daemon Conductor' },
+      { id: 'shell', available: !!opts.agentOs?.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
+        detail: opts.agentOs?.runtime ? undefined : 'requires the PTY runtime' },
+    ]
+  registerAgentOsRoutes(server, {
+    ...opts.agentOs,
+    db,
+    drivers: opts.agentOs?.drivers ?? defaultAgentOsDrivers,
   })
 
   // static web UI (built by Task 13; 404s harmlessly before that)

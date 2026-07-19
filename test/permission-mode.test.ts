@@ -7,6 +7,8 @@ import { buildServer, ConductorLike, Bus } from '../src/server.js'
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }))
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { Conductor, PERMISSION_MODES } from '../src/conductor.js'
+import { PolicyEngine } from '../src/agent-os/policy-engine.js'
+import { TaskContractService } from '../src/agent-os/task-contracts.js'
 
 function fakeSession() {
   const msgs: any[] = []
@@ -143,6 +145,45 @@ it('an aborted ask withdraws itself and fails closed', async () => {
   expect(events.some((e) => e.type === 'permission' && e.data.status === 'withdrawn')).toBe(true)
 })
 
+it('task policy allows, denies, or escalates tool use before the permission fallback', async () => {
+  const { db, queryArgs, conductor, events } = setup()
+  const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
+    VALUES (1, 'Policy task', 'exercise policy')`).run().lastInsertRowid)
+  const policy = new PolicyEngine(db).create({
+    boardId: 1,
+    name: 'task boundary',
+    fileGlobs: ['src/**', '!src/secrets/**'],
+    commandGlobs: ['npm test*', '!git push*'],
+    networkHosts: ['api.github.com'],
+    approvalScope: 'ask',
+  })
+  new TaskContractService(db).put(cardId, { policy_id: policy.id })
+  const agent = conductor.hire({ boardId: 1, cwd: '/p', cardId, permissionMode: 'default' })
+  expect(queryArgs[0].options.permissionMode).toBe('default')
+  const canUseTool = queryArgs[0].options.canUseTool
+
+  await expect(canUseTool('Bash', { command: 'npm test -- auth' }, { toolUseID: 'allow-command' }))
+    .resolves.toEqual({ behavior: 'allow', updatedInput: { command: 'npm test -- auth' } })
+  await expect(canUseTool('Write', { file_path: '/p/src/secrets/key.ts' }, { toolUseID: 'deny-file' }))
+    .resolves.toMatchObject({ behavior: 'deny', message: expect.stringContaining('blocked by policy') })
+  expect(conductor.transcript(agent.id).permissions).toEqual([])
+
+  const ask = canUseTool('Bash', { command: 'git status' }, { toolUseID: 'ask-command' })
+  expect(conductor.transcript(agent.id).permissions).toHaveLength(1)
+  expect(conductor.resolvePermission(agent.id, 'ask-command', 'allow')).toBe(true)
+  await expect(ask).resolves.toEqual({ behavior: 'allow', updatedInput: { command: 'git status' } })
+
+  const decisions = events.filter((event) => event.type === 'policy').map((event) => event.data.decision)
+  expect(decisions).toEqual(['allow', 'deny', 'ask'])
+})
+
+it('passes enforceable cost and token budgets to the provider SDK', () => {
+  const { queryArgs, conductor } = setup()
+  conductor.hire({ boardId: 1, cwd: '/p', maxBudgetUsd: 2.5, taskBudgetTokens: 12_000 })
+
+  expect(queryArgs[0].options).toMatchObject({ maxBudgetUsd: 2.5, taskBudget: { total: 12_000 } })
+})
+
 // ── server endpoints ────────────────────────────────────────────────
 
 function stubConductor(db: any) {
@@ -211,5 +252,5 @@ it('agents.permission_mode column exists and the exported mode list is stable', 
   const db = openDb(':memory:')
   const cols = db.prepare(`PRAGMA table_info(agents)`).all().map((c: any) => c.name)
   expect(cols).toContain('permission_mode')
-  expect([...PERMISSION_MODES]).toEqual(['bypassPermissions', 'acceptEdits', 'plan'])
+  expect([...PERMISSION_MODES]).toEqual(['default', 'bypassPermissions', 'acceptEdits', 'plan'])
 })

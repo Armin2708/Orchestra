@@ -7,6 +7,7 @@ import { installHooks, uninstallHooks } from './install.js'
 import { ensureToken } from './token.js'
 import { pairUrl, startRemote, stopRemote } from './remote.js'
 import { messageBody } from './msgsafe.js'
+import { registerAgentOsCommands } from './agent-os-cli.js'
 import qrcode from 'qrcode-terminal'
 
 const program = new Command().name('orchestra').version(VERSION)
@@ -293,5 +294,7 @@ program.command('hook <event>').action(async (event) => { await runHook(event) }
 program.command('install').option('--project', 'install into ./.claude instead of ~/.claude')
   .action((o) => installHooks(o.project ? 'project' : 'global'))
 program.command('uninstall').option('--project').action((o) => uninstallHooks(o.project ? 'project' : 'global'))
+
+registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 
 program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })

@@ -1,0 +1,846 @@
+import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { realpath } from 'node:fs/promises'
+import path from 'node:path'
+import type Database from 'better-sqlite3'
+import { ArtifactStore } from './artifact-store.js'
+import { AttentionService } from './attention.js'
+import type { Checkpoint } from './checkpoints.js'
+import { ContextStore } from './context-store.js'
+import { ValidationError } from './errors.js'
+import { EventStore } from './event-store.js'
+import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
+import { TaskContractService, type TaskContract } from './task-contracts.js'
+import type { AgentOsRuntimeAdapter, DriverDescriptor, ProcessRecord as ApiProcessRecord } from './routes.js'
+import {
+  WorkspaceStore as DurableWorkspaceStore,
+  type CreateWorkspace,
+  type Workspace,
+} from './workspace-store.js'
+import {
+  createRuntimeLayer,
+  ClaudeAgentDriverAdapter,
+  type ClaudeConductorPort,
+  type AgentDriver,
+  type DriverEvent,
+  type DriverRegistry,
+  type DriverSession,
+  type NewProcessRecord,
+  type NewWorkspaceRecord,
+  type ProcessOutputChunk,
+  type ProcessPatch,
+  type ProcessRecord,
+  type ProcessRestartRecipe,
+  type RuntimeEvent,
+  type RuntimePersistence,
+  type RuntimeSupervisor,
+  type WorkspaceFilter,
+  type WorkspacePatch,
+  type WorkspaceRecord,
+  type WorkspaceStatus,
+  type WorkspaceStore,
+  WorkspaceManager,
+} from '../runtime/index.js'
+
+type BusRef = { current?: EventEmitter }
+
+function mapWorkspace(row: Workspace): WorkspaceRecord {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    cardId: row.card_id,
+    name: row.name,
+    kind: row.kind as WorkspaceRecord['kind'],
+    rootPath: row.root_path,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
+    baseRef: row.base_ref ?? 'HEAD',
+    status: row.status as WorkspaceStatus,
+    env: row.env,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function mapApiWorkspace(row: WorkspaceRecord): Workspace {
+  return {
+    id: row.id,
+    board_id: row.boardId,
+    card_id: row.cardId,
+    name: row.name,
+    kind: row.kind,
+    root_path: row.rootPath,
+    worktree_path: row.worktreePath,
+    branch: row.branch,
+    base_ref: row.baseRef,
+    status: row.status,
+    env: row.env,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  }
+}
+
+function mapProcess(row: Record<string, unknown>): ProcessRecord {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    name: String(row.name),
+    command: String(row.command),
+    cwd: String(row.cwd),
+    status: String(row.status) as ProcessRecord['status'],
+    pid: row.pid == null ? null : Number(row.pid),
+    exitCode: row.exit_code == null ? null : Number(row.exit_code),
+    cols: Number(row.cols),
+    rows: Number(row.rows),
+    restartable: Number(row.restartable) === 1,
+    startedAt: row.started_at == null ? null : String(row.started_at),
+    endedAt: row.ended_at == null ? null : String(row.ended_at),
+  }
+}
+
+function mapApiProcess(row: ProcessRecord): ApiProcessRecord {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    name: row.name,
+    command: row.command,
+    cwd: row.cwd,
+    status: row.status,
+    pid: row.pid,
+    exit_code: row.exitCode,
+    cols: row.cols,
+    rows: row.rows,
+    restartable: row.restartable,
+    started_at: row.startedAt,
+    ended_at: row.endedAt,
+  }
+}
+
+/** Runtime WorkspaceStore backed by the Agent OS workspace table and validation service. */
+export class SqliteWorkspaceStore implements WorkspaceStore {
+  private readonly durable: DurableWorkspaceStore
+
+  constructor(private readonly db: Database.Database) {
+    this.durable = new DurableWorkspaceStore(db)
+  }
+
+  create(input: NewWorkspaceRecord): WorkspaceRecord {
+    return mapWorkspace(this.durable.create({
+      boardId: input.boardId,
+      cardId: input.cardId,
+      name: input.name,
+      kind: input.kind,
+      rootPath: input.rootPath,
+      worktreePath: input.worktreePath,
+      branch: input.branch,
+      baseRef: input.baseRef,
+      status: input.status,
+      env: input.env,
+    }))
+  }
+
+  get(id: string): WorkspaceRecord | undefined {
+    const row = this.durable.get(id)
+    return row ? mapWorkspace(row) : undefined
+  }
+
+  list(filter: WorkspaceFilter = {}): WorkspaceRecord[] {
+    const where: string[] = []
+    const params: Record<string, unknown> = {}
+    if (filter.boardId !== undefined) { where.push('board_id=@board_id'); params.board_id = filter.boardId }
+    if (filter.cardId !== undefined) { where.push('card_id IS @card_id'); params.card_id = filter.cardId }
+    if (filter.status !== undefined) { where.push('status=@status'); params.status = filter.status }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const rows = this.db.prepare(`SELECT id FROM workspaces ${clause} ORDER BY updated_at DESC, rowid DESC`)
+      .all(params) as Array<{ id: string }>
+    return rows.map((row) => mapWorkspace(this.durable.get(row.id)!))
+  }
+
+  update(id: string, patch: WorkspacePatch): WorkspaceRecord {
+    return mapWorkspace(this.durable.update(id, {
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.cardId !== undefined ? { card_id: patch.cardId } : {}),
+      ...(patch.baseRef !== undefined ? { base_ref: patch.baseRef } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(patch.env !== undefined ? { env: patch.env } : {}),
+    }))
+  }
+}
+
+/** Durable process/output/event persistence used by the real PTY supervisor. */
+export class SqliteRuntimePersistence implements RuntimePersistence {
+  private readonly events: EventStore
+  private readonly attention: AttentionService
+
+  constructor(private readonly db: Database.Database, private readonly bus: BusRef = {}) {
+    this.events = new EventStore(db)
+    this.attention = new AttentionService(db)
+  }
+
+  createProcess(input: NewProcessRecord): ProcessRecord {
+    const record = { id: randomUUID(), ...input }
+    this.db.prepare(`INSERT INTO processes
+      (id, workspace_id, name, command, cwd, status, pid, exit_code, cols, rows, restartable, started_at, ended_at)
+      VALUES (@id, @workspace_id, @name, @command, @cwd, @status, @pid, @exit_code, @cols, @rows, @restartable, @started_at, @ended_at)`)
+      .run({
+        id: record.id,
+        workspace_id: record.workspaceId,
+        name: record.name,
+        command: record.command,
+        cwd: record.cwd,
+        status: record.status,
+        pid: record.pid,
+        exit_code: record.exitCode,
+        cols: record.cols,
+        rows: record.rows,
+        restartable: record.restartable ? 1 : 0,
+        started_at: record.startedAt,
+        ended_at: record.endedAt,
+      })
+    return structuredClone(record)
+  }
+
+  updateProcess(id: string, patch: ProcessPatch): ProcessRecord {
+    const current = this.getProcess(id)
+    if (!current) throw new Error(`process ${id} not found`)
+    const record = { ...current, ...structuredClone(patch) }
+    this.db.prepare(`UPDATE processes SET
+      name=@name, command=@command, cwd=@cwd, status=@status, pid=@pid, exit_code=@exit_code,
+      cols=@cols, rows=@rows, restartable=@restartable, started_at=@started_at, ended_at=@ended_at
+      WHERE id=@id`).run({
+      id,
+      name: record.name,
+      command: record.command,
+      cwd: record.cwd,
+      status: record.status,
+      pid: record.pid,
+      exit_code: record.exitCode,
+      cols: record.cols,
+      rows: record.rows,
+      restartable: record.restartable ? 1 : 0,
+      started_at: record.startedAt,
+      ended_at: record.endedAt,
+    })
+    return record
+  }
+
+  getProcess(id: string): ProcessRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM processes WHERE id=?').get(id) as Record<string, unknown> | undefined
+    return row ? mapProcess(row) : undefined
+  }
+
+  listProcesses(workspaceId?: string): ProcessRecord[] {
+    const rows = (workspaceId === undefined
+      ? this.db.prepare('SELECT * FROM processes ORDER BY rowid DESC').all()
+      : this.db.prepare('SELECT * FROM processes WHERE workspace_id=? ORDER BY rowid DESC').all(workspaceId)) as Record<string, unknown>[]
+    return rows.map(mapProcess)
+  }
+
+  listRunningProcesses(): ProcessRecord[] {
+    return (this.db.prepare("SELECT * FROM processes WHERE status IN ('starting','running','stopping') ORDER BY rowid")
+      .all() as Record<string, unknown>[]).map(mapProcess)
+  }
+
+  appendOutput(chunk: ProcessOutputChunk): void {
+    this.db.prepare(`INSERT INTO process_output (process_id, seq, stream, data, created_at)
+      VALUES (@process_id, @seq, @stream, @data, @created_at)`).run({
+      process_id: chunk.processId,
+      seq: chunk.seq,
+      stream: chunk.stream,
+      data: chunk.data,
+      created_at: chunk.createdAt,
+    })
+  }
+
+  readOutput(processId: string, afterSeq: number, limit: number): ProcessOutputChunk[] {
+    return (this.db.prepare(`SELECT process_id, seq, stream, data, created_at FROM process_output
+      WHERE process_id=? AND seq>? ORDER BY seq LIMIT ?`).all(processId, afterSeq, limit) as Array<Record<string, unknown>>)
+      .map((row) => ({
+        processId: String(row.process_id),
+        seq: Number(row.seq),
+        stream: 'pty',
+        data: String(row.data),
+        createdAt: String(row.created_at),
+      }))
+  }
+
+  pruneOutput(processId: string, beforeSeq: number): void {
+    this.db.prepare('DELETE FROM process_output WHERE process_id=? AND seq<?').run(processId, beforeSeq)
+  }
+
+  saveRestartRecipe(processId: string, recipe: ProcessRestartRecipe): void {
+    this.db.prepare('UPDATE processes SET recipe_json=? WHERE id=?').run(JSON.stringify(recipe), processId)
+  }
+
+  getRestartRecipe(processId: string): ProcessRestartRecipe | undefined {
+    const row = this.db.prepare('SELECT recipe_json FROM processes WHERE id=?')
+      .get(processId) as { recipe_json: string } | undefined
+    if (!row?.recipe_json) return undefined
+    try {
+      const recipe = JSON.parse(row.recipe_json) as ProcessRestartRecipe
+      return recipe && typeof recipe.command === 'string' && typeof recipe.cwd === 'string' ? recipe : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  onEvent(event: RuntimeEvent): void {
+    const workspace = this.db.prepare('SELECT board_id, card_id FROM workspaces WHERE id=?')
+      .get(event.workspaceId) as { board_id: number; card_id: number | null } | undefined
+    if (!workspace) return
+    this.events.append({
+      boardId: workspace.board_id,
+      workspaceId: event.workspaceId,
+      cardId: workspace.card_id,
+      processId: event.processId,
+      kind: event.kind,
+      source: typeof event.payload.source === 'string' ? event.payload.source : 'runtime',
+      payload: event.payload,
+      createdAt: event.at,
+    })
+    if (event.kind === 'process.failed' || event.kind === 'process.lost') {
+      const process = this.getProcess(event.processId)
+      this.attention.create({
+        boardId: workspace.board_id,
+        workspaceId: event.workspaceId,
+        cardId: workspace.card_id,
+        kind: event.kind,
+        severity: event.kind === 'process.lost' ? 'high' : 'critical',
+        title: `${process?.name ?? 'Process'} ${event.kind === 'process.lost' ? 'was lost after restart' : 'failed'}`,
+        detail: JSON.stringify(event.payload),
+      })
+    }
+    this.bus.current?.emit('event', {
+      board_id: workspace.board_id,
+      type: 'os:runtime',
+      data: {
+        kind: event.kind,
+        workspace_id: event.workspaceId,
+        process_id: event.processId,
+        ...event.payload,
+      },
+    })
+  }
+}
+
+type GitResult = { stdout: string; stderr: string; code: number }
+
+function git(cwd: string, args: string[], options: { input?: string; allowed?: number[] } = {}): Promise<GitResult> {
+  return new Promise((resolve, reject) => {
+    const child = execFile('git', args, {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: 32 * 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      const code = typeof (error as NodeJS.ErrnoException | null)?.code === 'number'
+        ? (error as unknown as { code: number }).code : error ? 1 : 0
+      const result = { stdout: String(stdout), stderr: String(stderr), code }
+      if (!error || options.allowed?.includes(code)) resolve(result)
+      else reject(new Error(`git ${args[0]} failed: ${result.stderr.trim() || (error as Error).message}`))
+    })
+    if (options.input !== undefined) child.stdin?.end(options.input)
+  })
+}
+
+async function capturePatch(cwd: string): Promise<string> {
+  const tracked = await git(cwd, ['diff', '--binary', 'HEAD', '--'])
+  const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout
+    .split('\0').filter(Boolean)
+  const pieces = [tracked.stdout]
+  for (const file of untracked) {
+    const empty = process.platform === 'win32' ? 'NUL' : '/dev/null'
+    const diff = await git(cwd, ['diff', '--binary', '--no-index', '--', empty, file], { allowed: [1] })
+    pieces.push(diff.stdout)
+  }
+  return pieces.filter(Boolean).join('\n')
+}
+
+export type AgentOsRuntime = {
+  supervisor: RuntimeSupervisor
+  workspaceManager: WorkspaceManager
+  drivers: DriverRegistry
+  jobExecutor: AgentOsJobExecutor
+  scheduler: JobScheduler
+  adapter: AgentOsRuntimeAdapter
+  descriptors(): DriverDescriptor[]
+  registerClaude(conductor: ClaudeConductorPort): void
+  setBus(bus: EventEmitter): void
+  reconcileLost(): Promise<ProcessRecord[]>
+  reconcileJobs(): Promise<{ resumed: string[]; recovered: string[] }>
+  shutdown(): Promise<void>
+}
+
+/** Compose the durable stores, safe worktree manager, PTY supervisor, and driver scheduler. */
+export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
+  const bus: BusRef = {}
+  const persistence = new SqliteRuntimePersistence(db, bus)
+  const layer = createRuntimeLayer({ persistence })
+  const workspaceStore = new SqliteWorkspaceStore(db)
+  const workspaceManager = new WorkspaceManager({
+    store: workspaceStore,
+    hasLiveProcesses: (workspaceId) => layer.supervisor.hasLiveProcesses(workspaceId),
+    onEvent: (event) => {
+      new EventStore(db).append({
+        boardId: event.boardId,
+        workspaceId: event.workspaceId,
+        kind: event.kind,
+        source: 'runtime',
+        payload: event.payload,
+        createdAt: event.at,
+      })
+      bus.current?.emit('event', {
+        board_id: event.boardId,
+        type: 'os:workspace',
+        data: { kind: event.kind, workspace_id: event.workspaceId, ...event.payload },
+      })
+    },
+  })
+  const artifacts = new ArtifactStore(db)
+
+  const captureCheckpoint: NonNullable<AgentOsRuntimeAdapter['captureCheckpoint']> = async (input) => {
+    const cwd = input.workspace.worktree_path ?? input.workspace.root_path
+    const head = (await git(cwd, ['rev-parse', 'HEAD'])).stdout.trim()
+    const patch = await capturePatch(cwd)
+    const artifact = patch ? artifacts.create({
+      boardId: input.workspace.board_id,
+      workspaceId: input.workspace.id,
+      cardId: input.workspace.card_id,
+      kind: 'patch',
+      name: `${input.name}.patch`,
+      mimeType: 'text/x-diff',
+      content: patch,
+      metadata: { git_head: head, checkpoint: input.name },
+    }) : null
+    const processRecipes = (await layer.supervisor.list(input.workspace.id))
+      .filter((process) => process.restartable)
+      .map((process) => layer.supervisor.restartRecipe(process.id))
+    return {
+      gitHead: head,
+      patchArtifactId: artifact?.id ?? null,
+      processRecipes: (await Promise.all(processRecipes)).filter(Boolean),
+      context: input.context && Object.keys(input.context).length > 0
+        ? input.context
+        : { items: new ContextStore(db).listWorkspace(input.workspace.id) },
+    }
+  }
+
+  const forkCheckpoint = async (checkpoint: Checkpoint, request: { name: string; branch?: string; targetPath?: string }): Promise<Workspace> => {
+    const source = new DurableWorkspaceStore(db).get(checkpoint.workspace_id)
+    if (!source) throw new Error('checkpoint workspace not found')
+    const created = await workspaceManager.create({
+      boardId: source.board_id,
+      cardId: source.card_id,
+      name: request.name,
+      kind: 'worktree',
+      rootPath: source.root_path,
+      baseRef: checkpoint.git_head,
+      ...(request.branch ? { branch: request.branch } : {}),
+      ...(request.targetPath ? { worktreePath: request.targetPath } : {}),
+      reuseExisting: false,
+    })
+    try {
+      if (checkpoint.patch_artifact_id) {
+        const artifact = artifacts.get(checkpoint.patch_artifact_id)
+        if (!artifact?.content) throw new Error('checkpoint patch artifact is missing its content')
+        await git(workspaceManager.root(created), ['apply', '--binary', '--whitespace=nowarn', '-'], { input: artifact.content })
+      }
+      return mapApiWorkspace(created)
+    } catch (error) {
+      await workspaceManager.archive(created.id).catch(() => undefined)
+      throw error
+    }
+  }
+
+  const adapter: AgentOsRuntimeAdapter = {
+    createWorkspace: async (input: CreateWorkspace) => {
+      if (input.status && input.status !== 'active') throw new Error('new runtime workspaces must start active')
+      if (input.kind && !['shared', 'worktree'].includes(input.kind)) throw new Error('workspace kind must be shared or worktree')
+      return mapApiWorkspace(await workspaceManager.create({
+        boardId: input.boardId,
+        cardId: input.cardId,
+        name: input.name,
+        kind: (input.kind ?? 'shared') as 'shared' | 'worktree',
+        rootPath: input.rootPath,
+        ...(input.worktreePath ? { worktreePath: input.worktreePath } : {}),
+        ...(input.branch ? { branch: input.branch } : {}),
+        baseRef: input.baseRef ?? 'HEAD',
+        env: input.env,
+      }))
+    },
+    updateWorkspace: async (workspace, patch) => mapApiWorkspace(await workspaceManager.update(workspace.id, patch)),
+    archiveWorkspace: async (workspace) => mapApiWorkspace(await workspaceManager.archive(workspace.id)),
+    spawnProcess: async (input) => {
+      const executionRoot = await realpath(path.resolve(input.workspace.worktree_path ?? input.workspace.root_path))
+      const cwd = await realpath(path.resolve(input.cwd))
+      const relative = path.relative(executionRoot, cwd)
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new ValidationError(`process cwd must stay inside workspace execution root ${executionRoot}`)
+      }
+      return mapApiProcess(await layer.supervisor.spawn({
+        workspaceId: input.workspace.id,
+        name: input.name,
+        command: input.command,
+        cwd,
+        env: { ...input.workspace.env, ...input.env },
+        cols: input.cols,
+        rows: input.rows,
+        restartable: input.restartable,
+      }))
+    },
+    writeProcessInput: (processId, data) => layer.supervisor.write(processId, data, 'human'),
+    resizeProcess: async (processId, cols, rows) => { await layer.supervisor.resize(processId, cols, rows) },
+    signalProcess: (processId, signal) => layer.supervisor.signal(processId, signal as NodeJS.Signals),
+    restartProcess: async (processId) => mapApiProcess(await layer.supervisor.restart(processId)),
+    listProcessPorts: (workspaceId) => layer.supervisor.discoverPorts(workspaceId),
+    captureCheckpoint,
+    forkCheckpoint,
+  }
+
+  const jobExecutor = new AgentOsJobExecutor(db, layer.drivers, workspaceManager, bus)
+  const scheduler = new JobScheduler(db, jobExecutor)
+  jobExecutor.bindScheduler(scheduler)
+  let claudeRegistered = false
+
+  return {
+    supervisor: layer.supervisor,
+    workspaceManager,
+    drivers: layer.drivers,
+    jobExecutor,
+    scheduler,
+    adapter,
+    descriptors: () => layer.drivers.list().map(({ id, capabilities }) => ({
+      id,
+      available: true,
+      capabilities: Object.entries(capabilities).filter(([, enabled]) => enabled).map(([name]) => name),
+    })),
+    registerClaude: (conductor) => {
+      if (claudeRegistered) return
+      layer.drivers.register(new ClaudeAgentDriverAdapter({
+        conductor,
+        resolveAgent: (externalId) => {
+          const row = /^\d+$/.test(externalId)
+            ? db.prepare('SELECT * FROM agents WHERE id=?').get(Number(externalId))
+            : db.prepare('SELECT * FROM agents WHERE sdk_session=?').get(externalId)
+          return row as any ?? null
+        },
+        workspaceForAgent: (agentId) => (db.prepare(`SELECT workspace_id FROM agent_sessions
+          WHERE agent_id=? ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(agentId) as { workspace_id: string } | undefined)?.workspace_id,
+      }))
+      claudeRegistered = true
+    },
+    setBus: (nextBus) => { bus.current = nextBus },
+    reconcileLost: () => layer.supervisor.reconcileLost(),
+    reconcileJobs: () => jobExecutor.reconcileRunningJobs(),
+    shutdown: async () => {
+      jobExecutor.prepareShutdown()
+      await layer.supervisor.shutdown()
+    },
+  }
+}
+
+type LiveJob = { driver: AgentDriver; session: DriverSession }
+
+/** Executes durable jobs through provider-neutral drivers and completes them from driver events. */
+export class AgentOsJobExecutor implements JobExecutor {
+  private readonly live = new Map<string, LiveJob>()
+  private scheduler?: JobScheduler
+  private shuttingDown = false
+
+  constructor(
+    private readonly db: Database.Database,
+    private readonly drivers: DriverRegistry,
+    private readonly workspaces: WorkspaceManager,
+    private readonly bus: BusRef = {},
+  ) {}
+
+  bindScheduler(scheduler: JobScheduler): void {
+    this.scheduler = scheduler
+  }
+
+  supportedProviders(): readonly string[] {
+    return this.drivers.list().map((driver) => driver.id)
+  }
+
+  prepareShutdown(): void {
+    this.shuttingDown = true
+  }
+
+  async reconcileRunningJobs(): Promise<{ resumed: string[]; recovered: string[] }> {
+    if (!this.scheduler) throw new Error('job executor is not bound to a scheduler')
+    const resumed: string[] = []
+    const recovered: string[] = []
+    const rows = this.db.prepare("SELECT * FROM jobs WHERE status IN ('running','cancelling') ORDER BY started_at, rowid")
+      .all() as Record<string, unknown>[]
+    for (const row of rows) {
+      const job = mapRuntimeJob(row)
+      if (job.status === 'cancelling') {
+        this.scheduler.recover(job.id, 'daemon restarted while cancellation was in progress')
+        recovered.push(job.id)
+        continue
+      }
+      const sessionRow = this.sessionForJob(job.id)
+      const driver = sessionRow ? this.drivers.get(sessionRow.provider) : undefined
+      if (!sessionRow?.external_id || !driver || !driver.capabilities().resume) {
+        if (sessionRow) this.markSessionFailed(sessionRow.id)
+        this.scheduler.recover(job.id, `daemon restarted; ${job.provider} session cannot be resumed`)
+        recovered.push(job.id)
+        continue
+      }
+      try {
+        const session = await driver.attach(sessionRow.external_id)
+        if (!session) throw new Error('provider session is no longer live')
+        this.db.prepare("UPDATE agent_sessions SET status='running', updated_at=datetime('now') WHERE id=?")
+          .run(sessionRow.id)
+        this.live.set(job.id, { driver, session })
+        void this.watch(job, sessionRow.id, driver, session)
+        resumed.push(job.id)
+      } catch (error) {
+        this.markSessionFailed(sessionRow.id)
+        this.scheduler.recover(job.id, `daemon restart recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        recovered.push(job.id)
+      }
+    }
+    return { resumed, recovered }
+  }
+
+  async execute(job: Job): Promise<JobExecutionResult> {
+    const driver = this.drivers.require(job.provider)
+    const contract = job.card_id ? new TaskContractService(this.db).getOrCreate(job.card_id) : null
+    const budgetTokens = job.budget_tokens ?? contract?.budget_tokens ?? null
+    const budgetCents = job.budget_cents ?? contract?.budget_cents ?? null
+    this.db.prepare(`UPDATE jobs SET budget_tokens=COALESCE(budget_tokens, ?), budget_cents=COALESCE(budget_cents, ?)
+      WHERE id=?`).run(budgetTokens, budgetCents, job.id)
+    const effectiveJob = { ...job, budget_tokens: budgetTokens, budget_cents: budgetCents }
+    if ((budgetTokens !== null && job.spent_tokens >= budgetTokens) ||
+        (budgetCents !== null && job.spent_cents >= budgetCents)) throw new Error('job budget is exhausted before launch')
+    if (job.provider !== 'claude' && (budgetTokens !== null || budgetCents !== null)) {
+      throw new Error(`provider ${job.provider} does not expose enforceable model token or cost budgets`)
+    }
+    const workspace = await this.resolveWorkspace(effectiveJob, contract)
+    if (job.card_id && contract?.workspace_id !== workspace.id) {
+      new TaskContractService(this.db).put(job.card_id, { workspace_id: workspace.id })
+    }
+    this.assertCardClaimable(job)
+    const cwd = this.workspaces.root(workspace)
+    const request = job.provider === 'shell'
+      ? this.shellRequest(effectiveJob, workspace, contract, cwd)
+      : {
+          workspaceId: workspace.id,
+          boardId: job.board_id,
+          cwd,
+          name: job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
+          prompt: this.prompt(job, contract),
+          ...(job.model ? { model: job.model } : {}),
+          permissionMode: contract?.policy_id ? 'default' : 'bypassPermissions',
+          ...(budgetCents !== null ? { maxBudgetUsd: Math.max(0.01, (budgetCents - job.spent_cents) / 100) } : {}),
+          ...(budgetTokens !== null ? { taskBudgetTokens: Math.max(1, budgetTokens - job.spent_tokens) } : {}),
+          metadata: { jobId: job.id, cardId: job.card_id, budgetTokens, budgetCents },
+        }
+    const session = await driver.launch(request)
+    const launchState = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
+    if (launchState?.status !== 'running') {
+      await driver.stop(session.id).catch(() => undefined)
+      throw new Error(`job ${job.id} left the running state while its provider was launching`)
+    }
+    const sessionId = randomUUID()
+    const agentId = Number(session.metadata.agentId)
+    try {
+      this.db.prepare(`INSERT INTO agent_sessions
+        (id, workspace_id, agent_id, provider, external_id, model, status, context_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'running', ?, datetime('now'), datetime('now'))`).run(
+        sessionId,
+        workspace.id,
+        Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null,
+        job.provider,
+        session.externalId,
+        job.model,
+        JSON.stringify({ job_id: job.id, card_id: job.card_id }),
+      )
+      this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
+      if (job.card_id && Number.isSafeInteger(agentId) && agentId > 0) this.claimCard(job, agentId)
+    } catch (error) {
+      await driver.stop(session.id).catch(() => undefined)
+      throw error
+    }
+    this.live.set(job.id, { driver, session })
+    void this.watch(job, sessionId, driver, session)
+    return { status: 'running', detail: { session_id: sessionId, driver_session_id: session.id, workspace_id: workspace.id } }
+  }
+
+  async cancel(job: Job): Promise<void> {
+    const current = this.live.get(job.id)
+    if (current) {
+      await current.driver.stop(current.session.id)
+      this.live.delete(job.id)
+    } else {
+      const row = this.sessionForJob(job.id)
+      if (row?.external_id) {
+        const driver = this.drivers.get(row.provider)
+        const attached = driver ? await driver.attach(row.external_id) : null
+        if (driver && attached) await driver.stop(attached.id)
+      }
+    }
+    this.db.prepare(`UPDATE agent_sessions SET status='stopped', updated_at=datetime('now')
+      WHERE json_extract(context_json, '$.job_id')=? AND status NOT IN ('stopped','failed')`).run(job.id)
+  }
+
+  private async resolveWorkspace(job: Job, contract: TaskContract | null): Promise<WorkspaceRecord> {
+    const requested = job.workspace_id ?? contract?.workspace_id
+    if (requested) {
+      const existing = await this.workspaces.get(requested)
+      if (!existing) throw new Error(`workspace ${requested} not found`)
+      if (existing.status !== 'active') throw new Error(`workspace ${requested} is ${existing.status}`)
+      if (job.card_id && existing.cardId !== null && existing.cardId !== job.card_id) {
+        throw new Error(`workspace ${requested} is linked to a different card`)
+      }
+      if (job.card_id && existing.cardId === null) return this.workspaces.update(existing.id, { cardId: job.card_id })
+      return existing
+    }
+    if (job.card_id) {
+      const linked = (await this.workspaces.list({ boardId: job.board_id, cardId: job.card_id, status: 'active' }))[0]
+      if (linked) return linked
+    }
+    const board = this.db.prepare('SELECT project_path FROM boards WHERE id=?').get(job.board_id) as { project_path: string } | undefined
+    if (!board) throw new Error('job board not found')
+    const workspace = await this.workspaces.create({
+      boardId: job.board_id,
+      cardId: job.card_id,
+      name: job.card_id ? `card-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
+      kind: job.card_id ? 'worktree' : 'shared',
+      rootPath: board.project_path,
+      baseRef: contract?.base_ref ?? 'HEAD',
+      reuseExisting: !job.card_id,
+    })
+    return workspace
+  }
+
+  private shellRequest(job: Job, workspace: WorkspaceRecord, contract: TaskContract | null, cwd: string) {
+    const command = contract?.verify_commands[0]?.trim()
+    if (!command) throw new Error('shell jobs require at least one task-contract verify command')
+    return {
+      workspaceId: workspace.id,
+      boardId: job.board_id,
+      cwd,
+      name: job.card_id ? `verify-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
+      command,
+      env: workspace.env,
+      metadata: { jobId: job.id, cardId: job.card_id },
+    }
+  }
+
+  private prompt(job: Job, contract: TaskContract | null): string {
+    if (!contract) return `Execute Agent OS job ${job.id} in this workspace. Report the result and evidence when complete.`
+    const acceptance = contract.acceptance_criteria.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')
+    const verification = contract.verify_commands.map((command) => `- ${command}`).join('\n')
+    return [
+      `Objective: ${contract.objective}`,
+      acceptance ? `Acceptance criteria:\n${acceptance}` : '',
+      verification ? `Required verification:\n${verification}` : '',
+      'Work in the attached workspace. Preserve terminal-visible evidence and stop after completing this task.',
+    ].filter(Boolean).join('\n\n')
+  }
+
+  private claimCard(job: Job, agentId: number): void {
+    const current = this.db.prepare('SELECT owner_agent_id FROM cards WHERE id=? AND board_id=?')
+      .get(job.card_id, job.board_id) as { owner_agent_id: number | null } | undefined
+    if (!current) throw new Error('job card not found')
+    if (current.owner_agent_id && current.owner_agent_id !== agentId) throw new Error('job card is already owned by another agent')
+    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
+      .run(agentId, job.card_id)
+    this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, 'agent_os_job_started', ?)`)
+      .run(job.card_id, agentId, JSON.stringify({ job_id: job.id }))
+    const card = this.db.prepare('SELECT * FROM cards WHERE id=?').get(job.card_id)
+    this.bus.current?.emit('event', { board_id: job.board_id, type: 'card', data: card })
+  }
+
+  private assertCardClaimable(job: Job): void {
+    if (!job.card_id || job.provider !== 'claude') return
+    const card = this.db.prepare('SELECT owner_agent_id FROM cards WHERE id=? AND board_id=?')
+      .get(job.card_id, job.board_id) as { owner_agent_id: number | null } | undefined
+    if (!card) throw new Error('job card not found')
+    if (card.owner_agent_id) throw new Error('job card is already owned by another agent')
+  }
+
+  private async watch(job: Job, sessionId: string, driver: AgentDriver, session: DriverSession): Promise<void> {
+    let failure: string | undefined
+    try {
+      for await (const event of driver.events(session.id)) {
+        this.recordDriverEvent(job, sessionId, event)
+        if (event.type === 'error') failure = event.data
+        if (event.type === 'exit') {
+          const tokens = Number(event.metadata?.tokens)
+          const costUsd = Number(event.metadata?.costUsd)
+          if (this.scheduler && (Number.isFinite(tokens) || Number.isFinite(costUsd))) {
+            this.scheduler.recordUsage(job.id, Number.isFinite(tokens) ? tokens : 0,
+              Number.isFinite(costUsd) ? costUsd * 100 : 0)
+          }
+          const exitCode = Number(event.metadata?.exitCode)
+          if (this.shuttingDown || event.data.includes('process.stopped')) {
+            failure = 'job interrupted by daemon shutdown or an explicit process stop'
+          } else if (event.data.includes('failed') || event.data.includes('lost') || (Number.isFinite(exitCode) && exitCode !== 0)) {
+            failure = event.data || `process exited with code ${exitCode}`
+          }
+          break
+        }
+      }
+      if (!failure && job.card_id) {
+        const card = this.db.prepare('SELECT column_name FROM cards WHERE id=?').get(job.card_id) as { column_name: string } | undefined
+        if (card?.column_name === 'blocked') failure = 'agent stopped with the task blocked'
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+    } finally {
+      this.live.delete(job.id)
+      this.db.prepare(`UPDATE agent_sessions SET status=?, updated_at=datetime('now') WHERE id=?`)
+        .run(failure ? 'failed' : 'stopped', sessionId)
+      const current = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
+      if (current?.status === 'running') {
+        try { this.scheduler?.complete(job.id, failure) } catch { /* cancellation or another completion won the race */ }
+      }
+    }
+  }
+
+  private recordDriverEvent(job: Job, sessionId: string, event: DriverEvent): void {
+    const current = this.db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(job.id) as { workspace_id: string | null } | undefined
+    new EventStore(this.db).append({
+      boardId: job.board_id,
+      workspaceId: current?.workspace_id,
+      cardId: job.card_id,
+      sessionId,
+      kind: `driver.${event.type}`,
+      source: job.provider,
+      payload: { seq: event.seq, data: event.data.slice(0, 8_000), metadata: event.metadata ?? {} },
+      createdAt: event.at,
+    })
+    if (event.type !== 'output') this.bus.current?.emit('event', {
+      board_id: job.board_id,
+      type: 'os:driver',
+      data: { job_id: job.id, session_id: sessionId, type: event.type, data: event.data, metadata: event.metadata ?? {} },
+    })
+  }
+
+  private sessionForJob(jobId: string): { id: string; provider: string; external_id: string | null } | undefined {
+    return this.db.prepare(`SELECT id, provider, external_id FROM agent_sessions
+      WHERE json_extract(context_json, '$.job_id')=? ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
+      .get(jobId) as { id: string; provider: string; external_id: string | null } | undefined
+  }
+
+  private markSessionFailed(id: string): void {
+    this.db.prepare("UPDATE agent_sessions SET status='failed', updated_at=datetime('now') WHERE id=?").run(id)
+  }
+}
+
+const mapRuntimeJob = (row: Record<string, unknown>): Job => ({
+  id: String(row.id), board_id: Number(row.board_id), card_id: row.card_id == null ? null : Number(row.card_id),
+  workspace_id: row.workspace_id == null ? null : String(row.workspace_id), provider: String(row.provider),
+  model: row.model == null ? null : String(row.model), priority: Number(row.priority), status: String(row.status) as Job['status'],
+  attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
+  budget_tokens: row.budget_tokens == null ? null : Number(row.budget_tokens),
+  budget_cents: row.budget_cents == null ? null : Number(row.budget_cents),
+  spent_tokens: Number(row.spent_tokens ?? 0), spent_cents: Number(row.spent_cents ?? 0),
+  scheduled_at: String(row.scheduled_at), started_at: row.started_at == null ? null : String(row.started_at),
+  finished_at: row.finished_at == null ? null : String(row.finished_at), error: row.error == null ? null : String(row.error),
+  created_at: String(row.created_at),
+})
