@@ -6,6 +6,7 @@ import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
 import { ensureToken } from './token.js'
 import { pairUrl, startRemote, stopRemote } from './remote.js'
+import { messageBody } from './msgsafe.js'
 import qrcode from 'qrcode-terminal'
 
 const program = new Command().name('orchestra').version(VERSION)
@@ -111,16 +112,22 @@ card.command('move <id> <column>').option('--agent <a>').action(async (id, colum
   console.log(`card #${r.card.id} → ${r.card.column}`)
 })
 
-program.command('ask <to> <body>').option('--card <id>').option('--from <a>').action(async (to, body, o) => {
-  await up(); const b = await board()
-  const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, body, card_id: o.card ? Number(o.card) : undefined })
-  console.log(`asked ${to} (msg #${m.id})`)
-})
-program.command('reply <msgId> <body>').option('--from <a>').action(async (msgId, body, o) => {
-  await up(); const b = await board()
-  const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body, reply_to: Number(msgId) })
-  console.log(`replied (msg #${m.id})`)
-})
+program.command('ask <to> [body]').option('--card <id>').option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (to, body, o) => {
+    const text = await messageBody(body, o.stdin)
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, body: text, card_id: o.card ? Number(o.card) : undefined })
+    console.log(`asked ${to} (msg #${m.id})`)
+  })
+program.command('reply <msgId> [body]').option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (msgId, body, o) => {
+    const text = await messageBody(body, o.stdin)
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body: text, reply_to: Number(msgId) })
+    console.log(`replied (msg #${m.id})`)
+  })
 
 program.command('pulse').option('--agent-id <id>').action(async (o) => {
   await up()
@@ -173,10 +180,13 @@ program.command('shipped <cardId> <hash>').description('record the merge commit 
     console.log(`card #${cardId} shipped @ ${p.hash} "${p.subject}"${r.created ? '' : ' (already recorded)'}`)
   })
 
-program.command('note <text>').description('post a note to the board (visible to everyone as a thread)')
-  .option('--from <a>').action(async (text, o) => {
+program.command('note [text]').description('post a note to the board (visible to everyone as a thread)')
+  .option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (text, o) => {
+    const body = await messageBody(text, o.stdin)
     await up(); const b = await board()
-    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body: text })
+    const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), body })
     console.log(`note posted (msg #${m.id})`)
   })
 
