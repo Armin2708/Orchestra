@@ -220,6 +220,7 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
         return (
           <div key={a.id} className={`net-node ${dying === a.id ? 'dying' : ''}`} style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
             <button className="net-kill" title={a.kind === 'hired' ? `Fire ${a.name}` : `Remove ${a.name} from the board`}
+              aria-label={a.kind === 'hired' ? `Fire ${a.name}` : `Remove ${a.name} from the board`}
               onClick={(e) => { e.stopPropagation(); setKilling(killing?.id === a.id ? null : a) }}>✕</button>
             {killing?.id === a.id && (
               <div className="kill-confirm" onClick={(e) => e.stopPropagation()}>

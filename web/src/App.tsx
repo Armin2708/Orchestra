@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api, ApiError, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
-import { ProjectGrid } from './Board'
-import { MessagesView } from './MessagesView'
+import { BoardSection } from './BoardSection'
+import { BoardTab, PrimaryView, resolveStoredNavigation } from './boardNavigation'
 import { RoadmapView } from './RoadmapView'
 import { TimelineView } from './TimelineView'
 import { ShippedView } from './ShippedView'
@@ -11,8 +11,6 @@ import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
 import './messages.css'
 import './agentOs.css'
-
-const WorkspaceCockpit = React.lazy(() => import('./WorkspaceCockpit').then((module) => ({ default: module.WorkspaceCockpit })))
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -32,17 +30,25 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  type View = 'board' | 'messages' | 'workspaces' | 'roadmap' | 'timeline' | 'shipped'
-  const [view, setView] = useState<View>(() =>
-    (localStorage.getItem('orchestra-view') as View) ?? 'board')
-  const pickView = (v: View) => { setView(v); localStorage.setItem('orchestra-view', v) }
+  const [navigation, setNavigation] = useState(() => resolveStoredNavigation(
+    localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab')))
+  const { view, boardTab } = navigation
+  const pickView = (next: PrimaryView) => setNavigation((current) => ({ ...current, view: next }))
+  const pickBoardTab = (next: BoardTab) => setNavigation({ view: 'board', boardTab: next })
   const pick = (f: number | 'all') => { setFocus(f); setMenuOpen(false); localStorage.setItem('orchestra-focus', String(f)) }
+
+  useEffect(() => {
+    localStorage.setItem('orchestra-view', view)
+    localStorage.setItem('orchestra-board-tab', boardTab)
+  }, [view, boardTab])
 
   // a notification tap lands on /?board=<id>[&card=<id>] — focus that board;
   // the card param is picked up by ProjectGrid once snapshots arrive
   useEffect(() => {
-    const b = Number(new URLSearchParams(location.search).get('board'))
+    const params = new URLSearchParams(location.search)
+    const b = Number(params.get('board'))
     if (b) { setFocus(b); localStorage.setItem('orchestra-focus', String(b)) }
+    if (params.has('card')) setNavigation({ view: 'board', boardTab: 'overview' })
   }, [])
 
   // default to the first project (network view) rather than the all-projects grid
@@ -120,30 +126,21 @@ export function App() {
           <SystemMeter boards={snaps.map((s) => s.board.id)} />
           <nav className="view-tabs">
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
-            <button className={view === 'messages' ? 'tab active' : 'tab'} onClick={() => pickView('messages')}>
-              Messages{openMessages > 0 && <span className="tab-count">{openMessages}</span>}
-            </button>
-            <button className={view === 'workspaces' ? 'tab active' : 'tab'} onClick={() => pickView('workspaces')}>Workspaces</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
             <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
             <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
               if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
               pick(item.board_id)
-              pickView('workspaces')
+              pickBoardTab('workspace')
             }} />
             <PushBell />
           </nav>
         </div>
       </header>
       {view === 'board'
-        ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-        : view === 'messages'
-          ? <MessagesView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-          : view === 'workspaces'
-            ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading workspace cockpit"><span /><span /><span /></div>}>
-                <WorkspaceCockpit snaps={shown} onChange={refresh} />
-              </React.Suspense>
+        ? <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && visible.length === 1}
+            openMessages={openMessages} onTabChange={pickBoardTab} onChange={refresh} />
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : view === 'timeline'
