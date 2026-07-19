@@ -3,6 +3,7 @@
   "owner": {
     "name": "Armin2708"
   },
+  "description": "Official Orchestra marketplace for the live Claude Code multi-agent coordination board.",
   "plugins": [
     {
       "name": "orchestra",
