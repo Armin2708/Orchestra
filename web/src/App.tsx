@@ -3,6 +3,7 @@ import { api, ApiError, setToken, streamUrl, Snapshot , SystemInfo, Telemetry } 
 import { ProjectGrid } from './Board'
 import { RoadmapView } from './RoadmapView'
 import { TimelineView } from './TimelineView'
+import { ShippedView } from './ShippedView'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 
 export const Mark = () => (
@@ -23,9 +24,10 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  const [view, setView] = useState<'board' | 'roadmap' | 'timeline'>(() =>
-    (localStorage.getItem('orchestra-view') as 'board' | 'roadmap' | 'timeline') ?? 'board')
-  const pickView = (v: 'board' | 'roadmap' | 'timeline') => { setView(v); localStorage.setItem('orchestra-view', v) }
+  type View = 'board' | 'roadmap' | 'timeline' | 'shipped'
+  const [view, setView] = useState<View>(() =>
+    (localStorage.getItem('orchestra-view') as View) ?? 'board')
+  const pickView = (v: View) => { setView(v); localStorage.setItem('orchestra-view', v) }
   const pick = (f: number | 'all') => { setFocus(f); setMenuOpen(false); localStorage.setItem('orchestra-focus', String(f)) }
 
   // a notification tap lands on /?board=<id>[&card=<id>] — focus that board;
@@ -110,6 +112,7 @@ export function App() {
           <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
           <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
           <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
+          <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
           <PushBell />
         </nav>
       </header>
@@ -117,7 +120,9 @@ export function App() {
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-          : <TimelineView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
+          : view === 'timeline'
+            ? <TimelineView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+            : <ShippedView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />}
     </div>
   )
 }

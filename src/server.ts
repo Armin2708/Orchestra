@@ -15,6 +15,7 @@ import { hardware, claudeUsage } from './system.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
 import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
+import { shiplog } from './shiplog.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -139,6 +140,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const next_cursor = has_more && last
         ? Buffer.from(JSON.stringify([last.ts, last.source, last.id])).toString('base64url') : null
       return { items, next_cursor, has_more }
+    })
+
+  // annotated commit history: git log joined with the cards/agents that shipped each commit
+  server.get<{ Params: { id: string }; Querystring: { offset?: string; limit?: string } }>(
+    '/api/v1/boards/:id/shipped', async (req, reply) => {
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      return shiplog(db, board, { offset: Number(req.query.offset ?? 0) || 0, limit: Number(req.query.limit ?? 50) || 50 })
     })
 
   // terminal sessions report their live subagents via hook pings; entries expire quickly
