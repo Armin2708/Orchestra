@@ -689,7 +689,7 @@
   background: var(--message-line-strong);
 }
 
-.message-answers li {
+.message-answers > li {
   position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
@@ -1237,7 +1237,7 @@
   .message-reply-action { margin-left: -8px; }
 
   .message-answers::before { left: -28px; }
-  .message-answers li { grid-template-columns: 27px minmax(0, 1fr); gap: 8px; }
+  .message-answers > li { grid-template-columns: 27px minmax(0, 1fr); gap: 8px; }
   .message-answer-avatar { width: 26px; height: 26px; border-radius: 9px; }
   .message-answer-meta { flex-wrap: wrap; }
   .message-answer-meta time { width: 100%; margin-left: 0; }
