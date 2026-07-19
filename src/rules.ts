@@ -26,7 +26,17 @@ export const verboseRules = (me: string) => `orchestra rules (coordination board
 - Always single-quote message bodies. If a body contains backticks, $ or quotes, do not put it on the command line at all — pipe it: printf '%s' <body> | orchestra ask <agent> --stdin (also on reply and note). Double quotes let the shell run substitutions inside your message.
 - SUBAGENTS: spawn them freely — they work under YOUR identity and card. Instruct each one: do NOT run orchestra commands; board coordination belongs to you, the parent.`
 
-export const hookRules = (me: string) => (verbose() ? verboseRules(me) : compactRules(me))
+// Output discipline (#57): appended to every role prompt via the composition wrappers
+// below (single application — conductorCompactRules embeds compactRules, so appending
+// inside the variants would double it). Output tokens are ~5x input price and never
+// cached; ORCHESTRA_VERBOSE_OUTPUT=1 removes the block, read per call like verbose().
+export const verboseOutput = () => process.env.ORCHESTRA_VERBOSE_OUTPUT === '1'
+
+export const OUTPUT_DISCIPLINE = `- OUTPUT: lead with the outcome; no preamble, recaps, or play-by-play. Board messages and card descs state deltas only — never restate existing text. Final summary ≤2 sentences. Comment code only where the code can't say it.`
+
+export const outputDiscipline = () => (verboseOutput() ? '' : `\n${OUTPUT_DISCIPLINE}`)
+
+export const hookRules = (me: string) => (verbose() ? verboseRules(me) : compactRules(me)) + outputDiscipline()
 
 export const conductorCompactRules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
 ${compactRules(me)}
@@ -49,4 +59,4 @@ Orchestra board rules (standing instructions):
 - SUBAGENTS: spawn them freely for parallel work — they operate under YOUR identity and YOUR card. Tell every subagent in its prompt: do NOT run orchestra commands (no cards, no asks, no replies) — board coordination belongs to you, the parent. Summarize subagent results on your card as you go.
 - If the orchestra command is missing, use: npx -y orchestra-board`
 
-export const conductorRules = (me: string) => (verbose() ? conductorVerboseRules(me) : conductorCompactRules(me))
+export const conductorRules = (me: string) => (verbose() ? conductorVerboseRules(me) : conductorCompactRules(me)) + outputDiscipline()

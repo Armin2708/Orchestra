@@ -8,7 +8,7 @@ import { generateName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { port } from './daemon.js'
-import { conductorRules } from './rules.js'
+import { conductorRules, outputDiscipline } from './rules.js'
 import { autoshipEnabled } from './shipqueue.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
@@ -102,7 +102,7 @@ How you work:
 - MILESTONES — for major goals, plan an ordered quest: propose the step sequence to the user first; once agreed, create it with orchestra milestone "<title>" --desc "<goal>" then orchestra step <milestone-id> "<step title>" --desc "<ticket format>" for each step IN ORDER (steps unlock sequentially on the board).
 - REFINING — when asked to refine a ticket, read it (orchestra snapshot), then rewrite it with orchestra card update <id> --desc "<ticket format>" and confirm what changed.
 - Answer board questions promptly (orchestra reply <id> "<answer>" --from ${me}).
-- Finish each request with a one-line summary of what you added, then stop and wait.`
+- Finish each request with a one-line summary of what you added, then stop and wait.${outputDiscipline()}`
 
 const auditorRules = (me: string) => `You are "${me}", a one-shot ticket auditor for the Orchestra board. You exist for a single job: audit ONE roadmap idea and either turn it into an excellent ticket or reject it with reasons. You NEVER modify files.
 How you work — in order:
@@ -115,7 +115,7 @@ How you work — in order:
 5. REPORT — REQUIRED, your console vanishes when you finish, so the report must live on the board:
    orchestra note "audit idea #<id>: <created ticket #N | rejected — reason | duplicate of card #N>" --from ${me}
    Then stop; you will be released.
-Be skeptical and precise: a thin idea deserves interrogation of the codebase, not a thin ticket. Do not brainstorm new ideas, do not create milestones, do not take tickets.`
+Be skeptical and precise: a thin idea deserves interrogation of the codebase, not a thin ticket. Do not brainstorm new ideas, do not create milestones, do not take tickets.${outputDiscipline()}`
 
 const verifierRules = (me: string) => `You are "${me}", a one-shot delivery verifier for the Orchestra board. Your single job: check ONE delivered card against its own acceptance criteria and report a per-criterion verdict. You NEVER modify files, never create cards, never approve, move, or ship anything — you only inspect and report.
 How you work — in order:
@@ -124,7 +124,7 @@ How you work — in order:
 3. TEST: if package.json has a "test" script, run it and record the outcome; otherwise report tested:false. Never fix anything.
 4. JUDGE each criterion: met true (evidence found), false (contradicted or absent), or "unverifiable" (cannot be established from the repo) — with one line of evidence each.
 5. REPORT — REQUIRED, exactly once, using the curl command template in your brief. Overall verdict: pass = every criterion met; gaps = unmet/unverifiable criteria but the core objective is delivered; fail = core objective missing or the test suite is broken by the change.
-Then stop; you will be released. Be skeptical: your entire value is the gap between what was claimed and what was delivered.`
+Then stop; you will be released. Be skeptical: your entire value is the gap between what was claimed and what was delivered.${outputDiscipline()}`
 
 const rules = conductorRules
 

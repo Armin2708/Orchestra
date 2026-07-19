@@ -108,3 +108,39 @@ export ORCHESTRA_VERBOSE_RULES=1
   single-quoted and the conductor/verbose variants carry a prefer-`--stdin` note —
   token-neutral for the compact arm (still 464 tok/session; quote swaps are
   length-preserving, the note lives outside the budgeted compact text).
+
+## Output discipline (#57)
+
+Output tokens are ~5x the input price and never cache — so after shrinking what
+orchestra injects, the next win is shrinking what agents *say*. Every role prompt
+(hired, strategist, auditor, verifier, and the CLI hook rules) now ends with a
+single discipline block: lead with the outcome, no preamble/recaps/play-by-play,
+board messages and card descs carry deltas only, final summaries ≤2 sentences,
+comments only where code can't say it.
+
+**Input cost of the block: 224 chars ≈ 56 tok per session** (CI-asserted <60 in
+`test/output-discipline.test.ts`, alongside once-per-prompt presence in every
+role variant in both rules modes, and rollback). The block is identical in both
+rules arms, so all 11 A/B compliance gates (10 original + `output_discipline_present`)
+stay green and the #35 diet ratio is measured with the block excluded.
+
+**Output-side saving, measured live** (`npx tsx scripts/ab-output.mjs`, real SDK,
+3 scripted turns per arm, 2026-07-19, claude-haiku-4-5-20251001; not run in CI —
+CI enforces the deterministic invariants instead):
+
+| turn | undisciplined (tok) | disciplined (tok) | reduction |
+|---|---|---|---|
+| completion_report | 47 | 34 | 28% |
+| status_update | 88 | 57 | 35.6% |
+| plan_ack | 194 | 124 | 36.4% |
+| **total** | 328 | 214 | **35%** |
+
+Net: the block pays for its 56-tok input cost as soon as a session produces ~160
+tok of would-be output (a single turn), and output is where #56's usage split
+(`↓ out` in the terminal footer) will show it in production.
+
+Rollback, independent of the rules flag:
+
+```sh
+export ORCHESTRA_VERBOSE_OUTPUT=1   # removes the block from every role prompt
+```

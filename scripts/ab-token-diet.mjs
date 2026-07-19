@@ -40,6 +40,9 @@ console.log('|---|---|---|')
 for (const k of Object.keys(r.verbose.compliance)) {
   console.log(`| ${k} | ${r.verbose.compliance[k] ? '✓' : '✗'} | ${r.compact.compliance[k] ? '✓' : '✗'} |`)
 }
+if (r.output_rules_cost) {
+  console.log(`\n## Output discipline (#57)\n\nRules cost: ${r.output_rules_cost.chars} chars ≈ ${r.output_rules_cost.tokens} tok per session (cap: <60). Output-side savings are measured live by scripts/ab-output.mjs — see docs/token-diet.md.`)
+}
 if (!r.modes_differ) {
   console.log('\n⚠ verbose and compact produced identical output — the compact injections (#35) are not on this branch yet.')
 }

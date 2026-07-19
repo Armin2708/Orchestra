@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderSessionStart } from '../src/hooks.js'
-import { compactRules, conductorCompactRules, conductorRules, hookRules, verboseRules } from '../src/rules.js'
+import { compactRules, conductorCompactRules, conductorRules, hookRules, outputDiscipline, verboseRules } from '../src/rules.js'
 
-afterEach(() => { delete process.env.ORCHESTRA_VERBOSE_RULES })
+afterEach(() => { delete process.env.ORCHESTRA_VERBOSE_RULES; delete process.env.ORCHESTRA_VERBOSE_OUTPUT })
 
 // every standing directive must survive the diet — these are the load-bearing phrases
 const DIRECTIVES = [
@@ -40,12 +40,13 @@ describe('compact rules', () => {
   })
 
   it('ORCHESTRA_VERBOSE_RULES=1 restores the old text, read per call', () => {
-    expect(hookRules('x')).toBe(compactRules('x'))
+    // wrappers append the #57 output-discipline block; the variant text itself is unchanged
+    expect(hookRules('x')).toBe(compactRules('x') + outputDiscipline())
     process.env.ORCHESTRA_VERBOSE_RULES = '1'
-    expect(hookRules('x')).toBe(verboseRules('x'))
+    expect(hookRules('x')).toBe(verboseRules('x') + outputDiscipline())
     expect(conductorRules('x')).toContain('REQUIRED before starting any task')
     delete process.env.ORCHESTRA_VERBOSE_RULES
-    expect(hookRules('x')).toBe(compactRules('x'))
+    expect(hookRules('x')).toBe(compactRules('x') + outputDiscipline())
   })
 })
 
@@ -75,6 +76,9 @@ describe('session-start injection', () => {
   }
 
   it('compact injection is ≤40% of the verbose baseline on a 20-card board', () => {
+    // #57's block is constant in both arms by design — exclude it so this measures
+    // exactly the #35 rules-diet ratio it always did
+    process.env.ORCHESTRA_VERBOSE_OUTPUT = '1'
     process.env.ORCHESTRA_VERBOSE_RULES = '1'
     const baseline = renderSessionStart(me, board, snap, '/proj')
     delete process.env.ORCHESTRA_VERBOSE_RULES
