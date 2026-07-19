@@ -5,6 +5,7 @@ import { RoadmapView } from './RoadmapView'
 import { TimelineView } from './TimelineView'
 import { ShippedView } from './ShippedView'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
+import { wakeMeter } from './wake'
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -190,16 +191,38 @@ function GettingStarted() {
 const fmtTokens = (t: number) =>
   t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t)
 
+// agents paused by usage limits: one-click wake-all, with the autowake timer's fire time
+// when the daemon will do it on its own (#62)
+function WakeButton({ boards, sys, reload }: { boards: number[]; sys: SystemInfo; reload: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const m = wakeMeter(sys.paused_limit ?? 0, sys.autowake_at, sys.autowake_enabled, busy)
+  if (!m) return null
+  const wake = async () => {
+    setBusy(true)
+    try {
+      for (const id of boards) await api('POST', `/boards/${id}/wake`)
+    } catch { /* the meter refresh below re-reads the real state */ }
+    setBusy(false)
+    reload()
+  }
+  return (
+    <button className="meter meter-wake" disabled={busy} onClick={wake} title={m.title}>
+      <span className="meter-label">paused</span>
+      <span className="meter-val">{m.label}</span>
+      {m.auto && <span className="meter-reset">{m.auto}</span>}
+    </button>
+  )
+}
+
 function SystemMeter({ boards }: { boards: number[] }) {
   const [sys, setSys] = useState<SystemInfo | null>(null)
   const [inj, setInj] = useState<Telemetry | null>(null)
+  const loadSys = useCallback(() => api('GET', '/system').then(setSys).catch(() => {}), [])
   useEffect(() => {
-    let dead = false
-    const load = () => api('GET', '/system').then((s) => { if (!dead) setSys(s) }).catch(() => {})
-    load()
-    const t = setInterval(load, 60_000)
-    return () => { dead = true; clearInterval(t) }
-  }, [])
+    loadSys()
+    const t = setInterval(loadSys, 60_000)
+    return () => clearInterval(t)
+  }, [loadSys])
   // injected-context accounting; daemons without the telemetry route just hide the stat
   const boardKey = boards.join(',')
   useEffect(() => {
@@ -252,6 +275,7 @@ function SystemMeter({ boards }: { boards: number[] }) {
         <span className="meter-label">agents</span>
         <span className="meter-val">{sys.hired}/{sys.hardware.capacity}</span>
       </span>
+      <WakeButton boards={boards} sys={sys} reload={loadSys} />
       {sys.usage && win('5h', sys.usage.five_hour)}
       {sys.usage && win('week', sys.usage.seven_day)}
       {!sys.usage && sys.usage_error && (

@@ -193,10 +193,24 @@ export function registerPush(server: FastifyInstance, opts: PushOptions = {}) {
     })
   }
 
+  // the autowake timer resumed limit-paused agents (#62) — tell the phone the fleet is moving again
+  const onAutowake = (data: any) => {
+    const woke = data?.woke ?? 0
+    const queued = data?.queued ?? 0
+    if (woke + queued === 0) return
+    notify('autowake', {
+      title: 'Claude usage window reset',
+      body: `${woke} agent${woke === 1 ? '' : 's'} resumed${queued ? `, ${queued} queued` : ''}`,
+      url: '/',
+      tag: 'autowake',
+    })
+  }
+
   server.bus.on('event', (e: { type: string; data: any }) => {
     if (e.type === 'card') onCard(e.data)
     else if (e.type === 'review') onReview(e.data)
     else if (e.type === 'message') onMessage(e.data)
+    else if (e.type === 'autowake') onAutowake(e.data)
   })
 
   // ── routes ──────────────────────────────────────────────────────────────

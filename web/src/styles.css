@@ -1066,6 +1066,14 @@ textarea {
 .meter.stale .meter-bar i { opacity: 0.4; }
 .meter.stale .meter-val, .meter.stale .meter-reset { color: #9b968e; }
 .meter.degraded .meter-val { color: #9b968e; font-weight: 500; font-style: italic; }
+/* wake-all (#62): the one clickable meter — reads as an action without leaving the row */
+.meter-wake {
+  border: 1px solid #E3DFD7; background: var(--surface); border-radius: 6px;
+  padding: 3px 8px; cursor: pointer; font: inherit; transition: border-color 0.15s var(--ease);
+}
+.meter-wake:hover:not(:disabled) { border-color: #C4554D; }
+.meter-wake .meter-val { color: #9F2F2D; }
+.meter-wake:disabled { cursor: progress; opacity: 0.6; }
 
 /* kill agent: hover ✕ on the circle, anchored confirm, dissolve on the way out */
 .net-kill {

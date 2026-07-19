@@ -24,6 +24,8 @@ export interface ConductorLike {
   isHired(agentId: number): boolean
   hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string }): any
   deliver(agentId: number, msg: any): boolean
+  // optional: only the real Conductor resumes limit-paused agents (#62)
+  wake?(boardId: number): { woke: string[]; queued: string[]; skipped: string[] }
   task(agentId: number, text: string): boolean
   transcript(agentId: number): any
   subagents(agentId: number): { key: string; label: string }[]
@@ -45,6 +47,8 @@ export interface ServerOptions {
   token?: string
   // test seam: replace the real ShipQueue (which runs git + the full suite)
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
+  // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
+  autowakeAt?: () => string | null
 }
 
 export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
@@ -81,6 +85,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       injected: injectedTotal(db),
       // real API tokens consumed by hired agents — not the injected-context estimate above
       agent_usage: usageTotal(db),
+      // limit-paused agents + when the autowake timer resumes them (#62)
+      paused_limit: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status='paused_limit'`).get() as any).c,
+      autowake_at: opts.autowakeAt?.() ?? null,
+      autowake_enabled: process.env.ORCHESTRA_AUTOWAKE !== '0',
     }
   })
 
@@ -782,6 +790,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       emit(board.id, 'agent', agent)
       return agent
     })
+
+  // manual wake-all for limit-paused agents — same mechanics the autowake timer uses
+  server.post<{ Params: { id: string } }>('/api/v1/boards/:id/wake', (req, reply) => {
+    if (!maestro?.wake) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+    const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+    if (!board) return reply.code(404).send({ error: 'not found' })
+    return maestro.wake(board.id)
+  })
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {

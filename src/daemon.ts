@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +11,7 @@ import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureToken } from './token.js'
 import { registerPush } from './push.js'
+import { Autowake, autowakeEnabled } from './autowake.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -23,6 +25,16 @@ export const authDisabled = () => process.env.ORCHESTRA_NO_AUTH === '1'
 
 export interface ServeOptions { expose?: boolean }
 
+// hired agents to resurrect after a restart — sessions resume, cards and work persist.
+// Limit-paused agents are deliberately excluded: resurrecting them into a still-spent
+// window would just re-kill them, so the autowake timer owns their return (#62).
+export const survivors = (db: Database.Database): any[] => db.prepare(`
+  SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode, a.model, a.effort, b.project_path,
+    lc.id AS launched_card_id, lc.branch AS launched_branch
+  FROM agents a JOIN boards b ON b.id = a.board_id
+  LEFT JOIN cards lc ON lc.owner_agent_id = a.id AND lc.column_name = 'in_progress' AND lc.branch IS NOT NULL
+  WHERE a.kind='hired' AND a.status NOT IN ('gone', 'paused_limit')`).all() as any[]
+
 export async function serve(opts: ServeOptions = {}): Promise<void> {
   // an exposed daemon is remote code execution for anyone who can reach the port
   if (opts.expose && authDisabled())
@@ -30,17 +42,12 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
   const token = authDisabled() ? undefined : ensureToken()
   let maestro: Conductor | undefined
-  const server = buildServer(db, (bus) => (maestro = new Conductor(db, bus)), { token })
+  let autowake: Autowake | undefined
+  const server = buildServer(db, (bus) => (maestro = new Conductor(db, bus)),
+    { token, autowakeAt: () => autowake?.scheduledAt() ?? null })
   registerPush(server)
   await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
-  // resurrect hired agents from before the restart — sessions resume, cards and work persist
-  const survivors = db.prepare(`
-    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode, a.model, a.effort, b.project_path,
-      lc.id AS launched_card_id, lc.branch AS launched_branch
-    FROM agents a JOIN boards b ON b.id = a.board_id
-    LEFT JOIN cards lc ON lc.owner_agent_id = a.id AND lc.column_name = 'in_progress' AND lc.branch IS NOT NULL
-    WHERE a.kind='hired' AND a.status != 'gone'`).all() as any[]
-  for (const s of survivors) {
+  for (const s of survivors(db)) {
     if (s.name.startsWith('auditor-')) { // one-shot auditors don't outlive a restart
       db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
       bounceDeadLetters(db, s.id)
@@ -60,6 +67,10 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       bounceDeadLetters(db, s.id)
     }
   }
+  // limit-paused agents deliberately sit out the resurrect above — the autowake timer
+  // (recomputed here from the live usage poll, never persisted) resumes them at window reset
+  autowake = new Autowake(db, server.bus, (boardId) => maestro!.wake(boardId))
+  if (autowakeEnabled()) void autowake.reschedule()
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   setInterval(() => reap(db), 60_000)
 }

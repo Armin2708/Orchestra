@@ -90,6 +90,10 @@ export type SystemInfo = {
   injected?: { chars: number; tokens: number; count: number }
   // real API tokens consumed by hired agents (SDK usage reports) — distinct from the injected estimate
   agent_usage?: UsageSplit
+  // agents paused by usage limits + when the daemon's autowake timer resumes them (#62)
+  paused_limit?: number
+  autowake_at?: string | null
+  autowake_enabled?: boolean
 }
 
 export type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
