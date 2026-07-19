@@ -254,7 +254,7 @@ function BoardCanvas({ children, focused, storageKey }: {
     if (!canvas || !lens) return
     if (window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
-    const radius = 140
+    const radius = lens.offsetWidth / 2 || 84
     let frame = 0
     let initialized = false
     let current = { x: 0, y: 0 }

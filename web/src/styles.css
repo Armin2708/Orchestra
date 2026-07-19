@@ -102,9 +102,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .board-canvas:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--line); }
 .board-cursor-filter { position: absolute; width: 0; height: 0; pointer-events: none; }
 .board-cursor-lens {
+  --cursor-lens-size: 168px;
   --cursor-lens-left: -300px; --cursor-lens-top: -300px;
   --cursor-bend-x: 0px; --cursor-bend-y: 0px; --cursor-lens-scale: 1;
-  position: absolute; left: 0; top: 0; z-index: 0; width: 280px; height: 280px;
+  position: absolute; left: 0; top: 0; z-index: 0;
+  width: var(--cursor-lens-size); height: var(--cursor-lens-size);
   pointer-events: none; contain: strict; opacity: 0; border-radius: 50%;
   background-color: rgba(255, 255, 255, 0.62);
   background-image: radial-gradient(circle at 1px 1px, rgba(17, 17, 17, 0.18) 1.2px, transparent 1.55px);
