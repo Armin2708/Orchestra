@@ -26,6 +26,11 @@ export type ShipHooks = {
 
 export const autoshipEnabled = () => process.env.ORCHESTRA_AUTOSHIP !== '0'
 
+// single source of the card-worktree path convention — shared by launch (conductor),
+// daemon resurrect, and #62's wake path, so restarts land agents back in their worktree
+export const cardWorktree = (projectPath: string, cardId: number): string =>
+  path.join(projectPath, '..', `${path.basename(projectPath)}-card-${cardId}`)
+
 // pre-queue gate over #52 verifier verdicts (contract w/ coral-falcon, msgs #547-#577):
 // newest card_event type='verification' is authoritative; only an unconfirmed fail blocks.
 export function shipGate(db: Database.Database, cardId: number, decision: { confirmed?: boolean }): { queue: boolean; warn?: string; held?: string } {

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
+import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureToken } from './token.js'
 import { registerPush } from './push.js'
@@ -34,8 +35,10 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   // resurrect hired agents from before the restart — sessions resume, cards and work persist
   const survivors = db.prepare(`
-    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode, a.model, a.effort, b.project_path
+    SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode, a.model, a.effort, b.project_path,
+      lc.id AS launched_card_id, lc.branch AS launched_branch
     FROM agents a JOIN boards b ON b.id = a.board_id
+    LEFT JOIN cards lc ON lc.owner_agent_id = a.id AND lc.column_name = 'in_progress' AND lc.branch IS NOT NULL
     WHERE a.kind='hired' AND a.status != 'gone'`).all() as any[]
   for (const s of survivors) {
     if (s.name.startsWith('auditor-')) { // one-shot auditors don't outlive a restart
@@ -44,7 +47,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       continue
     }
     try {
-      maestro!.hire({ boardId: s.board_id, cwd: s.project_path, name: s.name,
+      // a launched agent resumes inside its card worktree, not the shared checkout (#59)
+      const wt = s.launched_card_id != null ? cardWorktree(s.project_path, s.launched_card_id) : null
+      maestro!.hire({ boardId: s.board_id, cwd: wt && fs.existsSync(wt) ? wt : s.project_path, name: s.name,
         role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined,
         permissionMode: s.permission_mode ?? undefined,
         model: s.model ?? undefined, effort: s.effort ?? undefined })
