@@ -3,8 +3,6 @@ import { api, ApiError, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } f
 import { BoardSection } from './BoardSection'
 import { BoardTab, PrimaryView, resolveStoredNavigation } from './boardNavigation'
 import { RoadmapView } from './RoadmapView'
-import { TimelineView } from './TimelineView'
-import { ShippedView } from './ShippedView'
 import { NeedsYou } from './NeedsYou'
 import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
@@ -129,8 +127,6 @@ export function App() {
           <nav className="view-tabs">
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
-            <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
-            <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
             <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
               if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
@@ -146,13 +142,9 @@ export function App() {
             openMessages={openMessages} onTabChange={pickBoardTab} onChange={refresh} />
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-          : view === 'timeline'
-            ? <TimelineView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-            : view === 'shipped'
-              ? <ShippedView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-              : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
-                  <SettingsView />
-                </React.Suspense>}
+          : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
+              <SettingsView />
+            </React.Suspense>}
     </div>
   )
 }

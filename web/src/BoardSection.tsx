@@ -1,6 +1,8 @@
 import React from 'react'
 import { ProjectGrid } from './Board'
 import { MessagesView } from './MessagesView'
+import { ShippedView } from './ShippedView'
+import { TimelineView } from './TimelineView'
 import { Snapshot } from './api'
 import { BOARD_TABS, BoardTab } from './boardNavigation'
 import './boardSection.css'
@@ -37,9 +39,13 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
           ? <ProjectGrid snaps={snaps} focused={focused} onChange={onChange} />
           : tab === 'messages'
             ? <MessagesView snaps={snaps} focused={focused} onChange={onChange} />
-            : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading workspace cockpit"><span /><span /><span /></div>}>
-                <WorkspaceCockpit snaps={snaps} onChange={onChange} />
-              </React.Suspense>}
+            : tab === 'workspace'
+              ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading workspace cockpit"><span /><span /><span /></div>}>
+                  <WorkspaceCockpit snaps={snaps} onChange={onChange} />
+                </React.Suspense>
+              : tab === 'timeline'
+                ? <TimelineView snaps={snaps} focused={focused} onChange={onChange} />
+                : <ShippedView snaps={snaps} focused={focused} onChange={onChange} />}
       </div>
     </section>
   )
