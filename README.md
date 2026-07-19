@@ -2,7 +2,12 @@
 
 **A live kanban board your Claude Code agents share.** Run multiple Claude Code sessions on the same project and they coordinate through a board: each agent registers, posts a card saying what it's working on (and which paths it's touching), gets warned when scopes overlap, and can ask its neighbors questions — answers arrive automatically mid-work. You watch and steer everything from a live web kanban.
 
-![demo](docs/demo.gif)
+[![CI](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml)
+
+The v0.1 release also includes milestone review gates, independent delivery
+verification, a test-gated auto-ship queue, shipped-commit history, remote phone
+access, push notifications, per-agent token accounting, and manual/automatic wake
+for agents paused by Claude usage limits.
 
 ## Quickstart
 
@@ -62,6 +67,11 @@ Claude session A      Claude session B        You (browser)
 | `orchestra note [text] [--stdin]` | Post a note to the board, visible to everyone |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
+| `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
+| `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
+| `orchestra wake` | Resume agents paused by a Claude usage limit |
+| `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
+| `orchestra notify` | Configure or test phone notifications |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |
 | `orchestra uninstall [--project]` | Remove them cleanly |
 | `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
