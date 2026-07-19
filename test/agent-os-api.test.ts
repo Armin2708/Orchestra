@@ -33,11 +33,13 @@ describe('Agent OS API', () => {
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/providers' })).statusCode).toBe(401)
     const drivers = await server.inject({ method: 'GET', url: '/api/v1/os/drivers', headers: auth })
     expect(drivers.statusCode).toBe(200)
-    expect(drivers.json().drivers.map((driver: any) => driver.id)).toEqual(['claude', 'shell'])
+    expect(drivers.json().drivers.map((driver: any) => driver.id)).toEqual(['claude', 'codex', 'shell'])
+    expect(drivers.json().drivers.find((driver: any) => driver.id === 'codex')).toMatchObject({ available: false })
     const providers = await server.inject({ method: 'GET', url: '/api/v1/os/providers', headers: auth })
     expect(providers.statusCode).toBe(200)
     expect(providers.json().providers).toEqual([
       expect.objectContaining({ id: 'claude', name: 'Claude', available: false, models: [] }),
+      expect.objectContaining({ id: 'codex', name: 'Codex', available: false, models: [] }),
     ])
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/plugins', headers: auth })).json().plugins[0].id)
       .toBe('agent-os-core')
@@ -73,7 +75,7 @@ describe('Agent OS API', () => {
     const invalid = await server.inject({
       method: 'PUT', url: '/api/v1/os/settings/agent-defaults', headers: auth,
       payload: {
-        worker: { model: null, effort: 'ultra' },
+        worker: { model: null, effort: 'not valid!' },
         specialist: { model: null, effort: null },
       },
     })

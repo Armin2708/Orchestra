@@ -3,12 +3,12 @@
   "owner": {
     "name": "Armin2708"
   },
-  "description": "Official Orchestra marketplace for the live Claude Code multi-agent coordination board.",
+  "description": "Official Orchestra marketplace for the live Claude Code and Codex multi-agent coordination board.",
   "plugins": [
     {
       "name": "orchestra",
       "source": "./",
-      "description": "Orchestra \u2014 live project board for Claude Code agents: auto-register sessions, scope cards, overlap warnings, agent-to-agent Q&A, live web UI."
+      "description": "Orchestra \u2014 live project board for Claude Code and Codex agents: auto-register sessions, scope cards, overlap warnings, agent-to-agent Q&A, live web UI."
     }
   ]
 }

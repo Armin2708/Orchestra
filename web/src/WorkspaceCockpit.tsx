@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AgentTerminal } from './AgentTerminal'
 import { Agent, Card, Snapshot } from './api'
+import { ProviderBadge } from './ProviderBadge'
 import {
   ContextItem,
   DriverCapability,
@@ -405,6 +406,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
                   <span className={`os-status-pill ${selected.status}`}>{selected.status}</span>
                   <span>{selected.kind}</span>
                   {card && <span>Task {card.id}</span>}
+                  {owner && <ProviderBadge provider={owner.provider} compact />}
                 </div>
                 <h2>{selected.name}</h2>
                 <div className="os-workspace-paths">
@@ -794,7 +796,7 @@ function WorkspaceInfoDialog({ onClose }: { onClose: () => void }) {
 
         <aside className="os-info-token-note">
           <span aria-hidden="true">i</span>
-          <p><strong>A workspace is not an agent.</strong> Creating or opening one does not call a model. Tokens are used only when a model-backed agent or job runs; ordinary shell processes use no Claude tokens.</p>
+          <p><strong>A workspace is not an agent.</strong> Creating or opening one does not call a model. Tokens are used only when a model-backed agent or job runs; ordinary shell processes use no model tokens.</p>
         </aside>
 
         <footer>

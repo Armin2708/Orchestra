@@ -15,7 +15,7 @@ describe('workspace guide', () => {
   it('explains the lifecycle, recovery value, and token boundary in a trapped modal', () => {
     expect(cockpit).toContain('role="dialog" aria-modal="true"')
     expect(cockpit).toContain('useModalFocusTrap(true, dialogRef, onClose, closeRef)')
-    for (const phrase of ['Create', 'Run', 'Inspect', 'Resume', 'A workspace is not an agent.', 'ordinary shell processes use no Claude tokens.']) {
+    for (const phrase of ['Create', 'Run', 'Inspect', 'Resume', 'A workspace is not an agent.', 'ordinary shell processes use no model tokens.']) {
       expect(cockpit).toContain(phrase)
     }
   })

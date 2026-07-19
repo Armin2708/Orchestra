@@ -1,4 +1,4 @@
-import { Command } from 'commander'
+import { Command, InvalidArgumentError } from 'commander'
 import { ensureDaemon, serve, stopDaemon, baseUrl } from './daemon.js'
 import { api, projectPath } from './client.js'
 import { VERSION } from './version.js'
@@ -13,6 +13,12 @@ import qrcode from 'qrcode-terminal'
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
 const envAgent = () => process.env.ORCHESTRA_AGENT
+const providerOption = (allowBoth: boolean) => (value: string) => {
+  const accepted = allowBoth ? ['claude', 'codex', 'both'] : ['claude', 'codex']
+  if (!accepted.includes(value))
+    throw new InvalidArgumentError(`expected ${accepted.join('|')}`)
+  return value
+}
 
 async function up() { if (!(await ensureDaemon())) { console.error('daemon unreachable'); process.exit(1) } }
 async function board() { return api('POST', '/boards/resolve', { project_path: projectPath() }) }
@@ -230,11 +236,25 @@ program.command('step <milestoneId> <title>').description('append an ordered ste
   })
 
 program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
-  .option('--name <name>').option('--model <m>').option('--cwd <dir>')
+  .option('--name <name>')
+  .option('--provider <provider>', 'agent provider (claude|codex); omitted uses the board default', providerOption(false))
+  .option('--model <m>')
+  .option('--effort <level>')
+  .option('--access-profile <profile>', 'read_only|workspace_write|full_access')
+  .option('--cwd <dir>')
   .action(async (o) => {
     await up(); const b = await board()
-    const a = await api('POST', `/boards/${b.id}/hire`, { name: o.name, model: o.model, cwd: o.cwd })
-    console.log(`hired ${a.name} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
+    if (o.accessProfile && !['read_only', 'workspace_write', 'full_access'].includes(o.accessProfile))
+      throw new Error('--access-profile must be read_only, workspace_write, or full_access')
+    const a = await api('POST', `/boards/${b.id}/hire`, {
+      name: o.name,
+      provider: o.provider,
+      model: o.model,
+      effort: o.effort,
+      access_profile: o.accessProfile,
+      cwd: o.cwd,
+    })
+    console.log(`hired ${a.name} with ${a.provider ?? o.provider ?? 'the board default'} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
   })
 program.command('task <name> <text>').description('give a hired agent a task')
   .action(async (name, text) => {
@@ -290,10 +310,17 @@ program.command('notify [to] [body]').description('queue an agent notification, 
     console.log(`devices subscribed: ${s.subscriptions} · ntfy: ${s.ntfy_topic ? `https://ntfy.sh/${s.ntfy_topic}` : 'off'} · links point to ${s.public_base}`)
   })
 
-program.command('hook <event>').action(async (event) => { await runHook(event) })
-program.command('install').option('--project', 'install into ./.claude instead of ~/.claude')
-  .action((o) => installHooks(o.project ? 'project' : 'global'))
-program.command('uninstall').option('--project').action((o) => uninstallHooks(o.project ? 'project' : 'global'))
+program.command('hook <event>')
+  .option('--provider <provider>', 'hook provider (claude|codex)', providerOption(false))
+  .action(async (event, o) => { await runHook(event, o.provider) })
+program.command('install')
+  .option('--project', 'install into the current project instead of the user config')
+  .option('--provider <provider>', 'hooks to install (claude|codex|both)', providerOption(true), 'claude')
+  .action((o) => installHooks(o.project ? 'project' : 'global', { provider: o.provider }))
+program.command('uninstall')
+  .option('--project', 'remove hooks from the current project instead of the user config')
+  .option('--provider <provider>', 'hooks to remove (claude|codex|both)', providerOption(true), 'claude')
+  .action((o) => uninstallHooks(o.project ? 'project' : 'global', { provider: o.provider }))
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 

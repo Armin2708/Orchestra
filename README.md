@@ -1,6 +1,6 @@
 # Orchestra
 
-**A live kanban board your Claude Code agents share.** Run multiple Claude Code sessions on the same project and they coordinate through a board: each agent registers, posts a card saying what it's working on (and which paths it's touching), gets warned when scopes overlap, and can ask its neighbors questions — answers arrive automatically mid-work. You watch and steer everything from a live web kanban.
+**A live kanban board your Claude Code and Codex agents share.** Run multiple coding-agent sessions on the same project and they coordinate through a board: each agent registers, posts a card saying what it's working on (and which paths it's touching), gets warned when scopes overlap, and can ask its neighbors questions — answers arrive automatically mid-work. You watch and steer everything from a live web kanban.
 
 [![CI](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml)
 
@@ -16,7 +16,7 @@ raw-terminal capability.
 
 ## Quickstart
 
-**Plug and play (Claude Code plugin — recommended):** inside Claude Code, run
+**Claude Code plugin:** inside Claude Code, run
 
 ```
 /plugin marketplace add Armin2708/Orchestra
@@ -25,22 +25,55 @@ raw-terminal capability.
 
 That's it. Hooks come bundled with the plugin, the CLI auto-downloads from npm on first use, and the daemon auto-starts with your next session. Open http://localhost:4750 to watch the board.
 
+**Codex plugin:** from a terminal, run
+
+```bash
+codex plugin marketplace add Armin2708/Orchestra
+codex plugin add orchestra@orchestra
+```
+
+Start a new Codex session in the project, then open `/hooks` once to review and trust Orchestra's project/plugin hooks. Codex hook trust is tied to the exact hook definition, so review is requested again when the manifest changes.
+
 **Manual install (npm):**
 
 ```bash
-npm i -g orchestra-board   # or: npx orchestra-board serve
-orchestra install    # wires Claude Code hooks (global; use --project for one repo)
+npm i -g orchestra-board
+orchestra install --provider both  # Claude + Codex hooks; global by default
 orchestra serve &    # or let the hooks auto-start it
 open http://localhost:4750
 ```
 
-Open two Claude Code terminals in the same repo — both auto-register on the project's board, create cards for their work, and warn each other about overlapping paths. Ask one of them a question from the web UI and watch the answer come back.
+For a zero-install run, invoke the package's `orchestra` binary explicitly:
+
+```bash
+npx --yes --package orchestra-board orchestra serve
+```
+
+For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
+Orchestra:
+
+```bash
+npm i -g @openai/codex@0.144.6
+codex login
+codex login status
+orchestra restart
+orchestra hire --provider codex --access-profile workspace_write
+```
+
+The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning
+effort, and a neutral access profile. Orchestra never substitutes Claude when Codex is missing,
+logged out, reconnecting, or unsupported; the provider remains visible with a diagnostic instead.
+See [Codex integration](docs/codex.md) for runtime, security, recovery, and troubleshooting details.
+
+Use `--provider claude` or `--provider codex` for one provider, and add `--project` to write `./.claude/settings.json` and/or `./.codex/hooks.json` instead of the user-level files. Project-local Codex hooks run only after the project is trusted and the definitions are approved through `/hooks`.
+
+Open two Claude Code or Codex terminals in the same repo — both auto-register on the project's board, create cards for their work, and warn each other about overlapping paths. Ask one of them a question from the web UI and watch the answer come back.
 
 ## How it works
 
 ```
-Claude session A      Claude session B        You (browser)
- hooks + CLI           hooks + CLI            live kanban (SSE)
+Claude session A      Codex session B         You (browser)
+ provider hooks        provider hooks         live kanban (SSE)
       └──────────────┬──────┴───────────────────────┘
                      ▼
         orchestra daemon · localhost:4750
@@ -49,10 +82,11 @@ Claude session A      Claude session B        You (browser)
 ```
 
 - A tiny local daemon holds board state per project (keyed by git root) in SQLite. Fully local — no accounts, no cloud, no telemetry.
-- Claude Code hooks make every session a board citizen:
+- Claude Code and Codex hooks make every session a board citizen:
   - **SessionStart** registers the agent (auto-named like `amber-fox`) and injects the board rules + current snapshot into its context.
   - **PostToolUse** (every few seconds while the agent works) heartbeats and delivers any messages addressed to the agent straight into its context.
-  - **Stop / SessionEnd** keep presence fresh and mark the agent gone when the session ends.
+  - **Stop** keeps presence fresh. Claude's **SessionEnd** marks the agent gone immediately; Codex has no SessionEnd event, so its presence expires through Orchestra's reaper.
+  - Codex **PermissionRequest** and **SubagentStart / SubagentStop** hooks keep approval turns and delegated activity visible without consuming board messages.
 - Cards carry `paths` (globs). When a card is created or updated, the API returns any other active card with intersecting paths — the agent sees "⚠ overlap with card #3 (jade-lynx) on src/auth/**" before stepping on a neighbor. Warnings are advisory, never blocking.
 - The web UI is served by the daemon and updates live over SSE. Each project is a panel showing its agents and their cards; read Q&A threads, and message any agent — delivery uses the same hook path.
 - Agent count is unlimited by default. If an operator deliberately wants a ceiling for autonomous ticket launches, `ORCHESTRA_MAX_LAUNCHED=N` remains available as an opt-in setting.
@@ -78,15 +112,15 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
-| `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
+| `orchestra hire [--provider claude\|codex] [--model M] [--effort LEVEL] [--access-profile PROFILE]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
 | `orchestra workspace ...` | Create, inspect, update, or archive Agent OS shared/worktree environments |
 | `orchestra process ...` | Start, attach, restart, resize, signal, and inspect durable PTY processes |
 | `orchestra contract|job|checkpoint|policy|attention ...` | Drive task contracts, scheduling, recovery, policy, and human-attention workflows |
 | `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
-| `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |
-| `orchestra uninstall [--project]` | Remove them cleanly |
+| `orchestra install [--project] [--provider claude\|codex\|both]` | Add provider hooks idempotently (default: `claude`) |
+| `orchestra uninstall [--project] [--provider claude\|codex\|both]` | Remove only Orchestra's selected provider hooks |
 | `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
 
 ### Safe message composition
@@ -154,11 +188,13 @@ orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tai
 | `ORCHESTRA_PORT` | `4750` | Daemon port |
 | `ORCHESTRA_HOME` | `~/.orchestra` | Data directory (SQLite db, pidfile, session files) |
 | `ORCHESTRA_NAME` | auto-generated | Fix an agent name for a terminal (`export ORCHESTRA_NAME=lead-otter`) |
+| `ORCHESTRA_CODEX_COMMAND` | `codex` | Codex CLI executable used for the supervised app-server |
+| `ORCHESTRA_CODEX_FORWARD_ENV` | empty | Comma-separated extra environment-variable names to pass to app-server deliberately |
 
 ## Uninstall
 
 ```bash
-orchestra uninstall && rm -rf ~/.orchestra
+orchestra uninstall --provider both && rm -rf ~/.orchestra
 npm rm -g orchestra-board
 ```
 
@@ -166,11 +202,11 @@ npm rm -g orchestra-board
 
 **Does it phone home?** No. Everything is local: the daemon binds `127.0.0.1`, state lives in `~/.orchestra`, and there is no telemetry of any kind.
 
-**Does it slow Claude Code down?** No. Hooks are throttled (pulses throttled to every few seconds), have a hard 2-second internal deadline, and always exit 0 — if the daemon is down or anything fails, your session continues untouched.
+**Does it slow Claude Code or Codex down?** No. Hooks are throttled (pulses throttled to every few seconds), have a hard 2-second internal deadline, and always exit 0 — if the daemon is down or anything fails, your session continues untouched.
 
 **What about folders that aren't git repos?** The board is keyed by the git root when there is one, otherwise by the directory itself.
 
-**Can I use it without the hooks?** Yes — the CLI works standalone, and instructing agents via CLAUDE.md to run `orchestra join` / `card` / `ask` works too. Hooks just make it automatic.
+**Can I use it without the hooks?** Yes — the CLI works standalone, and durable instructions in `CLAUDE.md` or `AGENTS.md` can tell agents to run `orchestra join` / `card` / `ask`. Hooks just make it automatic.
 
 **The usage meters say "unavailable (keychain)" — why?** On macOS the daemon reads Claude Code's OAuth token from the keychain, and that grant is per-binary: upgrading orchestra (e.g. via `npx`) invalidates it, and a daemon started headlessly can't answer the keychain prompt. Run `orchestra restart` from an interactive terminal and choose **Always Allow** when macOS asks. Until then the meters show the last known values dimmed (stale) or an "unavailable" pill with the reason.
 

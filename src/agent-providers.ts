@@ -1,7 +1,48 @@
 import type Database from 'better-sqlite3'
-import { AGENT_DEFAULT_EFFORT_LEVELS, type AgentDefaultEffort } from './agent-defaults.js'
 
 export const CLAUDE_PROVIDER_ID = 'claude'
+export const CODEX_PROVIDER_ID = 'codex'
+
+export type AgentProviderCapability =
+  | 'steering'
+  | 'approvals'
+  | 'model'
+  | 'effort'
+  | 'rate_limits'
+  | 'usage'
+  | 'diffs'
+  | 'plans'
+  | 'subagents'
+  | 'ambient_hooks'
+  | 'session_end_hooks'
+  | 'access_profile'
+  | 'interrupt'
+  | 'stop'
+
+export type AgentProviderCapabilities = Record<AgentProviderCapability, boolean>
+
+export type AgentProviderHealth = {
+  available: boolean
+  status: 'ready' | 'degraded' | 'unavailable'
+  updated_at: string
+  version?: string
+  detail?: string
+}
+
+export type AgentProviderAuthState = {
+  status: 'authenticated' | 'unauthenticated' | 'unknown'
+  updated_at: string
+  account?: string
+  detail?: string
+}
+
+export type AgentProviderUsageSnapshot = {
+  updated_at: string
+  stale?: boolean
+  rate_limits?: unknown
+  usage?: unknown
+  detail?: string
+}
 
 export type AgentProviderModel = {
   value: string
@@ -9,7 +50,7 @@ export type AgentProviderModel = {
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: AgentDefaultEffort[]
+  supportedEffortLevels?: string[]
   supportsAdaptiveThinking?: boolean
   supportsFastMode?: boolean
   supportsAutoMode?: boolean
@@ -23,6 +64,20 @@ export type AgentProviderCatalog = {
   source: 'live' | 'cache' | 'unavailable'
   updated_at: string | null
   detail?: string
+  capabilities?: AgentProviderCapabilities | string[]
+  health?: AgentProviderHealth
+  auth?: AgentProviderAuthState
+  usage?: AgentProviderUsageSnapshot
+}
+
+export interface AgentProviderService {
+  readonly id: string
+  readonly name: string
+  readonly capabilities: AgentProviderCapabilities
+  catalog(): Promise<AgentProviderCatalog>
+  health(): Promise<AgentProviderHealth>
+  authState?(): Promise<AgentProviderAuthState>
+  usageSnapshot?(): Promise<AgentProviderUsageSnapshot>
 }
 
 export type ProviderModelCache = {
@@ -30,8 +85,11 @@ export type ProviderModelCache = {
   updated_at: string
 }
 
-const CLAUDE_MODEL_CACHE_KEY = 'provider_models_claude_v1'
+const PROVIDER_MODEL_CACHE_PREFIX = 'provider_models_'
+const PROVIDER_MODEL_CACHE_SUFFIX = '_v1'
 const MAX_MODEL_ID_LENGTH = 200
+const MAX_EFFORT_ID_LENGTH = 40
+const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined
@@ -39,18 +97,43 @@ const optionalString = (value: unknown): string | undefined =>
 const optionalBoolean = (value: unknown): boolean | undefined =>
   typeof value === 'boolean' ? value : undefined
 
+const normalizeProviderId = (provider: string): string => {
+  const normalized = provider.trim().toLowerCase()
+  if (!SAFE_PROVIDER_ID.test(normalized)) throw new Error(`invalid provider id: ${provider}`)
+  return normalized
+}
+
+const providerModelCacheKey = (provider: string): string =>
+  `${PROVIDER_MODEL_CACHE_PREFIX}${normalizeProviderId(provider)}${PROVIDER_MODEL_CACHE_SUFFIX}`
+
+const normalizeEffortLevels = (row: Record<string, unknown>): string[] => {
+  const raw = Array.isArray(row.supportedEffortLevels)
+    ? row.supportedEffortLevels
+    : Array.isArray(row.supportedReasoningEfforts)
+      ? row.supportedReasoningEfforts
+      : []
+  const levels: string[] = []
+  for (const item of raw) {
+    const value = typeof item === 'string'
+      ? item
+      : item && typeof item === 'object' && !Array.isArray(item)
+        ? optionalString((item as Record<string, unknown>).reasoningEffort)
+        : undefined
+    if (!value || value.length > MAX_EFFORT_ID_LENGTH || !/^[a-zA-Z0-9_-]+$/.test(value)) continue
+    levels.push(value)
+  }
+  return [...new Set(levels)]
+}
+
 export function normalizeProviderModels(value: unknown): AgentProviderModel[] {
   if (!Array.isArray(value)) return []
   const models = new Map<string, AgentProviderModel>()
   for (const item of value) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const row = item as Record<string, unknown>
-    const modelValue = optionalString(row.value) ?? optionalString(row.model)
+    const modelValue = optionalString(row.value) ?? optionalString(row.model) ?? optionalString(row.id)
     if (!modelValue || modelValue.length > MAX_MODEL_ID_LENGTH) continue
-    const effortLevels = Array.isArray(row.supportedEffortLevels)
-      ? row.supportedEffortLevels.filter((level): level is AgentDefaultEffort =>
-          AGENT_DEFAULT_EFFORT_LEVELS.includes(level as AgentDefaultEffort))
-      : []
+    const effortLevels = normalizeEffortLevels(row)
     models.set(modelValue, {
       value: modelValue,
       ...(optionalString(row.resolvedModel) ? { resolvedModel: optionalString(row.resolvedModel) } : {}),
@@ -71,8 +154,11 @@ export function normalizeProviderModels(value: unknown): AgentProviderModel[] {
   return [...models.values()]
 }
 
-export function readProviderModelCache(db: Database.Database): ProviderModelCache | null {
-  const row = db.prepare('SELECT value, updated_at FROM kv WHERE key=?').get(CLAUDE_MODEL_CACHE_KEY) as
+export function readProviderModelCache(
+  db: Database.Database,
+  provider = CLAUDE_PROVIDER_ID,
+): ProviderModelCache | null {
+  const row = db.prepare('SELECT value, updated_at FROM kv WHERE key=?').get(providerModelCacheKey(provider)) as
     { value: string; updated_at: string } | undefined
   if (!row) return null
   try {
@@ -83,13 +169,45 @@ export function readProviderModelCache(db: Database.Database): ProviderModelCach
   }
 }
 
-export function writeProviderModelCache(db: Database.Database, value: unknown): ProviderModelCache | null {
+export function writeProviderModelCache(
+  db: Database.Database,
+  value: unknown,
+  provider = CLAUDE_PROVIDER_ID,
+): ProviderModelCache | null {
   const models = normalizeProviderModels(value)
   if (!models.length) return null
   db.prepare(`INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-    .run(CLAUDE_MODEL_CACHE_KEY, JSON.stringify(models))
-  return readProviderModelCache(db)
+    .run(providerModelCacheKey(provider), JSON.stringify(models))
+  return readProviderModelCache(db, provider)
+}
+
+export function agentProviderCatalog(input: {
+  id: string
+  name: string
+  available: boolean
+  models?: AgentProviderModel[]
+  source?: AgentProviderCatalog['source']
+  updatedAt?: string | null
+  detail?: string
+  capabilities?: AgentProviderCapabilities | string[]
+  health?: AgentProviderHealth
+  auth?: AgentProviderAuthState
+  usage?: AgentProviderUsageSnapshot
+}): AgentProviderCatalog {
+  return {
+    id: normalizeProviderId(input.id),
+    name: input.name,
+    available: input.available,
+    models: input.models ?? [],
+    source: input.source ?? 'unavailable',
+    updated_at: input.updatedAt ?? null,
+    ...(input.detail ? { detail: input.detail } : {}),
+    ...(input.capabilities ? { capabilities: input.capabilities } : {}),
+    ...(input.health ? { health: input.health } : {}),
+    ...(input.auth ? { auth: input.auth } : {}),
+    ...(input.usage ? { usage: input.usage } : {}),
+  }
 }
 
 export function claudeProviderCatalog(input: {
@@ -99,13 +217,23 @@ export function claudeProviderCatalog(input: {
   updatedAt?: string | null
   detail?: string
 }): AgentProviderCatalog {
-  return {
+  return agentProviderCatalog({
     id: CLAUDE_PROVIDER_ID,
     name: 'Claude',
-    available: input.available,
-    models: input.models ?? [],
-    source: input.source ?? 'unavailable',
-    updated_at: input.updatedAt ?? null,
-    ...(input.detail ? { detail: input.detail } : {}),
-  }
+    ...input,
+  })
+}
+
+export function codexProviderCatalog(input: {
+  available: boolean
+  models?: AgentProviderModel[]
+  source?: AgentProviderCatalog['source']
+  updatedAt?: string | null
+  detail?: string
+  capabilities?: AgentProviderCapabilities
+  health?: AgentProviderHealth
+  auth?: AgentProviderAuthState
+  usage?: AgentProviderUsageSnapshot
+}): AgentProviderCatalog {
+  return agentProviderCatalog({ id: CODEX_PROVIDER_ID, name: 'Codex', ...input })
 }

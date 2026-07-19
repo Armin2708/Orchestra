@@ -44,17 +44,23 @@ async function boot() {
   return { server, board, agent }
 }
 
+const identity = (agent: any) => ({
+  provider: agent.provider,
+  session_id: agent.external_session_id,
+  session_token: agent.session_token,
+})
+
 it('pulse and heartbeat piggyback telemetry; endpoint returns per-event counts', async () => {
   const { server, board, agent } = await boot()
 
   const pulse = await server.inject({
     method: 'POST', url: `/api/v1/agents/${agent.id}/pulse`,
-    payload: { telemetry: [{ event: 'session_start', chars: 2400 }, { event: 'user_prompt_submit', chars: 120 }] },
+    payload: { ...identity(agent), telemetry: [{ event: 'session_start', chars: 2400 }, { event: 'user_prompt_submit', chars: 120 }] },
   })
   expect(pulse.statusCode).toBe(200)
   const hb = await server.inject({
     method: 'POST', url: `/api/v1/agents/${agent.id}/heartbeat`,
-    payload: { telemetry: [{ event: 'stop', chars: 400 }] },
+    payload: { ...identity(agent), telemetry: [{ event: 'stop', chars: 400 }] },
   })
   expect(hb.statusCode).toBe(200)
 
@@ -65,9 +71,9 @@ it('pulse and heartbeat piggyback telemetry; endpoint returns per-event counts',
   expect(byEvent).toEqual({ session_start: 600, user_prompt_submit: 30, stop: 100 })
   expect(t.by_agent[0]).toMatchObject({ agent_id: agent.id, agent_name: agent.name, tokens: 730 })
 
-  // bodyless calls (other callers) keep working and record nothing new
-  expect((await server.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/heartbeat` })).statusCode).toBe(200)
-  expect((await server.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/pulse` })).statusCode).toBe(200)
+  // Bound hook sessions reject stale or spoofed bodyless lifecycle calls.
+  expect((await server.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/heartbeat` })).statusCode).toBe(403)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/pulse` })).statusCode).toBe(403)
   const t2 = (await server.inject({ method: 'GET', url: `/api/v1/boards/${board.id}/telemetry` })).json()
   expect(t2.total.count).toBe(3)
 
@@ -81,7 +87,7 @@ it('leave flushes trailing telemetry before the agent goes gone', async () => {
   const { server, board, agent } = await boot()
   const res = await server.inject({
     method: 'POST', url: `/api/v1/agents/${agent.id}/leave`,
-    payload: { telemetry: [{ event: 'stop', chars: 100 }] },
+    payload: { ...identity(agent), telemetry: [{ event: 'stop', chars: 100 }] },
   })
   expect(res.statusCode).toBe(200)
   const t = (await server.inject({ method: 'GET', url: `/api/v1/boards/${board.id}/telemetry` })).json()

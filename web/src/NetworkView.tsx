@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
 import { STATUS } from './Board'
 import { CanvasPoint, CanvasViewport, canvasSceneOffset, screenToCanvasLocal } from './canvasViewport'
+import { ProviderBadge } from './ProviderBadge'
 
 type Norm = { x: number; y: number }
 type Point = { x: number; y: number }
@@ -257,7 +258,7 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
               ))}
               {subs.length > 3 && <i className="net-sub more" title={`${subs.length} subagents`}>{subs.length}</i>}
             </span>
-            <span className="net-name">{a.name}{subs.length > 0 ? ` +${subs.length}` : ''}</span>
+            <span className="net-name">{a.name}{subs.length > 0 ? ` +${subs.length}` : ''} <ProviderBadge provider={a.provider} compact /></span>
             <div className="net-cards">
               {mine.map((c) => {
                 const st = STATUS[c.column] ?? STATUS.backlog
@@ -274,7 +275,7 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
       })}
       </div>
 
-      {agents.length === 0 && <p className="col-empty net-empty">No agents online — hire one or open a Claude session here.</p>}
+      {agents.length === 0 && <p className="col-empty net-empty">No agents online — hire one or open a supported agent session here.</p>}
 
       {promptFor && (
         <div className="net-prompt">

@@ -5,6 +5,17 @@ import type Database from 'better-sqlite3'
 // these numbers come from the API's own usage reports, not char heuristics.
 export type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
 
+export type ProviderUsageSplit = {
+  provider: string
+  total_tokens: number
+  input_tokens: number
+  cached_input_tokens: number
+  cache_creation_input_tokens: number
+  output_tokens: number
+  reasoning_output_tokens: number
+  cost_cents: number | null
+}
+
 export const emptyUsage = (): UsageSplit => ({ input_tokens: 0, cache_read: 0, cache_creation: 0, output_tokens: 0 })
 
 export const hasUsage = (u: UsageSplit): boolean =>
@@ -34,21 +45,114 @@ export function addUsage(into: UsageSplit, add: UsageSplit): UsageSplit {
 export const turnUsage = (resultUsage: any, fallback: UsageSplit): UsageSplit =>
   resultUsage ? fromSdkUsage(resultUsage) : { ...fallback }
 
-export function recordUsage(db: Database.Database, boardId: number, agentId: number, u: UsageSplit): void {
-  if (!hasUsage(u)) return
+const usageNumber = (value: unknown): number =>
+  Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0
+
+export function fromCodexUsage(value: unknown): ProviderUsageSplit {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const input = usageNumber(row.inputTokens ?? row.input_tokens)
+  const cached = usageNumber(row.cachedInputTokens ?? row.cached_input_tokens)
+  const output = usageNumber(row.outputTokens ?? row.output_tokens)
+  const reasoning = usageNumber(row.reasoningOutputTokens ?? row.reasoning_output_tokens)
+  const reportedTotal = usageNumber(row.totalTokens ?? row.total_tokens)
+  return {
+    provider: 'codex',
+    total_tokens: reportedTotal || input + output,
+    input_tokens: input,
+    cached_input_tokens: Math.min(cached, input),
+    cache_creation_input_tokens: 0,
+    output_tokens: output,
+    reasoning_output_tokens: Math.min(reasoning, output),
+    cost_cents: null,
+  }
+}
+
+export function recordProviderUsage(
+  db: Database.Database,
+  boardId: number,
+  agentId: number,
+  usage: ProviderUsageSplit,
+): void {
+  if (usage.total_tokens <= 0 && usage.cost_cents == null) return
+  // Claude reports cache reads as a separate additive bucket. Codex reports cached
+  // input as a subset of input_tokens, so mirroring it into the legacy additive
+  // cache_read column would inflate usageTotal()/boardUsage() rollups.
+  const legacyCacheRead = usage.provider === 'codex' ? 0 : usage.cached_input_tokens
   db.prepare(`
-    INSERT INTO agent_usage (board_id, agent_id, day, input_tokens, cache_read, cache_creation, output_tokens)
-    VALUES (?, ?, date('now'), ?, ?, ?, ?)
+    INSERT INTO agent_usage (
+      board_id, agent_id, day, provider, input_tokens, cache_read, cache_creation, output_tokens,
+      total_tokens, cached_input_tokens, reasoning_output_tokens, cost_cents
+    ) VALUES (?, ?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(board_id, agent_id, day) DO UPDATE SET
+      provider = excluded.provider,
       input_tokens = input_tokens + excluded.input_tokens,
       cache_read = cache_read + excluded.cache_read,
       cache_creation = cache_creation + excluded.cache_creation,
-      output_tokens = output_tokens + excluded.output_tokens`)
-    .run(boardId, agentId, u.input_tokens, u.cache_read, u.cache_creation, u.output_tokens)
+      output_tokens = output_tokens + excluded.output_tokens,
+      total_tokens = total_tokens + excluded.total_tokens,
+      cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+      reasoning_output_tokens = reasoning_output_tokens + excluded.reasoning_output_tokens,
+      cost_cents = CASE
+        WHEN excluded.cost_cents IS NULL THEN cost_cents
+        WHEN cost_cents IS NULL THEN excluded.cost_cents
+        ELSE cost_cents + excluded.cost_cents
+      END`)
+    .run(
+      boardId,
+      agentId,
+      usage.provider,
+      usage.input_tokens,
+      legacyCacheRead,
+      usage.cache_creation_input_tokens,
+      usage.output_tokens,
+      usage.total_tokens,
+      usage.cached_input_tokens,
+      usage.reasoning_output_tokens,
+      usage.cost_cents,
+    )
+}
+
+export function recordUsage(db: Database.Database, boardId: number, agentId: number, u: UsageSplit): void {
+  if (!hasUsage(u)) return
+  recordProviderUsage(db, boardId, agentId, {
+    provider: 'claude',
+    total_tokens: u.input_tokens + u.cache_read + u.cache_creation + u.output_tokens,
+    input_tokens: u.input_tokens,
+    cached_input_tokens: u.cache_read,
+    cache_creation_input_tokens: u.cache_creation,
+    output_tokens: u.output_tokens,
+    reasoning_output_tokens: 0,
+    cost_cents: null,
+  })
 }
 
 const SUMS = `COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(cache_read),0) AS cache_read,
   COALESCE(SUM(cache_creation),0) AS cache_creation, COALESCE(SUM(output_tokens),0) AS output_tokens`
+const PROVIDER_SUMS = `COALESCE(SUM(total_tokens),0) AS total_tokens,
+  COALESCE(SUM(input_tokens),0) AS input_tokens,
+  COALESCE(SUM(cached_input_tokens),0) AS cached_input_tokens,
+  COALESCE(SUM(output_tokens),0) AS output_tokens,
+  COALESCE(SUM(reasoning_output_tokens),0) AS reasoning_output_tokens,
+  SUM(cost_cents) AS cost_cents`
+
+export function providerBoardUsage(db: Database.Database, boardId: number) {
+  return {
+    total: db.prepare(`SELECT ${PROVIDER_SUMS} FROM agent_usage WHERE board_id=?`).get(boardId),
+    by_provider: db.prepare(`SELECT provider, ${PROVIDER_SUMS} FROM agent_usage
+      WHERE board_id=? GROUP BY provider ORDER BY total_tokens DESC`).all(boardId),
+    by_agent: db.prepare(`SELECT u.agent_id, a.name AS agent_name, u.provider, ${PROVIDER_SUMS}
+      FROM agent_usage u LEFT JOIN agents a ON a.id=u.agent_id WHERE u.board_id=?
+      GROUP BY u.agent_id, u.provider ORDER BY total_tokens DESC`).all(boardId),
+  }
+}
+
+export function providerUsageTotal(db: Database.Database) {
+  return {
+    total: db.prepare(`SELECT ${PROVIDER_SUMS} FROM agent_usage`).get(),
+    by_provider: db.prepare(`SELECT provider, ${PROVIDER_SUMS} FROM agent_usage
+      GROUP BY provider ORDER BY total_tokens DESC`).all(),
+  }
+}
 
 export function boardUsage(db: Database.Database, boardId: number) {
   return {
@@ -60,6 +164,7 @@ export function boardUsage(db: Database.Database, boardId: number) {
     days: db.prepare(`
       SELECT day, ${SUMS} FROM agent_usage WHERE board_id=?
       GROUP BY day ORDER BY day`).all(boardId),
+    normalized: providerBoardUsage(db, boardId),
   }
 }
 

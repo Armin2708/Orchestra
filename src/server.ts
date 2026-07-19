@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
@@ -14,18 +15,24 @@ import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
-import { boardUsage, usageTotal } from './usage.js'
+import { boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
-import { claudeProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
+import { claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
+import {
+  ACCESS_PROFILES,
+  CODEX_CAPABILITIES,
+  ProviderUnavailableError,
+  type AccessProfile,
+} from './provider-agent-manager.js'
 import { registerAgentSessionControlRoutes, type AgentSessionControlHost } from './agent-session-controls.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike extends AgentSessionControlHost {
   isHired(agentId: number): boolean
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string; cardId?: number }): any
+  hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: AccessProfile; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any
   deliver(agentId: number, msg: any): boolean
   // optional: only the real Conductor resumes limit-paused agents (#62)
   wake?(boardId: number): { woke: string[]; queued: string[]; skipped: string[] }
@@ -34,14 +41,20 @@ export interface ConductorLike extends AgentSessionControlHost {
   subagents(agentId: number): { key: string; label: string }[]
   interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
-  launch(req: { boardId: number; cardId: number; cwd: string; brief: string }): any
+  launch(req: { boardId: number; cardId: number; cwd: string; brief: string; provider?: string; model?: string; effort?: string; accessProfile?: AccessProfile; permissionMode?: string }): any
   isLaunched(cardId: number): boolean
   // optional so existing test stubs stay valid; the real Conductor implements all of these
   setPermissionMode?(agentId: number, mode: string): Promise<boolean>
-  resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean
+  resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean | Promise<boolean>
+  resolveApproval?(agentId: number, requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel', message?: string, answers?: Record<string, string[]>): boolean | Promise<boolean>
+  setAccessProfile?(agentId: number, profile: AccessProfile): Promise<boolean>
   setModel?(agentId: number, model: string): Promise<boolean>
   setEffort?(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
   providerCatalog?(): Promise<AgentProviderCatalog[]>
+  capabilities?(agentId: number): string[]
+  adoptLaunch?(agentId: number): void
+  detachAll?(): Promise<void>
+  shutdown?(): Promise<void>
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
@@ -87,6 +100,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/api/v1/system', async () => {
     const u = await claudeUsage(db)
+    const providers = await maestro?.providerCatalog?.() ?? []
     return {
       hardware: hardware(),
       hired: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status != 'gone'`).get() as any).c,
@@ -96,6 +110,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       injected: injectedTotal(db),
       // real API tokens consumed by hired agents — not the injected-context estimate above
       agent_usage: usageTotal(db),
+      provider_usage: providerUsageTotal(db),
+      providers,
       // limit-paused agents + when the autowake timer resumes them (#62)
       paused_limit: (db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE kind='hired' AND status='paused_limit'`).get() as any).c,
       autowake_at: opts.autowakeAt?.() ?? null,
@@ -183,6 +199,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     for (const [k, t] of m) if (now - t > 90_000) m.delete(k)
     return [...m.keys()].map((key) => ({ key, label: 'subagent' }))
   }
+  const hookTokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
+  const hookAgent = (agentId: number, body: Record<string, unknown> | null | undefined) => {
+    const agent = db.prepare('SELECT * FROM agents WHERE id=?').get(agentId) as any
+    if (!agent || agent.kind !== 'session') return null
+    // Name-only legacy API registrations have no provider session to steal and keep
+    // their historical bodyless lifecycle contract. Every real hook session is bound.
+    if (!agent.hook_token_hash && !agent.external_session_id) return agent
+    const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : ''
+    const sessionId = typeof body?.session_id === 'string' ? body.session_id : ''
+    const token = typeof body?.session_token === 'string' ? body.session_token : ''
+    if (!provider || !sessionId || !token || provider !== agent.provider || sessionId !== agent.external_session_id)
+      return null
+    return tokenEquals(hookTokenHash(token), String(agent.hook_token_hash ?? '')) ? agent : null
+  }
 
   server.post<{ Body: { project_path: string } }>('/api/v1/boards/resolve', (req) => {
     const p = req.body.project_path
@@ -193,27 +223,52 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/api/v1/boards', () => db.prepare(`SELECT * FROM boards ORDER BY id`).all())
 
-  server.post<{ Body: { board_id: number; session_id?: string; name?: string } }>(
-    '/api/v1/agents/register', (req) => {
+  server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string } }>(
+    '/api/v1/agents/register', (req, reply) => {
       const { board_id, session_id } = req.body
+      const requestedProvider = req.body.provider?.trim().toLowerCase()
+      if (requestedProvider !== undefined && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(requestedProvider))
+        return reply.code(400).send({ error: 'invalid provider id' })
+      const provider = requestedProvider ?? 'claude'
+      const externalSessionId = req.body.external_session_id ?? session_id ?? null
+      if (externalSessionId !== null && (typeof externalSessionId !== 'string' || !externalSessionId.trim() || externalSessionId.length > 512))
+        return reply.code(400).send({ error: 'session_id must be a non-empty string of 512 characters or fewer' })
       let name = req.body.name
-      if (!name && session_id) {
-        // same session re-registering (e.g. lost session file) keeps its identity
-        const existing = db.prepare(`SELECT name FROM agents WHERE board_id=? AND session_id=?`).get(board_id, session_id) as any
-        if (existing) name = existing.name
+      const identity = externalSessionId ? db.prepare(`SELECT * FROM agents WHERE provider=? AND external_session_id=?`)
+        .get(provider, externalSessionId) as any : undefined
+      if (identity) {
+        if (identity.kind !== 'session' || identity.board_id !== board_id || (name && name !== identity.name))
+          return reply.code(409).send({ error: 'provider session identity is already bound to another agent' })
+        name = identity.name
       }
       if (!name) {
         do { name = generateName() } while (
           db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(board_id, name))
       }
-      db.prepare(`
-        INSERT INTO agents (board_id, name, session_id) VALUES (?, ?, ?)
-        ON CONFLICT(board_id, name) DO UPDATE SET
-          session_id=excluded.session_id, status='active', last_seen=datetime('now')
-      `).run(board_id, name, session_id ?? null)
-      const agent = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name)
+      const named = db.prepare('SELECT * FROM agents WHERE board_id=? AND name=?').get(board_id, name) as any
+      const sameIdentity = !!named && identity?.id === named.id
+      const legacyNameOnly = !!named && !externalSessionId && !named.external_session_id && named.kind === 'session'
+      if (named && !sameIdentity && !legacyNameOnly)
+        return reply.code(409).send({ error: `agent ${name} is already registered with another session` })
+      const sessionToken = externalSessionId ? randomBytes(32).toString('base64url') : null
+      const tokenHash = sessionToken ? hookTokenHash(sessionToken) : null
+      try {
+        db.prepare(`
+          INSERT INTO agents (board_id, name, session_id, provider, external_session_id, hook_token_hash)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(board_id, name) DO UPDATE SET
+            session_id=excluded.session_id, external_session_id=excluded.external_session_id,
+            hook_token_hash=excluded.hook_token_hash, status='active', last_seen=datetime('now')
+        `).run(board_id, name, session_id ?? null, provider, externalSessionId, tokenHash)
+      } catch (error) {
+        if (String(error).includes('UNIQUE constraint failed'))
+          return reply.code(409).send({ error: 'provider session identity is already registered' })
+        throw error
+      }
+      const stored = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name) as any
+      const { hook_token_hash: _secretHash, ...agent } = stored
       emit(board_id, 'agent', agent)
-      return agent
+      return { ...agent, ...(sessionToken ? { session_token: sessionToken } : {}) }
     })
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/snapshot', (req) => {
@@ -222,6 +277,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       board: db.prepare(`SELECT * FROM boards WHERE id=?`).get(id),
       agents: (db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id) as any[]).map((a) => ({
         ...a,
+        capabilities: maestro?.capabilities?.(a.id) ?? [],
         subagents: maestro?.isHired(a.id) ? maestro.subagents(a.id) : liveTermSubs(a.id),
       })),
       // review cards carry their latest verification (#52); ship_status marks cards the
@@ -701,16 +757,39 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
-  server.post<{ Params: { id: string } }>('/api/v1/cards/:id/launch', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { provider?: string; model?: string; effort?: string; access_profile?: AccessProfile } | null }>(
+    '/api/v1/cards/:id/launch', (req, reply) => {
     if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
     if (card.column === 'done') return reply.code(400).send({ error: 'card is already done' })
     if (maestro.isLaunched(card.id)) return reply.code(409).send({ error: 'card already launched or queued' })
-    if (card.owner_agent_id && maestro.isHired(card.owner_agent_id))
-      return reply.code(409).send({ error: `already being worked by ${card.owner}` })
+    if (card.owner_agent_id) {
+      const owner = db.prepare('SELECT name, kind, status FROM agents WHERE id=?').get(card.owner_agent_id) as
+        { name: string; kind: string; status: string } | undefined
+      if (maestro.isHired(card.owner_agent_id) || (owner?.kind === 'hired' && owner.status !== 'gone'))
+        return reply.code(409).send({ error: `already being worked by ${owner?.name ?? card.owner}` })
+    }
+    if (req.body?.access_profile !== undefined && !ACCESS_PROFILES.includes(req.body.access_profile))
+      return reply.code(400).send({ error: `access_profile must be one of: ${ACCESS_PROFILES.join(', ')}` })
+    if (req.body?.effort !== undefined && !/^[a-zA-Z0-9_-]{1,40}$/.test(req.body.effort))
+      return reply.code(400).send({ error: 'effort must be a provider effort identifier' })
     const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
-    return maestro.launch({ boardId: card.board_id, cardId: card.id, cwd: board.project_path, brief: launchBrief(card) })
+    try {
+      return maestro.launch({
+        boardId: card.board_id,
+        cardId: card.id,
+        cwd: board.project_path,
+        brief: launchBrief(card),
+        provider: req.body?.provider,
+        model: req.body?.model,
+        effort: req.body?.effort,
+        accessProfile: req.body?.access_profile,
+      })
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+      throw error
+    }
   })
 
   // bring a completed card back to the backlog, unowned, ready to reassign
@@ -806,24 +885,36 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return msg
     })
 
-  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string } }>(
+  server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; provider?: string; model?: string; effort?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; access_profile?: AccessProfile } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
       if (!board) return reply.code(404).send({ error: 'not found' })
-      const agent = maestro.hire({
-        boardId: board.id,
-        cwd: req.body?.cwd ?? board.project_path,
-        name: req.body?.name,
-        model: req.body?.model,
-        role: req.body?.role,
-        ephemeral: req.body?.ephemeral,
-        // /resume revives a stopped agent with its memory and permission mode intact (#44)
-        resumeSession: req.body?.resumeSession,
-        permissionMode: req.body?.permissionMode,
-      })
-      emit(board.id, 'agent', agent)
-      return agent
+      if (req.body?.access_profile !== undefined && !ACCESS_PROFILES.includes(req.body.access_profile))
+        return reply.code(400).send({ error: `access_profile must be one of: ${ACCESS_PROFILES.join(', ')}` })
+      if (req.body?.effort !== undefined && !/^[a-zA-Z0-9_-]{1,40}$/.test(req.body.effort))
+        return reply.code(400).send({ error: 'effort must be a provider effort identifier' })
+      try {
+        const agent = maestro.hire({
+          boardId: board.id,
+          cwd: req.body?.cwd ?? board.project_path,
+          name: req.body?.name,
+          provider: req.body?.provider,
+          model: req.body?.model,
+          effort: req.body?.effort,
+          role: req.body?.role,
+          ephemeral: req.body?.ephemeral,
+          // /resume revives a stopped agent with its provider-native memory intact (#44)
+          resumeSession: req.body?.resumeSession,
+          permissionMode: req.body?.permissionMode,
+          accessProfile: req.body?.access_profile,
+        })
+        emit(board.id, 'agent', agent)
+        return agent
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+        throw error
+      }
     })
 
   // manual wake-all for limit-paused agents — same mechanics the autowake timer uses
@@ -864,14 +955,49 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return ok ? { ok: true, mode } : reply.code(404).send({ error: 'not a hired agent' })
     })
 
+  server.post<{ Params: { id: string }; Body: { profile?: AccessProfile } | null }>(
+    '/api/v1/agents/:id/access-profile', async (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const profile = req.body?.profile
+      if (!profile || !ACCESS_PROFILES.includes(profile))
+        return reply.code(400).send({ error: `profile must be one of: ${ACCESS_PROFILES.join(', ')}` })
+      const ok = (await maestro.setAccessProfile?.(Number(req.params.id), profile)) ?? false
+      return ok ? { ok: true, profile } : reply.code(404).send({ error: 'not a hired agent' })
+    })
+
   // answer a pending canUseTool ask surfaced in the terminal
   server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string } | null }>(
-    '/api/v1/agents/:id/permissions/:requestId', (req, reply) => {
+    '/api/v1/agents/:id/permissions/:requestId', async (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const behavior = req.body?.behavior
       if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
-      const ok = maestro.resolvePermission?.(Number(req.params.id), req.params.requestId, behavior, req.body?.message) ?? false
+      const ok = (await maestro.resolvePermission?.(Number(req.params.id), req.params.requestId, behavior, req.body?.message)) ?? false
       return ok ? { ok: true } : reply.code(404).send({ error: 'no pending permission request with that id' })
+    })
+
+  server.post<{ Params: { id: string; requestId: string }; Body: { decision?: string; message?: string; answers?: Record<string, unknown> } | null }>(
+    '/api/v1/agents/:id/approvals/:requestId', async (req, reply) => {
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
+      const decision = req.body?.decision
+      const decisions = ['allow', 'allow_session', 'deny', 'cancel'] as const
+      if (!decision || !decisions.includes(decision as (typeof decisions)[number]))
+        return reply.code(400).send({ error: `decision must be one of: ${decisions.join(', ')}` })
+      const rawAnswers = req.body?.answers
+      if (rawAnswers !== undefined && (
+        !rawAnswers || typeof rawAnswers !== 'object' || Array.isArray(rawAnswers)
+        || Object.keys(rawAnswers).length > 50
+        || Object.values(rawAnswers).some((value) => !Array.isArray(value)
+          || value.length > 50
+          || value.some((answer) => typeof answer !== 'string' || answer.length > 8_000))
+      )) return reply.code(400).send({ error: 'answers must map question ids to bounded string arrays' })
+      const ok = (await maestro.resolveApproval?.(
+        Number(req.params.id),
+        req.params.requestId,
+        decision as (typeof decisions)[number],
+        req.body?.message,
+        rawAnswers as Record<string, string[]> | undefined,
+      )) ?? false
+      return ok ? { ok: true, decision } : reply.code(404).send({ error: 'no compatible pending approval request with that id' })
     })
 
   // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)
@@ -886,17 +1012,16 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // change reasoning effort — a spawn param, so the daemon restarts the session with resume;
   // 409 while a turn is running, mirroring the launch gate
-  const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
   server.post<{ Params: { id: string }; Body: { level?: string } | null }>(
     '/api/v1/agents/:id/effort', async (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const level = req.body?.level ?? ''
-      if (!EFFORT_LEVELS.includes(level)) return reply.code(400).send({ error: `level must be one of: ${EFFORT_LEVELS.join(', ')}` })
+      if (!/^[a-zA-Z0-9_-]{1,40}$/.test(level)) return reply.code(400).send({ error: 'level must be a provider effort identifier' })
       const r = (await maestro.setEffort?.(Number(req.params.id), level)) ?? 'not-found'
       if (r === 'ok') return { ok: true, level }
       if (r === 'busy') return reply.code(409).send({ error: 'agent is mid-turn — wait or interrupt, then retry' })
       if (r === 'no-session') return reply.code(409).send({ error: 'agent has no resumable session yet — send a first prompt before changing effort' })
-      if (r === 'bad-level') return reply.code(400).send({ error: `level must be one of: ${EFFORT_LEVELS.join(', ')}` })
+      if (r === 'bad-level') return reply.code(400).send({ error: `level ${level} is not supported by this provider` })
       return reply.code(404).send({ error: 'not a hired agent' })
     })
 
@@ -964,26 +1089,32 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { key?: string } }>('/api/v1/agents/:id/subping', (req) => {
+  server.post<{ Params: { id: string }; Body: { key?: string; state?: string; provider?: string; session_id?: string; session_token?: string } }>('/api/v1/agents/:id/subping', (req, reply) => {
     const id = Number(req.params.id)
+    const a = hookAgent(id, req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     if (!termSubs.has(id)) termSubs.set(id, new Map())
-    termSubs.get(id)!.set(String(req.body?.key ?? 'sub'), Date.now())
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
-    if (a) emit(a.board_id, 'agent', { id, subs: true })
+    const key = String(req.body?.key ?? 'sub')
+    if (req.body?.state === 'stopped') termSubs.get(id)!.delete(key)
+    else termSubs.get(id)!.set(key, Date.now())
+    emit(a.board_id, 'agent', { id, subs: termSubs.get(id)!.size > 0 })
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/heartbeat', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
     const id = Number(req.params.id)
+    const a = hookAgent(id, req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
-    if (a && req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
-    if (a) emit(a.board_id, 'agent', a)
-    return a ?? {}
+    if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
+    const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id)
+    emit(a.board_id, 'agent', updated)
+    return updated
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/pulse', (req) => {
-    const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/pulse', (req, reply) => {
+    const a = hookAgent(Number(req.params.id), req.body)
+    if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
     if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
     // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
@@ -997,10 +1128,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { agent: a, messages }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[] } | null }>('/api/v1/agents/:id/leave', (req) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/leave', (req, reply) => {
     const id = Number(req.params.id)
-    const boardOf = db.prepare(`SELECT board_id FROM agents WHERE id=?`).get(id) as any
-    if (boardOf && req.body?.telemetry) recordTelemetry(db, boardOf.board_id, id, req.body.telemetry)
+    const bound = hookAgent(id, req.body)
+    if (!bound) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
+    if (req.body?.telemetry) recordTelemetry(db, bound.board_id, id, req.body.telemetry)
     removeAgentCards(db, id) // gone agents leave a clean board
     db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
@@ -1047,15 +1179,24 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const defaultAgentOsDrivers = () => [
       { id: 'claude', available: !!maestro, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
         detail: maestro ? undefined : 'requires the daemon Conductor' },
+      { id: 'codex', available: false, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
+        detail: 'requires the daemon Codex app-server runtime' },
       { id: 'shell', available: !!opts.agentOs?.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
         detail: opts.agentOs?.runtime ? undefined : 'requires the PTY runtime' },
     ]
   const defaultAgentProviders = async () => maestro?.providerCatalog
     ? maestro.providerCatalog()
-    : [claudeProviderCatalog({
-        available: false,
-        detail: 'Requires the daemon Conductor before Claude models can be discovered.',
-      })]
+    : [
+        claudeProviderCatalog({
+          available: false,
+          detail: 'Requires the daemon Conductor before Claude models can be discovered.',
+        }),
+        codexProviderCatalog({
+          available: false,
+          capabilities: CODEX_CAPABILITIES,
+          detail: 'Requires the daemon Codex app-server runtime.',
+        }),
+      ]
   registerAgentOsRoutes(server, {
     ...opts.agentOs,
     db,

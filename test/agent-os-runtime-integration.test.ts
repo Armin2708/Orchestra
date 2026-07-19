@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
 import { openDb } from '../src/db.js'
+import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
 import { buildServer } from '../src/server.js'
 
 const roots: string[] = []
@@ -243,6 +244,48 @@ describe('Agent OS daemon runtime integration', () => {
       .toBe(1)
   }, 25_000)
 
+  it('launches managed agent jobs with least-privilege defaults', async () => {
+    const { boardId, repo, db, runtime, server } = await fixture()
+    const requests: DriverLaunchRequest[] = []
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async (request) => {
+        requests.push(request)
+        return {
+          id: 'claude:least-privilege', externalId: 'least-privilege', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'least-privilege', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { workspace_id: workspace.id, provider: 'claude', max_attempts: 1 },
+    })
+    expect(response.statusCode).toBe(201)
+    const jobId = response.json().job.id as string
+    await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ accessProfile: 'workspace_write', permissionMode: 'default' })
+    expect(db.prepare("SELECT access_profile FROM agents WHERE session_id=?").get(`agent-os:${jobId}`))
+      .toMatchObject({ access_profile: 'workspace_write' })
+  })
+
   it('reconciles orphaned process records as lost and raises durable attention', async () => {
     const { boardId, repo, db, runtime, server } = await fixture()
     const workspace = (await server.inject({
@@ -327,5 +370,44 @@ describe('Agent OS daemon runtime integration', () => {
     expect(runtime.scheduler.get(job.id)).toMatchObject({ status: 'blocked', attempts: 1 })
     expect(db.prepare("SELECT status FROM agent_sessions WHERE id='orphaned-session'")).toBeTruthy()
     expect((db.prepare("SELECT status FROM agent_sessions WHERE id='orphaned-session'").get() as { status: string }).status).toBe('failed')
+  })
+
+  it('continues a resumable Claude job after daemon restart instead of attaching it idle', async () => {
+    const { boardId, repo, db, runtime, server } = await fixture()
+    const sent: Array<[string, string]> = []
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async () => { throw new Error('not used') },
+      attach: async () => ({
+        id: 'claude:resumed', externalId: 'claude-thread', driverId: 'claude', workspaceId: 'restart-workspace',
+        status: 'idle', startedAt: new Date().toISOString(), metadata: {},
+      }),
+      send: async (sessionId, text) => { sent.push([sessionId, text]) },
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'Claude session stopped' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { id: 'restart-workspace', name: 'restart-claude', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const job = runtime.scheduler.create({ boardId, workspaceId: workspace.id, provider: 'claude', maxAttempts: 1 })
+    db.prepare("UPDATE jobs SET status='running', attempts=1, started_at=datetime('now') WHERE id=?").run(job.id)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, external_id, status, context_json, created_at, updated_at)
+      VALUES ('resumable-claude-session', ?, 'claude', 'claude-thread', 'running', ?, datetime('now'), datetime('now'))`)
+      .run(workspace.id, JSON.stringify({ job_id: job.id }))
+
+    expect(await runtime.reconcileJobs()).toEqual({ resumed: [job.id], recovered: [] })
+    expect(sent).toEqual([[
+      'claude:resumed',
+      expect.stringMatching(/daemon restarted.*continue the existing job/i),
+    ]])
   })
 })

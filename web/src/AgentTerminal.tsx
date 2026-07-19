@@ -2,6 +2,17 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { followIntent } from './follow'
+import { ProviderBadge } from './ProviderBadge'
+import {
+  ACCESS_PROFILES,
+  AccessProfile,
+  hasAgentCapability,
+  normalizeProvider,
+  providerLabel,
+  providerTokenSummary,
+  ProviderTokenUsage,
+  resolveAccessProfile,
+} from './agentProviderUi'
 import { AgentControlPanel } from './AgentControlPanel'
 import {
   localConsoleCommand,
@@ -18,19 +29,140 @@ type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' |
 
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
-// real API token split (input / cache-read / cache-creation / output) — from result-message
-// usage, NOT the injected-context estimate the board meter shows
-type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
-const usageIn = (u: UsageSplit) => u.input_tokens + u.cache_read + u.cache_creation
-const usageSum = (u?: UsageSplit) => (u ? usageIn(u) + u.output_tokens : 0)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 const readableError = (cause: unknown) => {
   const raw = cause instanceof Error ? cause.message : 'The action could not be completed.'
   try { return JSON.parse(raw).error ?? raw } catch { return raw }
 }
 
-// a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
-type PendingPermission = { id: string; tool: string; summary: string; title: string | null; at: string }
+const controlErrorText = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : 'Provider control failed'
+  try { return JSON.parse(raw).error ?? raw } catch { return raw }
+}
+
+type PendingQuestionOption = { label?: string; description?: string }
+type PendingQuestion = {
+  id: string
+  header?: string
+  question?: string
+  options?: PendingQuestionOption[] | null
+  isOther?: boolean
+  isSecret?: boolean
+  multiple?: boolean
+  multiSelect?: boolean
+  required?: boolean
+  defaultAnswers?: string[]
+  inputType?: 'text' | 'number' | 'email' | 'url' | 'date' | 'datetime-local'
+  minimum?: number
+  maximum?: number
+  step?: number
+}
+
+// A provider approval or structured user-input request waiting in the terminal.
+type PendingPermission = {
+  id: string
+  tool?: string
+  summary: string
+  title: string | null
+  at: string
+  approvalKind?: string
+  questions?: PendingQuestion[]
+  native?: { questions?: PendingQuestion[] }
+  elicitationMode?: string | null
+  serverName?: string | null
+  url?: string | null
+}
+
+const questionsFor = (permission: PendingPermission): PendingQuestion[] =>
+  permission.questions ?? permission.native?.questions ?? []
+
+function UserInputApproval({ permission, onSubmit, onCancel }: {
+  permission: PendingPermission
+  onSubmit: (answers: Record<string, string[]>) => Promise<void>
+  onCancel: () => Promise<void>
+}) {
+  const questions = questionsFor(permission)
+  const [answers, setAnswers] = useState<Record<string, string[]>>(() => Object.fromEntries(
+    questions.filter((question) => question.defaultAnswers?.length)
+      .map((question) => [question.id, question.defaultAnswers!]),
+  ))
+  const [customAnswers, setCustomAnswers] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+  const ready = questions.length > 0 && questions.every((question) => question.required === false
+    || (answers[question.id] ?? []).some((answer) => answer.trim()))
+  const single = (id: string, value: string) => setAnswers((previous) => ({
+    ...previous,
+    [id]: value ? [value] : [],
+  }))
+  const toggle = (id: string, value: string, checked: boolean) => setAnswers((previous) => ({
+    ...previous,
+    [id]: checked
+      ? [...(previous[id] ?? []).filter((answer) => answer !== value), value]
+      : (previous[id] ?? []).filter((answer) => answer !== value),
+  }))
+  const choose = (id: string, value: string) => {
+    const custom = value === '__orchestra_custom_answer__'
+    setCustomAnswers((previous) => ({ ...previous, [id]: custom }))
+    single(id, custom ? '' : value)
+  }
+  return (
+    <div className="cc-user-input">
+      {questions.map((question) => {
+        const options = (question.options ?? []).filter((option) => option.label)
+        const multiple = question.multiple === true || question.multiSelect === true
+        return (
+          <fieldset key={question.id} className="cc-user-input-question">
+            <legend>{question.header ?? question.question ?? question.id}</legend>
+            {question.header && question.question && <p>{question.question}</p>}
+            {options.length > 0 && multiple ? options.map((option) => (
+              <label key={option.label} className="cc-user-input-option">
+                <input type="checkbox" checked={(answers[question.id] ?? []).includes(option.label!)}
+                  onChange={(event) => toggle(question.id, option.label!, event.target.checked)} />
+                <span><b>{option.label}</b>{option.description ? ` — ${option.description}` : ''}</span>
+              </label>
+            )) : options.length > 0 ? (
+              <>
+                <select value={customAnswers[question.id] ? '__orchestra_custom_answer__' : answers[question.id]?.[0] ?? ''}
+                  onChange={(event) => choose(question.id, event.target.value)}>
+                  <option value="">Choose…</option>
+                  {options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}
+                  {question.isOther && <option value="__orchestra_custom_answer__">Other…</option>}
+                </select>
+                {customAnswers[question.id] && (
+                  <input type={question.isSecret ? 'password' : 'text'} autoComplete="off"
+                    aria-label={`${question.header ?? question.question ?? question.id} custom answer`}
+                    value={answers[question.id]?.[0] ?? ''}
+                    onChange={(event) => single(question.id, event.target.value)} />
+                )}
+              </>
+            ) : question.isSecret ? (
+              <input type="password" autoComplete="off"
+                aria-label={question.header ?? question.question ?? question.id}
+                value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            ) : question.inputType && question.inputType !== 'text' ? (
+              <input type={question.inputType} autoComplete="off"
+                aria-label={question.header ?? question.question ?? question.id}
+                min={question.minimum} max={question.maximum} step={question.step}
+                value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            ) : (
+              <textarea rows={2} value={answers[question.id]?.[0] ?? ''}
+                onChange={(event) => single(question.id, event.target.value)} />
+            )}
+          </fieldset>
+        )
+      })}
+      <div className="cc-perm-actions">
+        <button className="cc-perm-allow" disabled={!ready || busy} onClick={async () => {
+          setBusy(true)
+          try { await onSubmit(answers) } finally { setBusy(false) }
+        }}>✓ submit answers</button>
+        <button className="cc-perm-deny" disabled={busy} onClick={onCancel}>cancel</button>
+      </div>
+    </div>
+  )
+}
 
 // a slash-menu entry; source 'sdk' = the session's real command list, anything else
 // (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
@@ -38,30 +170,49 @@ export type CommandItem = { name: string; description: string; source: string }
 
 const LOCAL_CONSOLE_COMMANDS: CommandItem[] = [
   { name: 'commands', description: 'show only the actions available in this console', source: 'orchestra' },
-  { name: 'status', description: 'show this session’s model, mode, and location', source: 'orchestra' },
+  { name: 'status', description: 'show this session’s model, access, and location', source: 'orchestra' },
   { name: 'usage', description: 'show token and cost accounting for this session', source: 'orchestra' },
   { name: 'clear', description: 'clear this console view without erasing session memory', source: 'orchestra' },
 ]
 
-// permission modes the daemon accepts (POST /agents/:id/permission-mode)
-const PERMISSION_MODES = [
-  { value: 'bypassPermissions', label: 'autonomous', hint: 'runs without approval prompts' },
-  { value: 'acceptEdits', label: 'edit', hint: 'edits auto-approved · other tools ask below' },
-  { value: 'plan', label: 'plan', hint: 'read-only · tools ask below' },
-]
+// Provider model catalogs may use the legacy Claude `model` key or the neutral `value` key.
+type ModelInfo = {
+  model?: string
+  value?: string
+  resolvedModel?: string
+  displayName?: string
+  description?: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: string[]
+}
 
-// Model catalogs use `value`; `model` remains accepted for older daemon payloads.
-type ModelInfo = { value?: string; model?: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
+type TranscriptInfo = {
+  provider?: string
+  capabilities?: string[]
+  accessProfile?: string | null
+  access_profile?: string | null
+  model: string | null
+  cwd: string
+  tokens: number
+  permissionMode?: string
+  commands?: { name: string; description: string }[]
+  effort?: string | null
+  models?: ModelInfo[]
+  costUsd?: number
+  usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
+}
 
-function ModelEffortControls({ agentId, info, working, onChange, onError }: {
+function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange, onError }: {
   agentId: number
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
   working: boolean
+  canSelectModel: boolean
+  canSetEffort: boolean
   onChange: () => void
   onError: (error: unknown) => void
 }) {
   const models = info?.models ?? []
-  if (models.length === 0) return null
+  if ((!canSelectModel && !canSetEffort) || models.length === 0) return null
   const current = models.find((model) => {
     const value = sessionModelValue(model)
     return value === info?.model || model.resolvedModel === info?.model
@@ -70,7 +221,7 @@ function ModelEffortControls({ agentId, info, working, onChange, onError }: {
   const levels = current?.supportedEffortLevels ?? []
   return (
     <span className="cc-model-effort">
-      <select className="cc-mode-select" value={currentValue} aria-label="Model"
+      {canSelectModel && <select className="cc-mode-select" value={currentValue} aria-label="Model"
         title="Model used by this session"
         onChange={async (event) => {
           if (!event.target.value) return
@@ -84,8 +235,8 @@ function ModelEffortControls({ agentId, info, working, onChange, onError }: {
           const value = sessionModelValue(model)
           return value ? <option key={value || index} value={value}>{model.displayName ?? value}</option> : null
         })}
-      </select>
-      {levels.length > 0 && (
+      </select>}
+      {canSetEffort && levels.length > 0 && (
         <span className="cc-effort" role="group" aria-label="Reasoning effort"
           title={working ? 'Wait for the current turn to finish' : 'Change reasoning effort'}>
           {levels.map((level) => (
@@ -105,37 +256,39 @@ function ModelEffortControls({ agentId, info, working, onChange, onError }: {
   )
 }
 
-function PermissionModeHint({ agentId, mode, onChange, onError }: {
+function PermissionModeHint({ agentId, profile, onChange, onError }: {
   agentId: number
-  mode: string
+  profile: AccessProfile
   onChange: () => void
   onError: (error: unknown) => void
 }) {
-  const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
+  const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
   return (
     <span className="cc-mode">
       <span className="cc-mode-dot" aria-hidden="true" />
-      <select className="cc-mode-select" value={m.value} aria-label="Permission mode"
-        title={`${m.hint}. Shift+Tab also cycles modes.`}
+      <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
+        title={`${selected.hint}. Shift+Tab also cycles profiles.`}
         onChange={async (event) => {
+          const next = event.target.value as AccessProfile
+          if (next === 'full_access'
+            && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
           try {
-            await api('POST', `/agents/${agentId}/permission-mode`, { mode: event.target.value })
+            await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
             onChange()
           } catch (cause) { onError(cause) }
         }}>
-        {PERMISSION_MODES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        {ACCESS_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
       </select>
-      <span className="cc-dim">{m.hint}</span>
+      <span className="cc-dim">{selected.hint}</span>
     </span>
   )
 }
-
 export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[]; costUsd?: number; usage?: { turn: UsageSplit; session: UsageSplit } } | null>(null)
+  const [info, setInfo] = useState<TranscriptInfo | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
   const [localLines, setLocalLines] = useState<Line[]>([])
@@ -157,6 +310,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const followRef = useRef(true)
   const [following, setFollowing] = useState(true)
   const [controlPanel, setControlPanel] = useState<AgentControlPanelName | null>(null)
+  const [controlError, setControlError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // grow the prompt box with its content, up to a cap — like the real cli
   useEffect(() => {
@@ -170,6 +324,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     followRef.current = true
     setFollowing(true)
     setControlPanel(null)
+    setControlError(null)
     setLocalLines([])
     setPromptHistory([])
     setHistoryIdx(null)
@@ -196,12 +351,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         return w
       })
       setInfo((prev) => {
-        const i = r.info ?? null
+        const i: TranscriptInfo | null = r.info ?? null
+        const previousProvider = normalizeProvider(prev?.provider ?? agent.provider)
+        const nextProvider = normalizeProvider(i?.provider ?? agent.provider)
         if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
+          previousProvider === nextProvider &&
+          (prev.accessProfile ?? prev.access_profile) === (i.accessProfile ?? i.access_profile) &&
+          (prev.capabilities ?? []).join('|') === (i.capabilities ?? []).join('|') &&
           (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
           prev.commands?.[0]?.description === i.commands?.[0]?.description &&
           prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0) &&
-          usageSum(prev.usage?.session) + usageSum(prev.usage?.turn) === usageSum(i.usage?.session) + usageSum(i.usage?.turn)) return prev
+          providerTokenSummary(previousProvider, [prev.usage?.session, prev.usage?.turn]).total ===
+            providerTokenSummary(nextProvider, [i.usage?.session, i.usage?.turn]).total) return prev
         return i
       })
       setPerms((prev) => {
@@ -212,7 +373,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     load()
     const t = setInterval(load, 1000)
     return () => { alive = false; clearInterval(t) }
-  }, [agent.id, hired])
+  }, [agent.id, agent.provider, hired])
 
   // interleave local command echo with the streamed transcript by timestamp
   const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
@@ -230,6 +391,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })),
     ])
 
+  const provider = normalizeProvider(info?.provider ?? agent.provider)
+  const capabilities = info?.capabilities ?? agent.capabilities
+  const canAccessProfile = hasAgentCapability(capabilities, 'access_profile', provider)
+  const canSelectModel = hasAgentCapability(capabilities, 'model', provider)
+  const canSetEffort = hasAgentCapability(capabilities, 'effort', provider)
+  const canApprove = hasAgentCapability(capabilities, 'approvals', provider)
+  const canInterrupt = hasAgentCapability(capabilities, 'interrupt', provider)
+  const canStop = hasAgentCapability(capabilities, 'stop', provider)
+  const accessProfile = resolveAccessProfile(
+    info?.accessProfile ?? info?.access_profile ?? agent.access_profile,
+    info?.permissionMode,
+  )
   const working = hired && turn !== null
 
   // on open: jump straight to the latest messages; afterwards follow the stream while the
@@ -289,12 +462,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }
 
-  const cyclePermissionMode = async () => {
-    if (!hired) return
-    const current = PERMISSION_MODES.findIndex((mode) => mode.value === (info?.permissionMode ?? 'bypassPermissions'))
-    const next = PERMISSION_MODES[(current + 1 + PERMISSION_MODES.length) % PERMISSION_MODES.length]
-    try { await api('POST', `/agents/${agent.id}/permission-mode`, { mode: next.value }) } catch { /* agent gone or daemon too old */ }
-    onChange()
+  const cycleAccessProfile = async () => {
+    if (!hired || !canAccessProfile) return
+    const current = ACCESS_PROFILES.findIndex((profile) => profile.value === accessProfile)
+    const next = ACCESS_PROFILES[(current + 1 + ACCESS_PROFILES.length) % ACCESS_PROFILES.length]
+    if (next.value === 'full_access'
+      && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
+    try {
+      await api('POST', `/agents/${agent.id}/access-profile`, { profile: next.value })
+      setControlError(null)
+      onChange()
+    } catch (error) { setControlError(controlErrorText(error)) }
   }
 
   const navigateHistory = (direction: -1 | 1) => {
@@ -346,6 +524,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   })
   const modelLabel = currentModel?.displayName ?? info?.model ?? 'Default model'
   const cwdLabel = info?.cwd?.replace(/^\/(?:Users|home)\/[^/]+/, '~') ?? ''
+  const accessLabel = ACCESS_PROFILES.find((profile) => profile.value === accessProfile)?.label ?? accessProfile
 
   const runLocalConsoleCommand = (command: NonNullable<ReturnType<typeof localConsoleCommand>>, text: string) => {
     const at = new Date().toISOString()
@@ -365,18 +544,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       echoLocal('status', [
         `Agent: ${agent.name} · ${agent.status}`,
         `Model: ${modelLabel}`,
-        `Access: ${info?.permissionMode ?? 'initializing'}`,
+        `Access: ${accessLabel}`,
         cwdLabel ? `Workspace: ${cwdLabel}` : '',
       ].filter(Boolean).join('\n'))
       return
     }
 
-    const session = info?.usage?.session
-    const active = info?.usage?.turn
-    const inputTokens = (session ? usageIn(session) : 0) + (active ? usageIn(active) : 0)
-    const outputTokens = (session?.output_tokens ?? 0) + (active?.output_tokens ?? 0)
+    const usage = providerTokenSummary(provider, [info?.usage?.session, info?.usage?.turn])
     const cost = typeof info?.costUsd === 'number' && info.costUsd > 0 ? ` · $${info.costUsd.toFixed(4)}` : ''
-    echoLocal('status', `Session usage: ${fmtTokens(inputTokens)} input · ${fmtTokens(outputTokens)} output${cost}`)
+    echoLocal('status', `Session usage: ${fmtTokens(usage.inputTotal)} input · ${fmtTokens(usage.output)} output${cost}`)
   }
 
   const send = async () => {
@@ -391,6 +567,14 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       const nativePanel = hired ? panelForSlashInput(text) : null
       if (nativePanel) {
         setInput('')
+        if (provider !== 'claude' && nativePanel !== 'model') {
+          echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
+          return
+        }
+        if (nativePanel === 'model' && !canSelectModel && !canSetEffort) {
+          echoLocal('status', 'Model controls are not available for this provider session.')
+          return
+        }
         setControlPanel(nativePanel)
         return
       }
@@ -443,6 +627,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (nativePanel) {
       setInput('')
       setMenuHidden(true)
+      if (provider !== 'claude' && nativePanel !== 'model') {
+        echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
+        return
+      }
       setControlPanel(nativePanel)
       return
     }
@@ -479,12 +667,23 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   }
 
   const interrupt = async () => {
-    if (hired && working) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
+    if (hired && working && canInterrupt) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
   }
 
-  const decide = async (requestId: string, behavior: 'allow' | 'deny') => {
-    try { await api('POST', `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`, { behavior }) } catch { /* already resolved */ }
-    setPerms((prev) => prev.filter((p) => p.id !== requestId))
+  const decide = async (
+    requestId: string,
+    decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
+    answers?: Record<string, string[]>,
+  ) => {
+    const path = provider === 'codex'
+      ? `/agents/${agent.id}/approvals/${encodeURIComponent(requestId)}`
+      : `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`
+    const body = provider === 'codex' ? { decision, ...(answers ? { answers } : {}) } : { behavior: decision }
+    try {
+      await api('POST', path, body)
+      setControlError(null)
+      setPerms((prev) => prev.filter((p) => p.id !== requestId))
+    } catch (error) { setControlError(controlErrorText(error)) }
   }
 
   const renderLine = (l: Line, i: number) => {
@@ -521,9 +720,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         onKeyDown={(e) => {
           const key = e.key.toLowerCase()
           if (e.shiftKey && e.key === 'Tab' && hired) {
-            e.preventDefault(); void cyclePermissionMode(); return
+            e.preventDefault(); void cycleAccessProfile(); return
           }
-          if (e.altKey && key === 'p' && hired) {
+          if (e.altKey && key === 'p' && hired && (canSelectModel || canSetEffort)) {
             e.preventDefault(); setControlPanel('model'); return
           }
           if (e.ctrlKey && key === 'o') {
@@ -541,8 +740,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         <div className="terminal-col">
           <header className="cc-head">
             <span className="cc-head-status" aria-hidden="true" />
-            <strong>{agent.name}</strong>
-            <span className="cc-head-dim">{hired ? `hired agent · ${agent.status}` : `board conversation · ${agent.status}`}</span>
+            <strong>{agent.name}{hired && <> <ProviderBadge provider={provider} compact /></>}</strong>
+            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}` : `board conversation · ${agent.status}`}</span>
             <div className="cc-head-actions">
               {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
                 <select className="cc-assign" defaultValue=""
@@ -561,7 +760,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   ))}
                 </select>
               )}
-              {hired && (
+              {hired && canStop && (
                 <button type="button" className="cc-head-action cc-head-stop"
                   title="Stop this agent — terminates its session; a launched ticket moves to blocked"
                   onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>stop</button>
@@ -590,20 +789,44 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 )}
                 {hired && perms.map((p) => (
                   <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
-                    <p className="cc-perm-kicker">Agent requests access to {p.tool}</p>
+                    <p className="cc-perm-kicker">
+                      {p.approvalKind === 'user-input' ? 'Agent needs your input'
+                        : p.approvalKind === 'mcp-elicitation' ? 'External service requests input'
+                          : `Agent requests access to ${p.tool ?? 'a provider action'}`}
+                    </p>
                     <p className="cc-perm-title"><b>{p.title ?? p.summary}</b></p>
-                    <div className="cc-perm-actions">
-                      <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}><span>1.</span> Allow once</button>
-                      <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}><span>2.</span> Deny</button>
-                    </div>
-                    <p className="cc-perm-help">Choose an option to continue</p>
+                    {p.approvalKind === 'mcp-elicitation' && p.serverName && (
+                      <p className="cc-perm-external">Requested by MCP server <b>{p.serverName}</b>.</p>
+                    )}
+                    {p.approvalKind === 'mcp-elicitation' && p.url && (
+                      <p><a className="cc-perm-link" href={p.url} target="_blank" rel="noreferrer noopener">Open the provider sign-in page ↗</a></p>
+                    )}
+                    {canApprove && provider === 'codex'
+                      && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
+                      && questionsFor(p).length > 0 ? (
+                      <UserInputApproval permission={p}
+                        onSubmit={(answers) => decide(p.id, 'allow', answers)}
+                        onCancel={() => decide(p.id, 'cancel')} />
+                    ) : canApprove ? (
+                      <div className="cc-perm-actions">
+                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}><span>1.</span> Allow once</button>
+                        {provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
+                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}><span>2.</span> Allow for session</button>}
+                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>
+                          <span>{provider === 'codex' && p.approvalKind !== 'mcp-elicitation' ? '3.' : '2.'}</span> Deny
+                        </button>
+                      </div>
+                    ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
+                    {canApprove && !(provider === 'codex'
+                      && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
+                      && questionsFor(p).length > 0) && <p className="cc-perm-help">Choose an option to continue</p>}
                   </div>
                 ))}
                 {working && turn && (
                   <div className="cc-working" role="status">
                     <span className="cc-working-dot" aria-hidden="true" />
                     <span>Working · {fmtSecs(turn.secs)}{turn.tokens > 0 && <> · {fmtTokens(turn.tokens)} output tokens</>}</span>
-                    <button type="button" onClick={interrupt}>Interrupt</button>
+                    {canInterrupt && <button type="button" onClick={interrupt}>Interrupt</button>}
                   </div>
                 )}
               </div>
@@ -632,7 +855,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 {filtered.length > 10 && <div className="cc-slash-more">{filtered.length - 10} more · keep typing</div>}
               </div>
             )}
-            <div className="cc-promptbox" data-mode={info?.permissionMode ?? 'bypassPermissions'}>
+            <div className="cc-promptbox" data-mode={accessProfile}>
               <span className="cc-prompt-caret" aria-hidden="true">›</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
                 placeholder={convo.length === 0 ? (hired ? 'Describe what this agent should do…' : `Message ${agent.name}`) : 'Write a follow-up…'}
@@ -646,21 +869,22 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <div className="cc-hints">
             {hired
               ? <span className="cc-controls">
-                  <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'}
-                    onChange={onChange} onError={(cause) => setSubmitError(readableError(cause))} />
-                  <ModelEffortControls agentId={agent.id} info={info} working={working} onChange={onChange}
-                    onError={(cause) => setSubmitError(readableError(cause))} />
+                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile}
+                    onChange={onChange} onError={(cause) => setControlError(controlErrorText(cause))} />}
+                  <ModelEffortControls agentId={agent.id} info={info} working={working}
+                    canSelectModel={canSelectModel} canSetEffort={canSetEffort} onChange={onChange}
+                    onError={(cause) => setControlError(controlErrorText(cause))} />
+                  {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span className="cc-session-meta" title={info?.cwd}>
-              {cwdLabel || info?.cwd || ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
-              {info?.usage && usageSum(info.usage.session) + usageSum(info.usage.turn) > 0 ? (() => {
-                // live turn accrual counts toward the session display so the split never lags the ↓ number
-                const s = info.usage.session, t = info.usage.turn
-                const inTok = usageIn(s) + usageIn(t), outTok = s.output_tokens + t.output_tokens
-                const cached = inTok > 0 ? Math.round(100 * (s.cache_read + t.cache_read) / inTok) : 0
-                const tip = `real API tokens this session — input ${fmtTokens(s.input_tokens + t.input_tokens)} · cache read ${fmtTokens(s.cache_read + t.cache_read)} · cache write ${fmtTokens(s.cache_creation + t.cache_creation)} · output ${fmtTokens(outTok)} (distinct from the board meter's injected-context estimate)`
-                return <span title={tip}> · {fmtTokens(inTok)} in · {cached}% cached · {fmtTokens(outTok)} out</span>
+              {modelLabel}{cwdLabel ? ` · ${cwdLabel}` : ''}
+              {info?.usage && providerTokenSummary(provider, [info.usage.session, info.usage.turn]).total > 0 ? (() => {
+                const usage = providerTokenSummary(provider, [info.usage.session, info.usage.turn])
+                const cacheWrite = usage.cacheWrite > 0 ? ` · cache write ${fmtTokens(usage.cacheWrite)}` : ''
+                const reasoning = usage.reasoningOutput > 0 ? ` · reasoning ${fmtTokens(usage.reasoningOutput)}` : ''
+                const tip = `${providerLabel(provider)} API tokens this session — input ${fmtTokens(usage.input)} · cached input ${fmtTokens(usage.cached)}${cacheWrite} · output ${fmtTokens(usage.output)}${reasoning} (distinct from the board meter's injected-context estimate)`
+                return <span title={tip}> · {fmtTokens(usage.inputTotal)} in · {usage.cachedPercent}% cached · {fmtTokens(usage.output)} out</span>
               })() : info && info.tokens > 0 ? ` · ${fmtTokens(info.tokens)} output tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
             </span>

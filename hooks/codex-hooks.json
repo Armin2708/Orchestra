@@ -1,0 +1,80 @@
+{
+  "description": "Orchestra board registration, presence, delivery, and subagent hooks for Codex.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook session-start --provider codex"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook post-tool-use --provider codex"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook user-prompt-submit --provider codex"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook stop --provider codex"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook permission-request --provider codex"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook subagent-start --provider codex"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y orchestra-board@0.1.0 hook subagent-stop --provider codex"
+          }
+        ]
+      }
+    ]
+  }
+}

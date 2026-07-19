@@ -414,6 +414,9 @@
 .terminal .cc-promptbox[data-mode='plan'] { box-shadow: inset 2px 0 0 #718f96; }
 .terminal .cc-promptbox[data-mode='acceptEdits'] { box-shadow: inset 2px 0 0 var(--at-success); }
 .terminal .cc-promptbox[data-mode='bypassPermissions'] { box-shadow: inset 2px 0 0 var(--at-warning); }
+.terminal .cc-promptbox[data-mode='read_only'] { box-shadow: inset 2px 0 0 #718f96; }
+.terminal .cc-promptbox[data-mode='workspace_write'] { box-shadow: inset 2px 0 0 var(--at-success); }
+.terminal .cc-promptbox[data-mode='full_access'] { box-shadow: inset 2px 0 0 var(--at-warning); }
 
 .terminal .cc-prompt-caret { color: var(--at-accent); padding-top: 1px; font-size: 15px; line-height: 1.4; }
 
