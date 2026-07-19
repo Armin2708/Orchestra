@@ -168,7 +168,7 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
     fs.writeFileSync(nudged, ''); fs.writeFileSync(stale, '')
     // full command syntax only in the session's first reminder; later nudges stay terse
     if (mine.length === 0 && firstCheck) {
-      lines.push(`Reminder: no orchestra card yet — register now: orchestra card create "<title>" --desc "<scope>" --paths <paths> --column in_progress --agent ${sess.agent_name}`)
+      lines.push(`Reminder: no orchestra card yet — register now: orchestra card create '<title>' --desc '<scope>' --paths <paths> --column in_progress --agent ${sess.agent_name}`)
     } else if (mine.length > 0 && staleCheck && !firstCheck) {
       const old = mine.filter((c: any) => cardAgeMs(c) > 600_000)
       if (old.length > 0) {
