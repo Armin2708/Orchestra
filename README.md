@@ -9,6 +9,11 @@ verification, a test-gated auto-ship queue, shipped-commit history, remote phone
 access, push notifications, per-agent token accounting, and manual/automatic wake
 for agents paused by Claude usage limits.
 
+The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
+provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
+checkpoints, durable scheduling, and a single human-attention queue—without removing any CLI or
+raw-terminal capability.
+
 ## Quickstart
 
 **Plug and play (Claude Code plugin — recommended):** inside Claude Code, run
