@@ -10,6 +10,7 @@ import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, U
 import { port } from './daemon.js'
 import { conductorRules, outputDiscipline } from './rules.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
+import { isUsageLimitError } from './limits.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -75,6 +76,9 @@ type Hired = {
   role?: 'strategist' | 'auditor' | 'verifier'
   // an effort restart supersedes this session — its exit must leave cards/queue untouched
   handoff: boolean
+  // the session died on a spent usage window — resumable, so the exit path parks
+  // (paused_limit + blocked ticket) instead of pruning
+  limitHit: boolean
   ephemeral: boolean
   subs: Map<string, string>
   // launched-on-ticket agents carry their card through to review/blocked on exit
@@ -86,7 +90,9 @@ type Hired = {
   summary: string
 }
 
-type LaunchRequest = { boardId: number; cardId: number; cwd: string; brief: string }
+// wakeAgentId marks a queued wake of a limit-paused agent: when a slot frees, the queue
+// resumes that agent's saved session instead of minting a fresh one
+type LaunchRequest = { boardId: number; cardId: number; cwd: string; brief: string; wakeAgentId?: number }
 
 const strategistRules = (me: string) => `You are "${me}", this project's strategist — a specialist in brainstorming, product research, and writing tickets that other agents can execute from directly. You NEVER modify files; you research and produce roadmap material.
 How you work:
@@ -222,6 +228,8 @@ export class Conductor {
   }
 
   private startLaunch(req: LaunchRequest): any {
+    // a queued wake re-enters here when a slot frees — resume, don't mint a fresh agent
+    if (req.wakeAgentId !== undefined) return { woken: this.wakeOne(req.wakeAgentId) === 'woken' }
     // autoship isolates each ticket in its own worktree+branch so the daemon can later
     // merge it test-gated; falling back to the shared checkout just disables auto-merge
     let cwd = req.cwd
@@ -273,6 +281,87 @@ export class Conductor {
     while (this.launchQueue.length && this.launchedCount() < this.maxLaunched()) {
       this.startLaunch(this.launchQueue.shift()!)
     }
+  }
+
+  // a usage-limit death is a nap, not an exit: keep sdk_session and card ownership so
+  // wake() can resume the same conversation. No card pruning, no dead-letter bounce (the
+  // agent is coming back — mail stays queued for the wake-time hire(), per the #61 seam),
+  // and no queue drain (a spent window would just kill whatever launches next).
+  private pauseForLimit(h: Hired): void {
+    if (h.cardId !== null) {
+      const card = this.cardRow(h.cardId)
+      if (card && card.column !== 'done') {
+        this.db.prepare(`UPDATE cards SET column_name='blocked', updated_at=datetime('now') WHERE id=?`).run(h.cardId)
+        this.logCardEvent(h.cardId, h.agentId, 'limit_paused', { reason: 'usage-limit', agent: h.name })
+        this.emit(h.boardId, 'card', this.cardRow(h.cardId))
+        this.emit(h.boardId, 'launch', { card_id: h.cardId, agent_id: h.agentId, agent_name: h.name, status: 'paused', reason: 'usage-limit' })
+      }
+    }
+    this.db.prepare(`UPDATE agents SET status='paused_limit' WHERE id=?`).run(h.agentId)
+    this.emit(h.boardId, 'agent', this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(h.agentId))
+    this.emit(h.boardId, 'limit_pause', { agent_id: h.agentId, agent_name: h.name, card_id: h.cardId })
+  }
+
+  // resume one limit-paused agent through the ordinary hire() chokepoint (where the #61
+  // mail seam re-delivers queued mail) — same session, same ticket, same identity
+  private wakeOne(agentId: number): 'woken' | 'skipped' {
+    if (this.hired.has(agentId)) return 'skipped' // already live — wake is idempotent
+    const a = this.db.prepare(`
+      SELECT a.*, b.project_path FROM agents a JOIN boards b ON b.id = a.board_id
+      WHERE a.id=? AND a.status='paused_limit'
+        AND (a.role IS NULL OR a.role NOT IN ('auditor','verifier'))`).get(agentId) as any
+    if (!a) return 'skipped'
+    const card = this.db.prepare(`
+      SELECT c.id, c.branch FROM cards c
+      JOIN card_events e ON e.card_id=c.id AND e.type='limit_paused' AND e.agent_id=?
+      WHERE c.owner_agent_id=? AND c.column_name='blocked' ORDER BY c.id LIMIT 1`).get(agentId, agentId) as any
+    // resume inside the ticket's autoship worktree while it still exists (#59);
+    // a pruned worktree falls back to the shared checkout
+    let cwd = a.project_path
+    if (card?.branch) {
+      const wt = cardWorktree(a.project_path, card.id)
+      if (existsSync(wt)) cwd = wt
+    }
+    this.hire({
+      boardId: a.board_id, cwd, name: a.name, role: a.role ?? undefined,
+      resumeSession: a.sdk_session ?? undefined, permissionMode: a.permission_mode ?? undefined,
+      model: a.model ?? undefined, effort: a.effort ?? undefined,
+    })
+    const h = this.hired.get(agentId)
+    if (!h) return 'skipped'
+    if (card) {
+      this.db.prepare(`UPDATE cards SET column_name='in_progress', updated_at=datetime('now') WHERE id=?`).run(card.id)
+      this.adoptLaunch(agentId)
+      this.logCardEvent(card.id, agentId, 'limit_resumed', { agent: a.name })
+      this.emit(a.board_id, 'card', this.cardRow(card.id))
+    }
+    h.push(`The Claude usage window that paused you has reset — your session is resumed with memory intact. Continue where you left off${card ? ` on card #${card.id}` : ''}.`)
+    return 'woken'
+  }
+
+  // wake every limit-paused agent on the board, oldest ticket first; ticket-carrying wakes
+  // beyond maxLaunched ride the existing launch queue and start as live slots free up
+  wake(boardId: number): { woke: string[]; queued: string[]; skipped: string[] } {
+    const rows = this.db.prepare(`
+      SELECT a.id, a.name, MIN(c.id) AS card_id FROM agents a
+      LEFT JOIN card_events e ON e.agent_id=a.id AND e.type='limit_paused'
+      LEFT JOIN cards c ON c.id=e.card_id AND c.owner_agent_id=a.id AND c.column_name='blocked'
+      WHERE a.board_id=? AND a.kind='hired' AND a.status='paused_limit'
+        AND (a.role IS NULL OR a.role NOT IN ('auditor','verifier'))
+      GROUP BY a.id, a.name
+      ORDER BY (MIN(c.id) IS NULL), MIN(c.id), a.id`).all(boardId) as any[]
+    const woke: string[] = []; const queued: string[] = []; const skipped: string[] = []
+    for (const r of rows) {
+      if (this.hired.has(r.id)) { skipped.push(r.name); continue }
+      if (r.card_id !== null && this.launchedCount() >= this.maxLaunched()) {
+        if (!this.launchQueue.some((q) => q.cardId === r.card_id))
+          this.launchQueue.push({ boardId, cardId: r.card_id, cwd: '', brief: '', wakeAgentId: r.id })
+        queued.push(r.name)
+        continue
+      }
+      if (this.wakeOne(r.id) === 'woken') woke.push(r.name); else skipped.push(r.name)
+    }
+    return { woke, queued, skipped }
   }
 
   hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string }): any {
@@ -367,7 +456,7 @@ export class Conductor {
       transcript,
       turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(),
       model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
-      effort, models: [], role: opts.role, handoff: false,
+      effort, models: [], role: opts.role, handoff: false, limitHit: false,
       cardId: null, branch: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
@@ -436,6 +525,14 @@ export class Conductor {
             hired.turnTokens = 0
             hired.subs.clear()
             this.touch(agent.id, 'idle')
+            // a spent usage window ends the turn with limit text — flag it so the exit
+            // path parks the session (paused_limit) instead of pruning it, and stop
+            // sessions that would otherwise idle forever against a dead window
+            if (m.subtype !== 'success' &&
+                isUsageLimitError(`${m.subtype ?? ''} ${typeof m.result === 'string' ? m.result : ''}`)) {
+              hired.limitHit = true
+              if (hired.cardId === null && !hired.ephemeral) void this.fire(agent.id)
+            }
             // one-shot agents (idea auditors) dissolve after their turn
             if (hired.ephemeral) void this.fire(agent.id)
             // launched agents work one ticket run, then their card gets parked
@@ -450,6 +547,7 @@ export class Conductor {
         }
       } catch (e: any) {
         log('error', String(e?.message ?? e))
+        if (isUsageLimitError(String(e?.message ?? e))) hired.limitHit = true
         if (hired.cardId !== null && hired.outcome === null) {
           hired.outcome = 'error'
           hired.reason = String(e?.message ?? e)
@@ -467,21 +565,27 @@ export class Conductor {
         // agent row and inherits the ticket, so the exit path must not park, prune, or drain —
         // and its mail is still deliverable, so it must not bounce either (gone ⇒ bounce, alive ⇒ deliver)
         if (!hired.handoff) {
-          if (hired.cardId !== null) this.finalizeLaunch(hired)
-          removeAgentCards(this.db, agent.id)
-          this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
-          for (const bounce of bounceDeadLetters(this.db, agent.id) as any[]) {
-            const sender = bounce.to_agent_id
-            if (sender && this.isHired(sender) && this.deliver(sender, { ...bounce, from_name: null })) {
-              this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(bounce.id, sender)
-              this.db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(bounce.id)
+          // one-shot roles stay dead on limit death (a resumed verifier could post a
+          // stale newest-wins verdict into the ship gate) — #52's staleness cutoff covers them
+          if (hired.limitHit && !hired.ephemeral && hired.role !== 'auditor' && hired.role !== 'verifier') {
+            this.pauseForLimit(hired)
+          } else {
+            if (hired.cardId !== null) this.finalizeLaunch(hired)
+            removeAgentCards(this.db, agent.id)
+            this.db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(agent.id)
+            for (const bounce of bounceDeadLetters(this.db, agent.id) as any[]) {
+              const sender = bounce.to_agent_id
+              if (sender && this.isHired(sender) && this.deliver(sender, { ...bounce, from_name: null })) {
+                this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(bounce.id, sender)
+                this.db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(bounce.id)
+              }
+              this.emit(opts.boardId, 'message', bounce)
             }
-            this.emit(opts.boardId, 'message', bounce)
+            const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
+            this.emit(opts.boardId, 'agent', a)
+            this.emit(opts.boardId, 'card', { pruned: agent.id })
+            if (hired.cardId !== null) this.drainQueue()
           }
-          const a = this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(agent.id)
-          this.emit(opts.boardId, 'agent', a)
-          this.emit(opts.boardId, 'card', { pruned: agent.id })
-          if (hired.cardId !== null) this.drainQueue()
         }
       }
     })()
