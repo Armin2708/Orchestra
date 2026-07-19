@@ -132,6 +132,18 @@ it('supported models surface in transcript info after init', async () => {
   expect(t.conductor.transcript(a.id).info?.models).toEqual(MODELS)
 })
 
+it('seeds a fresh session with the configured model and cached catalog before init', () => {
+  const t = setup()
+  expect(writeProviderModelCache(t.db, MODELS)?.models).toEqual(MODELS)
+
+  const a = t.conductor.hire({ boardId: 1, cwd: '/p', model: 'claude-fable-5' })
+
+  expect(t.conductor.transcript(a.id).info).toMatchObject({
+    model: 'claude-fable-5',
+    models: MODELS,
+  })
+})
+
 it('publishes the live Claude model catalog and persists a last-known fallback', async () => {
   const t = setup()
   t.conductor.hire({ boardId: 1, cwd: '/p' })

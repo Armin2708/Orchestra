@@ -15,6 +15,7 @@ type ThreadRow = {
   boardId: number
   boardName: string
   cardTitle: string | null
+  cardTitles: ReadonlyMap<number, string>
 }
 
 const FILTERS: { key: MessageFilter; label: string }[] = [
@@ -40,6 +41,7 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
       boardId: snap.board.id,
       boardName: snap.board.name,
       cardTitle: thread.card_id ? cards.get(thread.card_id) ?? null : null,
+      cardTitles: cards,
     }))
   }).sort((a, b) => b.thread.id - a.thread.id), [snaps])
 
@@ -78,7 +80,7 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
           {visible.map((row) => (
             <MessageThread key={`${row.boardId}-${row.thread.id}`} thread={row.thread}
               boardLabel={snaps.length > 1 ? row.boardName : undefined}
-              cardTitle={row.cardTitle} onChange={onChange} />
+              cardTitle={row.cardTitle} cardTitles={row.cardTitles} onChange={onChange} />
           ))}
           {visible.length === 0 && (
             <div className="message-empty">

@@ -14,14 +14,18 @@ import {
   resolveAccessProfile,
 } from './agentProviderUi'
 import { AgentControlPanel } from './AgentControlPanel'
-import { panelForSlashCommand, panelForSlashInput, type AgentControlPanelName } from './agentTerminalControls'
+import {
+  localConsoleCommand,
+  normalizeSlashCommandName,
+  panelForSlashCommand,
+  panelForSlashInput,
+  sessionModelValue,
+  uniqueSlashCommands,
+  type AgentControlPanelName,
+} from './agentTerminalControls'
+import './claudeTerminal.css'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
-
-// Friendly progress copy shared by every model-backed provider.
-const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolating', 'Ruminating',
-  'Marinating', 'Brewing', 'Conjuring', 'Scheming', 'Tinkering', 'Musing', 'Whirring', 'Puzzling',
-  'Simmering', 'Crunching', 'Weaving', 'Hatching', 'Composing', 'Orchestrating', 'Grooving', 'Vibing']
 
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
@@ -160,12 +164,20 @@ function UserInputApproval({ permission, onSubmit, onCancel }: {
 // (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
 export type CommandItem = { name: string; description: string; source: string }
 
+const LOCAL_CONSOLE_COMMANDS: CommandItem[] = [
+  { name: 'commands', description: 'show only the actions available in this console', source: 'orchestra' },
+  { name: 'status', description: 'show this session’s model, access, and location', source: 'orchestra' },
+  { name: 'usage', description: 'show token and cost accounting for this session', source: 'orchestra' },
+  { name: 'clear', description: 'clear this console view without erasing session memory', source: 'orchestra' },
+]
+
 // Provider model catalogs may use the legacy Claude `model` key or the neutral `value` key.
 type ModelInfo = {
   model?: string
   value?: string
   resolvedModel?: string
   displayName?: string
+  description?: string
   supportsEffort?: boolean
   supportedEffortLevels?: string[]
 }
@@ -182,99 +194,38 @@ type TranscriptInfo = {
   commands?: { name: string; description: string }[]
   effort?: string | null
   models?: ModelInfo[]
+  costUsd?: number
   usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
 }
 
-const modelValue = (model: ModelInfo) => model.value ?? model.model ?? model.resolvedModel ?? ''
-
-// model dropdown + segmented effort control — slots in beside PermissionModeHint (#45 contract).
-// Provider controls persist immediately and apply to the next turn.
-function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange, onError }: {
-  agentId: number
+function ModelEffortControls({ info, onOpen, canSelectModel, canSetEffort }: {
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
-  working: boolean
+  onOpen: () => void
   canSelectModel: boolean
   canSetEffort: boolean
-  onChange: () => void
-  onError: (message: string | null) => void
 }) {
   const models = info?.models ?? []
-  if (models.length === 0 || (!canSelectModel && !canSetEffort)) return null
-  const current = models.find((model) => modelValue(model) === info?.model || model.resolvedModel === info?.model)
-  const levels = canSetEffort && current?.supportsEffort !== false ? current?.supportedEffortLevels ?? [] : []
+  if ((!canSelectModel && !canSetEffort) || (models.length === 0 && !info?.effort)) return null
   return (
-    <span className="cc-model-effort">
-      {canSelectModel && (
-        <select className="cc-mode-select" value={current ? modelValue(current) : ''} aria-label="Model"
-          title="Model — applies from the next turn"
-          onChange={async (e) => {
-            try {
-              await api('POST', `/agents/${agentId}/model`, { model: e.target.value })
-              onError(null); onChange()
-            } catch (error) { onError(controlErrorText(error)) }
-          }}>
-          {!current && <option value="">{info?.model ?? 'model…'}</option>}
-          {models.map((model) => {
-            const value = modelValue(model)
-            return <option key={value} value={value}>{model.displayName ?? value}</option>
-          })}
-        </select>
-      )}
-      {levels.length > 0 && (
-        <span className="cc-effort" role="group" aria-label="Reasoning effort"
-          title={working ? 'Effort — wait for the turn to finish' : 'Effort — applies from the next turn'}>
-          {levels.map((l) => (
-            <button key={l} disabled={working}
-              className={`cc-effort-btn${(info?.effort ?? '') === l ? ' cc-effort-on' : ''}`}
-              onClick={async () => {
-                if ((info?.effort ?? '') === l) return
-                try {
-                  await api('POST', `/agents/${agentId}/effort`, { level: l })
-                  onError(null); onChange()
-                } catch (error) { onError(controlErrorText(error)) }
-              }}>{l === 'medium' ? 'med' : l}</button>
-          ))}
-        </span>
-      )}
-    </span>
+    <button type="button" className="cc-effort-status" onClick={onOpen}
+      aria-label={`Open model and effort picker. Current effort: ${info?.effort ?? 'default'}`}>
+      Effort: {info?.effort ?? 'default'} <span className="cc-dim">· models</span>
+    </button>
   )
 }
 
-// Neutral access profiles map to each provider's native sandbox and approval policy.
-function PermissionModeHint({ agentId, profile, onChange, onError }: {
-  agentId: number
+function PermissionModeHint({ profile, onCycle }: {
   profile: AccessProfile
-  onChange: () => void
-  onError: (message: string | null) => void
+  onCycle: () => void
 }) {
   const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
   return (
-    <span className={`cc-mode${profile === 'full_access' ? ' cc-mode-danger' : ''}`}>
-      {selected.icon}{' '}
-      <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
-        title="Access profile — applies from the next provider turn"
-        onChange={async (e) => {
-          const next = e.target.value as AccessProfile
-          if (next === 'full_access' && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
-          try {
-            await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
-            onError(null); onChange()
-          } catch (error) { onError(controlErrorText(error)) }
-        }}>
-        {ACCESS_PROFILES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
-      </select>
-      <span className="cc-dim">({selected.hint})</span>
-    </span>
+    <button type="button" className={`cc-mode cc-mode-${profile}`} onClick={onCycle}
+      title={`${selected.hint}. Shift+Tab to cycle.`}>
+      Access: {selected.label} <span className="cc-dim">· Shift+Tab to change</span>
+    </button>
   )
 }
-
-// Orchestra spinner frames are provider-neutral; provider identity is shown separately.
-const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
-const BOOT_MSGS = [
-  'Warming up the orchestra…', 'Tuning instruments…', 'Raising the baton…',
-  'Finding a seat in the pit…', 'Rosining the bow…', 'Clearing the throat…',
-]
-
 export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const hired = agent.kind === 'hired'
@@ -287,7 +238,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const echoLocal = (kind: Line['kind'], text: string) =>
     setLocalLines((prev) => [...prev.slice(-99), { at: new Date().toISOString(), kind, text }])
   const [input, setInput] = useState('')
-  const [gerund, setGerund] = useState(() => GERUNDS[Math.floor(Math.random() * GERUNDS.length)])
+  const [promptHistory, setPromptHistory] = useState<string[]>([])
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null)
+  const [historyDraft, setHistoryDraft] = useState('')
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false)
+  const [clearedAt, setClearedAt] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
@@ -312,6 +269,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     setControlPanel(null)
     setControlError(null)
     setLocalLines([])
+    setPromptHistory([])
+    setHistoryIdx(null)
+    setHistoryDraft('')
+    setTranscriptExpanded(false)
+    setClearedAt(null)
+    setSending(false)
+    setSubmitError(null)
   }, [agent.id])
 
   // hired agents stream their real transcript; terminal agents show the board conversation
@@ -354,29 +318,11 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     return () => { alive = false; clearInterval(t) }
   }, [agent.id, agent.provider, hired])
 
-  // rotate the working word every so often, like the real thing
-  useEffect(() => {
-    if (!turn) return
-    const t = setInterval(() => setGerund(GERUNDS[Math.floor(Math.random() * GERUNDS.length)]), 9000)
-    return () => clearInterval(t)
-  }, [turn !== null])
-
-  // A provider session is booting until its normalized transcript reports activity.
-  const booting = hired && !lines.some((l) => l.kind === 'status' && l.text.startsWith('session started')) &&
-    !lines.some((l) => l.kind === 'text' || l.kind === 'tool')
-  const [frame, setFrame] = useState(0)
-  useEffect(() => {
-    if (!booting && !turn) return
-    const t = setInterval(() => setFrame((f) => f + 1), 220)
-    return () => clearInterval(t)
-  }, [booting, turn !== null])
-  const star = STARS[frame % STARS.length]
-  const bootMsg = BOOT_MSGS[Math.floor(frame / 14) % BOOT_MSGS.length]
-
   // interleave local command echo with the streamed transcript by timestamp
+  const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
   const convo: Line[] = hired ? (localLines.length
-    ? [...lines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
-    : lines) : [...threads]
+    ? [...visibleLines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
+    : visibleLines) : [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
     .flatMap((t) => [
@@ -459,50 +405,164 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }
 
-  const send = async () => {
-    const text = input.trim()
-    if (!text) return
-    const nativePanel = hired ? panelForSlashInput(text) : null
-    if (nativePanel) {
-      setInput('')
-      if (provider !== 'claude' && nativePanel !== 'model') {
-        echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
-        return
-      }
-      setControlPanel(nativePanel)
-      return
-    }
-    // orchestra commands run daemon-direct — claimed here, never posted to the agent (#44)
-    if (hired && isBoardCommand(text)) {
-      setInput('')
-      echoLocal('user', text)
-      const out = await runBoardCommand(text, { boardId, agent, cards, api })
-      out.forEach((t) => echoLocal('status', t))
+  const cycleAccessProfile = async () => {
+    if (!hired || !canAccessProfile) return
+    const current = ACCESS_PROFILES.findIndex((profile) => profile.value === accessProfile)
+    const next = ACCESS_PROFILES[(current + 1 + ACCESS_PROFILES.length) % ACCESS_PROFILES.length]
+    if (next.value === 'full_access'
+      && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
+    try {
+      await api('POST', `/agents/${agent.id}/access-profile`, { profile: next.value })
+      setControlError(null)
       onChange()
-      return
+    } catch (error) { setControlError(controlErrorText(error)) }
+  }
+
+  const navigateHistory = (direction: -1 | 1) => {
+    if (promptHistory.length === 0) return
+    if (direction === -1) {
+      const next = historyIdx === null ? promptHistory.length - 1 : Math.max(0, historyIdx - 1)
+      if (historyIdx === null) setHistoryDraft(input)
+      setHistoryIdx(next)
+      setInput(promptHistory[next])
+    } else {
+      if (historyIdx === null) return
+      const next = historyIdx + 1
+      if (next >= promptHistory.length) {
+        setHistoryIdx(null)
+        setInput(historyDraft)
+      } else {
+        setHistoryIdx(next)
+        setInput(promptHistory[next])
+      }
     }
-    if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
-    else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
-    setInput(''); onChange()
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (el) el.setSelectionRange(el.value.length, el.value.length)
+    })
   }
 
   // slash-command menu: open while a hired agent's input is a bare /prefix (no space yet)
   const [menuIdx, setMenuIdx] = useState(0)
   const [menuHidden, setMenuHidden] = useState(false) // escape dismisses; typing re-opens
-  const menuItems: CommandItem[] = [
-    ...(info?.commands ?? []).map((c) => ({ ...c, source: 'sdk' })),
-    ...extraCommands,
-  ]
+  const menuItems: CommandItem[] = uniqueSlashCommands([
+    ...LOCAL_CONSOLE_COMMANDS,
+    ...extraCommands.map((c) => ({ ...c, name: normalizeSlashCommandName(c.name) })),
+    ...(info?.commands ?? []).map((c) => ({ ...c, name: normalizeSlashCommandName(c.name), source: 'session' })),
+  ])
   const slashTerm = hired && input.startsWith('/') && !/[\s]/.test(input) ? input.slice(1) : null
   const filtered = slashTerm !== null
-    ? menuItems.filter((c) => c.name.toLowerCase().startsWith(slashTerm.toLowerCase()))
+    ? menuItems
+      .filter((c) => c.name.toLowerCase().includes(slashTerm.toLowerCase()))
+      .sort((a, b) => Number(!a.name.toLowerCase().startsWith(slashTerm.toLowerCase())) - Number(!b.name.toLowerCase().startsWith(slashTerm.toLowerCase())))
     : []
-  const menuOpen = filtered.length > 0 && !menuHidden
+  const visibleCommands = filtered.slice(0, 10)
+  const menuOpen = visibleCommands.length > 0 && !menuHidden
   useEffect(() => { setMenuIdx(0); setMenuHidden(false) }, [slashTerm])
 
-  // complete into the textarea only — never send; execution stays in send() (contract w/ #44)
+  const activeModel = info?.model ?? null
+  const currentModel = info?.models?.find((model) => {
+    const value = sessionModelValue(model)
+    return value === activeModel || model.resolvedModel === activeModel
+  })
+  const modelLabel = currentModel?.displayName ?? info?.model ?? 'Default model'
+  const cwdLabel = info?.cwd?.replace(/^\/(?:Users|home)\/[^/]+/, '~') ?? ''
+  const accessLabel = ACCESS_PROFILES.find((profile) => profile.value === accessProfile)?.label ?? accessProfile
+
+  const runLocalConsoleCommand = (command: NonNullable<ReturnType<typeof localConsoleCommand>>, text: string) => {
+    const at = new Date().toISOString()
+    if (command === 'clear') {
+      setClearedAt(at)
+      setLocalLines([{ at, kind: 'status', text: 'Console view cleared. Session memory is unchanged.' }])
+      return
+    }
+
+    echoLocal('user', text)
+    if (command === 'commands') {
+      const available = menuItems.map((item) => `/${item.name} — ${item.description || item.source}`).join('\n')
+      echoLocal('status', `Available in this console:\n${available}`)
+      return
+    }
+    if (command === 'status') {
+      echoLocal('status', [
+        `Agent: ${agent.name} · ${agent.status}`,
+        `Model: ${modelLabel}`,
+        `Access: ${accessLabel}`,
+        cwdLabel ? `Workspace: ${cwdLabel}` : '',
+      ].filter(Boolean).join('\n'))
+      return
+    }
+
+    const usage = providerTokenSummary(provider, [info?.usage?.session, info?.usage?.turn])
+    const cost = typeof info?.costUsd === 'number' && info.costUsd > 0 ? ` · $${info.costUsd.toFixed(4)}` : ''
+    echoLocal('status', `Session usage: ${fmtTokens(usage.inputTotal)} input · ${fmtTokens(usage.output)} output${cost}`)
+  }
+
+  const send = async () => {
+    const text = input.trim()
+    if (!text || sending) return
+    setSending(true)
+    setSubmitError(null)
+    setPromptHistory((prev) => prev[prev.length - 1] === text ? prev : [...prev, text].slice(-100))
+    setHistoryIdx(null)
+    setHistoryDraft('')
+    try {
+      const nativePanel = hired ? panelForSlashInput(text) : null
+      if (nativePanel) {
+        setInput('')
+        if (provider !== 'claude' && nativePanel !== 'model') {
+          echoLocal('status', `/${nativePanel} controls are only available for Claude sessions.`)
+          return
+        }
+        if (nativePanel === 'model' && !canSelectModel && !canSetEffort) {
+          echoLocal('status', 'Model controls are not available for this provider session.')
+          return
+        }
+        setControlPanel(nativePanel)
+        return
+      }
+
+      const localCommand = hired ? localConsoleCommand(text) : null
+      if (localCommand) {
+        setInput('')
+        runLocalConsoleCommand(localCommand, text)
+        return
+      }
+
+      // Orchestra commands run daemon-direct and never enter the model context.
+      if (hired && isBoardCommand(text)) {
+        setInput('')
+        echoLocal('user', text)
+        const out = await runBoardCommand(text, { boardId, agent, cards, api })
+        out.forEach((line) => echoLocal('status', line))
+        onChange()
+        return
+      }
+
+      const slashName = text.match(/^\/([^\s]+)/)?.[1]?.toLowerCase()
+      const advertised = slashName && menuItems.some((item) => item.name.toLowerCase() === slashName)
+      if (hired && slashName && !advertised) {
+        setInput('')
+        echoLocal('user', text)
+        echoLocal('error', `/${slashName} is not available in this session. Type /commands to see actions that can run here.`)
+        return
+      }
+
+      if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
+      else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
+      setInput('')
+      onChange()
+    } catch (cause) {
+      const raw = cause instanceof Error ? cause.message : 'The message could not be sent.'
+      try { setSubmitError(JSON.parse(raw).error ?? raw) } catch { setSubmitError(raw) }
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // Selecting a command fills the composer. The explicit Send action makes execution clear.
   const complete = (c: CommandItem) => {
-    setInput(`/${c.name} `)
+    setInput(`/${c.name}`)
     inputRef.current?.focus()
   }
 
@@ -521,13 +581,31 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     complete(c)
   }
 
-  const promptKeys = (e: React.KeyboardEvent) => {
+  const promptKeys = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const key = e.key.toLowerCase()
+    if (e.ctrlKey && key === 'c' && e.currentTarget.selectionStart === e.currentTarget.selectionEnd) {
+      e.preventDefault()
+      if (input) {
+        setInput('')
+        setHistoryIdx(null)
+      } else if (working) {
+        void interrupt()
+      }
+      return
+    }
     if (menuOpen) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % filtered.length); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIdx((i) => (i - 1 + filtered.length) % filtered.length); return }
-      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); activateCommand(filtered[Math.min(menuIdx, filtered.length - 1)]); return }
+      if (e.key === 'ArrowDown' || (e.ctrlKey && key === 'n')) { e.preventDefault(); setMenuIdx((i) => (i + 1) % visibleCommands.length); return }
+      if (e.key === 'ArrowUp' || (e.ctrlKey && key === 'p')) { e.preventDefault(); setMenuIdx((i) => (i - 1 + visibleCommands.length) % visibleCommands.length); return }
+      if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'Enter') { e.preventDefault(); activateCommand(visibleCommands[Math.min(menuIdx, visibleCommands.length - 1)]); return }
       // dismiss the menu only — must not bubble to the terminal's interrupt/close handler
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenuHidden(true); return }
+    }
+    const caret = e.currentTarget.selectionStart ?? input.length
+    if ((e.key === 'ArrowUp' || (e.ctrlKey && key === 'p')) && !input.slice(0, caret).includes('\n')) {
+      e.preventDefault(); navigateHistory(-1); return
+    }
+    if ((e.key === 'ArrowDown' || (e.ctrlKey && key === 'n')) && !input.slice(caret).includes('\n')) {
+      e.preventDefault(); navigateHistory(1); return
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
@@ -555,25 +633,31 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const renderLine = (l: Line, i: number) => {
     switch (l.kind) {
       case 'user':
-        return <p key={i} className="cc-user">&gt; {l.text}</p>
+        return <div key={i} className="cc-line cc-user"><span className="cc-line-mark">YOU</span><p>{l.text}</p></div>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
         const args = paren === -1 ? '' : l.text.slice(paren)
-        return <p key={i} className="cc-tool"><span className="cc-dot tool">⏺</span> <b>{name}</b>{args}</p>
+        return <div key={i} className="cc-line cc-tool"><span className="cc-line-mark">TOOL</span><p><b>{name}</b>{args}</p></div>
       }
       case 'tool_result':
-        return <p key={i} className="cc-result">⎿  {l.text}</p>
+        return <div key={i} className={`cc-line cc-result${transcriptExpanded ? '' : ' is-collapsed'}`}
+          title={transcriptExpanded ? undefined : 'Ctrl+O to expand transcript details'}>
+          <span className="cc-line-mark">RESULT</span><p>{l.text}</p>
+        </div>
       case 'thinking':
-        return <p key={i} className="cc-thinking">✻ {l.text}</p>
+        return <div key={i} className={`cc-line cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>
+          <span className="cc-line-mark">NOTE</span><p>{l.text}</p>
+        </div>
       case 'status':
-        return <p key={i} className="cc-status">{l.text}</p>
+        return <div key={i} className="cc-line cc-status"><span className="cc-line-mark">SYSTEM</span><p>{l.text}</p></div>
       case 'error':
-        return <p key={i} className="cc-error">✗ {l.text}</p>
+        return <div key={i} className="cc-line cc-error"><span className="cc-line-mark">ERROR</span><p>{l.text}</p></div>
       default:
-        return <p key={i} className="cc-text"><span className="cc-dot">⏺</span> {l.text}</p>
+        return <div key={i} className="cc-line cc-text"><span className="cc-line-mark">AGENT</span><p>{l.text}</p></div>
     }
   }
+  const hasConversationActivity = convo.some((line) => line.kind !== 'status')
 
   return (
     <>
@@ -582,62 +666,79 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true}
         aria-label={`${agent.name} console`}
         onKeyDown={(e) => {
-          if (e.key !== 'Escape') return
-          e.preventDefault()
-          // esc interrupts a working agent; otherwise it closes, as the header promises
-          if (hired && working) interrupt()
-          else if (!embedded) onClose()
+          const key = e.key.toLowerCase()
+          if (e.shiftKey && e.key === 'Tab' && hired) {
+            e.preventDefault(); void cycleAccessProfile(); return
+          }
+          if (e.altKey && key === 'p' && hired && (canSelectModel || canSetEffort)) {
+            e.preventDefault(); setControlPanel('model'); return
+          }
+          if (e.ctrlKey && key === 'o') {
+            e.preventDefault(); setTranscriptExpanded((expanded) => !expanded); return
+          }
+          if (e.ctrlKey && key === 'l') {
+            e.preventDefault(); jumpToLatest(); return
+          }
+          if (e.key === 'Escape' && hired && working) {
+            e.preventDefault(); void interrupt()
+          }
         }}>
         <div className="terminal-col">
           <header className="cc-head">
-            <span className="cc-head-star">✻</span>
-            <span>{agent.name}</span>
-            {hired && <ProviderBadge provider={provider} compact />}
-            <span className="cc-head-dim">{hired ? `agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
-            {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
-              <select className="cc-assign" defaultValue=""
-                title="Assign a ticket — the agent gets briefed and starts"
-                onChange={async (e) => {
-                  const id = Number(e.target.value)
-                  e.target.value = ''
-                  if (!id) return
-                  try { await api('POST', `/cards/${id}/assign`, { agent: agent.name }) } catch { /* locked */ }
-                  onChange()
-                }}>
-                <option value="" disabled>assign ticket…</option>
-                {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
-                  <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
-                ))}
-              </select>
-            )}
-            {hired && canStop && (
-              <button className="cc-close" title="Stop this agent — terminates its session; a launched ticket moves to blocked"
-                onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>■ stop</button>
-            )}
-            {!embedded && <button className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
+            <div className="cc-head-identity">
+              <span className="cc-head-kicker">SESSION</span>
+              <span>
+                <strong>{agent.name}{hired && <> <ProviderBadge provider={provider} compact /></>}</strong>
+                <small>{hired ? `${providerLabel(provider)} model session` : 'Board conversation'} · {agent.status}</small>
+              </span>
+            </div>
+            <div className="cc-head-actions">
+              {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
+                <select className="cc-assign" defaultValue=""
+                  title="Assign a ticket — the agent gets briefed and starts"
+                  aria-label="Assign ticket"
+                  onChange={async (e) => {
+                    const id = Number(e.target.value)
+                    e.target.value = ''
+                    if (!id) return
+                    try { await api('POST', `/cards/${id}/assign`, { agent: agent.name }) } catch { /* locked */ }
+                    onChange()
+                  }}>
+                  <option value="" disabled>assign ticket…</option>
+                  {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
+                    <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
+                  ))}
+                </select>
+              )}
+              {hired && canStop && (
+                <button type="button" className="cc-head-action cc-head-stop"
+                  title="Stop this agent — terminates its session; a launched ticket moves to blocked"
+                  onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>stop</button>
+              )}
+              {!embedded && <button type="button" className="cc-head-close" onClick={onClose} aria-label="Close console" title="Close console">×</button>}
+            </div>
           </header>
 
           <div className="cc-history-shell">
             <div className="terminal-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onWheel}>
               <div className="terminal-feed" ref={feedRef}>
-                {hired && (
-                  <div className="cc-welcome">
-                    <p><span className="cc-logo">{booting ? star : '✻'}</span> Welcome to <b>Orchestra</b>!</p>
-                    <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
-                  </div>
-                )}
                 {convo.map(renderLine)}
-                {booting && (
-                  <p className="cc-spinner"><span className="cc-star-frame">{star}</span> {bootMsg}</p>
-                )}
-                {!booting && convo.length === 0 && (
-                  <p className="cc-status">
-                    {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
-                  </p>
+                {!working && !hasConversationActivity && (
+                  <div className="cc-empty">
+                    <strong>{hired ? 'Ready for your first prompt' : 'No messages yet'}</strong>
+                    <p>{hired
+                      ? 'The session is idle and uses no model tokens until you send something. Type / to see actions supported here.'
+                      : `Messages to ${agent.name} will appear here.`}</p>
+                  </div>
                 )}
                 {hired && perms.map((p) => (
                   <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
-                    <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
+                    <p className="cc-perm-kicker">
+                      {p.approvalKind === 'user-input' ? 'Agent needs your input'
+                        : p.approvalKind === 'mcp-elicitation' ? 'External service requests input'
+                          : `Agent requests access to ${p.tool ?? 'a provider action'}`}
+                    </p>
+                    <p className="cc-perm-title"><b>{p.title ?? p.summary}</b></p>
                     {p.approvalKind === 'mcp-elicitation' && p.serverName && (
                       <p className="cc-perm-external">Requested by MCP server <b>{p.serverName}</b>.</p>
                     )}
@@ -652,76 +753,96 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                         onCancel={() => decide(p.id, 'cancel')} />
                     ) : canApprove ? (
                       <div className="cc-perm-actions">
-                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
+                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}><span>1.</span> Allow once</button>
                         {provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
-                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
-                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+                          && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}><span>2.</span> Allow for session</button>}
+                        <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>
+                          <span>{provider === 'codex' && p.approvalKind !== 'mcp-elicitation' ? '3.' : '2.'}</span> Deny
+                        </button>
                       </div>
                     ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
+                    {canApprove && !(provider === 'codex'
+                      && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
+                      && questionsFor(p).length > 0) && <p className="cc-perm-help">Choose an option to continue</p>}
                   </div>
                 ))}
                 {working && turn && (
-                  <p className="cc-spinner">
-                    <span className="cc-star-frame">{star}</span> {gerund}… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
-                    {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
-                  </p>
+                  <div className="cc-working" role="status">
+                    <span className="cc-working-track" aria-hidden="true"><span /></span>
+                    <span>Working · {fmtSecs(turn.secs)}{turn.tokens > 0 && <> · {fmtTokens(turn.tokens)} output tokens</>}</span>
+                    {canInterrupt && <button type="button" onClick={interrupt}>Interrupt</button>}
+                  </div>
                 )}
               </div>
             </div>
-            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>↓ Jump to latest</button>}
+            {!following && <button type="button" className="cc-follow-latest" onClick={jumpToLatest}>Latest messages</button>}
           </div>
 
           <div className="cc-prompt-wrap">
             {controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
-              models={(info?.models ?? []).map((model) => ({ ...model, model: modelValue(model) })).filter((model) => model.model)}
-              currentModel={info?.model ?? null}
+              models={info?.models ?? []} currentModel={info?.model ?? null}
+              currentEffort={info?.effort ?? null} working={working}
               onClose={() => { setControlPanel(null); inputRef.current?.focus() }} onChange={onChange} />}
             {menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
-                {filtered.slice(0, 10).map((c, i) => (
+                <div className="cc-slash-heading"><strong>Available actions</strong><span>{filtered.length}</span></div>
+                {visibleCommands.map((c, i) => (
                   <button type="button" key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
                     className={i === menuIdx ? 'cc-slash-item active' : 'cc-slash-item'}
                     onMouseEnter={() => setMenuIdx(i)}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => activateCommand(c)}>
                     <span className="cc-slash-name">/{c.name}</span>
-                    {c.source !== 'sdk' && <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>}
+                    <span className="cc-cmd-badge" data-source={c.source}>{c.source}</span>
                     <span className="cc-slash-desc">{c.description}</span>
                   </button>
                 ))}
-                {filtered.length > 10 && <div className="cc-slash-more">… {filtered.length - 10} more — keep typing</div>}
+                <div className="cc-slash-footer">
+                  <span>Choose an action, then Send to run it</span>
+                  {filtered.length > 10 && <span>{filtered.length - 10} more</span>}
+                </div>
               </div>
             )}
-            <div className="cc-promptbox">
-              <span className="cc-prompt-caret">&gt;</span>
+            {hired && <div className="cc-prompt-meta">
+              <ModelEffortControls info={info} canSelectModel={canSelectModel} canSetEffort={canSetEffort}
+                onOpen={() => setControlPanel('model')} />
+            </div>}
+            <div className="cc-promptbox" data-mode={accessProfile}>
+              <span className="cc-prompt-label">MESSAGE</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
-                placeholder=""
-                onChange={(e) => setInput(e.target.value)}
+                placeholder={convo.length === 0 ? (hired ? 'Describe what this agent should do…' : `Message ${agent.name}`) : 'Write a follow-up…'}
+                onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
                 onKeyDown={promptKeys} />
+              <button type="button" className="cc-send" disabled={!input.trim() || sending}
+                onClick={() => void send()}>{sending ? 'Sending' : 'Send'}</button>
             </div>
+            {submitError && <p className="cc-submit-error" role="alert">{submitError}</p>}
           </div>
-          <div className="cc-hints">
-            {hired
-              ? <span className="cc-controls">
-                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile}
-                    onChange={onChange} onError={setControlError} />}
-                  <ModelEffortControls agentId={agent.id} info={info} working={working}
-                    canSelectModel={canSelectModel} canSetEffort={canSetEffort}
-                    onChange={onChange} onError={setControlError} />
-                  {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
-                </span>
-              : <span>enter to send · shift+enter for newline</span>}
+          <div className="cc-statusline">
+            <span title={info?.cwd}>{modelLabel}{cwdLabel ? ` · ${cwdLabel}` : ''}</span>
             <span>
-              {info?.cwd ?? ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
               {info?.usage && providerTokenSummary(provider, [info.usage.session, info.usage.turn]).total > 0 ? (() => {
                 // live turn accrual counts toward the session display so the split never lags the ↓ number
                 const usage = providerTokenSummary(provider, [info.usage.session, info.usage.turn])
                 const cacheWrite = usage.cacheWrite > 0 ? ` · cache write ${fmtTokens(usage.cacheWrite)}` : ''
                 const reasoning = usage.reasoningOutput > 0 ? ` · reasoning ${fmtTokens(usage.reasoningOutput)}` : ''
                 const tip = `${providerLabel(provider)} API tokens this session — input ${fmtTokens(usage.input)} · cached input ${fmtTokens(usage.cached)}${cacheWrite} · output ${fmtTokens(usage.output)}${reasoning} (distinct from the board meter's injected-context estimate)`
-                return <span title={tip}> · ↑ {fmtTokens(usage.inputTotal)} in · {usage.cachedPercent}% cached · ↓ {fmtTokens(usage.output)} out</span>
-              })() : info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
+                return <span title={tip}>{fmtTokens(usage.inputTotal)} in · {usage.cachedPercent}% cached · {fmtTokens(usage.output)} out</span>
+              })() : info && info.tokens > 0 ? `${fmtTokens(info.tokens)} output tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
+            </span>
+          </div>
+          <div className="cc-hints">
+            {hired
+              ? <span className="cc-controls">
+                  {canAccessProfile && <PermissionModeHint profile={accessProfile} onCycle={() => void cycleAccessProfile()} />}
+                  {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
+                </span>
+              : <span>enter to send · shift+enter for newline</span>}
+            <span className="cc-key-hints">
+              <button type="button" onClick={() => setTranscriptExpanded((expanded) => !expanded)}>Details {transcriptExpanded ? 'on' : 'off'}</button>
+              {hired && (canSelectModel || canSetEffort)
+                && <button type="button" onClick={() => setControlPanel('model')}>Models</button>}
             </span>
           </div>
         </div>
