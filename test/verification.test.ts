@@ -144,6 +144,21 @@ it('ORCHESTRA_AUTO_VERIFY=1 spawns a verifier when a card enters review', async 
   await server.close()
 })
 
+it('a verifier that died without reporting goes stale: badge clears and re-verify unblocks', async () => {
+  const { db, server, stub, board, card } = await boot()
+  await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/verify` })
+  expect((await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/verify` })).statusCode).toBe(409)
+
+  // the verifier crashed / hit a usage limit — its request ages past the staleness window
+  db.prepare(`UPDATE card_events SET created_at = datetime('now', '-20 minutes') WHERE card_id=? AND type='verify_requested'`).run(card.id)
+  const snap = (await server.inject({ method: 'GET', url: `/api/v1/boards/${board.id}/snapshot` })).json()
+  expect(snap.cards.find((c: any) => c.id === card.id).verification.running).toBe(false)
+
+  expect((await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/verify` })).statusCode).toBe(200)
+  expect(stub.hires).toHaveLength(2)
+  await server.close()
+})
+
 it('shipped hash lands in the verifier brief when recorded', async () => {
   const { db, server, stub, board } = await boot()
   const c = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {

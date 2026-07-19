@@ -339,11 +339,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       .get(cardId, type)
 
   // latest verdict + running state for badges; newest event wins, a newer request means re-running
+  // a verifier that dies without reporting (crash, usage limit — see #62) must not pin the
+  // card at "running" forever: after this window re-verify unblocks and the badge clears
+  const VERIFY_STALE_MS = 15 * 60_000
   const verificationFor = (cardId: number): any => {
     const v = lastEvent(cardId, 'verification')
     const r = lastEvent(cardId, 'verify_requested')
     if (!v && !r) return undefined
-    const running = !!r && (!v || r.id > v.id)
+    const fresh = !!r && Date.now() - new Date(r.created_at.replace(' ', 'T') + 'Z').getTime() < VERIFY_STALE_MS
+    const running = fresh && (!v || r.id > v.id)
     if (!v) return { running, verdict: null }
     try {
       const p = JSON.parse(v.payload)
