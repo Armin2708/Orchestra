@@ -13,6 +13,7 @@ import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
+import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 
 export type Bus = EventEmitter
@@ -72,11 +73,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       usage_error: u.usage_error,
       usage_error_since: u.usage_error_since,
       injected: injectedTotal(db),
+      // real API tokens consumed by hired agents — not the injected-context estimate above
+      agent_usage: usageTotal(db),
     }
   })
 
-  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/telemetry', (req) =>
-    boardTelemetry(db, Number(req.params.id)))
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/telemetry', (req) => ({
+    ...boardTelemetry(db, Number(req.params.id)),
+    usage: boardUsage(db, Number(req.params.id)),
+  }))
 
   // board-wide activity feed: card events, review decisions, messages, milestones merged
   // reverse-chronologically. Cursor pages on (ts, source, id) strictly-less-than, so rows

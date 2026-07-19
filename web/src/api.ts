@@ -85,7 +85,11 @@ export type SystemInfo = {
   usage_error?: 'keychain' | 'offline' | 'none' | null
   usage_error_since?: string | null
   injected?: { chars: number; tokens: number; count: number }
+  // real API tokens consumed by hired agents (SDK usage reports) — distinct from the injected estimate
+  agent_usage?: UsageSplit
 }
+
+export type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
 
 // GET /boards/:id/telemetry — injected-context accounting (tokens = ceil(chars/4))
 export type TelemetryCount = { chars: number; tokens: number; count: number }
@@ -94,4 +98,10 @@ export type Telemetry = {
   by_event: ({ hook_event: string } & TelemetryCount)[]
   by_agent: ({ agent_id: number; agent_name: string } & TelemetryCount)[]
   days: ({ day: string } & TelemetryCount)[]
+  // real API token usage (agent_usage table) — separate metric from the injected estimate above
+  usage?: {
+    total: UsageSplit
+    by_agent: ({ agent_id: number; agent_name: string } & UsageSplit)[]
+    days: ({ day: string } & UsageSplit)[]
+  }
 }

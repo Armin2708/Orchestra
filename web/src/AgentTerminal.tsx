@@ -10,7 +10,13 @@ const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolatin
   'Marinating', 'Brewing', 'Conjuring', 'Scheming', 'Tinkering', 'Musing', 'Whirring', 'Puzzling',
   'Simmering', 'Crunching', 'Weaving', 'Hatching', 'Composing', 'Orchestrating', 'Grooving', 'Vibing']
 
-const fmtTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+
+// real API token split (input / cache-read / cache-creation / output) — from result-message
+// usage, NOT the injected-context estimate the board meter shows
+type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
+const usageIn = (u: UsageSplit) => u.input_tokens + u.cache_read + u.cache_creation
+const usageSum = (u?: UsageSplit) => (u ? usageIn(u) + u.output_tokens : 0)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
 // a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
@@ -102,7 +108,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[] } | null>(null)
+  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[]; usage?: { turn: UsageSplit; session: UsageSplit } } | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
   const [localLines, setLocalLines] = useState<Line[]>([])
@@ -145,7 +151,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
           (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
           prev.commands?.[0]?.description === i.commands?.[0]?.description &&
-          prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0)) return prev
+          prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0) &&
+          usageSum(prev.usage?.session) + usageSum(prev.usage?.turn) === usageSum(i.usage?.session) + usageSum(i.usage?.turn)) return prev
         return i
       })
       setPerms((prev) => {
@@ -407,7 +414,14 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               : <span>enter to send · shift+enter for newline</span>}
             <span>
               {info?.cwd ?? ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
-              {info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
+              {info?.usage && usageSum(info.usage.session) + usageSum(info.usage.turn) > 0 ? (() => {
+                // live turn accrual counts toward the session display so the split never lags the ↓ number
+                const s = info.usage.session, t = info.usage.turn
+                const inTok = usageIn(s) + usageIn(t), outTok = s.output_tokens + t.output_tokens
+                const cached = inTok > 0 ? Math.round(100 * (s.cache_read + t.cache_read) / inTok) : 0
+                const tip = `real API tokens this session — input ${fmtTokens(s.input_tokens + t.input_tokens)} · cache read ${fmtTokens(s.cache_read + t.cache_read)} · cache write ${fmtTokens(s.cache_creation + t.cache_creation)} · output ${fmtTokens(outTok)} (distinct from the board meter's injected-context estimate)`
+                return <span title={tip}> · ↑ {fmtTokens(inTok)} in · {cached}% cached · ↓ {fmtTokens(outTok)} out</span>
+              })() : info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
             </span>
           </div>

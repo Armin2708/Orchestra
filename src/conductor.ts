@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { generateName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
+import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { port } from './daemon.js'
 import { conductorRules } from './rules.js'
 
@@ -60,6 +61,10 @@ type Hired = {
   turnStart: number | null
   turnTokens: number
   sessionTokens: number
+  // true token split from the API's own usage reports — turn accrues live from assistant
+  // messages, session sums authoritative per-turn totals (result usage when present)
+  turnUsage: UsageSplit
+  sessionUsage: UsageSplit
   model: string | null
   effort: EffortLevel | null
   models: any[]
@@ -328,7 +333,8 @@ export class Conductor {
       pending,
       commands: [],
       transcript,
-      turnStart: null, turnTokens: 0, sessionTokens: 0, model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
+      turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(),
+      model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: [], role: opts.role, handoff: false,
       cardId: null, outcome: null, reason: '', summary: '',
     }
@@ -362,6 +368,7 @@ export class Conductor {
             if (hired.turnStart === null) hired.turnStart = Date.now()
             hired.turnTokens += m.message?.usage?.output_tokens ?? 0
             hired.sessionTokens += m.message?.usage?.output_tokens ?? 0
+            if (m.message?.usage) addUsage(hired.turnUsage, fromSdkUsage(m.message.usage))
             const blocks = m.message?.content ?? []
             for (const b of blocks) {
               if (b.type === 'text' && b.text) log('text', b.text)
@@ -386,6 +393,10 @@ export class Conductor {
           } else if (m.type === 'result') {
             const secs = m.duration_ms ? ` · ${(m.duration_ms / 1000).toFixed(1)}s` : ''
             log('status', `turn finished (${m.subtype ?? 'done'})${secs}`)
+            const turn = turnUsage(m.usage, hired.turnUsage)
+            addUsage(hired.sessionUsage, turn)
+            recordUsage(this.db, opts.boardId, agent.id, turn)
+            hired.turnUsage = emptyUsage()
             hired.turnStart = null
             hired.turnTokens = 0
             hired.subs.clear()
@@ -409,6 +420,12 @@ export class Conductor {
           hired.reason = String(e?.message ?? e)
         }
       } finally {
+        // a session that dies mid-turn (error, fire, effort handoff) still consumed real
+        // tokens — flush the in-flight accrual so the daily rollup never undercounts
+        if (hasUsage(hired.turnUsage)) {
+          recordUsage(this.db, opts.boardId, agent.id, hired.turnUsage)
+          hired.turnUsage = emptyUsage()
+        }
         hired.pending.clear()
         this.hired.delete(agent.id)
         // an effort restart supersedes this session: the replacement re-registers the same
@@ -457,13 +474,14 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[] }; permissions?: Omit<PendingPermission, 'finish'>[] } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[]; usage: { turn: UsageSplit; session: UsageSplit } }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
       working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
-      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, commands: h.commands, effort: h.effort, models: h.models },
+      info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, commands: h.commands, effort: h.effort, models: h.models,
+        usage: { turn: h.turnUsage, session: h.sessionUsage } },
       permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
     }
   }
