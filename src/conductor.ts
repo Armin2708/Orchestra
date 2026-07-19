@@ -348,6 +348,9 @@ export class Conductor {
       cardId: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
+    // every (re-)registration — fresh hire, effort-restart handoff, daemon resurrection, wake —
+    // drains mail that arrived while no live session could hear it (gone ⇒ bounce, alive ⇒ deliver)
+    this.deliverPending(agent.id)
     log('status', opts.resumeSession ? `resumed in ${opts.cwd} (previous session continues)` : `hired in ${opts.cwd}`)
 
     void (async () => {
@@ -461,6 +464,26 @@ export class Conductor {
     })()
 
     return agent
+  }
+
+  // catch-up: undelivered mail for an agent that just (re-)registered — a message posted during
+  // an effort-restart swap gap or daemon downtime is never in any instant-delivery target set and
+  // would strand silently (alive agents aren't dead_letters). Mail already dead-lettered while the
+  // agent was gone (has a system bounce reply) stays quiet — the sender was told it went nowhere.
+  private deliverPending(agentId: number): void {
+    const pending = this.db.prepare(`
+      SELECT m.*, fa.name AS from_name FROM messages m
+      LEFT JOIN agents fa ON fa.id = m.from_agent_id
+      WHERE m.to_agent_id=? AND m.delivered_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id AND r.from_agent_id IS NULL)
+      ORDER BY m.id`).all(agentId) as any[]
+    const stampDelivery = this.db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`)
+    const stampMessage = this.db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`)
+    for (const m of pending) {
+      if (!this.deliver(agentId, m)) return
+      stampDelivery.run(m.id, agentId)
+      stampMessage.run(m.id)
+    }
   }
 
   // instant delivery — no hooks, straight into the agent's conversation
