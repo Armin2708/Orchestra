@@ -83,6 +83,16 @@ export function openDb(file: string): Database.Database {
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (board_id, agent_id, hook_event, day)
   );
+  CREATE TABLE IF NOT EXISTS agent_usage (
+    board_id INTEGER NOT NULL,
+    agent_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_creation INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, agent_id, day)
+  );
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY,
     board_id INTEGER NOT NULL REFERENCES boards(id),

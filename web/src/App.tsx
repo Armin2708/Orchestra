@@ -263,6 +263,20 @@ function SystemMeter({ boards }: { boards: number[] }) {
           <span className="meter-val">{fmtTokens(sys.injected.tokens)} tok</span>
         </span>
       )}
+      {sys.agent_usage && (() => {
+        // real API tokens (from SDK usage reports) — a different animal than the injected estimate above
+        const u = sys.agent_usage
+        const inTok = u.input_tokens + u.cache_read + u.cache_creation
+        if (inTok + u.output_tokens === 0) return null
+        const cached = inTok > 0 ? Math.round(100 * u.cache_read / inTok) : 0
+        return (
+          <span className="meter"
+            title={`real API tokens consumed by hired agents (all boards, from SDK usage reports — not an estimate): input ${u.input_tokens.toLocaleString()} · cache read ${u.cache_read.toLocaleString()} (${cached}% of intake) · cache write ${u.cache_creation.toLocaleString()} · output ${u.output_tokens.toLocaleString()}`}>
+            <span className="meter-label">api tok</span>
+            <span className="meter-val">↑ {fmtTokens(inTok)} · ↓ {fmtTokens(u.output_tokens)}</span>
+          </span>
+        )
+      })()}
     </div>
   )
 }
