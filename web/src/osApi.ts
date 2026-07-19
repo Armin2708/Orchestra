@@ -230,6 +230,28 @@ export type DriverCapability = {
   [key: string]: unknown
 }
 
+export type AgentProviderModel = {
+  value: string
+  resolvedModel?: string
+  displayName: string
+  description: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: AgentEffort[]
+  supportsAdaptiveThinking?: boolean
+  supportsFastMode?: boolean
+  supportsAutoMode?: boolean
+}
+
+export type AgentProviderCatalog = {
+  id: string
+  name: string
+  available: boolean
+  models: AgentProviderModel[]
+  source: 'live' | 'cache' | 'unavailable'
+  updated_at: string | null
+  detail?: string
+}
+
 export type PluginDescriptor = {
   id: string
   name?: string
@@ -240,7 +262,7 @@ export type PluginDescriptor = {
 
 export const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type AgentEffort = (typeof AGENT_EFFORT_LEVELS)[number]
-export type AgentDefaultProfile = { model: string | null; effort: AgentEffort | null }
+export type AgentDefaultProfile = { provider: string; model: string | null; effort: AgentEffort | null }
 export type AgentDefaults = { worker: AgentDefaultProfile; specialist: AgentDefaultProfile }
 
 const unwrapList = <T>(value: unknown, keys: string[]): T[] => {
@@ -404,6 +426,7 @@ export const osApi = {
   listConflicts: async (boardId: number) =>
     unwrapList<WorkspaceConflict>(await api('GET', `/os/boards/${boardId}/conflicts`), ['conflicts']),
   listDrivers: async () => unwrapList<DriverCapability>(await api('GET', '/os/drivers'), ['drivers']),
+  listAgentProviders: async () => unwrapList<AgentProviderCatalog>(await api('GET', '/os/providers'), ['providers']),
   listPlugins: async () => unwrapList<PluginDescriptor>(await api('GET', '/os/plugins'), ['plugins']),
   getAgentDefaults: async () =>
     unwrapEntity<AgentDefaults>(await api('GET', '/os/settings/agent-defaults'), ['defaults']),

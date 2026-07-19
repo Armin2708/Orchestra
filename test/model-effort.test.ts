@@ -8,10 +8,13 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }))
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { Conductor, EFFORT_LEVELS } from '../src/conductor.js'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
+import { readProviderModelCache, writeProviderModelCache } from '../src/agent-providers.js'
 
 const MODELS = [
-  { model: 'claude-fable-5', displayName: 'Fable 5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
-  { model: 'claude-haiku-4-5', displayName: 'Haiku 4.5', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+  { value: 'claude-fable-5', displayName: 'Fable 5', description: 'Deep implementation model', supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  { value: 'claude-haiku-4-5', displayName: 'Haiku 4.5', description: 'Fast model', supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'] },
 ]
 
 function fakeSession() {
@@ -129,6 +132,33 @@ it('supported models surface in transcript info after init', async () => {
   expect(t.conductor.transcript(a.id).info?.models).toEqual(MODELS)
 })
 
+it('publishes the live Claude model catalog and persists a last-known fallback', async () => {
+  const t = setup()
+  t.conductor.hire({ boardId: 1, cwd: '/p' })
+  t.sessions[0].emit({ type: 'system', subtype: 'init', session_id: 's1', model: 'claude-fable-5' })
+  await until(() => Boolean(readProviderModelCache(t.db)))
+
+  const [live] = await t.conductor.providerCatalog()
+  expect(live).toMatchObject({ id: 'claude', name: 'Claude', available: true, source: 'live' })
+  expect(live.models.map((model) => model.value)).toEqual(['claude-fable-5', 'claude-haiku-4-5'])
+  expect(live.models[0].supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+
+  const fallback = new Conductor(t.db, new EventEmitter())
+  expect(await fallback.providerCatalog()).toEqual([
+    expect.objectContaining({ id: 'claude', available: true, source: 'cache', models: live.models }),
+  ])
+})
+
+it('does not invent model options before Claude has reported a catalog', async () => {
+  const t = setup()
+  expect(readProviderModelCache(t.db)).toBeNull()
+  expect(await t.conductor.providerCatalog()).toEqual([
+    expect.objectContaining({ id: 'claude', available: true, source: 'unavailable', models: [] }),
+  ])
+
+  expect(writeProviderModelCache(t.db, [{ value: '', displayName: 'invalid' }])).toBeNull()
+})
+
 // ── setModel ────────────────────────────────────────────────────────
 
 it('setModel switches the live session, persists, and logs to the transcript', async () => {
@@ -228,6 +258,24 @@ const stubWith = (over: Partial<ConductorLike>): ConductorLike => ({
   transcript: () => ({ lines: [], working: null }), subagents: () => [],
   interruptAgent: async () => true, fire: async () => true,
   launch: () => ({ agent: {} }), isLaunched: () => false, ...over,
+})
+
+it('GET /os/providers exposes only the live agent-provider catalog', async () => {
+  const stub = stubWith({
+    providerCatalog: async () => [{
+      id: 'claude', name: 'Claude', available: true, source: 'live', updated_at: '2026-07-19T10:00:00.000Z',
+      models: [{ value: 'claude-fable-5', displayName: 'Fable 5', description: 'Deep implementation model' }],
+    }],
+  })
+  const s = buildServer(openDb(':memory:'), () => stub)
+  await s.ready()
+
+  const response = await s.inject({ method: 'GET', url: '/api/v1/os/providers' })
+  expect(response.statusCode).toBe(200)
+  expect(response.json().providers).toEqual([
+    expect.objectContaining({ id: 'claude', source: 'live', models: [expect.objectContaining({ value: 'claude-fable-5' })] }),
+  ])
+  await s.close()
 })
 
 it('POST /agents/:id/model and /effort map conductor outcomes to status codes', async () => {

@@ -4,8 +4,10 @@ export const AGENT_DEFAULT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'm
 export type AgentDefaultEffort = (typeof AGENT_DEFAULT_EFFORT_LEVELS)[number]
 export type AgentType = 'worker' | 'specialist'
 export type SpecialistRole = 'strategist' | 'auditor' | 'verifier'
+export const DEFAULT_AGENT_PROVIDER = 'claude'
 
 export type AgentDefaultProfile = {
+  provider: string
   model: string | null
   effort: AgentDefaultEffort | null
 }
@@ -13,29 +15,39 @@ export type AgentDefaultProfile = {
 export type AgentDefaults = Record<AgentType, AgentDefaultProfile>
 
 const SETTINGS_KEY = 'agent_defaults_v1'
+const MAX_PROVIDER_LENGTH = 64
 const MAX_MODEL_LENGTH = 200
 
 export class AgentDefaultsValidationError extends Error {}
 
 export const emptyAgentDefaults = (): AgentDefaults => ({
-  worker: { model: null, effort: null },
-  specialist: { model: null, effort: null },
+  worker: { provider: DEFAULT_AGENT_PROVIDER, model: null, effort: null },
+  specialist: { provider: DEFAULT_AGENT_PROVIDER, model: null, effort: null },
 })
 
 const storedProfile = (value: unknown): AgentDefaultProfile => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { model: null, effort: null }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return { provider: DEFAULT_AGENT_PROVIDER, model: null, effort: null }
   const profile = value as Record<string, unknown>
+  const provider = typeof profile.provider === 'string' && profile.provider.trim()
+    ? profile.provider.trim().slice(0, MAX_PROVIDER_LENGTH) : DEFAULT_AGENT_PROVIDER
   const model = typeof profile.model === 'string' && profile.model.trim()
     ? profile.model.trim().slice(0, MAX_MODEL_LENGTH) : null
   const effort = AGENT_DEFAULT_EFFORT_LEVELS.includes(profile.effort as AgentDefaultEffort)
     ? profile.effort as AgentDefaultEffort : null
-  return { model, effort }
+  return { provider, model, effort }
 }
 
 const requestedProfile = (value: unknown, type: AgentType): AgentDefaultProfile => {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new AgentDefaultsValidationError(`${type} settings are required`)
   const profile = value as Record<string, unknown>
+  if (profile.provider !== undefined && typeof profile.provider !== 'string')
+    throw new AgentDefaultsValidationError(`${type} provider must be a string`)
+  const provider = profile.provider === undefined ? DEFAULT_AGENT_PROVIDER : profile.provider.trim()
+  if (!provider) throw new AgentDefaultsValidationError(`${type} provider is required`)
+  if (provider.length > MAX_PROVIDER_LENGTH)
+    throw new AgentDefaultsValidationError(`${type} provider must be ${MAX_PROVIDER_LENGTH} characters or fewer`)
   if (profile.model !== null && typeof profile.model !== 'string')
     throw new AgentDefaultsValidationError(`${type} model must be a string or null`)
   const model = typeof profile.model === 'string' ? profile.model.trim() || null : null
@@ -43,7 +55,7 @@ const requestedProfile = (value: unknown, type: AgentType): AgentDefaultProfile 
     throw new AgentDefaultsValidationError(`${type} model must be ${MAX_MODEL_LENGTH} characters or fewer`)
   if (profile.effort !== null && !AGENT_DEFAULT_EFFORT_LEVELS.includes(profile.effort as AgentDefaultEffort))
     throw new AgentDefaultsValidationError(`${type} effort must be low, medium, high, xhigh, max, or null`)
-  return { model, effort: profile.effort as AgentDefaultEffort | null }
+  return { provider, model, effort: profile.effort as AgentDefaultEffort | null }
 }
 
 export function parseAgentDefaults(value: unknown): AgentDefaults {

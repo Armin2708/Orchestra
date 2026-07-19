@@ -30,9 +30,15 @@ describe('Agent OS API', () => {
   it('inherits API auth and exposes drivers and plugins', async () => {
     const { server } = await fixture()
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/drivers' })).statusCode).toBe(401)
+    expect((await server.inject({ method: 'GET', url: '/api/v1/os/providers' })).statusCode).toBe(401)
     const drivers = await server.inject({ method: 'GET', url: '/api/v1/os/drivers', headers: auth })
     expect(drivers.statusCode).toBe(200)
     expect(drivers.json().drivers.map((driver: any) => driver.id)).toEqual(['claude', 'shell'])
+    const providers = await server.inject({ method: 'GET', url: '/api/v1/os/providers', headers: auth })
+    expect(providers.statusCode).toBe(200)
+    expect(providers.json().providers).toEqual([
+      expect.objectContaining({ id: 'claude', name: 'Claude', available: false, models: [] }),
+    ])
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/plugins', headers: auth })).json().plugins[0].id)
       .toBe('agent-os-core')
   })
@@ -43,8 +49,8 @@ describe('Agent OS API', () => {
     expect(initial.statusCode).toBe(200)
     expect(initial.json()).toMatchObject({
       defaults: {
-        worker: { model: null, effort: null },
-        specialist: { model: null, effort: null },
+        worker: { provider: 'claude', model: null, effort: null },
+        specialist: { provider: 'claude', model: null, effort: null },
       },
       effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
@@ -52,14 +58,14 @@ describe('Agent OS API', () => {
     const saved = await server.inject({
       method: 'PUT', url: '/api/v1/os/settings/agent-defaults', headers: auth,
       payload: {
-        worker: { model: '  worker-model  ', effort: 'medium' },
-        specialist: { model: 'specialist-model', effort: 'xhigh' },
+        worker: { provider: 'claude', model: '  worker-model  ', effort: 'medium' },
+        specialist: { provider: 'claude', model: 'specialist-model', effort: 'xhigh' },
       },
     })
     expect(saved.statusCode).toBe(200)
     expect(saved.json().defaults).toEqual({
-      worker: { model: 'worker-model', effort: 'medium' },
-      specialist: { model: 'specialist-model', effort: 'xhigh' },
+      worker: { provider: 'claude', model: 'worker-model', effort: 'medium' },
+      specialist: { provider: 'claude', model: 'specialist-model', effort: 'xhigh' },
     })
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/settings/agent-defaults', headers: auth })).json().defaults)
       .toEqual(saved.json().defaults)

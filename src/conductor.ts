@@ -11,7 +11,14 @@ import { conductorRules, outputDiscipline } from './rules.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { isUsageLimitError } from './limits.js'
 import { evaluatePolicy, type PolicyOperation } from './agent-os/policy-engine.js'
-import { defaultsForRole } from './agent-defaults.js'
+import { DEFAULT_AGENT_PROVIDER, defaultsForRole } from './agent-defaults.js'
+import {
+  claudeProviderCatalog,
+  normalizeProviderModels,
+  readProviderModelCache,
+  writeProviderModelCache,
+  type AgentProviderCatalog,
+} from './agent-providers.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -120,6 +127,22 @@ type Hired = {
 // resumes that agent's saved session instead of minting a fresh one
 type LaunchRequest = { boardId: number; cardId: number; cwd: string; brief: string; wakeAgentId?: number }
 
+const MODEL_CATALOG_TIMEOUT_MS = 2_500
+
+async function supportedModelsWithTimeout(queryHandle: any): Promise<unknown> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(queryHandle.supportedModels()),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('provider model catalog timed out')), MODEL_CATALOG_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 const strategistRules = (me: string) => `You are "${me}", this project's strategist — a specialist in brainstorming, product research, and writing tickets that other agents can execute from directly. You NEVER modify files; you research and produce roadmap material.
 How you work:
 - Converse with the user like a thinking partner: when a request is ambiguous, ask one sharp clarifying question before producing output; explain your reasoning briefly as you go.
@@ -207,6 +230,39 @@ export class Conductor {
 
   list(boardId: number): number[] {
     return [...this.hired.values()].filter((h) => h.boardId === boardId).map((h) => h.agentId)
+  }
+
+  async providerCatalog(): Promise<AgentProviderCatalog[]> {
+    const live = [...this.hired.values()].find((h) => typeof h.query?.supportedModels === 'function')
+    if (live) {
+      try {
+        const raw = await supportedModelsWithTimeout(live.query)
+        const models = normalizeProviderModels(raw)
+        if (models.length) {
+          live.models = Array.isArray(raw) ? raw : []
+          const cached = writeProviderModelCache(this.db, models)
+          return [claudeProviderCatalog({
+            available: true,
+            models,
+            source: 'live',
+            updatedAt: cached?.updated_at ?? new Date().toISOString(),
+          })]
+        }
+      } catch {
+        // A provider discovery failure must not make Settings unusable; use the last known catalog below.
+      }
+    }
+
+    const memoryModels = normalizeProviderModels([...this.hired.values()].flatMap((h) => h.models))
+    const cached = readProviderModelCache(this.db) ?? (memoryModels.length
+      ? writeProviderModelCache(this.db, memoryModels) : null)
+    return [claudeProviderCatalog({
+      available: true,
+      models: cached?.models ?? [],
+      source: cached ? 'cache' : 'unavailable',
+      updatedAt: cached?.updated_at ?? null,
+      detail: cached ? undefined : 'Start a Claude agent to discover the models available to this account.',
+    })]
   }
 
   private cardRow(id: number): any {
@@ -422,8 +478,9 @@ export class Conductor {
     // Defaults only seed fresh sessions. Resume, wake, and effort-handoff paths carry their
     // persisted configuration explicitly and must not change when an operator edits settings.
     const profile = opts.resumeSession ? null : defaultsForRole(this.db, opts.role)
-    const model = opts.model ?? profile?.model ?? undefined
-    const requestedEffort = opts.effort ?? profile?.effort ?? undefined
+    const providerProfile = profile?.provider === DEFAULT_AGENT_PROVIDER ? profile : null
+    const model = opts.model ?? providerProfile?.model ?? undefined
+    const requestedEffort = opts.effort ?? providerProfile?.effort ?? undefined
     const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
       ? requestedEffort as EffortLevel : null
     const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
@@ -555,7 +612,10 @@ export class Conductor {
               })
               .catch(() => { /* older CLI without the control request */ })
             // model catalog (incl. per-model effort levels) for the terminal's selectors
-            void Promise.resolve((q as any).supportedModels?.()).then((ms) => { hired.models = ms ?? [] }).catch(() => {})
+            void Promise.resolve((q as any).supportedModels?.()).then((ms) => {
+              hired.models = Array.isArray(ms) ? ms : []
+              writeProviderModelCache(this.db, ms)
+            }).catch(() => {})
             log('status', `session started · ${m.model ?? ''} · ${opts.cwd}`)
           } else if (m.type === 'system' && m.subtype === 'commands_changed') {
             // mid-session push (e.g. skills discovered while working) — REPLACE the cached list

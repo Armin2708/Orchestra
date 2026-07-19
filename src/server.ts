@@ -18,6 +18,7 @@ import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
+import { claudeProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -39,6 +40,7 @@ export interface ConductorLike {
   resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean
   setModel?(agentId: number, model: string): Promise<boolean>
   setEffort?(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
+  providerCatalog?(): Promise<AgentProviderCatalog[]>
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
@@ -1046,10 +1048,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       { id: 'shell', available: !!opts.agentOs?.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
         detail: opts.agentOs?.runtime ? undefined : 'requires the PTY runtime' },
     ]
+  const defaultAgentProviders = async () => maestro?.providerCatalog
+    ? maestro.providerCatalog()
+    : [claudeProviderCatalog({
+        available: false,
+        detail: 'Requires the daemon Conductor before Claude models can be discovered.',
+      })]
   registerAgentOsRoutes(server, {
     ...opts.agentOs,
     db,
     drivers: opts.agentOs?.drivers ?? defaultAgentOsDrivers,
+    providers: opts.agentOs?.providers ?? defaultAgentProviders,
   })
 
   // static web UI (built by Task 13; 404s harmlessly before that)

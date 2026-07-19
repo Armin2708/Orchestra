@@ -20,6 +20,7 @@ import {
   readAgentDefaults,
   writeAgentDefaults,
 } from '../agent-defaults.js'
+import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
 
 export interface ProcessRecord {
   id: string
@@ -87,6 +88,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   jobExecutor?: JobExecutor
   scheduler?: JobScheduler
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
+  providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
 }
 
@@ -119,6 +121,13 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }
     return reply.send(error)
   })
+
+  app.get('/providers', async () => ({ providers: await asyncDescriptors(options.providers, [
+    claudeProviderCatalog({
+      available: false,
+      detail: 'Requires the daemon Conductor before Claude models can be discovered.',
+    }),
+  ]) }))
 
   app.get('/settings/agent-defaults', () => ({
     defaults: readAgentDefaults(db),
@@ -530,6 +539,13 @@ function arrayValue(value: unknown, field: string): unknown[] {
 
 function descriptors<T>(source: T[] | (() => T[]) | undefined, fallback: T[]): T[] {
   return typeof source === 'function' ? source() : source ?? fallback
+}
+
+async function asyncDescriptors<T>(
+  source: T[] | (() => T[] | Promise<T[]>) | undefined,
+  fallback: T[],
+): Promise<T[]> {
+  return typeof source === 'function' ? await source() : source ?? fallback
 }
 
 function gitHead(workspace: Workspace): string {

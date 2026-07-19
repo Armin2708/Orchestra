@@ -4,15 +4,17 @@ import {
   AgentDefaultProfile,
   AgentDefaults,
   AgentEffort,
+  AgentProviderCatalog,
+  AgentProviderModel,
   osApi,
 } from './osApi'
 import './settings.css'
 
 type AgentType = keyof AgentDefaults
 
-const emptyDefaults = (): AgentDefaults => ({
-  worker: { model: null, effort: null },
-  specialist: { model: null, effort: null },
+const clearOverrides = (defaults: AgentDefaults): AgentDefaults => ({
+  worker: { provider: defaults.worker.provider, model: null, effort: null },
+  specialist: { provider: defaults.specialist.provider, model: null, effort: null },
 })
 
 const copyDefaults = (defaults: AgentDefaults): AgentDefaults => ({
@@ -47,19 +49,65 @@ const profileDetails: Record<AgentType, { number: string; label: string; title: 
   },
 }
 
+const modelEffortLevels = (model?: AgentProviderModel): readonly AgentEffort[] => {
+  if (!model) return AGENT_EFFORT_LEVELS
+  if (model.supportsEffort === false) return []
+  return model.supportedEffortLevels?.length ? model.supportedEffortLevels : AGENT_EFFORT_LEVELS
+}
+
+const effortLabel = (effort: AgentEffort): string =>
+  effort === 'xhigh' ? 'X-high' : effort[0].toUpperCase() + effort.slice(1)
+
 function AgentProfileEditor({
   type,
   profile,
+  providers,
   disabled,
+  refreshing,
   onChange,
+  onRefresh,
 }: {
   type: AgentType
   profile: AgentDefaultProfile
+  providers: AgentProviderCatalog[]
   disabled: boolean
+  refreshing: boolean
   onChange: (profile: AgentDefaultProfile) => void
+  onRefresh: () => void
 }) {
   const details = profileDetails[type]
+  const availableProviders = providers.filter((provider) => provider.available)
+  const selectedProvider = providers.find((provider) => provider.id === profile.provider)
+  const models = selectedProvider?.models ?? []
+  const selectedModel = models.find((model) => model.value === profile.model)
+  const supportedEfforts = modelEffortLevels(selectedModel)
   const setEffort = (effort: AgentEffort | null) => onChange({ ...profile, effort })
+  const setProvider = (provider: string) => onChange({ provider, model: null, effort: null })
+  const setModel = (modelValue: string) => {
+    const model = models.find((candidate) => candidate.value === modelValue)
+    const levels = modelEffortLevels(model)
+    onChange({
+      ...profile,
+      model: modelValue || null,
+      effort: profile.effort && !levels.includes(profile.effort) ? null : profile.effort,
+    })
+  }
+  const currentModelMissing = Boolean(profile.model && !selectedModel)
+  const catalogLabel = selectedProvider?.source === 'live'
+    ? `Live from ${selectedProvider.name}`
+    : selectedProvider?.source === 'cache'
+      ? `Last known ${selectedProvider.name} catalog`
+      : 'Catalog not discovered yet'
+  const modelHelper = selectedModel?.description
+    || selectedProvider?.detail
+    || (models.length
+      ? 'Choose one of the models currently reported by the provider.'
+      : 'Start a Claude agent, then refresh to discover models for this account.')
+  const effortHelper = selectedModel?.supportsEffort === false
+    ? `${selectedModel.displayName} uses provider-managed reasoning and has no effort override.`
+    : selectedModel?.supportedEffortLevels?.length
+      ? `Available for ${selectedModel.displayName}: ${selectedModel.supportedEffortLevels.map(effortLabel).join(', ')}.`
+      : 'Provider default keeps reasoning provider-managed; explicit levels apply when supported.'
 
   return (
     <section className="agent-default-row" aria-labelledby={`${type}-profile-title`}>
@@ -76,21 +124,44 @@ function AgentProfileEditor({
       </div>
 
       <div className="agent-default-controls">
-        <label className="agent-model-field" htmlFor={`${type}-default-model`}>
-          <span>Default model</span>
-          <input
-            id={`${type}-default-model`}
-            type="text"
-            value={profile.model ?? ''}
-            disabled={disabled}
-            maxLength={200}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="Provider default"
-            onChange={(event) => onChange({ ...profile, model: event.target.value || null })}
-          />
-          <small>Use a provider alias or full model ID. Leave blank to inherit the provider default.</small>
-        </label>
+        <div className="agent-selection-fields">
+          <label className="agent-provider-field" htmlFor={`${type}-default-provider`}>
+            <span>Provider</span>
+            <select id={`${type}-default-provider`} value={profile.provider} disabled={disabled}
+              onChange={(event) => setProvider(event.target.value)}>
+              {!availableProviders.some((provider) => provider.id === profile.provider) && (
+                <option value={profile.provider} disabled>{profile.provider} (unavailable)</option>
+              )}
+              {availableProviders.map((provider) => (
+                <option key={provider.id} value={provider.id}>{provider.name}</option>
+              ))}
+            </select>
+            <small>Only agent providers installed and available in this runtime appear here.</small>
+          </label>
+
+          <label className="agent-model-field" htmlFor={`${type}-default-model`}>
+            <span>Default model</span>
+            <select id={`${type}-default-model`} value={profile.model ?? ''}
+              disabled={disabled || !selectedProvider} onChange={(event) => setModel(event.target.value)}>
+              <option value="">Provider default</option>
+              {currentModelMissing && <option value={profile.model ?? ''}>{profile.model} (not in catalog)</option>}
+              {models.map((model) => (
+                <option key={model.value} value={model.value}>{model.displayName}</option>
+              ))}
+            </select>
+            <small>{modelHelper}</small>
+          </label>
+        </div>
+
+        <div className="agent-catalog-meta" aria-live="polite">
+          <span className={`agent-catalog-source ${selectedProvider?.source ?? 'unavailable'}`}>
+            <i aria-hidden="true" />
+            {catalogLabel}{models.length ? ` · ${models.length} model${models.length === 1 ? '' : 's'}` : ''}
+          </span>
+          <button type="button" disabled={disabled || refreshing} onClick={onRefresh}>
+            {refreshing ? 'Refreshing…' : 'Refresh models'}
+          </button>
+        </div>
 
         <fieldset className="agent-effort-field" disabled={disabled}>
           <legend>Reasoning effort</legend>
@@ -99,16 +170,17 @@ function AgentProfileEditor({
               aria-pressed={profile.effort === null} onClick={() => setEffort(null)}>Provider</button>
             {AGENT_EFFORT_LEVELS.map((effort) => (
               <button type="button" key={effort} className={profile.effort === effort ? 'active' : ''}
+                disabled={!supportedEfforts.includes(effort)}
                 aria-pressed={profile.effort === effort} onClick={() => setEffort(effort)}>
-                {effort === 'xhigh' ? 'X-high' : effort[0].toUpperCase() + effort.slice(1)}
+                {effortLabel(effort)}
               </button>
             ))}
           </div>
-          <small>Availability depends on the selected model. Unsupported values are rejected by the provider.</small>
+          <small>{effortHelper}</small>
         </fieldset>
 
         <button type="button" className="agent-profile-clear" disabled={disabled || (!profile.model && !profile.effort)}
-          onClick={() => onChange({ model: null, effort: null })}>
+          onClick={() => onChange({ ...profile, model: null, effort: null })}>
           Use provider defaults for this type
         </button>
       </div>
@@ -129,8 +201,10 @@ function SettingsSkeleton() {
 export function SettingsView() {
   const [draft, setDraft] = useState<AgentDefaults | null>(null)
   const [persisted, setPersisted] = useState<AgentDefaults | null>(null)
+  const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
@@ -138,9 +212,13 @@ export function SettingsView() {
     setLoading(true)
     setError(null)
     try {
-      const defaults = await osApi.getAgentDefaults()
+      const [defaults, availableProviders] = await Promise.all([
+        osApi.getAgentDefaults(),
+        osApi.listAgentProviders(),
+      ])
       setDraft(copyDefaults(defaults))
       setPersisted(copyDefaults(defaults))
+      setProviders(availableProviders)
     } catch (loadError) {
       setError(errorMessage(loadError))
     } finally {
@@ -151,6 +229,19 @@ export function SettingsView() {
   useEffect(() => { void load() }, [load])
 
   const dirty = useMemo(() => Boolean(draft && persisted && JSON.stringify(draft) !== JSON.stringify(persisted)), [draft, persisted])
+  const providerAvailable = useMemo(() => providers.some((provider) => provider.available), [providers])
+
+  const refreshProviders = useCallback(async () => {
+    setRefreshing(true)
+    setError(null)
+    try {
+      setProviders(await osApi.listAgentProviders())
+    } catch (refreshError) {
+      setError(errorMessage(refreshError))
+    } finally {
+      setRefreshing(false)
+    }
+  }, [])
 
   const updateProfile = (type: AgentType, profile: AgentDefaultProfile) => {
     setSaved(false)
@@ -196,16 +287,26 @@ export function SettingsView() {
             <small>{error}</small>
             <button type="button" onClick={() => void load()}>Try again</button>
           </section>
+        ) : !providerAvailable ? (
+          <section className="settings-provider-empty" aria-live="polite">
+            <p>No agent provider is available.</p>
+            <small>Run Orchestra through the daemon so its built-in Claude provider can report the models available to this account.</small>
+            <button type="button" disabled={refreshing} onClick={() => void refreshProviders()}>
+              {refreshing ? 'Checking…' : 'Check again'}
+            </button>
+          </section>
         ) : (
           <div className="agent-default-list">
-            <AgentProfileEditor type="worker" profile={draft.worker} disabled={saving}
+            <AgentProfileEditor type="worker" profile={draft.worker} providers={providers}
+              disabled={saving} refreshing={refreshing} onRefresh={() => void refreshProviders()}
               onChange={(profile) => updateProfile('worker', profile)} />
-            <AgentProfileEditor type="specialist" profile={draft.specialist} disabled={saving}
+            <AgentProfileEditor type="specialist" profile={draft.specialist} providers={providers}
+              disabled={saving} refreshing={refreshing} onRefresh={() => void refreshProviders()}
               onChange={(profile) => updateProfile('specialist', profile)} />
           </div>
         )}
 
-        {draft && (
+        {draft && providerAvailable && (
           <footer className="settings-actions">
             <div className="settings-state" aria-live="polite">
               {error ? <span className="error">{error}</span>
@@ -215,7 +316,7 @@ export function SettingsView() {
             </div>
             <div>
               <button type="button" className="settings-clear-all" disabled={saving}
-                onClick={() => { setDraft(emptyDefaults()); setSaved(false) }}>
+                onClick={() => { setDraft(clearOverrides(draft)); setSaved(false) }}>
                 Clear overrides
               </button>
               <button type="button" className="settings-discard" disabled={!dirty || saving}
