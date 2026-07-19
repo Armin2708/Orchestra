@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, setToken, streamUrl, Snapshot , SystemInfo, Telemetry } from './api'
+import { api, ApiError, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
 import { ProjectGrid } from './Board'
+import { MessagesView } from './MessagesView'
 import { RoadmapView } from './RoadmapView'
 import { TimelineView } from './TimelineView'
 import { ShippedView } from './ShippedView'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
+import './messages.css'
 
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -25,7 +27,7 @@ export function App() {
     return saved && saved !== 'all' ? Number(saved) : 'all'
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  type View = 'board' | 'roadmap' | 'timeline' | 'shipped'
+  type View = 'board' | 'messages' | 'roadmap' | 'timeline' | 'shipped'
   const [view, setView] = useState<View>(() =>
     (localStorage.getItem('orchestra-view') as View) ?? 'board')
   const pickView = (v: View) => { setView(v); localStorage.setItem('orchestra-view', v) }
@@ -80,6 +82,7 @@ export function App() {
   const cards = snaps.flatMap((s) => s.cards)
   const visible = focus === 'all' ? snaps : snaps.filter((s) => s.board.id === focus)
   const shown = visible.length > 0 ? visible : snaps // focused board was removed — fall back
+  const openMessages = shown.reduce((sum, snap) => sum + snap.open_questions.length, 0)
 
   return (
     <div className="app">
@@ -111,6 +114,9 @@ export function App() {
         <SystemMeter boards={snaps.map((s) => s.board.id)} />
         <nav className="view-tabs">
           <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
+          <button className={view === 'messages' ? 'tab active' : 'tab'} onClick={() => pickView('messages')}>
+            Messages{openMessages > 0 && <span className="tab-count">{openMessages}</span>}
+          </button>
           <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
           <button className={view === 'timeline' ? 'tab active' : 'tab'} onClick={() => pickView('timeline')}>Timeline</button>
           <button className={view === 'shipped' ? 'tab active' : 'tab'} onClick={() => pickView('shipped')}>Shipped</button>
@@ -119,6 +125,8 @@ export function App() {
       </header>
       {view === 'board'
         ? <ProjectGrid snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
+        : view === 'messages'
+          ? <MessagesView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : view === 'timeline'
