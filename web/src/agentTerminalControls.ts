@@ -2,6 +2,10 @@ export type AgentControlPanelName = 'model' | 'mcp' | 'plugin'
 
 const CONTROL_COMMANDS = new Set<AgentControlPanelName>(['model', 'mcp', 'plugin'])
 
+export function normalizeSlashCommandName(name: string): string {
+  return name.trim().replace(/^\/+/, '')
+}
+
 export function panelForSlashCommand(name: string): AgentControlPanelName | null {
   const normalized = name.trim().replace(/^\//, '').toLowerCase()
   return CONTROL_COMMANDS.has(normalized as AgentControlPanelName)
