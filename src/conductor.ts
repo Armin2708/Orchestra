@@ -1,11 +1,15 @@
 import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { generateName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { port } from './daemon.js'
 import { conductorRules } from './rules.js'
+import { autoshipEnabled } from './shipqueue.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -75,6 +79,8 @@ type Hired = {
   subs: Map<string, string>
   // launched-on-ticket agents carry their card through to review/blocked on exit
   cardId: number | null
+  // the card worktree's branch, when autoship launched this agent isolated (#59)
+  branch: string | null
   outcome: 'success' | 'error' | null
   reason: string
   summary: string
@@ -196,10 +202,10 @@ export class Conductor {
   adoptLaunch(agentId: number): void {
     const h = this.hired.get(agentId)
     if (!h || h.cardId !== null) return
-    const c = this.db.prepare(`SELECT c.id FROM cards c
+    const c = this.db.prepare(`SELECT c.id, c.branch FROM cards c
       JOIN card_events e ON e.card_id=c.id AND e.type='launched' AND e.agent_id=?
       WHERE c.owner_agent_id=? AND c.column_name='in_progress'`).get(agentId, agentId) as any
-    if (c) h.cardId = c.id
+    if (c) { h.cardId = c.id; h.branch = c.branch ?? null }
   }
 
 
@@ -216,11 +222,28 @@ export class Conductor {
   }
 
   private startLaunch(req: LaunchRequest): any {
-    const agent = this.hire({ boardId: req.boardId, cwd: req.cwd })
+    // autoship isolates each ticket in its own worktree+branch so the daemon can later
+    // merge it test-gated; falling back to the shared checkout just disables auto-merge
+    let cwd = req.cwd
+    let branch: string | null = null
+    if (autoshipEnabled()) {
+      const name = `card-${req.cardId}`
+      const wt = path.join(req.cwd, '..', `${path.basename(req.cwd)}-card-${req.cardId}`)
+      try {
+        if (!existsSync(wt)) {
+          try { execFileSync('git', ['worktree', 'add', wt, '-b', name], { cwd: req.cwd, timeout: 30_000 }) }
+          catch { execFileSync('git', ['worktree', 'add', wt, name], { cwd: req.cwd, timeout: 30_000 }) } // relaunch reuses the branch
+        }
+        cwd = wt
+        branch = name
+      } catch { /* not a git repo or worktree failed — shared checkout, no auto-merge */ }
+    }
+    const agent = this.hire({ boardId: req.boardId, cwd })
     const h = this.hired.get(agent.id)!
     h.cardId = req.cardId
-    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now') WHERE id=?`)
-      .run(agent.id, req.cardId)
+    h.branch = branch
+    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', branch=?, updated_at=datetime('now') WHERE id=?`)
+      .run(agent.id, branch, req.cardId)
     this.logCardEvent(req.cardId, agent.id, 'launched', { agent: agent.name })
     this.emit(req.boardId, 'card', this.cardRow(req.cardId))
     this.emit(req.boardId, 'launch', { card_id: req.cardId, agent_id: agent.id, agent_name: agent.name, status: 'started' })
@@ -345,7 +368,7 @@ export class Conductor {
       turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(),
       model: null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: [], role: opts.role, handoff: false,
-      cardId: null, outcome: null, reason: '', summary: '',
+      cardId: null, branch: null, outcome: null, reason: '', summary: '',
     }
     this.hired.set(agent.id, hired)
     // every (re-)registration — fresh hire, effort-restart handoff, daemon resurrection, wake —
@@ -541,7 +564,7 @@ export class Conductor {
     const row = this.db.prepare(`SELECT sdk_session FROM agents WHERE id=?`).get(agentId) as any
     if (!row?.sdk_session) return 'no-session' // nothing to resume — a restart would drop the conversation
 
-    const prior = { cardId: h.cardId, model: h.model, permissionMode: h.permissionMode, role: h.role, lines: [...h.transcript] }
+    const prior = { cardId: h.cardId, branch: h.branch, model: h.model, permissionMode: h.permissionMode, role: h.role, lines: [...h.transcript] }
     h.handoff = true
     await h.interrupt()
     h.end() // input stream closes → query ends → finally tears down without touching cards
@@ -556,6 +579,7 @@ export class Conductor {
     const nh = this.hired.get(agentId)
     if (!nh) return 'not-found' // respawn failed; agent row already re-marked active by hire's upsert
     nh.cardId = prior.cardId // launched tickets ride through the restart
+    nh.branch = prior.branch
     nh.transcript.unshift(...prior.lines.slice(-400))
     nh.transcript.push({ at: new Date().toISOString(), kind: 'status', text: `effort → ${level} (session restarted with conversation resumed)` })
     this.db.prepare(`UPDATE agents SET effort=? WHERE id=?`).run(level, agentId)
