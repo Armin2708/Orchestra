@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 
 export const AGENT_DEFAULT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
-export type AgentDefaultEffort = (typeof AGENT_DEFAULT_EFFORT_LEVELS)[number]
+export type AgentDefaultEffort = string
 export type AgentType = 'worker' | 'specialist'
 export type SpecialistRole = 'strategist' | 'auditor' | 'verifier'
 export const DEFAULT_AGENT_PROVIDER = 'claude'
@@ -17,6 +17,7 @@ export type AgentDefaults = Record<AgentType, AgentDefaultProfile>
 const SETTINGS_KEY = 'agent_defaults_v1'
 const MAX_PROVIDER_LENGTH = 64
 const MAX_MODEL_LENGTH = 200
+const SAFE_EFFORT = /^[a-zA-Z0-9_-]{1,40}$/
 
 export class AgentDefaultsValidationError extends Error {}
 
@@ -33,8 +34,8 @@ const storedProfile = (value: unknown): AgentDefaultProfile => {
     ? profile.provider.trim().slice(0, MAX_PROVIDER_LENGTH) : DEFAULT_AGENT_PROVIDER
   const model = typeof profile.model === 'string' && profile.model.trim()
     ? profile.model.trim().slice(0, MAX_MODEL_LENGTH) : null
-  const effort = AGENT_DEFAULT_EFFORT_LEVELS.includes(profile.effort as AgentDefaultEffort)
-    ? profile.effort as AgentDefaultEffort : null
+  const effort = typeof profile.effort === 'string' && SAFE_EFFORT.test(profile.effort)
+    ? profile.effort : null
   return { provider, model, effort }
 }
 
@@ -53,8 +54,8 @@ const requestedProfile = (value: unknown, type: AgentType): AgentDefaultProfile 
   const model = typeof profile.model === 'string' ? profile.model.trim() || null : null
   if (model && model.length > MAX_MODEL_LENGTH)
     throw new AgentDefaultsValidationError(`${type} model must be ${MAX_MODEL_LENGTH} characters or fewer`)
-  if (profile.effort !== null && !AGENT_DEFAULT_EFFORT_LEVELS.includes(profile.effort as AgentDefaultEffort))
-    throw new AgentDefaultsValidationError(`${type} effort must be low, medium, high, xhigh, max, or null`)
+  if (profile.effort !== null && (typeof profile.effort !== 'string' || !SAFE_EFFORT.test(profile.effort)))
+    throw new AgentDefaultsValidationError(`${type} effort must be a provider effort identifier or null`)
   return { provider, model, effort: profile.effort as AgentDefaultEffort | null }
 }
 

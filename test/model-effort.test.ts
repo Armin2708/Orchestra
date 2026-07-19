@@ -296,7 +296,9 @@ it('POST /agents/:id/model and /effort map conductor outcomes to status codes', 
 
   expect((await s.inject({ method: 'POST', url: '/api/v1/agents/7/effort', payload: { level: 'xhigh' } })).statusCode).toBe(200)
   expect(effortCalls).toEqual([[7, 'xhigh']])
-  expect((await s.inject({ method: 'POST', url: '/api/v1/agents/7/effort', payload: { level: 'ultra' } })).statusCode).toBe(400)
+  expect((await s.inject({ method: 'POST', url: '/api/v1/agents/7/effort', payload: { level: 'ultra' } })).statusCode).toBe(200)
+  expect(effortCalls).toEqual([[7, 'xhigh'], [7, 'ultra']])
+  expect((await s.inject({ method: 'POST', url: '/api/v1/agents/7/effort', payload: { level: 'not valid!' } })).statusCode).toBe(400)
   effortResult = 'busy'
   expect((await s.inject({ method: 'POST', url: '/api/v1/agents/7/effort', payload: { level: 'low' } })).statusCode).toBe(409)
   effortResult = 'no-session'

@@ -230,8 +230,14 @@ describe('Codex process transport and supervisor', () => {
       once: (event, listener) => childEvents.once(event, listener),
       kill: () => true,
     }
+    let spawnedEnvironment: NodeJS.ProcessEnv | undefined
     const transport = CodexProcessTransport.spawn({
-      spawnProcess: () => child,
+      spawnProcess: (_command, _args, options) => {
+        spawnedEnvironment = options.env
+        return child
+      },
+      inheritEnv: false,
+      env: { PATH: '/test/bin', CODEX_HOME: '/test/codex' },
       gracefulShutdownMs: 20,
       terminateWaitMs: 20,
     })
@@ -248,6 +254,7 @@ describe('Codex process transport and supervisor', () => {
     expect(diagnostics).toEqual(['diagnostic line'])
     expect(writes).toEqual(['request\n'])
     expect(ended).toBe(true)
+    expect(spawnedEnvironment).toEqual({ PATH: '/test/bin', CODEX_HOME: '/test/codex' })
     expect(transport.closed).toBe(true)
   })
 

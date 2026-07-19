@@ -246,7 +246,7 @@ export type AgentProviderCatalog = {
   id: string
   name: string
   available: boolean
-  capabilities?: string[]
+  capabilities?: string[] | Record<string, boolean>
   auth_state?: 'authenticated' | 'unauthenticated' | 'unavailable' | string
   health?: 'ready' | 'degraded' | 'unavailable' | string
   usage_health?: 'live' | 'stale' | 'unavailable' | string
@@ -266,7 +266,7 @@ export type PluginDescriptor = {
 }
 
 export const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
-export type AgentEffort = (typeof AGENT_EFFORT_LEVELS)[number]
+export type AgentEffort = string
 export type AgentDefaultProfile = { provider: string; model: string | null; effort: AgentEffort | null }
 export type AgentDefaults = { worker: AgentDefaultProfile; specialist: AgentDefaultProfile }
 

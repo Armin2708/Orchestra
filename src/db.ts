@@ -121,6 +121,50 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN permission_mode TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN model TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN effort TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN external_session_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN provider_state_json TEXT NOT NULL DEFAULT '{}'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN access_profile TEXT`) } catch { /* exists */ }
+  // Keep the Claude SDK session column for one compatibility window. New provider
+  // integrations use the namespaced provider + external_session_id identity.
+  db.exec(`
+    UPDATE agents SET provider='claude' WHERE provider IS NULL OR trim(provider)='';
+    UPDATE agents SET external_session_id=sdk_session
+      WHERE provider='claude' AND external_session_id IS NULL AND sdk_session IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS agents_provider_session_idx
+      ON agents(provider, external_session_id);
+    CREATE INDEX IF NOT EXISTS agents_board_provider_status_idx
+      ON agents(board_id, provider, status);
+    CREATE TRIGGER IF NOT EXISTS agents_sync_claude_session_insert
+      AFTER INSERT ON agents
+      WHEN NEW.provider='claude' AND NEW.sdk_session IS NOT NULL AND NEW.external_session_id IS NULL
+      BEGIN
+        UPDATE agents SET external_session_id=NEW.sdk_session WHERE id=NEW.id;
+      END;
+    CREATE TRIGGER IF NOT EXISTS agents_sync_claude_session_update
+      AFTER UPDATE OF sdk_session ON agents
+      WHEN NEW.provider='claude'
+        AND (NEW.external_session_id IS NULL OR NEW.external_session_id IS OLD.sdk_session)
+      BEGIN
+        UPDATE agents SET external_session_id=NEW.sdk_session WHERE id=NEW.id;
+      END;
+  `)
+  try { db.exec(`ALTER TABLE agent_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agent_usage ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agent_usage ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agent_usage ADD COLUMN reasoning_output_tokens INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agent_usage ADD COLUMN cost_cents INTEGER`) } catch { /* exists */ }
+  db.exec(`
+    UPDATE agent_usage
+      SET provider=COALESCE((SELECT provider FROM agents WHERE agents.id=agent_usage.agent_id), provider, 'claude');
+    UPDATE agent_usage
+      SET total_tokens=input_tokens + cache_read + cache_creation + output_tokens
+      WHERE total_tokens=0 AND (input_tokens + cache_read + cache_creation + output_tokens) > 0;
+    UPDATE agent_usage SET cached_input_tokens=cache_read
+      WHERE cached_input_tokens=0 AND cache_read > 0;
+    CREATE INDEX IF NOT EXISTS agent_usage_board_provider_day_idx
+      ON agent_usage(board_id, provider, day);
+  `)
   try { db.exec(`ALTER TABLE cards ADD COLUMN branch TEXT`) } catch { /* exists */ }
   // Existing targeted mail retains ask semantics. Old targetless rows become inert for
   // agents because only explicit, snapshotted swarms enter the fan-out inbox path.

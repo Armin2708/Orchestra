@@ -6,6 +6,12 @@ export const ACCESS_PROFILES = [
 
 export type AccessProfile = (typeof ACCESS_PROFILES)[number]['value']
 export type AgentCapability = 'access_profile' | 'model' | 'effort' | 'approvals' | 'interrupt' | 'stop'
+export type ProviderLaunchBody = {
+  provider?: string
+  model?: string
+  effort?: string
+  access_profile?: AccessProfile
+}
 
 export type ProviderTokenUsage = {
   total_tokens?: number
@@ -57,21 +63,38 @@ export function providerLabel(provider?: string | null): string {
 }
 
 export function hasAgentCapability(
-  capabilities: readonly string[] | null | undefined,
+  capabilities: readonly string[] | Readonly<Record<string, boolean>> | null | undefined,
   capability: AgentCapability,
   provider?: string | null,
 ): boolean {
   // Older Claude snapshots predate capability publication. Preserve their controls
   // during rolling upgrades; every non-legacy provider must advertise support.
-  if (!Array.isArray(capabilities)) return normalizeProvider(provider) === 'claude'
-  const published = new Set(capabilities.map(canonical))
+  if (!capabilities) return normalizeProvider(provider) === 'claude'
+  const values = Array.isArray(capabilities)
+    ? capabilities
+    : Object.entries(capabilities as Readonly<Record<string, boolean>>)
+      .filter(([, enabled]) => enabled)
+      .map(([name]) => name)
+  const published = new Set(values.map(canonical))
   if (published.has('*') || published.has('all')) return true
   return capabilityAliases[capability].some((alias) => published.has(canonical(alias)))
 }
 
-export function providerLaunchBody(provider?: string | null): { provider?: string } {
-  const selected = provider?.trim()
-  return selected ? { provider: selected } : {}
+export function providerLaunchBody(
+  provider?: string | null,
+  model?: string | null,
+  effort?: string | null,
+  accessProfile?: AccessProfile | null,
+): ProviderLaunchBody {
+  const selectedProvider = provider?.trim()
+  const selectedModel = model?.trim()
+  const selectedEffort = effort?.trim()
+  return {
+    ...(selectedProvider ? { provider: selectedProvider } : {}),
+    ...(selectedModel ? { model: selectedModel } : {}),
+    ...(selectedEffort ? { effort: selectedEffort } : {}),
+    ...(accessProfile ? { access_profile: accessProfile } : {}),
+  }
 }
 
 export function accessProfileFromLegacyPermission(mode?: string | null): AccessProfile {

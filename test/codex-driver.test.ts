@@ -374,7 +374,11 @@ describe('Codex AgentDriver event normalization', () => {
 
   it('applies session updates on the next idle turn and resolves deferred approvals', async () => {
     const service = new FakeService()
-    const driver = new CodexAgentDriver({ service: service.asPort(), approvalTimeoutMs: 1_000 })
+    const driver = new CodexAgentDriver({
+      service: service.asPort(),
+      approvalTimeoutMs: 1_000,
+      onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+    })
     drivers.push(driver)
     const session = await driver.launch({
       workspaceId: 'workspace-updates',

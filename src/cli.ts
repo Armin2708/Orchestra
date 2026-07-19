@@ -236,11 +236,25 @@ program.command('step <milestoneId> <title>').description('append an ordered ste
   })
 
 program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
-  .option('--name <name>').option('--model <m>').option('--cwd <dir>')
+  .option('--name <name>')
+  .option('--provider <provider>', 'agent provider (claude|codex); omitted uses the board default', providerOption(false))
+  .option('--model <m>')
+  .option('--effort <level>')
+  .option('--access-profile <profile>', 'read_only|workspace_write|full_access')
+  .option('--cwd <dir>')
   .action(async (o) => {
     await up(); const b = await board()
-    const a = await api('POST', `/boards/${b.id}/hire`, { name: o.name, model: o.model, cwd: o.cwd })
-    console.log(`hired ${a.name} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
+    if (o.accessProfile && !['read_only', 'workspace_write', 'full_access'].includes(o.accessProfile))
+      throw new Error('--access-profile must be read_only, workspace_write, or full_access')
+    const a = await api('POST', `/boards/${b.id}/hire`, {
+      name: o.name,
+      provider: o.provider,
+      model: o.model,
+      effort: o.effort,
+      access_profile: o.accessProfile,
+      cwd: o.cwd,
+    })
+    console.log(`hired ${a.name} with ${a.provider ?? o.provider ?? 'the board default'} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
   })
 program.command('task <name> <text>').description('give a hired agent a task')
   .action(async (name, text) => {

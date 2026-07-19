@@ -132,15 +132,23 @@ Jobs are durable, provider-neutral requests. The scheduler respects dependency c
 priority, global concurrency, retry limits, cancellation, and token/cost budgets. Claims are atomic
 across scheduler instances, and one card cannot have two active jobs. On restart, resumable provider
 sessions are reattached; non-resumable jobs are requeued or blocked according to their retry budget.
-`claude` uses the existing Conductor; `shell` uses the PTY runtime. An unavailable provider remains
+`claude` uses the existing Conductor, `codex` uses one supervised `codex app-server`, and `shell`
+uses the PTY runtime. An unavailable provider remains
 queued with an actionable attention item rather than silently falling back.
 
 ```sh
 orchestra job create 42 --provider claude --workspace <workspace-id> --priority 10 --attempts 2
+orchestra job create 43 --provider codex --workspace <workspace-id> --priority 10 --attempts 2 --tokens 50000
 orchestra job list --status queued
 orchestra drivers --json
 orchestra plugins --json
 ```
+
+Codex exposes authoritative token totals, including cached input and reasoning output, so token
+budgets are enforced by interrupting the active turn. Codex does not currently expose an
+authoritative per-job monetary cost through app-server, so cost-budget jobs are rejected explicitly
+instead of estimating. Agent OS policies auto-answer unambiguous allowed/denied Codex command and
+file requests; `ask` decisions appear in the shared approval UI.
 
 ## API and durability
 

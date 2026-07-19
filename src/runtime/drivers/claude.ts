@@ -63,7 +63,17 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
   }
 
   capabilities(): DriverCapabilities {
-    return { attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true }
+    return {
+      attach: true,
+      streaming: true,
+      interrupt: true,
+      stop: true,
+      rawTerminal: false,
+      resume: true,
+      tokenBudget: true,
+      costBudget: true,
+      managesAgentIdentity: true,
+    }
   }
 
   async launch(request: DriverLaunchRequest): Promise<DriverSession> {

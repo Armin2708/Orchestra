@@ -329,8 +329,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (hired && working && canInterrupt) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
   }
 
-  const decide = async (requestId: string, behavior: 'allow' | 'deny') => {
-    try { await api('POST', `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`, { behavior }) } catch { /* already resolved */ }
+  const decide = async (requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel') => {
+    const path = provider === 'codex'
+      ? `/agents/${agent.id}/approvals/${encodeURIComponent(requestId)}`
+      : `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`
+    const body = provider === 'codex' ? { decision } : { behavior: decision }
+    try { await api('POST', path, body) } catch { /* already resolved */ }
     setPerms((prev) => prev.filter((p) => p.id !== requestId))
   }
 
@@ -421,6 +425,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 {canApprove ? (
                   <div className="cc-perm-actions">
                     <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
+                    {provider === 'codex' && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow session</button>}
                     <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
                   </div>
                 ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}

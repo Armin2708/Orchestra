@@ -9,10 +9,16 @@ import {
 } from '../web/src/agentProviderUi.js'
 
 describe('provider-aware agent UI helpers', () => {
-  it('keeps launch defaults server-side and sends only an explicit override', () => {
+  it('keeps launch defaults server-side and sends only explicit overrides', () => {
     expect(providerLaunchBody()).toEqual({})
     expect(providerLaunchBody('')).toEqual({})
     expect(providerLaunchBody('codex')).toEqual({ provider: 'codex' })
+    expect(providerLaunchBody(' codex ', ' gpt-5.4 ', ' ultra ', 'workspace_write')).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.4',
+      effort: 'ultra',
+      access_profile: 'workspace_write',
+    })
   })
 
   it('labels built-in and custom providers without leaking provider-specific copy', () => {
@@ -25,6 +31,8 @@ describe('provider-aware agent UI helpers', () => {
     expect(hasAgentCapability(['access_profile', 'model', 'effort', 'approvals'], 'model', 'codex')).toBe(true)
     expect(hasAgentCapability(['reasoningEffort'], 'effort', 'codex')).toBe(true)
     expect(hasAgentCapability(['inlineApprovals'], 'approvals', 'codex')).toBe(true)
+    expect(hasAgentCapability({ model: true, effort: false }, 'model', 'codex')).toBe(true)
+    expect(hasAgentCapability({ model: true, effort: false }, 'effort', 'codex')).toBe(false)
     expect(hasAgentCapability([], 'model', 'codex')).toBe(false)
     expect(hasAgentCapability(undefined, 'model', 'codex')).toBe(false)
     expect(hasAgentCapability(undefined, 'model', 'claude')).toBe(true)

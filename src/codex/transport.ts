@@ -123,6 +123,7 @@ export type CodexProcessTransportOptions = {
   args?: string[]
   cwd?: string
   env?: NodeJS.ProcessEnv
+  inheritEnv?: boolean
   gracefulShutdownMs?: number
   terminateWaitMs?: number
   maxStderrLineBytes?: number
@@ -160,7 +161,9 @@ export class CodexProcessTransport implements CodexByteTransport {
       spawn(cmd, argv, spawnOptions) as unknown as CodexChildProcess)
     const child = spawnProcess(command, args, {
       cwd: options.cwd,
-      env: options.env ? { ...process.env, ...options.env } : process.env,
+      env: options.inheritEnv === false
+        ? { ...(options.env ?? {}) }
+        : options.env ? { ...process.env, ...options.env } : process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })

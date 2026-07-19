@@ -168,9 +168,8 @@ function AgentProfileEditor({
           <div className="agent-effort-options">
             <button type="button" className={profile.effort === null ? 'active' : ''}
               aria-pressed={profile.effort === null} onClick={() => setEffort(null)}>Provider</button>
-            {AGENT_EFFORT_LEVELS.map((effort) => (
+            {supportedEfforts.map((effort) => (
               <button type="button" key={effort} className={profile.effort === effort ? 'active' : ''}
-                disabled={!supportedEfforts.includes(effort)}
                 aria-pressed={profile.effort === effort} onClick={() => setEffort(effort)}>
                 {effortLabel(effort)}
               </button>

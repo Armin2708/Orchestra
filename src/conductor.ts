@@ -125,7 +125,18 @@ type Hired = {
 
 // wakeAgentId marks a queued wake of a limit-paused agent: when a slot frees, the queue
 // resumes that agent's saved session instead of minting a fresh one
-type LaunchRequest = { boardId: number; cardId: number; cwd: string; brief: string; wakeAgentId?: number }
+type LaunchRequest = {
+  boardId: number
+  cardId: number
+  cwd: string
+  brief: string
+  wakeAgentId?: number
+  provider?: string
+  model?: string
+  effort?: string
+  permissionMode?: string
+  accessProfile?: string
+}
 
 const MODEL_CATALOG_TIMEOUT_MS = 2_500
 
@@ -331,7 +342,16 @@ export class Conductor {
         branch = name
       } catch { /* not a git repo or worktree failed — shared checkout, no auto-merge */ }
     }
-    const agent = this.hire({ boardId: req.boardId, cwd, cardId: req.cardId })
+    const agent = this.hire({
+      boardId: req.boardId,
+      cwd,
+      cardId: req.cardId,
+      provider: req.provider,
+      model: req.model,
+      effort: req.effort,
+      permissionMode: req.permissionMode,
+      accessProfile: req.accessProfile,
+    })
     const h = this.hired.get(agent.id)!
     h.cardId = req.cardId
     h.branch = branch
@@ -450,20 +470,34 @@ export class Conductor {
     return { woke, queued, skipped }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any {
+    if (opts.provider && opts.provider !== DEFAULT_AGENT_PROVIDER)
+      throw new Error(`provider ${opts.provider} must be routed through ProviderAgentManager`)
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
       if (existing) return this.db.prepare(`SELECT * FROM agents WHERE id=?`).get(existing.agentId)
     }
+    // Defaults only seed fresh sessions. Resume, wake, and effort-handoff paths carry their
+    // persisted configuration explicitly and must not change when an operator edits settings.
+    const profile = opts.resumeSession || opts.provider ? null : defaultsForRole(this.db, opts.role)
+    if (profile && profile.provider !== DEFAULT_AGENT_PROVIDER)
+      throw new Error(`provider ${profile.provider} must be routed through ProviderAgentManager`)
+    const model = opts.model ?? profile?.model ?? undefined
+    const requestedEffort = opts.effort ?? profile?.effort ?? undefined
+    const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
+      ? requestedEffort as EffortLevel : null
+    const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
+      ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
     let name = opts.name
     if (!name) {
       do { name = generateName() } while (
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))
     }
     const { lastInsertRowid } = this.db.prepare(`
-      INSERT INTO agents (board_id, name, session_id, kind, role) VALUES (?, ?, ?, 'hired', ?)
-      ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'), kind='hired', role=excluded.role
+      INSERT INTO agents (board_id, name, session_id, kind, role, provider) VALUES (?, ?, ?, 'hired', ?, 'claude')
+      ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'),
+        kind='hired', role=excluded.role, provider='claude'
     `).run(opts.boardId, name, `hired:${Date.now()}`, opts.role ?? null)
     const agent = this.db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name) as any
 
@@ -475,18 +509,10 @@ export class Conductor {
       this.emit(opts.boardId, 'transcript', { agent_id: agent.id })
     }
 
-    // Defaults only seed fresh sessions. Resume, wake, and effort-handoff paths carry their
-    // persisted configuration explicitly and must not change when an operator edits settings.
-    const profile = opts.resumeSession ? null : defaultsForRole(this.db, opts.role)
-    const providerProfile = profile?.provider === DEFAULT_AGENT_PROVIDER ? profile : null
-    const model = opts.model ?? providerProfile?.model ?? undefined
-    const requestedEffort = opts.effort ?? providerProfile?.effort ?? undefined
-    const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
-      ? requestedEffort as EffortLevel : null
-    const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
-      ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
-    this.db.prepare('UPDATE agents SET permission_mode=?, model=?, effort=? WHERE id=?')
-      .run(permissionMode, model ?? null, effort, agent.id)
+    const accessProfile = opts.accessProfile ?? (permissionMode === 'plan' ? 'read_only'
+      : permissionMode === 'bypassPermissions' ? 'full_access' : 'workspace_write')
+    this.db.prepare("UPDATE agents SET provider='claude', permission_mode=?, access_profile=?, model=?, effort=? WHERE id=?")
+      .run(permissionMode, accessProfile, model ?? null, effort, agent.id)
     const pending = new Map<string, PendingPermission>()
     // non-bypass modes deny tools unless a canUseTool handler answers — park each ask as a
     // pending request the board resolves via approve/deny buttons in the terminal
@@ -600,7 +626,8 @@ export class Conductor {
           if (m.type === 'system' && m.subtype === 'init') {
             hired.model = m.model ?? null
             // remember the sdk session so a daemon restart can resume this agent with its memory intact
-            if (m.session_id) this.db.prepare(`UPDATE agents SET sdk_session=? WHERE id=?`).run(m.session_id, agent.id)
+            if (m.session_id) this.db.prepare(`UPDATE agents SET sdk_session=?, external_session_id=? WHERE id=?`)
+              .run(m.session_id, m.session_id, agent.id)
             // init carries names only; supportedCommands() backfills descriptions (best effort —
             // don't overwrite if a commands_changed replacement raced ahead of the resolution)
             hired.commands = (m.slash_commands ?? []).map((n: string) => ({ name: n, description: '' }))

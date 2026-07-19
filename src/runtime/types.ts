@@ -165,6 +165,9 @@ export type DriverCapabilities = {
   stop: boolean
   rawTerminal: boolean
   resume: boolean
+  tokenBudget?: boolean
+  costBudget?: boolean
+  managesAgentIdentity?: boolean
 }
 
 export type DriverLaunchRequest = {
@@ -178,6 +181,7 @@ export type DriverLaunchRequest = {
   env?: Record<string, string | undefined>
   model?: string
   externalId?: string
+  accessProfile?: 'read_only' | 'workspace_write' | 'full_access'
   permissionMode?: string
   maxBudgetUsd?: number
   taskBudgetTokens?: number

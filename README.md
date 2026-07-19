@@ -43,6 +43,22 @@ orchestra serve &    # or let the hooks auto-start it
 open http://localhost:4750
 ```
 
+For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
+Orchestra:
+
+```bash
+npm i -g @openai/codex@0.144.6
+codex login
+codex login status
+orchestra restart
+orchestra hire --provider codex --access-profile workspace_write
+```
+
+The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning
+effort, and a neutral access profile. Orchestra never substitutes Claude when Codex is missing,
+logged out, reconnecting, or unsupported; the provider remains visible with a diagnostic instead.
+See [Codex integration](docs/codex.md) for runtime, security, recovery, and troubleshooting details.
+
 Use `--provider claude` or `--provider codex` for one provider, and add `--project` to write `./.claude/settings.json` and/or `./.codex/hooks.json` instead of the user-level files. Project-local Codex hooks run only after the project is trusted and the definitions are approved through `/hooks`.
 
 Open two Claude Code or Codex terminals in the same repo — both auto-register on the project's board, create cards for their work, and warn each other about overlapping paths. Ask one of them a question from the web UI and watch the answer come back.
@@ -90,7 +106,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
-| `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
+| `orchestra hire [--provider claude\|codex] [--model M] [--effort LEVEL] [--access-profile PROFILE]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
 | `orchestra workspace ...` | Create, inspect, update, or archive Agent OS shared/worktree environments |
 | `orchestra process ...` | Start, attach, restart, resize, signal, and inspect durable PTY processes |

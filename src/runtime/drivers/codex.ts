@@ -560,7 +560,7 @@ export class CodexAgentDriver implements AgentDriver {
       approvalRequest: { kind, requestId: request.id, turnId, itemId },
     })
     if (this.options.onApprovalRequest) {
-      return this.options.onApprovalRequest({
+      const handled = await this.options.onApprovalRequest({
         kind,
         sessionId: state.session.id,
         threadId,
@@ -570,6 +570,7 @@ export class CodexAgentDriver implements AgentDriver {
         method: request.method,
         params: request.params,
       })
+      if (handled !== CODEX_REQUEST_UNHANDLED) return handled
     }
     const requestId = String(request.id)
     const existing = state.pendingApprovals.get(requestId)

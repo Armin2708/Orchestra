@@ -14,6 +14,20 @@ import { registerPush } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
+import { CODEX_PROVIDER_ID } from './agent-providers.js'
+import {
+  CodexAppServerService,
+  CodexAppServerSupervisor,
+  CodexProviderService,
+  codexApprovalPolicyHandler,
+} from './codex/index.js'
+import { CodexAgentDriver } from './runtime/drivers/codex.js'
+import {
+  CodexManagedAgentRuntime,
+  ProviderAgentManager,
+  ProviderUnavailableError,
+  type AccessProfile,
+} from './provider-agent-manager.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -31,7 +45,8 @@ export interface ServeOptions { expose?: boolean }
 // Limit-paused agents are deliberately excluded: resurrecting them into a still-spent
 // window would just re-kill them, so the autowake timer owns their return (#62).
 export const survivors = (db: Database.Database): any[] => db.prepare(`
-  SELECT a.id, a.name, a.board_id, a.role, a.sdk_session, a.permission_mode,
+  SELECT a.id, a.name, a.board_id, a.role, a.provider, a.sdk_session,
+    a.external_session_id, a.provider_state_json, a.permission_mode, a.access_profile,
     COALESCE(os.model, a.model) AS model, a.effort, b.project_path,
     lc.id AS launched_card_id, lc.branch AS launched_branch,
     os.workspace_id AS agent_os_workspace_id,
@@ -50,6 +65,32 @@ export const survivors = (db: Database.Database): any[] => db.prepare(`
   LEFT JOIN jobs oj ON oj.id=json_extract(os.context_json, '$.job_id')
   WHERE a.kind='hired' AND a.status NOT IN ('gone', 'paused_limit')`).all() as any[]
 
+export const codexWorkspaceForThread = (db: Database.Database, threadId: string): string | undefined => {
+  const durable = db.prepare(`SELECT workspace_id FROM agent_sessions
+    WHERE provider=? AND external_id=? ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
+    .get(CODEX_PROVIDER_ID, threadId) as { workspace_id: string } | undefined
+  if (durable?.workspace_id) return durable.workspace_id
+  const legacy = db.prepare(`SELECT id FROM agents WHERE provider=? AND external_session_id=?
+    ORDER BY last_seen DESC, id DESC LIMIT 1`).get(CODEX_PROVIDER_ID, threadId) as { id: number } | undefined
+  return legacy ? `legacy-agent:${legacy.id}` : undefined
+}
+
+export const codexTokenBudgetForThread = (db: Database.Database, threadId: string): number | null => {
+  const row = db.prepare(`SELECT j.budget_tokens FROM agent_sessions s
+    JOIN jobs j ON j.id=json_extract(s.context_json, '$.job_id')
+    WHERE s.provider=? AND s.external_id=? ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`)
+    .get(CODEX_PROVIDER_ID, threadId) as { budget_tokens: number | null } | undefined
+  return row?.budget_tokens ?? null
+}
+
+export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(source).filter(([key, value]) =>
+    value !== undefined
+    && key !== 'ORCHESTRA_TOKEN'
+    && key !== 'CLAUDECODE'
+    && !key.startsWith('ANTHROPIC_')
+    && !key.startsWith('CLAUDE_')))
+
 export async function serve(opts: ServeOptions = {}): Promise<void> {
   // an exposed daemon is remote code execution for anyone who can reach the port
   if (opts.expose && authDisabled())
@@ -57,14 +98,32 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
   const token = authDisabled() ? undefined : ensureToken()
   let maestro: Conductor | undefined
+  let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
   const agentOs = createAgentOsRuntime(db)
   const scheduler = agentOs.scheduler
+  const codexCommand = process.env.ORCHESTRA_CODEX_COMMAND?.trim() || 'codex'
+  const codexSupervisor = new CodexAppServerSupervisor({
+    client: { requestTimeoutMs: 5_000 },
+    process: { command: codexCommand, env: sanitizedCodexEnvironment(), inheritEnv: false },
+  })
+  const codexRpc = new CodexAppServerService(codexSupervisor)
+  const codexDriver = new CodexAgentDriver({
+    service: codexRpc,
+    workspaceForThread: (threadId) => codexWorkspaceForThread(db, threadId),
+    tokenBudgetForThread: (threadId) => codexTokenBudgetForThread(db, threadId),
+    onApprovalRequest: codexApprovalPolicyHandler(db),
+  })
+  const codexProvider = new CodexProviderService(db, codexRpc, codexSupervisor, { command: codexCommand })
+  const codexReady = await codexProvider.initialize()
+  if (codexReady) agentOs.registerDriver(codexDriver)
   const server = buildServer(db, (bus) => {
     agentOs.setBus(bus)
     maestro = new Conductor(db, bus)
     agentOs.registerClaude(maestro)
-    return maestro
+    const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
+    manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider)
+    return manager
   }, {
     token,
     autowakeAt: () => autowake?.scheduledAt() ?? null,
@@ -79,6 +138,15 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let reapTimer: ReturnType<typeof setInterval> | undefined
   let schedulerTimer: ReturnType<typeof setInterval> | undefined
   let closing = false
+  let runtimesClosed = false
+  const shutdownRuntimes = async () => {
+    if (runtimesClosed) return
+    runtimesClosed = true
+    await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
+    codexDriver.dispose()
+    codexProvider.dispose()
+    await codexSupervisor.stop().catch(() => undefined)
+  }
   const close = () => {
     if (closing) return
     closing = true
@@ -92,13 +160,14 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     autowake?.stop()
     process.off('SIGTERM', close)
     process.off('SIGINT', close)
-    await Promise.allSettled([agentOs.shutdown(), maestro?.shutdown() ?? Promise.resolve()])
+    await shutdownRuntimes()
     lease.release()
   })
   registerPush(server)
   try {
     await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   } catch (error) {
+    await shutdownRuntimes()
     lease.release()
     throw error
   }
@@ -120,15 +189,24 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
           : Number(s.agent_os_budget_cents) - Number(s.agent_os_spent_cents ?? 0)
         if (remainingTokens !== undefined && remainingTokens <= 0) throw new Error('job token budget is exhausted')
         if (remainingCents !== undefined && remainingCents <= 0) throw new Error('job cost budget is exhausted')
-        maestro!.hire({ boardId: s.board_id, cwd: agentOsCwd ?? (wt && fs.existsSync(wt) ? wt : s.project_path), name: s.name,
-          role: s.role ?? undefined, resumeSession: s.sdk_session ?? undefined,
+        // Durable Agent OS Codex jobs are reattached once by the job executor below;
+        // consuming the same driver event stream from the legacy runtime would race it.
+        if (s.provider === CODEX_PROVIDER_ID && s.agent_os_workspace_id) continue
+        manager!.hire({ boardId: s.board_id, cwd: agentOsCwd ?? (wt && fs.existsSync(wt) ? wt : s.project_path), name: s.name,
+          provider: s.provider ?? 'claude', role: s.role ?? undefined,
+          resumeSession: s.external_session_id ?? s.sdk_session ?? undefined,
           permissionMode: s.permission_mode ?? undefined,
+          accessProfile: s.access_profile as AccessProfile | undefined,
           model: s.model ?? undefined, effort: s.effort ?? undefined,
           cardId: s.agent_os_card_id == null ? undefined : Number(s.agent_os_card_id),
           maxBudgetUsd: remainingCents === undefined ? undefined : remainingCents / 100,
           taskBudgetTokens: remainingTokens })
-        maestro!.adoptLaunch(s.id)
-      } catch {
+        manager!.adoptLaunch(s.id)
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) {
+          db.prepare(`UPDATE agents SET status='paused_provider', last_seen=datetime('now') WHERE id=?`).run(s.id)
+          continue
+        }
         // could not respawn — keep the agent's cards, just mark it gone
         db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
         bounceDeadLetters(db, s.id)
@@ -141,7 +219,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   }
   // limit-paused agents deliberately sit out the resurrect above — the autowake timer
   // (recomputed here from the live usage poll, never persisted) resumes them at window reset
-  autowake = new Autowake(db, server.bus, (boardId) => maestro!.wake(boardId))
+  autowake = new Autowake(db, server.bus, (boardId) => manager!.wake(boardId))
   if (autowakeEnabled()) void autowake.reschedule()
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   reapTimer = setInterval(() => reap(db), 60_000)
