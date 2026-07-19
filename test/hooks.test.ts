@@ -241,3 +241,79 @@ it('keeps the hook harness outside the throwaway-directory guard on every platfo
   expect(hooks.isThrowawayCwd(os.tmpdir())).toBe(true)
   expect(hooks.isThrowawayCwd(projectRoot)).toBe(false)
 })
+
+it('namespaces local state by provider and carries provider through registration and telemetry', async () => {
+  const hooks = await import('../src/hooks.js')
+  const realFetch = globalThis.fetch
+  const requests: { path: string; body: any }[] = []
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input.url)
+    if (init?.body && (url.pathname.endsWith('/agents/register') ||
+      url.pathname.endsWith('/heartbeat') || url.pathname.endsWith('/subping'))) {
+      requests.push({ path: url.pathname, body: JSON.parse(String(init.body)) })
+    }
+    return realFetch(input, init)
+  })
+  const stdin = vi.spyOn(hooks._internals, 'readStdin')
+  const out = vi.spyOn(console, 'log').mockImplementation(() => {})
+  const sessionId = 'provider-shared'
+
+  stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
+  await hooks.runHook('session-start', 'claude')
+  stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot, provider: 'codex' }))
+  await hooks.runHook('session-start') // provider detected from hook input
+
+  const claudePath = hooks._internals.sessionFile('claude', sessionId)
+  const codexPath = hooks._internals.sessionFile('codex', sessionId)
+  expect(claudePath).not.toBe(codexPath)
+  expect(JSON.parse(fs.readFileSync(claudePath, 'utf8')).provider).toBe('claude')
+  expect(JSON.parse(fs.readFileSync(codexPath, 'utf8')).provider).toBe('codex')
+  expect(JSON.parse(fs.readFileSync(codexPath + '.tel', 'utf8').trim()).provider).toBe('codex')
+
+  stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
+  await hooks.runHook('permission-request', 'codex')
+  stdin.mockResolvedValueOnce(JSON.stringify({
+    session_id: sessionId, cwd: projectRoot, agent_id: 'reviewer-1',
+  }))
+  await hooks.runHook('subagent-start', 'codex')
+  stdin.mockResolvedValueOnce(JSON.stringify({
+    session_id: sessionId, cwd: projectRoot, agent_id: 'reviewer-1',
+  }))
+  await hooks.runHook('subagent-stop', 'codex')
+
+  expect(requests.filter((r) => r.path.endsWith('/agents/register')).map((r) => r.body.provider))
+    .toEqual(expect.arrayContaining(['claude', 'codex']))
+  const heartbeat = requests.find((r) => r.path.endsWith('/heartbeat') && r.body.telemetry)
+  expect(heartbeat?.body).toMatchObject({ provider: 'codex' })
+  expect(heartbeat?.body.telemetry[0]).toMatchObject({ provider: 'codex', event: 'session_start' })
+  expect(requests.filter((r) => r.path.endsWith('/subping')).map((r) => r.body.state))
+    .toEqual(['started', 'stopped'])
+
+  out.mockRestore()
+  fetchSpy.mockRestore()
+})
+
+it('emits the Codex continuation contract while keeping Claude Stop output unchanged', async () => {
+  const hooks = await import('../src/hooks.js')
+  const stdin = vi.spyOn(hooks._internals, 'readStdin')
+  const out: string[] = []
+  vi.spyOn(console, 'log').mockImplementation((line: string) => { out.push(String(line)) })
+  const sessionId = 'codex-stop'
+  stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
+  await hooks.runHook('session-start', 'codex')
+  const sess = JSON.parse(fs.readFileSync(hooks._internals.sessionFile('codex', sessionId), 'utf8'))
+  const { card } = await (await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ board_id: sess.board_id, title: 'Codex stale card', column: 'in_progress', agent: sess.agent_name }),
+  })).json()
+  backdateCard(card.id, 20)
+
+  out.length = 0
+  stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
+  await hooks.runHook('stop', 'codex')
+  const payload = JSON.parse(out.join('\n'))
+  expect(payload).toMatchObject({ continue: false })
+  expect(payload.stopReason).toContain('Codex stale card')
+  expect(payload.hookSpecificOutput.hookEventName).toBe('Stop')
+  expect(payload.decision).toBeUndefined()
+})

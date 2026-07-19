@@ -21,46 +21,74 @@ export const _internals = {
       process.stdin.on('end', () => { clearTimeout(t); resolve(data) })
     })
   },
+  sessionFile(provider: HookProvider, id: string): string {
+    return sessFile(provider, id)
+  },
 }
 
-type Session = { agent_id: number; agent_name: string; board_id: number; transcript_path?: string }
-const sessFile = (id: string) => path.join(dataDir(), 'sessions', `${id}.json`)
-const loadSession = (id: string): Session | undefined => {
-  try { return JSON.parse(fs.readFileSync(sessFile(id), 'utf8')) } catch { return undefined }
+export type HookProvider = 'claude' | 'codex'
+
+export function detectHookProvider(input: any, requested?: string): HookProvider {
+  const value = requested ?? input?.provider ?? input?.orchestra_provider
+  return value === 'codex' ? 'codex' : 'claude'
 }
 
-async function registerSession(input: any): Promise<Session | undefined> {
+type Session = {
+  agent_id: number
+  agent_name: string
+  board_id: number
+  provider: HookProvider
+  transcript_path?: string
+}
+const safeSessionId = (id: string) => encodeURIComponent(id)
+// Keep the historical Claude path intact while isolating every other provider
+// under its own directory. This avoids state collisions without invalidating
+// active Claude sessions during upgrade.
+const sessFile = (provider: HookProvider, id: string) => provider === 'claude'
+  ? path.join(dataDir(), 'sessions', `${safeSessionId(id)}.json`)
+  : path.join(dataDir(), 'sessions', provider, `${safeSessionId(id)}.json`)
+const loadSession = (provider: HookProvider, id: string): Session | undefined => {
+  try {
+    const session = JSON.parse(fs.readFileSync(sessFile(provider, id), 'utf8'))
+    return { ...session, provider: session.provider ?? provider }
+  } catch { return undefined }
+}
+
+async function registerSession(input: any, provider: HookProvider): Promise<Session | undefined> {
   if (!input.session_id) return undefined
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return undefined
   if (!(await ensureDaemon())) return undefined
   const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
   const agent = await api('POST', '/agents/register', {
-    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME,
+    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
   })
-  const sess: Session = { agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }
-  fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
-  fs.writeFileSync(sessFile(input.session_id), JSON.stringify(sess))
+  const sess: Session = {
+    agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
+    transcript_path: input.transcript_path,
+  }
+  fs.mkdirSync(path.dirname(sessFile(provider, input.session_id)), { recursive: true })
+  fs.writeFileSync(sessFile(provider, input.session_id), JSON.stringify(sess))
   return sess
 }
 
 // session file may be missing (session-start cut short, cleanup, crash) — self-heal
-const ensureSession = async (input: any): Promise<Session | undefined> =>
-  loadSession(input.session_id) ?? registerSession(input)
+const ensureSession = async (input: any, provider: HookProvider): Promise<Session | undefined> =>
+  loadSession(provider, input.session_id) ?? registerSession(input, provider)
 
 // injected-token telemetry: spool emissions locally and flush them on the next daemon
 // call the hook already makes (pulse/heartbeat/leave) — never an extra blocking request
-const telFile = (id: string) => sessFile(id) + '.tel'
-function spool(sessionId: string, event: string, text: string): void {
+const telFile = (provider: HookProvider, id: string) => sessFile(provider, id) + '.tel'
+function spool(provider: HookProvider, sessionId: string, event: string, text: string): void {
   try {
-    fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
-    fs.appendFileSync(telFile(sessionId), JSON.stringify({ event, chars: text.length }) + '\n')
+    fs.mkdirSync(path.dirname(telFile(provider, sessionId)), { recursive: true })
+    fs.appendFileSync(telFile(provider, sessionId), JSON.stringify({ provider, event, chars: text.length }) + '\n')
   } catch { /* best effort */ }
 }
-function takeSpool(sessionId: string): { event: string; chars: number }[] | undefined {
+function takeSpool(provider: HookProvider, sessionId: string): { provider: HookProvider; event: string; chars: number }[] | undefined {
   try {
-    const raw = fs.readFileSync(telFile(sessionId), 'utf8')
-    fs.rmSync(telFile(sessionId), { force: true })
-    const entries = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const raw = fs.readFileSync(telFile(provider, sessionId), 'utf8')
+    fs.rmSync(telFile(provider, sessionId), { force: true })
+    const entries = raw.split('\n').filter(Boolean).map((line) => ({ provider, ...JSON.parse(line) }))
     return entries.length ? entries : undefined
   } catch { return undefined }
 }
@@ -107,45 +135,53 @@ export function renderSessionStart(agent: { id: number; name: string }, board: a
   return lines.join('\n')
 }
 
-async function sessionStart(input: any): Promise<void> {
+async function sessionStart(input: any, provider: HookProvider): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
   if (!(await ensureDaemon())) return
   const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
   const agent = await api('POST', '/agents/register', {
-    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME,
+    board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
   })
-  fs.mkdirSync(path.join(dataDir(), 'sessions'), { recursive: true })
-  fs.writeFileSync(sessFile(input.session_id),
-    JSON.stringify({ agent_id: agent.id, agent_name: agent.name, board_id: board.id, transcript_path: input.transcript_path }))
+  const sessionPath = sessFile(provider, input.session_id)
+  fs.mkdirSync(path.dirname(sessionPath), { recursive: true })
+  fs.writeFileSync(sessionPath,
+    JSON.stringify({
+      agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
+      transcript_path: input.transcript_path,
+    }))
   const snap = await api('GET', `/boards/${board.id}/snapshot`)
   const text = renderSessionStart(agent, board, snap, input.cwd ?? process.cwd())
-  spool(input.session_id, 'session_start', text)
-  console.log(text)
+  spool(provider, input.session_id, 'session_start', text)
+  if (provider === 'codex') {
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
+  } else {
+    console.log(text)
+  }
 }
 
 const cardAgeMs = (c: any) => Date.now() - new Date(c.updated_at.replace(' ', 'T') + 'Z').getTime()
 
 // events that only ever fire in the main conversation may adopt a missing transcript_path
 // (heals session files written before the field existed)
-function stampTranscript(sess: Session, input: any): void {
+function stampTranscript(sess: Session, input: any, provider: HookProvider): void {
   if (!sess.transcript_path && input.transcript_path) {
     sess.transcript_path = input.transcript_path
-    try { fs.writeFileSync(sessFile(input.session_id), JSON.stringify(sess)) } catch { /* best effort */ }
+    try { fs.writeFileSync(sessFile(provider, input.session_id), JSON.stringify(sess)) } catch { /* best effort */ }
   }
 }
 
-async function deliver(input: any, hookEventName: string, throttleMs: number): Promise<void> {
-  const sess = await ensureSession(input)
+async function deliver(input: any, hookEventName: string, throttleMs: number, provider: HookProvider): Promise<void> {
+  const sess = await ensureSession(input, provider)
   if (!sess) return
-  if (hookEventName === 'UserPromptSubmit') stampTranscript(sess, input)
+  if (hookEventName === 'UserPromptSubmit') stampTranscript(sess, input, provider)
   // hooks also fire inside subagents (Task tool) — report presence and heartbeat, but never
   // consume the parent's board messages: injected context would vanish into the subagent's transcript
   if (sess.transcript_path && input.transcript_path && sess.transcript_path !== input.transcript_path) {
     const key = String(input.transcript_path).split('/').pop()?.slice(0, 24) ?? 'sub'
-    await api('POST', `/agents/${sess.agent_id}/subping`, { key }).catch(() => {})
+    await api('POST', `/agents/${sess.agent_id}/subping`, { key, provider }).catch(() => {})
     return
   }
-  const throttle = sessFile(input.session_id) + '.throttle'
+  const throttle = sessFile(provider, input.session_id) + '.throttle'
   if (throttleMs > 0) {
     try {
       if (Date.now() - fs.statSync(throttle).mtimeMs < throttleMs) return
@@ -153,7 +189,9 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   }
   fs.mkdirSync(path.dirname(throttle), { recursive: true })
   fs.writeFileSync(throttle, '')
-  const r = await api('POST', `/agents/${sess.agent_id}/pulse`, { telemetry: takeSpool(input.session_id) })
+  const r = await api('POST', `/agents/${sess.agent_id}/pulse`, {
+    provider, telemetry: takeSpool(provider, input.session_id),
+  })
   const lines = r.messages.map((m: any) => {
     const from = m.from_name ?? 'human'
     if (m.reply_to || m.kind === 'reply')
@@ -167,8 +205,8 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
     return `direct orchestra ask from ${from}: "${m.body}" — reply required with: orchestra reply ${m.id} '<answer>'; no acknowledgment-only reply.`
   })
   // one-time nudge if the agent is working without a card; recurring nudge if its card is stale
-  const nudged = sessFile(input.session_id) + '.nudged'
-  const stale = sessFile(input.session_id) + '.stale'
+  const nudged = sessFile(provider, input.session_id) + '.nudged'
+  const stale = sessFile(provider, input.session_id) + '.stale'
   const firstCheck = !fs.existsSync(nudged)
   let staleCheck = false
   try { staleCheck = Date.now() - fs.statSync(stale).mtimeMs > 600_000 } catch { staleCheck = true }
@@ -188,20 +226,23 @@ async function deliver(input: any, hookEventName: string, throttleMs: number): P
   }
   if (lines.length === 0) return
   const additionalContext = lines.join('\n')
-  spool(input.session_id, hookEventName === 'UserPromptSubmit' ? 'user_prompt_submit' : 'post_tool_use', additionalContext)
+  spool(provider, input.session_id,
+    hookEventName === 'UserPromptSubmit' ? 'user_prompt_submit' : 'post_tool_use', additionalContext)
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }))
 }
 
 // pulse is a ~1ms localhost call — keep the throttle just tight enough to survive tool bursts
-const postToolUse = (input: any) => deliver(input, 'PostToolUse', 5_000)
-const userPromptSubmit = (input: any) => deliver(input, 'UserPromptSubmit', 0)
+const postToolUse = (input: any, provider: HookProvider) => deliver(input, 'PostToolUse', 5_000, provider)
+const userPromptSubmit = (input: any, provider: HookProvider) => deliver(input, 'UserPromptSubmit', 0, provider)
 
-async function stop(input: any): Promise<void> {
-  const sess = await ensureSession(input)
+async function stop(input: any, provider: HookProvider): Promise<void> {
+  const sess = await ensureSession(input, provider)
   if (!sess) return
-  stampTranscript(sess, input)
+  stampTranscript(sess, input, provider)
   // heartbeat only — pulse would consume undelivered messages with no way to show them
-  await api('POST', `/agents/${sess.agent_id}/heartbeat`, { telemetry: takeSpool(input.session_id) })
+  await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
+    provider, telemetry: takeSpool(provider, input.session_id),
+  })
   if (input.stop_hook_active) return // already continued once for this — never loop
   const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
   // a card touched in the last 10 minutes is proof of board discipline — don't burn a turn on it
@@ -210,28 +251,61 @@ async function stop(input: any): Promise<void> {
   if (mine.length === 0) return
   const ids = mine.map((c: any) => `#${c.id} "${c.title}"`).join(', ')
   const reason = `Card ${ids} still in_progress — move it (orchestra card move <id> done|review|blocked) or update it, then finish.`
-  spool(input.session_id, 'stop', reason)
-  console.log(JSON.stringify({ decision: 'block', reason }))
+  spool(provider, input.session_id, 'stop', reason)
+  if (provider === 'codex') {
+    console.log(JSON.stringify({
+      continue: false,
+      stopReason: reason,
+      hookSpecificOutput: { hookEventName: 'Stop', additionalContext: reason },
+    }))
+  } else {
+    console.log(JSON.stringify({ decision: 'block', reason }))
+  }
 }
 
-async function sessionEnd(input: any): Promise<void> {
-  const sess = loadSession(input.session_id)
+async function sessionEnd(input: any, provider: HookProvider): Promise<void> {
+  const sess = loadSession(provider, input.session_id)
   if (!sess) return
-  await api('POST', `/agents/${sess.agent_id}/leave`, { telemetry: takeSpool(input.session_id) })
+  await api('POST', `/agents/${sess.agent_id}/leave`, {
+    provider, telemetry: takeSpool(provider, input.session_id),
+  })
   for (const suffix of ['', '.throttle', '.nudged', '.stale', '.tel'])
-    fs.rmSync(sessFile(input.session_id) + suffix, { force: true })
+    fs.rmSync(sessFile(provider, input.session_id) + suffix, { force: true })
 }
 
-export async function runHook(event: string): Promise<void> {
+async function providerHeartbeat(input: any, provider: HookProvider): Promise<Session | undefined> {
+  const sess = await ensureSession(input, provider)
+  if (!sess) return undefined
+  await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
+    provider, telemetry: takeSpool(provider, input.session_id),
+  })
+  return sess
+}
+
+async function subagentPresence(input: any, provider: HookProvider, state: 'started' | 'stopped'): Promise<void> {
+  const sess = await providerHeartbeat(input, provider)
+  if (!sess) return
+  const key = String(
+    input.agent_id ?? input.subagent_id ?? input.agent_type ?? input.subagent_type ??
+    input.transcript_path ?? `${provider}-subagent`,
+  ).split('/').pop()?.slice(0, 64) ?? `${provider}-subagent`
+  await api('POST', `/agents/${sess.agent_id}/subping`, { key, provider, state }).catch(() => {})
+}
+
+export async function runHook(event: string, requestedProvider?: string): Promise<void> {
   // session-start runs once and may need to cold-start the daemon; per-tool hooks stay tight
   const deadline = new Promise<void>((r) => setTimeout(r, event === 'session-start' ? 10_000 : 2000))
   const work = (async () => {
     const input = JSON.parse((await _internals.readStdin()) || '{}')
-    if (event === 'session-start') await sessionStart(input)
-    else if (event === 'post-tool-use') await postToolUse(input)
-    else if (event === 'user-prompt-submit') await userPromptSubmit(input)
-    else if (event === 'stop') await stop(input)
-    else if (event === 'session-end') await sessionEnd(input)
+    const provider = detectHookProvider(input, requestedProvider)
+    if (event === 'session-start') await sessionStart(input, provider)
+    else if (event === 'post-tool-use') await postToolUse(input, provider)
+    else if (event === 'user-prompt-submit') await userPromptSubmit(input, provider)
+    else if (event === 'stop') await stop(input, provider)
+    else if (event === 'session-end') await sessionEnd(input, provider)
+    else if (event === 'permission-request') await providerHeartbeat(input, provider)
+    else if (event === 'subagent-start') await subagentPresence(input, provider, 'started')
+    else if (event === 'subagent-stop') await subagentPresence(input, provider, 'stopped')
   })()
   try { await Promise.race([work, deadline]) } catch { /* never break a session */ }
 }

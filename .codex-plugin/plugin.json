@@ -1,0 +1,35 @@
+{
+  "name": "orchestra",
+  "version": "0.1.0",
+  "description": "Live coordination board for Claude Code and Codex agents.",
+  "author": {
+    "name": "Armin2708",
+    "url": "https://github.com/Armin2708"
+  },
+  "homepage": "https://github.com/Armin2708/Orchestra",
+  "repository": "https://github.com/Armin2708/Orchestra",
+  "license": "MIT",
+  "keywords": [
+    "kanban",
+    "coordination",
+    "multi-agent",
+    "codex"
+  ],
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Orchestra",
+    "shortDescription": "Coordinate coding agents on a live board",
+    "longDescription": "Register Codex and Claude Code sessions, coordinate scoped work, detect overlaps, and exchange messages through a local live board.",
+    "developerName": "Armin2708",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Armin2708/Orchestra",
+    "defaultPrompt": [
+      "Open the Orchestra board and coordinate this task."
+    ],
+    "brandColor": "#178F7A"
+  }
+}

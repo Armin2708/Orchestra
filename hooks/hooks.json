@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y orchestra-board@latest hook session-start"
+            "command": "npx -y orchestra-board@latest hook session-start --provider claude"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y orchestra-board@latest hook post-tool-use"
+            "command": "npx -y orchestra-board@latest hook post-tool-use --provider claude"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y orchestra-board@latest hook stop"
+            "command": "npx -y orchestra-board@latest hook stop --provider claude"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y orchestra-board@latest hook session-end"
+            "command": "npx -y orchestra-board@latest hook session-end --provider claude"
           }
         ]
       }
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y orchestra-board@latest hook user-prompt-submit"
+            "command": "npx -y orchestra-board@latest hook user-prompt-submit --provider claude"
           }
         ]
       }
