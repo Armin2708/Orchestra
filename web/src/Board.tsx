@@ -116,6 +116,12 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
       title={isLocked ? 'Has open prerequisite steps — the assignee will coordinate with their owners' : 'Drag onto an agent to assign'}>
       <div className="t-top">
         <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '⛓ ' : ''}{st.label}</span>
+        {c.column === 'review' && c.verification && (
+          <span className={`verify-badge vb-${c.verification.running ? 'running' : c.verification.verdict}`}
+            title={c.verification.running ? 'verifier running' : `verifier verdict: ${c.verification.verdict}`}>
+            {c.verification.running ? '◌' : c.verification.verdict === 'pass' ? '✓' : c.verification.verdict === 'gaps' ? '△' : c.verification.verdict === 'fail' ? '✗' : ''}
+          </span>
+        )}
         {!c.owner && c.column !== 'done' && (
           <button className="thread-reply" title="Launch an autonomous agent on this ticket"
             onClick={async (e) => {

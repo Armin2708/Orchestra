@@ -26,7 +26,10 @@ export const streamUrl = () => {
   return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : '/api/v1/events'
 }
 
-export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null }
+export type VerificationCriterion = { text: string; met: boolean | 'unverifiable'; evidence: string }
+// latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict
+export type Verification = { running: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
+export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification }
 export type Agent = { id: number; name: string; status: string; last_seen: string; kind?: string; board_id?: number; subagents?: { key: string; label: string }[] }
 export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }

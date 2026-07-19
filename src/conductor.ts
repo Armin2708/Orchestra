@@ -68,7 +68,7 @@ type Hired = {
   model: string | null
   effort: EffortLevel | null
   models: any[]
-  role?: 'strategist' | 'auditor'
+  role?: 'strategist' | 'auditor' | 'verifier'
   // an effort restart supersedes this session — its exit must leave cards/queue untouched
   handoff: boolean
   ephemeral: boolean
@@ -110,6 +110,15 @@ How you work — in order:
    orchestra note "audit idea #<id>: <created ticket #N | rejected — reason | duplicate of card #N>" --from ${me}
    Then stop; you will be released.
 Be skeptical and precise: a thin idea deserves interrogation of the codebase, not a thin ticket. Do not brainstorm new ideas, do not create milestones, do not take tickets.`
+
+const verifierRules = (me: string) => `You are "${me}", a one-shot delivery verifier for the Orchestra board. Your single job: check ONE delivered card against its own acceptance criteria and report a per-criterion verdict. You NEVER modify files, never create cards, never approve, move, or ship anything — you only inspect and report.
+How you work — in order:
+1. CRITERIA: split the DONE WHEN section of the card description in your brief into individual criteria. No DONE WHEN → fall back to REQUIREMENTS. Neither → treat the OBJECTIVE as a single criterion.
+2. EVIDENCE: inspect the actual delivered changes, not the claimed summary — use the shipped commit if your brief names one (git show <hash>), otherwise locate the delivery (recent merges matching the card, or the diffstat in your brief) and read the real code.
+3. TEST: if package.json has a "test" script, run it and record the outcome; otherwise report tested:false. Never fix anything.
+4. JUDGE each criterion: met true (evidence found), false (contradicted or absent), or "unverifiable" (cannot be established from the repo) — with one line of evidence each.
+5. REPORT — REQUIRED, exactly once, using the curl command template in your brief. Overall verdict: pass = every criterion met; gaps = unmet/unverifiable criteria but the core objective is delivered; fail = core objective missing or the test suite is broken by the change.
+Then stop; you will be released. Be skeptical: your entire value is the gap between what was claimed and what was delivered.`
 
 const rules = conductorRules
 
@@ -243,7 +252,7 @@ export class Conductor {
     }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; effort?: string }): any {
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -304,7 +313,7 @@ export class Conductor {
     const env: Record<string, string | undefined> = { ...process.env, ORCHESTRA_PORT: String(port()), ORCHESTRA_AGENT: name, ORCHESTRA_NAME: name }
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
     // cannot auto-claim ownership, so their cards are born unowned
-    if (opts.role === 'auditor') delete env.ORCHESTRA_AGENT
+    if (opts.role === 'auditor' || opts.role === 'verifier') delete env.ORCHESTRA_AGENT
     const q = query({
       prompt: input.stream(),
       options: {
@@ -314,7 +323,7 @@ export class Conductor {
         ...(effort ? { effort } : {}),
         permissionMode,
         canUseTool,
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : rules)(name) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : opts.role === 'verifier' ? verifierRules : rules)(name) },
         env,
       } as any,
     })

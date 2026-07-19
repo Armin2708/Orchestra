@@ -978,6 +978,26 @@ textarea {
 .review-diffstat { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #fff; border: 1px solid #eee6cf; border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: 0 0 10px; }
 .review-note { width: 100%; box-sizing: border-box; }
 .review-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+/* delivery verification (#52): drawer checklist + rail badge */
+.verify-block { margin: 0 0 10px; }
+.verify-running { color: #7a7568; margin: 0 0 6px; }
+.verify-verdict { font-weight: 600; margin: 0 0 6px; }
+.verify-verdict.v-pass { color: #2e7d4f; }
+.verify-verdict.v-gaps { color: #a15c00; }
+.verify-verdict.v-fail { color: #9F2F2D; }
+.verify-criteria { list-style: none; padding: 0; margin: 0 0 8px; }
+.verify-criteria li { display: grid; grid-template-columns: 16px 1fr; gap: 2px 6px; padding: 3px 0; font-size: 13px; }
+.crit-mark { font-weight: 700; }
+.crit-met .crit-mark { color: #2e7d4f; }
+.crit-unmet .crit-mark { color: #9F2F2D; }
+.crit-unknown .crit-mark { color: #a15c00; }
+.crit-evidence { grid-column: 2; color: #7a7568; font-size: 12px; }
+.verify-run { font-size: 12px; }
+.verify-badge { font-weight: 700; font-size: 13px; line-height: 1; }
+.verify-badge.vb-pass { color: #2e7d4f; }
+.verify-badge.vb-gaps { color: #a15c00; }
+.verify-badge.vb-fail { color: #9F2F2D; }
+.verify-badge.vb-running { color: #7a7568; }
 .review-history { list-style: none; padding: 0; margin: 0 0 12px; }
 .review-history li { padding: 3px 0; }
 .review-history li.approved b { color: #2e7d4f; }
