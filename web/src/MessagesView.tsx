@@ -52,29 +52,31 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
   return (
     <main className={`message-workspace ${focused ? 'focused' : ''}`}>
       <section className="message-inbox" aria-label="Messages">
-        <header className="message-view-head">
-          <div>
-            <p className="message-view-kicker">Coordination</p>
-            <h2>Messages</h2>
-            <p>Every wake is explicit. Delivery state comes from receipts, not acknowledgment replies.</p>
-          </div>
-          <dl className="message-summary">
-            <div><dt>Open</dt><dd>{openCount}</dd></div>
-            <div><dt>Total</dt><dd>{rows.length}</dd></div>
-          </dl>
-        </header>
+        <div className="message-feed-top">
+          <header className="message-view-head">
+            <div>
+              <p className="message-view-kicker"><span aria-hidden="true" />Agent network</p>
+              <h2>Messages</h2>
+              <p>Decisions, questions, and progress from every agent—without the protocol noise.</p>
+            </div>
+            <dl className="message-summary">
+              <div><dt>Needs reply</dt><dd>{openCount}</dd></div>
+              <div><dt>Threads</dt><dd>{rows.length}</dd></div>
+            </dl>
+          </header>
 
-        <nav className="message-filters" aria-label="Filter messages">
-          {FILTERS.map((item) => {
-            const count = rows.filter((row) => threadMatches(row.thread, item.key)).length
-            return (
-              <button key={item.key} type="button" className={filter === item.key ? 'active' : ''}
-                aria-pressed={filter === item.key} onClick={() => setFilter(item.key)}>
-                {item.label}<span>{count}</span>
-              </button>
-            )
-          })}
-        </nav>
+          <nav className="message-filters" aria-label="Filter messages">
+            {FILTERS.map((item) => {
+              const count = rows.filter((row) => threadMatches(row.thread, item.key)).length
+              return (
+                <button key={item.key} type="button" className={filter === item.key ? 'active' : ''}
+                  aria-pressed={filter === item.key} onClick={() => setFilter(item.key)}>
+                  {item.label}<span>{count}</span>
+                </button>
+              )
+            })}
+          </nav>
+        </div>
 
         <div className="message-feed" aria-live="polite">
           {visible.map((row) => (
@@ -94,24 +96,27 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
       </section>
 
       <aside className="message-compose-panel" aria-label="Compose message">
-        <div className="message-compose-heading">
-          <p className="message-view-kicker">New message</p>
-          <h3>Choose the wake behavior</h3>
+        <div className="message-compose-sticky">
+          <div className="message-compose-heading">
+            <p className="message-view-kicker">Compose</p>
+            <h3>Post to the agent network</h3>
+            <p>Pick an intent first. The wake cost stays visible before you send.</p>
+          </div>
+          {snaps.length > 1 && (
+            <label className="message-field message-project-field">
+              <span>Project</span>
+              <select value={composeBoard} onChange={(event) => setComposeBoard(Number(event.target.value))}>
+                {snaps.map((snap) => <option key={snap.board.id} value={snap.board.id}>{snap.board.name}</option>)}
+              </select>
+            </label>
+          )}
+          {selected ? (
+            <MessageComposer key={selected.board.id} boardId={selected.board.id}
+              agents={selected.agents} cards={selected.cards} onSent={onChange} />
+          ) : (
+            <p className="message-empty-inline">No project is available.</p>
+          )}
         </div>
-        {snaps.length > 1 && (
-          <label className="message-field message-project-field">
-            <span>Project</span>
-            <select value={composeBoard} onChange={(event) => setComposeBoard(Number(event.target.value))}>
-              {snaps.map((snap) => <option key={snap.board.id} value={snap.board.id}>{snap.board.name}</option>)}
-            </select>
-          </label>
-        )}
-        {selected ? (
-          <MessageComposer key={selected.board.id} boardId={selected.board.id}
-            agents={selected.agents} cards={selected.cards} onSent={onChange} />
-        ) : (
-          <p className="message-empty-inline">No project is available.</p>
-        )}
       </aside>
     </main>
   )
