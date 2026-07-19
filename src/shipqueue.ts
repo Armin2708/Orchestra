@@ -128,6 +128,19 @@ export class ShipQueue {
     return run('git', args, { cwd, timeout: 120_000, maxBuffer: 16 * 1024 * 1024 })
   }
 
+  // the registered worktree holding this branch (the launched agent's), if any
+  private async worktreeFor(branch: string): Promise<string | null> {
+    try {
+      const out = (await this.git(['worktree', 'list', '--porcelain'])).stdout
+      for (const block of out.split('\n\n')) {
+        if (!block.includes(`branch refs/heads/${branch}\n`) && !block.trim().endsWith(`branch refs/heads/${branch}`)) continue
+        const m = block.match(/^worktree (.+)$/m)
+        if (m) return m[1]
+      }
+    } catch { /* no worktrees */ }
+    return null
+  }
+
   private async ship(c: ShipCandidate): Promise<{ status: 'shipped' | 'failed' | 'skipped'; hash?: string; reason?: string; detail?: string }> {
     let sha: string
     try {
@@ -165,12 +178,13 @@ export class ShipQueue {
       // green — repeat the identical merge on the real main, unless it moved under us
       const nowTip = (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
       if (nowTip !== mainTip) return { status: 'failed', reason: 'main moved during integration', detail: `${mainTip} → ${nowTip}` }
+      const agentWorktree = c.worktree ?? await this.worktreeFor(c.branch)
       await this.git(['merge', '--no-ff', sha, '-m', subject])
       const hash = (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
       await this.hooks.recordShipped(c.cardId, hash)
 
       // the branch and its worktree become invisible plumbing once main has the work
-      if (c.worktree) { try { await this.git(['worktree', 'remove', '--force', c.worktree]) } catch { /* already gone */ } }
+      if (agentWorktree) { try { await this.git(['worktree', 'remove', '--force', agentWorktree]) } catch { /* already gone */ } }
       try { await this.git(['branch', '-d', c.branch]) } catch { /* deleted or unmerged-elsewhere — leave it */ }
       return { status: 'shipped', hash }
     } finally {

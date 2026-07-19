@@ -12,6 +12,7 @@ import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, list
 import { tokenEquals } from './token.js'
 import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
+import { ShipQueue, ShipHooks, shipGate, autoshipEnabled } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
 import { boardUsage, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
@@ -40,7 +41,11 @@ declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
 }
 
-export interface ServerOptions { token?: string }
+export interface ServerOptions {
+  token?: string
+  // test seam: replace the real ShipQueue (which runs git + the full suite)
+  makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
+}
 
 export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
   const server = Fastify()
@@ -200,8 +205,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         ...a,
         subagents: maestro?.isHired(a.id) ? maestro.subagents(a.id) : liveTermSubs(a.id),
       })),
-      // review cards carry their latest verification so badges render without extra requests
-      cards: listCards(db, id).map((c) => c.column === 'review' ? { ...c, verification: verificationFor(c.id) } : c),
+      // review cards carry their latest verification (#52); ship_status marks cards the
+      // auto-ship queue currently holds (#59)
+      cards: listCards(db, id).map((c: any) => ({
+        ...(c.column === 'review' ? { ...c, verification: verificationFor(c.id) } : c),
+        ship_status: ships.get(id)?.status(c.id) ?? null,
+      })),
       ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
       milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=? ORDER BY id`).all(id),
       open_questions: db.prepare(`
@@ -251,6 +260,28 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       Date.now() - Date.parse(`${o.updated_at.replace(' ', 'T')}Z`) <= DONE_WINDOW_MS &&
       isShippedMatch(text, `${o.title} ${o.description}`))
   }
+  // ── auto-ship (#59): one queue per board, integrating approved branches serially ──
+  const ships = new Map<number, Pick<ShipQueue, 'enqueue' | 'status'>>()
+  const shipFor = (board: { id: number; project_path: string }) => {
+    let q = ships.get(board.id)
+    if (q) return q
+    const hooks: ShipHooks = {
+      onEvent: (type, data) => emit(board.id, 'ship', { status: type, ...data }),
+      recordShipped: async (cardId, hash) => {
+        await recordShipped(db, server.bus, { id: cardId, board_id: board.id }, board.project_path, { hash, by: 'autoship' })
+      },
+      onSuccess: (c) => emit(board.id, 'card', getCard(c.cardId)),
+      onFailure: (c, reason, detail) => {
+        db.prepare(`UPDATE cards SET column_name='blocked', updated_at=datetime('now') WHERE id=?`).run(c.cardId)
+        logEvent(c.cardId, null, 'autoship_failed', { reason, detail: detail.slice(0, 4000) })
+        emit(board.id, 'card', getCard(c.cardId))
+      },
+    }
+    q = (opts.makeShipQueue ?? ((p, h) => new ShipQueue(p, h)))(board.project_path, hooks)
+    ships.set(board.id, q)
+    return q
+  }
+
   const logEvent = (card_id: number, agent_id: number | null, type: string, payload: unknown = {}) =>
     db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
       .run(card_id, agent_id, type, JSON.stringify(payload))
@@ -453,15 +484,29 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
       const note = req.body?.note?.trim() || null
-      // approving over a failed verification requires an explicit confirm — consumed by the
-      // auto-ship queue (#59): confirmed:true travels in the decision payload + review event
+      // approving over a failed verification requires an explicit confirm (#52); the
+      // auto-ship queue (#59) consumes it — an unconfirmed fail holds the card in review
       const confirmed = req.body?.confirm === true
+      const wantShip = autoshipEnabled() && !!card.branch
+      const gate = wantShip ? shipGate(db, card.id, { confirmed }) : { queue: false }
+      if (wantShip && !gate.queue) {
+        const decision = recordDecision(db, card, 'approve', note)
+        logEvent(card.id, null, 'review_decision', { decision: 'approve', note, held: true })
+        reviewEvent(card, 'approved', { note, held: true })
+        emit(card.board_id, 'ship', { status: 'held', card_id: card.id, reason: gate.held })
+        return { card: getCard(card.id), decision, held: true, reason: gate.held }
+      }
       const decision = recordDecision(db, card, 'approve', note)
       logEvent(card.id, null, 'review_decision', { decision: 'approve', note, ...(confirmed ? { confirmed: true } : {}) })
       db.prepare(`UPDATE cards SET column_name='done', updated_at=datetime('now') WHERE id=?`).run(card.id)
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
       reviewEvent(updated, 'approved', { note, ...(confirmed ? { confirmed: true } : {}) })
+      if (wantShip) {
+        if (gate.warn) logEvent(card.id, null, 'autoship_note', { warn: gate.warn })
+        const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
+        shipFor(board).enqueue({ boardId: card.board_id, cardId: card.id, branch: card.branch, title: card.title, worktree: null })
+      }
       const unlocked = card.milestone_id != null && card.step_order != null
         ? db.prepare(`SELECT id, title, column_name FROM cards WHERE milestone_id=? AND step_order > ? ORDER BY step_order LIMIT 1`)
             .get(card.milestone_id, card.step_order) ?? null
