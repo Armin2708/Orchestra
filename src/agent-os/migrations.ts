@@ -200,6 +200,66 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '002-runtime-hardening',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE processes ADD COLUMN recipe_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE jobs ADD COLUMN spent_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE jobs ADD COLUMN spent_cents INTEGER NOT NULL DEFAULT 0;
+
+        CREATE TABLE daemon_leases (
+          name TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL,
+          pid INTEGER NOT NULL,
+          acquired_at TEXT NOT NULL,
+          heartbeat_at TEXT NOT NULL
+        );
+
+        CREATE TRIGGER jobs_one_active_card_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.card_id IS NOT NULL AND NEW.status IN ('queued', 'running', 'cancelling')
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id = NEW.card_id AND status IN ('queued', 'running', 'cancelling')
+          ) THEN RAISE(ABORT, 'card already has an active job') END;
+        END;
+
+        CREATE TRIGGER jobs_one_active_card_update
+        BEFORE UPDATE OF card_id, status ON jobs
+        WHEN NEW.card_id IS NOT NULL AND NEW.status IN ('queued', 'running', 'cancelling')
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id = NEW.card_id AND id != NEW.id AND status IN ('queued', 'running', 'cancelling')
+          ) THEN RAISE(ABORT, 'card already has an active job') END;
+        END;
+
+        CREATE TRIGGER workspaces_unique_active_worktree_insert
+        BEFORE INSERT ON workspaces
+        WHEN NEW.kind = 'worktree' AND NEW.status = 'active'
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM workspaces
+            WHERE kind = 'worktree' AND status = 'active'
+              AND (worktree_path = NEW.worktree_path OR (root_path = NEW.root_path AND branch = NEW.branch))
+          ) THEN RAISE(ABORT, 'active worktree path or branch already belongs to a workspace') END;
+        END;
+
+        CREATE TRIGGER workspaces_unique_active_worktree_update
+        BEFORE UPDATE OF worktree_path, root_path, branch, kind, status ON workspaces
+        WHEN NEW.kind = 'worktree' AND NEW.status = 'active'
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM workspaces
+            WHERE id != NEW.id AND kind = 'worktree' AND status = 'active'
+              AND (worktree_path = NEW.worktree_path OR (root_path = NEW.root_path AND branch = NEW.branch))
+          ) THEN RAISE(ABORT, 'active worktree path or branch already belongs to a workspace') END;
+        END;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

@@ -153,6 +153,8 @@ export interface RuntimePersistence {
   appendOutput(chunk: ProcessOutputChunk): MaybePromise<void>
   readOutput?(processId: OsId, afterSeq: number, limit: number): MaybePromise<ProcessOutputChunk[]>
   pruneOutput?(processId: OsId, beforeSeq: number): MaybePromise<void>
+  saveRestartRecipe?(processId: OsId, recipe: ProcessRestartRecipe): MaybePromise<void>
+  getRestartRecipe?(processId: OsId): MaybePromise<ProcessRestartRecipe | undefined>
   onEvent?(event: RuntimeEvent): MaybePromise<void>
 }
 
@@ -177,6 +179,8 @@ export type DriverLaunchRequest = {
   model?: string
   externalId?: string
   permissionMode?: string
+  maxBudgetUsd?: number
+  taskBudgetTokens?: number
   metadata?: Record<string, unknown>
 }
 

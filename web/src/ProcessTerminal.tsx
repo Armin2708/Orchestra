@@ -200,7 +200,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
         <div className="os-terminal-empty" aria-hidden="true">
           <OsIcon name="terminal" size={22} />
           <strong>Start with a command</strong>
-          <span>Output stays byte-for-byte and the same PTY remains attachable outside this view.</span>
+          <span>Managed PTYs keep byte-for-byte output and remain attachable with the Orchestra CLI.</span>
         </div>
       )}
       {streamError && <div className="os-terminal-error" role="alert">{streamError}</div>}

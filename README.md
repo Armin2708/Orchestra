@@ -75,6 +75,9 @@ Claude session A      Claude session B        You (browser)
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--role X]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
+| `orchestra workspace ...` | Create, inspect, update, or archive Agent OS shared/worktree environments |
+| `orchestra process ...` | Start, attach, restart, resize, signal, and inspect durable PTY processes |
+| `orchestra contract|job|checkpoint|policy|attention ...` | Drive task contracts, scheduling, recovery, policy, and human-attention workflows |
 | `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
 | `orchestra notify` | Configure or test phone notifications |
 | `orchestra install [--project]` | Add the Claude Code hooks (idempotent) |

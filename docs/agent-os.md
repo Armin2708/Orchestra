@@ -54,14 +54,18 @@ the same process through the HTTP API and CLI:
 ```sh
 orchestra process start <workspace-id> npm run dev
 orchestra process list <workspace-id>
+orchestra process attach <process-id>   # Ctrl+] detaches without stopping it
 orchestra process output <process-id>
 printf '\003' | orchestra process input <process-id> --stdin
 orchestra process resize <process-id> 140 40
 orchestra process signal <process-id> SIGTERM
+orchestra process restart <process-id>
 ```
 
 After a daemon restart, processes that cannot be reattached are marked `lost` instead of being
-reported as still running. Restartable process recipes remain visible.
+reported as still running. Restartable process recipes retain the exact command, cwd, environment,
+terminal geometry, and shell mode, so a stopped or lost process can be restarted without rebuilding
+its invocation by hand.
 
 ## Task contracts and evidence
 
@@ -125,9 +129,11 @@ orchestra checkpoint fork <checkpoint-id> --name experiment-b --branch orchestra
 ```
 
 Jobs are durable, provider-neutral requests. The scheduler respects dependency completion,
-priority, concurrency, retry limits, and token/cost budgets. `claude` uses the existing Conductor;
-`shell` uses the PTY runtime. An unavailable provider remains queued with an actionable attention
-item rather than silently falling back.
+priority, global concurrency, retry limits, cancellation, and token/cost budgets. Claims are atomic
+across scheduler instances, and one card cannot have two active jobs. On restart, resumable provider
+sessions are reattached; non-resumable jobs are requeued or blocked according to their retry budget.
+`claude` uses the existing Conductor; `shell` uses the PTY runtime. An unavailable provider remains
+queued with an actionable attention item rather than silently falling back.
 
 ```sh
 orchestra job create 42 --provider claude --workspace <workspace-id> --priority 10 --attempts 2
@@ -141,4 +147,5 @@ orchestra plugins --json
 All Agent OS routes are under `/api/v1/os` and inherit Orchestra's bearer-token authentication.
 Every cockpit mutation has a corresponding CLI command. Kernel state is stored in the same local
 SQLite database under `ORCHESTRA_HOME`; PTY output is bounded, ordered, and durable. Existing hooks
-remain fail-soft, and path overlap remains advisory by default.
+remain fail-soft, and path overlap remains advisory by default. A database-wide daemon lease ensures
+only one process can reconcile PTYs and jobs for a data directory at a time.

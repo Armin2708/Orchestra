@@ -136,6 +136,7 @@
   overflow: hidden; border-top: 1px solid #e1ded7; background: #f7f6f3;
 }
 .os-workspace-rail {
+  position: relative;
   min-width: 0; display: flex; flex-direction: column; background: #f1efe9;
   border-right: 1px solid #dcd8d0;
 }
@@ -396,8 +397,15 @@
 .os-process-main > div { min-width: 0; display: grid; gap: 2px; }.os-process-main strong { font-size: 10.5px; }.os-process-main code { overflow: hidden; color: #777168; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .os-process-list dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 9px; background: #e3e0d9; }
 .os-process-list dl div { display: grid; gap: 2px; padding: 5px; background: #f7f6f3; }.os-process-list dt { color: #98938a; font-size: 7px; text-transform: uppercase; }.os-process-list dd { overflow: hidden; color: #55514b; font: 8px 'SF Mono', ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.os-port-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.os-port-list a { display: inline-flex; align-items: center; gap: 3px; border: 1px solid #cbd8c7; border-radius: 999px; background: #f0f4ee; color: #4f7148; padding: 2px 6px; font: 8px 'SF Mono', ui-monospace, monospace; text-decoration: none; }
 .os-process-list footer { display: flex; gap: 5px; margin-top: 8px; }.os-process-list footer button { border: 1px solid #d8d4cc; border-radius: 5px; background: #fff; color: #716d66; padding: 4px 6px; font-size: 8.5px; }.os-process-list footer button:hover { color: #201f1c; border-color: #aaa59c; }
+.os-port-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.os-port-list span { display: inline-flex; overflow: hidden; border: 1px solid #d8d4cc; border-radius: 5px; background: #fff; }
+.os-port-list button, .os-port-list a { display: inline-flex; align-items: center; border: 0; background: transparent; color: #716d66; padding: 4px 6px; font-size: 8.5px; text-decoration: none; }
+.os-port-list button.active, .os-port-list button:hover, .os-port-list a:hover { background: #ece8e0; color: #201f1c; }
+.os-port-preview { margin: 0 13px 18px; overflow: hidden; border: 1px solid #d8d4cc; border-radius: 7px; background: #fff; }
+.os-port-preview header { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 8px; border-bottom: 1px solid #e3e0d9; background: #f3f1ec; color: #716d66; font-size: 8.5px; }
+.os-port-preview header span { font-weight: 650; color: #383531; }.os-port-preview header code { margin-left: auto; font-size: 8px; }.os-port-preview header button { border: 0; background: transparent; color: #777168; }
+.os-port-preview iframe { display: block; width: 100%; height: 240px; border: 0; background: #fff; }
 
 /* Create workspace */
 .os-create-dialog {

@@ -1,6 +1,6 @@
 # Orchestra Agent OS Architecture
 
-Status: implementation contract for `codex/agent-os`.
+Status: implemented on `codex/agent-os`.
 
 ## Product invariants
 
@@ -40,7 +40,7 @@ Add idempotent migrations in a separate module called by `openDb`:
 - `agent_sessions(id, workspace_id, agent_id, provider, external_id, model, status,
   context_json, created_at, updated_at)`
 - `processes(id, workspace_id, name, command, cwd, status, pid, exit_code, cols, rows,
-  restartable, started_at, ended_at)`
+  restartable, recipe_json, started_at, ended_at)`
 - `process_output(id, process_id, seq, stream, data, created_at)`
 - `os_events(id, board_id, workspace_id, card_id, session_id, process_id, kind, source,
   payload, created_at)`
@@ -55,9 +55,11 @@ Add idempotent migrations in a separate module called by `openDb`:
 - `checkpoints(id, workspace_id, session_id, name, git_head, patch_artifact_id, context_json,
   process_recipes, created_at)`
 - `jobs(id, board_id, card_id, workspace_id, provider, model, priority, status, attempts,
-  max_attempts, budget_tokens, budget_cents, scheduled_at, started_at, finished_at, error)`
+  max_attempts, budget_tokens, budget_cents, spent_tokens, spent_cents, scheduled_at, started_at,
+  finished_at, error)`
 - `context_items(id, board_id, workspace_id, card_id, kind, source, content, tokens, pinned,
   provenance, created_at, updated_at)`
+- `daemon_leases(name, owner_id, pid, acquired_at, heartbeat_at)`
 
 Foreign keys should cascade only for generated child records. Never delete a dirty worktree or
 an artifact implicitly.
@@ -76,6 +78,8 @@ Required operations:
 - record PID/status/exit code and bounded durable output;
 - discover listening ports for workspace processes where supported;
 - mark previously-running records `lost` after daemon restart and expose restart recipes;
+- reconcile durable jobs by reattaching resumable sessions or consuming their retry budget;
+- acquire a database-wide daemon lease before runtime reconciliation;
 - safely fork a checkpoint into a new worktree and apply its patch.
 
 Use a real PTY backend (`node-pty`) and xterm-compatible byte streams. Transport may use the
@@ -107,10 +111,12 @@ All new routes live under `/api/v1/os`:
 - `GET|POST /boards/:id/workspaces`
 - `GET|PATCH|DELETE /workspaces/:id`
 - `GET|POST /workspaces/:id/processes`
+- `GET /processes/:id`
 - `GET /processes/:id/output?after=<seq>`
 - `POST /processes/:id/input`
 - `POST /processes/:id/resize`
 - `POST /processes/:id/signal`
+- `POST /processes/:id/restart`
 - `GET /boards/:id/events`
 - `GET /boards/:id/attention`
 - `POST /attention/:id/resolve`
@@ -150,9 +156,10 @@ without changing their current behavior.
 ## Scheduler
 
 The durable scheduler runs queued jobs by priority while respecting `ORCHESTRA_MAX_LAUNCHED`,
-dependencies, retry count, and budgets. It records every transition. The first provider set is
-`claude` and `shell`; unsupported providers remain queued with an actionable error rather than
-silently falling back.
+dependencies, retry count, cancellation, and budgets. Job claims and global capacity checks share
+one immediate transaction, duplicate active card jobs are rejected durably, and usage is recorded
+before retry decisions. It records every transition. The first provider set is `claude` and `shell`;
+unsupported providers remain queued with an actionable error rather than silently falling back.
 
 ## Policy engine
 
@@ -181,7 +188,8 @@ one pane with explicit tabs. All controls need labels and keyboard access.
 ## CLI parity
 
 Add `orchestra workspace`, `process`, `attention`, `contract`, `evidence`, `checkpoint`, `job`,
-`policy`, and `drivers` command groups over the same HTTP APIs. Preserve existing commands.
+`policy`, and `drivers` command groups over the same HTTP APIs. `process attach` preserves raw PTY
+semantics and `process restart` uses the durable recipe. Preserve existing commands.
 
 ## Verification
 

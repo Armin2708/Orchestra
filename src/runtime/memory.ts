@@ -4,6 +4,7 @@ import type {
   ProcessOutputChunk,
   ProcessPatch,
   ProcessRecord,
+  ProcessRestartRecipe,
   RuntimeEvent,
   RuntimePersistence,
   OsId,
@@ -51,6 +52,7 @@ export class MemoryRuntimePersistence implements RuntimePersistence {
   readonly processes = new Map<OsId, ProcessRecord>()
   readonly output = new Map<OsId, ProcessOutputChunk[]>()
   readonly events: RuntimeEvent[] = []
+  readonly recipes = new Map<OsId, ProcessRestartRecipe>()
 
   createProcess(input: NewProcessRecord): ProcessRecord {
     const record = { ...input, id: String(this.nextId++) }
@@ -98,6 +100,15 @@ export class MemoryRuntimePersistence implements RuntimePersistence {
 
   pruneOutput(processId: OsId, beforeSeq: number): void {
     this.output.set(processId, (this.output.get(processId) ?? []).filter((chunk) => chunk.seq >= beforeSeq))
+  }
+
+  saveRestartRecipe(processId: OsId, recipe: ProcessRestartRecipe): void {
+    this.recipes.set(processId, structuredClone(recipe))
+  }
+
+  getRestartRecipe(processId: OsId): ProcessRestartRecipe | undefined {
+    const recipe = this.recipes.get(processId)
+    return recipe ? structuredClone(recipe) : undefined
   }
 
   onEvent(event: RuntimeEvent): void {

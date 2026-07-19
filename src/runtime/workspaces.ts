@@ -145,6 +145,9 @@ export class WorkspaceManager {
     const existing = current.find((workspace) => workspace.kind === 'shared' && workspace.rootPath === request.rootPath)
     if (existing) {
       if (request.reuseExisting === false) throw new Error(`shared workspace already exists as ${existing.id}`)
+      if (existing.cardId !== (request.cardId ?? null)) {
+        throw new Error(`shared workspace ${existing.id} is linked to a different card; use an isolated worktree`)
+      }
       return existing
     }
     const branchResult = await this.git(request.rootPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true)
@@ -176,6 +179,9 @@ export class WorkspaceManager {
       workspace.worktreePath !== null && path.resolve(workspace.worktreePath) === destination)
     const entries = await this.worktrees(request.rootPath)
     const atDestination = entries.find((entry) => path.resolve(entry.path) === destination)
+    const branchRecord = current.find((workspace) => workspace.kind === 'worktree' && workspace.branch === branch &&
+      workspace.worktreePath !== null && path.resolve(workspace.worktreePath) !== destination)
+    if (branchRecord) throw new Error(`branch ${branch} already belongs to workspace ${branchRecord.id}`)
     if (existingRecord) {
       if (request.reuseExisting === false) throw new Error(`worktree workspace already exists as ${existingRecord.id}`)
       if (existingRecord.branch !== branch) throw new Error(`worktree path is already assigned to branch ${existingRecord.branch}`)
@@ -186,6 +192,7 @@ export class WorkspaceManager {
     }
 
     if (atDestination) {
+      if (request.reuseExisting === false) throw new Error(`registered worktree already exists at ${destination}`)
       if (atDestination.branch !== branch)
         throw new Error(`registered worktree at ${destination} uses ${atDestination.branch ?? 'detached HEAD'}, not ${branch}`)
     } else {

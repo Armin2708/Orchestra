@@ -68,6 +68,8 @@ describe('Agent OS API', () => {
     db.prepare("INSERT INTO process_output (process_id, seq, stream, data) VALUES ('proc-1', 2, 'stdout', 'two')").run()
     expect((await server.inject({ method: 'GET', url: `/api/v1/os/workspaces/${workspace.id}/processes`, headers: auth })).json().processes)
       .toHaveLength(1)
+    expect((await server.inject({ method: 'GET', url: '/api/v1/os/processes/proc-1', headers: auth })).json().process)
+      .toMatchObject({ id: 'proc-1', status: 'exited' })
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/processes/proc-1/output?after=1', headers: auth })).json())
       .toMatchObject({ next_seq: 2, output: [{ seq: 2, data: 'two' }] })
 
@@ -135,8 +137,12 @@ describe('Agent OS API', () => {
 
     expect((await server.inject({ method: 'PATCH', url: `/api/v1/os/workspaces/${workspace.id}`, headers: auth,
       payload: { status: 'ready' } })).statusCode).toBe(400)
+    expect((await server.inject({ method: 'PATCH', url: `/api/v1/os/workspaces/${workspace.id}`, headers: auth,
+      payload: { branch: 'unsafe-rewrite' } })).statusCode).toBe(400)
     expect((await server.inject({ method: 'DELETE', url: `/api/v1/os/workspaces/${workspace.id}`, headers: auth })).json().workspace.status)
       .toBe('archived')
+    expect((await server.inject({ method: 'GET', url: `/api/v1/os/boards/${boardId}/workspaces?status=archived`, headers: auth })).json().workspaces)
+      .toEqual([expect.objectContaining({ id: workspace.id, status: 'archived' })])
   })
 
   it('passes terminal input bytes through without trimming control or whitespace input', async () => {

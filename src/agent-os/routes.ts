@@ -29,11 +29,13 @@ export interface ProcessRecord {
   restartable: boolean
   started_at: string | null
   ended_at: string | null
+  ports?: number[]
 }
 
 /** Adapter boundary implemented by the PTY/worktree runtime, never by chat message simulation. */
 export interface AgentOsRuntimeAdapter {
   createWorkspace?(input: CreateWorkspace): Promise<Workspace>
+  updateWorkspace?(workspace: Workspace, patch: { name?: string; cardId?: number | null; baseRef?: string; env?: Record<string, string> }): Promise<Workspace>
   archiveWorkspace?(workspace: Workspace): Promise<Workspace>
   spawnProcess(input: {
     workspace: Workspace
@@ -48,11 +50,14 @@ export interface AgentOsRuntimeAdapter {
   writeProcessInput(processId: string, data: string): Promise<void>
   resizeProcess(processId: string, cols: number, rows: number): Promise<void>
   signalProcess(processId: string, signal: string): Promise<void>
+  restartProcess?(processId: string): Promise<ProcessRecord>
+  listProcessPorts?(workspaceId: string): Promise<Array<{ processId: string; port: number }>>
   forkCheckpoint?: CheckpointForker
   captureCheckpoint?(input: { workspace: Workspace; name: string; sessionId: string | null; context: Record<string, unknown> }): Promise<{
     gitHead: string
     patchArtifactId?: string | null
     processRecipes?: unknown[]
+    context?: Record<string, unknown>
   }>
 }
 
@@ -74,6 +79,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   db: Database.Database
   runtime?: AgentOsRuntimeAdapter
   jobExecutor?: JobExecutor
+  scheduler?: JobScheduler
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
 }
@@ -91,7 +97,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const attention = new AttentionService(db)
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
-  const scheduler = new JobScheduler(db, options.jobExecutor)
+  const scheduler = options.scheduler ?? new JobScheduler(db, options.jobExecutor)
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
   const projection = new LegacyEventProjection(db)
@@ -108,9 +114,13 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return reply.send(error)
   })
 
-  app.get<{ Params: { id: string }; Querystring: { archived?: string } }>('/boards/:id/workspaces', (request) => {
+  app.get<{ Params: { id: string }; Querystring: { archived?: string; status?: string } }>('/boards/:id/workspaces', (request) => {
     const boardId = board(db, request.params.id)
-    return { workspaces: workspaces.listBoard(boardId, request.query.archived === '1' || request.query.archived === 'true') }
+    const status = request.query.status
+    if (status && !['active', 'archived', 'missing'].includes(status)) throw new ValidationError('workspace status must be active, archived, or missing')
+    const includeArchived = Boolean(status) || request.query.archived === '1' || request.query.archived === 'true'
+    const rows = workspaces.listBoard(boardId, includeArchived)
+    return { workspaces: status ? rows.filter((workspace) => workspace.status === status) : rows }
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/workspaces', async (request, reply) => {
@@ -126,17 +136,37 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }
     const workspace = options.runtime?.createWorkspace ? await options.runtime.createWorkspace(input) : workspaces.create(input)
     if (!workspaces.get(workspace.id)) throw new ValidationError('workspace runtime did not persist the returned workspace')
-    events.append({ boardId, workspaceId: workspace.id, cardId: workspace.card_id,
+    if (!options.runtime?.createWorkspace) events.append({ boardId, workspaceId: workspace.id, cardId: workspace.card_id,
       kind: 'workspace.created', source: 'api', payload: { kind: workspace.kind, root_path: workspace.root_path } })
     return reply.code(201).send({ workspace })
   })
 
   app.get<{ Params: { id: string } }>('/workspaces/:id', (request) => ({ workspace: requireWorkspace(workspaces, request.params.id) }))
 
-  app.patch<{ Params: { id: string }; Body: unknown }>('/workspaces/:id', (request) => {
+  app.patch<{ Params: { id: string }; Body: unknown }>('/workspaces/:id', async (request) => {
     const body = objectBody(request.body)
-    const workspace = workspaces.update(request.params.id, body)
-    events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
+    const allowed = new Set(['name', 'card_id', 'cardId', 'base_ref', 'baseRef', 'env'])
+    for (const key of Object.keys(body)) if (!allowed.has(key)) {
+      throw new ValidationError(`workspace field ${key} is immutable; use the archive endpoint for lifecycle changes`)
+    }
+    const current = requireWorkspace(workspaces, request.params.id)
+    const changesCard = Object.hasOwn(body, 'card_id') || Object.hasOwn(body, 'cardId')
+    const patch = {
+      ...(body.name !== undefined ? { name: requiredString(body.name, 'name') } : {}),
+      ...(changesCard ? { cardId: optionalPositiveId(body.card_id ?? body.cardId, 'card_id') } : {}),
+      ...(body.base_ref !== undefined || body.baseRef !== undefined
+        ? { baseRef: requiredString(body.base_ref ?? body.baseRef, 'base_ref') } : {}),
+      ...(body.env !== undefined ? { env: envObject(body.env) } : {}),
+    }
+    const workspace = options.runtime?.updateWorkspace
+      ? await options.runtime.updateWorkspace(current, patch)
+      : workspaces.update(current.id, {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.cardId !== undefined || changesCard ? { card_id: patch.cardId ?? null } : {}),
+          ...(patch.baseRef !== undefined ? { base_ref: patch.baseRef } : {}),
+          ...(patch.env !== undefined ? { env: patch.env } : {}),
+        })
+    if (!options.runtime?.updateWorkspace) events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
       kind: 'workspace.updated', source: 'api', payload: body })
     return { workspace }
   })
@@ -145,14 +175,18 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const current = requireWorkspace(workspaces, request.params.id)
     const workspace = options.runtime?.archiveWorkspace ? await options.runtime.archiveWorkspace(current) : workspaces.archive(current.id)
     if (workspaces.get(workspace.id)?.status !== 'archived') throw new ValidationError('workspace runtime did not persist the archived state')
-    events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
+    if (!options.runtime?.archiveWorkspace) events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
       kind: 'workspace.archived', source: 'api' })
     return { workspace }
   })
 
-  app.get<{ Params: { id: string } }>('/workspaces/:id/processes', (request) => {
+  app.get<{ Params: { id: string } }>('/workspaces/:id/processes', async (request) => {
     requireWorkspace(workspaces, request.params.id)
-    return { processes: listProcesses(db, request.params.id) }
+    const processes = listProcesses(db, request.params.id)
+    const ports = await options.runtime?.listProcessPorts?.(request.params.id) ?? []
+    const byProcess = new Map<string, number[]>()
+    for (const entry of ports) byProcess.set(entry.processId, [...(byProcess.get(entry.processId) ?? []), entry.port])
+    return { processes: processes.map((process) => ({ ...process, ports: byProcess.get(process.id) ?? [] })) }
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/processes', async (request, reply) => {
@@ -166,6 +200,19 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       rows: boundedInteger(body.rows, 24, 5, 300, 'rows'), restartable: body.restartable === true })
     events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
       processId: process.id, kind: 'process.spawned', source: 'api', payload: { command, name: process.name } })
+    return reply.code(201).send({ process })
+  })
+
+  app.get<{ Params: { id: string } }>('/processes/:id', (request) => ({ process: requireProcess(db, request.params.id) }))
+
+  app.post<{ Params: { id: string } }>('/processes/:id/restart', async (request, reply) => {
+    if (!options.runtime?.restartProcess) throw new UnsupportedError('process restart requires the PTY runtime')
+    const current = requireProcess(db, request.params.id)
+    if (!current.restartable) throw new ValidationError('process does not have a restart recipe')
+    const process = await options.runtime.restartProcess(current.id)
+    const workspace = requireWorkspace(workspaces, process.workspace_id)
+    events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
+      processId: process.id, kind: 'process.restart_requested', source: 'human', payload: { previous_process_id: current.id } })
     return reply.code(201).send({ process })
   })
 
@@ -186,9 +233,6 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     if (typeof data !== 'string') throw new ValidationError('data must be a string')
     if (Buffer.byteLength(data) > 1024 * 1024) throw new ValidationError('process input exceeds the 1 MiB limit')
     await options.runtime.writeProcessInput(process.id, data)
-    const workspace = requireWorkspace(workspaces, process.workspace_id)
-    events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
-      processId: process.id, kind: 'process.input', source: 'human', payload: { bytes: Buffer.byteLength(data) } })
     return { ok: true }
   })
 
@@ -307,13 +351,14 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const workspace = requireWorkspace(workspaces, request.params.id)
     const name = requiredString(body.name, 'name')
     const sessionId = nullableValue(body.session_id ?? body.sessionId)
+    const hasContext = body.context !== undefined || body.context_json !== undefined
     const contextValue = recordValue(body.context ?? body.context_json, 'context')
     const captured = options.runtime?.captureCheckpoint && body.git_head === undefined && body.gitHead === undefined
       ? await options.runtime.captureCheckpoint({ workspace, name, sessionId, context: contextValue }) : null
     const checkpoint = checkpoints.create({ workspaceId: request.params.id, sessionId, name,
       gitHead: stringValue(body.git_head ?? body.gitHead) ?? captured?.gitHead ?? gitHead(workspace),
       patchArtifactId: nullableValue(body.patch_artifact_id ?? body.patchArtifactId ?? captured?.patchArtifactId),
-      context: contextValue,
+      context: hasContext ? contextValue : captured?.context ?? contextValue,
       processRecipes: body.process_recipes !== undefined || body.processRecipes !== undefined
         ? arrayValue(body.process_recipes ?? body.processRecipes, 'process_recipes') : captured?.processRecipes ?? [] })
     events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,

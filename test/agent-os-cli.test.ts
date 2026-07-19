@@ -16,6 +16,7 @@ const setup = (response: any = { id: 1 }) => {
     resolveBoard: vi.fn(async () => ({ id: 42 })),
     output: (line) => output.push(line),
     readStdin: () => 'exact\nbytes',
+    attachProcess: vi.fn(async () => {}),
   }
   const program = new Command().name('orchestra').exitOverride()
   program.configureOutput({ writeErr: () => {}, writeOut: () => {} })
@@ -80,12 +81,42 @@ describe('Agent OS CLI', () => {
     expect(calls[0]).toEqual({ method: 'POST', path: '/os/processes/5/input', body: { data: 'exact\nbytes' } })
   })
 
+  it('preserves opaque Agent OS ids instead of coercing them to legacy integers', async () => {
+    const { calls, run } = setup({ ok: true })
+
+    await run('process', 'signal', 'f5c293c8-7009-4d56-9b61-4ab7cb610e25', 'SIGINT')
+    await run('events', '--after', '3d58bcee-e748-48e2-b61b-c15ea9589b81')
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/processes/f5c293c8-7009-4d56-9b61-4ab7cb610e25/signal',
+        body: { signal: 'SIGINT' },
+      },
+      {
+        method: 'GET',
+        path: '/os/boards/42/events?limit=100&after=3d58bcee-e748-48e2-b61b-c15ea9589b81',
+        body: undefined,
+      },
+    ])
+  })
+
   it('prints ordered process output as raw terminal bytes', async () => {
     const { output, run } = setup({ output: [{ seq: 1, data: 'hello ' }, { seq: 2, data: 'world\n' }] })
 
     await run('process', 'output', '8', '--after', '0')
 
     expect(output).toEqual(['hello world\n'])
+  })
+
+  it('attaches the current terminal and restarts processes through opaque ids', async () => {
+    const { calls, deps, run } = setup({ process: { id: 'replacement' } })
+
+    await run('process', 'attach', 'proc/a')
+    await run('process', 'restart', 'proc/a')
+
+    expect(deps.attachProcess).toHaveBeenCalledWith('proc/a')
+    expect(calls).toEqual([{ method: 'POST', path: '/os/processes/proc%2Fa/restart', body: undefined }])
   })
 
   it('writes structured task contracts through the compatibility card bridge', async () => {

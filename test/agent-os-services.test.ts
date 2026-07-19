@@ -61,6 +61,7 @@ describe('Agent OS core services', () => {
     expect(engine.evaluate(policy.id, { kind: 'network', value: 'https://api.example.com:443/path' }).decision).toBe('allow')
     expect(engine.evaluate(policy.id, { kind: 'secret', value: 'DATABASE_URL' }).decision).toBe('ask')
     expect(engine.evaluate(policy.id, { kind: 'command', value: 'rm -rf build', actor: 'human' }).decision).toBe('allow')
+    expect(() => engine.create({ boardId, name: 'invalid', approvalScope: 'forever' })).toThrow(/advisory, ask, allow, or deny/)
   })
 
   it('orders attention by severity and resolves idempotently', () => {
@@ -71,6 +72,9 @@ describe('Agent OS core services', () => {
     expect(attention.listBoard(boardId).map((item) => item.title)).toEqual(['Now', 'Later'])
     expect(attention.resolve(urgent.id).status).toBe('resolved')
     expect(attention.resolve(urgent.id).status).toBe('resolved')
+    expect(attention.listBoard(boardId, 'all')).toHaveLength(2)
+    expect(attention.listBoard(boardId, 'resolved').map((item) => item.id)).toEqual([urgent.id])
+    expect(() => attention.listBoard(boardId, 'unknown')).toThrow(/open, resolved, or all/)
   })
 
   it('requires a safe runtime for checkpoint forks and records mock-runtime forks as worktrees', async () => {
@@ -121,6 +125,105 @@ describe('Agent OS core services', () => {
     expect(scheduler.get(unsupported.id)).toMatchObject({ status: 'queued' })
     expect(scheduler.get(unsupported.id)?.error).toMatch(/unavailable/)
     expect(new AttentionService(db).listBoard(boardId).some((item) => item.kind === 'job.unsupported_provider')).toBe(true)
+  })
+
+  it('requeues asynchronous driver failures until the durable retry budget is exhausted', async () => {
+    const { db, boardId } = fixture()
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async () => ({ status: 'running' }),
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const job = scheduler.create({ boardId, provider: 'shell', maxAttempts: 2 })
+
+    await scheduler.tick()
+    expect(scheduler.complete(job.id, 'first failure')).toMatchObject({ status: 'queued', attempts: 1 })
+    expect(new AttentionService(db).listBoard(boardId)).toHaveLength(0)
+
+    await scheduler.tick()
+    expect(scheduler.complete(job.id, 'second failure')).toMatchObject({ status: 'blocked', attempts: 2 })
+    expect(new AttentionService(db).listBoard(boardId).map((item) => item.kind)).toContain('job.blocked')
+    expect(new EventStore(db).listBoard(boardId).map((event) => event.kind))
+      .toEqual(expect.arrayContaining(['job.retry_queued', 'job.blocked']))
+  })
+
+  it('shares global launch capacity with legacy Conductor card launches', async () => {
+    process.env.ORCHESTRA_MAX_LAUNCHED = '1'
+    const { db, boardId, cardId } = fixture()
+    const agentId = Number(db.prepare(`INSERT INTO agents (board_id, name, kind, status)
+      VALUES (?, 'legacy-agent', 'hired', 'active')`).run(boardId).lastInsertRowid)
+    db.prepare("UPDATE cards SET owner_agent_id=?, column_name='in_progress' WHERE id=?").run(agentId, cardId)
+    const executed: string[] = []
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async (job) => { executed.push(job.id); return { status: 'running' } },
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const queued = scheduler.create({ boardId, provider: 'shell' })
+
+    expect((await scheduler.tick()).started).toEqual([])
+    expect(scheduler.get(queued.id)?.status).toBe('queued')
+    expect(executed).toEqual([])
+  })
+
+  it('atomically shares launch capacity across scheduler instances', async () => {
+    process.env.ORCHESTRA_MAX_LAUNCHED = '1'
+    const { db, boardId } = fixture()
+    const executed: string[] = []
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async (job) => { executed.push(job.id); return { status: 'running' } },
+    }
+    const first = new JobScheduler(db, executor)
+    const second = new JobScheduler(db, executor)
+    const high = first.create({ boardId, provider: 'shell', priority: 2 })
+    const low = second.create({ boardId, provider: 'shell', priority: 1 })
+
+    await Promise.all([first.tick(), second.tick()])
+
+    expect(executed).toEqual([high.id])
+    expect(first.get(high.id)?.status).toBe('running')
+    expect(second.get(low.id)?.status).toBe('queued')
+  })
+
+  it('prevents duplicate active card jobs and makes cancellation win completion races', async () => {
+    const { db, boardId, cardId } = fixture()
+    let statusObservedByCancel: string | undefined
+    let scheduler!: JobScheduler
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async () => ({ status: 'running' }),
+      cancel: async (job) => { statusObservedByCancel = scheduler.get(job.id)?.status },
+    }
+    scheduler = new JobScheduler(db, executor)
+    const job = scheduler.create({ boardId, cardId, provider: 'shell' })
+    expect(() => scheduler.create({ boardId, cardId, provider: 'shell' })).toThrow(/active job/)
+    await scheduler.tick()
+
+    const cancelled = await scheduler.cancel(job.id)
+
+    expect(statusObservedByCancel).toBe('cancelling')
+    expect(cancelled.status).toBe('cancelled')
+    expect(() => scheduler.complete(job.id)).toThrow(/only a running job/)
+  })
+
+  it('records durable usage and blocks retries once their budget is exhausted', async () => {
+    const { db, boardId } = fixture()
+    const executed: string[] = []
+    const executor: JobExecutor = {
+      supportedProviders: () => ['shell'],
+      execute: async (job) => { executed.push(job.id); return { status: 'running' } },
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const job = scheduler.create({ boardId, provider: 'shell', maxAttempts: 2, budgetTokens: 10 })
+
+    await scheduler.tick()
+    expect(scheduler.recordUsage(job.id, 10, 0).spent_tokens).toBe(10)
+    expect(scheduler.complete(job.id, 'retry me').status).toBe('queued')
+    await scheduler.tick()
+
+    expect(executed).toEqual([job.id])
+    expect(scheduler.get(job.id)).toMatchObject({ status: 'blocked', error: 'job budget is exhausted before launch' })
   })
 
   it('assembles evidence from records while keeping agent claims explicitly separate', () => {

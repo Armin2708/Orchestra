@@ -133,6 +133,21 @@ export class RuntimeSupervisor {
       endedAt: null,
     })
 
+    const recipe: ProcessRestartRecipe = {
+      workspaceId: request.workspaceId,
+      name: starting.name,
+      command: request.command,
+      ...(request.args ? { args: [...request.args] } : {}),
+      shell,
+      ...(shell ? { shellPath } : {}),
+      cwd,
+      env: explicitEnv,
+      cols,
+      rows,
+      restartable,
+    }
+    await this.persistence.saveRestartRecipe?.(starting.id, recipe)
+
     let pty: PtyHandle
     try {
       pty = this.backend.spawn(file, args, {
@@ -157,19 +172,6 @@ export class RuntimeSupervisor {
     const exitPromise = new Promise<ProcessRecord>((resolve) => { resolveExit = resolve })
     let resolveStarted!: () => void
     const startBarrier = new Promise<void>((resolve) => { resolveStarted = resolve })
-    const recipe: ProcessRestartRecipe = {
-      workspaceId: request.workspaceId,
-      name: starting.name,
-      command: request.command,
-      ...(request.args ? { args: [...request.args] } : {}),
-      shell,
-      ...(shell ? { shellPath } : {}),
-      cwd,
-      env: explicitEnv,
-      cols,
-      rows,
-      restartable,
-    }
     const state: RuntimeState = {
       record: starting,
       pty,
@@ -282,6 +284,8 @@ export class RuntimeSupervisor {
   async restartRecipe(processId: OsId): Promise<ProcessRestartRecipe | undefined> {
     const state = this.states.get(processId)
     if (state) return clone(state.recipe)
+    const persisted = await this.persistence.getRestartRecipe?.(processId)
+    if (persisted) return clone(persisted)
     const record = await this.persistence.getProcess(processId)
     if (!record?.restartable) return undefined
     return {
@@ -434,6 +438,7 @@ export class RuntimeSupervisor {
       state.dataDisposable?.dispose()
       state.exitDisposable?.dispose()
       state.resolveExit(clone(state.record))
+      this.states.delete(state.record.id)
     }
   }
 

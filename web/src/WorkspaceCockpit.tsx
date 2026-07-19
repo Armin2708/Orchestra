@@ -15,6 +15,7 @@ import {
 } from './osApi'
 import { OsIcon, OsIconName } from './OsIcon'
 import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
+import { useModalFocusTrap } from './useModalFocusTrap'
 import {
   ChangesPane,
   ContextPane,
@@ -93,9 +94,17 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 
   const terminalRef = useRef<ProcessTerminalHandle>(null)
   const commandRef = useRef<HTMLInputElement>(null)
+  const selectedIdRef = useRef<string | null>(selectedId)
+  const loadGenerationRef = useRef(0)
+  const resourceWorkspaceRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
 
   const selectWorkspace = useCallback((workspace: Workspace) => {
     const id = String(workspace.id)
+    selectedIdRef.current = id
+    loadGenerationRef.current++
+    setActiveProcessId(null)
+    setProcesses({ status: 'loading', data: [], error: null })
     setSelectedId(id)
     localStorage.setItem('orchestra-os-workspace', id)
   }, [])
@@ -113,6 +122,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
         const wanted = [requested, current].find((candidate) => candidate && next.some((workspace) => String(workspace.id) === candidate))
         const fallback = wanted ?? (next[0] ? String(next[0].id) : null)
         if (fallback) localStorage.setItem('orchestra-os-workspace', fallback)
+        selectedIdRef.current = fallback
         return fallback
       })
     } catch (error) {
@@ -134,17 +144,22 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 
   const refreshProcesses = useCallback(async (quiet = true) => {
     if (!selected) return
+    const workspaceId = String(selected.id)
     if (!quiet) setProcesses((current) => ({ ...current, status: 'loading', error: null }))
     try {
-      const data = await osApi.listProcesses(selected.id)
+      const data = await osApi.listProcesses(workspaceId)
+      if (selectedIdRef.current !== workspaceId) return
       setProcesses({ status: 'ready', data, error: null })
     } catch (error) {
+      if (selectedIdRef.current !== workspaceId) return
       setProcesses((current) => ({ ...current, status: 'error', error: errorMessage(error, 'Processes could not be loaded.') }))
     }
   }, [selected?.id])
 
   useEffect(() => {
     if (!selected) {
+      resourceWorkspaceRef.current = null
+      loadGenerationRef.current++
       setProcesses({ status: 'ready', data: [], error: null })
       setEvents({ status: 'ready', data: [], error: null })
       setEvidence({ status: 'ready', data: null, error: null })
@@ -154,19 +169,34 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setConflicts({ status: 'ready', data: [], error: null })
       return
     }
+    const workspaceId = String(selected.id)
+    const generation = ++loadGenerationRef.current
+    const switched = resourceWorkspaceRef.current !== workspaceId
+    resourceWorkspaceRef.current = workspaceId
     let alive = true
-    const loading = <T,>(setter: React.Dispatch<React.SetStateAction<Resource<T>>>) =>
-      setter((current) => ({ ...current, status: 'loading', error: null }))
-    loading(setProcesses); loading(setEvents); loading(setContext); loading(setPolicies); loading(setConflicts)
-    if (selected.card_id !== null) { loading(setContract); loading(setEvidence) }
+    if (switched) {
+      setActiveProcessId(null)
+      setProcesses({ status: 'loading', data: [], error: null })
+      setEvents({ status: 'loading', data: [], error: null })
+      setContext({ status: 'loading', data: [], error: null })
+      setPolicies({ status: 'loading', data: [], error: null })
+      setConflicts({ status: 'loading', data: [], error: null })
+    }
+    if (selected.card_id !== null && switched) {
+      setContract({ status: 'loading', data: null, error: null })
+      setEvidence({ status: 'loading', data: null, error: null })
+    }
     else {
-      setContract({ status: 'ready', data: null, error: null })
-      setEvidence({ status: 'ready', data: null, error: null })
+      if (selected.card_id === null) {
+        setContract({ status: 'ready', data: null, error: null })
+        setEvidence({ status: 'ready', data: null, error: null })
+      }
     }
 
     const settle = <T,>(promise: Promise<T>, setter: React.Dispatch<React.SetStateAction<Resource<T>>>, label: string) => {
-      promise.then((data) => { if (alive) setter({ status: 'ready', data, error: null }) })
-        .catch((error) => { if (alive) setter((current) => ({ ...current, status: 'error', error: errorMessage(error, `${label} could not be loaded.`) })) })
+      const current = () => alive && loadGenerationRef.current === generation && selectedIdRef.current === workspaceId
+      promise.then((data) => { if (current()) setter({ status: 'ready', data, error: null }) })
+        .catch((error) => { if (current()) setter((value) => ({ ...value, status: 'error', error: errorMessage(error, `${label} could not be loaded.`) })) })
     }
     settle(osApi.listProcesses(selected.id), setProcesses, 'Processes')
     settle(osApi.listEvents(selected.board_id), setEvents, 'Events')
@@ -179,6 +209,12 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     }
     return () => { alive = false }
   }, [selected?.id, selected?.board_id, selected?.card_id, reloadTick])
+
+  useEffect(() => {
+    if (!selected) return
+    const timer = window.setInterval(() => setReloadTick((tick) => tick + 1), 8_000)
+    return () => window.clearInterval(timer)
+  }, [selected?.id])
 
   useEffect(() => {
     let alive = true
@@ -194,14 +230,19 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     return () => window.clearInterval(timer)
   }, [selected?.id, refreshProcesses])
 
+  const scopedProcessData = useMemo(() => processes.data.filter((process) =>
+    String(process.workspace_id) === String(selected?.id ?? '')), [processes.data, selected?.id])
+  const scopedProcesses = useMemo<Resource<WorkspaceProcess[]>>(() => ({ ...processes, data: scopedProcessData }),
+    [processes.status, processes.error, scopedProcessData])
+
   useEffect(() => {
     if (processes.status !== 'ready') return
     setActiveProcessId((current) => {
-      if (current && processes.data.some((process) => String(process.id) === current)) return current
-      const running = processes.data.find((process) => ['running', 'starting', 'stopping'].includes(process.status))
-      return running ? String(running.id) : processes.data[0] ? String(processes.data[0].id) : null
+      if (current && scopedProcessData.some((process) => String(process.id) === current)) return current
+      const running = scopedProcessData.find((process) => ['running', 'starting', 'stopping'].includes(process.status))
+      return running ? String(running.id) : scopedProcessData[0] ? String(scopedProcessData[0].id) : null
     })
-  }, [processes.status, processes.data])
+  }, [processes.status, scopedProcessData])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -233,13 +274,14 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const activeProcess = processes.data.find((process) => String(process.id) === activeProcessId) ?? null
+  const activeProcess = scopedProcessData.find((process) => String(process.id) === activeProcessId) ?? null
   const workspaceConflicts = conflicts.data.filter((conflict) =>
     String(conflict.workspace_id ?? '') === String(selected?.id ?? '') || String(conflict.other_workspace_id ?? '') === String(selected?.id ?? '') ||
     conflict.workspace_ids?.some((id) => String(id) === String(selected?.id ?? '')))
   const availableDrivers = drivers.data.filter((driver) => driver.available !== false)
 
   const attachProcess = (process: WorkspaceProcess) => {
+    if (!selected || String(process.workspace_id) !== String(selected.id)) return
     setActiveProcessId(String(process.id))
     setCenterPane('terminal'); setMobilePane('terminal')
     window.requestAnimationFrame(() => terminalRef.current?.focus())
@@ -254,16 +296,9 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   }
 
   const restartProcess = async (process: WorkspaceProcess) => {
-    if (!selected) return
+    if (!selected || String(process.workspace_id) !== String(selected.id)) return
     try {
-      const created = await osApi.createProcess(selected.id, {
-        name: process.name,
-        command: process.command,
-        cwd: process.cwd,
-        cols: process.cols,
-        rows: process.rows,
-        restartable: true,
-      })
+      const created = await osApi.restartProcess(process.id)
       await refreshProcesses(true)
       attachProcess(created)
       setHeaderError(null)
@@ -288,7 +323,8 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     if (!selected) return
     const path = selected.worktree_path ?? selected.root_path
     try {
-      await navigator.clipboard.writeText(`cd ${JSON.stringify(path)}`)
+      const command = activeProcess ? `orchestra process attach ${JSON.stringify(String(activeProcess.id))}` : `cd ${JSON.stringify(path)}`
+      await navigator.clipboard.writeText(command)
       setCopied(true); setHeaderError(null)
       window.setTimeout(() => setCopied(false), 1_800)
     } catch (error) { setHeaderError(errorMessage(error, 'The workspace path could not be copied.')) }
@@ -299,6 +335,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     try {
       await osApi.archiveWorkspace(selected.id)
       localStorage.removeItem('orchestra-os-workspace')
+      selectedIdRef.current = null
       setSelectedId(null)
       await loadWorkspaces()
       onChange()
@@ -312,7 +349,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const renderPane = (pane: PaneId) => {
     if (!selected) return null
     if (pane === 'terminal') return (
-      <TerminalPane workspace={selected} processes={processes} activeProcess={activeProcess}
+      <TerminalPane workspace={selected} processes={scopedProcesses} activeProcess={activeProcess}
         terminalRef={terminalRef} commandRef={commandRef} onAttach={attachProcess}
         onProcessesChanged={refreshProcesses} onError={setHeaderError}
         onSignal={signalProcess} onRestart={restartProcess} />
@@ -324,7 +361,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     if (pane === 'changes') return <ChangesPane evidence={evidence} />
     if (pane === 'evidence') return <EvidencePane evidence={evidence} contract={contract} card={card} />
     if (pane === 'processes') return (
-      <ProcessesPane processes={processes} activeId={activeProcessId} onAttach={attachProcess}
+      <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} onAttach={attachProcess}
         onSignal={signalProcess} onRestart={restartProcess} />
     )
     if (pane === 'context') return <ContextPane context={context} onTogglePin={toggleContextPin} />
@@ -609,14 +646,9 @@ function CreateWorkspaceDialog({ snaps, initialBoardId, initialCard, onClose, on
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const firstRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLFormElement>(null)
   const snapshot = snaps.find((item) => item.board.id === boardId) ?? snaps[0]
-
-  useEffect(() => {
-    window.requestAnimationFrame(() => firstRef.current?.focus())
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', key)
-    return () => window.removeEventListener('keydown', key)
-  }, [onClose])
+  useModalFocusTrap(true, dialogRef, onClose, firstRef)
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -635,7 +667,7 @@ function CreateWorkspaceDialog({ snaps, initialBoardId, initialCard, onClose, on
   return (
     <div className="os-modal-layer">
       <button className="os-modal-scrim" onClick={onClose} aria-label="Close create workspace dialog" />
-      <form className="os-create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-workspace-title" onSubmit={submit}>
+      <form ref={dialogRef} className="os-create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-workspace-title" onSubmit={submit} tabIndex={-1}>
         <header><div><p className="os-eyebrow">Runtime allocation</p><h2 id="create-workspace-title">Create workspace</h2></div>
           <button type="button" className="os-icon-button" onClick={onClose} aria-label="Close"><OsIcon name="close" /></button></header>
         <p className="os-dialog-intro">Bind a task to an isolated checkout and durable process namespace. You can still attach from any local terminal.</p>

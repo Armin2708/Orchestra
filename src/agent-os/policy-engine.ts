@@ -52,6 +52,10 @@ export class PolicyEngine {
   create(input: CreatePolicy): Policy {
     if (!this.db.prepare('SELECT 1 FROM boards WHERE id=?').get(input.boardId)) throw new NotFoundError('board not found')
     if (!input.name.trim()) throw new ValidationError('policy name is required')
+    const approvalScope = input.approvalScope?.trim() || 'advisory'
+    if (!['advisory', 'ask', 'allow', 'deny'].includes(approvalScope)) {
+      throw new ValidationError('approval_scope must be advisory, ask, allow, or deny')
+    }
     const at = timestamp()
     const row = {
       id: randomUUID(), board_id: input.boardId, name: input.name.trim(),
@@ -59,7 +63,7 @@ export class PolicyEngine {
       command_globs: JSON.stringify(stringArray(input.commandGlobs, 'command_globs')),
       network_hosts: JSON.stringify(stringArray(input.networkHosts, 'network_hosts')),
       secret_names: JSON.stringify(stringArray(input.secretNames, 'secret_names')),
-      approval_scope: input.approvalScope?.trim() || 'advisory', created_at: at, updated_at: at,
+      approval_scope: approvalScope, created_at: at, updated_at: at,
     }
     this.db.prepare(`INSERT INTO policies
       (id, board_id, name, file_globs, command_globs, network_hosts, secret_names, approval_scope, created_at, updated_at)

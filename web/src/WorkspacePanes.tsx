@@ -450,14 +450,18 @@ export function PolicyPane({ policies, contract }: {
               <div className="os-policy-inputs">
                 <label className="os-field">
                   <span>Capability</span>
-                  <select value={operationKind} onChange={(event) => setOperationKind(event.target.value as typeof operationKind)}>
+                  <select value={operationKind} onChange={(event) => {
+                    setOperationKind(event.target.value as typeof operationKind); setDecision(null); setEvaluateError(null)
+                  }}>
                     <option value="command">Command</option><option value="filesystem">File</option>
                     <option value="network">Network host</option><option value="secret">Secret</option>
                   </select>
                 </label>
                 <label className="os-field grow">
                   <span>Operation</span>
-                  <input value={operationValue} onChange={(event) => setOperationValue(event.target.value)}
+                  <input value={operationValue} onChange={(event) => {
+                    setOperationValue(event.target.value); setDecision(null); setEvaluateError(null)
+                  }}
                     placeholder={operationKind === 'command' ? 'npm run build' : operationKind === 'filesystem' ? 'src/server.ts' : 'api.example.com'} />
                 </label>
               </div>
@@ -492,6 +496,12 @@ export function ProcessesPane({ processes, activeId, onAttach, onSignal, onResta
   onSignal: (process: WorkspaceProcess, signal: string) => Promise<void>
   onRestart: (process: WorkspaceProcess) => Promise<void>
 }) {
+  const availablePorts = processes.data.flatMap((process) => process.ports ?? [])
+  const localViewer = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(window.location.hostname)
+  const [previewPort, setPreviewPort] = useState<number | null>(null)
+  useEffect(() => {
+    if (previewPort !== null && !availablePorts.includes(previewPort)) setPreviewPort(availablePorts[0] ?? null)
+  }, [availablePorts.join(','), previewPort])
   return (
     <PaneFrame title="Processes & ports" eyebrow="Durable PTY recipes">
       <PaneState resource={processes}
@@ -515,7 +525,12 @@ export function ProcessesPane({ processes, activeId, onAttach, onSignal, onResta
                 </dl>
                 {process.ports && process.ports.length > 0 && (
                   <div className="os-port-list">
-                    {process.ports.map((port) => <a key={port} href={`http://127.0.0.1:${port}`} target="_blank" rel="noreferrer">:{port} <OsIcon name="external" size={12} /></a>)}
+                    {process.ports.map((port) => <span key={port}>
+                      {localViewer ? <>
+                        <button className={previewPort === port ? 'active' : ''} onClick={() => setPreviewPort(port)}>Preview :{port}</button>
+                        <a href={`http://127.0.0.1:${port}`} target="_blank" rel="noreferrer" aria-label={`Open port ${port} in a new tab`}><OsIcon name="external" size={12} /></a>
+                      </> : <code title="Port previews are local to the daemon host">Local daemon :{port}</code>}
+                    </span>)}
                   </div>
                 )}
                 <footer>
@@ -527,6 +542,12 @@ export function ProcessesPane({ processes, activeId, onAttach, onSignal, onResta
             )
           })}
         </div>
+        {localViewer && previewPort !== null && (
+          <section className="os-port-preview">
+            <header><span>Local preview</span><code>127.0.0.1:{previewPort}</code><button onClick={() => setPreviewPort(null)} aria-label="Close local preview"><OsIcon name="close" size={12} /></button></header>
+            <iframe src={`http://127.0.0.1:${previewPort}`} title={`Preview of local port ${previewPort}`} />
+          </section>
+        )}
       </PaneState>
     </PaneFrame>
   )

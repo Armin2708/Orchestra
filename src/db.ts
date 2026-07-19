@@ -4,6 +4,7 @@ import { applyAgentOsMigrations } from './agent-os/migrations.js'
 export function openDb(file: string): Database.Database {
   const db = new Database(file)
   db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
   db.exec(`
   CREATE TABLE IF NOT EXISTS boards (
     id INTEGER PRIMARY KEY,

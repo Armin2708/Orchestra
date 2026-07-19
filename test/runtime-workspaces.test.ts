@@ -96,6 +96,26 @@ describe('WorkspaceManager', () => {
     expect((await git(repo, 'worktree', 'list', '--porcelain')).stdout.match(/worktree /g)).toHaveLength(2)
   })
 
+  it('never applies a fresh checkpoint fork into an already registered worktree', async () => {
+    const { repo, worktrees } = await repository()
+    const first = new WorkspaceManager({ store: new MemoryWorkspaceStore(), worktreeRoot: worktrees })
+    const created = await first.create({
+      boardId: 1, name: 'Existing', kind: 'worktree', rootPath: repo, branch: 'agent/existing',
+    })
+    const restarted = new WorkspaceManager({ store: new MemoryWorkspaceStore(), worktreeRoot: worktrees })
+
+    await expect(restarted.create({
+      boardId: 1,
+      name: 'Checkpoint fork',
+      kind: 'worktree',
+      rootPath: repo,
+      branch: 'agent/existing',
+      worktreePath: created.worktreePath!,
+      reuseExisting: false,
+    })).rejects.toThrow(/already exists|already registered/)
+    expect((await git(repo, 'worktree', 'list', '--porcelain')).stdout.match(/worktree /g)).toHaveLength(2)
+  })
+
   it('refuses escape paths and preserves dirty worktrees during removal', async () => {
     const { base, repo, worktrees } = await repository()
     const store = new MemoryWorkspaceStore()

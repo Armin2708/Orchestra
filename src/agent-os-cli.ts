@@ -9,6 +9,69 @@ export interface AgentOsCliDeps {
   resolveBoard: () => Promise<{ id: number }>
   output?: (line: string) => void
   readStdin?: () => string
+  attachProcess?: (id: string) => Promise<void>
+}
+
+const terminalStatuses = new Set(['stopped', 'exited', 'failed', 'lost'])
+
+/** Attach the local terminal to a managed PTY over the same durable HTTP byte stream as the cockpit. */
+export async function attachManagedProcess(api: AgentOsApi, id: string): Promise<void> {
+  const input = process.stdin
+  const output = process.stdout
+  let after = 0
+  let detached = false
+  let inputError: unknown
+  let inputQueue = Promise.resolve()
+  const wasRaw = Boolean(input.isTTY && input.isRaw)
+  const send = (data: Buffer) => {
+    if (data.length === 0) return
+    inputQueue = inputQueue.then(() => api('POST', `/os/processes/${segment(id)}/input`, { data: data.toString('utf8') }))
+      .catch((error) => { inputError = error; detached = true })
+  }
+  const onData = (chunk: Buffer | string) => {
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    const detachAt = data.indexOf(0x1d) // Ctrl+] mirrors ssh/telnet-style detach controls.
+    if (detachAt >= 0) {
+      send(data.subarray(0, detachAt))
+      detached = true
+      return
+    }
+    send(data)
+  }
+  const resize = () => {
+    const cols = output.columns
+    const rows = output.rows
+    if (cols && rows) void api('POST', `/os/processes/${segment(id)}/resize`, { cols, rows }).catch(() => undefined)
+  }
+
+  if (input.isTTY) input.setRawMode(true)
+  input.on('data', onData)
+  input.resume()
+  process.on('SIGWINCH', resize)
+  resize()
+  output.write('\r\n[attached · Ctrl+] detaches]\r\n')
+  try {
+    while (!detached) {
+      const page = await api('GET', `/os/processes/${segment(id)}/output?after=${after}`)
+      const records = arrayFrom(page, ['output', 'records', 'chunks'])
+      for (const record of records) output.write(typeof record === 'string' ? record : String(record.data ?? ''))
+      const explicit = Number(page?.next_seq ?? page?.nextSeq)
+      if (Number.isFinite(explicit)) after = explicit
+      else for (const record of records) after = Math.max(after, Number(record?.seq) || 0)
+      const detail = await api('GET', `/os/processes/${segment(id)}`)
+      const status = String(detail?.process?.status ?? detail?.status ?? '')
+      if (terminalStatuses.has(status)) break
+      await new Promise((resolve) => setTimeout(resolve, records.length > 0 ? 10 : 120))
+    }
+    await inputQueue
+    if (inputError) throw inputError
+  } finally {
+    input.off('data', onData)
+    process.off('SIGWINCH', resize)
+    if (input.isTTY) input.setRawMode(wasRaw)
+    input.pause()
+    output.write('\r\n[detached]\r\n')
+  }
 }
 
 const integer = (value: string): number => {
@@ -22,6 +85,14 @@ const decimal = (value: string): number => {
   if (!Number.isFinite(parsed)) throw new Error(`expected a number, received "${value}"`)
   return parsed
 }
+
+const opaqueId = (value: string): string => {
+  const id = value.trim()
+  if (!id) throw new Error('resource id cannot be empty')
+  return id
+}
+
+const segment = (value: string): string => encodeURIComponent(opaqueId(value))
 
 const csv = (value?: string): string[] | undefined => value
   ?.split(',')
@@ -60,6 +131,7 @@ const summarize = (value: any): string => {
 export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps): void {
   const write = deps.output ?? console.log
   const stdin = deps.readStdin ?? (() => fs.readFileSync(0, 'utf8'))
+  const attach = deps.attachProcess ?? ((id: string) => attachManagedProcess(deps.api, id))
 
   const ready = async () => {
     await deps.ensureReady()
@@ -119,7 +191,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('GET', `/os/workspaces/${integer(id)}`), options.json)
+      print(await deps.api('GET', `/os/workspaces/${segment(id)}`), options.json)
     })
   workspace.command('update <id>')
     .option('--name <name>')
@@ -135,13 +207,13 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         card_id: options.card,
         env: parseJsonOption<Record<string, string>>(options.env, '--env'),
       })
-      print(await deps.api('PATCH', `/os/workspaces/${integer(id)}`, body), options.json)
+      print(await deps.api('PATCH', `/os/workspaces/${segment(id)}`, body), options.json)
     })
   workspace.command('archive <id>')
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('DELETE', `/os/workspaces/${integer(id)}`), options.json)
+      print(await deps.api('DELETE', `/os/workspaces/${segment(id)}`), options.json)
     })
 
   const processCommand = program.command('process').description('run and control real PTY processes')
@@ -149,7 +221,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (workspaceId, options) => {
       await ready()
-      print(await deps.api('GET', `/os/workspaces/${integer(workspaceId)}/processes`), options.json, ['processes'])
+      print(await deps.api('GET', `/os/workspaces/${segment(workspaceId)}/processes`), options.json, ['processes'])
     })
   processCommand.command('start <workspace> <command...>')
     .option('--name <name>', 'process label', 'terminal')
@@ -161,7 +233,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (workspaceId, command: string[], options) => {
       await ready()
-      print(await deps.api('POST', `/os/workspaces/${integer(workspaceId)}/processes`, compact({
+      print(await deps.api('POST', `/os/workspaces/${segment(workspaceId)}/processes`, compact({
         name: options.name,
         command: command.join(' '),
         cwd: options.cwd,
@@ -176,10 +248,16 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print records instead of terminal bytes')
     .action(async (id, options) => {
       await ready()
-      const result = await deps.api('GET', `/os/processes/${integer(id)}/output?after=${options.after}`)
+      const result = await deps.api('GET', `/os/processes/${segment(id)}/output?after=${options.after}`)
       if (options.json) return print(result, true)
       const records = arrayFrom(result, ['output', 'records', 'chunks'])
       write(records.map((record) => typeof record === 'string' ? record : (record.data ?? '')).join(''))
+    })
+  processCommand.command('attach <id>')
+    .description('attach this terminal to a managed PTY; Ctrl+] detaches')
+    .action(async (id) => {
+      await ready()
+      await attach(opaqueId(id))
     })
   processCommand.command('input <id> [text]')
     .option('--stdin', 'read exact input bytes from stdin')
@@ -188,13 +266,13 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       await ready()
       const data = options.stdin ? stdin() : text
       if (data === undefined) throw new Error('input requires text or --stdin')
-      print(await deps.api('POST', `/os/processes/${integer(id)}/input`, { data }), options.json)
+      print(await deps.api('POST', `/os/processes/${segment(id)}/input`, { data }), options.json)
     })
   processCommand.command('resize <id> <cols> <rows>')
     .option('--json', 'print the complete response')
     .action(async (id, cols, rows, options) => {
       await ready()
-      print(await deps.api('POST', `/os/processes/${integer(id)}/resize`, {
+      print(await deps.api('POST', `/os/processes/${segment(id)}/resize`, {
         cols: integer(cols), rows: integer(rows),
       }), options.json)
     })
@@ -202,7 +280,13 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, signal, options) => {
       await ready()
-      print(await deps.api('POST', `/os/processes/${integer(id)}/signal`, { signal: signal ?? 'SIGTERM' }), options.json)
+      print(await deps.api('POST', `/os/processes/${segment(id)}/signal`, { signal: signal ?? 'SIGTERM' }), options.json)
+    })
+  processCommand.command('restart <id>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/processes/${segment(id)}/restart`), options.json)
     })
 
   const attention = program.command('attention').description('inspect and resolve items that need a human')
@@ -219,7 +303,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('POST', `/os/attention/${integer(id)}/resolve`, compact({ resolution: options.resolution })), options.json)
+      print(await deps.api('POST', `/os/attention/${segment(id)}/resolve`, compact({ resolution: options.resolution })), options.json)
     })
 
   const contract = program.command('contract').description('manage executable task contracts')
@@ -238,8 +322,8 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--priority <number>', 'higher runs first', integer)
     .option('--tokens <number>', 'token budget', integer)
     .option('--cost <number>', 'cost budget', decimal)
-    .option('--policy <id>', 'policy id', integer)
-    .option('--workspace <id>', 'workspace id', integer)
+    .option('--policy <id>', 'policy id')
+    .option('--workspace <id>', 'workspace id')
     .option('--json', 'print the complete response')
     .action(async (cardId, options) => {
       await ready()
@@ -270,7 +354,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--file <path>', 'read artifact content from a file')
     .option('--mime <type>')
     .option('--metadata <json>')
-    .option('--workspace <id>', 'workspace id', integer)
+    .option('--workspace <id>', 'workspace id')
     .option('--json', 'print the complete response')
     .action(async (cardId, kind, name, options) => {
       await ready()
@@ -292,14 +376,14 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (workspaceId, options) => {
       await ready()
-      print(await deps.api('GET', `/os/workspaces/${integer(workspaceId)}/context`), options.json, ['context', 'items'])
+      print(await deps.api('GET', `/os/workspaces/${segment(workspaceId)}/context`), options.json, ['context', 'items'])
     })
   context.command('set <workspace> <json>')
     .option('--json-output', 'print the complete response')
     .action(async (workspaceId, value, options) => {
       await ready()
       const items = parseJsonOption<unknown[]>(value, 'context')
-      print(await deps.api('PUT', `/os/workspaces/${integer(workspaceId)}/context`, { items }), options.jsonOutput)
+      print(await deps.api('PUT', `/os/workspaces/${segment(workspaceId)}/context`, { items }), options.jsonOutput)
     })
 
   const checkpoint = program.command('checkpoint').description('create and safely fork durable checkpoints')
@@ -307,7 +391,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (workspaceId, options) => {
       await ready()
-      print(await deps.api('GET', `/os/workspaces/${integer(workspaceId)}/checkpoints`), options.json, ['checkpoints'])
+      print(await deps.api('GET', `/os/workspaces/${segment(workspaceId)}/checkpoints`), options.json, ['checkpoints'])
     })
   checkpoint.command('create <workspace> <name>')
     .option('--context <json>')
@@ -315,7 +399,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (workspaceId, name, options) => {
       await ready()
-      print(await deps.api('POST', `/os/workspaces/${integer(workspaceId)}/checkpoints`, compact({
+      print(await deps.api('POST', `/os/workspaces/${segment(workspaceId)}/checkpoints`, compact({
         name,
         context: parseJsonOption<Record<string, unknown>>(options.context, '--context'),
         process_recipes: parseJsonOption<unknown[]>(options.recipes, '--recipes'),
@@ -328,7 +412,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('POST', `/os/checkpoints/${integer(id)}/fork`, compact({
+      print(await deps.api('POST', `/os/checkpoints/${segment(id)}/fork`, compact({
         name: options.name,
         worktree_path: options.path,
         branch: options.branch,
@@ -347,7 +431,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     })
   job.command('create <card>')
     .option('--board <id>', 'board id', integer)
-    .option('--workspace <id>', 'workspace id', integer)
+    .option('--workspace <id>', 'workspace id')
     .option('--provider <name>', 'agent driver', 'claude')
     .option('--model <model>')
     .option('--priority <number>', 'higher runs first', integer)
@@ -374,7 +458,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('POST', `/os/jobs/${integer(id)}/cancel`), options.json)
+      print(await deps.api('POST', `/os/jobs/${segment(id)}/cancel`), options.json)
     })
 
   const policy = program.command('policy').description('manage agent filesystem, command, network, and secret policy')
@@ -408,18 +492,20 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (id, kind, value, options) => {
       await ready()
-      print(await deps.api('POST', `/os/policies/${integer(id)}/evaluate`, { kind, value }), options.json)
+      print(await deps.api('POST', `/os/policies/${segment(id)}/evaluate`, { kind, value }), options.json)
     })
 
   program.command('events')
     .description('read the append-only Agent OS event stream')
     .option('--board <id>', 'board id', integer)
-    .option('--after <id>', 'only events after this id', integer, 0)
+    .option('--after <id>', 'only events after this opaque cursor')
     .option('--limit <number>', 'maximum events', integer, 100)
     .option('--json', 'print the complete response')
     .action(async (options) => {
       const id = await boardId(options.board)
-      print(await deps.api('GET', `/os/boards/${id}/events?after=${options.after}&limit=${options.limit}`), options.json, ['events'])
+      const query = new URLSearchParams({ limit: String(options.limit) })
+      if (options.after) query.set('after', opaqueId(options.after))
+      print(await deps.api('GET', `/os/boards/${id}/events?${query}`), options.json, ['events'])
     })
 
   program.command('conflicts')

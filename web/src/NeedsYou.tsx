@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from './api'
 import { AttentionItem, osApi } from './osApi'
 import { OsIcon } from './OsIcon'
+import { useModalFocusTrap } from './useModalFocusTrap'
 
 type BoardRef = { id: number; name: string }
 
@@ -26,9 +27,13 @@ export function NeedsYou({ boards, onOpen }: {
   const [error, setError] = useState<string | null>(null)
   const [resolving, setResolving] = useState<Set<string>>(new Set())
   const closeRef = useRef<HTMLButtonElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const drawerRef = useRef<HTMLElement>(null)
   const boardsRef = useRef(boards)
   boardsRef.current = boards
   const boardKey = boards.map((board) => board.id).join(',')
+  const close = useCallback(() => setOpen(false), [])
+  useModalFocusTrap(open, drawerRef, close, closeRef)
 
   const load = useCallback(async (quiet = false) => {
     const current = boardsRef.current
@@ -62,15 +67,10 @@ export function NeedsYou({ boards, onOpen }: {
         event.preventDefault()
         setOpen((current) => !current)
       }
-      if (event.key === 'Escape') setOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
-
-  useEffect(() => {
-    if (open) window.requestAnimationFrame(() => closeRef.current?.focus())
-  }, [open])
 
   const boardNames = useMemo(() => new Map(boards.map((board) => [board.id, board.name])), [boardKey])
   const urgent = items.filter((item) => item.severity === 'critical' || item.severity === 'high').length
@@ -95,7 +95,7 @@ export function NeedsYou({ boards, onOpen }: {
 
   return (
     <>
-      <button className={`os-attention-trigger${urgent ? ' urgent' : ''}`} onClick={() => setOpen(true)}
+      <button ref={triggerRef} className={`os-attention-trigger${urgent ? ' urgent' : ''}`} onClick={() => setOpen(true)}
         aria-haspopup="dialog" aria-expanded={open} aria-label={`Needs You, ${items.length} open items`}
         title="Needs You — Command/Control + Shift + A">
         <OsIcon name="attention" />
@@ -105,15 +105,15 @@ export function NeedsYou({ boards, onOpen }: {
 
       {open && (
         <div className="os-attention-layer">
-          <button className="os-attention-scrim" onClick={() => setOpen(false)} aria-label="Close Needs You" />
-          <aside className="os-attention-drawer" role="dialog" aria-modal="true" aria-labelledby="needs-you-title">
+          <button className="os-attention-scrim" onClick={close} aria-label="Close Needs You" />
+          <aside ref={drawerRef} className="os-attention-drawer" role="dialog" aria-modal="true" aria-labelledby="needs-you-title" tabIndex={-1}>
             <header className="os-attention-head">
               <div>
                 <p className="os-eyebrow">Human attention queue</p>
                 <h2 id="needs-you-title">Needs You</h2>
                 <p>Only decisions blocking useful work appear here.</p>
               </div>
-              <button ref={closeRef} className="os-icon-button" onClick={() => setOpen(false)} aria-label="Close Needs You">
+              <button ref={closeRef} className="os-icon-button" onClick={close} aria-label="Close Needs You">
                 <OsIcon name="close" />
               </button>
             </header>
@@ -151,7 +151,7 @@ export function NeedsYou({ boards, onOpen }: {
                       <span>{boardNames.get(item.board_id) ?? `Project ${item.board_id}`}</span>
                       <div>
                         {item.workspace_id !== null && onOpen && (
-                          <button className="os-text-button" onClick={() => { onOpen(item); setOpen(false) }}>
+                          <button className="os-text-button" onClick={() => { onOpen(item); close() }}>
                             Open workspace <OsIcon name="external" size={13} />
                           </button>
                         )}

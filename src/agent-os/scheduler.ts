@@ -5,7 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { optionalInteger, parseJson, timestamp } from './json.js'
 
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'blocked' | 'cancelled'
+export type JobStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'blocked' | 'cancelled'
 
 export interface Job {
   id: string
@@ -20,6 +20,8 @@ export interface Job {
   max_attempts: number
   budget_tokens: number | null
   budget_cents: number | null
+  spent_tokens: number
+  spent_cents: number
   scheduled_at: string
   started_at: string | null
   finished_at: string | null
@@ -61,6 +63,7 @@ export interface SchedulerTick {
 export class JobScheduler {
   private readonly events: EventStore
   private readonly attention: AttentionService
+  private activeTick: Promise<SchedulerTick> | null = null
 
   constructor(private readonly db: Database.Database, private readonly executor?: JobExecutor) {
     this.events = new EventStore(db)
@@ -83,12 +86,21 @@ export class JobScheduler {
       budget_tokens: input.budgetTokens ?? null, budget_cents: input.budgetCents ?? null,
       scheduled_at: scheduledAt, started_at: null, finished_at: null, error: null, created_at: timestamp(),
     }
-    this.db.prepare(`INSERT INTO jobs
-      (id, board_id, card_id, workspace_id, provider, model, priority, status, attempts, max_attempts,
-       budget_tokens, budget_cents, scheduled_at, started_at, finished_at, error, created_at)
-      VALUES (@id, @board_id, @card_id, @workspace_id, @provider, @model, @priority, @status, @attempts,
-       @max_attempts, @budget_tokens, @budget_cents, @scheduled_at, @started_at, @finished_at, @error, @created_at)`)
-      .run(row)
+    if (row.card_id && this.db.prepare(`SELECT 1 FROM jobs WHERE card_id=?
+      AND status IN ('queued','running','cancelling')`).get(row.card_id)) {
+      throw new ConflictError('card already has an active job')
+    }
+    try {
+      this.db.prepare(`INSERT INTO jobs
+        (id, board_id, card_id, workspace_id, provider, model, priority, status, attempts, max_attempts,
+         budget_tokens, budget_cents, scheduled_at, started_at, finished_at, error, created_at)
+        VALUES (@id, @board_id, @card_id, @workspace_id, @provider, @model, @priority, @status, @attempts,
+         @max_attempts, @budget_tokens, @budget_cents, @scheduled_at, @started_at, @finished_at, @error, @created_at)`)
+        .run(row)
+    } catch (error) {
+      if (String(error).includes('card already has an active job')) throw new ConflictError('card already has an active job')
+      throw error
+    }
     this.events.append({ boardId: row.board_id, workspaceId: row.workspace_id, cardId: row.card_id,
       kind: 'job.queued', source: 'scheduler', payload: { job_id: row.id, provider: row.provider, priority } })
     return mapJob(row)
@@ -110,24 +122,41 @@ export class JobScheduler {
     const job = this.get(id)
     if (!job) throw new NotFoundError('job not found')
     if (['succeeded', 'cancelled'].includes(job.status)) return job
-    await this.executor?.cancel?.(job)
+    const claimed = this.db.prepare(`UPDATE jobs SET status='cancelling', error=NULL
+      WHERE id=? AND status IN ('queued','running','blocked','cancelling')`).run(id)
+    if (claimed.changes !== 1) return this.get(id)!
+    try {
+      if (job.status === 'running' || job.status === 'cancelling') await this.executor?.cancel?.(job)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.db.prepare("UPDATE jobs SET error=? WHERE id=? AND status='cancelling'").run(`cancellation not confirmed: ${detail}`, id)
+      this.attention.create({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
+        kind: 'job.cancellation_failed', severity: 'critical', title: 'Job cancellation needs attention', detail })
+      throw error
+    }
     const at = timestamp()
-    this.db.prepare("UPDATE jobs SET status='cancelled', finished_at=?, error=NULL WHERE id=?").run(at, id)
+    this.db.prepare("UPDATE jobs SET status='cancelled', finished_at=?, error=NULL WHERE id=? AND status='cancelling'").run(at, id)
     this.events.append({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
       kind: 'job.cancelled', source: 'scheduler', payload: { job_id: id } })
     return this.get(id)!
   }
 
   async tick(): Promise<SchedulerTick> {
+    if (this.activeTick) return this.activeTick
+    const running = this.runTick()
+    const wrapped = running.finally(() => {
+      if (this.activeTick === wrapped) this.activeTick = null
+    })
+    this.activeTick = wrapped
+    return wrapped
+  }
+
+  private async runTick(): Promise<SchedulerTick> {
     const result: SchedulerTick = { started: [], completed: [], blocked: [], deferred: [] }
-    const running = (this.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status='running'").get() as { count: number }).count
-    let capacity = Math.max(0, this.maxLaunched() - running)
-    if (capacity === 0) return result
     const queued = (this.db.prepare(`SELECT * FROM jobs WHERE status='queued' AND scheduled_at<=?
       ORDER BY priority DESC, scheduled_at ASC, created_at ASC`).all(timestamp()) as Record<string, unknown>[]).map(mapJob)
 
     for (const job of queued) {
-      if (capacity === 0) break
       if (!this.supports(job.provider)) {
         const error = `provider ${job.provider} is unavailable; install or enable its driver`
         this.db.prepare('UPDATE jobs SET error=? WHERE id=?').run(error, job.id)
@@ -139,14 +168,14 @@ export class JobScheduler {
       const dependency = this.dependencyState(job)
       if (dependency === 'waiting') { result.deferred.push(job.id); continue }
       if (dependency === 'invalid') { this.block(job, 'one or more dependencies no longer exist'); result.blocked.push(job.id); continue }
-      if (job.budget_tokens === 0 || job.budget_cents === 0) {
+      if ((job.budget_tokens !== null && job.spent_tokens >= job.budget_tokens) ||
+          (job.budget_cents !== null && job.spent_cents >= job.budget_cents)) {
         this.block(job, 'job budget is exhausted before launch'); result.blocked.push(job.id); continue
       }
 
-      const claimed = this.db.prepare(`UPDATE jobs SET status='running', attempts=attempts+1,
-        started_at=?, finished_at=NULL, error=NULL WHERE id=? AND status='queued'`).run(timestamp(), job.id)
-      if (claimed.changes !== 1) continue
-      capacity--
+      const claim = this.claim(job.id)
+      if (claim === 'capacity') { result.deferred.push(job.id); break }
+      if (claim !== 'claimed') continue
       result.started.push(job.id)
       const active = this.get(job.id)!
       this.events.append({ boardId: active.board_id, workspaceId: active.workspace_id, cardId: active.card_id,
@@ -154,45 +183,81 @@ export class JobScheduler {
       try {
         const execution = await this.executor!.execute(active)
         if (execution?.status === 'running') continue
-        this.db.prepare("UPDATE jobs SET status='succeeded', finished_at=?, error=NULL WHERE id=?").run(timestamp(), active.id)
-        this.events.append({ boardId: active.board_id, workspaceId: active.workspace_id, cardId: active.card_id,
-          kind: 'job.succeeded', source: 'scheduler', payload: { job_id: active.id, ...(execution?.detail ?? {}) } })
-        result.completed.push(active.id)
-        capacity++
+        const completed = this.complete(active.id, undefined, execution?.detail)
+        if (completed.status === 'succeeded') result.completed.push(active.id)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        const retry = active.attempts < active.max_attempts
-        this.db.prepare(`UPDATE jobs SET status=?, error=?, finished_at=? WHERE id=?`)
-          .run(retry ? 'queued' : 'blocked', detail, retry ? null : timestamp(), active.id)
-        this.events.append({ boardId: active.board_id, workspaceId: active.workspace_id, cardId: active.card_id,
-          kind: retry ? 'job.retry_queued' : 'job.blocked', source: 'scheduler',
-          payload: { job_id: active.id, attempt: active.attempts, error: detail } })
-        if (!retry) {
-          this.attention.create({ boardId: active.board_id, workspaceId: active.workspace_id, cardId: active.card_id,
-            kind: 'job.blocked', severity: 'high', title: `Job blocked after ${active.attempts} attempt${active.attempts === 1 ? '' : 's'}`, detail })
-          result.blocked.push(active.id)
-        } else result.deferred.push(active.id)
-        capacity++
+        const current = this.get(active.id)
+        if (current?.status !== 'running') continue
+        const completed = this.complete(active.id, detail)
+        if (completed.status === 'blocked') result.blocked.push(active.id)
+        else if (completed.status === 'queued') result.deferred.push(active.id)
       }
     }
     return result
   }
 
-  complete(id: string, error?: string): Job {
+  complete(id: string, error?: string, detail: Record<string, unknown> = {}): Job {
     const job = this.get(id)
     if (!job) throw new NotFoundError('job not found')
     if (job.status !== 'running') throw new ConflictError('only a running job can be completed')
-    const status = error ? 'blocked' : 'succeeded'
-    this.db.prepare('UPDATE jobs SET status=?, error=?, finished_at=? WHERE id=?').run(status, error ?? null, timestamp(), id)
+    const retry = Boolean(error) && job.attempts < job.max_attempts
+    const status = retry ? 'queued' : error ? 'blocked' : 'succeeded'
+    const updated = this.db.prepare(`UPDATE jobs SET status=?, error=?, finished_at=?
+      WHERE id=? AND status='running'`).run(status, error ?? null, retry ? null : timestamp(), id)
+    if (updated.changes !== 1) return this.get(id)!
     this.events.append({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
-      kind: error ? 'job.blocked' : 'job.succeeded', source: 'scheduler', payload: { job_id: id, error } })
-    if (error) this.attention.create({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
+      kind: retry ? 'job.retry_queued' : error ? 'job.blocked' : 'job.succeeded', source: 'scheduler',
+      payload: { job_id: id, error, attempt: job.attempts, ...detail } })
+    if (error && !retry) this.attention.create({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
       kind: 'job.blocked', severity: 'high', title: 'Job blocked', detail: error })
     return this.get(id)!
   }
 
+  recover(id: string, error: string): Job {
+    const job = this.get(id)
+    if (!job) throw new NotFoundError('job not found')
+    if (job.status === 'cancelling') {
+      this.db.prepare("UPDATE jobs SET status='cancelled', error=NULL, finished_at=? WHERE id=?").run(timestamp(), id)
+      this.events.append({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
+        kind: 'job.cancelled', source: 'recovery', payload: { job_id: id, recovered: true } })
+      return this.get(id)!
+    }
+    if (job.status !== 'running') return job
+    return this.complete(id, error, { recovered: true })
+  }
+
+  recordUsage(id: string, tokens: number, cents: number): Job {
+    const safeTokens = Number.isFinite(tokens) ? Math.max(0, Math.floor(tokens)) : 0
+    const safeCents = Number.isFinite(cents) ? Math.max(0, Math.ceil(cents)) : 0
+    this.db.prepare(`UPDATE jobs SET spent_tokens=spent_tokens+?, spent_cents=spent_cents+? WHERE id=?`)
+      .run(safeTokens, safeCents, id)
+    const job = this.get(id)
+    if (!job) throw new NotFoundError('job not found')
+    return job
+  }
+
   private supports(provider: string): boolean {
     return !!this.executor && this.executor.supportedProviders().includes(provider)
+  }
+
+  private claim(id: string): 'claimed' | 'capacity' | 'stale' {
+    const reserve = this.db.transaction(() => {
+      const current = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(id) as { status: string } | undefined
+      if (current?.status !== 'queued') return 'stale' as const
+      const running = (this.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status IN ('running','cancelling')")
+        .get() as { count: number }).count
+      const legacyLaunched = (this.db.prepare(`SELECT COUNT(DISTINCT a.id) AS count
+        FROM agents a JOIN cards c ON c.owner_agent_id=a.id
+        WHERE a.kind='hired' AND a.status NOT IN ('gone','paused_limit') AND c.column_name='in_progress'
+          AND NOT EXISTS (SELECT 1 FROM agent_sessions s WHERE s.agent_id=a.id AND s.status IN ('starting','running','idle'))`)
+        .get() as { count: number }).count
+      if (running + legacyLaunched >= this.maxLaunched()) return 'capacity' as const
+      const claimed = this.db.prepare(`UPDATE jobs SET status='running', attempts=attempts+1,
+        started_at=?, finished_at=NULL, error=NULL WHERE id=? AND status='queued'`).run(timestamp(), id)
+      return claimed.changes === 1 ? 'claimed' as const : 'stale' as const
+    })
+    return reserve.immediate()
   }
 
   private dependencyState(job: Job): 'ready' | 'waiting' | 'invalid' {
@@ -241,6 +306,7 @@ function mapJob(row: Record<string, unknown>): Job {
     model: row.model == null ? null : String(row.model), priority: Number(row.priority), status: String(row.status) as JobStatus,
     attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
     budget_tokens: optionalInteger(row.budget_tokens, 'budget_tokens'), budget_cents: optionalInteger(row.budget_cents, 'budget_cents'),
+    spent_tokens: Number(row.spent_tokens ?? 0), spent_cents: Number(row.spent_cents ?? 0),
     scheduled_at: String(row.scheduled_at), started_at: row.started_at == null ? null : String(row.started_at),
     finished_at: row.finished_at == null ? null : String(row.finished_at), error: row.error == null ? null : String(row.error),
     created_at: String(row.created_at),

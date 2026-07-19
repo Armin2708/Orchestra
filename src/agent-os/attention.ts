@@ -61,9 +61,15 @@ export class AttentionService {
   }
 
   listBoard(boardId: number, status = 'open'): AttentionItem[] {
-    return (this.db.prepare(`SELECT * FROM attention_items WHERE board_id=? AND status=?
+    if (!['open', 'resolved', 'all'].includes(status)) throw new ValidationError('attention status must be open, resolved, or all')
+    const rows = status === 'all'
+      ? this.db.prepare(`SELECT * FROM attention_items WHERE board_id=?
+        ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        created_at ASC, rowid ASC`).all(boardId)
+      : this.db.prepare(`SELECT * FROM attention_items WHERE board_id=? AND status=?
       ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-      created_at ASC, rowid ASC`).all(boardId, status) as Record<string, unknown>[]).map(mapAttention)
+      created_at ASC, rowid ASC`).all(boardId, status)
+    return (rows as Record<string, unknown>[]).map(mapAttention)
   }
 
   get(id: string): AttentionItem | null {

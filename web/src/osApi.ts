@@ -136,7 +136,7 @@ export type Policy = {
   command_globs: string[] | string
   network_hosts: string[] | string
   secret_names: string[] | string
-  approval_scope: 'once' | 'task' | 'project' | string
+  approval_scope: 'advisory' | 'ask' | 'allow' | 'deny' | string
   created_at: string
   updated_at: string
 }
@@ -349,6 +349,8 @@ export const osApi = {
   writeProcessInput: (processId: OsId, data: string) => api('POST', `/os/processes/${processId}/input`, { data }),
   resizeProcess: (processId: OsId, cols: number, rows: number) => api('POST', `/os/processes/${processId}/resize`, { cols, rows }),
   signalProcess: (processId: OsId, signal: string) => api('POST', `/os/processes/${processId}/signal`, { signal }),
+  restartProcess: async (processId: OsId) =>
+    normalizeProcess(unwrapEntity<unknown>(await api('POST', `/os/processes/${processId}/restart`), ['process'])),
 
   listEvents: async (boardId: number) =>
     unwrapList<OsEvent>(await api('GET', `/os/boards/${boardId}/events`), ['events']),
