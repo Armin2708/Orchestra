@@ -125,6 +125,7 @@ it('nudges are one-liners: syntax only on first reminder, stale nudge once per w
   await hooks.runHook('user-prompt-submit')
   const first = JSON.parse(out.join('\n')).hookSpecificOutput.additionalContext
   expect(first).toContain('orchestra card create')
+  expect(first).not.toMatch(/"</) // shell-safe: injected syntax models single quotes (#53)
   expect(first).not.toContain('\n')
 
   // stale card, later window — one short line, no command syntax repeated
