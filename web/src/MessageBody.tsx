@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import type { BoardMessage, MessageKind } from './api'
-import { MessagePresentationToken, presentMessage } from './messagePresentation'
+import { presentMessage, type MessagePresentationToken } from './messagePresentation'
 
 type Props = {
   message: Pick<BoardMessage, 'body' | 'kind'> | { body: string; kind?: MessageKind }
@@ -78,9 +78,11 @@ export function MessageBody({ message, boardId, cardTitles }: Props) {
       <details className="message-raw">
         <summary>Raw protocol</summary>
         <div className="message-raw-panel">
-          <pre>{presentation.raw}</pre>
-          <button type="button" onClick={copyRaw} aria-live="polite">
-            {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Select text to copy' : 'Copy raw'}
+          <pre tabIndex={0} aria-label="Exact agent protocol message">{presentation.raw}</pre>
+          <button type="button" onClick={copyRaw} aria-live="polite"
+            aria-label={copyState === 'copied' ? 'Raw protocol copied' : copyState === 'failed' ? 'Raw protocol copy unavailable' : 'Copy raw protocol message'}
+            title={copyState === 'failed' ? 'Select the raw protocol text manually' : undefined}>
+            {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy unavailable' : 'Copy raw'}
           </button>
         </div>
       </details>

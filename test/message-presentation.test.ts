@@ -43,7 +43,9 @@ describe('human-readable message presentation', () => {
   it.each([
     ['⚠ undeliverable: agent left before reading.', 'Delivery failed', 'danger'],
     ['No collision — proceed with the merge.', 'No conflict reported', 'positive'],
+    ['No blockers remain for the release.', 'No blockers reported', 'positive'],
     ['Card #8 is blocked on the release gate.', 'Blocker or gate update', 'attention'],
+    ['Checks are not green and the change is not merged.', 'Merge pending', 'attention'],
     ['Verification failed after the final run.', 'Failure reported', 'danger'],
     ['All checks green and complete.', 'Completion update', 'positive'],
   ] as const)('classifies common protocol status: %s', (body, heading, tone) => {
@@ -74,6 +76,7 @@ describe('human-readable message presentation', () => {
     expect(presentation.clauses).toHaveLength(2)
     expect(presentation.clauses.flat().map((token) => token.text).join(''))
       .toContain('<script>alert("x")</script>')
+    expect(presentation.clauses.flat().some((token) => token.kind === 'path')).toBe(false)
   })
 
   it('uses intent-aware headings when a packet has no recognized protocol vocabulary', () => {

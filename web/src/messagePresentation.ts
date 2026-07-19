@@ -27,7 +27,14 @@ export type MessagePresentationContext = {
 
 type PresentableMessage = Pick<BoardMessage, 'body' | 'kind'> | { body: string; kind?: MessageKind }
 
-const TOKEN_PATTERN = /(#(\d+))|((?<![A-Za-z0-9#/:])@?(?=[0-9a-f]{7,40}\b)(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b)|((?<![/:A-Za-z0-9])(?:feat|feature|fix|hotfix|release|codex)\/[A-Za-z0-9._/-]*[A-Za-z0-9_-])|((?<![:/A-Za-z0-9])(?:\.\.?\/|\/)[A-Za-z0-9._~@+/-]*[A-Za-z0-9_~@+-])|(\b(?:acknowledged|ack|noted|tracked|recorded)\b)|(\b(?:no blockers?|no collision|no conflict|not ready|merge-ready|main advanced|undeliverable|blockers?|blocked|gates?|gated|merged|green|passes?|passed|failed|failure|ready|complete|completed|done|collision|conflict)\b)/gi
+const TOKEN_PATTERN = new RegExp([
+  '(?<card>#(?<cardId>\\d+))',
+  '(?<commit>(?<![A-Za-z0-9#/:])@?(?=[0-9a-f]{7,40}\\b)(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\\d)[0-9a-f]{7,40}\\b)',
+  '(?<branch>(?<![/:A-Za-z0-9])(?:feat|feature|fix|hotfix|release|codex)\\/[A-Za-z0-9._/-]*[A-Za-z0-9_-])',
+  '(?<path>(?<![<:/A-Za-z0-9])(?:\\.\\.?\\/|\\/)[A-Za-z0-9._~@+/-]*[A-Za-z0-9_~@+-])',
+  '(?<receipt>\\b(?:acknowledged|ack|noted|tracked|recorded)\\b)',
+  '(?<status>\\b(?:no blockers?|no gates?|no collision|no conflict|not blocked|not ready|not merged|not green|not complete(?:d)?|not done|merge-ready|main advanced|undeliverable|blockers?|blocked|gates?|gated|merged|green|passes?|passed|failed|failure|ready|complete|completed|done|collision|conflict)\\b)',
+].join('|'), 'gi')
 
 const receiptLabel = (text: string) => {
   switch (text.toLowerCase()) {
@@ -43,6 +50,9 @@ function statusPresentation(text: string): Pick<MessagePresentationToken, 'label
   switch (text.toLowerCase()) {
     case 'no blocker':
     case 'no blockers': return { label: 'No blockers', tone: 'positive' }
+    case 'no gate':
+    case 'no gates': return { label: 'No gates', tone: 'positive' }
+    case 'not blocked': return { label: 'Not blocked', tone: 'positive' }
     case 'no collision': return { label: 'No collision', tone: 'positive' }
     case 'no conflict': return { label: 'No conflict', tone: 'positive' }
     case 'main advanced': return { label: 'Main branch advanced', tone: 'positive' }
@@ -57,6 +67,11 @@ function statusPresentation(text: string): Pick<MessagePresentationToken, 'label
     case 'done': return { label: 'Done', tone: 'positive' }
     case 'ready': return { label: 'Ready', tone: 'positive' }
     case 'not ready': return { label: 'Not ready', tone: 'attention' }
+    case 'not merged': return { label: 'Not merged', tone: 'attention' }
+    case 'not green': return { label: 'Checks not green', tone: 'attention' }
+    case 'not complete':
+    case 'not completed':
+    case 'not done': return { label: 'Not complete', tone: 'attention' }
     case 'blocker':
     case 'blockers': return { label: 'Blocker', tone: 'attention' }
     case 'blocked': return { label: 'Blocked', tone: 'attention' }
@@ -93,19 +108,20 @@ function tokenizeClause(clause: string, context: MessagePresentationContext): Me
   while ((match = pattern.exec(clause)) !== null) {
     if (match.index > cursor) tokens.push({ kind: 'text', text: clause.slice(cursor, match.index) })
     const text = match[0]
-    if (match[1]) {
-      const cardId = Number(match[2])
+    const groups = match.groups ?? {}
+    if (groups.card) {
+      const cardId = Number(groups.cardId)
       tokens.push({
         kind: 'card', text, cardId,
         cardTitle: context.cardTitles?.get(cardId) ?? null,
       })
-    } else if (match[3]) {
+    } else if (groups.commit) {
       tokens.push({ kind: 'commit', text, value: text.replace(/^@/, '') })
-    } else if (match[4]) {
+    } else if (groups.branch) {
       tokens.push({ kind: 'branch', text, value: text })
-    } else if (match[5]) {
+    } else if (groups.path) {
       tokens.push({ kind: 'path', text, value: text })
-    } else if (match[6]) {
+    } else if (groups.receipt) {
       tokens.push({ kind: 'receipt', text, label: receiptLabel(text), tone: 'receipt' })
     } else {
       tokens.push({ kind: 'status', text, ...statusPresentation(text) })
@@ -124,9 +140,12 @@ function presentationHeading(body: string, kind: MessageKind): Pick<MessagePrese
   const receipt = source.match(/^(acknowledged|ack|noted|tracked|recorded)\b/i)?.[1]
   if (receipt) return { heading: `${receiptLabel(receipt)} update`, tone: 'receipt' }
 
-  if (/\bno (?:blockers?|collision|conflict)\b/i.test(source)) return { heading: 'No conflict reported', tone: 'positive' }
+  if (/\b(?:no (?:blockers?|gates?)|not blocked)\b/i.test(source)) return { heading: 'No blockers reported', tone: 'positive' }
+  if (/\bno (?:collision|conflict)\b/i.test(source)) return { heading: 'No conflict reported', tone: 'positive' }
   if (/\bmain advanced\b/i.test(source)) return { heading: 'Main branch advanced', tone: 'positive' }
-  if (/\b(?:not ready|blocked|blockers?|gates?|gated)\b/i.test(source)) return { heading: 'Blocker or gate update', tone: 'attention' }
+  if (/\bnot merged\b/i.test(source)) return { heading: 'Merge pending', tone: 'attention' }
+  if (/\b(?:not ready|not green|not complete(?:d)?|not done)\b/i.test(source)) return { heading: 'Work still pending', tone: 'attention' }
+  if (/\b(?:blocked|blockers?|gates?|gated)\b/i.test(source)) return { heading: 'Blocker or gate update', tone: 'attention' }
   if (/\b(?:merged|merge-ready)\b/i.test(source)) return { heading: 'Merge update', tone: 'positive' }
   if (/\b(?:failed|failure)\b/i.test(source)) return { heading: 'Failure reported', tone: 'danger' }
   if (/\b(?:green|passes?|passed|complete|completed|done)\b/i.test(source)) return { heading: 'Completion update', tone: 'positive' }

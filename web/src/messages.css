@@ -102,10 +102,13 @@
 .message-token-technical {
   display: inline-flex; align-items: baseline; gap: 4px; margin: 0 1px; padding: 1px 5px;
   border: 1px solid #e7e3db; border-radius: 4px; background: #FAF9F7; color: var(--ink-soft);
-  font-size: 0.82em; line-height: 1.45;
+  max-width: 100%; font-size: 0.82em; line-height: 1.45;
 }
 .message-token-technical > span { font-size: 0.86em; letter-spacing: 0.035em; text-transform: uppercase; }
-.message-token-technical code { color: #4f4b45; font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; }
+.message-token-technical code {
+  min-width: 0; color: #4f4b45; font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
 .message-token-receipt, .message-token-status {
   display: inline-block; padding: 0 4px; border-radius: 4px; font-size: 0.92em; font-weight: 650;
   box-decoration-break: clone; -webkit-box-decoration-break: clone;
