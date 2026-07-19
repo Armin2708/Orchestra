@@ -34,8 +34,24 @@ export type Agent = { id: number; name: string; status: string; last_seen: strin
 export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }
 export type ReviewDecision = { id: number; board_id: number; card_id: number; card_title?: string; milestone_id: number | null; step_order: number | null; decision: 'approve' | 'send_back'; note: string | null; decided_at: string }
-export type Thread = { id: number; body: string; from_name: string | null; to_name: string | null; created_at: string; answered: boolean; replies: { id: number; body: string; from_name: string | null; created_at: string }[] }
-export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: any[]; threads: Thread[]; ideas: Idea[]; milestones: Milestone[] }
+export const MESSAGE_KINDS = ['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const
+export type MessageKind = typeof MESSAGE_KINDS[number]
+export type BoardMessage = {
+  id: number
+  board_id: number
+  card_id: number | null
+  kind: MessageKind
+  body: string
+  from_name: string | null
+  to_name: string | null
+  reply_to: number | null
+  created_at: string
+  delivered_at: string | null
+  recipient_count: number
+  delivered_count: number
+}
+export type Thread = BoardMessage & { answered: boolean; replies: BoardMessage[] }
+export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: BoardMessage[]; threads: Thread[]; ideas: Idea[]; milestones: Milestone[] }
 
 // deterministic identity color per agent name — muted, editorial
 export function agentHue(name: string): number {

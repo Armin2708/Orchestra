@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, Agent, Card, ReviewDecision, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, ReviewDecision, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
 import { STATUS } from './Board'
+import { MessageComposer } from './MessageComposer'
+import { MessageThread } from './MessageThread'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
@@ -10,16 +12,30 @@ const EVENT_VERB: Record<string, string> = {
 export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
   { card: Card; boardId: number; agents?: Agent[]; onClose: () => void; onChange: () => void }) {
   const [events, setEvents] = useState<any[]>([])
-  const [comment, setComment] = useState('')
   const [editingDesc, setEditingDesc] = useState(false)
   const [desc, setDesc] = useState(card.description)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [reviews, setReviews] = useState<ReviewDecision[]>([])
   const [reviewNote, setReviewNote] = useState('')
+  const [conversation, setConversation] = useState<Thread[]>([])
+  const [messageAgents, setMessageAgents] = useState<Agent[]>(agents)
+  const [conversationLoading, setConversationLoading] = useState(true)
 
   useEffect(() => { api('GET', `/cards/${card.id}/events`).then(setEvents) }, [card.id, card.updated_at])
   useEffect(() => { api('GET', `/cards/${card.id}/reviews`).then(setReviews).catch(() => {}) }, [card.id, card.updated_at])
   useEffect(() => { setDesc(card.description) }, [card.description])
+  useEffect(() => {
+    let current = true
+    setConversationLoading(true)
+    api('GET', `/boards/${boardId}/snapshot`).then((snap: Snapshot) => {
+      if (!current) return
+      setConversation(snap.threads.filter((thread) => thread.card_id === card.id))
+      setMessageAgents(snap.agents.filter((agent) => agent.status !== 'gone'))
+    }).catch(() => {
+      if (current) setMessageAgents(agents)
+    }).finally(() => { if (current) setConversationLoading(false) })
+    return () => { current = false }
+  }, [boardId, card.id])
 
   // modal behavior: take focus on open, close on Escape
   const panelRef = useRef<HTMLElement>(null)
@@ -30,10 +46,11 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const send = async () => {
-    if (!comment.trim()) return
-    await api('POST', '/messages', { board_id: boardId, to: card.owner ?? undefined, card_id: card.id, body: comment.trim() })
-    setComment(''); onChange()
+  const refreshConversation = async () => {
+    const snap: Snapshot = await api('GET', `/boards/${boardId}/snapshot`)
+    setConversation(snap.threads.filter((thread) => thread.card_id === card.id))
+    setMessageAgents(snap.agents.filter((agent) => agent.status !== 'gone'))
+    onChange()
   }
   const saveDesc = async () => {
     await api('PATCH', `/cards/${card.id}`, { description: desc })
@@ -187,10 +204,23 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
           {events.length === 0 && <li className="tl-empty">No activity yet</li>}
         </ol>
 
-        <h3>Message {card.owner ?? 'the board'}</h3>
-        <textarea value={comment} placeholder="Lands in the agent's context within seconds if it's working, or at its next turn"
-          onChange={(e) => setComment(e.target.value)} />
-        <button className="btn primary" onClick={send}>Send</button>
+        <h3>Conversation</h3>
+        <section className="card-conversation" aria-label={`Conversation for card ${card.id}`}>
+          {conversationLoading && <p className="card-conversation-loading">Loading messages…</p>}
+          {!conversationLoading && conversation.length === 0 && (
+            <p className="card-conversation-empty">No card-linked messages yet. Choose an intent below to start one.</p>
+          )}
+          {conversation.length > 0 && (
+            <div className="card-conversation-list">
+              {conversation.map((thread) => (
+                <MessageThread key={thread.id} thread={thread} compact onChange={refreshConversation} />
+              ))}
+            </div>
+          )}
+          <MessageComposer boardId={boardId} agents={messageAgents} fixedCardId={card.id}
+            defaultTo={card.owner} defaultKind={card.owner ? 'notify' : 'announce'} compact
+            onSent={refreshConversation} />
+        </section>
 
         <div className="drawer-footer">
           {card.column === 'done' && (
