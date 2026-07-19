@@ -271,7 +271,7 @@ function SystemMeter({ boards }: { boards: number[] }) {
         const cached = inTok > 0 ? Math.round(100 * u.cache_read / inTok) : 0
         return (
           <span className="meter"
-            title={`real API tokens consumed by hired agents (all boards, from SDK usage reports — not an estimate): input ${u.input_tokens.toLocaleString()} · cache read ${u.cache_read.toLocaleString()} (${cached}% of input) · cache write ${u.cache_creation.toLocaleString()} · output ${u.output_tokens.toLocaleString()}`}>
+            title={`real API tokens consumed by hired agents (all boards, from SDK usage reports — not an estimate): input ${u.input_tokens.toLocaleString()} · cache read ${u.cache_read.toLocaleString()} (${cached}% of intake) · cache write ${u.cache_creation.toLocaleString()} · output ${u.output_tokens.toLocaleString()}`}>
             <span className="meter-label">api tok</span>
             <span className="meter-val">↑ {fmtTokens(inTok)} · ↓ {fmtTokens(u.output_tokens)}</span>
           </span>
