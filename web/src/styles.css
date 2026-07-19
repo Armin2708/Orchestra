@@ -219,6 +219,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .hire-btn:hover { border-color: #ccc8bf; color: var(--ink); }
 .crew-slot { position: relative; display: inline-flex; }
+.provider-badge {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  border: 1px solid #d8d4cc; border-radius: 999px; padding: 1px 7px;
+  background: #f5f3ee; color: #6f6b64; font-size: 9px; line-height: 1.45;
+  font-weight: 700; letter-spacing: .045em; text-transform: uppercase;
+}
+.provider-badge[data-provider='claude'] { border-color: #e2c5b7; background: #fbf1eb; color: #9b5139; }
+.provider-badge[data-provider='codex'] { border-color: #bad7cb; background: #ecf6f2; color: #236b58; }
+.provider-badge.compact { padding: 0 5px; font-size: 7.5px; line-height: 1.5; }
+.crew-slot > .provider-badge { position: absolute; left: 50%; bottom: -8px; z-index: 2; transform: translateX(-50%); }
+.provider-launch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.provider-launch button:disabled { opacity: .58; cursor: wait; }
+.provider-launch-override { display: inline-flex; min-width: 0; }
+.provider-launch-override select {
+  max-width: 84px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--ink-soft); padding: 2px 18px 2px 7px; font: inherit; font-size: 9.5px;
+}
+.provider-launch-override select:focus-visible { outline: 2px solid rgba(54, 101, 56, .2); outline-offset: 1px; }
+.provider-launch-card .provider-launch-override select { max-width: 70px; border-color: #e0d6bb; color: #806529; background: #fbf7ed; }
+.t-top > .provider-launch { margin-left: auto; }
 .avatar.hired { box-shadow: 0 0 0 1.5px var(--ink) !important; }
 .crew-slot .fire {
   position: absolute; top: -10px; right: -9px;
@@ -282,7 +302,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .net-avatar .presence.active { background: #346538; }
 .net-avatar .presence.idle { background: #956400; }
-.net-name { font-size: 12px; font-weight: 600; }
+.net-name { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
 .net-cards { display: flex; flex-direction: column; gap: 3px; align-items: center; }
 .net-card {
   display: inline-flex; align-items: center; gap: 6px;
@@ -338,6 +358,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .cc-head-star { color: #D97757; }
 .cc-head-dim { color: #6f6b64; }
+.cc-head .provider-badge { border-color: #4c4841; background: #302e29; color: #bdb7ac; }
+.cc-head .provider-badge[data-provider='claude'] { border-color: #754f40; color: #e19a78; }
+.cc-head .provider-badge[data-provider='codex'] { border-color: #376b5d; color: #74c7aa; }
 .cc-close {
   margin-left: auto; border: none; background: none; color: #6f6b64; font: inherit; font-size: 12px;
 }
@@ -415,6 +438,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px;
 }
 .cc-mode-select:focus-visible { outline: 1px solid #D97757; outline-offset: 2px; }
+.cc-mode-danger, .cc-mode-danger .cc-mode-select { color: #E5716A; }
+.cc-mode-danger .cc-dim { color: #b77b72; }
 .cc-controls { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .cc-model-effort { display: inline-flex; align-items: center; gap: 6px; }
 /* segmented effort control — a restart-with-resume, so it dims while a turn runs */
@@ -451,6 +476,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-perm-allow:hover { background: rgba(125, 156, 111, 0.15); }
 .cc-perm-deny { border: 1px solid #b3564a; color: #d99a91; }
 .cc-perm-deny:hover { background: rgba(179, 86, 74, 0.15); }
+.cc-perm-external { color: #999489; font-size: 11.5px; }
 
 /* ── Roadmap ideas ───────────────────────────────── */
 .ideas { display: grid; gap: 8px; }

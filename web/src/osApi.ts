@@ -246,6 +246,11 @@ export type AgentProviderCatalog = {
   id: string
   name: string
   available: boolean
+  capabilities?: string[]
+  auth_state?: 'authenticated' | 'unauthenticated' | 'unavailable' | string
+  health?: 'ready' | 'degraded' | 'unavailable' | string
+  usage_health?: 'live' | 'stale' | 'unavailable' | string
+  rate_limit_health?: 'live' | 'stale' | 'unavailable' | string
   models: AgentProviderModel[]
   source: 'live' | 'cache' | 'unavailable'
   updated_at: string | null

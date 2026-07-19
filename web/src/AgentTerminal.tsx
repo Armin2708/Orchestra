@@ -2,21 +2,27 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { followIntent } from './follow'
+import { ProviderBadge } from './ProviderBadge'
+import {
+  ACCESS_PROFILES,
+  AccessProfile,
+  hasAgentCapability,
+  normalizeProvider,
+  providerLabel,
+  providerTokenSummary,
+  ProviderTokenUsage,
+  resolveAccessProfile,
+} from './agentProviderUi'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
-// claude-code's whimsical working gerunds
+// Friendly progress copy shared by every model-backed provider.
 const GERUNDS = ['Pondering', 'Cerebrating', 'Noodling', 'Waddling', 'Percolating', 'Ruminating',
   'Marinating', 'Brewing', 'Conjuring', 'Scheming', 'Tinkering', 'Musing', 'Whirring', 'Puzzling',
   'Simmering', 'Crunching', 'Weaving', 'Hatching', 'Composing', 'Orchestrating', 'Grooving', 'Vibing']
 
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
-// real API token split (input / cache-read / cache-creation / output) — from result-message
-// usage, NOT the injected-context estimate the board meter shows
-type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
-const usageIn = (u: UsageSplit) => u.input_tokens + u.cache_read + u.cache_creation
-const usageSum = (u?: UsageSplit) => (u ? usageIn(u) + u.output_tokens : 0)
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 
 // a tool ask parked by the daemon's canUseTool handler, waiting for allow/deny
@@ -26,39 +32,63 @@ type PendingPermission = { id: string; tool: string; summary: string; title: str
 // (e.g. 'orchestra' from card #44's extraCommands) renders a .cc-cmd-badge
 export type CommandItem = { name: string; description: string; source: string }
 
-// permission modes the daemon accepts (POST /agents/:id/permission-mode)
-const PERMISSION_MODES = [
-  { value: 'bypassPermissions', icon: '⏵⏵', label: 'bypass permissions', hint: 'runs autonomously' },
-  { value: 'acceptEdits', icon: '⏵', label: 'accept edits', hint: 'edits auto-approved · other tools ask below' },
-  { value: 'plan', icon: '⏸', label: 'plan mode', hint: 'read-only · tools ask below' },
-]
+// Provider model catalogs may use the legacy Claude `model` key or the neutral `value` key.
+type ModelInfo = {
+  model?: string
+  value?: string
+  resolvedModel?: string
+  displayName?: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: string[]
+}
 
-// a model entry from the SDK's supportedModels(), surfaced via transcript info
-type ModelInfo = { model: string; resolvedModel?: string; displayName?: string; supportedEffortLevels?: string[] }
+type TranscriptInfo = {
+  provider?: string
+  capabilities?: string[]
+  accessProfile?: string | null
+  access_profile?: string | null
+  model: string | null
+  cwd: string
+  tokens: number
+  permissionMode?: string
+  commands?: { name: string; description: string }[]
+  effort?: string | null
+  models?: ModelInfo[]
+  usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
+}
+
+const modelValue = (model: ModelInfo) => model.value ?? model.model ?? model.resolvedModel ?? ''
 
 // model dropdown + segmented effort control — slots in beside PermissionModeHint (#45 contract).
 // model switches apply next turn; effort restarts the session with the conversation resumed.
-function ModelEffortControls({ agentId, info, working, onChange }: {
+function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange }: {
   agentId: number
   info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
   working: boolean
+  canSelectModel: boolean
+  canSetEffort: boolean
   onChange: () => void
 }) {
   const models = info?.models ?? []
-  if (models.length === 0) return null
-  const current = models.find((m) => m.model === info?.model || m.resolvedModel === info?.model)
-  const levels = current?.supportedEffortLevels ?? []
+  if (models.length === 0 || (!canSelectModel && !canSetEffort)) return null
+  const current = models.find((model) => modelValue(model) === info?.model || model.resolvedModel === info?.model)
+  const levels = canSetEffort && current?.supportsEffort !== false ? current?.supportedEffortLevels ?? [] : []
   return (
     <span className="cc-model-effort">
-      <select className="cc-mode-select" value={current?.model ?? ''} aria-label="Model"
-        title="Model — applies from the next turn"
-        onChange={async (e) => {
-          try { await api('POST', `/agents/${agentId}/model`, { model: e.target.value }) } catch { /* agent gone */ }
-          onChange()
-        }}>
-        {!current && <option value="">{info?.model ?? 'model…'}</option>}
-        {models.map((m) => <option key={m.model} value={m.model}>{m.displayName ?? m.model}</option>)}
-      </select>
+      {canSelectModel && (
+        <select className="cc-mode-select" value={current ? modelValue(current) : ''} aria-label="Model"
+          title="Model — applies from the next turn"
+          onChange={async (e) => {
+            try { await api('POST', `/agents/${agentId}/model`, { model: e.target.value }) } catch { /* agent gone */ }
+            onChange()
+          }}>
+          {!current && <option value="">{info?.model ?? 'model…'}</option>}
+          {models.map((model) => {
+            const value = modelValue(model)
+            return <option key={value} value={value}>{model.displayName ?? value}</option>
+          })}
+        </select>
+      )}
       {levels.length > 0 && (
         <span className="cc-effort" role="group" aria-label="Reasoning effort"
           title={working ? 'Effort — wait for the turn to finish' : 'Effort — restarts the session, conversation resumes'}>
@@ -77,26 +107,28 @@ function ModelEffortControls({ agentId, info, working, onChange }: {
   )
 }
 
-// container for the mode toggle — #40's command menu and #41's model/effort selectors slot in beside it
-function PermissionModeHint({ agentId, mode, onChange }: { agentId: number; mode: string; onChange: () => void }) {
-  const m = PERMISSION_MODES.find((x) => x.value === mode) ?? PERMISSION_MODES[0]
+// Neutral access profiles map to each provider's native sandbox and approval policy.
+function PermissionModeHint({ agentId, profile, onChange }: { agentId: number; profile: AccessProfile; onChange: () => void }) {
+  const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
   return (
-    <span className="cc-mode">
-      {m.icon}{' '}
-      <select className="cc-mode-select" value={m.value} aria-label="Permission mode"
-        title="Permission mode — applies live to this agent's session"
+    <span className={`cc-mode${profile === 'full_access' ? ' cc-mode-danger' : ''}`}>
+      {selected.icon}{' '}
+      <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
+        title="Access profile — applies live to this agent's provider sandbox"
         onChange={async (e) => {
-          try { await api('POST', `/agents/${agentId}/permission-mode`, { mode: e.target.value }) } catch { /* agent gone or daemon too old */ }
+          const next = e.target.value as AccessProfile
+          if (next === 'full_access' && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
+          try { await api('POST', `/agents/${agentId}/access-profile`, { profile: next }) } catch { /* agent gone or capability changed */ }
           onChange()
         }}>
-        {PERMISSION_MODES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+        {ACCESS_PROFILES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
       </select>
-      <span className="cc-dim">({m.hint})</span>
+      <span className="cc-dim">({selected.hint})</span>
     </span>
   )
 }
 
-// the claude spinner glyph frames
+// Orchestra spinner frames are provider-neutral; provider identity is shown separately.
 const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const BOOT_MSGS = [
   'Warming up the orchestra…', 'Tuning instruments…', 'Raising the baton…',
@@ -108,7 +140,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
-  const [info, setInfo] = useState<{ model: string | null; cwd: string; tokens: number; permissionMode?: string; commands?: { name: string; description: string }[]; effort?: string | null; models?: ModelInfo[]; usage?: { turn: UsageSplit; session: UsageSplit } } | null>(null)
+  const [info, setInfo] = useState<TranscriptInfo | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
   const [localLines, setLocalLines] = useState<Line[]>([])
@@ -147,12 +179,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         return w
       })
       setInfo((prev) => {
-        const i = r.info ?? null
+        const i: TranscriptInfo | null = r.info ?? null
+        const previousProvider = normalizeProvider(prev?.provider ?? agent.provider)
+        const nextProvider = normalizeProvider(i?.provider ?? agent.provider)
         if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
+          previousProvider === nextProvider &&
+          (prev.accessProfile ?? prev.access_profile) === (i.accessProfile ?? i.access_profile) &&
+          (prev.capabilities ?? []).join('|') === (i.capabilities ?? []).join('|') &&
           (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
           prev.commands?.[0]?.description === i.commands?.[0]?.description &&
           prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0) &&
-          usageSum(prev.usage?.session) + usageSum(prev.usage?.turn) === usageSum(i.usage?.session) + usageSum(i.usage?.turn)) return prev
+          providerTokenSummary(previousProvider, [prev.usage?.session, prev.usage?.turn]).total ===
+            providerTokenSummary(nextProvider, [i.usage?.session, i.usage?.turn]).total) return prev
         return i
       })
       setPerms((prev) => {
@@ -163,7 +201,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     load()
     const t = setInterval(load, 1000)
     return () => { alive = false; clearInterval(t) }
-  }, [agent.id, hired])
+  }, [agent.id, agent.provider, hired])
 
   // rotate the working word every so often, like the real thing
   useEffect(() => {
@@ -172,7 +210,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     return () => clearInterval(t)
   }, [turn !== null])
 
-  // session is booting until the SDK reports init
+  // A provider session is booting until its normalized transcript reports activity.
   const booting = hired && !lines.some((l) => l.kind === 'status' && l.text.startsWith('session started')) &&
     !lines.some((l) => l.kind === 'text' || l.kind === 'tool')
   const [frame, setFrame] = useState(0)
@@ -199,6 +237,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })),
     ])
 
+  const provider = normalizeProvider(info?.provider ?? agent.provider)
+  const capabilities = info?.capabilities ?? agent.capabilities
+  const canAccessProfile = hasAgentCapability(capabilities, 'access_profile', provider)
+  const canSelectModel = hasAgentCapability(capabilities, 'model', provider)
+  const canSetEffort = hasAgentCapability(capabilities, 'effort', provider)
+  const canApprove = hasAgentCapability(capabilities, 'approvals', provider)
+  const canInterrupt = hasAgentCapability(capabilities, 'interrupt', provider)
+  const canStop = hasAgentCapability(capabilities, 'stop', provider)
+  const accessProfile = resolveAccessProfile(
+    info?.accessProfile ?? info?.access_profile ?? agent.access_profile,
+    info?.permissionMode,
+  )
   const working = hired && turn !== null
 
   // on open: jump straight to the latest messages; afterwards follow the stream while the
@@ -276,7 +326,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   }
 
   const interrupt = async () => {
-    if (hired && working) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
+    if (hired && working && canInterrupt) { await api('POST', `/agents/${agent.id}/interrupt`); onChange() }
   }
 
   const decide = async (requestId: string, behavior: 'allow' | 'deny') => {
@@ -324,7 +374,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <header className="cc-head">
             <span className="cc-head-star">✻</span>
             <span>{agent.name}</span>
-            <span className="cc-head-dim">{hired ? `hired agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
+            {hired && <ProviderBadge provider={provider} compact />}
+            <span className="cc-head-dim">{hired ? `agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
             {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
               <select className="cc-assign" defaultValue=""
                 title="Assign a ticket — the agent gets briefed and starts"
@@ -341,7 +392,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 ))}
               </select>
             )}
-            {hired && (
+            {hired && canStop && (
               <button className="cc-close" title="Stop this agent — terminates its session; a launched ticket moves to blocked"
                 onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>■ stop</button>
             )}
@@ -367,15 +418,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             {hired && perms.map((p) => (
               <div key={p.id} className="cc-perm" role="group" aria-label="Permission request">
                 <p className="cc-perm-title">⚠ permission needed · <b>{p.title ?? p.summary}</b></p>
-                <div className="cc-perm-actions">
-                  <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
-                  <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
-                </div>
+                {canApprove ? (
+                  <div className="cc-perm-actions">
+                    <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow</button>
+                    <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+                  </div>
+                ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
               </div>
             ))}
             {working && turn && (
               <p className="cc-spinner">
-                <span className="cc-star-frame">{star}</span> {gerund}… (<button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · {fmtSecs(turn.secs)}
+                <span className="cc-star-frame">{star}</span> {gerund}… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
                 {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
               </p>
             )}
@@ -408,19 +461,20 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <div className="cc-hints">
             {hired
               ? <span className="cc-controls">
-                  <PermissionModeHint agentId={agent.id} mode={info?.permissionMode ?? 'bypassPermissions'} onChange={onChange} />
-                  <ModelEffortControls agentId={agent.id} info={info} working={working} onChange={onChange} />
+                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile} onChange={onChange} />}
+                  <ModelEffortControls agentId={agent.id} info={info} working={working}
+                    canSelectModel={canSelectModel} canSetEffort={canSetEffort} onChange={onChange} />
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span>
               {info?.cwd ?? ''}{info?.model && !(info?.models?.length) ? ` · ${info.model}` : ''}
-              {info?.usage && usageSum(info.usage.session) + usageSum(info.usage.turn) > 0 ? (() => {
+              {info?.usage && providerTokenSummary(provider, [info.usage.session, info.usage.turn]).total > 0 ? (() => {
                 // live turn accrual counts toward the session display so the split never lags the ↓ number
-                const s = info.usage.session, t = info.usage.turn
-                const inTok = usageIn(s) + usageIn(t), outTok = s.output_tokens + t.output_tokens
-                const cached = inTok > 0 ? Math.round(100 * (s.cache_read + t.cache_read) / inTok) : 0
-                const tip = `real API tokens this session — input ${fmtTokens(s.input_tokens + t.input_tokens)} · cache read ${fmtTokens(s.cache_read + t.cache_read)} · cache write ${fmtTokens(s.cache_creation + t.cache_creation)} · output ${fmtTokens(outTok)} (distinct from the board meter's injected-context estimate)`
-                return <span title={tip}> · ↑ {fmtTokens(inTok)} in · {cached}% cached · ↓ {fmtTokens(outTok)} out</span>
+                const usage = providerTokenSummary(provider, [info.usage.session, info.usage.turn])
+                const cacheWrite = usage.cacheWrite > 0 ? ` · cache write ${fmtTokens(usage.cacheWrite)}` : ''
+                const reasoning = usage.reasoningOutput > 0 ? ` · reasoning ${fmtTokens(usage.reasoningOutput)}` : ''
+                const tip = `${providerLabel(provider)} API tokens this session — input ${fmtTokens(usage.input)} · cached input ${fmtTokens(usage.cached)}${cacheWrite} · output ${fmtTokens(usage.output)}${reasoning} (distinct from the board meter's injected-context estimate)`
+                return <span title={tip}> · ↑ {fmtTokens(usage.inputTotal)} in · {usage.cachedPercent}% cached · ↓ {fmtTokens(usage.output)} out</span>
               })() : info && info.tokens > 0 ? ` · ↓ ${fmtTokens(info.tokens)} tokens` : ''}
               {!hired ? ' · delivered on its next turn' : ''}
             </span>

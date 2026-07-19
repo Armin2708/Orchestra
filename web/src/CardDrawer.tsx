@@ -3,14 +3,16 @@ import { api, Agent, Card, ReviewDecision, Snapshot, Thread, agentInk, agentWash
 import { STATUS } from './Board'
 import { MessageComposer } from './MessageComposer'
 import { MessageThread } from './MessageThread'
+import { ProviderLaunchControl } from './ProviderLaunchControl'
+import type { AgentProviderCatalog } from './osApi'
 
 const EVENT_VERB: Record<string, string> = {
   created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
   review_request: 'parked it for review', review_decision: 'recorded a review decision',
 }
 
-export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
-  { card: Card; boardId: number; agents?: Agent[]; onClose: () => void; onChange: () => void }) {
+export function CardDrawer({ card, boardId, agents = [], providers = [], onClose, onChange }:
+  { card: Card; boardId: number; agents?: Agent[]; providers?: AgentProviderCatalog[]; onClose: () => void; onChange: () => void }) {
   const [events, setEvents] = useState<any[]>([])
   const [editingDesc, setEditingDesc] = useState(false)
   const [desc, setDesc] = useState(card.description)
@@ -113,11 +115,9 @@ export function CardDrawer({ card, boardId, agents = [], onClose, onChange }:
             </select>
           )}
           {!card.owner && card.column !== 'done' && (
-            <button className="thread-reply" title="Spawn a fresh autonomous agent on this ticket"
-              onClick={async () => {
-                try { await api('POST', `/cards/${card.id}/launch`) } catch { /* daemon-only or already launched */ }
-                onChange()
-              }}>▶ Launch agent</button>
+            <ProviderLaunchControl providers={providers} variant="card" label="▶ Launch agent"
+              title="Spawn a fresh autonomous agent on this ticket"
+              onLaunch={async (body) => { await api('POST', `/cards/${card.id}/launch`, body); onChange() }} />
           )}
         </p>
 

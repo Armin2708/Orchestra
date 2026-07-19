@@ -3,6 +3,9 @@ import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials, time
 import { CardDrawer } from './CardDrawer'
 import { AgentTerminal } from './AgentTerminal'
 import { NetworkView } from './NetworkView'
+import { ProviderBadge } from './ProviderBadge'
+import { ProviderLaunchControl } from './ProviderLaunchControl'
+import { AgentProviderCatalog, osApi } from './osApi'
 import {
   CanvasPoint,
   CanvasViewport,
@@ -21,7 +24,13 @@ export const STATUS: Record<string, { label: string; bg: string; ink: string }> 
   done: { label: 'Done', bg: '#EDF3EC', ink: '#346538' },
 }
 
-function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen: (c: Card) => void }) {
+function RailCard({ c, isLocked, providers, onOpen, onChange }: {
+  c: Card
+  isLocked: boolean
+  providers: AgentProviderCatalog[]
+  onOpen: (c: Card) => void
+  onChange?: () => void
+}) {
   const st = STATUS[c.column] ?? STATUS.backlog
   return (
     <article className={`t-card ${isLocked ? 'chained' : ''}`}
@@ -41,11 +50,9 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
           </span>
         )}
         {!c.owner && c.column !== 'done' && (
-          <button className="thread-reply" title="Launch an autonomous agent on this ticket"
-            onClick={async (e) => {
-              e.stopPropagation()
-              try { await api('POST', `/cards/${c.id}/launch`) } catch { /* daemon-only or already launched */ }
-            }}>▶ Launch</button>
+          <ProviderLaunchControl providers={providers} variant="card" stopPropagation
+            label="▶ Launch" title="Launch an autonomous agent on this ticket"
+            onLaunch={async (body) => { await api('POST', `/cards/${c.id}/launch`, body); onChange?.() }} />
         )}
       </div>
       <h4>{c.title}</h4>
@@ -60,7 +67,12 @@ function RailCard({ c, isLocked, onOpen }: { c: Card; isLocked: boolean; onOpen:
   )
 }
 
-function TicketRail({ snap, onOpen, onChange }: { snap: Snapshot; onOpen: (c: Card) => void; onChange?: () => void }) {
+function TicketRail({ snap, providers, onOpen, onChange }: {
+  snap: Snapshot
+  providers: AgentProviderCatalog[]
+  onOpen: (c: Card) => void
+  onChange?: () => void
+}) {
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set())
   const [showDone, setShowDone] = useState(false)
   const panelKey = `orchestra-task-panel-${snap.board.id}`
@@ -113,14 +125,14 @@ function TicketRail({ snap, onOpen, onChange }: { snap: Snapshot; onOpen: (c: Ca
               </button>
               {!collapsed.has(m.id) && (
                 <div className="rail-mile-steps">
-                  {openSteps.map((c) => <RailCard key={c.id} c={c} isLocked={locked(c)} onOpen={onOpen} />)}
+                  {openSteps.map((c) => <RailCard key={c.id} c={c} isLocked={locked(c)} providers={providers} onOpen={onOpen} onChange={onChange} />)}
                   {openSteps.length === 0 && <p className="rail-empty">All steps complete 🏆</p>}
                 </div>
               )}
             </div>
           ))}
           {loose.length > 0 && <p className="rail-head">Tickets <span className="rm-count">{loose.length}</span></p>}
-          {loose.map((c) => <RailCard key={c.id} c={c} isLocked={false} onOpen={onOpen} />)}
+          {loose.map((c) => <RailCard key={c.id} c={c} isLocked={false} providers={providers} onOpen={onOpen} onChange={onChange} />)}
           {done.length > 0 && (
             <div className="rail-mile">
               <button className="rail-mile-head" onClick={() => setShowDone((v) => !v)}>
@@ -447,8 +459,15 @@ function BoardCanvas({ children, focused, storageKey }: {
 export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
   const [open, setOpen] = useState<{ card: Card; boardId: number } | null>(null)
   const [terminal, setTerminal] = useState<{ agent: Agent; boardId: number } | null>(null)
+  const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
   const [askTo, setAskTo] = useState<{ name: string; boardId: number } | null>(null)
   const [askBody, setAskBody] = useState('')
+
+  useEffect(() => {
+    let current = true
+    osApi.listAgentProviders().then((catalog) => { if (current) setProviders(catalog) }).catch(() => {})
+    return () => { current = false }
+  }, [])
 
   const ask = async () => {
     if (!askTo || !askBody.trim()) return
@@ -494,10 +513,9 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                   <RemoveProject boardId={s.board.id} onChange={onChange} />
                 </div>
                 <div className="project-head-right">
-                  <button className="hire-btn" title="Spawn an autonomous agent on this project"
-                    onClick={async () => { await api('POST', `/boards/${s.board.id}/hire`, {}); onChange() }}>
-                    + Hire
-                  </button>
+                  <ProviderLaunchControl providers={providers} variant="hire" label="+ Hire"
+                    title="Spawn an autonomous agent on this project"
+                    onLaunch={async (body) => { await api('POST', `/boards/${s.board.id}/hire`, body); onChange() }} />
                   <div className="project-crew">
                     {agents.map((a) => (
                       <span key={a.id} className="crew-slot">
@@ -510,6 +528,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
                           {initials(a.name)}
                           <i className="presence" />
                         </span>
+                        <ProviderBadge provider={a.provider} compact />
                         {a.kind === 'hired' && (
                           <button className="icon-x fire" title={`Fire ${a.name}`} aria-label={`Fire ${a.name}`}
                             onClick={async () => {
@@ -525,7 +544,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               </header>
 
               <div className="net-wrap">
-                <TicketRail snap={s} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} onChange={onChange} />
+                <TicketRail snap={s} providers={providers} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} onChange={onChange} />
                 <NetworkView snap={s} viewport={viewport}
                   onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
                   onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}
@@ -562,6 +581,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
       </div>
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
+        providers={providers}
         agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-'))}
         onClose={() => setOpen(null)} onChange={onChange} />}
       {terminal && <AgentTerminal

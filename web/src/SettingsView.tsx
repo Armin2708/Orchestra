@@ -102,7 +102,7 @@ function AgentProfileEditor({
     || selectedProvider?.detail
     || (models.length
       ? 'Choose one of the models currently reported by the provider.'
-      : 'Start a Claude agent, then refresh to discover models for this account.')
+      : `Start an agent with ${selectedProvider?.name ?? 'this provider'}, then refresh to discover models for this account.`)
   const effortHelper = selectedModel?.supportsEffort === false
     ? `${selectedModel.displayName} uses provider-managed reasoning and has no effort override.`
     : selectedModel?.supportedEffortLevels?.length
@@ -272,7 +272,7 @@ export function SettingsView() {
           <div>
             <p className="settings-kicker">Runtime policy</p>
             <h1>Agent defaults</h1>
-            <p>Choose the model and reasoning effort Orchestra uses when it creates each type of agent.</p>
+            <p>Choose the provider, model, and reasoning effort Orchestra uses when it creates each type of agent.</p>
           </div>
           <div className="settings-freshness">
             <span aria-hidden="true" />
@@ -290,7 +290,7 @@ export function SettingsView() {
         ) : !providerAvailable ? (
           <section className="settings-provider-empty" aria-live="polite">
             <p>No agent provider is available.</p>
-            <small>Run Orchestra through the daemon so its built-in Claude provider can report the models available to this account.</small>
+            <small>Run Orchestra through the daemon so installed agent providers can report their authentication state and available models.</small>
             <button type="button" disabled={refreshing} onClick={() => void refreshProviders()}>
               {refreshing ? 'Checking…' : 'Check again'}
             </button>
