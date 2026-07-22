@@ -15,7 +15,10 @@ const DIRECTIVES = [
   '⚠',
   '≈',
   'Card current',                 // keep the card updated / moved
-  'done when finished',
+  'done when finished',           // done is still the terminal state...
+  'human-accepted only',          // ...but agents cannot self-declare acceptance
+  'Delivered/Evidence/Remaining', // structured completion report
+  'move review, never done',      // agent completion parks for review
   'claimed path',                 // don't touch claimed paths
   'Subagents: no orchestra commands', // subagent prohibition
   'snapshot --full',              // where the full board lives now

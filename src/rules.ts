@@ -9,8 +9,8 @@ export const verbose = () => process.env.ORCHESTRA_VERBOSE_RULES === '1'
 export const compactRules = (me: string) => `orchestra rules:
 - ID=${me}; use --agent/--from.
 - Board first; similar/conflict/claimed path → orchestra ask owner; wait.
-- Before edit: orchestra card create '<title>' --desc '<scope>' --paths <p1,p2> --column in_progress --agent ${me}; ⚠/≈ → ask.
-- Card current; done when finished.
+- Before edit: orchestra card create '<title>' --desc '<objective; deliverables; done when>' --paths <p1,p2> --column in_progress --agent ${me}; ⚠/≈ → ask.
+- Card current; done when finished = human-accepted only. Agent final: Delivered/Evidence/Remaining; move review, never done.
 - Subagents: no orchestra commands.
 - Full: orchestra snapshot --full`
 
@@ -18,9 +18,9 @@ export const verboseRules = (me: string) => `orchestra rules (coordination board
 - You are agent "${me}". ALWAYS pass --agent ${me} on card commands and --from ${me} when asking/replying.
 - REQUIRED before starting any task: read the board below and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict with what you're about to do, you MUST ask its owner what they're covering BEFORE you start: orchestra ask <agent-name> '<question>' --from ${me}. Wait for the answer, then scope your work to not duplicate theirs.
 - REQUIRED: as soon as you receive a task, and BEFORE your first file edit, register it:
-  orchestra card create '<short title>' --desc '<scope>' --paths <comma,separated,paths> --column in_progress --agent ${me}
+  orchestra card create '<short title>' --desc '<OBJECTIVE; DELIVERABLES; DONE WHEN>' --paths <comma,separated,paths> --column in_progress --agent ${me}
   If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
-- Keep your card updated as work progresses: orchestra card update <id> --desc '<current step>' --agent ${me}; move it (orchestra card move <id> done|review|blocked --agent ${me}) when status changes. Move to done when finished.
+- Keep your card updated as work progresses: orchestra card update <id> --desc '<current delta>' --agent ${me}; move it to blocked when blocked. When implementation finishes, report Delivered / Evidence / Remaining and move to review. Never self-move to done; done means human-accepted delivery.
 - Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.
 - Always single-quote message bodies. If a body contains backticks, $ or quotes, do not put it on the command line at all — pipe it: printf '%s' <body> | orchestra ask <agent> --stdin (also on reply and note). Double quotes let the shell run substitutions inside your message.
 - SUBAGENTS: spawn them freely — they work under YOUR identity and card. Instruct each one: do NOT run orchestra commands; board coordination belongs to you, the parent.`
@@ -31,7 +31,7 @@ export const verboseRules = (me: string) => `orchestra rules (coordination board
 // cached; ORCHESTRA_VERBOSE_OUTPUT=1 removes the block, read per call like verbose().
 export const verboseOutput = () => process.env.ORCHESTRA_VERBOSE_OUTPUT === '1'
 
-export const OUTPUT_DISCIPLINE = `- OUTPUT: lead with the outcome; no preamble, recaps, or play-by-play. Board messages and card descs state deltas only — never restate existing text. Final summary ≤2 sentences. Comment code only where the code can't say it.`
+export const OUTPUT_DISCIPLINE = `- OUTPUT: lead with the outcome; no preamble or play-by-play. Board updates state deltas only. Final report: Delivered / Evidence / Remaining, ≤3 bullets. Comment code only where code can't say it.`
 
 export const outputDiscipline = () => (verboseOutput() ? '' : `\n${OUTPUT_DISCIPLINE}`)
 
@@ -48,9 +48,9 @@ export const conductorVerboseRules = (me: string) => `You are agent "${me}", a h
 Orchestra board rules (standing instructions):
 - REQUIRED before starting any task: run orchestra snapshot and evaluate every active card's title and description against your task. If another agent's card looks similar, related, or could conflict, you MUST ask its owner what they're covering BEFORE you start (orchestra ask <agent> '...' --from ${me}), wait for the answer, and scope your work to not duplicate theirs.
 - REQUIRED: when you receive a task, BEFORE your first file edit, register it:
-  orchestra card create '<short title>' --desc '<scope>' --paths <comma,separated,paths> --column in_progress --agent ${me}
+  orchestra card create '<short title>' --desc '<OBJECTIVE; DELIVERABLES; DONE WHEN>' --paths <comma,separated,paths> --column in_progress --agent ${me}
   If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
-- Keep the card updated as you progress (orchestra card update/move --agent ${me}); move it to done when finished.
+- Keep the card updated as you progress (orchestra card update/move --agent ${me}). When implementation finishes, report Delivered / Evidence / Remaining and move to review. Never self-move to done; done means human-accepted delivery.
 - Do NOT touch paths claimed by another active card without asking first.
 - If your assignment mentions open prerequisite steps, message their owners FIRST (orchestra ask) to agree boundaries and interfaces — then build in parallel against the agreed contract instead of waiting.
 - Messages from the board arrive directly in this conversation. Reply promptly only to direct asks and explicit swarms with: orchestra reply <msg-id> '<answer>' --from ${me}. Notifications and replies need no response; never send acknowledgment-only replies.

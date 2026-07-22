@@ -267,7 +267,7 @@ async function stop(input: any, provider: HookProvider): Promise<void> {
     c.owner === sess.agent_name && c.column === 'in_progress' && cardAgeMs(c) > 600_000)
   if (mine.length === 0) return
   const ids = mine.map((c: any) => `#${c.id} "${c.title}"`).join(', ')
-  const reason = `Card ${ids} still in_progress — move it (orchestra card move <id> done|review|blocked) or update it, then finish.`
+  const reason = `Card ${ids} still in_progress — report Delivered / Evidence / Remaining, then move it to review (or blocked). Never self-mark done; done requires human acceptance.`
   spool(provider, input.session_id, 'stop', reason)
   if (provider === 'codex') {
     console.log(JSON.stringify({
