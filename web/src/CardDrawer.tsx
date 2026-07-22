@@ -12,6 +12,20 @@ const EVENT_VERB: Record<string, string> = {
   review_request: 'parked it for review', review_decision: 'recorded a review decision',
 }
 
+export const buildApprovalBody = (note: string): { note?: string; confirm: true } => {
+  const trimmed = note.trim()
+  return trimmed ? { note: trimmed, confirm: true } : { confirm: true }
+}
+
+const actionErrorText = (error: unknown, fallback: string) => {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  try {
+    const parsed = JSON.parse(message) as { error?: unknown }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error
+  } catch { /* plain-text API response */ }
+  return message.trim() || fallback
+}
+
 export function CardDrawer({ card, boardId, agents = [], providers = [], onClose, onChange }:
   { card: Card; boardId: number; agents?: Agent[]; providers?: AgentProviderCatalog[]; onClose: () => void; onChange: () => void }) {
   const [events, setEvents] = useState<any[]>([])
@@ -20,6 +34,8 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [reviews, setReviews] = useState<ReviewDecision[]>([])
   const [reviewNote, setReviewNote] = useState('')
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const [approving, setApproving] = useState(false)
   const [conversation, setConversation] = useState<Thread[]>([])
   const [messageAgents, setMessageAgents] = useState<Agent[]>(agents)
   const [conversationLoading, setConversationLoading] = useState(true)
@@ -27,6 +43,7 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
   useEffect(() => { api('GET', `/cards/${card.id}/events`).then(setEvents) }, [card.id, card.updated_at])
   useEffect(() => { api('GET', `/cards/${card.id}/reviews`).then(setReviews).catch(() => {}) }, [card.id, card.updated_at])
   useEffect(() => { setDesc(card.description) }, [card.description])
+  useEffect(() => { setReviewError(null) }, [card.id])
   useEffect(() => {
     let current = true
     setConversationLoading(true)
@@ -64,13 +81,23 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
   try { reviewReq = latestRequest ? JSON.parse(latestRequest.payload) : null } catch { /* legacy payload */ }
   const verification = card.verification
   const approve = async () => {
+    if (verification?.running) {
+      setReviewError('Wait for the active verification to finish before approving.')
+      return
+    }
     // a failed verification demands an explicit confirm; the flag travels to the auto-ship gate
-    const overridingFail = verification?.verdict === 'fail' && !verification.running
+    const overridingFail = verification?.verdict === 'fail'
     if (overridingFail && !window.confirm(`The verifier marked this card FAIL. Approve anyway?`)) return
-    const body: any = reviewNote.trim() ? { note: reviewNote.trim() } : {}
-    if (overridingFail) body.confirm = true
-    await api('POST', `/cards/${card.id}/approve`, body)
-    setReviewNote(''); onChange()
+    setReviewError(null)
+    setApproving(true)
+    try {
+      await api('POST', `/cards/${card.id}/approve`, buildApprovalBody(reviewNote))
+      setReviewNote(''); onChange()
+    } catch (error) {
+      setReviewError(actionErrorText(error, 'Could not approve this delivery.'))
+    } finally {
+      setApproving(false)
+    }
   }
   const runVerify = async () => {
     try { await api('POST', `/cards/${card.id}/verify`) } catch { /* already running or daemon-only */ }
@@ -157,8 +184,9 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
             <textarea className="review-note" rows={2} value={reviewNote}
               placeholder="Note for the agent — optional on approve, required to send back"
               onChange={(e) => setReviewNote(e.target.value)} />
+            {reviewError && <p className="review-error" role="alert">{reviewError}</p>}
             <div className="review-actions">
-              <button className="btn primary review-approve" onClick={approve}>Approve</button>
+              <button className="btn primary review-approve" disabled={approving || verification?.running} onClick={approve}>{approving ? 'Approving…' : 'Approve'}</button>
               <button className="btn ghost review-sendback" disabled={!reviewNote.trim()} onClick={sendBack}>Send back</button>
             </div>
           </section>

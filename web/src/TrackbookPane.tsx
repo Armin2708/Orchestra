@@ -23,6 +23,14 @@ type TrackbookAsked = {
   nonGoals: string[]
   risks: string[]
   verifyCommands: string[]
+  dependencies: string[]
+  baseRef: string | null
+  budgetTokens: number | null
+  budgetCents: number | null
+  priority: number
+  policyId: string | null
+  version: string | number | null
+  updatedAt: string | null
 }
 
 type DeltaRow = {
@@ -79,17 +87,24 @@ const statusTone = (status: string | null | undefined) => {
   return 'unverified'
 }
 
-const contractCriteria = (contract: TaskContract | null): DeliveryPromise[] => {
-  if (!contract) return []
-  const raw = Array.isArray(contract.acceptance_criteria)
-    ? contract.acceptance_criteria
-    : parseJson<unknown>(contract.acceptance_criteria, contract.acceptance_criteria)
+const contractPromises = (value: unknown): DeliveryPromise[] => {
+  const raw = Array.isArray(value) ? value : parseJson<unknown>(value, value)
   const list = Array.isArray(raw)
     ? raw
     : typeof raw === 'string' ? raw.split('\n').map((item) => item.trim()).filter(Boolean) : []
-  return list.map((criterion, index) => typeof criterion === 'string'
-    ? { id: null, text: criterion }
-    : { id: criterion.id ?? null, text: criterion.text || `Criterion ${index + 1}` })
+  return list.map((promise, index) => {
+    if (typeof promise === 'string') return {
+      id: null, text: promise, required: true, deliverable_ids: [], metadata: {},
+    }
+    const row = recordValue(promise)
+    return {
+      id: firstText(row, ['id', 'deliverable_id', 'criterion_id']),
+      text: firstText(row, ['text', 'description', 'title']) ?? `Outcome ${index + 1}`,
+      required: row.required !== false,
+      deliverable_ids: Array.isArray(row.deliverable_ids) ? row.deliverable_ids.map(String) : [],
+      metadata: recordValue(row.metadata),
+    }
+  })
 }
 
 const contractCommands = (contract: TaskContract | null): string[] => {
@@ -99,16 +114,46 @@ const contractCommands = (contract: TaskContract | null): string[] => {
   return typeof raw === 'string' ? raw.split('\n').map((item) => item.trim()).filter(Boolean) : []
 }
 
-const askedFor = (delivery: DeliveryReport | null, contract: TaskContract | null, card: Card | undefined): TrackbookAsked => ({
-  objective: delivery?.asked.objective || contract?.objective || card?.description || card?.title || 'No objective recorded.',
-  deliverables: delivery?.asked.deliverables ?? [],
-  criteria: delivery?.asked.acceptance_criteria.length
-    ? delivery.asked.acceptance_criteria : contractCriteria(contract),
-  nonGoals: delivery?.asked.non_goals ?? [],
-  risks: delivery?.asked.risks ?? [],
-  verifyCommands: delivery?.asked.verify_commands.length
-    ? delivery.asked.verify_commands : contractCommands(contract),
-})
+const contractStrings = (value: unknown): string[] => {
+  const raw = parseJson<unknown>(value, value)
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean)
+  return typeof raw === 'string' ? raw.split('\n').map((item) => item.trim()).filter(Boolean) : []
+}
+
+const askedFor = (delivery: DeliveryReport | null, contract: TaskContract | null, card: Card | undefined): TrackbookAsked => {
+  if (delivery) return {
+    objective: delivery.asked.objective || card?.description || card?.title || 'No objective recorded.',
+    deliverables: delivery.asked.deliverables,
+    criteria: delivery.asked.acceptance_criteria,
+    nonGoals: delivery.asked.non_goals,
+    risks: delivery.asked.risks,
+    verifyCommands: delivery.asked.verify_commands,
+    dependencies: delivery.asked.dependencies.map(String),
+    baseRef: delivery.asked.base_ref,
+    budgetTokens: delivery.asked.budget_tokens,
+    budgetCents: delivery.asked.budget_cents,
+    priority: delivery.asked.priority,
+    policyId: delivery.asked.policy_id === null ? null : String(delivery.asked.policy_id),
+    version: delivery.asked.version,
+    updatedAt: delivery.asked.updated_at,
+  }
+  return {
+    objective: contract?.objective || card?.description || card?.title || 'No objective recorded.',
+    deliverables: contractPromises(contract?.deliverables),
+    criteria: contractPromises(contract?.acceptance_criteria),
+    nonGoals: contractStrings(contract?.non_goals),
+    risks: contractStrings(contract?.risks),
+    verifyCommands: contractCommands(contract),
+    dependencies: contractStrings(contract?.dependencies),
+    baseRef: contract?.base_ref ?? null,
+    budgetTokens: contract?.budget_tokens ?? null,
+    budgetCents: contract?.budget_cents ?? null,
+    priority: contract?.priority ?? 0,
+    policyId: contract?.policy_id === null || contract?.policy_id === undefined ? null : String(contract.policy_id),
+    version: contract?.version ?? null,
+    updatedAt: contract?.updated_at ?? null,
+  }
+}
 
 const outcomeKey = (item: DeliveryPromise, index: number) => item.id ? `id:${item.id}` : `index:${index}`
 
@@ -136,7 +181,7 @@ const hasObservedEvidence = (outcome: DeliveryOutcome | null) => Boolean(outcome
 
 const deliveryHeadline = (delivery: DeliveryReport | null, rows: DeltaRow[]) => {
   if (!delivery) return 'No delivery has been submitted yet.'
-  if (!rows.length) return 'Delivery submitted; promised outcomes are not mapped to verification yet.'
+  if (!rows.length) return 'Delivery submitted; no required outcomes are recorded.'
   const supported = (result: DeliveryOutcome | null) => Boolean(result?.override || (result
     && GOOD_STATUSES.has(result.status) && hasObservedEvidence(result) && result.gaps.length === 0))
   const verified = rows.filter(({ result }) => supported(result)).length
@@ -145,7 +190,7 @@ const deliveryHeadline = (delivery: DeliveryReport | null, rows: DeltaRow[]) => 
     !supported(result) && !BAD_STATUSES.has(result.status)
     && (!hasObservedEvidence(result) || EVIDENCE_GAP_STATUSES.has(result.status) || result.gaps.length > 0)
   )).length
-  const parts = [`Delivered ${verified} of ${rows.length} promised outcome${rows.length === 1 ? '' : 's'}`]
+  const parts = [`Delivered ${verified} of ${rows.length} required outcome${rows.length === 1 ? '' : 's'}`]
   if (needsEvidence) parts.push(`${needsEvidence} need${needsEvidence === 1 ? 's' : ''} evidence`)
   if (failed) parts.push(`${failed} failed`)
   return `${parts.join('; ')}.`
@@ -158,6 +203,11 @@ export const deliveryEvidenceText = (value: DeliveryEvidence): string => {
   if (label && reference && label !== reference) return `${label} — ${reference}`
   return label ?? reference ?? 'Evidence reference'
 }
+
+const metadataText = (metadata: JsonObject): string => Object.entries(metadata).map(([key, value]) => {
+  const rendered = typeof value === 'string' ? value : JSON.stringify(value)
+  return `${key}: ${rendered}`
+}).join(' · ')
 
 const eventDetail = (event: OsEvent) => {
   const payload = parseJson<JsonObject>(event.payload, {})
@@ -252,18 +302,22 @@ const evidenceTimeline = (bundle: EvidenceBundle | null): TimelineItem[] => {
   })
 }
 
-const lifecycleTimes = (delivery: DeliveryReport) => [
-  ['Submitted', delivery.submitted_at ?? delivery.created_at],
-  ['Verified', delivery.verified_at],
-  ['Reviewed', delivery.reviewed_at],
-  ['Accepted', delivery.accepted_at],
-  ['Rejected', delivery.rejected_at],
-  ['Shipped', delivery.shipped_at],
-  ['Updated', delivery.updated_at],
-].filter((entry): entry is [string, string] => Boolean(entry[1]))
+const lifecycleTimes = (delivery: DeliveryReport) => ([
+  ['Created', delivery.created_at, delivery.created_by],
+  ['Submitted', delivery.submitted_at, delivery.submitted_by],
+  ['Verified', delivery.verified_at, delivery.verified_by],
+  ['Reviewed', delivery.reviewed_at, null],
+  ['Accepted', delivery.accepted_at, delivery.accepted_by],
+  ['Rejected', delivery.rejected_at, delivery.rejected_by],
+  ['Shipped', delivery.shipped_at, null],
+  ['Updated', delivery.updated_at, null],
+] as Array<[string, string | null, string | null]>).filter((entry): entry is [string, string, string | null] => Boolean(entry[1]))
 
 const actorLabel = (delivery: DeliveryReport) => {
-  if (delivery.submitted_by) return delivery.submitted_by
+  const lifecycleActor = delivery.status === 'rejected' ? delivery.rejected_by
+    : delivery.status === 'accepted' ? delivery.accepted_by
+      : delivery.status === 'verified' ? delivery.verified_by : delivery.submitted_by ?? delivery.created_by
+  if (lifecycleActor) return lifecycleActor
   return [delivery.actor_type, delivery.actor_id === null ? null : String(delivery.actor_id)].filter(Boolean).join(' · ')
     || 'Actor not recorded'
 }
@@ -274,14 +328,36 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
 
 function PromiseList({ items, empty }: { items: DeliveryPromise[]; empty: string }) {
   if (!items.length) return <p className="os-trackbook-quiet">{empty}</p>
-  return <ol className="os-trackbook-promises">{items.map((item, index) => (
-    <li key={item.id ?? index}><span>{index + 1}</span><p>{item.text}</p></li>
-  ))}</ol>
+  return <ol className="os-trackbook-promises">{items.map((item, index) => {
+    const metadata = metadataText(item.metadata)
+    return <li key={item.id ?? index}><span>{index + 1}</span><p>{item.text}<small>{item.required ? 'Required' : 'Optional'}
+      {item.deliverable_ids.length ? ` · Covers ${item.deliverable_ids.join(', ')}` : ''}</small>
+      {metadata && <small className="os-trackbook-promise-meta">Metadata · {metadata}</small>}</p></li>
+  })}</ol>
 }
 
 function TextList({ items, empty }: { items: string[]; empty: string }) {
   if (!items.length) return <p className="os-trackbook-quiet">{empty}</p>
   return <ul className="os-trackbook-text-list">{items.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
+}
+
+function AskedMetadata({ asked }: { asked: TrackbookAsked }) {
+  const hasContractMetadata = asked.version !== null || asked.updatedAt || asked.baseRef || asked.dependencies.length
+    || asked.budgetTokens !== null || asked.budgetCents !== null || asked.policyId
+  if (!hasContractMetadata) return null
+  const facts: Array<[string, string | null]> = [
+    ['Contract', asked.version === null ? null : `v${asked.version}`],
+    ['Captured', asked.updatedAt ? normalizeTime(asked.updatedAt) : null],
+    ['Base ref', asked.baseRef],
+    ['Priority', String(asked.priority)],
+    ['Token budget', asked.budgetTokens === null ? null : asked.budgetTokens.toLocaleString()],
+    ['Cost budget', asked.budgetCents === null ? null : `$${(asked.budgetCents / 100).toFixed(2)}`],
+    ['Policy', asked.policyId],
+  ].filter((fact): fact is [string, string] => fact[1] !== null)
+  return <div className="os-trackbook-block"><h5>Contract context</h5>
+    <dl className="os-trackbook-asked-meta">{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    {asked.dependencies.length > 0 && <div className="os-trackbook-dependencies"><b>Dependencies</b><TextList items={asked.dependencies} empty="" /></div>}
+  </div>
 }
 
 function AskedColumn({ asked }: { asked: TrackbookAsked }) {
@@ -298,20 +374,27 @@ function AskedColumn({ asked }: { asked: TrackbookAsked }) {
       {asked.verifyCommands.length > 0 && (
         <div className="os-trackbook-block"><h5>Verification requested</h5>{asked.verifyCommands.map((command) => (
           <code className="os-trackbook-command" key={command}>{command}</code>
-        ))}</div>
+         ))}</div>
       )}
+      <AskedMetadata asked={asked} />
     </section>
   )
 }
 
 function DeliveredColumn({ delivery }: { delivery: DeliveryReport | null }) {
+  const reviewNote = delivery?.rejection_reason ?? delivery?.acceptance_note ?? delivery?.human_summary ?? null
+  const reviewLabel = delivery?.rejection_reason ? 'Rejection reason'
+    : delivery?.acceptance_note ? 'Acceptance note' : 'Reviewer summary'
+  const reviewActor = delivery?.rejection_reason ? delivery.rejected_by
+    : delivery?.acceptance_note ? delivery.accepted_by : null
   return (
     <section className="os-trackbook-column delivered" aria-labelledby="trackbook-delivered-title">
       <header><span>02</span><div><p className="os-eyebrow">Delivered</p><h4 id="trackbook-delivered-title">The submitted result</h4></div></header>
       {!delivery ? (
         <div className="os-trackbook-pending"><OsIcon name="evidence" size={20} /><strong>Nothing submitted</strong><p>The request is visible, but there is no delivery report to compare yet.</p></div>
       ) : <>
-        {delivery.human_summary && <div className="os-trackbook-block human-summary"><h5>Reviewer summary</h5><p>{delivery.human_summary}</p></div>}
+        {reviewNote && <div className="os-trackbook-block human-summary"><h5>{reviewLabel}</h5><p>{reviewNote}</p>
+          {reviewActor && <small>Recorded by {reviewActor}</small>}</div>}
         <div className="os-trackbook-block"><h5>Submitted summary</h5><p>{delivery.summary || 'No summary was supplied.'}</p></div>
         <div className="os-trackbook-block"><h5>Reported items</h5>
           {delivery.delivered_items.length ? <ul className="os-trackbook-delivered-list">{delivery.delivered_items.map((item, index) => (
@@ -345,12 +428,15 @@ function DeltaResult({ row }: { row: DeltaRow }) {
   return (
     <article className={`os-trackbook-delta-row ${statusTone(status)}`}>
       <header>
-        <div><span>{row.extra ? 'Additional output' : 'Promised outcome'}</span><h5>{row.promised.text}</h5></div>
+        <div><span>{row.extra ? 'Additional output' : `${row.promised.required ? 'Required' : 'Optional'} outcome`}</span><h5>{row.promised.text}</h5></div>
         <StatusBadge status={status} />
       </header>
       {!result && <p className="os-trackbook-missing"><OsIcon name="attention" size={13} /> No result was submitted for this promise.</p>}
       {result && <>
         {result.text !== row.promised.text && <p className="os-trackbook-result-text"><b>Reported result</b>{result.text}</p>}
+        {result.note && <p className="os-trackbook-result-text"><b>Verifier note</b>{result.note}</p>}
+        {(result.actor || result.updated_at) && <p className="os-trackbook-result-audit"><b>Recorded by</b>
+          {result.actor ?? 'Actor not recorded'}{result.updated_at ? ` · ${normalizeTime(result.updated_at)}` : ''}</p>}
         {result.evidence.length > 0 ? (
           <div className="os-trackbook-evidence-links"><span><OsIcon name="check" size={12} /> Linked evidence</span><ul>{result.evidence.map((item, index) => (
             <li key={`${deliveryEvidenceText(item)}:${index}`}>{deliveryEvidenceText(item)}</li>
@@ -381,20 +467,28 @@ function DeltaSection({ deliverables, criteria }: { deliverables: DeltaRow[]; cr
   )
 }
 
-function EvidenceTimeline({ timeline, state }: { timeline: TimelineItem[]; state: Resource<EvidenceBundle | null> }) {
+function EvidenceTimeline({ timeline, state, historical }: {
+  timeline: TimelineItem[]
+  state: Resource<EvidenceBundle | null>
+  historical: boolean
+}) {
   return (
     <section className="os-trackbook-timeline" aria-labelledby="trackbook-timeline-title">
       <header><div><p className="os-eyebrow">Observed record</p><h4 id="trackbook-timeline-title">Evidence timeline</h4></div><span>{timeline.length} record{timeline.length === 1 ? '' : 's'}</span></header>
-      <p className="os-trackbook-section-note">Runtime exits, tests, reviews, artifacts, and shipped records are evidence. Agent claims stay separate.</p>
-      {state.status === 'loading' && !state.data && <PaneSkeleton />}
-      {state.status === 'error' && <div className="os-trackbook-stale" role="status"><OsIcon name="attention" size={13} /> Evidence may be stale: {state.error}</div>}
+      <p className="os-trackbook-section-note">{historical
+        ? 'Only evidence explicitly linked in the Delta above belongs to this historical revision.'
+        : 'Runtime exits, tests, reviews, artifacts, and shipped records are current card evidence. Agent claims stay separate.'}</p>
+      {!historical && state.status === 'loading' && !state.data && <PaneSkeleton />}
+      {!historical && state.status === 'error' && <div className="os-trackbook-stale" role="status"><OsIcon name="attention" size={13} /> Evidence may be stale: {state.error}</div>}
       {timeline.length ? <ol>{timeline.map((item) => (
         <li key={item.id}>
           <span className={`os-trackbook-timeline-icon ${item.kind}`}><OsIcon name={item.icon} size={13} /></span>
           <div><header><span>{item.label}</span>{item.time && <time dateTime={item.time}>{normalizeTime(item.time)}</time>}</header>
             <h5>{item.title}</h5>{item.detail && <p>{item.detail}</p>}{item.status && <StatusBadge status={item.status} />}</div>
         </li>
-      ))}</ol> : <div className="os-trackbook-timeline-empty"><OsIcon name="evidence" size={18} /><p>No observed evidence has been recorded yet.</p></div>}
+      ))}</ol> : <div className="os-trackbook-timeline-empty"><OsIcon name="evidence" size={18} /><p>{historical
+        ? 'A revision-specific timeline is unavailable. Later-revision evidence is intentionally hidden; use the linked evidence in Delta.'
+        : 'No observed evidence has been recorded yet.'}</p></div>}
     </section>
   )
 }
@@ -436,9 +530,10 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
   const asked = useMemo(() => askedFor(selected, contract.data, card), [selected, contract.data, card])
   const deliverableRows = useMemo(() => deltaRows(asked.deliverables, selected?.deliverable_results ?? []), [asked.deliverables, selected?.deliverable_results])
   const criterionRows = useMemo(() => deltaRows(asked.criteria, selected?.criterion_results ?? []), [asked.criteria, selected?.criterion_results])
-  const comparisonRows = deliverableRows.length ? deliverableRows : criterionRows
+  const comparisonRows = [...deliverableRows, ...criterionRows].filter((row) => row.promised.required)
   const headline = deliveryHeadline(selected, comparisonRows)
-  const timeline = useMemo(() => evidenceTimeline(evidence.data), [evidence.data])
+  const viewingHistorical = Boolean(selected && currentId && String(selected.id) !== currentId)
+  const timeline = useMemo(() => viewingHistorical ? [] : evidenceTimeline(evidence.data), [evidence.data, viewingHistorical])
   const hasDeliveryData = deliveries.data.deliveries.length > 0 || deliveries.data.current !== null
   const isInitialLoading = ['idle', 'loading'].includes(deliveries.status) && !hasDeliveryData
   const isHardError = deliveries.status === 'error' && !hasDeliveryData
@@ -458,13 +553,13 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
             <div><p className="os-eyebrow">Delivery health</p><h3>{headline}</h3></div>
             {selected ? <dl>
               <div><dt>Revision</dt><dd>{selected.sequence || 'Unversioned'}</dd></div>
-              <div><dt>Actor</dt><dd>{actorLabel(selected)}</dd></div>
+              <div><dt>Latest actor</dt><dd>{actorLabel(selected)}</dd></div>
               <div><dt>Parent</dt><dd>{selected.parent_delivery_id ?? 'First submission'}</dd></div>
             </dl> : <p>Waiting for the first submitted result.</p>}
           </section>
 
-          {selected && <div className="os-trackbook-lifecycle" aria-label="Delivery lifecycle timestamps">{lifecycleTimes(selected).map(([label, time]) => (
-            <span key={label}><b>{label}</b><time dateTime={time}>{normalizeTime(time)}</time></span>
+          {selected && <div className="os-trackbook-lifecycle" aria-label="Delivery lifecycle timestamps">{lifecycleTimes(selected).map(([label, time, actor]) => (
+            <span key={label}><b>{label}</b><time dateTime={time}>{normalizeTime(time)}</time>{actor && <small>by {actor}</small>}</span>
           ))}</div>}
 
           <div className="os-trackbook-comparison">
@@ -472,7 +567,7 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
             <DeliveredColumn delivery={selected} />
           </div>
           <DeltaSection deliverables={deliverableRows} criteria={criterionRows} />
-          <EvidenceTimeline timeline={timeline} state={evidence} />
+          <EvidenceTimeline timeline={timeline} state={evidence} historical={viewingHistorical} />
           {deliveries.data.deliveries.length > 0 && (
             <RevisionHistory deliveries={deliveries.data.deliveries} selectedId={selected ? String(selected.id) : null}
               currentId={currentId} onSelect={(delivery) => setSelectedId(String(delivery.id))} />

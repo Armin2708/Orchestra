@@ -57,25 +57,34 @@ export type ProcessOutput = {
   created_at: string
 }
 
-export type AcceptanceCriterion = string | {
+export type ContractPromise = string | {
   id?: string
   text: string
+  required?: boolean
+  deliverable_ids?: string[]
+  metadata?: JsonObject
   met?: boolean | 'unverifiable'
   evidence?: string
 }
 
+export type AcceptanceCriterion = ContractPromise
+
 export type TaskContract = {
   card_id: number
   objective: string
+  deliverables?: ContractPromise[] | string
   acceptance_criteria: AcceptanceCriterion[] | string
   dependencies: Array<number | string> | string
   base_ref: string | null
   verify_commands: string[] | string
+  non_goals?: string[] | string
+  risks?: string[] | string
   budget_tokens: number | null
   budget_cents: number | null
   priority: number
   policy_id: OsId | null
   workspace_id: OsId | null
+  version?: number
   updated_at: string
 }
 
@@ -139,6 +148,9 @@ export type DeliveryOverride = {
 export type DeliveryPromise = {
   id: string | null
   text: string
+  required: boolean
+  deliverable_ids: string[]
+  metadata: JsonObject
 }
 
 export type DeliveryOutcome = DeliveryPromise & {
@@ -147,6 +159,10 @@ export type DeliveryOutcome = DeliveryPromise & {
   gaps: string[]
   override: DeliveryOverride | null
   claim: string | null
+  note: string | null
+  actor: string | null
+  created_at: string | null
+  updated_at: string | null
 }
 
 export type DeliveryClaim = {
@@ -162,11 +178,19 @@ export type DeliveryAskedSnapshot = {
   non_goals: string[]
   risks: string[]
   verify_commands: string[]
+  dependencies: OsId[]
+  base_ref: string | null
+  budget_tokens: number | null
+  budget_cents: number | null
+  priority: number
+  policy_id: OsId | null
   version: string | number | null
+  updated_at: string | null
 }
 
 export type DeliveryReport = {
   id: OsId
+  lineage_id: OsId | null
   card_id: number | null
   contract_id: OsId | null
   job_id: OsId | null
@@ -188,7 +212,13 @@ export type DeliveryReport = {
   sequence: number
   actor_type: string | null
   actor_id: OsId | null
+  created_by: string | null
   submitted_by: string | null
+  verified_by: string | null
+  accepted_by: string | null
+  rejected_by: string | null
+  acceptance_note: string | null
+  rejection_reason: string | null
   created_at: string
   updated_at: string
   submitted_at: string | null
@@ -481,6 +511,19 @@ const optionalId = (value: unknown): OsId | null => {
   return typeof value === 'number' ? value : String(value)
 }
 
+const optionalNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+const requiredBoolean = (value: unknown, fallback = true): boolean => {
+  if (value === null || value === undefined || value === '') return fallback
+  if (typeof value === 'string') return !['0', 'false', 'no'].includes(value.trim().toLowerCase())
+  if (typeof value === 'number') return value !== 0
+  return value !== false
+}
+
 const listValue = (value: unknown): unknown[] => {
   const parsed = parseJson<unknown>(value, value)
   if (Array.isArray(parsed)) return parsed
@@ -492,11 +535,16 @@ const deliveryText = (row: JsonObject): string => optionalString(firstValue(row,
   'text', 'description', 'deliverable', 'criterion', 'title', 'name', 'summary', 'claim')) ?? ''
 
 const normalizeDeliveryPromise = (value: unknown, index: number): DeliveryPromise => {
-  if (typeof value === 'string') return { id: null, text: value.trim() }
+  if (typeof value === 'string') return {
+    id: null, text: value.trim(), required: true, deliverable_ids: [], metadata: {},
+  }
   const row = objectValue(value)
   return {
     id: optionalString(firstValue(row, 'id', 'deliverable_id', 'deliverableId', 'criterion_id', 'criterionId')),
     text: deliveryText(row) || `Outcome ${index + 1}`,
+    required: requiredBoolean(firstValue(row, 'required', 'mandatory')),
+    deliverable_ids: normalizeIdList(firstValue(row, 'deliverable_ids', 'deliverableIds')).map(String),
+    metadata: objectValue(firstValue(row, 'metadata', 'meta')),
   }
 }
 
@@ -510,11 +558,17 @@ const normalizePromiseList = (value: unknown): DeliveryPromise[] => {
   return items.map(normalizeDeliveryPromise).filter((item) => item.text)
 }
 
-const normalizeDeliveryEvidence = (value: unknown): DeliveryEvidence[] => listValue(value).flatMap((item) => {
-  if (typeof item === 'string') return item.trim() ? [item.trim()] : []
-  if (item && typeof item === 'object' && !Array.isArray(item)) return [item as JsonObject]
-  return item === null || item === undefined ? [] : [String(item)]
-})
+const normalizeDeliveryEvidence = (value: unknown): DeliveryEvidence[] => {
+  const evidence: DeliveryEvidence[] = []
+  for (const item of listValue(value)) {
+    if (typeof item === 'string') {
+      if (item.trim()) evidence.push(item.trim())
+    } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+      evidence.push(item as JsonObject)
+    } else if (item !== null && item !== undefined) evidence.push(String(item))
+  }
+  return evidence
+}
 
 const normalizeDeliveryOverride = (value: unknown): DeliveryOverride | null => {
   if (value === null || value === undefined || value === '') return null
@@ -530,7 +584,11 @@ const normalizeDeliveryOverride = (value: unknown): DeliveryOverride | null => {
 
 const normalizeDeliveryOutcome = (value: unknown, index: number, fallbackStatus = 'unverified'): DeliveryOutcome => {
   if (typeof value === 'string') {
-    return { id: null, text: value.trim(), status: fallbackStatus, evidence: [], gaps: [], override: null, claim: value.trim() }
+    return {
+      id: null, text: value.trim(), required: true, deliverable_ids: [], metadata: {},
+      status: fallbackStatus, evidence: [], gaps: [], override: null, claim: value.trim(),
+      note: null, actor: null, created_at: null, updated_at: null,
+    }
   }
   const row = objectValue(value)
   const evidence = firstValue(row, 'evidence_refs', 'evidenceRefs', 'evidence', 'evidence_items', 'evidenceItems', 'artifact_ids', 'artifactIds', 'artifacts')
@@ -541,6 +599,10 @@ const normalizeDeliveryOutcome = (value: unknown, index: number, fallbackStatus 
     gaps: asStringList(firstValue(row, 'gaps', 'gap', 'missing_evidence', 'missingEvidence')),
     override: normalizeDeliveryOverride(firstValue(row, 'override', 'human_override', 'humanOverride')),
     claim: optionalString(firstValue(row, 'claim', 'agent_claim', 'agentClaim')),
+    note: optionalString(firstValue(row, 'note', 'verifier_note', 'verifierNote', 'reason')),
+    actor: optionalString(firstValue(row, 'actor', 'verified_by', 'verifiedBy')),
+    created_at: optionalString(firstValue(row, 'created_at', 'createdAt')),
+    updated_at: optionalString(firstValue(row, 'updated_at', 'updatedAt')),
   }
 }
 
@@ -591,7 +653,14 @@ const normalizeAskedSnapshot = (value: unknown): DeliveryAskedSnapshot => {
     non_goals: asStringList(firstValue(row, 'non_goals', 'nonGoals', 'out_of_scope', 'outOfScope')),
     risks: asStringList(firstValue(row, 'risks', 'constraints', 'known_risks', 'knownRisks')),
     verify_commands: asStringList(firstValue(row, 'verify_commands', 'verifyCommands', 'verification_commands', 'verificationCommands')),
+    dependencies: normalizeIdList(firstValue(row, 'dependencies', 'dependency_ids', 'dependencyIds')),
+    base_ref: optionalString(firstValue(row, 'base_ref', 'baseRef')),
+    budget_tokens: optionalNumber(firstValue(row, 'budget_tokens', 'budgetTokens')),
+    budget_cents: optionalNumber(firstValue(row, 'budget_cents', 'budgetCents')),
+    priority: optionalNumber(firstValue(row, 'priority')) ?? 0,
+    policy_id: optionalId(firstValue(row, 'policy_id', 'policyId')),
     version: typeof version === 'string' || typeof version === 'number' ? version : null,
+    updated_at: optionalString(firstValue(row, 'contract_updated_at', 'contractUpdatedAt', 'updated_at', 'updatedAt')),
   }
 }
 
@@ -604,6 +673,7 @@ export const normalizeDeliveryReport = (value: unknown): DeliveryReport => {
   const rawDeliverableResults = firstValue(row, 'deliverable_results', 'deliverableResults')
   return {
     id: optionalId(firstValue(row, 'id', 'delivery_id', 'deliveryId')) ?? `delivery-${Number.isFinite(sequence) ? sequence : 0}`,
+    lineage_id: optionalId(firstValue(row, 'lineage_id', 'lineageId')),
     card_id: rawCardId === null || rawCardId === undefined || rawCardId === '' || !Number.isFinite(cardId) ? null : cardId,
     contract_id: optionalId(firstValue(row, 'contract_id', 'contractId')),
     job_id: optionalId(firstValue(row, 'job_id', 'jobId')),
@@ -626,7 +696,13 @@ export const normalizeDeliveryReport = (value: unknown): DeliveryReport => {
     sequence: Number.isFinite(sequence) ? sequence : 0,
     actor_type: optionalString(firstValue(row, 'actor_type', 'actorType')),
     actor_id: optionalId(firstValue(row, 'actor_id', 'actorId')),
+    created_by: optionalString(firstValue(row, 'created_by', 'createdBy')),
     submitted_by: optionalString(firstValue(row, 'submitted_by', 'submittedBy', 'actor', 'author')),
+    verified_by: optionalString(firstValue(row, 'verified_by', 'verifiedBy')),
+    accepted_by: optionalString(firstValue(row, 'accepted_by', 'acceptedBy')),
+    rejected_by: optionalString(firstValue(row, 'rejected_by', 'rejectedBy')),
+    acceptance_note: optionalString(firstValue(row, 'acceptance_note', 'acceptanceNote')),
+    rejection_reason: optionalString(firstValue(row, 'rejection_reason', 'rejectionReason')),
     created_at: optionalString(firstValue(row, 'created_at', 'createdAt')) ?? '',
     updated_at: optionalString(firstValue(row, 'updated_at', 'updatedAt')) ?? '',
     submitted_at: optionalString(firstValue(row, 'submitted_at', 'submittedAt')),

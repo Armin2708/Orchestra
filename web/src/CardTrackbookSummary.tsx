@@ -42,29 +42,28 @@ export const summarizeTrackbookDelivery = (delivery: DeliveryReport | null, card
     delivered: 'Waiting for the first delivery report.', complete: 0, total: 0, needsEvidence: 0, failed: 0,
   }
 
-  const promises = delivery.asked.deliverables.length
-    ? delivery.asked.deliverables : delivery.asked.acceptance_criteria
-  const results = delivery.asked.deliverables.length
-    ? delivery.deliverable_results : delivery.criterion_results
-  const matched = promises.map((promise, index) => resultFor(results, promise.id, index))
+  const matched = [
+    ...delivery.asked.deliverables.map((promise, index) => ({ promise, result: resultFor(delivery.deliverable_results, promise.id, index) })),
+    ...delivery.asked.acceptance_criteria.map((promise, index) => ({ promise, result: resultFor(delivery.criterion_results, promise.id, index) })),
+  ].filter(({ promise }) => promise.required).map(({ result }) => result)
   const complete = matched.filter(isSupported).length
   const failed = matched.filter((result) => result && !result.override && FAILED_STATUSES.has(result.status)).length
-  const needsEvidence = Math.max(0, promises.length - complete - failed)
-  const parts = [`Delivered ${complete} of ${promises.length} promised outcome${promises.length === 1 ? '' : 's'}`]
+  const needsEvidence = Math.max(0, matched.length - complete - failed)
+  const parts = [`Delivered ${complete} of ${matched.length} required outcome${matched.length === 1 ? '' : 's'}`]
   if (needsEvidence) parts.push(`${needsEvidence} need${needsEvidence === 1 ? 's' : ''} evidence`)
   if (failed) parts.push(`${failed} failed`)
-  const headline = promises.length
+  const headline = matched.length
     ? `${parts.join('; ')}.`
-    : 'Delivery submitted; promised outcomes are not mapped yet.'
+    : 'Delivery submitted; no required outcomes are recorded.'
   return {
     headline,
-    tone: failed ? 'failed' : needsEvidence || !promises.length ? 'attention' : 'complete',
+    tone: failed ? 'failed' : needsEvidence || !matched.length ? 'attention' : 'complete',
     asked,
     delivered: delivery.human_summary || delivery.summary
       || delivery.delivered_items.map((item) => item.text).filter(Boolean).join('; ')
       || 'A report exists, but no delivered summary was supplied.',
     complete,
-    total: promises.length,
+    total: matched.length,
     needsEvidence,
     failed,
   }
