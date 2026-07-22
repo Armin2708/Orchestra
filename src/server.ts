@@ -21,6 +21,7 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
+import { resolveIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
@@ -875,6 +876,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     idempotencyKey?: string
   } | null }>(
     '/api/v1/cards/:id/launch', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
@@ -904,13 +906,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         if (!jobExecutor.supportedProviders().includes(provider)) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
         }
-        const headerKey = Array.isArray(req.headers['idempotency-key'])
-          ? req.headers['idempotency-key'][0]
-          : req.headers['idempotency-key']
-        const bodyKey = req.body?.idempotency_key ?? req.body?.idempotencyKey
-        if (headerKey && bodyKey && headerKey !== bodyKey) {
-          return reply.code(400).send({ error: 'Idempotency-Key header and request body must match' })
-        }
+        const idempotencyKey = resolveIdempotencyKey({
+          header: req.headers['idempotency-key'],
+          snake: req.body?.idempotency_key,
+          camel: req.body?.idempotencyKey,
+        })
         const launchInput = {
           cardId: card.id,
           expectedBoardId: card.board_id,
@@ -919,7 +919,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           model: req.body?.model,
           effort: req.body?.effort,
           accessProfile: req.body?.access_profile,
-          idempotencyKey: headerKey ?? bodyKey,
+          idempotencyKey,
         }
         const launched = await orchestration.launchCard(launchInput)
         const agent = launched.session?.agent_id == null ? undefined
@@ -1051,6 +1051,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; provider?: string; model?: string; effort?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; access_profile?: AccessProfile } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
       if (!board) return reply.code(404).send({ error: 'not found' })
@@ -1095,6 +1096,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const agentId = Number(req.params.id)
       const ok = maestro.task(agentId, req.body.text)
@@ -1108,8 +1110,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           workspace_id: string | null
           session_id: string | null
         } | undefined : undefined
-      const legacy = ok && !managed && db.prepare(`SELECT 1 FROM cards
-        WHERE owner_agent_id=? AND column_name='in_progress' LIMIT 1`).get(agentId)
+      const legacy = ok && !managed && db.prepare(`SELECT 1 FROM cards c
+        JOIN card_events e ON e.card_id=c.id AND e.agent_id=? AND e.type='launched'
+        WHERE c.owner_agent_id=? AND c.column_name='in_progress' LIMIT 1`).get(agentId, agentId)
       const mode = managed ? 'canonical' : legacy ? 'legacy' : 'ambient'
       return ok ? {
         ok: true,

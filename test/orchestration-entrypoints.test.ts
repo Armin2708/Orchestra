@@ -17,6 +17,42 @@ afterEach(async () => {
 })
 
 describe('orchestration compatibility entrypoints', () => {
+  it('uses durable launch evidence instead of card ownership to classify direct task steering', async () => {
+    const db = openDb(':memory:')
+    db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/repo', 'repo')").run()
+    const agentId = Number(db.prepare(`INSERT INTO agents (board_id, name, kind, provider, status)
+      VALUES (1, 'ambient-owl', 'hired', 'claude', 'active')`).run().lastInsertRowid)
+    const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, owner_agent_id, column_name)
+      VALUES (1, 'Manually assigned', ?, 'in_progress')`).run(agentId).lastInsertRowid)
+    const conductor: ConductorLike = {
+      isHired: () => true,
+      hire: () => ({}),
+      deliver: () => true,
+      task: () => true,
+      transcript: () => ({ lines: [], working: null }),
+      subagents: () => [],
+      interruptAgent: async () => true,
+      fire: async () => true,
+      launch: () => ({ queued: false }),
+      isLaunched: () => false,
+    }
+    const server = buildServer(db, () => conductor)
+    servers.push(server)
+    await server.ready()
+
+    const ambient = await server.inject({
+      method: 'POST', url: `/api/v1/agents/${agentId}/task`, payload: { text: 'continue manually assigned work' },
+    })
+    expect(ambient.json()).toMatchObject({ mode: 'ambient', orchestration: { lifecycle: 'ambient' } })
+
+    db.prepare("INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, 'launched', '{}')")
+      .run(cardId, agentId)
+    const legacy = await server.inject({
+      method: 'POST', url: `/api/v1/agents/${agentId}/task`, payload: { text: 'continue legacy launch' },
+    })
+    expect(legacy.json()).toMatchObject({ mode: 'legacy', orchestration: { lifecycle: 'legacy' } })
+  })
+
   it('authenticates direct hire/task while identifying them as ambient, not canonical work', async () => {
     const db = openDb(':memory:')
     db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/repo', 'repo')").run()

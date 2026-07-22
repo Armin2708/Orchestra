@@ -10,6 +10,7 @@ import { DeliveryReportService } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
+import { resolveIdempotencyKey } from './idempotency.js'
 import { LegacyBusEvent, LegacyEventProjection } from './legacy-projection.js'
 import { orchestrationIdentity } from './orchestration-envelope.js'
 import { OrchestrationService } from './orchestration-service.js'
@@ -117,7 +118,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
   const isOperator = options.isOperator ?? (() => true)
   const requireOperator = (request: FastifyRequest) => {
-    if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this delivery action')
+    if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')
   }
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
@@ -508,6 +509,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { jobs: scheduler.listBoard(boardId, request.query.status) }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/jobs', async (request, reply) => {
+    requireOperator(request)
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
     const cardId = optionalPositiveId(body.card_id ?? body.cardId, 'card_id')
@@ -532,15 +534,14 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const scopedCard = db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
       if (!scopedCard) throw new NotFoundError('card not found')
       if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
-      const rawHeaderKey = request.headers['idempotency-key']
-      const headerKey = stringValue(Array.isArray(rawHeaderKey) ? rawHeaderKey[0] : rawHeaderKey)
-      const bodyKey = stringValue(body.idempotency_key ?? body.idempotencyKey)
-      if (headerKey && bodyKey && headerKey !== bodyKey) {
-        throw new ValidationError('Idempotency-Key header and request body must match')
-      }
+      const idempotencyKey = resolveIdempotencyKey({
+        header: request.headers['idempotency-key'],
+        snake: body.idempotency_key,
+        camel: body.idempotencyKey,
+      })
       const launchInput = { cardId, expectedBoardId: boardId, workspaceId,
         provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt,
-        idempotencyKey: headerKey ?? bodyKey }
+        idempotencyKey }
       const launched = await orchestration.launchCard(launchInput)
       return reply.code(201).send({
         mode: 'canonical',
@@ -559,7 +560,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     await scheduler.tick()
     return reply.code(201).send({ job: scheduler.get(created.id) })
   })
-  app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => ({ job: await scheduler.cancel(request.params.id) }))
+  app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => {
+    requireOperator(request)
+    return { job: await scheduler.cancel(request.params.id) }
+  })
 
   app.get<{ Params: { id: string } }>('/boards/:id/conflicts', (request) => {
     const boardId = board(db, request.params.id)

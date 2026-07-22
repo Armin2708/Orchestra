@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
-import { buildServer } from '../src/server.js'
+import { buildServer, type ConductorLike } from '../src/server.js'
 import { ensureAgentToken, ensureToken, loadClientToken } from '../src/token.js'
 
 const OPERATOR_TOKEN = 'operator-token'
@@ -21,6 +21,47 @@ afterEach(async () => {
 })
 
 describe('operator and agent API principals', () => {
+  it('prevents an agent credential from launching, hiring, steering, or cancelling work', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/operator-auth', 'auth')")
+      .run().lastInsertRowid)
+    const cardId = Number(db.prepare("INSERT INTO cards (board_id, title) VALUES (?, 'Privileged work')")
+      .run(boardId).lastInsertRowid)
+    const calls: string[] = []
+    const conductor: ConductorLike = {
+      isHired: () => true,
+      hire: () => { calls.push('hire'); return { id: 1, name: 'privileged-agent' } },
+      deliver: () => true,
+      task: () => { calls.push('task'); return true },
+      transcript: () => ({ lines: [], working: null }),
+      subagents: () => [],
+      interruptAgent: async () => true,
+      fire: async () => true,
+      launch: () => { calls.push('launch'); return { queued: false } },
+      isLaunched: () => false,
+    }
+    const server = buildServer(db, () => conductor, { token: OPERATOR_TOKEN, agentToken: AGENT_TOKEN })
+    servers.push(server)
+    await server.ready()
+
+    const attempts = await Promise.all([
+      server.inject({
+        method: 'POST', url: `/api/v1/boards/${boardId}/hire`, headers: agent,
+        payload: { cwd: '/tmp/escalated', permissionMode: 'bypassPermissions', access_profile: 'full_access' },
+      }),
+      server.inject({ method: 'POST', url: `/api/v1/cards/${cardId}/launch`, headers: agent }),
+      server.inject({
+        method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`, headers: agent,
+        payload: { card_id: cardId, provider: 'claude' },
+      }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/task', headers: agent, payload: { text: 'escalate' } }),
+      server.inject({ method: 'POST', url: '/api/v1/os/jobs/unknown/cancel', headers: agent }),
+    ])
+
+    expect(attempts.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403])
+    expect(calls).toEqual([])
+  })
+
   it('keeps normal agent reporting open but reserves acceptance and done for the operator', async () => {
     const db = openDb(':memory:')
     const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/operator-auth', 'auth')")
