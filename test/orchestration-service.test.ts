@@ -137,6 +137,7 @@ describe('OrchestrationService', () => {
     })
 
     expect(launched.dispatch.started).toEqual([launched.job.id])
+    expect(launched.dispatch_error).toBeNull()
     expect(launched.job).toMatchObject({ status: 'running', workspace_id: launched.workspace?.id })
     expect(launched.workspace).toMatchObject({ card_id: setup.cardId, kind: 'worktree' })
     expect(launched.session).toMatchObject({
@@ -168,10 +169,80 @@ describe('OrchestrationService', () => {
     expect(launched.session).toBeNull()
   })
 
+  it('validates board scope and launchable card state before contract or job writes', () => {
+    const { db, boardId, cardId, orchestration } = fixture()
+    const otherBoardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/other', 'other')")
+      .run().lastInsertRowid)
+
+    expect(() => orchestration.createCardJob({ cardId, expectedBoardId: otherBoardId })).toThrow(/different board/)
+    db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(cardId)
+    expect(() => orchestration.createCardJob({ cardId, expectedBoardId: boardId, requireLaunchable: true }))
+      .toThrow(/already done/)
+    db.prepare("UPDATE cards SET column_name='backlog' WHERE id=?").run(cardId)
+    const ownerId = Number(db.prepare("INSERT INTO agents (board_id, name) VALUES (?, 'busy-agent')")
+      .run(boardId).lastInsertRowid)
+    db.prepare('UPDATE cards SET owner_agent_id=? WHERE id=?').run(ownerId, cardId)
+    expect(() => orchestration.createCardJob({ cardId, expectedBoardId: boardId, requireLaunchable: true }))
+      .toThrow(/already assigned/)
+
+    expect(db.prepare('SELECT 1 FROM task_contracts WHERE card_id=?').get(cardId)).toBeUndefined()
+    expect(db.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 0 })
+  })
+
+  it('returns a committed queued job when the post-commit scheduler kick fails', async () => {
+    const setup = fixture()
+    setup.scheduler.tick = async () => { throw new Error('scheduler kick failed') }
+
+    const launched = await setup.orchestration.launchCard({ cardId: setup.cardId, provider: 'claude' })
+
+    expect(launched.job.status).toBe('queued')
+    expect(launched.dispatch).toEqual({ started: [], completed: [], blocked: [], deferred: [] })
+    expect(launched.dispatch_error).toBe('scheduler kick failed')
+    expect(setup.scheduler.get(launched.job.id)?.status).toBe('queued')
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM jobs WHERE card_id=?').get(setup.cardId)).toEqual({ count: 1 })
+  })
+
+  it('filters global scheduler results to the requested job', async () => {
+    const setup = fixture()
+    setup.scheduler.tick = async () => {
+      const jobId = setup.scheduler.listBoard(setup.boardId)[0]!.id
+      return {
+        started: [jobId, 'other-started'],
+        completed: ['other-completed'],
+        blocked: [jobId, 'other-blocked'],
+        deferred: ['other-deferred'],
+      }
+    }
+
+    const launched = await setup.orchestration.launchCard({ cardId: setup.cardId, provider: 'claude' })
+
+    expect(launched.dispatch).toEqual({
+      started: [launched.job.id],
+      completed: [],
+      blocked: [launched.job.id],
+      deferred: [],
+    })
+    expect(launched.dispatch_error).toBeNull()
+  })
+
+  it('ignores malformed legacy session context while building a snapshot', () => {
+    const { db, boardId, cardId, orchestration } = fixture()
+    const workspace = new WorkspaceStore(db).create({ boardId, name: 'legacy', rootPath: '/repo' })
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json, created_at, updated_at)
+      VALUES ('legacy-session', ?, 'claude', 'stopped', 'not-json', datetime('now'), datetime('now'))`).run(workspace.id)
+
+    const created = orchestration.createCardJob({ cardId, provider: 'claude' })
+
+    expect(created.job.status).toBe('queued')
+    expect(created.session).toBeNull()
+  })
+
   it('rejects invalid and missing card identifiers without creating jobs', () => {
     const { db, orchestration } = fixture()
 
     expect(() => orchestration.createCardJob({ cardId: 0 })).toThrow(/positive integer/)
+    expect(() => orchestration.createCardJob({ cardId: 1, expectedBoardId: 0 })).toThrow(/expectedBoardId/)
     expect(() => orchestration.createCardJob({ cardId: 999 })).toThrow(/card not found/)
     expect(db.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 0 })
   })

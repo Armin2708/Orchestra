@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 import { defaultsForRole } from '../agent-defaults.js'
-import { NotFoundError, UnsupportedError, ValidationError } from './errors.js'
+import { ConflictError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
 import { parseJson } from './json.js'
 import {
   JobScheduler,
@@ -13,6 +13,8 @@ import { WorkspaceStore, type Workspace } from './workspace-store.js'
 
 export interface CreateCardJob {
   cardId: number
+  expectedBoardId?: number
+  requireLaunchable?: boolean
   provider?: string
   model?: string | null
   effort?: string | null
@@ -47,6 +49,7 @@ export interface CardJobSnapshot {
 
 export interface LaunchCardJobResult extends CardJobSnapshot {
   dispatch: SchedulerTick
+  dispatch_error: string | null
 }
 
 /**
@@ -70,7 +73,7 @@ export class OrchestrationService {
 
   createCardJob(input: CreateCardJob): CardJobSnapshot {
     const create = this.db.transaction(() => {
-      const boardId = this.boardForCard(input.cardId)
+      const card = this.cardForCommand(input)
       const defaults = defaultsForRole(this.db)
       const provider = input.provider ?? defaults.provider
       const matchingDefaults = provider.trim() === defaults.provider ? defaults : null
@@ -78,7 +81,7 @@ export class OrchestrationService {
       this.assertSupportedOptions(input, effort)
       const contract = this.contracts.getOrCreate(input.cardId)
       const jobInput: CreateJob = {
-        boardId,
+        boardId: card.boardId,
         cardId: input.cardId,
         workspaceId: input.workspaceId ?? contract.workspace_id,
         provider,
@@ -98,8 +101,15 @@ export class OrchestrationService {
 
   async launchCard(input: CreateCardJob): Promise<LaunchCardJobResult> {
     const created = this.createCardJob(input)
-    const dispatch = await this.scheduler.tick()
-    return { ...this.snapshot(created.job.id), dispatch }
+    let dispatch: SchedulerTick = { started: [], completed: [], blocked: [], deferred: [] }
+    let dispatchError: string | null = null
+    try {
+      const globalDispatch = await this.scheduler.tick()
+      dispatch = filterDispatch(globalDispatch, created.job.id)
+    } catch (error) {
+      dispatchError = error instanceof Error ? error.message : String(error)
+    }
+    return { ...this.snapshot(created.job.id), dispatch, dispatch_error: dispatchError }
   }
 
   private assertSupportedOptions(input: CreateCardJob, effort: string | null | undefined): void {
@@ -110,11 +120,30 @@ export class OrchestrationService {
     }
   }
 
-  private boardForCard(cardId: number): number {
-    if (!Number.isSafeInteger(cardId) || cardId <= 0) throw new ValidationError('cardId must be a positive integer')
-    const row = this.db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
+  private cardForCommand(input: CreateCardJob): { boardId: number } {
+    if (!Number.isSafeInteger(input.cardId) || input.cardId <= 0) {
+      throw new ValidationError('cardId must be a positive integer')
+    }
+    if (input.expectedBoardId !== undefined
+      && (!Number.isSafeInteger(input.expectedBoardId) || input.expectedBoardId <= 0)) {
+      throw new ValidationError('expectedBoardId must be a positive integer')
+    }
+    const row = this.db.prepare('SELECT board_id, column_name, owner_agent_id FROM cards WHERE id=?').get(input.cardId) as {
+      board_id: number
+      column_name: string
+      owner_agent_id: number | null
+    } | undefined
     if (!row) throw new NotFoundError('card not found')
-    return row.board_id
+    if (input.expectedBoardId !== undefined && row.board_id !== input.expectedBoardId) {
+      throw new ValidationError('card belongs to a different board')
+    }
+    if (input.requireLaunchable && row.column_name === 'done') {
+      throw new ValidationError('card is already done')
+    }
+    if (input.requireLaunchable && row.owner_agent_id !== null) {
+      throw new ConflictError('card is already assigned')
+    }
+    return { boardId: row.board_id }
   }
 
   private snapshot(jobId: string): CardJobSnapshot {
@@ -132,7 +161,8 @@ export class OrchestrationService {
 
   private sessionForJob(jobId: string): OrchestratedAgentSession | null {
     const row = this.db.prepare(`SELECT * FROM agent_sessions
-      WHERE json_extract(context_json, '$.job_id')=?
+      WHERE CASE WHEN json_valid(context_json)
+        THEN json_extract(context_json, '$.job_id')=? ELSE 0 END
       ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(jobId) as Record<string, unknown> | undefined
     if (!row) return null
     return {
@@ -147,5 +177,14 @@ export class OrchestrationService {
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     }
+  }
+}
+
+function filterDispatch(dispatch: SchedulerTick, jobId: string): SchedulerTick {
+  return {
+    started: dispatch.started.filter((id) => id === jobId),
+    completed: dispatch.completed.filter((id) => id === jobId),
+    blocked: dispatch.blocked.filter((id) => id === jobId),
+    deferred: dispatch.deferred.filter((id) => id === jobId),
   }
 }
