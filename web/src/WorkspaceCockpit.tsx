@@ -4,6 +4,7 @@ import { Agent, Card, Snapshot } from './api'
 import { ProviderBadge } from './ProviderBadge'
 import {
   ContextItem,
+  DeliveryCollection,
   DriverCapability,
   EvidenceBundle,
   OsEvent,
@@ -16,12 +17,12 @@ import {
 } from './osApi'
 import { OsIcon, OsIconName } from './OsIcon'
 import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
+import { TrackbookPane } from './TrackbookPane'
 import { useModalFocusTrap } from './useModalFocusTrap'
 import {
   ChangesPane,
   ContextPane,
   ConversationPane,
-  EvidencePane,
   PaneFrame,
   PaneSkeleton,
   PolicyPane,
@@ -30,19 +31,34 @@ import {
   Resource,
 } from './WorkspacePanes'
 
-type PaneId = 'terminal' | 'agent' | 'changes' | 'evidence' | 'processes' | 'context' | 'policy'
+type PaneId = 'terminal' | 'agent' | 'changes' | 'trackbook' | 'processes' | 'context' | 'policy'
+type DetailPaneId = Exclude<PaneId, 'terminal' | 'agent'>
 
 const panes: Array<{ id: PaneId; label: string; icon: OsIconName }> = [
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'agent', label: 'Agent', icon: 'message' },
   { id: 'changes', label: 'Changes', icon: 'diff' },
-  { id: 'evidence', label: 'Evidence', icon: 'evidence' },
+  { id: 'trackbook', label: 'Trackbook', icon: 'evidence' },
   { id: 'processes', label: 'Processes', icon: 'process' },
   { id: 'context', label: 'Context', icon: 'context' },
   { id: 'policy', label: 'Policy', icon: 'policy' },
 ]
 
 const detailPanes = panes.filter((pane) => !['terminal', 'agent'].includes(pane.id))
+const primaryPaneIds = ['terminal', 'agent'] as const
+const detailPaneIds = detailPanes.map((pane) => pane.id as DetailPaneId)
+
+function moveTabFocus<T extends string>(event: React.KeyboardEvent<HTMLButtonElement>, ids: readonly T[], active: T,
+  onSelect: (id: T) => void, idPrefix: string) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const current = Math.max(0, ids.indexOf(active))
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? ids.length - 1
+    : event.key === 'ArrowRight' ? (current + 1) % ids.length : (current - 1 + ids.length) % ids.length
+  const next = ids[index]
+  onSelect(next)
+  window.requestAnimationFrame(() => document.getElementById(`${idPrefix}-${next}`)?.focus())
+}
 
 const useMedia = (query: string) => {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
@@ -67,6 +83,7 @@ const timeLabel = (value: string | null | undefined) => {
 
 export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
   const mobile = useMedia('(max-width: 820px)')
+  const requestedPaneRef = useRef<PaneId | null>(localStorage.getItem('orchestra-os-pane') === 'trackbook' ? 'trackbook' : null)
   const snapsRef = useRef(snaps)
   snapsRef.current = snaps
   const boardKey = snaps.map((snapshot) => snapshot.board.id).join(',')
@@ -75,8 +92,8 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [activeProcessId, setActiveProcessId] = useState<string | null>(null)
   const [centerPane, setCenterPane] = useState<'terminal' | 'agent'>('terminal')
-  const [sidePane, setSidePane] = useState<Exclude<PaneId, 'terminal' | 'agent'>>('changes')
-  const [mobilePane, setMobilePane] = useState<PaneId>('terminal')
+  const [sidePane, setSidePane] = useState<DetailPaneId>(requestedPaneRef.current === 'trackbook' ? 'trackbook' : 'changes')
+  const [mobilePane, setMobilePane] = useState<PaneId>(requestedPaneRef.current ?? 'terminal')
   const [reloadTick, setReloadTick] = useState(0)
   const [createOpen, setCreateOpen] = useState(false)
   const [createCard, setCreateCard] = useState<Card | null>(null)
@@ -87,6 +104,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const [processes, setProcesses] = useState<Resource<WorkspaceProcess[]>>(resource([]))
   const [events, setEvents] = useState<Resource<OsEvent[]>>(resource([]))
   const [evidence, setEvidence] = useState<Resource<EvidenceBundle | null>>(resource(null))
+  const [deliveries, setDeliveries] = useState<Resource<DeliveryCollection>>(resource({ deliveries: [], current: null }))
   const [context, setContext] = useState<Resource<ContextItem[]>>(resource([]))
   const [policies, setPolicies] = useState<Resource<Policy[]>>(resource([]))
   const [contract, setContract] = useState<Resource<TaskContract | null>>(resource(null))
@@ -99,6 +117,10 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const loadGenerationRef = useRef(0)
   const resourceWorkspaceRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
+
+  useEffect(() => {
+    if (requestedPaneRef.current) localStorage.removeItem('orchestra-os-pane')
+  }, [])
 
   const selectWorkspace = useCallback((workspace: Workspace) => {
     const id = String(workspace.id)
@@ -164,6 +186,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setProcesses({ status: 'ready', data: [], error: null })
       setEvents({ status: 'ready', data: [], error: null })
       setEvidence({ status: 'ready', data: null, error: null })
+      setDeliveries({ status: 'ready', data: { deliveries: [], current: null }, error: null })
       setContext({ status: 'ready', data: [], error: null })
       setPolicies({ status: 'ready', data: [], error: null })
       setContract({ status: 'ready', data: null, error: null })
@@ -186,11 +209,13 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     if (selected.card_id !== null && switched) {
       setContract({ status: 'loading', data: null, error: null })
       setEvidence({ status: 'loading', data: null, error: null })
+      setDeliveries({ status: 'loading', data: { deliveries: [], current: null }, error: null })
     }
     else {
       if (selected.card_id === null) {
         setContract({ status: 'ready', data: null, error: null })
         setEvidence({ status: 'ready', data: null, error: null })
+        setDeliveries({ status: 'ready', data: { deliveries: [], current: null }, error: null })
       }
     }
 
@@ -207,6 +232,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     if (selected.card_id !== null) {
       settle<TaskContract | null>(osApi.getContract(selected.card_id), setContract, 'Task contract')
       settle<EvidenceBundle | null>(osApi.getEvidence(selected.card_id), setEvidence, 'Evidence')
+      settle<DeliveryCollection>(osApi.getDeliveries(selected.card_id), setDeliveries, 'Trackbook')
     }
     return () => { alive = false }
   }, [selected?.id, selected?.board_id, selected?.card_id, reloadTick])
@@ -363,7 +389,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
         onOpenAgent={setLiveAgent} />
     )
     if (pane === 'changes') return <ChangesPane evidence={evidence} />
-    if (pane === 'evidence') return <EvidencePane evidence={evidence} contract={contract} card={card} />
+    if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card} />
     if (pane === 'processes') return (
       <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} onAttach={attachProcess}
         onSignal={signalProcess} onRestart={restartProcess} />
@@ -432,35 +458,47 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 
             {mobile ? (
               <div className="os-mobile-workspace">
-                <nav className="os-mobile-tabs" aria-label="Workspace panes">
+                <nav className="os-mobile-tabs" aria-label="Workspace panes" role="tablist">
                   {panes.map((pane, index) => (
-                    <button key={pane.id} className={mobilePane === pane.id ? 'active' : ''} onClick={() => setMobilePane(pane.id)}
-                      aria-current={mobilePane === pane.id ? 'page' : undefined} title={`Command/Control + ${index + 1}`}>
+                    <button key={pane.id} id={`os-mobile-tab-${pane.id}`} className={mobilePane === pane.id ? 'active' : ''} onClick={() => setMobilePane(pane.id)}
+                      role="tab" aria-selected={mobilePane === pane.id} aria-controls="os-mobile-panel" tabIndex={mobilePane === pane.id ? 0 : -1}
+                      onKeyDown={(event) => moveTabFocus(event, panes.map((item) => item.id), mobilePane, setMobilePane, 'os-mobile-tab')}
+                      aria-label={pane.label} title={`Command/Control + ${index + 1}`}>
                       <OsIcon name={pane.icon} /><span>{pane.label}</span>
                     </button>
                   ))}
                 </nav>
-                <div className="os-mobile-pane">{renderPane(mobilePane)}</div>
+                <div className="os-mobile-pane" id="os-mobile-panel" role="tabpanel" tabIndex={0}
+                  aria-labelledby={`os-mobile-tab-${mobilePane}`}>{renderPane(mobilePane)}</div>
               </div>
             ) : (
               <div className="os-desktop-workspace">
                 <section className="os-primary-column">
-                  <nav className="os-pane-tabs" aria-label="Primary workspace panes">
-                    <button className={centerPane === 'terminal' ? 'active' : ''} onClick={() => setCenterPane('terminal')}><OsIcon name="terminal" /> Terminal <kbd>⌘`</kbd></button>
-                    <button className={centerPane === 'agent' ? 'active' : ''} onClick={() => setCenterPane('agent')}><OsIcon name="message" /> Agent</button>
+                  <nav className="os-pane-tabs" aria-label="Primary workspace panes" role="tablist">
+                    <button id="os-primary-tab-terminal" role="tab" aria-selected={centerPane === 'terminal'} aria-controls="os-primary-panel"
+                      tabIndex={centerPane === 'terminal' ? 0 : -1} onKeyDown={(event) => moveTabFocus(event, primaryPaneIds, centerPane, setCenterPane, 'os-primary-tab')}
+                      className={centerPane === 'terminal' ? 'active' : ''} onClick={() => setCenterPane('terminal')}><OsIcon name="terminal" /> Terminal <kbd>⌘`</kbd></button>
+                    <button id="os-primary-tab-agent" role="tab" aria-selected={centerPane === 'agent'} aria-controls="os-primary-panel"
+                      tabIndex={centerPane === 'agent' ? 0 : -1} onKeyDown={(event) => moveTabFocus(event, primaryPaneIds, centerPane, setCenterPane, 'os-primary-tab')}
+                      className={centerPane === 'agent' ? 'active' : ''} onClick={() => setCenterPane('agent')}><OsIcon name="message" /> Agent</button>
                   </nav>
-                  <div className="os-primary-pane">{renderPane(centerPane)}</div>
+                  <div className="os-primary-pane" id="os-primary-panel" role="tabpanel" tabIndex={0}
+                    aria-labelledby={`os-primary-tab-${centerPane}`}>{renderPane(centerPane)}</div>
                 </section>
                 <aside className="os-inspector-column">
-                  <nav className="os-pane-tabs inspector" aria-label="Workspace inspector panes">
+                  <nav className="os-pane-tabs inspector" aria-label="Workspace inspector panes" role="tablist">
                     {detailPanes.map((pane, index) => (
-                      <button key={pane.id} className={sidePane === pane.id ? 'active' : ''}
-                        onClick={() => setSidePane(pane.id as typeof sidePane)} title={`Command/Control + ${index + 3}`}>
+                      <button key={pane.id} id={`os-inspector-tab-${pane.id}`} className={sidePane === pane.id ? 'active' : ''}
+                        role="tab" aria-selected={sidePane === pane.id} aria-controls="os-inspector-panel" aria-label={pane.label}
+                        tabIndex={sidePane === pane.id ? 0 : -1}
+                        onKeyDown={(event) => moveTabFocus(event, detailPaneIds, sidePane, setSidePane, 'os-inspector-tab')}
+                        onClick={() => setSidePane(pane.id as DetailPaneId)} title={`Command/Control + ${index + 3}`}>
                         <OsIcon name={pane.icon} /><span>{pane.label}</span>
                       </button>
                     ))}
                   </nav>
-                  <div className="os-inspector-pane">{renderPane(sidePane)}</div>
+                  <div className="os-inspector-pane" id="os-inspector-panel" role="tabpanel" tabIndex={0}
+                    aria-labelledby={`os-inspector-tab-${sidePane}`}>{renderPane(sidePane)}</div>
                 </aside>
               </div>
             )}

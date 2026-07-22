@@ -4,6 +4,7 @@ import { STATUS } from './Board'
 import { MessageComposer } from './MessageComposer'
 import { MessageThread } from './MessageThread'
 import { ProviderLaunchControl } from './ProviderLaunchControl'
+import { CardTrackbookSummary } from './CardTrackbookSummary'
 import type { AgentProviderCatalog } from './osApi'
 
 const EVENT_VERB: Record<string, string> = {
@@ -192,6 +193,8 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
           </p>
         )}
         {card.paths.length > 0 && <div className="tags">{card.paths.map((p) => <code key={p}>{p}</code>)}</div>}
+
+        <CardTrackbookSummary card={card} boardId={boardId} onOpenFull={onClose} />
 
         <h3>Activity</h3>
         <ol className="timeline">

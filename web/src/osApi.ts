@@ -128,6 +128,82 @@ export type EvidenceBundle = {
   [key: string]: unknown
 }
 
+export type DeliveryEvidence = string | JsonObject
+
+export type DeliveryOverride = {
+  actor: string | null
+  reason: string | null
+  created_at: string | null
+}
+
+export type DeliveryPromise = {
+  id: string | null
+  text: string
+}
+
+export type DeliveryOutcome = DeliveryPromise & {
+  status: string
+  evidence: DeliveryEvidence[]
+  gaps: string[]
+  override: DeliveryOverride | null
+  claim: string | null
+}
+
+export type DeliveryClaim = {
+  text: string
+  source: string | null
+  created_at: string | null
+}
+
+export type DeliveryAskedSnapshot = {
+  objective: string
+  deliverables: DeliveryPromise[]
+  acceptance_criteria: DeliveryPromise[]
+  non_goals: string[]
+  risks: string[]
+  verify_commands: string[]
+  version: string | number | null
+}
+
+export type DeliveryReport = {
+  id: OsId
+  card_id: number | null
+  contract_id: OsId | null
+  job_id: OsId | null
+  session_id: OsId | null
+  workspace_id: OsId | null
+  status: string
+  asked: DeliveryAskedSnapshot
+  summary: string
+  human_summary: string | null
+  delivered_items: DeliveryOutcome[]
+  deliverable_results: DeliveryOutcome[]
+  criterion_results: DeliveryOutcome[]
+  changed_files: string[]
+  commits: string[]
+  artifact_ids: OsId[]
+  claims: DeliveryClaim[]
+  gaps: string[]
+  parent_delivery_id: OsId | null
+  sequence: number
+  actor_type: string | null
+  actor_id: OsId | null
+  submitted_by: string | null
+  created_at: string
+  updated_at: string
+  submitted_at: string | null
+  verified_at: string | null
+  reviewed_at: string | null
+  accepted_at: string | null
+  rejected_at: string | null
+  shipped_at: string | null
+}
+
+export type DeliveryCollection = {
+  deliveries: DeliveryReport[]
+  current: DeliveryReport | null
+}
+
 export type Policy = {
   id: OsId
   board_id: number
@@ -382,6 +458,207 @@ export const asStringList = (value: unknown): string[] => {
   return []
 }
 
+const objectValue = (value: unknown): JsonObject => {
+  const parsed = parseJson<unknown>(value, value)
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as JsonObject : {}
+}
+
+const firstValue = (row: JsonObject, ...keys: string[]): unknown => {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key]
+  }
+  return undefined
+}
+
+const optionalString = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null
+  const text = String(value).trim()
+  return text || null
+}
+
+const optionalId = (value: unknown): OsId | null => {
+  if (value === null || value === undefined || value === '') return null
+  return typeof value === 'number' ? value : String(value)
+}
+
+const listValue = (value: unknown): unknown[] => {
+  const parsed = parseJson<unknown>(value, value)
+  if (Array.isArray(parsed)) return parsed
+  if (parsed === null || parsed === undefined || parsed === '') return []
+  return [parsed]
+}
+
+const deliveryText = (row: JsonObject): string => optionalString(firstValue(row,
+  'text', 'description', 'deliverable', 'criterion', 'title', 'name', 'summary', 'claim')) ?? ''
+
+const normalizeDeliveryPromise = (value: unknown, index: number): DeliveryPromise => {
+  if (typeof value === 'string') return { id: null, text: value.trim() }
+  const row = objectValue(value)
+  return {
+    id: optionalString(firstValue(row, 'id', 'deliverable_id', 'deliverableId', 'criterion_id', 'criterionId')),
+    text: deliveryText(row) || `Outcome ${index + 1}`,
+  }
+}
+
+const normalizePromiseList = (value: unknown): DeliveryPromise[] => {
+  const parsed = parseJson<unknown>(value, value)
+  const items = Array.isArray(parsed)
+    ? parsed
+    : typeof parsed === 'string'
+      ? parsed.split('\n').map((item) => item.trim()).filter(Boolean)
+      : parsed && typeof parsed === 'object' ? Object.values(parsed as JsonObject) : []
+  return items.map(normalizeDeliveryPromise).filter((item) => item.text)
+}
+
+const normalizeDeliveryEvidence = (value: unknown): DeliveryEvidence[] => listValue(value).flatMap((item) => {
+  if (typeof item === 'string') return item.trim() ? [item.trim()] : []
+  if (item && typeof item === 'object' && !Array.isArray(item)) return [item as JsonObject]
+  return item === null || item === undefined ? [] : [String(item)]
+})
+
+const normalizeDeliveryOverride = (value: unknown): DeliveryOverride | null => {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'string') return { actor: null, reason: value, created_at: null }
+  const row = objectValue(value)
+  if (!Object.keys(row).length) return null
+  return {
+    actor: optionalString(firstValue(row, 'actor', 'actor_name', 'actorName', 'reviewer', 'overridden_by', 'overriddenBy')),
+    reason: optionalString(firstValue(row, 'reason', 'note', 'summary', 'detail')),
+    created_at: optionalString(firstValue(row, 'at', 'created_at', 'createdAt', 'overridden_at', 'overriddenAt')),
+  }
+}
+
+const normalizeDeliveryOutcome = (value: unknown, index: number, fallbackStatus = 'unverified'): DeliveryOutcome => {
+  if (typeof value === 'string') {
+    return { id: null, text: value.trim(), status: fallbackStatus, evidence: [], gaps: [], override: null, claim: value.trim() }
+  }
+  const row = objectValue(value)
+  const evidence = firstValue(row, 'evidence_refs', 'evidenceRefs', 'evidence', 'evidence_items', 'evidenceItems', 'artifact_ids', 'artifactIds', 'artifacts')
+  return {
+    ...normalizeDeliveryPromise(row, index),
+    status: optionalString(firstValue(row, 'outcome', 'status', 'result', 'state'))?.toLowerCase().replace(/[\s-]+/g, '_') ?? fallbackStatus,
+    evidence: normalizeDeliveryEvidence(evidence),
+    gaps: asStringList(firstValue(row, 'gaps', 'gap', 'missing_evidence', 'missingEvidence')),
+    override: normalizeDeliveryOverride(firstValue(row, 'override', 'human_override', 'humanOverride')),
+    claim: optionalString(firstValue(row, 'claim', 'agent_claim', 'agentClaim')),
+  }
+}
+
+const normalizeOutcomeList = (value: unknown, fallbackStatus: string): DeliveryOutcome[] =>
+  listValue(value).map((item, index) => normalizeDeliveryOutcome(item, index, fallbackStatus)).filter((item) => item.text)
+
+const normalizeDeliveryClaim = (value: unknown): DeliveryClaim | null => {
+  if (typeof value === 'string') return value.trim() ? { text: value.trim(), source: null, created_at: null } : null
+  const row = objectValue(value)
+  const text = optionalString(firstValue(row, 'claim', 'text', 'summary', 'detail'))
+  if (!text) return null
+  return {
+    text,
+    source: optionalString(firstValue(row, 'source', 'agent', 'actor', 'provider')),
+    created_at: optionalString(firstValue(row, 'created_at', 'createdAt', 'claimed_at', 'claimedAt')),
+  }
+}
+
+const normalizePathList = (value: unknown): string[] => listValue(value).flatMap((item) => {
+  if (typeof item === 'string') return item.trim() ? [item.trim()] : []
+  const row = objectValue(item)
+  const path = optionalString(firstValue(row, 'path', 'file', 'name'))
+  return path ? [path] : []
+})
+
+const normalizeCommitList = (value: unknown): string[] => listValue(value).flatMap((item) => {
+  if (typeof item === 'string') return item.trim() ? [item.trim()] : []
+  const row = objectValue(item)
+  const commit = optionalString(firstValue(row, 'hash', 'sha', 'commit', 'id'))
+  return commit ? [commit] : []
+})
+
+const normalizeIdList = (value: unknown): OsId[] => listValue(value).flatMap((item) => {
+  if (typeof item === 'number') return [item]
+  if (typeof item === 'string' && item.trim()) return [item.trim()]
+  const row = objectValue(item)
+  const id = optionalId(firstValue(row, 'id', 'artifact_id', 'artifactId'))
+  return id === null ? [] : [id]
+})
+
+const normalizeAskedSnapshot = (value: unknown): DeliveryAskedSnapshot => {
+  const row = objectValue(value)
+  const version = firstValue(row, 'version', 'contract_version', 'contractVersion')
+  return {
+    objective: optionalString(firstValue(row, 'objective', 'goal', 'request', 'description')) ?? '',
+    deliverables: normalizePromiseList(firstValue(row, 'deliverables', 'promised_outcomes', 'promisedOutcomes', 'outcomes')),
+    acceptance_criteria: normalizePromiseList(firstValue(row, 'acceptance_criteria', 'acceptanceCriteria', 'criteria')),
+    non_goals: asStringList(firstValue(row, 'non_goals', 'nonGoals', 'out_of_scope', 'outOfScope')),
+    risks: asStringList(firstValue(row, 'risks', 'constraints', 'known_risks', 'knownRisks')),
+    verify_commands: asStringList(firstValue(row, 'verify_commands', 'verifyCommands', 'verification_commands', 'verificationCommands')),
+    version: typeof version === 'string' || typeof version === 'number' ? version : null,
+  }
+}
+
+export const normalizeDeliveryReport = (value: unknown): DeliveryReport => {
+  const row = objectValue(value)
+  const sequence = Number(firstValue(row, 'sequence', 'revision', 'version') ?? 0)
+  const rawCardId = firstValue(row, 'card_id', 'cardId')
+  const cardId = Number(rawCardId)
+  const rawDeliveredItems = firstValue(row, 'delivered_items', 'deliveredItems', 'outcomes')
+  const rawDeliverableResults = firstValue(row, 'deliverable_results', 'deliverableResults')
+  return {
+    id: optionalId(firstValue(row, 'id', 'delivery_id', 'deliveryId')) ?? `delivery-${Number.isFinite(sequence) ? sequence : 0}`,
+    card_id: rawCardId === null || rawCardId === undefined || rawCardId === '' || !Number.isFinite(cardId) ? null : cardId,
+    contract_id: optionalId(firstValue(row, 'contract_id', 'contractId')),
+    job_id: optionalId(firstValue(row, 'job_id', 'jobId')),
+    session_id: optionalId(firstValue(row, 'session_id', 'sessionId')),
+    workspace_id: optionalId(firstValue(row, 'workspace_id', 'workspaceId')),
+    status: optionalString(firstValue(row, 'status', 'lifecycle_status', 'lifecycleStatus'))?.toLowerCase().replace(/[\s-]+/g, '_') ?? 'submitted',
+    asked: normalizeAskedSnapshot(firstValue(row, 'asked', 'asked_snapshot', 'askedSnapshot', 'request_snapshot', 'requestSnapshot')),
+    summary: optionalString(firstValue(row, 'summary', 'delivery_summary', 'deliverySummary')) ?? '',
+    human_summary: optionalString(firstValue(row, 'human_summary', 'humanSummary', 'review_summary', 'reviewSummary')),
+    delivered_items: normalizeOutcomeList(rawDeliveredItems, 'claimed'),
+    deliverable_results: normalizeOutcomeList(rawDeliverableResults === undefined ? rawDeliveredItems : rawDeliverableResults, 'unverified'),
+    criterion_results: normalizeOutcomeList(firstValue(row, 'criterion_results', 'criterionResults', 'criteria'), 'missing'),
+    changed_files: normalizePathList(firstValue(row, 'changed_files', 'changedFiles', 'files')),
+    commits: normalizeCommitList(firstValue(row, 'commits', 'commit_ids', 'commitIds')),
+    artifact_ids: normalizeIdList(firstValue(row, 'artifact_ids', 'artifactIds', 'artifacts')),
+    claims: listValue(firstValue(row, 'claims', 'agent_claims', 'agentClaims')).map(normalizeDeliveryClaim)
+      .filter((claim): claim is DeliveryClaim => claim !== null),
+    gaps: asStringList(firstValue(row, 'gaps', 'evidence_gaps', 'evidenceGaps')),
+    parent_delivery_id: optionalId(firstValue(row, 'parent_report_id', 'parentReportId', 'parent_delivery_id', 'parentDeliveryId')),
+    sequence: Number.isFinite(sequence) ? sequence : 0,
+    actor_type: optionalString(firstValue(row, 'actor_type', 'actorType')),
+    actor_id: optionalId(firstValue(row, 'actor_id', 'actorId')),
+    submitted_by: optionalString(firstValue(row, 'submitted_by', 'submittedBy', 'actor', 'author')),
+    created_at: optionalString(firstValue(row, 'created_at', 'createdAt')) ?? '',
+    updated_at: optionalString(firstValue(row, 'updated_at', 'updatedAt')) ?? '',
+    submitted_at: optionalString(firstValue(row, 'submitted_at', 'submittedAt')),
+    verified_at: optionalString(firstValue(row, 'verified_at', 'verifiedAt')),
+    reviewed_at: optionalString(firstValue(row, 'reviewed_at', 'reviewedAt')),
+    accepted_at: optionalString(firstValue(row, 'accepted_at', 'acceptedAt')),
+    rejected_at: optionalString(firstValue(row, 'rejected_at', 'rejectedAt')),
+    shipped_at: optionalString(firstValue(row, 'shipped_at', 'shippedAt')),
+  }
+}
+
+export const normalizeDeliveriesResponse = (value: unknown): DeliveryCollection => {
+  const parsed = parseJson<unknown>(value, value)
+  const row = objectValue(parsed)
+  const rawDeliveries = listValue(Array.isArray(parsed) ? parsed : firstValue(row, 'deliveries', 'items', 'data'))
+    .flatMap((item) => {
+      const parsedItem = parseJson<unknown>(item, item)
+      return parsedItem && typeof parsedItem === 'object' && !Array.isArray(parsedItem) ? [parsedItem] : []
+    })
+  const deliveries = rawDeliveries.map(normalizeDeliveryReport).sort((a, b) =>
+    b.sequence - a.sequence || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const rawCurrent = firstValue(row, 'current', 'current_delivery', 'currentDelivery')
+  const parsedCurrent = parseJson<unknown>(rawCurrent, rawCurrent)
+  const explicitCurrent = parsedCurrent && typeof parsedCurrent === 'object' && !Array.isArray(parsedCurrent)
+    ? normalizeDeliveryReport(parsedCurrent) : null
+  const current = explicitCurrent ?? deliveries[0] ?? null
+  const ordered = current
+    ? [current, ...deliveries.filter((delivery) => String(delivery.id) !== String(current.id))]
+    : deliveries
+  return { deliveries: ordered, current }
+}
+
 export const osApi = {
   listWorkspaces: async (boardId: number) =>
     unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/workspaces`), ['workspaces']).map(normalizeWorkspace),
@@ -430,6 +707,8 @@ export const osApi = {
   },
   createEvidence: async (cardId: number, input: Partial<Artifact>) =>
     unwrapEntity<Artifact>(await api('POST', `/os/cards/${cardId}/evidence`, input), ['artifact']),
+  getDeliveries: async (cardId: number) =>
+    normalizeDeliveriesResponse(await api('GET', `/os/cards/${cardId}/deliveries`)),
 
   getContext: async (workspaceId: OsId) =>
     unwrapList<ContextItem>(await api('GET', `/os/workspaces/${workspaceId}/context`), ['context', 'context_items']),
