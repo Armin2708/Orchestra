@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { defaultsForRole } from '../agent-defaults.js'
+import { DeliveryReportService, type DeliveryReport } from './delivery-reports.js'
 import { ConflictError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
 import { parseJson } from './json.js'
 import {
@@ -42,6 +43,7 @@ export interface OrchestratedAgentSession {
 
 export interface CardJobSnapshot {
   contract: TaskContract
+  delivery: DeliveryReport
   job: Job
   workspace: Workspace | null
   session: OrchestratedAgentSession | null
@@ -61,6 +63,7 @@ export interface LaunchCardJobResult extends CardJobSnapshot {
  */
 export class OrchestrationService {
   private readonly contracts: TaskContractService
+  private readonly deliveries: DeliveryReportService
   private readonly workspaces: WorkspaceStore
 
   constructor(
@@ -68,6 +71,7 @@ export class OrchestrationService {
     private readonly scheduler: JobScheduler,
   ) {
     this.contracts = new TaskContractService(db)
+    this.deliveries = new DeliveryReportService(db)
     this.workspaces = new WorkspaceStore(db)
   }
 
@@ -92,7 +96,9 @@ export class OrchestrationService {
         budgetCents: input.budgetCents === undefined ? contract.budget_cents : input.budgetCents,
         scheduledAt: input.scheduledAt,
       }
-      return this.scheduler.create(jobInput)
+      const job = this.scheduler.create(jobInput)
+      this.deliveries.prepareForJob(job.id)
+      return job
     })
 
     const job = create.immediate()
@@ -153,6 +159,7 @@ export class OrchestrationService {
     const workspaceId = job.workspace_id ?? contract.workspace_id
     return {
       contract,
+      delivery: this.deliveries.prepareForJob(job.id),
       job,
       workspace: workspaceId ? this.workspaces.get(workspaceId) : null,
       session: this.sessionForJob(job.id),

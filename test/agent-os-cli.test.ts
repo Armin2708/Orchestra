@@ -125,7 +125,10 @@ describe('Agent OS CLI', () => {
     await run(
       'contract', 'set', '2',
       '--objective', 'ship it',
+      '--deliverables', '[{"id":"deliverable-1","text":"Ship the feature","required":true}]',
       '--accept', '["tests pass",{"kind":"visual"}]',
+      '--non-goals', '["redesign the shell"]',
+      '--risks', '["provider output may be incomplete"]',
       '--depends', '1,3',
       '--verify', '["npm test"]',
       '--tokens', '5000',
@@ -136,7 +139,10 @@ describe('Agent OS CLI', () => {
       path: '/os/cards/2/contract',
       body: {
         objective: 'ship it',
+        deliverables: [{ id: 'deliverable-1', text: 'Ship the feature', required: true }],
         acceptance_criteria: ['tests pass', { kind: 'visual' }],
+        non_goals: ['redesign the shell'],
+        risks: ['provider output may be incomplete'],
         dependencies: [1, 3],
         verify_commands: ['npm test'],
         budget_tokens: 5000,
@@ -150,6 +156,81 @@ describe('Agent OS CLI', () => {
     await run('drivers', '--json')
 
     expect(calls).toEqual([{ method: 'GET', path: '/os/drivers', body: undefined }])
+  })
+
+  it('submits structured delivery items, criterion outcomes, and evidence for a job', async () => {
+    const { calls, run } = setup({ delivery: { id: 'delivery-1', status: 'verified' } })
+
+    await run(
+      'delivery', 'submit', 'job/a',
+      '--actor', 'codex-agent',
+      '--summary', 'Implemented the delivery',
+      '--items', '[{"deliverableId":"del-1","status":"delivered"}]',
+      '--criteria', '[{"criterionId":"criterion-1","outcome":"met","evidence":["commit:abc"]}]',
+      '--evidence', '{"commits":["abc"],"artifacts":["artifact-1"]}',
+      '--claims', '["all requested behavior is present"]',
+      '--files', '["src/agent-os-cli.ts"]',
+      '--commits', '["abc"]',
+      '--artifacts', '["artifact-1"]',
+      '--gaps', '["visual QA remains"]',
+    )
+
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/os/jobs/job%2Fa/deliveries/submit',
+      body: {
+        actor: 'codex-agent',
+        summary: 'Implemented the delivery',
+        delivered_items: [{ deliverableId: 'del-1', status: 'delivered' }],
+        criteria: [{ criterionId: 'criterion-1', outcome: 'met', evidence: ['commit:abc'] }],
+        evidence: { commits: ['abc'], artifacts: ['artifact-1'] },
+        claims: ['all requested behavior is present'],
+        changed_files: ['src/agent-os-cli.ts'],
+        commits: ['abc'],
+        artifact_ids: ['artifact-1'],
+        gaps: ['visual QA remains'],
+      },
+    }])
+  })
+
+  it('accepts a plain stdin delivery summary and exposes review lifecycle commands', async () => {
+    const { calls, run } = setup({ delivery: { id: 'delivery-1' } })
+
+    await run('delivery', 'submit', 'job-1', '--stdin')
+    await run('delivery', 'verify', 'delivery-1', '--criteria', '[{"text":"works","met":"unverifiable"}]')
+    await run('delivery', 'accept', 'delivery-1', '--note', 'reviewed')
+    await run('delivery', 'reject', 'delivery-2', '--reason', 'missing evidence')
+    await run('delivery', 'revise', 'delivery-2')
+    await run('delivery', 'show', '7')
+
+    expect(calls).toEqual([
+      { method: 'POST', path: '/os/jobs/job-1/deliveries/submit', body: {
+        actor: 'agent', summary: 'exact\nbytes',
+      } },
+      { method: 'POST', path: '/os/deliveries/delivery-1/verify', body: {
+        actor: 'verifier', results: [{ text: 'works', met: 'unverifiable' }],
+      } },
+      { method: 'POST', path: '/os/deliveries/delivery-1/accept', body: {
+        actor: 'human', note: 'reviewed',
+      } },
+      { method: 'POST', path: '/os/deliveries/delivery-2/reject', body: {
+        actor: 'human', reason: 'missing evidence',
+      } },
+      { method: 'POST', path: '/os/deliveries/delivery-2/revise', body: { actor: 'agent' } },
+      { method: 'GET', path: '/os/cards/7/deliveries', body: undefined },
+    ])
+  })
+
+  it('exports human trackbook text by default and canonical JSON on request', async () => {
+    const human = setup('# Delivery delivery-1\nStatus: submitted\n')
+    await human.run('delivery', 'export', 'delivery-1')
+    expect(human.output).toEqual(['# Delivery delivery-1\nStatus: submitted\n'])
+    expect(human.calls[0]).toMatchObject({ method: 'GET', path: '/os/deliveries/delivery-1/export?format=human' })
+
+    const json = setup({ delivery: { id: 'delivery-1', status: 'submitted' } })
+    await json.run('delivery', 'export', 'delivery-1', '--json')
+    expect(json.calls[0]).toMatchObject({ method: 'GET', path: '/os/deliveries/delivery-1/export?format=json' })
+    expect(json.output[0]).toContain('"status": "submitted"')
   })
 })
 

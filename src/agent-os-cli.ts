@@ -315,7 +315,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     })
   contract.command('set <card>')
     .option('--objective <text>')
+    .option('--deliverables <json>', 'promised deliverable JSON array')
     .option('--accept <json>', 'acceptance criteria JSON array')
+    .option('--non-goals <json>', 'non-goal JSON array')
+    .option('--risks <json>', 'risk JSON array')
     .option('--depends <ids>', 'comma-separated card ids')
     .option('--verify <json>', 'verification command JSON array')
     .option('--base <ref>')
@@ -330,7 +333,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       const dependencies = csv(options.depends)?.map(integer)
       print(await deps.api('PUT', `/os/cards/${integer(cardId)}/contract`, compact({
         objective: options.objective,
+        deliverables: parseJsonOption<unknown[]>(options.deliverables, '--deliverables'),
         acceptance_criteria: parseJsonOption<unknown[]>(options.accept, '--accept'),
+        non_goals: parseJsonOption<string[]>(options.nonGoals, '--non-goals'),
+        risks: parseJsonOption<string[]>(options.risks, '--risks'),
         dependencies,
         verify_commands: parseJsonOption<string[]>(options.verify, '--verify'),
         base_ref: options.base,
@@ -369,6 +375,119 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         metadata: parseJsonOption<Record<string, unknown>>(options.metadata, '--metadata'),
         workspace_id: options.workspace,
       })), options.json)
+    })
+
+  const delivery = program.command('delivery').description('manage frozen delivery reports and review evidence')
+  delivery.command('show <card>')
+    .option('--json', 'print the complete response')
+    .action(async (cardId, options) => {
+      await ready()
+      print(await deps.api('GET', `/os/cards/${integer(cardId)}/deliveries`), options.json, ['deliveries'])
+    })
+  delivery.command('submit <job>')
+    .option('--actor <actor>', 'reporting actor', 'agent')
+    .option('--summary <text>', 'concise delivery summary')
+    .option('--items <json>', 'delivered-item JSON array')
+    .option('--criteria <json>', 'criterion-result JSON array')
+    .option('--evidence <json>', 'evidence JSON object or artifact-id array')
+    .option('--claims <json>', 'claim JSON array')
+    .option('--files <json>', 'changed-file JSON array')
+    .option('--commits <json>', 'commit JSON array')
+    .option('--artifacts <json>', 'artifact-id JSON array')
+    .option('--gaps <json>', 'reported-gap JSON array')
+    .option('--stdin', 'read a JSON report object, or plain summary text, from stdin')
+    .option('--json', 'print the complete response')
+    .action(async (jobId, options) => {
+      await ready()
+      let input: Record<string, unknown> = {}
+      if (options.stdin) {
+        const raw = stdin().trim()
+        if (!raw) throw new Error('--stdin did not contain a delivery report')
+        try {
+          const parsed = JSON.parse(raw) as unknown
+          input = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : { summary: raw }
+        } catch {
+          input = { summary: raw }
+        }
+      }
+      const summary = options.summary ?? input.summary
+      if (typeof summary !== 'string' || !summary.trim()) throw new Error('delivery submit requires --summary or --stdin')
+      print(await deps.api('POST', `/os/jobs/${segment(jobId)}/deliveries/submit`, compact({
+        ...input,
+        actor: options.actor ?? input.actor,
+        summary: summary.trim(),
+        delivered_items: parseJsonOption<unknown[]>(options.items, '--items') ?? input.delivered_items ?? input.items,
+        criteria: parseJsonOption<unknown[]>(options.criteria, '--criteria') ?? input.criteria,
+        evidence: parseJsonOption<unknown>(options.evidence, '--evidence') ?? input.evidence,
+        claims: parseJsonOption<unknown[]>(options.claims, '--claims') ?? input.claims,
+        changed_files: parseJsonOption<string[]>(options.files, '--files') ?? input.changed_files ?? input.changedFiles,
+        commits: parseJsonOption<string[]>(options.commits, '--commits') ?? input.commits,
+        artifact_ids: parseJsonOption<string[]>(options.artifacts, '--artifacts')
+          ?? input.artifact_ids ?? input.artifactIds,
+        gaps: parseJsonOption<string[]>(options.gaps, '--gaps') ?? input.gaps,
+      })), options.json, ['delivery'])
+    })
+  delivery.command('verify <id>')
+    .option('--actor <actor>', 'verifying actor', 'verifier')
+    .option('--criteria <json>', 'criterion-result JSON array')
+    .option('--deliverables <json>', 'deliverable-result JSON array')
+    .option('--stdin', 'read criterion results or a verification object from stdin')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      let input: Record<string, unknown> = {}
+      if (options.stdin) {
+        const raw = stdin().trim()
+        if (!raw) throw new Error('--stdin did not contain verification results')
+        const parsed = parseJsonOption<unknown>(raw, '--stdin')
+        input = Array.isArray(parsed) ? { results: parsed } : parsed as Record<string, unknown>
+      }
+      print(await deps.api('POST', `/os/deliveries/${segment(id)}/verify`, compact({
+        ...input,
+        actor: options.actor ?? input.actor,
+        results: parseJsonOption<unknown[]>(options.criteria, '--criteria') ?? input.results ?? input.criteria,
+        deliverable_results: parseJsonOption<unknown[]>(options.deliverables, '--deliverables')
+          ?? input.deliverable_results,
+      })), options.json, ['delivery'])
+    })
+  delivery.command('accept <id>')
+    .option('--actor <actor>', 'accepting actor', 'human')
+    .option('--note <text>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/deliveries/${segment(id)}/accept`, compact({
+        actor: options.actor,
+        note: options.note,
+      })), options.json, ['delivery'])
+    })
+  delivery.command('reject <id>')
+    .option('--actor <actor>', 'rejecting actor', 'human')
+    .requiredOption('--reason <text>', 'reason the delivery needs revision')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/deliveries/${segment(id)}/reject`, {
+        actor: options.actor,
+        reason: options.reason,
+      }), options.json, ['delivery'])
+    })
+  delivery.command('revise <id>')
+    .option('--actor <actor>', 'revision actor', 'agent')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/deliveries/${segment(id)}/revise`, { actor: options.actor }), options.json, ['delivery'])
+    })
+  delivery.command('export <id>')
+    .option('--json', 'export canonical JSON instead of the human trackbook')
+    .action(async (id, options) => {
+      await ready()
+      const result = await deps.api('GET', `/os/deliveries/${segment(id)}/export?format=${options.json ? 'json' : 'human'}`)
+      if (options.json) return print(result, true)
+      write(typeof result === 'string' ? result : String(result?.text ?? result?.report ?? result))
     })
 
   const context = program.command('context').description('inspect or replace a workspace context manifest')

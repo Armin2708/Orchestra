@@ -8,6 +8,8 @@ import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import type { Checkpoint } from './checkpoints.js'
 import { ContextStore } from './context-store.js'
+import { DeliveryLifecycleIntegration } from './delivery-integration.js'
+import type { DeliveryReport } from './delivery-reports.js'
 import { ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
@@ -45,6 +47,7 @@ import {
 import { projectDriverTranscript } from '../runtime/transcript.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
 import { readProviderModelCache } from '../agent-providers.js'
+import { hasOpenReviewRequest } from '../review.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -565,6 +568,7 @@ export class AgentOsJobExecutor implements JobExecutor {
   private readonly live = new Map<string, LiveJob>()
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
+  private readonly deliveries: DeliveryLifecycleIntegration
   private scheduler?: JobScheduler
   private shuttingDown = false
 
@@ -573,7 +577,9 @@ export class AgentOsJobExecutor implements JobExecutor {
     private readonly drivers: DriverRegistry,
     private readonly workspaces: WorkspaceManager,
     private readonly bus: BusRef = {},
-  ) {}
+  ) {
+    this.deliveries = new DeliveryLifecycleIntegration(db)
+  }
 
   bindScheduler(scheduler: JobScheduler): void {
     this.scheduler = scheduler
@@ -835,6 +841,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     const driver = this.drivers.require(job.provider)
     const capabilities = driver.capabilities()
     const contract = job.card_id ? new TaskContractService(this.db).getOrCreate(job.card_id) : null
+    const delivery = job.card_id ? this.deliveries.reports.prepareForJob(job.id) : null
     const budgetTokens = job.budget_tokens ?? contract?.budget_tokens ?? null
     const budgetCents = job.budget_cents ?? contract?.budget_cents ?? null
     this.db.prepare(`UPDATE jobs SET budget_tokens=COALESCE(budget_tokens, ?), budget_cents=COALESCE(budget_cents, ?)
@@ -862,7 +869,7 @@ export class AgentOsJobExecutor implements JobExecutor {
           boardId: job.board_id,
           cwd,
           name: job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
-          prompt: this.prompt(job, contract),
+          prompt: this.prompt(job, contract, delivery),
           ...(job.model ? { model: job.model } : {}),
           accessProfile: 'workspace_write' as const,
           ...(job.provider === 'claude'
@@ -994,15 +1001,29 @@ export class AgentOsJobExecutor implements JobExecutor {
     }
   }
 
-  private prompt(job: Job, contract: TaskContract | null): string {
-    if (!contract) return `Execute Agent OS job ${job.id} in this workspace. Report the result and evidence when complete.`
-    const acceptance = contract.acceptance_criteria.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')
-    const verification = contract.verify_commands.map((command) => `- ${command}`).join('\n')
+  private prompt(job: Job, contract: TaskContract | null, delivery: DeliveryReport | null): string {
+    if (!contract || !delivery) {
+      return `Execute Agent OS job ${job.id} in this workspace. Finish with a concise Delivery summary and Evidence.`
+    }
+    const asked = delivery.asked as DeliveryReport['asked'] & {
+      objective?: string
+      deliverables?: Array<{ id: string; text?: string; description?: string; required?: boolean }>
+      acceptance_criteria?: Array<{ id: string; text?: string; description?: string; required?: boolean }>
+      verify_commands?: string[]
+    }
+    const row = (item: { id: string; text?: string; description?: string; required?: boolean }) =>
+      `- [${item.id}] ${item.text ?? item.description ?? '(unspecified)'}${item.required === false ? ' (optional)' : ''}`
+    const deliverables = (asked.deliverables ?? []).map(row).join('\n')
+    const acceptance = (asked.acceptance_criteria ?? []).map(row).join('\n')
+    const verification = (asked.verify_commands ?? contract.verify_commands).map((command) => `- ${command}`).join('\n')
     return [
-      `Objective: ${contract.objective}`,
-      acceptance ? `Acceptance criteria:\n${acceptance}` : '',
-      verification ? `Required verification:\n${verification}` : '',
-      'Work in the attached workspace. Preserve terminal-visible evidence and stop after completing this task.',
+      `Delivery ${delivery.id} for Agent OS job ${job.id}`,
+      `Objective: ${asked.objective ?? contract.objective}`,
+      deliverables ? `Promised deliverables (stable IDs):\n${deliverables}` : 'Promised deliverables: none recorded.',
+      acceptance ? `Acceptance criteria (stable IDs):\n${acceptance}` : 'Acceptance criteria: none recorded.',
+      verification ? `Required verification commands:\n${verification}` : 'Required verification commands: none recorded.',
+      `Before stopping, submit the structured report with "orchestra delivery submit ${job.id}" when that command is available. Claims are not verification evidence.`,
+      'Your final response MUST end with two concise sections: "Delivery summary:" describing what changed, and "Evidence:" listing the exact commands, artifacts, commits, or observed results. Do not move the card to done; the daemon parks a complete report in review.',
     ].filter(Boolean).join('\n\n')
   }
 
@@ -1146,26 +1167,96 @@ export class AgentOsJobExecutor implements JobExecutor {
   ): void {
     const session = this.db.prepare('SELECT agent_id, context_json FROM agent_sessions WHERE id=?').get(sessionId) as
       { agent_id: number | null; context_json: string } | undefined
-    if (!session?.agent_id) return
     let context: Record<string, unknown> = {}
-    try { context = JSON.parse(session.context_json) as Record<string, unknown> } catch { /* legacy */ }
-    if (context.managed_identity !== true) return
-    const agentId = session.agent_id
+    try { context = JSON.parse(session?.context_json ?? '{}') as Record<string, unknown> } catch { /* legacy */ }
+    const agentId = session?.agent_id ?? null
     if (job.card_id) {
-      const to = finalStatus === 'queued' ? 'backlog'
-        : !failure && finalStatus === 'succeeded' ? 'review'
-          : 'blocked'
+      const card = this.db.prepare('SELECT column_name FROM cards WHERE id=?').get(job.card_id) as
+        { column_name: string } | undefined
+      let to = finalStatus === 'queued' ? 'backlog' : 'blocked'
+      let deliveryId: string | null = null
+      let deliveryFailure: string | null = null
+      const summary = this.completionSummary(sessionId)
+      const workspace = this.db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(job.id) as
+        { workspace_id: string | null } | undefined
+      const workspaceId = workspace?.workspace_id ?? job.workspace_id
+      if (!failure && finalStatus === 'succeeded') {
+        try {
+          const delivery = this.deliveries.completeRuntime({
+            cardId: job.card_id,
+            jobId: job.id,
+            sessionId,
+            workspaceId,
+            provider: job.provider,
+            actor: 'runtime',
+            summary,
+          })
+          deliveryId = delivery.id
+          to = delivery.status === 'accepted' && card?.column_name === 'done' ? 'done' : 'review'
+        } catch (error) {
+          deliveryFailure = error instanceof Error ? error.message : String(error)
+          new AttentionService(this.db).create({
+            boardId: job.board_id,
+            workspaceId,
+            cardId: job.card_id,
+            agentId,
+            kind: 'delivery.report_blocked',
+            severity: 'high',
+            title: `Delivery report blocked for card #${job.card_id}`,
+            detail: deliveryFailure,
+          })
+        }
+      }
       this.db.prepare(`UPDATE cards SET owner_agent_id=NULL, column_name=?, updated_at=datetime('now')
-        WHERE id=? AND owner_agent_id=?`).run(to, job.card_id, agentId)
-      this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload)
+        WHERE id=? AND (owner_agent_id IS NULL OR owner_agent_id IS ?)`).run(to, job.card_id, agentId)
+      const recorded = this.db.prepare(`SELECT 1 FROM card_events
+        WHERE card_id=? AND type='agent_os_job_finished' AND json_valid(payload)
+          AND json_extract(payload, '$.job_id')=? LIMIT 1`).get(job.card_id, job.id)
+      if (!recorded) this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload)
         VALUES (?, ?, 'agent_os_job_finished', ?)`).run(
-          job.card_id,
-          agentId,
-          JSON.stringify({ job_id: job.id, provider: job.provider, status: finalStatus ?? null, failure: failure ?? null, to }),
-        )
-      const card = this.db.prepare('SELECT * FROM cards WHERE id=?').get(job.card_id)
-      this.bus.current?.emit('event', { board_id: job.board_id, type: 'card', data: card })
+        job.card_id,
+        agentId,
+        JSON.stringify({
+          job_id: job.id,
+          delivery_id: deliveryId,
+          provider: job.provider,
+          status: finalStatus ?? null,
+          failure: failure ?? deliveryFailure,
+          to,
+        }),
+      )
+      if (to === 'review') {
+        if (!hasOpenReviewRequest(this.db, job.card_id)) {
+          this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload)
+            VALUES (?, ?, 'review_request', ?)`).run(job.card_id, agentId, JSON.stringify({
+              summary,
+              delivery_id: deliveryId,
+              job_id: job.id,
+              branch: null,
+              diffstat: '',
+            }))
+        }
+        const reviewCard = this.db.prepare('SELECT title, milestone_id, step_order FROM cards WHERE id=?').get(job.card_id) as
+          { title: string; milestone_id: number | null; step_order: number | null }
+        this.bus.current?.emit('event', {
+          board_id: job.board_id,
+          type: 'review',
+          data: {
+            card_id: job.card_id,
+            card_title: reviewCard.title,
+            milestone_id: reviewCard.milestone_id,
+            step_order: reviewCard.step_order,
+            agent_name: null,
+            status: 'awaiting_approval',
+            summary,
+            delivery_id: deliveryId,
+          },
+        })
+      }
+      const updatedCard = this.db.prepare('SELECT * FROM cards WHERE id=?').get(job.card_id)
+      this.bus.current?.emit('event', { board_id: job.board_id, type: 'card', data: updatedCard })
     }
+    if (!agentId || context.managed_identity !== true) return
     this.db.prepare(`UPDATE agents SET status='gone', provider_state_json=?, last_seen=datetime('now') WHERE id=?`).run(
       JSON.stringify({
         ...context,
@@ -1178,6 +1269,34 @@ export class AgentOsJobExecutor implements JobExecutor {
     )
     const agent = this.db.prepare('SELECT * FROM agents WHERE id=?').get(agentId)
     this.bus.current?.emit('event', { board_id: job.board_id, type: 'agent', data: agent })
+  }
+
+  private completionSummary(sessionId: string): string {
+    const rows = this.db.prepare(`SELECT payload, created_at FROM (
+      SELECT rowid, payload, created_at FROM os_events
+      WHERE session_id=? AND kind='driver.output' ORDER BY rowid DESC LIMIT 5000
+    ) ORDER BY rowid`).all(sessionId) as Array<{ payload: string; created_at: string }>
+    const events = rows.flatMap((row, index): DriverEvent[] => {
+      let payload: Record<string, unknown>
+      try { payload = JSON.parse(row.payload) as Record<string, unknown> } catch { return [] }
+      const metadata = payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
+        ? payload.metadata as Record<string, unknown> : {}
+      if (typeof metadata.transcriptKind === 'string' && metadata.transcriptKind !== 'text') return []
+      const data = typeof payload.data === 'string' ? payload.data : ''
+      if (!data.trim()) return []
+      return [{
+        sessionId,
+        seq: Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : index + 1,
+        type: 'output',
+        at: row.created_at,
+        data,
+        metadata,
+      }]
+    })
+    const summary = [...projectDriverTranscript(events)].reverse()
+      .find((line) => line.kind === 'text' && line.text.trim())?.text.trim()
+    if (!summary) return 'Provider completed the job without a final textual report.'
+    return summary.length > 4_000 ? `${summary.slice(0, 3_997)}...` : summary
   }
 
   private codexUsageBreakdown(event: DriverEvent): ProviderUsageSplit | null {

@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
+import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
 import { buildServer } from '../src/server.js'
@@ -234,6 +235,7 @@ describe('Agent OS daemon runtime integration', () => {
     expect(response.statusCode).toBe(201)
     const jobId = response.json().job.id as string
     await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+    await until(() => (db.prepare('SELECT column_name FROM cards WHERE id=?').get(cardId) as { column_name: string }).column_name === 'review')
 
     expect(db.prepare("SELECT provider, status FROM agent_sessions WHERE json_extract(context_json, '$.job_id')=?").get(jobId))
       .toMatchObject({ provider: 'shell', status: 'stopped' })
@@ -242,6 +244,11 @@ describe('Agent OS daemon runtime integration', () => {
     expect(output).toContain('verified')
     expect((db.prepare("SELECT COUNT(*) AS count FROM os_events WHERE kind='driver.exit' AND card_id=?").get(cardId) as { count: number }).count)
       .toBe(1)
+    const delivery = new DeliveryReportService(db).currentForCard(cardId)
+    expect(delivery).toMatchObject({ job_id: jobId, status: 'submitted' })
+    expect(delivery?.claims.map((claim) => claim.text).join('\n')).toContain('verified')
+    expect(delivery?.criterion_results.every((result) => result.outcome === 'unverifiable')).toBe(true)
+    expect(delivery?.artifact_ids).toHaveLength(1)
   }, 25_000)
 
   it('launches managed agent jobs with least-privilege defaults', async () => {
@@ -284,6 +291,145 @@ describe('Agent OS daemon runtime integration', () => {
     expect(requests[0]).toMatchObject({ accessProfile: 'workspace_write', permissionMode: 'default' })
     expect(db.prepare("SELECT access_profile FROM agents WHERE session_id=?").get(`agent-os:${jobId}`))
       .toMatchObject({ access_profile: 'workspace_write' })
+  })
+
+  it('hands agents the frozen Asked contract and idempotently converts final output into a review report', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const requests: DriverLaunchRequest[] = []
+    const driver: AgentDriver = {
+      id: 'test-agent',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async (request) => {
+        requests.push(request)
+        return {
+          id: 'test-agent:delivery', externalId: 'delivery-thread', driverId: 'test-agent',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield {
+          sessionId, seq: 1, type: 'output', at: new Date().toISOString(),
+          data: 'Delivery summary: implemented the frozen contract.\nEvidence: npm test passed.',
+        }
+        yield { sessionId, seq: 2, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'delivery-runtime', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const contract = await server.inject({
+      method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`,
+      payload: {
+        workspace_id: workspace.id,
+        deliverables: [{ id: 'deliverable-stable', text: 'Implement the runtime bridge', required: true }],
+        acceptance_criteria: [{
+          id: 'criterion-stable', text: 'The report reaches review', required: true,
+          deliverable_ids: ['deliverable-stable'],
+        }],
+        verify_commands: ['npm test'],
+      },
+    })
+    expect(contract.statusCode).toBe(200)
+
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { card_id: cardId, workspace_id: workspace.id, provider: 'test-agent' },
+    })
+    expect(response.statusCode).toBe(201)
+    const jobId = response.json().job.id as string
+    await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+    await until(() => (db.prepare('SELECT column_name FROM cards WHERE id=?').get(cardId) as { column_name: string }).column_name === 'review')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].prompt).toContain('[deliverable-stable] Implement the runtime bridge')
+    expect(requests[0].prompt).toContain('[criterion-stable] The report reaches review')
+    expect(requests[0].prompt).toContain('Required verification commands:\n- npm test')
+    expect(requests[0].prompt).toContain('Delivery summary:')
+    expect(requests[0].prompt).toContain('Evidence:')
+
+    const reports = new DeliveryReportService(db)
+    const delivery = reports.currentForCard(cardId)!
+    expect(delivery).toMatchObject({ job_id: jobId, status: 'submitted' })
+    expect(delivery.summary).toContain('implemented the frozen contract')
+    expect(delivery.claims).toEqual([expect.objectContaining({
+      text: expect.stringContaining('Evidence: npm test passed'),
+    })])
+    expect(delivery.deliverable_results).toEqual([
+      expect.objectContaining({ deliverable_id: 'deliverable-stable', outcome: 'unverifiable' }),
+    ])
+    expect(delivery.criterion_results).toEqual([
+      expect.objectContaining({ criterion_id: 'criterion-stable', outcome: 'unverifiable' }),
+    ])
+
+    const session = db.prepare(`SELECT id FROM agent_sessions
+      WHERE json_extract(context_json, '$.job_id')=?`).get(jobId) as { id: string }
+    const job = runtime.scheduler.get(jobId)!
+    ;(runtime.jobExecutor as any).finalizeManagedAgent(job, session.id, undefined, 'succeeded')
+    ;(runtime.jobExecutor as any).finalizeManagedAgent(job, session.id, undefined, 'succeeded')
+
+    expect(new DeliveryReportService(db).listCard(cardId)).toHaveLength(1)
+    expect((db.prepare("SELECT COUNT(*) AS count FROM os_events WHERE card_id=? AND kind='delivery.runtime_evidence'")
+      .get(cardId) as { count: number }).count).toBe(1)
+    expect((db.prepare("SELECT COUNT(*) AS count FROM artifacts WHERE card_id=? AND kind='evidence_bundle'")
+      .get(cardId) as { count: number }).count).toBe(1)
+    expect((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE card_id=? AND type='agent_os_job_finished'")
+      .get(cardId) as { count: number }).count).toBe(1)
+  })
+
+  it('blocks the card and raises attention when a successful provider cannot produce a review-ready report', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const driver: AgentDriver = {
+      id: 'missing-report-agent',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async (request) => ({
+        id: 'missing-report:session', externalId: 'missing-report-thread', driverId: 'missing-report-agent',
+        workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+      }),
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'output', at: new Date().toISOString(), data: 'I finished the task.' }
+        yield { sessionId, seq: 2, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'missing-report', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    ;(runtime.jobExecutor as any).deliveries.completeRuntime = () => {
+      throw new Error('structured delivery report is unavailable')
+    }
+
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { card_id: cardId, workspace_id: workspace.id, provider: 'missing-report-agent' },
+    })
+    const jobId = response.json().job.id as string
+    await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+    await until(() => (db.prepare('SELECT column_name FROM cards WHERE id=?').get(cardId) as { column_name: string }).column_name === 'blocked')
+
+    expect(new DeliveryReportService(db).currentForCard(cardId)).toMatchObject({ job_id: jobId, status: 'draft' })
+    expect(db.prepare(`SELECT kind, severity, detail FROM attention_items WHERE card_id=? AND status='open'`).get(cardId))
+      .toMatchObject({
+        kind: 'delivery.report_blocked',
+        severity: 'high',
+        detail: 'structured delivery report is unavailable',
+      })
+    expect((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE card_id=? AND type='review_request'")
+      .get(cardId) as { count: number }).count).toBe(0)
   })
 
   it('reconciles orphaned process records as lost and raises durable attention', async () => {
@@ -370,6 +516,35 @@ describe('Agent OS daemon runtime integration', () => {
     expect(runtime.scheduler.get(job.id)).toMatchObject({ status: 'blocked', attempts: 1 })
     expect(db.prepare("SELECT status FROM agent_sessions WHERE id='orphaned-session'")).toBeTruthy()
     expect((db.prepare("SELECT status FROM agent_sessions WHERE id='orphaned-session'").get() as { status: string }).status).toBe('failed')
+  })
+
+  it('keeps a recovered canonical job out of review and preserves its draft for revision', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'canonical-recovery', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const job = runtime.scheduler.create({
+      boardId, cardId, workspaceId: workspace.id, provider: 'shell', maxAttempts: 1,
+    })
+    const delivery = new DeliveryReportService(db).prepareForJob(job.id)
+    db.prepare("UPDATE jobs SET status='running', attempts=1, started_at=datetime('now') WHERE id=?").run(job.id)
+    db.prepare("UPDATE cards SET column_name='in_progress' WHERE id=?").run(cardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json, created_at, updated_at)
+      VALUES ('canonical-orphan', ?, 'shell', 'running', ?, datetime('now'), datetime('now'))`)
+      .run(workspace.id, JSON.stringify({ job_id: job.id, card_id: cardId }))
+
+    expect(await runtime.reconcileJobs()).toEqual({ resumed: [], recovered: [job.id] })
+    expect(await runtime.reconcileJobs()).toEqual({ resumed: [], recovered: [] })
+    expect(runtime.scheduler.get(job.id)?.status).toBe('blocked')
+    expect((db.prepare('SELECT column_name FROM cards WHERE id=?').get(cardId) as { column_name: string }).column_name)
+      .toBe('blocked')
+    expect(new DeliveryReportService(db).get(delivery.id).status).toBe('draft')
+    expect((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE card_id=? AND type='agent_os_job_finished'")
+      .get(cardId) as { count: number }).count).toBe(1)
+    expect((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE card_id=? AND type='review_request'")
+      .get(cardId) as { count: number }).count).toBe(0)
   })
 
   it('continues a resumable Claude job after daemon restart instead of attaching it idle', async () => {

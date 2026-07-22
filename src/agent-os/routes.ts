@@ -6,6 +6,7 @@ import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import { Checkpoint, CheckpointForker, CheckpointService } from './checkpoints.js'
 import { ContextStore, PutContextItem } from './context-store.js'
+import { DeliveryReportService } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
@@ -104,6 +105,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const db = options.db
   const workspaces = new WorkspaceStore(db)
   const events = new EventStore(db)
+  const deliveries = new DeliveryReportService(db, events)
   const artifacts = new ArtifactStore(db)
   const contracts = new TaskContractService(db, events)
   const attention = new AttentionService(db)
@@ -351,6 +353,74 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return reply.code(201).send({ artifact, artifacts: [artifact], evidence: bundle })
   })
 
+  app.get<{ Params: { id: string } }>('/cards/:id/deliveries', (request) => {
+    const cardId = positiveId(request.params.id, 'card id')
+    return { deliveries: deliveries.listCard(cardId), current: deliveries.currentForCard(cardId) }
+  })
+  app.post<{ Params: { id: string } }>('/jobs/:id/deliveries/prepare', (request, reply) =>
+    reply.code(201).send({ delivery: deliveries.prepareForJob(request.params.id) }))
+  app.post<{ Params: { id: string }; Body: unknown }>('/jobs/:id/deliveries/submit', (request) => {
+    const body = objectBody(request.body)
+    const actor = requiredString(body.actor, 'actor')
+    const evidenceInput = Array.isArray(body.evidence)
+      ? { artifact_ids: body.evidence }
+      : recordValue(body.evidence, 'evidence')
+    const prepared = deliveries.prepareForJob(request.params.id)
+    let delivery = deliveries.submit(prepared.id, {
+      actor,
+      summary: requiredString(body.summary, 'summary'),
+      deliveredItems: arrayValue(body.delivered_items ?? body.deliveredItems ?? body.items, 'delivered_items') as any,
+      claims: arrayValue(body.claims, 'claims') as any,
+      changedFiles: arrayValue(body.changed_files ?? body.changedFiles ?? evidenceInput.changed_files, 'changed_files') as string[],
+      commits: arrayValue(body.commits ?? evidenceInput.commits, 'commits') as string[],
+      artifactIds: arrayValue(
+        body.artifact_ids ?? body.artifactIds ?? evidenceInput.artifact_ids ?? evidenceInput.artifacts,
+        'artifact_ids',
+      ) as string[],
+      gaps: arrayValue(body.gaps ?? evidenceInput.gaps, 'gaps') as string[],
+    })
+    if (body.criteria !== undefined || body.criterion_results !== undefined || body.deliverable_results !== undefined) {
+      delivery = deliveries.verify(delivery.id, {
+        actor,
+        results: arrayValue(body.criteria ?? body.criterion_results, 'criteria') as any,
+        deliverableResults: arrayValue(body.deliverable_results, 'deliverable_results') as any,
+      })
+    }
+    return { delivery }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/verify', (request) => {
+    const body = objectBody(request.body)
+    return { delivery: deliveries.verify(request.params.id, {
+      actor: requiredString(body.actor, 'actor'),
+      results: arrayValue(body.results ?? body.criteria ?? body.criterion_results, 'results') as any,
+      deliverableResults: arrayValue(body.deliverable_results ?? body.deliverableResults, 'deliverable_results') as any,
+    }) }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/accept', (request) => {
+    const body = objectBody(request.body)
+    return { delivery: deliveries.accept(request.params.id, {
+      actor: requiredString(body.actor, 'actor'),
+      note: stringValue(body.note),
+    }) }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/reject', (request) => {
+    const body = objectBody(request.body)
+    return { delivery: deliveries.reject(request.params.id, {
+      actor: requiredString(body.actor, 'actor'),
+      reason: requiredString(body.reason, 'reason'),
+    }) }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/revise', (request) => {
+    const body = objectBody(request.body)
+    return { delivery: deliveries.revise(request.params.id, { actor: requiredString(body.actor, 'actor') }) }
+  })
+  app.get<{ Params: { id: string }; Querystring: { format?: string } }>('/deliveries/:id/export', (request, reply) => {
+    const format = request.query.format ?? 'human'
+    if (format === 'json') return { delivery: deliveries.get(request.params.id) }
+    if (format !== 'human') throw new ValidationError('format must be human or json')
+    return reply.type('text/plain; charset=utf-8').send(deliveries.renderHuman(request.params.id))
+  })
+
   app.get<{ Params: { id: string } }>('/workspaces/:id/context', (request) => ({ context: context.listWorkspace(request.params.id) }))
   app.put<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/context', (request) => {
     const bodyObject = Array.isArray(request.body) ? null : objectBody(request.body)
@@ -450,6 +520,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
         provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt })
       return reply.code(201).send({
         job: launched.job,
+        delivery: launched.delivery,
         dispatch: launched.dispatch,
         dispatch_error: launched.dispatch_error,
       })
@@ -471,7 +542,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     { id: 'shell', available: !!options.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'], detail: options.runtime ? undefined : 'requires the PTY runtime' },
   ]) }))
   app.get('/plugins', () => ({ plugins: descriptors(options.plugins, [
-    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence'] },
+    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
   ]) }))
 
   // Keep the store referenced: artifacts are deliberately durable and never receive a delete route.

@@ -20,6 +20,7 @@ import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
+import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 import {
@@ -97,6 +98,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   registerAgentSessionControlRoutes(server, maestro)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
+  const deliveryLifecycle = new DeliveryLifecycleIntegration(db)
+  const deliveryFailure = (error: unknown, reply: any) => {
+    if (error instanceof AgentOsError) {
+      return reply.code(error.statusCode).send({ error: error.message, code: error.code })
+    }
+    throw error
+  }
 
   server.get('/health', () => ({ ok: true, version: VERSION }))
 
@@ -380,20 +388,30 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   server.patch<{ Params: { id: string }; Body: { title?: string; description?: string; paths?: string[]; column?: string; agent?: string } }>(
-    '/api/v1/cards/:id', (req, reply) => {
+    '/api/v1/cards/:id', async (req, reply) => {
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       const { title, description, paths, column, agent } = req.body
       if (column && !COLUMNS.includes(column)) return reply.code(400).send({ error: 'invalid column' })
+      const actor = agentByName(card.board_id, agent)
+      try {
+        if (column === 'review') deliveryLifecycle.ensureReviewReady({
+          cardId: card.id,
+          actor: actor?.name ?? agent ?? 'human',
+        })
+        if (column === 'done') deliveryLifecycle.assertDoneReady(card.id)
+      } catch (error) {
+        return deliveryFailure(error, reply)
+      }
       db.prepare(`
         UPDATE cards SET title=coalesce(?, title), description=coalesce(?, description),
           paths=coalesce(?, paths), column_name=coalesce(?, column_name), updated_at=datetime('now')
         WHERE id=?`)
         .run(title ?? null, description ?? null, paths ? JSON.stringify(paths) : null, column ?? null, card.id)
       const updated = getCard(card.id)
-      const actor = agentByName(card.board_id, agent)
       logEvent(card.id, actor?.id ?? null, 'updated', req.body)
       emit(card.board_id, 'card', updated)
+      if (column === 'review') await requestReview(updated, null, actor?.name ?? agent ?? null)
       const overlaps = overlapsFor(updated)
       return { card: updated, overlaps, similar: similarFor(updated, overlaps), done_similar: doneSimilarFor(updated) }
     })
@@ -403,10 +421,19 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (!COLUMNS.includes(req.body.column)) return reply.code(400).send({ error: 'invalid column' })
+      const actor = agentByName(card.board_id, req.body.agent)
+      try {
+        if (req.body.column === 'review') deliveryLifecycle.ensureReviewReady({
+          cardId: card.id,
+          actor: actor?.name ?? req.body.agent ?? 'human',
+        })
+        if (req.body.column === 'done') deliveryLifecycle.assertDoneReady(card.id)
+      } catch (error) {
+        return deliveryFailure(error, reply)
+      }
       db.prepare(`UPDATE cards SET column_name=?, updated_at=datetime('now') WHERE id=?`)
         .run(req.body.column, card.id)
       const updated = getCard(card.id)
-      const actor = agentByName(card.board_id, req.body.agent)
       logEvent(card.id, actor?.id ?? null, 'moved', { to: req.body.column })
       emit(card.board_id, 'card', updated)
       if (req.body.column === 'review') await requestReview(updated, null, updated.owner)
@@ -429,13 +456,24 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // enrich a card entering review with the agent's summary + changed paths, once per review cycle
   const requestReview = async (card: any, summary: string | null, agentName: string | null) => {
+    const delivery = deliveryLifecycle.ensureReviewReady({
+      cardId: card.id,
+      actor: agentName?.trim() || 'compatibility',
+      summary,
+    })
     if (hasOpenReviewRequest(db, card.id)) return
     const stat = await diffStat(boardPath(card.board_id), card.branch).catch(() => '')
-    logEvent(card.id, null, 'review_request', { summary, diffstat: stat, branch: card.branch ?? null })
+    logEvent(card.id, null, 'review_request', {
+      summary,
+      diffstat: stat,
+      branch: card.branch ?? null,
+      delivery_id: delivery.id,
+    })
     emit(card.board_id, 'review', {
       card_id: card.id, card_title: card.title,
       milestone_id: card.milestone_id ?? null, step_order: card.step_order ?? null,
       agent_name: agentName, status: 'awaiting_approval', summary, diffstat: stat,
+      delivery_id: delivery.id,
       branch: card.branch ?? null,
     })
     // opt-in: every card entering review gets an independent verifier pass (default manual)
@@ -522,7 +560,24 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (raw.length > 0 && criteria.length === 0)
         return reply.code(400).send({ error: 'criteria entries need {text, met: true|false|"unverifiable"}' })
       const tested = req.body?.tested === true
-      logEvent(card.id, null, 'verification', { criteria, verdict, tested, by: by ?? null })
+      let delivery
+      try {
+        delivery = deliveryLifecycle.recordVerification({
+          cardId: card.id,
+          actor: typeof by === 'string' && by.trim() ? by.trim() : 'verifier',
+          summary: `Legacy verifier verdict: ${verdict}`,
+          results: criteria,
+        })
+      } catch (error) {
+        return deliveryFailure(error, reply)
+      }
+      logEvent(card.id, null, 'verification', {
+        criteria,
+        verdict,
+        tested,
+        by: by ?? null,
+        delivery_id: delivery.id,
+      })
       const met = criteria.filter((c) => c.met === true).length
       // the human-readable trail survives the ephemeral verifier: a broadcast board note
       const noteBody = `verification of card #${card.id} "${card.title}": ${String(verdict).toUpperCase()} — ` +
@@ -531,8 +586,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         .run(card.board_id, card.id, noteBody)
       emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
       emit(card.board_id, 'card', { ...card, verification: verificationFor(card.id) })
-      reviewEvent(card, 'verified', { verdict })
-      return { ok: true, verdict, criteria_count: criteria.length }
+      reviewEvent(card, 'verified', { verdict, delivery_id: delivery.id })
+      return { ok: true, verdict, criteria_count: criteria.length, delivery }
     })
 
   // launched agents finishing a step already park the card in review (conductor exit) — enrich it here
@@ -540,6 +595,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (e?.type !== 'launch' || e?.data?.status !== 'finished' || e?.data?.to_column !== 'review') return
     const card = getCard(e.data.card_id)
     if (card) void requestReview(card, e.data.summary ?? null, e.data.agent_name ?? null)
+      .catch((error) => logEvent(card.id, e.data.agent_id ?? null, 'review_delivery_error', {
+        error: error instanceof Error ? error.message : String(error),
+      }))
   })
 
   // the gate: a milestone step can't be launched while an earlier step awaits completion or approval
@@ -582,12 +640,33 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         emit(card.board_id, 'ship', { status: 'held', card_id: card.id, reason: gate.held })
         return { card: getCard(card.id), decision, held: true, reason: gate.held }
       }
+      let delivery
+      try {
+        delivery = deliveryLifecycle.accept({
+          cardId: card.id,
+          actor: 'human',
+          summary: note,
+          confirmed,
+        })
+        deliveryLifecycle.assertDoneReady(card.id)
+      } catch (error) {
+        return deliveryFailure(error, reply)
+      }
       const decision = recordDecision(db, card, 'approve', note)
-      logEvent(card.id, null, 'review_decision', { decision: 'approve', note, ...(confirmed ? { confirmed: true } : {}) })
+      logEvent(card.id, null, 'review_decision', {
+        decision: 'approve',
+        note,
+        delivery_id: delivery?.id ?? null,
+        ...(confirmed ? { confirmed: true } : {}),
+      })
       db.prepare(`UPDATE cards SET column_name='done', updated_at=datetime('now') WHERE id=?`).run(card.id)
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
-      reviewEvent(updated, 'approved', { note, ...(confirmed ? { confirmed: true } : {}) })
+      reviewEvent(updated, 'approved', {
+        note,
+        delivery_id: delivery?.id ?? null,
+        ...(confirmed ? { confirmed: true } : {}),
+      })
       if (wantShip) {
         if (gate.warn) logEvent(card.id, null, 'autoship_note', { warn: gate.warn })
         const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
@@ -607,8 +686,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
       const note = req.body?.note?.trim()
       if (!note) return reply.code(400).send({ error: 'send-back requires a note for the agent' })
+      let delivery
+      try {
+        delivery = deliveryLifecycle.reject({ cardId: card.id, actor: 'human', summary: note, reason: note })
+      } catch (error) {
+        return deliveryFailure(error, reply)
+      }
       const decision = recordDecision(db, card, 'send_back', note)
-      logEvent(card.id, null, 'review_decision', { decision: 'send_back', note })
+      logEvent(card.id, null, 'review_decision', { decision: 'send_back', note, delivery_id: delivery?.id ?? null })
       db.prepare(`UPDATE cards SET column_name='in_progress', updated_at=datetime('now') WHERE id=?`).run(card.id)
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
@@ -626,7 +711,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         }
         emit(card.board_id, 'message', msg)
       }
-      reviewEvent(updated, 'sent_back', { note })
+      reviewEvent(updated, 'sent_back', { note, delivery_id: delivery?.id ?? null })
       return { card: updated, decision }
     })
 
@@ -689,7 +774,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     (card.description ? ` Scope: ${card.description}.` : '') + prereqNote(card) +
     ` This card is already registered to you and in in_progress — do NOT create another card for this work.` +
     ` Work the ticket autonomously to completion; do not wait for human input.` +
-    ` When you finish, do NOT move the card to done or review yourself — end your final message with a short summary of what you changed and how you verified it; the daemon parks the card in review for human approval.` +
+    ` When you finish, do NOT move the card to done or review yourself — end your final message with concise "Delivery summary:" and "Evidence:" sections naming exactly what changed and the commands or artifacts that verify it; the daemon parks the card in review for human approval.` +
     ` If you cannot complete the ticket, state exactly what blocked you and stop.`
 
   const notifyAssignment = (card: any, agentRow: any) => {

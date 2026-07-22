@@ -33,6 +33,12 @@ describe('OrchestrationService', () => {
     const created = orchestration.createCardJob({ cardId })
 
     expect(created.contract).toMatchObject({ card_id: cardId, workspace_id: workspace.id, priority: 8 })
+    expect(created.delivery).toMatchObject({
+      card_id: cardId,
+      job_id: created.job.id,
+      status: 'draft',
+      asked: { objective: 'Use the Agent OS lifecycle', contract_version: created.contract.version },
+    })
     expect(created.job).toMatchObject({
       board_id: boardId,
       card_id: cardId,
@@ -54,6 +60,7 @@ describe('OrchestrationService', () => {
     expect(() => orchestration.createCardJob({ cardId, provider: '   ' })).toThrow(/provider is required/)
     expect(db.prepare('SELECT 1 FROM task_contracts WHERE card_id=?').get(cardId)).toBeUndefined()
     expect(db.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get()).toEqual({ count: 0 })
   })
 
   it('rejects launch controls that the durable job model cannot preserve', () => {
