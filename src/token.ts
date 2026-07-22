@@ -18,7 +18,9 @@ export function loadAgentToken(): string | undefined {
 
 /** Agent subprocesses receive a scoped credential instead of the operator credential. */
 export function loadClientToken(): string | undefined {
-  return process.env.ORCHESTRA_AGENT_TOKEN?.trim() || loadToken()
+  const scoped = process.env.ORCHESTRA_AGENT_TOKEN?.trim() || undefined
+  if (process.env.ORCHESTRA_MANAGED_AGENT === '1') return scoped
+  return scoped || loadToken()
 }
 
 // first run mints the secret; later runs reuse it so already-paired clients never go stale

@@ -586,6 +586,7 @@ export class Conductor {
       ORCHESTRA_PORT: String(Number(process.env.ORCHESTRA_PORT ?? 4750)),
       ORCHESTRA_AGENT: name,
       ORCHESTRA_NAME: name,
+      ORCHESTRA_MANAGED_AGENT: '1',
       ...(this.agentToken ? { ORCHESTRA_AGENT_TOKEN: this.agentToken } : {}),
     }
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli

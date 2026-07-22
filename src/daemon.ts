@@ -131,7 +131,10 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   const orchestration = new OrchestrationService(db, scheduler)
   const codexCommand = process.env.ORCHESTRA_CODEX_COMMAND?.trim() || 'codex'
   const codexEnvironment = sanitizedCodexEnvironment()
-  if (agentToken) codexEnvironment.ORCHESTRA_AGENT_TOKEN = agentToken
+  if (agentToken) {
+    codexEnvironment.ORCHESTRA_AGENT_TOKEN = agentToken
+    codexEnvironment.ORCHESTRA_MANAGED_AGENT = '1'
+  }
   const codexSupervisor = new CodexAppServerSupervisor({
     client: { requestTimeoutMs: 5_000 },
     process: { command: codexCommand, env: codexEnvironment, inheritEnv: false },

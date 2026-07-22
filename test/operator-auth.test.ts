@@ -15,6 +15,7 @@ const servers: FastifyInstance[] = []
 
 afterEach(async () => {
   delete process.env.ORCHESTRA_AGENT_TOKEN
+  delete process.env.ORCHESTRA_MANAGED_AGENT
   delete process.env.ORCHESTRA_HOME
   await Promise.allSettled(servers.splice(0).map((server) => server.close()))
 })
@@ -85,6 +86,10 @@ describe('operator and agent API principals', () => {
     expect((await server.inject({
       method: 'POST', url: `/api/v1/cards/${cardId}/move`, headers: agent, payload: { column: 'done' },
     })).statusCode).toBe(403)
+    expect((await server.inject({
+      method: 'POST', url: '/api/v1/cards', headers: agent,
+      payload: { board_id: boardId, title: 'Bypass', column: 'done' },
+    })).statusCode).toBe(403)
     const moved = await server.inject({
       method: 'POST', url: `/api/v1/cards/${cardId}/move`, headers: operator, payload: { column: 'done' },
     })
@@ -99,5 +104,8 @@ describe('operator and agent API principals', () => {
     expect(agentToken).not.toBe(operatorToken)
     process.env.ORCHESTRA_AGENT_TOKEN = agentToken
     expect(loadClientToken()).toBe(agentToken)
+    process.env.ORCHESTRA_MANAGED_AGENT = '1'
+    delete process.env.ORCHESTRA_AGENT_TOKEN
+    expect(loadClientToken()).toBeUndefined()
   })
 })

@@ -391,6 +391,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     '/api/v1/cards', (req, reply) => {
       const { board_id, title, description = '', paths = [], agent, column = 'backlog' } = req.body
       if (!COLUMNS.includes(column)) return reply.code(400).send({ error: 'invalid column' })
+      if (column === 'done' && !requireOperator(req, reply)) return
       const owner = agentByName(board_id, agent)
       const { lastInsertRowid } = db.prepare(`
         INSERT INTO cards (board_id, title, description, column_name, owner_agent_id, paths)

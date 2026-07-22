@@ -53,7 +53,15 @@ program.command('restart').description('gracefully restart the daemon — defers
     console.log((await ensureDaemon()) ? `daemon restarted on ${baseUrl()}` : 'daemon failed to restart')
   })
 program.command('token').description('print the API token (paste it into the web UI login)')
-  .action(() => console.log(process.env.ORCHESTRA_AGENT_TOKEN?.trim() || ensureToken()))
+  .action(() => {
+    const scoped = process.env.ORCHESTRA_AGENT_TOKEN?.trim()
+    if (process.env.ORCHESTRA_MANAGED_AGENT === '1') {
+      if (!scoped) throw new Error('managed agent credential is unavailable')
+      console.log(scoped)
+      return
+    }
+    console.log(ensureToken())
+  })
 
 program.command('remote').description('expose the board over a secure tunnel and pair your phone with a QR scan')
   .option('--stop', 'tear the tunnel down')
