@@ -77,13 +77,16 @@ it('keeps provider model caches isolated and normalizes app-server reasoning opt
     model: 'gpt-5.4',
     displayName: 'GPT-5.4',
     description: 'Codex model',
+    isDefault: true,
+    defaultReasoningEffort: 'xhigh',
     supportedReasoningEfforts: [
       { reasoningEffort: 'low', description: 'Fast' },
       { reasoningEffort: 'xhigh', description: 'Deep' },
     ],
   }])
   expect(models).toEqual([expect.objectContaining({
-    value: 'gpt-5.4', supportedEffortLevels: ['low', 'xhigh'], supportsEffort: true,
+    value: 'gpt-5.4', isDefault: true, defaultEffort: 'xhigh',
+    supportedEffortLevels: ['low', 'xhigh'], supportsEffort: true,
   })])
 
   writeProviderModelCache(db, models, CODEX_PROVIDER_ID)

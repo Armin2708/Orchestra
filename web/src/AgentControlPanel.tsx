@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import { sessionModelValue, type AgentControlPanelName } from './agentTerminalControls'
+import {
+  sessionModelSelection,
+  sessionModelValue,
+  type AgentControlPanelName,
+} from './agentTerminalControls'
 import './agentTerminalControls.css'
 
 export type SessionModel = {
@@ -9,6 +13,8 @@ export type SessionModel = {
   resolvedModel?: string
   displayName?: string
   description?: string
+  isDefault?: boolean
+  defaultEffort?: string
   supportedEffortLevels?: string[]
 }
 
@@ -39,15 +45,34 @@ type AgentControlPanelProps = {
   agentId: number
   panel: AgentControlPanelName
   models: SessionModel[]
-  currentModel: string | null
+  legacyModel?: string | null
+  requestedModel?: string | null
+  resolvedModel?: string | null
   currentEffort: string | null
+  resolvedEffort?: string | null
   working: boolean
+  canSelectModel: boolean
+  canSetEffort: boolean
   onClose: () => void
-  onChange: () => void
+  onChange: (patch?: { requestedModel?: string; effort?: string }) => void
 }
 
 export function AgentControlPanel(props: AgentControlPanelProps) {
-  const { agentId, panel, models, currentModel, currentEffort, working, onClose, onChange } = props
+  const {
+    agentId,
+    panel,
+    models,
+    legacyModel,
+    requestedModel,
+    resolvedModel,
+    currentEffort,
+    resolvedEffort,
+    working,
+    canSelectModel,
+    canSetEffort,
+    onClose,
+    onChange,
+  } = props
   const [servers, setServers] = useState<McpServer[]>([])
   const [plugins, setPlugins] = useState<LoadedPlugin[]>([])
   const [pluginErrors, setPluginErrors] = useState(0)
@@ -55,11 +80,14 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
   const [loading, setLoading] = useState(panel !== 'model')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [optimisticModel, setOptimisticModel] = useState<string | null>(null)
+  const [optimisticEffort, setOptimisticEffort] = useState<string | null>(null)
   const panelRef = useRef<HTMLElement>(null)
-  const isCurrentModel = (model: SessionModel) => {
-    const value = sessionModelValue(model)
-    return value !== '' && (value === currentModel || model.resolvedModel === currentModel)
-  }
+  const selection = sessionModelSelection(models, optimisticModel !== null
+    ? { model: legacyModel, requestedModel: optimisticModel, resolvedModel }
+    : requestedModel !== undefined
+      ? { model: legacyModel, requestedModel, resolvedModel }
+      : { model: legacyModel, resolvedModel })
 
   const loadMcp = async () => {
     setLoading(true); setError(null)
@@ -82,11 +110,12 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
   }
 
   useEffect(() => {
-    const currentModelIndex = models.findIndex(isCurrentModel)
-    setCursor(panel === 'model' ? Math.max(0, currentModelIndex) : 0)
+    setCursor(panel === 'model' ? Math.max(0, selection.selectedIndex) : 0)
     setLoading(panel !== 'model')
     setBusy(null)
     setError(null)
+    setOptimisticModel(null)
+    setOptimisticEffort(null)
     if (panel === 'mcp') void loadMcp()
     if (panel === 'plugin') void loadPlugins()
     requestAnimationFrame(() => panelRef.current?.focus())
@@ -109,7 +138,7 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
 
   const selectModel = async (model: SessionModel) => {
     const value = sessionModelValue(model)
-    if (isCurrentModel(model) || busy) return
+    if (!canSelectModel || model === selection.selectedModel || busy) return
     if (!value) {
       setError('This model entry has no provider identifier. Refresh the session and try again.')
       return
@@ -117,18 +146,23 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
     setBusy(value); setError(null)
     try {
       await api('POST', `/agents/${agentId}/model`, { model: value })
-      onChange(); onClose()
-    } catch (cause) { setError(readableError(cause)); setBusy(null) }
+      setOptimisticModel(value)
+      onChange({ requestedModel: value })
+    } catch (cause) { setError(readableError(cause)) }
+    finally { setBusy(null) }
   }
 
-  const selectedModel = models.find(isCurrentModel)
+  const selectedModel = selection.selectedModel
   const effortLevels = selectedModel?.supportedEffortLevels ?? []
+  const selectedEffort = optimisticEffort ?? currentEffort
+  const effectiveEffort = selectedEffort ?? resolvedEffort ?? selectedModel?.defaultEffort ?? null
   const changeEffort = async (level: string) => {
-    if (working || busy || level === currentEffort) return
+    if (!canSetEffort || working || busy || level === selectedEffort) return
     setBusy(`effort:${level}`); setError(null)
     try {
       await api('POST', `/agents/${agentId}/effort`, { level })
-      onChange()
+      setOptimisticEffort(level)
+      onChange({ effort: level })
     } catch (cause) { setError(readableError(cause)) }
     finally { setBusy(null) }
   }
@@ -157,9 +191,9 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
         if (model) { event.preventDefault(); void selectModel(model) }
         return
       }
-      if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && effortLevels.length > 0) {
+      if (canSetEffort && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && effortLevels.length > 0) {
         event.preventDefault()
-        const current = Math.max(0, effortLevels.indexOf(currentEffort ?? ''))
+        const current = Math.max(0, effortLevels.indexOf(selectedEffort ?? effectiveEffort ?? ''))
         const direction = event.key === 'ArrowRight' ? 1 : -1
         void changeEffort(effortLevels[(current + direction + effortLevels.length) % effortLevels.length])
         return
@@ -186,21 +220,71 @@ export function AgentControlPanel(props: AgentControlPanelProps) {
       {loading && <p className="cc-control-empty">Loading session controls…</p>}
 
       {!loading && panel === 'model' && (
-        <div className="cc-control-list" role="listbox" aria-label="Available models">
-          {models.map((model, index) => {
-            const value = sessionModelValue(model)
-            const selected = isCurrentModel(model)
-            return (
-              <button type="button" role="option" aria-selected={selected} key={value || `model-${index}`}
-                className={`cc-control-row${selected ? ' selected' : ''}${index === cursor ? ' active' : ''}`}
-                onMouseEnter={() => setCursor(index)} onClick={() => void selectModel(model)}>
-                <span><b>{model.displayName ?? (value || 'Unnamed model')}</b>{model.description && <small>{model.description}</small>}</span>
-                <em>{busy === value ? 'switching…' : selected ? 'current' : value}</em>
-              </button>
-            )
-          })}
-          {models.length === 0 && <p className="cc-control-empty">The provider has not reported any models for this session yet.</p>}
-        </div>
+        <>
+          <div className="cc-model-state" aria-live="polite">
+            <span>
+              <small>{selection.pending ? 'Selected for next turn' : 'Selected'}</small>
+              <b>{selection.selectedLabel}</b>
+            </span>
+            <span>
+              <small>Active model</small>
+              <b>{selection.resolvedLabel ?? selection.resolvedModel ?? 'Waiting for provider'}</b>
+            </span>
+          </div>
+          <div className="cc-control-list" role="listbox" aria-label="Available models">
+            {models.map((model, index) => {
+              const value = sessionModelValue(model)
+              const selected = index === selection.selectedIndex
+              const running = index === selection.resolvedIndex
+              const providerDefault = selection.usesProviderDefault && selected
+              const description = providerDefault && selection.resolvedLabel
+                ? [`Currently resolves to ${selection.resolvedLabel}`, model.description].filter(Boolean).join(' · ')
+                : model.description
+              const status = busy === value
+                ? 'switching…'
+                : selected && selection.pending
+                  ? 'next turn'
+                  : selected
+                    ? 'current'
+                    : running
+                      ? 'active'
+                      : model.isDefault
+                        ? 'provider default'
+                        : value
+              return (
+                <button type="button" role="option" aria-selected={selected} key={value || `model-${index}`}
+                  disabled={!canSelectModel || busy !== null}
+                  className={`cc-control-row${selected ? ' selected' : ''}${running ? ' running' : ''}${index === cursor ? ' active' : ''}`}
+                  onMouseEnter={() => setCursor(index)} onClick={() => void selectModel(model)}>
+                  <span>
+                    <b>{providerDefault ? 'Provider default' : model.displayName ?? (value || 'Unnamed model')}</b>
+                    {description && <small>{description}</small>}
+                  </span>
+                  <em>{status}</em>
+                </button>
+              )
+            })}
+            {models.length === 0 && <p className="cc-control-empty">The provider has not reported any models for this session yet.</p>}
+          </div>
+          {canSetEffort && selectedModel && effortLevels.length > 0 && (
+            <fieldset className="cc-model-effort-panel">
+              <legend>Reasoning effort</legend>
+              <p>{selectedEffort ? `Selected: ${selectedEffort}`
+                : `Provider default${effectiveEffort ? ` · currently ${effectiveEffort}` : ''}`}</p>
+              <div role="group" aria-label="Reasoning effort">
+                {effortLevels.map((level) => (
+                  <button type="button" key={level} disabled={working || busy !== null}
+                    aria-pressed={selectedEffort === level}
+                    className={`${selectedEffort === level ? 'selected' : ''}${effectiveEffort === level ? ' running' : ''}`}
+                    onClick={() => void changeEffort(level)}>
+                    {busy === `effort:${level}` ? 'updating…' : level}
+                  </button>
+                ))}
+              </div>
+              {working && <small>Effort can change when the current turn finishes.</small>}
+            </fieldset>
+          )}
+        </>
       )}
 
       {!loading && panel === 'mcp' && (

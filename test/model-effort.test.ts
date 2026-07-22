@@ -210,7 +210,9 @@ it('setEffort with no resumable session yet refuses instead of dropping history'
 
 it('setEffort restarts with resume, carrying permission mode, model, and transcript history', async () => {
   const t = setup()
-  const a = t.conductor.hire({ boardId: 1, cwd: '/p', permissionMode: 'acceptEdits' })
+  const a = t.conductor.hire({
+    boardId: 1, cwd: '/p', permissionMode: 'acceptEdits', model: 'claude-fable-5',
+  })
   t.sessions[0].emit({ type: 'system', subtype: 'init', session_id: 's1', model: 'claude-fable-5' })
   await until(() => t.conductor.transcript(a.id).info?.model === 'claude-fable-5')
   t.conductor.task(a.id, 'hello there')
@@ -231,6 +233,20 @@ it('setEffort restarts with resume, carrying permission mode, model, and transcr
   expect(t.conductor.transcript(a.id).info?.effort).toBe('xhigh')
   expect((t.db.prepare(`SELECT effort FROM agents WHERE id=?`).get(a.id) as any).effort).toBe('xhigh')
   expect(t.conductor.transcript(a.id).info?.permissionMode).toBe('acceptEdits')
+})
+
+it('keeps provider-default model intent when an effort change resumes Claude', async () => {
+  const t = setup()
+  const a = t.conductor.hire({ boardId: 1, cwd: '/p' })
+  t.sessions[0].emit({ type: 'system', subtype: 'init', session_id: 's-default', model: 'claude-fable-5' })
+  await until(() => t.conductor.transcript(a.id).info?.model === 'claude-fable-5')
+  t.sessions[0].emit({ type: 'result', subtype: 'success', result: 'ready' })
+  await until(() => t.conductor.transcript(a.id).working === null)
+
+  expect(await settingEffort(t, a.id, 'high')).toBe('ok')
+  expect(t.queryArgs.at(-1).options.resume).toBe('s-default')
+  expect(t.queryArgs.at(-1).options.model).toBeUndefined()
+  expect(t.db.prepare('SELECT model FROM agents WHERE id=?').get(a.id)).toMatchObject({ model: null })
 })
 
 it('a launched agent keeps its ticket and launch state across an effort change', async () => {

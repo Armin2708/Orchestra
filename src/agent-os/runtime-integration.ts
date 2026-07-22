@@ -651,13 +651,24 @@ export class AgentOsJobExecutor implements JobExecutor {
     const agent = this.db.prepare('SELECT model, effort, access_profile FROM agents WHERE id=?').get(agentId) as
       { model: string | null; effort: string | null; access_profile: string | null } | undefined
     const accessProfile = agent?.access_profile ?? 'workspace_write'
+    const requestedModel = agent?.model ?? control.job.model
+    const resolvedModel = typeof control.live?.session.metadata.resolvedModel === 'string'
+      ? control.live.session.metadata.resolvedModel
+      : requestedModel
+    const requestedEffort = agent?.effort ?? null
+    const resolvedEffort = typeof control.live?.session.metadata.resolvedEffort === 'string'
+      ? control.live.session.metadata.resolvedEffort
+      : requestedEffort
     return {
       lines,
       working: control.live ? { secs: 0, tokens: control.job.spent_tokens } : null,
       info: {
         provider: control.job.provider,
-        model: agent?.model ?? control.job.model,
-        effort: agent?.effort ?? null,
+        model: requestedModel,
+        requestedModel,
+        resolvedModel,
+        effort: requestedEffort,
+        resolvedEffort,
         accessProfile,
         permissionMode: accessProfile === 'read_only' ? 'plan'
           : accessProfile === 'full_access' ? 'bypassPermissions' : 'acceptEdits',

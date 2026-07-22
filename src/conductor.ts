@@ -911,10 +911,10 @@ export class Conductor {
     if (!h) return 'not-found'
     if (!EFFORT_LEVELS.includes(level as EffortLevel)) return 'bad-level'
     if (h.turnStart !== null) return 'busy' // mirror the launch gate: never yank a running turn
-    const row = this.db.prepare(`SELECT sdk_session FROM agents WHERE id=?`).get(agentId) as any
+    const row = this.db.prepare(`SELECT sdk_session, model FROM agents WHERE id=?`).get(agentId) as any
     if (!row?.sdk_session) return 'no-session' // nothing to resume — a restart would drop the conversation
 
-    const prior = { cardId: h.cardId, branch: h.branch, model: h.model, permissionMode: h.permissionMode, role: h.role, lines: [...h.transcript] }
+    const prior = { cardId: h.cardId, branch: h.branch, model: row.model ?? null, permissionMode: h.permissionMode, role: h.role, lines: [...h.transcript] }
     h.handoff = true
     await h.interrupt()
     h.end() // input stream closes → query ends → finally tears down without touching cards

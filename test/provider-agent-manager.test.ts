@@ -161,7 +161,10 @@ const claudeStub = (db: ReturnType<typeof openDb>) => {
     },
     deliver: () => true,
     task: () => true,
-    transcript: () => ({ lines: [], working: null, info: { permissionMode: 'bypassPermissions' } }),
+    transcript: () => ({
+      lines: [], working: null,
+      info: { model: 'claude-resolved', permissionMode: 'bypassPermissions' },
+    }),
     subagents: () => [],
     interruptAgent: async (id) => live.has(id),
     fire: async (id) => live.delete(id),
@@ -189,6 +192,17 @@ const setup = () => {
   return { db, bus, driver, codex, claude, manager }
 }
 
+it('keeps Claude provider-default intent separate from its resolved runtime model', () => {
+  const t = setup()
+  const agent = t.manager.hire({ boardId: 1, cwd: '/project', name: 'claude-owl', provider: 'claude' })
+
+  expect(t.manager.transcript(agent.id).info).toMatchObject({
+    model: 'claude-resolved',
+    requestedModel: null,
+    resolvedModel: 'claude-resolved',
+  })
+})
+
 it('routes the stored worker default to Codex and queues work until the thread is ready', async () => {
   const t = setup()
   writeAgentDefaults(t.db, {
@@ -207,11 +221,16 @@ it('routes the stored worker default to Codex and queues work until the thread i
   expect(t.driver.sends[0][1]).toBe('implement the card')
   expect(t.db.prepare('SELECT status, external_session_id FROM agents WHERE id=?').get(agent.id))
     .toMatchObject({ status: 'active', external_session_id: 'thread-1' })
+  Object.assign(t.driver.sessions.get('codex:1')!.metadata, {
+    resolvedModel: 'gpt-5.4-runtime',
+    resolvedEffort: 'medium',
+  })
 
   t.driver.emit('codex:1', { type: 'output', data: 'working', metadata: { turnId: 'turn-1' } })
   await until(() => t.manager.transcript(agent.id).lines.some((line: any) => line.text === 'working'))
   expect(t.manager.transcript(agent.id).info).toMatchObject({
-    provider: 'codex', model: 'gpt-5.4', effort: 'high', accessProfile: 'workspace_write',
+    provider: 'codex', model: 'gpt-5.4', requestedModel: 'gpt-5.4', resolvedModel: 'gpt-5.4-runtime',
+    effort: 'high', resolvedEffort: 'medium', accessProfile: 'workspace_write',
   })
 
   expect(await t.manager.setModel(agent.id, 'gpt-5.5')).toBe(true)

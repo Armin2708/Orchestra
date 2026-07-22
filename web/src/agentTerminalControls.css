@@ -218,3 +218,140 @@ button.cc-slash-item.active { background: #3a372f; }
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
 }
+
+/* One model surface: the footer trigger, /model, and Alt+P all open this panel. */
+.cc-model-trigger {
+  min-width: 0;
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, auto) auto 8px;
+  align-items: baseline;
+  gap: 5px;
+  border: 1px solid #4a463f;
+  border-radius: 6px;
+  background: #26231f;
+  color: #ded9d1;
+  padding: 3px 7px;
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 120ms ease;
+}
+
+.cc-model-trigger:hover,
+.cc-model-trigger:focus-visible,
+.cc-model-trigger[aria-expanded='true'] {
+  border-color: #777168;
+  background: #302d28;
+  outline: none;
+}
+
+.cc-model-trigger:active { transform: translateY(1px) scale(0.99); }
+.cc-model-trigger.pending { border-color: #8a694e; }
+.cc-model-trigger > span { color: #777168; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+.cc-model-trigger > strong { overflow: hidden; max-width: 170px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.cc-model-trigger > em { color: #aaa49a; font-size: 10px; font-style: normal; white-space: nowrap; }
+.cc-model-trigger > i {
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid #777168;
+  border-bottom: 1px solid #777168;
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform 160ms ease;
+}
+.cc-model-trigger[aria-expanded='true'] > i { transform: translateY(2px) rotate(225deg); }
+
+.cc-model-state {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  border-bottom: 1px solid #3a3732;
+  background: #3a3732;
+}
+
+.cc-model-state > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #26231f;
+  padding: 8px 12px;
+}
+
+.cc-model-state small,
+.cc-model-effort-panel > p,
+.cc-model-effort-panel > small {
+  color: #777168;
+  font-size: 10px;
+}
+
+.cc-model-state b {
+  overflow: hidden;
+  color: #ded9d1;
+  font-size: 11.5px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-control-row.running:not(.selected) em { color: #aaa49a; }
+.cc-control-row:disabled { cursor: default; opacity: 0.72; }
+.cc-control-row.selected:disabled { opacity: 1; }
+
+.cc-model-effort-panel {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid #3a3732;
+  padding: 9px 12px 11px;
+}
+
+.cc-model-effort-panel legend {
+  float: left;
+  margin-right: 8px;
+  color: #ded9d1;
+  font-size: 11.5px;
+  font-weight: 560;
+}
+
+.cc-model-effort-panel > p { min-height: 16px; margin: 0 0 7px; text-align: right; }
+.cc-model-effort-panel > div { clear: both; display: flex; flex-wrap: wrap; gap: 5px; }
+.cc-model-effort-panel button {
+  min-width: 48px;
+  border: 1px solid #4a463f;
+  border-radius: 5px;
+  background: transparent;
+  color: #aaa49a;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 100ms ease;
+}
+.cc-model-effort-panel button:hover:not(:disabled),
+.cc-model-effort-panel button:focus-visible { border-color: #777168; color: #ded9d1; outline: none; }
+.cc-model-effort-panel button:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
+.cc-model-effort-panel button.running { box-shadow: inset 0 -2px 0 #777168; }
+.cc-model-effort-panel button.selected { border-color: #9d664f; background: rgba(217, 119, 87, 0.12); color: #d97757; }
+.cc-model-effort-panel button:disabled { cursor: not-allowed; opacity: 0.45; }
+.cc-model-effort-panel > small { display: block; margin-top: 7px; }
+
+/* The historical footer can now wrap without crushing access, model, and usage text. */
+.cc-hints { align-items: flex-start; gap: 8px 14px; flex-wrap: wrap; }
+.cc-hints > .cc-controls { flex: 1 1 270px; min-width: 0; }
+.cc-hints > span:last-child { flex: 0 1 auto; min-width: 0; margin-left: auto; text-align: right; }
+
+@media (max-width: 640px) {
+  .cc-control-panel { max-height: min(58dvh, 420px); }
+  .cc-model-state { grid-template-columns: 1fr; }
+  .cc-model-trigger { flex: 1 1 180px; grid-template-columns: auto minmax(0, 1fr) auto 8px; }
+  .cc-model-trigger > strong { max-width: none; }
+  .cc-hints > .cc-controls,
+  .cc-hints > span:last-child { flex-basis: 100%; width: 100%; margin-left: 0; text-align: left; }
+  .cc-control-row { align-items: flex-start; gap: 8px; }
+  .cc-control-row em { max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-model-trigger,
+  .cc-model-trigger > i,
+  .cc-model-effort-panel button { transition: none; }
+}

@@ -16,10 +16,11 @@ import {
 import { AgentControlPanel } from './AgentControlPanel'
 import {
   localConsoleCommand,
+  modelCatalogSignature,
   normalizeSlashCommandName,
   panelForSlashCommand,
   panelForSlashInput,
-  sessionModelValue,
+  sessionModelSelection,
   uniqueSlashCommands,
   type AgentControlPanelName,
 } from './agentTerminalControls'
@@ -181,6 +182,8 @@ type ModelInfo = {
   resolvedModel?: string
   displayName?: string
   description?: string
+  isDefault?: boolean
+  defaultEffort?: string
   supportsEffort?: boolean
   supportedEffortLevels?: string[]
 }
@@ -191,68 +194,17 @@ type TranscriptInfo = {
   accessProfile?: string | null
   access_profile?: string | null
   model: string | null
+  requestedModel?: string | null
+  resolvedModel?: string | null
   cwd: string
   tokens: number
   permissionMode?: string
   commands?: { name: string; description: string }[]
   effort?: string | null
+  resolvedEffort?: string | null
   models?: ModelInfo[]
   costUsd?: number
   usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
-}
-
-function ModelEffortControls({ agentId, info, working, canSelectModel, canSetEffort, onChange, onError }: {
-  agentId: number
-  info: { model: string | null; effort?: string | null; models?: ModelInfo[] } | null
-  working: boolean
-  canSelectModel: boolean
-  canSetEffort: boolean
-  onChange: () => void
-  onError: (error: unknown) => void
-}) {
-  const models = info?.models ?? []
-  if ((!canSelectModel && !canSetEffort) || models.length === 0) return null
-  const current = models.find((model) => {
-    const value = sessionModelValue(model)
-    return value === info?.model || model.resolvedModel === info?.model
-  })
-  const currentValue = current ? sessionModelValue(current) : info?.model ?? ''
-  const levels = current?.supportedEffortLevels ?? []
-  return (
-    <span className="cc-model-effort">
-      {canSelectModel && <select className="cc-mode-select" value={currentValue} aria-label="Model"
-        title="Model used by this session"
-        onChange={async (event) => {
-          if (!event.target.value) return
-          try {
-            await api('POST', `/agents/${agentId}/model`, { model: event.target.value })
-            onChange()
-          } catch (cause) { onError(cause) }
-        }}>
-        {!current && currentValue && <option value={currentValue}>{currentValue}</option>}
-        {models.map((model, index) => {
-          const value = sessionModelValue(model)
-          return value ? <option key={value || index} value={value}>{model.displayName ?? value}</option> : null
-        })}
-      </select>}
-      {canSetEffort && levels.length > 0 && (
-        <span className="cc-effort" role="group" aria-label="Reasoning effort"
-          title={working ? 'Wait for the current turn to finish' : 'Change reasoning effort'}>
-          {levels.map((level) => (
-            <button type="button" key={level} disabled={working}
-              className={`cc-effort-btn${(info?.effort ?? '') === level ? ' cc-effort-on' : ''}`}
-              onClick={async () => {
-                if ((info?.effort ?? '') === level) return
-                try {
-                  await api('POST', `/agents/${agentId}/effort`, { level })
-                  onChange()
-                } catch (cause) { onError(cause) }
-              }}>{level === 'medium' ? 'med' : level}</button>
-          ))}
-        </span>
-      )}
-    </span>
-  )
 }
 
 function PermissionModeHint({ agentId, profile, onChange, onError }: {
@@ -353,13 +305,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         const i: TranscriptInfo | null = r.info ?? null
         const previousProvider = normalizeProvider(prev?.provider ?? agent.provider)
         const nextProvider = normalizeProvider(i?.provider ?? agent.provider)
-        if (prev && i && prev.tokens === i.tokens && prev.model === i.model && prev.permissionMode === i.permissionMode &&
+        if (prev && i && prev.tokens === i.tokens && prev.model === i.model &&
+          prev.requestedModel === i.requestedModel && prev.resolvedModel === i.resolvedModel &&
+          prev.resolvedEffort === i.resolvedEffort && prev.permissionMode === i.permissionMode &&
           previousProvider === nextProvider &&
           (prev.accessProfile ?? prev.access_profile) === (i.accessProfile ?? i.access_profile) &&
           (prev.capabilities ?? []).join('|') === (i.capabilities ?? []).join('|') &&
           (prev.commands?.length ?? 0) === (i.commands?.length ?? 0) &&
           prev.commands?.[0]?.description === i.commands?.[0]?.description &&
-          prev.effort === i.effort && (prev.models?.length ?? 0) === (i.models?.length ?? 0) &&
+          prev.effort === i.effort && modelCatalogSignature(prev.models) === modelCatalogSignature(i.models) &&
           providerTokenSummary(previousProvider, [prev.usage?.session, prev.usage?.turn]).total ===
             providerTokenSummary(nextProvider, [i.usage?.session, i.usage?.turn]).total) return prev
         return i
@@ -516,12 +470,21 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const menuOpen = visibleCommands.length > 0 && !menuHidden
   useEffect(() => { setMenuIdx(0); setMenuHidden(false) }, [slashTerm])
 
-  const activeModel = info?.model ?? null
-  const currentModel = info?.models?.find((model) => {
-    const value = sessionModelValue(model)
-    return value === activeModel || model.resolvedModel === activeModel
-  })
-  const modelLabel = currentModel?.displayName ?? info?.model ?? 'Default model'
+  const modelSelection = sessionModelSelection(info?.models ?? [], info && 'requestedModel' in info
+    ? { model: info.model, requestedModel: info.requestedModel, resolvedModel: info.resolvedModel }
+    : { model: info?.model, resolvedModel: info?.resolvedModel })
+  const modelLabel = modelSelection.usesProviderDefault && modelSelection.resolvedLabel
+    ? `Provider default (active ${modelSelection.resolvedLabel})`
+    : modelSelection.pending && modelSelection.resolvedLabel
+      ? `${modelSelection.selectedLabel} next turn (active ${modelSelection.resolvedLabel})`
+      : modelSelection.selectedLabel
+  const modelTriggerLabel = modelSelection.usesProviderDefault ? 'Provider default' : modelSelection.selectedLabel
+  const effortLabel = info?.effort ?? info?.resolvedEffort ?? modelSelection.selectedModel?.defaultEffort ?? null
+  const modelControlTitle = [
+    `Selected: ${modelSelection.selectedLabel}`,
+    modelSelection.resolvedLabel ? `Active: ${modelSelection.resolvedLabel}` : '',
+    effortLabel ? `Effort: ${info?.effort ? effortLabel : `provider default (${effortLabel})`}` : '',
+  ].filter(Boolean).join(' · ')
   const cwdLabel = info?.cwd?.replace(/^\/(?:Users|home)\/[^/]+/, '~') ?? ''
   const accessLabel = ACCESS_PROFILES.find((profile) => profile.value === accessProfile)?.label ?? accessProfile
 
@@ -822,9 +785,20 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
           <div className="cc-prompt-wrap">
             {controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
-              models={info?.models ?? []} currentModel={info?.model ?? null}
-              currentEffort={info?.effort ?? null} working={working}
-              onClose={() => { setControlPanel(null); inputRef.current?.focus() }} onChange={onChange} />}
+              models={info?.models ?? []} legacyModel={info?.model ?? null}
+              requestedModel={info && 'requestedModel' in info ? info.requestedModel : undefined}
+              resolvedModel={info?.resolvedModel ?? null}
+              currentEffort={info?.effort ?? null} resolvedEffort={info?.resolvedEffort ?? null}
+              working={working} canSelectModel={canSelectModel} canSetEffort={canSetEffort}
+              onClose={() => { setControlPanel(null); inputRef.current?.focus() }}
+              onChange={(patch) => {
+                if (patch) setInfo((current) => current ? {
+                  ...current,
+                  ...(patch.requestedModel ? { requestedModel: patch.requestedModel } : {}),
+                  ...(patch.effort ? { effort: patch.effort } : {}),
+                } : current)
+                onChange()
+              }} />}
             {menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
                 {visibleCommands.map((c, i) => (
@@ -855,14 +829,22 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               ? <span className="cc-controls">
                   {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile}
                     onChange={onChange} onError={(cause) => setControlError(controlErrorText(cause))} />}
-                  <ModelEffortControls agentId={agent.id} info={info} working={working}
-                    canSelectModel={canSelectModel} canSetEffort={canSetEffort} onChange={onChange}
-                    onError={(cause) => setControlError(controlErrorText(cause))} />
+                  {(canSelectModel || canSetEffort) && (
+                    <button type="button" className={`cc-model-trigger${modelSelection.pending ? ' pending' : ''}`}
+                      title={modelControlTitle || 'Model controls'} aria-label={modelControlTitle || 'Open model controls'}
+                      aria-expanded={controlPanel === 'model'}
+                      onClick={() => setControlPanel((current) => current === 'model' ? null : 'model')}>
+                      <span>Model</span>
+                      <strong>{info ? modelTriggerLabel : 'Loading model'}</strong>
+                      {effortLabel && <em>{info?.effort ? effortLabel : `default ${effortLabel}`}</em>}
+                      <i aria-hidden="true" />
+                    </button>
+                  )}
                   {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span title={info?.cwd}>
-              {cwdLabel}{modelLabel ? `${cwdLabel ? ' · ' : ''}${modelLabel}` : ''}
+              {cwdLabel}
               {info?.usage && providerTokenSummary(provider, [info.usage.session, info.usage.turn]).total > 0 ? (() => {
                 const usage = providerTokenSummary(provider, [info.usage.session, info.usage.turn])
                 const cacheWrite = usage.cacheWrite > 0 ? ` · cache write ${fmtTokens(usage.cacheWrite)}` : ''

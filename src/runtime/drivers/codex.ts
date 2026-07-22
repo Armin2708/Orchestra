@@ -201,6 +201,7 @@ export class CodexAgentDriver implements AgentDriver {
           ...(typeof metadata.effort === 'string' ? { effort: metadata.effort } : {}),
           ...(typeof metadata.serviceTier === 'string' ? { serviceTier: metadata.serviceTier } : {}),
         })
+        if (typeof metadata.effort === 'string') state.session.metadata.resolvedEffort = metadata.effort
         this.setActiveTurn(state, turn.turn.id)
       } catch (error) {
         await this.options.service.unsubscribeThread(started.thread.id).catch(() => {})
@@ -261,6 +262,8 @@ export class CodexAgentDriver implements AgentDriver {
       state.pendingTurnOverrides = { ...overrides, ...state.pendingTurnOverrides }
       throw error
     }
+    if (typeof overrides.model === 'string') state.session.metadata.resolvedModel = overrides.model
+    if (typeof overrides.effort === 'string') state.session.metadata.resolvedEffort = overrides.effort
     this.setActiveTurn(state, started.turn.id)
   }
 
@@ -385,6 +388,10 @@ export class CodexAgentDriver implements AgentDriver {
     tokenBudget?: number | null,
   ): CodexSessionState {
     const active = thread.status?.type === 'active'
+    const resolvedModel = typeof native.model === 'string' && native.model.trim() ? native.model.trim() : undefined
+    const resolvedEffort = typeof native.reasoningEffort === 'string' && native.reasoningEffort.trim()
+      ? native.reasoningEffort.trim()
+      : undefined
     const session: DriverSession = {
       id: `${this.id}:${thread.id}`,
       externalId: thread.id,
@@ -402,6 +409,8 @@ export class CodexAgentDriver implements AgentDriver {
         agentRole: thread.agentRole ?? null,
         currentTurnId: null,
         tokenBudget: this.tokenBudget(tokenBudget),
+        ...(resolvedModel ? { resolvedModel } : {}),
+        ...(resolvedEffort ? { resolvedEffort } : {}),
         native,
       },
     }
@@ -439,6 +448,12 @@ export class CodexAgentDriver implements AgentDriver {
         const thread = read.thread ?? resumed.thread
         const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
         this.setActiveTurn(state, activeTurn?.id ?? null)
+        const resolvedModel = typeof resumed.model === 'string' && resumed.model.trim()
+          ? resumed.model.trim()
+          : undefined
+        const resolvedEffort = typeof resumed.reasoningEffort === 'string' && resumed.reasoningEffort.trim()
+          ? resumed.reasoningEffort.trim()
+          : undefined
         Object.assign(state.session.metadata, {
           codexSessionId: thread.sessionId ?? state.session.metadata.codexSessionId ?? null,
           cliVersion: thread.cliVersion ?? state.session.metadata.cliVersion ?? null,
@@ -446,6 +461,8 @@ export class CodexAgentDriver implements AgentDriver {
           parentThreadId: thread.parentThreadId ?? null,
           agentNickname: thread.agentNickname ?? null,
           agentRole: thread.agentRole ?? null,
+          ...(resolvedModel ? { resolvedModel } : {}),
+          ...(resolvedEffort ? { resolvedEffort } : {}),
           nativeReconcile: { resumed, read },
         })
         result.resumed.push(state.threadId)

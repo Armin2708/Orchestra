@@ -186,7 +186,10 @@ describe('Codex AgentDriver lifecycle', () => {
       driverId: 'codex',
       workspaceId: 'workspace-1',
       status: 'running',
-      metadata: { threadId: 'thread-new', cliVersion: '0.144.6', currentTurnId: 'turn-1' },
+      metadata: {
+        threadId: 'thread-new', cliVersion: '0.144.6', currentTurnId: 'turn-1',
+        resolvedModel: 'gpt-test', resolvedEffort: 'high',
+      },
     })
     expect(service.starts[0]).toMatchObject({
       cwd: '/repo', model: 'gpt-test', sandbox: 'workspace-write', approvalPolicy: 'on-request', serviceTier: 'fast',
@@ -226,7 +229,7 @@ describe('Codex AgentDriver lifecycle', () => {
     const session = await driver.attach('thread-existing')
     expect(session).toMatchObject({
       id: 'codex:thread-existing', workspaceId: 'workspace-existing', status: 'running',
-      metadata: { currentTurnId: 'turn-active' },
+      metadata: { currentTurnId: 'turn-active', resolvedModel: 'gpt-test', resolvedEffort: 'high' },
     })
     expect(service.resumes).toEqual(['thread-existing'])
     expect(service.reads).toEqual(['thread-existing'])
@@ -503,7 +506,11 @@ describe('Codex AgentDriver event normalization', () => {
       effort: 'xhigh',
       accessProfile: 'workspace_write',
     })
+    expect(session.metadata).toMatchObject({
+      model: 'gpt-next', effort: 'xhigh', resolvedModel: 'gpt-test', resolvedEffort: 'high',
+    })
     await driver.send(session.id, 'updated turn')
+    expect(session.metadata).toMatchObject({ resolvedModel: 'gpt-next', resolvedEffort: 'xhigh' })
     expect(service.turnStarts.at(-1)).toMatchObject({
       input: 'updated turn',
       overrides: {

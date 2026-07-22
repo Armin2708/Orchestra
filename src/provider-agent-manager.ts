@@ -393,6 +393,12 @@ export class CodexManagedAgentRuntime {
   transcript(agentId: number): any {
     const state = this.states.get(agentId)
     if (!state) return { lines: [], working: null }
+    const resolvedModel = typeof state.session?.metadata.resolvedModel === 'string'
+      ? state.session.metadata.resolvedModel
+      : state.model
+    const resolvedEffort = typeof state.session?.metadata.resolvedEffort === 'string'
+      ? state.session.metadata.resolvedEffort
+      : state.effort
     return {
       lines: state.transcript,
       working: state.activeTurnId ? { secs: 0, tokens: 0 } : null,
@@ -401,7 +407,10 @@ export class CodexManagedAgentRuntime {
         capabilities: enabledCapabilities(CODEX_CAPABILITIES),
         accessProfile: state.accessProfile,
         model: state.model,
+        requestedModel: state.model,
+        resolvedModel,
         effort: state.effort,
+        resolvedEffort,
         cwd: state.cwd,
         tokens: state.usageTotal.total_tokens,
         usage: { session: state.usageTotal },
@@ -898,6 +907,8 @@ export class ProviderAgentManager implements ConductorLike {
         provider: 'claude',
         capabilities: enabledCapabilities(CLAUDE_CAPABILITIES),
         accessProfile: row?.access_profile ?? accessForPermissionMode(transcript.info.permissionMode) ?? 'full_access',
+        requestedModel: row?.model ?? null,
+        resolvedModel: transcript.info.model,
       } : transcript.info,
     }
   }

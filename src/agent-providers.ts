@@ -49,6 +49,8 @@ export type AgentProviderModel = {
   resolvedModel?: string
   displayName: string
   description: string
+  isDefault?: boolean
+  defaultEffort?: string
   supportsEffort?: boolean
   supportedEffortLevels?: string[]
   supportsAdaptiveThinking?: boolean
@@ -125,6 +127,13 @@ const normalizeEffortLevels = (row: Record<string, unknown>): string[] => {
   return [...new Set(levels)]
 }
 
+const normalizeEffort = (value: unknown): string | undefined => {
+  const effort = optionalString(value)
+  return effort && effort.length <= MAX_EFFORT_ID_LENGTH && /^[a-zA-Z0-9_-]+$/.test(effort)
+    ? effort
+    : undefined
+}
+
 export function normalizeProviderModels(value: unknown): AgentProviderModel[] {
   if (!Array.isArray(value)) return []
   const models = new Map<string, AgentProviderModel>()
@@ -134,11 +143,15 @@ export function normalizeProviderModels(value: unknown): AgentProviderModel[] {
     const modelValue = optionalString(row.value) ?? optionalString(row.model) ?? optionalString(row.id)
     if (!modelValue || modelValue.length > MAX_MODEL_ID_LENGTH) continue
     const effortLevels = normalizeEffortLevels(row)
+    const isDefault = optionalBoolean(row.isDefault) ?? (modelValue.toLowerCase() === 'default' ? true : undefined)
+    const defaultEffort = normalizeEffort(row.defaultEffort) ?? normalizeEffort(row.defaultReasoningEffort)
     models.set(modelValue, {
       value: modelValue,
       ...(optionalString(row.resolvedModel) ? { resolvedModel: optionalString(row.resolvedModel) } : {}),
       displayName: optionalString(row.displayName) ?? modelValue,
       description: optionalString(row.description) ?? '',
+      ...(isDefault !== undefined ? { isDefault } : {}),
+      ...(defaultEffort ? { defaultEffort } : {}),
       ...(optionalBoolean(row.supportsEffort) !== undefined
         ? { supportsEffort: optionalBoolean(row.supportsEffort) }
         : effortLevels.length ? { supportsEffort: true } : {}),
