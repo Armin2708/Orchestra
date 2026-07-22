@@ -158,6 +158,41 @@ describe('Agent OS CLI', () => {
     expect(calls).toEqual([{ method: 'GET', path: '/os/drivers', body: undefined }])
   })
 
+  it('creates card work through the canonical jobs API with a replay key', async () => {
+    const { calls, output, run } = setup({
+      mode: 'canonical',
+      job: { id: 'job-1', status: 'queued', workspace_id: 'workspace-1' },
+      orchestration: {
+        lifecycle: 'canonical', contract_attached: true, job_id: 'job-1',
+        workspace_id: 'workspace-1', session_id: 'session-1',
+      },
+    })
+
+    await run(
+      'job', 'create', '7',
+      '--board', '42',
+      '--provider', 'codex',
+      '--model', 'gpt-route',
+      '--attempts', '3',
+      '--idempotency-key', 'cli-request-1',
+    )
+
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/os/boards/42/jobs',
+      body: {
+        card_id: 7,
+        provider: 'codex',
+        model: 'gpt-route',
+        max_attempts: 3,
+        idempotency_key: 'cli-request-1',
+      },
+    }])
+    expect(output).toEqual([
+      'mode=canonical job_id="job-1" status="queued" workspace_id="workspace-1" session_id="session-1"',
+    ])
+  })
+
   it('submits structured delivery items, criterion outcomes, and evidence for a job', async () => {
     const { calls, run } = setup({ delivery: { id: 'delivery-1', status: 'verified' } })
 

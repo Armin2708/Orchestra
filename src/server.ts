@@ -21,6 +21,7 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
+import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 import {
@@ -865,7 +866,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
-  server.post<{ Params: { id: string }; Body: { provider?: string; model?: string; effort?: string; access_profile?: AccessProfile } | null }>(
+  server.post<{ Params: { id: string }; Body: {
+    provider?: string
+    model?: string
+    effort?: string
+    access_profile?: AccessProfile
+    idempotency_key?: string
+    idempotencyKey?: string
+  } | null }>(
     '/api/v1/cards/:id/launch', async (req, reply) => {
     if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
     const card = getCard(Number(req.params.id))
@@ -896,7 +904,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         if (!jobExecutor.supportedProviders().includes(provider)) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
         }
-        const launched = await orchestration.launchCard({
+        const headerKey = Array.isArray(req.headers['idempotency-key'])
+          ? req.headers['idempotency-key'][0]
+          : req.headers['idempotency-key']
+        const bodyKey = req.body?.idempotency_key ?? req.body?.idempotencyKey
+        if (headerKey && bodyKey && headerKey !== bodyKey) {
+          return reply.code(400).send({ error: 'Idempotency-Key header and request body must match' })
+        }
+        const launchInput = {
           cardId: card.id,
           expectedBoardId: card.board_id,
           requireLaunchable: true,
@@ -904,19 +919,22 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           model: req.body?.model,
           effort: req.body?.effort,
           accessProfile: req.body?.access_profile,
-        })
+          idempotencyKey: headerKey ?? bodyKey,
+        }
+        const launched = await orchestration.launchCard(launchInput)
         const agent = launched.session?.agent_id == null ? undefined
           : db.prepare('SELECT * FROM agents WHERE id=?').get(launched.session.agent_id)
         return reply.code(200).send({
           ...launched,
           mode: 'canonical',
+          orchestration: orchestrationIdentity('canonical', launched),
           ...(agent ? { agent } : {}),
           card: getCard(card.id),
           queued: launched.job.status === 'queued',
           provider: launched.job.provider,
         })
       }
-      return maestro.launch({
+      const launched = maestro.launch({
         boardId: card.board_id,
         cardId: card.id,
         cwd: board.project_path,
@@ -926,6 +944,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         effort: req.body?.effort,
         accessProfile: req.body?.access_profile,
       })
+      return {
+        ...launched,
+        mode: 'legacy',
+        orchestration: orchestrationIdentity('legacy'),
+      }
     } catch (error) {
       if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
       if (error instanceof AgentOsError) return reply.code(error.statusCode).send({ error: error.message, code: error.code })
@@ -1051,7 +1074,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           accessProfile: req.body?.access_profile,
         })
         emit(board.id, 'agent', agent)
-        return agent
+        return {
+          ...agent,
+          mode: 'ambient',
+          orchestration: orchestrationIdentity('ambient'),
+        }
       } catch (error) {
         if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
         throw error
@@ -1069,8 +1096,29 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
-      const ok = maestro.task(Number(req.params.id), req.body.text)
-      return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
+      const agentId = Number(req.params.id)
+      const ok = maestro.task(agentId, req.body.text)
+      const managed = ok ? db.prepare(`SELECT j.id AS job_id,
+          COALESCE(s.workspace_id, j.workspace_id) AS workspace_id, s.id AS session_id
+        FROM agents a JOIN jobs j ON a.session_id=('agent-os:' || j.id)
+        LEFT JOIN agent_sessions s ON s.agent_id=a.id
+          AND CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id')=j.id ELSE 0 END
+        WHERE a.id=? ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as {
+          job_id: string
+          workspace_id: string | null
+          session_id: string | null
+        } | undefined : undefined
+      const legacy = ok && !managed && db.prepare(`SELECT 1 FROM cards
+        WHERE owner_agent_id=? AND column_name='in_progress' LIMIT 1`).get(agentId)
+      const mode = managed ? 'canonical' : legacy ? 'legacy' : 'ambient'
+      return ok ? {
+        ok: true,
+        mode,
+        orchestration: orchestrationIdentity(mode, managed ? {
+          job: { id: managed.job_id, workspace_id: managed.workspace_id },
+          session: managed.session_id ? { id: managed.session_id } : null,
+        } : {}),
+      } : reply.code(404).send({ error: 'not a hired agent' })
     })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/interrupt', async (req, reply) => {

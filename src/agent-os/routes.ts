@@ -11,6 +11,7 @@ import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
 import { LegacyBusEvent, LegacyEventProjection } from './legacy-projection.js'
+import { orchestrationIdentity } from './orchestration-envelope.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
@@ -531,11 +532,24 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const scopedCard = db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
       if (!scopedCard) throw new NotFoundError('card not found')
       if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
-      const launched = await orchestration.launchCard({ cardId, expectedBoardId: boardId, workspaceId,
-        provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt })
+      const rawHeaderKey = request.headers['idempotency-key']
+      const headerKey = stringValue(Array.isArray(rawHeaderKey) ? rawHeaderKey[0] : rawHeaderKey)
+      const bodyKey = stringValue(body.idempotency_key ?? body.idempotencyKey)
+      if (headerKey && bodyKey && headerKey !== bodyKey) {
+        throw new ValidationError('Idempotency-Key header and request body must match')
+      }
+      const launchInput = { cardId, expectedBoardId: boardId, workspaceId,
+        provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt,
+        idempotencyKey: headerKey ?? bodyKey }
+      const launched = await orchestration.launchCard(launchInput)
       return reply.code(201).send({
+        mode: 'canonical',
+        orchestration: orchestrationIdentity('canonical', launched),
+        contract: launched.contract,
         job: launched.job,
         delivery: launched.delivery,
+        workspace: launched.workspace,
+        session: launched.session,
         dispatch: launched.dispatch,
         dispatch_error: launched.dispatch_error,
       })

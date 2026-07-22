@@ -176,6 +176,14 @@ describe('canonical card launch routes', () => {
     expect(response.json()).toEqual({
       agent: { id: 91, name: 'legacy-agent', provider: 'claude' },
       card: { id: cardId, column: 'in_progress' },
+      mode: 'legacy',
+      orchestration: {
+        lifecycle: 'legacy',
+        contract_attached: false,
+        job_id: null,
+        workspace_id: null,
+        session_id: null,
+      },
     })
     expect(legacyCalls).toHaveLength(1)
     expect(legacyCalls[0]).toMatchObject({
@@ -206,6 +214,13 @@ describe('canonical card launch routes', () => {
       mode: 'canonical',
       provider: 'codex',
       queued: false,
+      orchestration: {
+        lifecycle: 'canonical',
+        contract_attached: true,
+        job_id: expect.any(String),
+        workspace_id: expect.any(String),
+        session_id: expect.any(String),
+      },
       contract: { card_id: cardId, objective: 'Create one durable lifecycle' },
       job: { board_id: boardId, card_id: cardId, provider: 'codex', model: 'gpt-route', status: 'running' },
       workspace: { board_id: boardId, card_id: cardId, status: 'active' },
@@ -217,10 +232,34 @@ describe('canonical card launch routes', () => {
     expect(body.job.workspace_id).toBe(body.workspace.id)
     expect(body.session.workspace_id).toBe(body.workspace.id)
     expect(body.session.context).toMatchObject({ job_id: body.job.id, card_id: cardId })
+    expect(body.orchestration).toEqual({
+      lifecycle: 'canonical',
+      contract_attached: true,
+      job_id: body.job.id,
+      workspace_id: body.workspace.id,
+      session_id: body.session.id,
+    })
     expect(body.session.agent_id).toBe(body.agent.id)
     expect(executor.launches.map((job) => job.id)).toEqual([body.job.id])
     expect(legacyCalls).toHaveLength(0)
     expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
+
+    const tasked = await server.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${body.agent.id}/task`,
+      payload: { text: 'continue the contracted work' },
+    })
+    expect(tasked.json()).toEqual({
+      ok: true,
+      mode: 'canonical',
+      orchestration: {
+        lifecycle: 'canonical',
+        contract_attached: true,
+        job_id: body.job.id,
+        workspace_id: body.workspace.id,
+        session_id: body.session.id,
+      },
+    })
   })
 
   it('delegates card-linked Agent OS job creation to the same orchestration service', async () => {
@@ -261,11 +300,72 @@ describe('canonical card launch routes', () => {
       status: 'running',
     })
     expect(response.json()).toMatchObject({
+      mode: 'canonical',
+      orchestration: {
+        lifecycle: 'canonical',
+        contract_attached: true,
+        job_id: response.json().job.id,
+        workspace_id: workspace.id,
+        session_id: response.json().session.id,
+      },
+      contract: { card_id: cardId },
+      workspace: { id: workspace.id, card_id: cardId },
+      session: { provider: 'codex', workspace_id: workspace.id },
       dispatch: { started: [response.json().job.id], completed: [], blocked: [], deferred: [] },
       dispatch_error: null,
     })
     expect(executor.launches).toHaveLength(1)
     expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
+  })
+
+  it('forwards one idempotency key through Board and Agent OS canonical entrypoints', async () => {
+    process.env.ORCHESTRA_CANONICAL_LAUNCH = '1'
+    const board = await fixture()
+    const boardLaunch = vi.spyOn(board.orchestration, 'launchCard')
+
+    const boardResponse = await board.server.inject({
+      method: 'POST',
+      url: `/api/v1/cards/${board.cardId}/launch`,
+      headers: { 'idempotency-key': 'board-request-1' },
+      payload: { provider: 'claude' },
+    })
+
+    expect(boardResponse.statusCode).toBe(200)
+    expect(boardLaunch).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'board-request-1' }))
+
+    const api = await fixture()
+    const apiLaunch = vi.spyOn(api.orchestration, 'launchCard')
+    const apiResponse = await api.server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${api.boardId}/jobs`,
+      payload: { card_id: api.cardId, provider: 'codex', idempotency_key: 'api-request-1' },
+    })
+
+    expect(apiResponse.statusCode).toBe(201)
+    expect(apiLaunch).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'api-request-1' }))
+  })
+
+  it('rejects conflicting header and body idempotency keys before creating canonical work', async () => {
+    process.env.ORCHESTRA_CANONICAL_LAUNCH = '1'
+    const board = await fixture()
+    const boardResponse = await board.server.inject({
+      method: 'POST',
+      url: `/api/v1/cards/${board.cardId}/launch`,
+      headers: { 'idempotency-key': 'header-key' },
+      payload: { provider: 'claude', idempotency_key: 'body-key' },
+    })
+    expect(boardResponse.statusCode).toBe(400)
+    expect(lifecycleCounts(board.db, board.cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
+
+    const api = await fixture()
+    const apiResponse = await api.server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${api.boardId}/jobs`,
+      headers: { 'idempotency-key': 'header-key' },
+      payload: { card_id: api.cardId, provider: 'claude', idempotency_key: 'body-key' },
+    })
+    expect(apiResponse.statusCode).toBe(400)
+    expect(lifecycleCounts(api.db, api.cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
   })
 
   it('allows only one lifecycle when Board and Agent OS endpoints race for the same card', async () => {

@@ -558,10 +558,11 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--tokens <number>', 'token budget', integer)
     .option('--cost <number>', 'cost budget', decimal)
     .option('--at <iso-time>', 'scheduled time')
+    .option('--idempotency-key <key>', 'safely replay the same launch request')
     .option('--json', 'print the complete response')
     .action(async (cardId, options) => {
       const id = await boardId(options.board)
-      print(await deps.api('POST', `/os/boards/${id}/jobs`, compact({
+      const result = await deps.api('POST', `/os/boards/${id}/jobs`, compact({
         card_id: integer(cardId),
         workspace_id: options.workspace,
         provider: options.provider,
@@ -571,7 +572,18 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         budget_tokens: options.tokens,
         budget_cents: options.cost,
         scheduled_at: options.at,
-      })), options.json)
+        idempotency_key: options.idempotencyKey,
+      }))
+      if (options.json) return print(result, true)
+      const job = result?.job ?? result
+      const identity = result?.orchestration ?? {}
+      write([
+        `mode=${result?.mode ?? 'canonical'}`,
+        `job_id=${JSON.stringify(identity.job_id ?? job?.id ?? null)}`,
+        `status=${JSON.stringify(job?.status ?? 'queued')}`,
+        `workspace_id=${JSON.stringify(identity.workspace_id ?? job?.workspace_id ?? null)}`,
+        `session_id=${JSON.stringify(identity.session_id ?? null)}`,
+      ].join(' '))
     })
   job.command('cancel <id>')
     .option('--json', 'print the complete response')

@@ -243,7 +243,7 @@ program.command('step <milestoneId> <title>').description('append an ordered ste
     console.log(`step #${r.card.id} added (order ${r.card.step_order})`)
   })
 
-program.command('hire').description('spawn an autonomous agent on this project (runs inside the daemon)')
+program.command('hire').description('spawn an ambient autonomous agent (not attached to a card contract)')
   .option('--name <name>')
   .option('--provider <provider>', 'agent provider (claude|codex); omitted uses the board default', providerOption(false))
   .option('--model <m>')
@@ -262,16 +262,16 @@ program.command('hire').description('spawn an autonomous agent on this project (
       access_profile: o.accessProfile,
       cwd: o.cwd,
     })
-    console.log(`hired ${a.name} with ${a.provider ?? o.provider ?? 'the board default'} (agent #${a.id}) — give it work: orchestra task ${a.name} "<task>"`)
+    console.log(`hired ${a.mode ?? 'ambient'} agent ${a.name} with ${a.provider ?? o.provider ?? 'the board default'} (agent #${a.id}) — not contract-attached; give it work: orchestra task ${a.name} "<task>"`)
   })
-program.command('task <name> <text>').description('give a hired agent a task')
+program.command('task <name> <text>').description('give an agent work while preserving its ambient/legacy/canonical identity')
   .action(async (name, text) => {
     await up(); const b = await board()
     const snap = await api('GET', `/boards/${b.id}/snapshot`)
     const a = snap.agents.find((x: any) => x.name === name)
     if (!a) { console.error(`no agent named ${name}`); process.exit(1) }
-    await api('POST', `/agents/${a.id}/task`, { text })
-    console.log(`tasked ${name}`)
+    const result = await api('POST', `/agents/${a.id}/task`, { text })
+    console.log(`tasked ${name} (${result.mode ?? 'ambient'} lifecycle)`)
   })
 program.command('wake').description('resume every usage-limit-paused agent now instead of waiting for the window reset')
   .option('--board <id>')
