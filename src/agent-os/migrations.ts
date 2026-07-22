@@ -559,6 +559,59 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '006-canonical-launch-reservations',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE jobs ADD COLUMN driver_id TEXT;
+        ALTER TABLE jobs ADD COLUMN effort TEXT;
+        ALTER TABLE jobs ADD COLUMN access_profile TEXT NOT NULL DEFAULT 'workspace_write';
+        ALTER TABLE jobs ADD COLUMN policy_id TEXT REFERENCES policies(id) ON DELETE SET NULL;
+        ALTER TABLE jobs ADD COLUMN contract_version INTEGER;
+        ALTER TABLE jobs ADD COLUMN idempotency_key TEXT;
+        ALTER TABLE jobs ADD COLUMN request_fingerprint TEXT;
+
+        UPDATE jobs SET driver_id=provider WHERE driver_id IS NULL;
+
+        CREATE UNIQUE INDEX idx_jobs_board_idempotency
+          ON jobs(board_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+        CREATE TABLE workspace_assignments (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+          job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'reserved'
+            CHECK(status IN ('reserved','active','released','failed')),
+          isolation_mode TEXT NOT NULL
+            CHECK(isolation_mode IN ('managed_worktree','explicit_worktree','explicit_shared')),
+          access_profile TEXT NOT NULL
+            CHECK(access_profile IN ('read_only','workspace_write','full_access')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          released_at TEXT
+        );
+
+        CREATE INDEX idx_workspace_assignments_workspace
+          ON workspace_assignments(workspace_id, status, created_at);
+        CREATE INDEX idx_workspace_assignments_board
+          ON workspace_assignments(board_id, status, created_at);
+
+        ALTER TABLE os_events ADD COLUMN job_id TEXT;
+        ALTER TABLE os_events ADD COLUMN contract_id TEXT;
+        ALTER TABLE os_events ADD COLUMN correlation_id TEXT;
+        ALTER TABLE os_events ADD COLUMN causation_id TEXT;
+        ALTER TABLE os_events ADD COLUMN idempotency_key TEXT;
+        ALTER TABLE os_events ADD COLUMN event_version INTEGER NOT NULL DEFAULT 1;
+
+        CREATE UNIQUE INDEX idx_os_events_board_idempotency
+          ON os_events(board_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX idx_os_events_job ON os_events(job_id, created_at, id);
+        CREATE INDEX idx_os_events_correlation ON os_events(correlation_id, created_at, id);
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

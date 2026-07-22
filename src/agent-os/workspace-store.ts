@@ -160,8 +160,8 @@ function validateEnv(value: unknown): Record<string, string> {
 }
 
 function workspaceStatus(value: unknown): string {
-  if (typeof value !== 'string' || !['active', 'archived', 'missing'].includes(value)) {
-    throw new ValidationError('workspace status must be active, archived, or missing')
+  if (typeof value !== 'string' || !['active', 'archived', 'missing', 'reserved', 'failed'].includes(value)) {
+    throw new ValidationError('workspace status must be active, archived, missing, reserved, or failed')
   }
   return value
 }

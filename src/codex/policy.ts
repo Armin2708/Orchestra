@@ -48,7 +48,9 @@ const operationFor = (request: CodexDriverApprovalRequest): PolicyOperation | nu
 /** Auto-answer only when a durable Agent OS policy is attached and the request is unambiguous. */
 export function codexApprovalPolicyHandler(db: Database.Database): CodexDriverApprovalHandler {
   return async (request) => {
-    const row = db.prepare(`SELECT tc.policy_id FROM agent_sessions s
+    const row = db.prepare(`SELECT CASE WHEN j.contract_version IS NOT NULL
+        THEN j.policy_id ELSE tc.policy_id END AS policy_id
+      FROM agent_sessions s
       JOIN jobs j ON j.id=json_extract(s.context_json, '$.job_id')
       LEFT JOIN task_contracts tc ON tc.card_id=j.card_id
       WHERE s.provider='codex' AND s.external_id=?

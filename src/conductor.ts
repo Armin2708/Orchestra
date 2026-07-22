@@ -538,11 +538,20 @@ export class Conductor {
       const linkedCardId = opts.cardId ?? (this.db.prepare(`SELECT id FROM cards
         WHERE owner_agent_id=? AND column_name IN ('in_progress','blocked','review') ORDER BY updated_at DESC, id DESC LIMIT 1`)
         .get(agent.id) as { id: number } | undefined)?.id
-      const contract = linkedCardId ? this.db.prepare('SELECT policy_id FROM task_contracts WHERE card_id=?')
-        .get(linkedCardId) as { policy_id: string | null } | undefined : undefined
-      if (contract?.policy_id) {
+      const policy = linkedCardId ? this.db.prepare(`SELECT j.policy_id AS job_policy_id,
+          j.contract_version, tc.policy_id AS contract_policy_id
+        FROM task_contracts tc LEFT JOIN jobs j ON j.id=(
+          SELECT id FROM jobs WHERE card_id=tc.card_id AND status IN ('running','cancelling')
+          ORDER BY started_at DESC, rowid DESC LIMIT 1
+        ) WHERE tc.card_id=?`).get(linkedCardId) as {
+          job_policy_id: string | null
+          contract_version: number | null
+          contract_policy_id: string | null
+        } | undefined : undefined
+      const policyId = policy?.contract_version == null ? policy?.contract_policy_id : policy.job_policy_id
+      if (policyId) {
         try {
-          const evaluation = evaluatePolicy(this.db, contract.policy_id, policyOperationForTool(toolName, toolInput, opts.cwd))
+          const evaluation = evaluatePolicy(this.db, policyId, policyOperationForTool(toolName, toolInput, opts.cwd))
           log('status', `policy ${evaluation.decision}: ${summary} — ${evaluation.reason}`)
           this.emit(opts.boardId, 'policy', {
             agent_id: agent.id,

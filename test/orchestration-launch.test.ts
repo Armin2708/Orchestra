@@ -29,42 +29,31 @@ class LifecycleExecutor implements JobExecutor {
     await this.beforeExecute?.(job)
     if (!job.card_id) return { status: 'running' }
 
-    const board = this.db.prepare('SELECT project_path FROM boards WHERE id=?').get(job.board_id) as
-      { project_path: string }
     const workspaces = new WorkspaceStore(this.db)
-    const workspace = job.workspace_id
-      ? workspaces.get(job.workspace_id)!
-      : workspaces.create({
-          boardId: job.board_id,
-          cardId: job.card_id,
-          name: `job-${job.card_id}`,
-          kind: 'shared',
-          rootPath: board.project_path,
-        })
+    const workspace = workspaces.get(job.workspace_id!)!
     new TaskContractService(this.db).put(job.card_id, { workspace_id: workspace.id })
     this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
 
     const agentId = Number(this.db.prepare(`INSERT INTO agents
-      (board_id, name, session_id, kind, status, provider, model, access_profile)
-      VALUES (?, ?, ?, 'hired', 'active', ?, ?, 'workspace_write')`).run(
+      (board_id, name, session_id, kind, status, provider, model, effort, access_profile)
+      VALUES (?, ?, ?, 'hired', 'active', ?, ?, ?, ?)`).run(
         job.board_id,
         `${job.provider}-job-${job.card_id}`,
         `agent-os:${job.id}`,
         job.provider,
         job.model,
+        job.effort,
+        job.access_profile,
       ).lastInsertRowid)
-    const sessionId = `session-${job.id}`
-    this.db.prepare(`INSERT INTO agent_sessions
-      (id, workspace_id, agent_id, provider, external_id, model, status, context_json,
-       created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'running', ?, datetime('now'), datetime('now'))`).run(
-        sessionId,
-        workspace.id,
+    const reserved = this.db.prepare(`SELECT id, context_json FROM agent_sessions
+      WHERE json_extract(context_json, '$.job_id')=?`).get(job.id) as { id: string; context_json: string }
+    const sessionId = reserved.id
+    this.db.prepare(`UPDATE agent_sessions SET agent_id=?, external_id=?, status='running', context_json=?,
+      updated_at=datetime('now') WHERE id=?`).run(
         agentId,
-        job.provider,
         `external-${job.id}`,
-        job.model,
-        JSON.stringify({ job_id: job.id, card_id: job.card_id }),
+        JSON.stringify({ ...JSON.parse(reserved.context_json), managed_identity: true }),
+        sessionId,
       )
     this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', updated_at=datetime('now')
       WHERE id=?`).run(agentId, job.card_id)
@@ -93,7 +82,10 @@ async function fixture(options: {
     VALUES (?, 'Canonical route', 'Create one durable lifecycle')`).run(boardId).lastInsertRowid)
   const executor = new LifecycleExecutor(db, options.supportedProviders, options.beforeExecute)
   const scheduler = new JobScheduler(db, executor)
-  const orchestration = new OrchestrationService(db, scheduler)
+  const workspaces = new WorkspaceStore(db)
+  const orchestration = new OrchestrationService(db, scheduler, {
+    materialize: async (workspace) => workspaces.update(workspace.id, { status: 'active' }),
+  })
   const legacyCalls: LaunchCall[] = []
   const legacy: ConductorLike = {
     isHired: () => false,
@@ -426,7 +418,7 @@ describe('canonical card launch routes', () => {
       id: response.json().job.id,
       status: 'queued',
     })
-    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 0, sessions: 0 })
+    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
     expect(executor.launches).toHaveLength(0)
     expect(legacyCalls).toHaveLength(0)
   })
@@ -488,7 +480,7 @@ describe('canonical card launch routes', () => {
       dispatch: { started: [], completed: [], blocked: [], deferred: [] },
       dispatch_error: null,
     })
-    expect(lifecycleCounts(setup.db, setup.cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 0, sessions: 0 })
+    expect(lifecycleCounts(setup.db, setup.cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
   })
 
   it('rechecks Board launchability inside the canonical transaction after route prechecks', async () => {
@@ -529,32 +521,28 @@ describe('canonical card launch routes', () => {
     expect(legacyCalls).toHaveLength(0)
   })
 
-  it('rejects unsupported Board controls and unavailable providers before writing canonical records', async () => {
+  it('persists Board launch controls and still rejects unavailable providers before canonical writes', async () => {
     process.env.ORCHESTRA_CANONICAL_LAUNCH = '1'
-    const { db, cardId, executor, legacyCalls, server } = await fixture({ supportedProviders: ['claude'] })
+    const effortSetup = await fixture({ supportedProviders: ['claude'] })
 
-    const effort = await server.inject({
-      method: 'POST', url: `/api/v1/cards/${cardId}/launch`, payload: { provider: 'claude', effort: 'high' },
+    const effort = await effortSetup.server.inject({
+      method: 'POST', url: `/api/v1/cards/${effortSetup.cardId}/launch`,
+      payload: { provider: 'claude', effort: 'high', access_profile: 'full_access' },
     })
-    expect(effort.statusCode).toBe(501)
-    expect(effort.json()).toMatchObject({ error: expect.stringMatching(/do not persist effort/), code: 'not_supported' })
-    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
+    expect(effort.statusCode).toBe(200)
+    expect(effort.json().job).toMatchObject({ effort: 'high', access_profile: 'full_access', status: 'running' })
+    expect(effortSetup.executor.launches[0]).toMatchObject({ effort: 'high', access_profile: 'full_access' })
 
-    const access = await server.inject({
-      method: 'POST', url: `/api/v1/cards/${cardId}/launch`, payload: { provider: 'claude', access_profile: 'full_access' },
-    })
-    expect(access.statusCode).toBe(501)
-    expect(access.json()).toMatchObject({ error: expect.stringMatching(/accessProfile/), code: 'not_supported' })
-    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
-
-    const unavailable = await server.inject({
-      method: 'POST', url: `/api/v1/cards/${cardId}/launch`, payload: { provider: 'codex' },
+    const unavailableSetup = await fixture({ supportedProviders: ['claude'] })
+    const unavailable = await unavailableSetup.server.inject({
+      method: 'POST', url: `/api/v1/cards/${unavailableSetup.cardId}/launch`, payload: { provider: 'codex' },
     })
     expect(unavailable.statusCode).toBe(503)
     expect(unavailable.json()).toMatchObject({ error: expect.stringMatching(/codex.*unavailable/i), provider: 'codex' })
-    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
-    expect(executor.launches).toHaveLength(0)
-    expect(legacyCalls).toHaveLength(0)
+    expect(lifecycleCounts(unavailableSetup.db, unavailableSetup.cardId))
+      .toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
+    expect(unavailableSetup.executor.launches).toHaveLength(0)
+    expect(unavailableSetup.legacyCalls).toHaveLength(0)
   })
 
   it('does not treat the raw shell driver as a Board agent provider', async () => {
@@ -621,7 +609,7 @@ describe('canonical card launch routes', () => {
       error: expect.stringMatching(/unavailable/),
     })
     expect(lifecycleCounts(unsupported.db, unsupported.cardId)).toEqual({
-      contracts: 1, jobs: 1, workspaces: 0, sessions: 0,
+      contracts: 1, jobs: 1, workspaces: 1, sessions: 1,
     })
 
     const cardless = await fixture()

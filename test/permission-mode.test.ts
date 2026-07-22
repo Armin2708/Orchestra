@@ -157,7 +157,12 @@ it('task policy allows, denies, or escalates tool use before the permission fall
     networkHosts: ['api.github.com'],
     approvalScope: 'ask',
   })
-  new TaskContractService(db).put(cardId, { policy_id: policy.id })
+  const contract = new TaskContractService(db).put(cardId, { policy_id: policy.id })
+  db.prepare(`INSERT INTO jobs
+    (id, board_id, card_id, provider, policy_id, contract_version, status, started_at)
+    VALUES ('canonical-policy-job', 1, ?, 'claude', ?, ?, 'running', datetime('now'))`)
+    .run(cardId, policy.id, contract.version)
+  new TaskContractService(db).put(cardId, { policy_id: null })
   const agent = conductor.hire({ boardId: 1, cwd: '/p', cardId, permissionMode: 'default' })
   expect(queryArgs[0].options.permissionMode).toBe('default')
   const canUseTool = queryArgs[0].options.canUseTool

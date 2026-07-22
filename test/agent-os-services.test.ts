@@ -204,6 +204,8 @@ describe('Agent OS core services', () => {
 
     expect(statusObservedByCancel).toBe('cancelling')
     expect(cancelled.status).toBe('cancelled')
+    expect(db.prepare(`SELECT kind FROM os_events WHERE job_id=? AND kind IN ('job.cancelling','job.cancelled')
+      ORDER BY rowid`).all(job.id)).toEqual([{ kind: 'job.cancelling' }, { kind: 'job.cancelled' }])
     expect(() => scheduler.complete(job.id)).toThrow(/only a running job/)
   })
 

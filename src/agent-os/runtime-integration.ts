@@ -12,6 +12,7 @@ import { DeliveryLifecycleIntegration } from './delivery-integration.js'
 import type { DeliveryReport } from './delivery-reports.js'
 import { ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import { parseJson } from './json.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
 import { TaskContractService, type TaskContract } from './task-contracts.js'
 import type { AgentOsRuntimeAdapter, DriverDescriptor, ProcessRecord as ApiProcessRecord } from './routes.js'
@@ -838,7 +839,7 @@ export class AgentOsJobExecutor implements JobExecutor {
   }
 
   async execute(job: Job): Promise<JobExecutionResult> {
-    const driver = this.drivers.require(job.provider)
+    const driver = this.drivers.require(job.driver_id)
     const capabilities = driver.capabilities()
     const contract = job.card_id ? new TaskContractService(this.db).getOrCreate(job.card_id) : null
     const delivery = job.card_id ? this.deliveries.reports.prepareForJob(job.id) : null
@@ -850,9 +851,9 @@ export class AgentOsJobExecutor implements JobExecutor {
     if ((budgetTokens !== null && job.spent_tokens >= budgetTokens) ||
         (budgetCents !== null && job.spent_cents >= budgetCents)) throw new Error('job budget is exhausted before launch')
     if (budgetTokens !== null && !capabilities.tokenBudget)
-      throw new Error(`provider ${job.provider} does not expose an enforceable token budget`)
+      throw new Error(`driver ${job.driver_id} does not expose an enforceable token budget`)
     if (budgetCents !== null && !capabilities.costBudget)
-      throw new Error(`provider ${job.provider} does not expose an authoritative cost budget`)
+      throw new Error(`driver ${job.driver_id} does not expose an authoritative cost budget`)
     const workspace = await this.resolveWorkspace(effectiveJob, contract)
     if (job.card_id && contract?.workspace_id !== workspace.id) {
       new TaskContractService(this.db).put(job.card_id, { workspace_id: workspace.id })
@@ -860,7 +861,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     this.assertCardClaimable(job)
     const cwd = this.workspaces.root(workspace)
     const managedAgentId = !capabilities.rawTerminal && capabilities.managesAgentIdentity !== true
-      ? this.prepareManagedAgent(effectiveJob, cwd, 'workspace_write')
+      ? this.prepareManagedAgent(effectiveJob, cwd, job.access_profile)
       : null
     const request = job.provider === 'shell'
       ? this.shellRequest(effectiveJob, workspace, contract, cwd)
@@ -871,9 +872,11 @@ export class AgentOsJobExecutor implements JobExecutor {
           name: job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
           prompt: this.prompt(job, contract, delivery),
           ...(job.model ? { model: job.model } : {}),
-          accessProfile: 'workspace_write' as const,
+          ...(job.effort ? { effort: job.effort } : {}),
+          accessProfile: job.access_profile,
           ...(job.provider === 'claude'
-            ? { permissionMode: 'default' }
+            ? { permissionMode: job.access_profile === 'read_only' ? 'plan'
+              : job.access_profile === 'full_access' ? 'bypassPermissions' : 'default' }
             : {}),
           ...(budgetCents !== null ? { maxBudgetUsd: Math.max(0.01, (budgetCents - job.spent_cents) / 100) } : {}),
           ...(budgetTokens !== null ? { taskBudgetTokens: Math.max(1, budgetTokens - job.spent_tokens) } : {}),
@@ -882,6 +885,9 @@ export class AgentOsJobExecutor implements JobExecutor {
             cardId: job.card_id,
             budgetTokens,
             budgetCents,
+            effort: job.effort,
+            accessProfile: job.access_profile,
+            driverId: job.driver_id,
             ...(managedAgentId ? { agentId: managedAgentId } : {}),
           },
         }
@@ -897,25 +903,47 @@ export class AgentOsJobExecutor implements JobExecutor {
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw new Error(`job ${job.id} left the running state while its provider was launching`)
     }
-    const sessionId = randomUUID()
+    const reservation = this.db.prepare(`SELECT id, context_json FROM agent_sessions
+      WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
+        AND status IN ('reserved','starting') ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
+      .get(job.id) as { id: string; context_json: string } | undefined
+    const sessionId = reservation?.id ?? randomUUID()
     const agentId = Number(session.metadata.agentId ?? managedAgentId)
     try {
-      this.db.prepare(`INSERT INTO agent_sessions
-        (id, workspace_id, agent_id, provider, external_id, model, status, context_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'running', ?, datetime('now'), datetime('now'))`).run(
-        sessionId,
-        workspace.id,
-        Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null,
-        job.provider,
-        session.externalId,
-        job.model,
-        JSON.stringify({
+      const context = {
+        ...parseJson<Record<string, unknown>>(reservation?.context_json, {}),
           job_id: job.id,
           card_id: job.card_id,
           managed_identity: managedAgentId !== null,
+          driver_id: job.driver_id,
+          effort: job.effort,
+          access_profile: job.access_profile,
           usage_total: null,
-        }),
-      )
+      }
+      if (reservation) {
+        this.db.prepare(`UPDATE agent_sessions SET workspace_id=?, agent_id=?, provider=?, external_id=?, model=?,
+          status='running', context_json=?, updated_at=datetime('now') WHERE id=?`).run(
+          workspace.id,
+          Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null,
+          job.provider,
+          session.externalId,
+          job.model,
+          JSON.stringify(context),
+          sessionId,
+        )
+      } else {
+        this.db.prepare(`INSERT INTO agent_sessions
+          (id, workspace_id, agent_id, provider, external_id, model, status, context_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, datetime('now'), datetime('now'))`).run(
+          sessionId,
+          workspace.id,
+          Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null,
+          job.provider,
+          session.externalId,
+          job.model,
+          JSON.stringify(context),
+        )
+      }
       if (managedAgentId) this.db.prepare(`UPDATE agents SET status='active', external_session_id=?,
         provider_state_json=?, last_seen=datetime('now') WHERE id=?`).run(
           session.externalId,
@@ -933,6 +961,23 @@ export class AgentOsJobExecutor implements JobExecutor {
       if (delivery) this.deliveries.reports.attachRuntimeScope(delivery.id, {
         workspaceId: workspace.id,
         sessionId,
+      })
+      const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
+        WHERE job_id=? ORDER BY rowid DESC LIMIT 1`).get(job.id) as
+        { id: string; correlation_id: string | null } | undefined
+      new EventStore(this.db).append({
+        boardId: job.board_id,
+        cardId: job.card_id,
+        workspaceId: workspace.id,
+        sessionId,
+        jobId: job.id,
+        contractId: job.card_id && job.contract_version ? `card:${job.card_id}:v${job.contract_version}` : null,
+        correlationId: previous?.correlation_id ?? job.id,
+        causationId: previous?.id ?? null,
+        idempotencyKey: `job:${job.id}:session-started:${job.attempts}`,
+        kind: 'agent_session.started',
+        source: job.driver_id,
+        payload: { provider: job.provider, driver_id: job.driver_id, external_id: session.externalId },
       })
       if (job.card_id && Number.isSafeInteger(agentId) && agentId > 0) this.claimCard(job, agentId)
     } catch (error) {
@@ -957,8 +1002,13 @@ export class AgentOsJobExecutor implements JobExecutor {
         if (driver && attached) await driver.stop(attached.id)
       }
     }
-    this.db.prepare(`UPDATE agent_sessions SET status='stopped', updated_at=datetime('now')
-      WHERE json_extract(context_json, '$.job_id')=? AND status NOT IN ('stopped','failed')`).run(job.id)
+    const stopped = this.db.prepare(`UPDATE agent_sessions SET status='stopped', updated_at=datetime('now')
+      WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
+        AND status NOT IN ('stopped','failed')`).run(job.id)
+    if (stopped.changes > 0) {
+      const session = this.sessionForJob(job.id)
+      if (session) this.recordSessionTransition(job, session.id, 'stopped', job.driver_id)
+    }
   }
 
   private async resolveWorkspace(job: Job, contract: TaskContract | null): Promise<WorkspaceRecord> {
@@ -970,7 +1020,11 @@ export class AgentOsJobExecutor implements JobExecutor {
       if (job.card_id && existing.cardId !== null && existing.cardId !== job.card_id) {
         throw new Error(`workspace ${requested} is linked to a different card`)
       }
-      if (job.card_id && existing.cardId === null) return this.workspaces.update(existing.id, { cardId: job.card_id })
+      const assigned = this.db.prepare('SELECT 1 FROM workspace_assignments WHERE job_id=? AND workspace_id=?')
+        .get(job.id, existing.id)
+      if (job.card_id && existing.cardId === null && !assigned) {
+        return this.workspaces.update(existing.id, { cardId: job.card_id })
+      }
       return existing
     }
     if (job.card_id) {
@@ -1121,9 +1175,12 @@ export class AgentOsJobExecutor implements JobExecutor {
     } finally {
       this.live.delete(job.id)
       if (detached || this.shuttingDown) return
-      this.db.prepare(`UPDATE agent_sessions SET status=?, updated_at=datetime('now') WHERE id=?`)
-        .run(failure ? 'failed' : 'stopped', sessionId)
       const current = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
+      const cancellationWon = current?.status === 'cancelling' || current?.status === 'cancelled'
+      const sessionStatus = failure && !cancellationWon ? 'failed' : 'stopped'
+      this.db.prepare(`UPDATE agent_sessions SET status=?, updated_at=datetime('now') WHERE id=?`)
+        .run(sessionStatus, sessionId)
+      this.recordSessionTransition(job, sessionId, sessionStatus, job.driver_id)
       let finalStatus = current?.status
       if (current?.status === 'running') {
         try { finalStatus = this.scheduler?.complete(job.id, failure).status }
@@ -1133,7 +1190,11 @@ export class AgentOsJobExecutor implements JobExecutor {
     }
   }
 
-  private prepareManagedAgent(job: Job, cwd: string, accessProfile: 'workspace_write' | 'full_access'): number {
+  private prepareManagedAgent(
+    job: Job,
+    cwd: string,
+    accessProfile: 'read_only' | 'workspace_write' | 'full_access',
+  ): number {
     const base = `${job.provider}-job-${job.card_id ?? job.id.slice(0, 8)}`
     let name = base
     const collision = this.db.prepare('SELECT provider FROM agents WHERE board_id=? AND name=?')
@@ -1141,12 +1202,12 @@ export class AgentOsJobExecutor implements JobExecutor {
     if (collision && collision.provider !== job.provider) name = `${base}-${job.id.slice(0, 6)}`
     this.db.prepare(`INSERT INTO agents (
       board_id, name, session_id, kind, status, provider, provider_state_json,
-      access_profile, model
-    ) VALUES (?, ?, ?, 'hired', 'starting', ?, ?, ?, ?)
+      access_profile, model, effort
+    ) VALUES (?, ?, ?, 'hired', 'starting', ?, ?, ?, ?, ?)
     ON CONFLICT(board_id, name) DO UPDATE SET
       session_id=excluded.session_id, kind='hired', status='starting', provider=excluded.provider,
       provider_state_json=excluded.provider_state_json, access_profile=excluded.access_profile,
-      model=excluded.model, last_seen=datetime('now')`).run(
+      model=excluded.model, effort=excluded.effort, last_seen=datetime('now')`).run(
         job.board_id,
         name,
         `agent-os:${job.id}`,
@@ -1154,6 +1215,7 @@ export class AgentOsJobExecutor implements JobExecutor {
         JSON.stringify({ job_id: job.id, workspace_id: job.workspace_id, cwd, lifecycle: 'starting' }),
         accessProfile,
         job.model,
+        job.effort,
       )
     return Number((this.db.prepare('SELECT id FROM agents WHERE board_id=? AND name=?')
       .get(job.board_id, name) as { id: number }).id)
@@ -1349,13 +1411,20 @@ export class AgentOsJobExecutor implements JobExecutor {
   private recordDriverEvent(job: Job, sessionId: string, event: DriverEvent): void {
     this.trackManagedEvent(sessionId, event)
     const current = this.db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(job.id) as { workspace_id: string | null } | undefined
+    const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
+      WHERE job_id=? ORDER BY rowid DESC LIMIT 1`).get(job.id) as
+      { id: string; correlation_id: string | null } | undefined
     new EventStore(this.db).append({
       boardId: job.board_id,
       workspaceId: current?.workspace_id,
       cardId: job.card_id,
       sessionId,
+      jobId: job.id,
+      contractId: job.card_id && job.contract_version ? `card:${job.card_id}:v${job.contract_version}` : null,
+      correlationId: previous?.correlation_id ?? job.id,
+      causationId: previous?.id ?? null,
       kind: `driver.${event.type}`,
-      source: job.provider,
+      source: job.driver_id,
       payload: { seq: event.seq, data: event.data.slice(0, 8_000), metadata: event.metadata ?? {} },
       createdAt: event.at,
     })
@@ -1363,6 +1432,31 @@ export class AgentOsJobExecutor implements JobExecutor {
       board_id: job.board_id,
       type: 'os:driver',
       data: { job_id: job.id, session_id: sessionId, type: event.type, data: event.data, metadata: event.metadata ?? {} },
+    })
+  }
+
+  private recordSessionTransition(
+    job: Job,
+    sessionId: string,
+    status: 'stopped' | 'failed',
+    source: string,
+  ): void {
+    const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
+      WHERE job_id=? ORDER BY rowid DESC LIMIT 1`).get(job.id) as
+      { id: string; correlation_id: string | null } | undefined
+    new EventStore(this.db).append({
+      boardId: job.board_id,
+      workspaceId: job.workspace_id,
+      cardId: job.card_id,
+      sessionId,
+      jobId: job.id,
+      contractId: job.card_id && job.contract_version ? `card:${job.card_id}:v${job.contract_version}` : null,
+      correlationId: previous?.correlation_id ?? job.id,
+      causationId: previous?.id ?? null,
+      idempotencyKey: `job:${job.id}:session-${status}:${Math.max(1, job.attempts)}`,
+      kind: `agent_session.${status}`,
+      source,
+      payload: { job_id: job.id, session_id: sessionId, attempt: job.attempts },
     })
   }
 
@@ -1377,7 +1471,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     return this.db.prepare(`SELECT s.id, s.provider, s.external_id,
       COALESCE(a.model, s.model) AS model, a.effort, a.access_profile
       FROM agent_sessions s LEFT JOIN agents a ON a.id=s.agent_id
-      WHERE json_extract(s.context_json, '$.job_id')=?
+      WHERE json_valid(s.context_json) AND json_extract(s.context_json, '$.job_id')=?
       ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId) as {
         id: string
         provider: string
@@ -1436,15 +1530,25 @@ export class AgentOsJobExecutor implements JobExecutor {
   }
 }
 
-const mapRuntimeJob = (row: Record<string, unknown>): Job => ({
-  id: String(row.id), board_id: Number(row.board_id), card_id: row.card_id == null ? null : Number(row.card_id),
-  workspace_id: row.workspace_id == null ? null : String(row.workspace_id), provider: String(row.provider),
-  model: row.model == null ? null : String(row.model), priority: Number(row.priority), status: String(row.status) as Job['status'],
-  attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
-  budget_tokens: row.budget_tokens == null ? null : Number(row.budget_tokens),
-  budget_cents: row.budget_cents == null ? null : Number(row.budget_cents),
-  spent_tokens: Number(row.spent_tokens ?? 0), spent_cents: Number(row.spent_cents ?? 0),
-  scheduled_at: String(row.scheduled_at), started_at: row.started_at == null ? null : String(row.started_at),
-  finished_at: row.finished_at == null ? null : String(row.finished_at), error: row.error == null ? null : String(row.error),
-  created_at: String(row.created_at),
-})
+const mapRuntimeJob = (row: Record<string, unknown>): Job => {
+  const access = String(row.access_profile ?? 'workspace_write')
+  return {
+    id: String(row.id), board_id: Number(row.board_id), card_id: row.card_id == null ? null : Number(row.card_id),
+    workspace_id: row.workspace_id == null ? null : String(row.workspace_id), provider: String(row.provider),
+    driver_id: String(row.driver_id ?? row.provider), model: row.model == null ? null : String(row.model),
+    effort: row.effort == null ? null : String(row.effort),
+    access_profile: (['read_only', 'workspace_write', 'full_access'].includes(access)
+      ? access : 'workspace_write') as Job['access_profile'],
+    policy_id: row.policy_id == null ? null : String(row.policy_id),
+    contract_version: row.contract_version == null ? null : Number(row.contract_version),
+    idempotency_key: row.idempotency_key == null ? null : String(row.idempotency_key),
+    priority: Number(row.priority), status: String(row.status) as Job['status'],
+    attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
+    budget_tokens: row.budget_tokens == null ? null : Number(row.budget_tokens),
+    budget_cents: row.budget_cents == null ? null : Number(row.budget_cents),
+    spent_tokens: Number(row.spent_tokens ?? 0), spent_cents: Number(row.spent_cents ?? 0),
+    scheduled_at: String(row.scheduled_at), started_at: row.started_at == null ? null : String(row.started_at),
+    finished_at: row.finished_at == null ? null : String(row.finished_at), error: row.error == null ? null : String(row.error),
+    created_at: String(row.created_at),
+  }
+}

@@ -180,6 +180,7 @@ export type DriverLaunchRequest = {
   args?: string[]
   env?: Record<string, string | undefined>
   model?: string
+  effort?: string
   externalId?: string
   accessProfile?: 'read_only' | 'workspace_write' | 'full_access'
   permissionMode?: string

@@ -28,6 +28,8 @@ export interface ClaudeConductorPort {
     cwd: string
     name?: string
     model?: string
+    effort?: string
+    accessProfile?: 'read_only' | 'workspace_write' | 'full_access'
     resumeSession?: string
     permissionMode?: string
     cardId?: number
@@ -84,6 +86,8 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
       cwd: request.cwd,
       ...(request.name ? { name: request.name } : {}),
       ...(request.model ? { model: request.model } : {}),
+      ...(request.effort ? { effort: request.effort } : {}),
+      ...(request.accessProfile ? { accessProfile: request.accessProfile } : {}),
       ...(request.externalId ? { resumeSession: request.externalId } : {}),
       ...(request.permissionMode ? { permissionMode: request.permissionMode } : {}),
       ...(request.maxBudgetUsd !== undefined ? { maxBudgetUsd: request.maxBudgetUsd } : {}),
