@@ -21,7 +21,7 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
-import { claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 import {
   ACCESS_PROFILES,
   CODEX_CAPABILITIES,
@@ -782,7 +782,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const orchestration = opts.agentOs?.orchestration
         if (!orchestration) throw new UnsupportedError('canonical orchestration service is not available')
         const provider = (req.body?.provider ?? defaultsForRole(db).provider).trim().toLowerCase()
-        if (!opts.agentOs?.jobExecutor?.supportedProviders().includes(provider)) {
+        if (provider !== 'claude' && provider !== CODEX_PROVIDER_ID) {
+          throw new ProviderUnavailableError(provider, 'no registered Agent OS agent provider driver')
+        }
+        const jobExecutor = opts.agentOs?.jobExecutor
+        if (!jobExecutor) throw new UnsupportedError('canonical orchestration job executor is not available')
+        if (!jobExecutor.supportedProviders().includes(provider)) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
         }
         const launched = await orchestration.launchCard({

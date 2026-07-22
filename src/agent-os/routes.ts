@@ -98,6 +98,9 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
 }
 
 export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app, options) => {
+  if (options.orchestration && !options.scheduler) {
+    throw new Error('Agent OS orchestration requires its matching scheduler')
+  }
   const db = options.db
   const workspaces = new WorkspaceStore(db)
   const events = new EventStore(db)
