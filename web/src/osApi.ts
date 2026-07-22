@@ -27,6 +27,7 @@ export type AgentSession = {
   external_id: string | null
   model: string | null
   status: string
+  context?: JsonObject
   context_json?: string | JsonObject | null
   created_at: string
   updated_at: string
@@ -95,6 +96,12 @@ export type OsEvent = {
   card_id: number | null
   session_id: OsId | null
   process_id: OsId | null
+  job_id?: OsId | null
+  contract_id?: OsId | null
+  correlation_id?: OsId | null
+  causation_id?: OsId | null
+  idempotency_key?: string | null
+  version?: number
   kind: string
   source: string
   payload: string | JsonObject | null
@@ -286,17 +293,58 @@ export type Job = {
   card_id: number | null
   workspace_id: OsId | null
   provider: string
+  driver_id?: string
   model: string | null
+  effort?: string | null
+  access_profile?: 'read_only' | 'workspace_write' | 'full_access' | string | null
+  policy_id?: OsId | null
+  contract_version?: number | null
+  idempotency_key?: string | null
   priority: number
   status: string
   attempts: number
   max_attempts: number
   budget_tokens: number | null
   budget_cents: number | null
+  spent_tokens?: number
+  spent_cents?: number
   scheduled_at: string
   started_at: string | null
   finished_at: string | null
   error: string | null
+  created_at?: string
+}
+
+export type SchedulerDispatch = {
+  started: OsId[]
+  completed: OsId[]
+  blocked: OsId[]
+  deferred: OsId[]
+}
+
+export type OrchestrationIdentity = {
+  lifecycle: 'canonical' | 'ambient' | 'legacy' | string
+  contract_attached: boolean
+  job_id: OsId | null
+  workspace_id: OsId | null
+  session_id: OsId | null
+  contract_id?: OsId | null
+  contract_version?: number | null
+  correlation_id?: OsId | null
+  idempotency_key?: string | null
+}
+
+/** Exact durable lifecycle returned by canonical Board, API, and CLI launch entrypoints. */
+export type CanonicalLifecycleSnapshot = {
+  mode: 'canonical' | string
+  orchestration: OrchestrationIdentity
+  contract: TaskContract
+  delivery: DeliveryReport
+  job: Job
+  workspace: Workspace
+  session: AgentSession
+  dispatch: SchedulerDispatch
+  dispatch_error: string | null
 }
 
 export type ContextItem = {
@@ -735,6 +783,114 @@ export const normalizeDeliveriesResponse = (value: unknown): DeliveryCollection 
   return { deliveries: ordered, current }
 }
 
+export const normalizeJob = (value: unknown): Job => {
+  const row = objectValue(value)
+  return {
+    id: optionalId(firstValue(row, 'id', 'job_id', 'jobId')) ?? '',
+    board_id: Number(firstValue(row, 'board_id', 'boardId')),
+    card_id: optionalNumber(firstValue(row, 'card_id', 'cardId')),
+    workspace_id: optionalId(firstValue(row, 'workspace_id', 'workspaceId')),
+    provider: optionalString(firstValue(row, 'provider')) ?? '',
+    ...(optionalString(firstValue(row, 'driver_id', 'driverId')) !== null
+      ? { driver_id: optionalString(firstValue(row, 'driver_id', 'driverId'))! } : {}),
+    model: optionalString(firstValue(row, 'model')),
+    ...(firstValue(row, 'effort') !== undefined ? { effort: optionalString(firstValue(row, 'effort')) } : {}),
+    ...(firstValue(row, 'access_profile', 'accessProfile') !== undefined
+      ? { access_profile: optionalString(firstValue(row, 'access_profile', 'accessProfile')) } : {}),
+    ...(firstValue(row, 'policy_id', 'policyId') !== undefined
+      ? { policy_id: optionalId(firstValue(row, 'policy_id', 'policyId')) } : {}),
+    ...(firstValue(row, 'contract_version', 'contractVersion') !== undefined
+      ? { contract_version: optionalNumber(firstValue(row, 'contract_version', 'contractVersion')) } : {}),
+    ...(firstValue(row, 'idempotency_key', 'idempotencyKey') !== undefined
+      ? { idempotency_key: optionalString(firstValue(row, 'idempotency_key', 'idempotencyKey')) } : {}),
+    priority: optionalNumber(firstValue(row, 'priority')) ?? 0,
+    status: optionalString(firstValue(row, 'status')) ?? 'unknown',
+    attempts: optionalNumber(firstValue(row, 'attempts')) ?? 0,
+    max_attempts: optionalNumber(firstValue(row, 'max_attempts', 'maxAttempts')) ?? 1,
+    budget_tokens: optionalNumber(firstValue(row, 'budget_tokens', 'budgetTokens')),
+    budget_cents: optionalNumber(firstValue(row, 'budget_cents', 'budgetCents')),
+    ...(firstValue(row, 'spent_tokens', 'spentTokens') !== undefined
+      ? { spent_tokens: optionalNumber(firstValue(row, 'spent_tokens', 'spentTokens')) ?? 0 } : {}),
+    ...(firstValue(row, 'spent_cents', 'spentCents') !== undefined
+      ? { spent_cents: optionalNumber(firstValue(row, 'spent_cents', 'spentCents')) ?? 0 } : {}),
+    scheduled_at: optionalString(firstValue(row, 'scheduled_at', 'scheduledAt')) ?? '',
+    started_at: optionalString(firstValue(row, 'started_at', 'startedAt')),
+    finished_at: optionalString(firstValue(row, 'finished_at', 'finishedAt')),
+    error: optionalString(firstValue(row, 'error')),
+    ...(firstValue(row, 'created_at', 'createdAt') !== undefined
+      ? { created_at: optionalString(firstValue(row, 'created_at', 'createdAt')) ?? '' } : {}),
+  }
+}
+
+export const normalizeAgentSession = (value: unknown): AgentSession => {
+  const row = objectValue(value)
+  const contextValue = firstValue(row, 'context', 'context_json', 'contextJson')
+  return {
+    id: optionalId(firstValue(row, 'id', 'session_id', 'sessionId')) ?? '',
+    workspace_id: optionalId(firstValue(row, 'workspace_id', 'workspaceId')) ?? '',
+    agent_id: optionalNumber(firstValue(row, 'agent_id', 'agentId')),
+    provider: optionalString(firstValue(row, 'provider')) ?? '',
+    external_id: optionalString(firstValue(row, 'external_id', 'externalId')),
+    model: optionalString(firstValue(row, 'model')),
+    status: optionalString(firstValue(row, 'status')) ?? 'unknown',
+    context: objectValue(contextValue),
+    context_json: contextValue as AgentSession['context_json'],
+    created_at: optionalString(firstValue(row, 'created_at', 'createdAt')) ?? '',
+    updated_at: optionalString(firstValue(row, 'updated_at', 'updatedAt')) ?? '',
+  }
+}
+
+const normalizeDispatch = (value: unknown): SchedulerDispatch => {
+  const row = objectValue(value)
+  return {
+    started: normalizeIdList(firstValue(row, 'started')),
+    completed: normalizeIdList(firstValue(row, 'completed')),
+    blocked: normalizeIdList(firstValue(row, 'blocked')),
+    deferred: normalizeIdList(firstValue(row, 'deferred')),
+  }
+}
+
+const requiredEntity = (row: JsonObject, key: string): JsonObject => {
+  const entity = objectValue(row[key])
+  if (!Object.keys(entity).length) throw new Error(`canonical lifecycle response is missing ${key}`)
+  return entity
+}
+
+/** Normalize the shared Board/API/CLI response without reconstructing missing canonical records. */
+export const normalizeCanonicalLifecycleResponse = (value: unknown): CanonicalLifecycleSnapshot => {
+  const row = objectValue(value)
+  const identity = requiredEntity(row, 'orchestration')
+  const lifecycle = optionalString(firstValue(identity, 'lifecycle'))
+  if (lifecycle !== 'canonical') throw new Error('response is not a canonical lifecycle')
+  const mode = optionalString(firstValue(row, 'mode'))
+  if (mode !== 'canonical') throw new Error('canonical lifecycle response is missing canonical mode')
+  return {
+    mode,
+    orchestration: {
+      lifecycle,
+      contract_attached: requiredBoolean(firstValue(identity, 'contract_attached', 'contractAttached'), false),
+      job_id: optionalId(firstValue(identity, 'job_id', 'jobId')),
+      workspace_id: optionalId(firstValue(identity, 'workspace_id', 'workspaceId')),
+      session_id: optionalId(firstValue(identity, 'session_id', 'sessionId')),
+      ...(firstValue(identity, 'contract_id', 'contractId') !== undefined
+        ? { contract_id: optionalId(firstValue(identity, 'contract_id', 'contractId')) } : {}),
+      ...(firstValue(identity, 'contract_version', 'contractVersion') !== undefined
+        ? { contract_version: optionalNumber(firstValue(identity, 'contract_version', 'contractVersion')) } : {}),
+      ...(firstValue(identity, 'correlation_id', 'correlationId') !== undefined
+        ? { correlation_id: optionalId(firstValue(identity, 'correlation_id', 'correlationId')) } : {}),
+      ...(firstValue(identity, 'idempotency_key', 'idempotencyKey') !== undefined
+        ? { idempotency_key: optionalString(firstValue(identity, 'idempotency_key', 'idempotencyKey')) } : {}),
+    },
+    contract: requiredEntity(row, 'contract') as TaskContract,
+    delivery: normalizeDeliveryReport(requiredEntity(row, 'delivery')),
+    job: normalizeJob(requiredEntity(row, 'job')),
+    workspace: normalizeWorkspace(requiredEntity(row, 'workspace')),
+    session: normalizeAgentSession(requiredEntity(row, 'session')),
+    dispatch: normalizeDispatch(requiredEntity(row, 'dispatch')),
+    dispatch_error: optionalString(firstValue(row, 'dispatch_error', 'dispatchError')),
+  }
+}
+
 export const osApi = {
   listWorkspaces: async (boardId: number) =>
     unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/workspaces`), ['workspaces']).map(normalizeWorkspace),
@@ -806,9 +962,9 @@ export const osApi = {
     normalizeWorkspace(unwrapEntity<unknown>(await api('POST', `/os/checkpoints/${checkpointId}/fork`, input), ['workspace'])),
 
   listJobs: async (boardId: number) =>
-    unwrapList<Job>(await api('GET', `/os/boards/${boardId}/jobs`), ['jobs']),
-  createJob: async (boardId: number, input: Partial<Job>) =>
-    unwrapEntity<Job>(await api('POST', `/os/boards/${boardId}/jobs`, input), ['job']),
+    unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/jobs`), ['jobs']).map(normalizeJob),
+  createJob: async (boardId: number, input: Partial<Job> & { card_id: number }) =>
+    normalizeCanonicalLifecycleResponse(await api('POST', `/os/boards/${boardId}/jobs`, input)),
   cancelJob: (jobId: OsId) => api('POST', `/os/jobs/${jobId}/cancel`),
   listConflicts: async (boardId: number) =>
     unwrapList<WorkspaceConflict>(await api('GET', `/os/boards/${boardId}/conflicts`), ['conflicts']),

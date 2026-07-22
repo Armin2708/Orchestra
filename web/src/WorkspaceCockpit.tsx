@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AgentTerminal } from './AgentTerminal'
 import { Agent, Card, Snapshot } from './api'
+import { CanonicalLifecycleStatus, canonicalLifecycleForWorkspace } from './CanonicalLifecycleStatus'
 import { ProviderBadge } from './ProviderBadge'
 import {
   ContextItem,
   DeliveryCollection,
   DriverCapability,
   EvidenceBundle,
+  Job,
   OsEvent,
   osApi,
   Policy,
@@ -110,6 +112,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const [contract, setContract] = useState<Resource<TaskContract | null>>(resource(null))
   const [conflicts, setConflicts] = useState<Resource<WorkspaceConflict[]>>(resource([]))
   const [drivers, setDrivers] = useState<Resource<DriverCapability[]>>(resource([]))
+  const [jobs, setJobs] = useState<Resource<Job[]>>(resource([]))
 
   const terminalRef = useRef<ProcessTerminalHandle>(null)
   const commandRef = useRef<HTMLInputElement>(null)
@@ -191,6 +194,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setPolicies({ status: 'ready', data: [], error: null })
       setContract({ status: 'ready', data: null, error: null })
       setConflicts({ status: 'ready', data: [], error: null })
+      setJobs({ status: 'ready', data: [], error: null })
       return
     }
     const workspaceId = String(selected.id)
@@ -205,6 +209,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setContext({ status: 'loading', data: [], error: null })
       setPolicies({ status: 'loading', data: [], error: null })
       setConflicts({ status: 'loading', data: [], error: null })
+      setJobs({ status: 'loading', data: [], error: null })
     }
     if (selected.card_id !== null && switched) {
       setContract({ status: 'loading', data: null, error: null })
@@ -229,6 +234,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     settle(osApi.getContext(selected.id), setContext, 'Context')
     settle(osApi.listPolicies(selected.board_id), setPolicies, 'Policies')
     settle(osApi.listConflicts(selected.board_id), setConflicts, 'Conflicts')
+    settle(osApi.listJobs(selected.board_id), setJobs, 'Jobs')
     if (selected.card_id !== null) {
       settle<TaskContract | null>(osApi.getContract(selected.card_id), setContract, 'Task contract')
       settle<EvidenceBundle | null>(osApi.getEvidence(selected.card_id), setEvidence, 'Evidence')
@@ -308,6 +314,13 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const workspaceConflicts = conflicts.data.filter((conflict) =>
     String(conflict.workspace_id ?? '') === String(selected?.id ?? '') || String(conflict.other_workspace_id ?? '') === String(selected?.id ?? '') ||
     conflict.workspace_ids?.some((id) => String(id) === String(selected?.id ?? '')))
+  const lifecycleView = selected && jobs.status === 'ready' && events.status === 'ready'
+    && (selected.card_id === null || deliveries.status === 'ready') ? canonicalLifecycleForWorkspace({
+    workspace: selected,
+    jobs: jobs.data,
+    delivery: deliveries.data.current,
+    events: events.data,
+  }) : null
   const availableDrivers = drivers.data.filter((driver) => driver.available !== false)
 
   const attachProcess = (process: WorkspaceProcess) => {
@@ -439,6 +452,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
                   {selected.branch && <span><OsIcon name="branch" size={13} /> <code>{selected.branch}</code></span>}
                   <span title={selected.worktree_path ?? selected.root_path}><OsIcon name="folder" size={13} /> <code>{selected.worktree_path ?? selected.root_path}</code></span>
                 </div>
+                {lifecycleView && <CanonicalLifecycleStatus view={lifecycleView} />}
               </div>
               <div className="os-workspace-head-actions">
                 <div className="os-driver-strip" title="Available provider drivers">
