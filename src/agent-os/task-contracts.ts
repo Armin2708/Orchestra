@@ -261,8 +261,8 @@ function mapContract(row: Record<string, unknown>): TaskContract {
   const rawDeliverables = parseJson<unknown[]>(row.deliverables, [])
   const deliverables = normalizeDeliverables(rawDeliverables)
   const promised = deliverables.length ? deliverables : compatibilityDeliverables(objective)
-  const rawCriteria = parseJson<unknown[]>(row.acceptance_criteria, [])
-  const criteria = normalizeAcceptanceCriteria(rawCriteria)
+  const rawCriteria = parseJson<unknown>(row.acceptance_criteria, [])
+  const criteria = normalizeStoredAcceptanceCriteria(rawCriteria, promised)
   return {
     card_id: Number(row.card_id),
     objective,
@@ -281,6 +281,119 @@ function mapContract(row: Record<string, unknown>): TaskContract {
     version: Number(row.version ?? 1),
     updated_at: String(row.updated_at),
   }
+}
+
+function normalizeStoredAcceptanceCriteria(
+  value: unknown,
+  deliverables: ContractDeliverable[],
+): ContractAcceptanceCriterion[] {
+  const input = Array.isArray(value) ? value : [value]
+  if (!input.length) return []
+  const deliverableIds = new Set(deliverables.map((item) => item.id))
+  const explicitIds = new Set<string>()
+  const records = input.map((item, index) => storedCriterionRecord(item, index, deliverableIds, explicitIds))
+  return normalizeRecords<ContractAcceptanceCriterion>(records, 'criterion', [],
+    (item, match, id, text, required, metadata) => {
+    const object = isRecord(item) ? item : {}
+    return {
+      id,
+      text,
+      required,
+      deliverable_ids: normalizedIds(object.deliverable_ids ?? [], 'deliverable_ids'),
+      metadata,
+    }
+    })
+}
+
+function storedCriterionRecord(
+  item: unknown,
+  index: number,
+  deliverableIds: Set<string>,
+  explicitIds: Set<string>,
+): Record<string, unknown> {
+  const object = isRecord(item) ? item : null
+  const legacyFields: Record<string, unknown> = {}
+  const record: Record<string, unknown> = {
+    text: storedCriterionText(item, index),
+    required: typeof object?.required === 'boolean' ? object.required : true,
+    deliverable_ids: [],
+  }
+
+  if (object?.id !== undefined) {
+    const id = storedContractId(object.id)
+    if (id && !explicitIds.has(id)) {
+      record.id = id
+      explicitIds.add(id)
+    } else {
+      legacyFields.id = object.id
+    }
+  }
+  if (object?.required !== undefined && typeof object.required !== 'boolean') {
+    legacyFields.required = object.required
+  }
+
+  const rawDeliverableIds = object?.deliverable_ids ?? object?.deliverableIds
+  if (rawDeliverableIds !== undefined) {
+    if (Array.isArray(rawDeliverableIds)) {
+      const valid = [...new Set(rawDeliverableIds.flatMap((candidate) => {
+        const id = storedContractId(candidate)
+        return id && deliverableIds.has(id) ? [id] : []
+      }))]
+      record.deliverable_ids = valid
+      if (valid.length !== rawDeliverableIds.length) legacyFields.deliverable_ids = rawDeliverableIds
+    } else {
+      legacyFields.deliverable_ids = rawDeliverableIds
+    }
+  }
+
+  record.metadata = storedCriterionMetadata(item, legacyFields)
+  return record
+}
+
+function storedCriterionText(value: unknown, index: number): string {
+  const object = isRecord(value) ? value : null
+  const candidate = typeof value === 'string' && value.trim()
+    ? value
+    : [object?.text, object?.description, object?.kind]
+      .find((item): item is string => typeof item === 'string' && !!item.trim())
+  const serialized = stableStringify(value)
+  const normalized = String(candidate ?? serialized ?? `Legacy criterion ${index + 1}`).trim().replace(/\s+/g, ' ')
+  if (normalized.length <= MAX_CONTRACT_TEXT) return normalized
+  const digest = createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+  const suffix = `… [legacy:${digest}]`
+  return `${normalized.slice(0, MAX_CONTRACT_TEXT - suffix.length)}${suffix}`
+}
+
+function storedCriterionMetadata(item: unknown, legacyFields: Record<string, unknown>): Record<string, unknown> {
+  const object = isRecord(item) ? item : null
+  const metadata: Record<string, unknown> = object && isRecord(object.metadata)
+    ? JSON.parse(JSON.stringify(object.metadata)) as Record<string, unknown>
+    : {}
+  if (object) {
+    for (const [key, value] of Object.entries(object)) {
+      if (['id', 'text', 'description', 'kind', 'required', 'metadata', 'deliverable_ids', 'deliverableIds'].includes(key)) continue
+      metadata[key] = value
+    }
+    if (object.metadata !== undefined && !isRecord(object.metadata)) legacyFields.metadata = object.metadata
+  } else {
+    metadata.legacy_value = item
+  }
+  if (Object.keys(legacyFields).length) metadata.legacy_fields = legacyFields
+  const serialized = JSON.stringify(metadata)
+  if (serialized.length <= MAX_CONTRACT_METADATA) return metadata
+  const original = stableStringify(item)
+  return {
+    legacy_normalized: true,
+    legacy_type: item === null ? 'null' : Array.isArray(item) ? 'array' : typeof item,
+    legacy_sha256: createHash('sha256').update(original).digest('hex'),
+    legacy_serialized_length: original.length,
+  }
+}
+
+function storedContractId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const id = value.trim()
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(id) ? id : null
 }
 
 function normalizeRecords<T extends { id: string; text: string; required: boolean; metadata: Record<string, unknown> }>(

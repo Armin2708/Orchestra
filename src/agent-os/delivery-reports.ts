@@ -133,6 +133,11 @@ export interface CreateDeliveryReportLinks {
   actor?: string
 }
 
+export interface AttachRuntimeScopeInput {
+  sessionId?: string | null
+  workspaceId?: string | null
+}
+
 export interface DeliveryItemInput {
   id?: string
   deliverableId?: string | null
@@ -249,10 +254,70 @@ export class DeliveryReportService {
     const id = boundedString(jobId, 'jobId', LIMITS.id)
     const job = this.job(id)
     if (job.card_id == null) throw new ValidationError('job is not linked to a card')
-    return this.createForCard(job.card_id, {
+    const report = this.createForCard(job.card_id, {
       jobId: id,
       actor: 'scheduler',
     })
+    const session = this.sessionForJob(id)
+    return this.attachRuntimeScope(report.id, {
+      sessionId: session?.id,
+      workspaceId: job.workspace_id,
+    })
+  }
+
+  attachRuntimeScope(reportId: string, input: AttachRuntimeScopeInput): DeliveryReport {
+    const id = boundedString(reportId, 'delivery report id', LIMITS.id)
+    const requestedSessionId = nullableBoundedString(input.sessionId, 'sessionId', LIMITS.id)
+    const requestedWorkspaceId = nullableBoundedString(input.workspaceId, 'workspaceId', LIMITS.id)
+    const attach = this.db.transaction(() => {
+      const report = this.get(id)
+      if (!requestedSessionId && !requestedWorkspaceId) return report
+      if (report.session_id && requestedSessionId && report.session_id !== requestedSessionId) {
+        throw new ConflictError('delivery report is already attached to a different runtime session')
+      }
+      if (report.workspace_id && requestedWorkspaceId && report.workspace_id !== requestedWorkspaceId) {
+        throw new ConflictError('delivery report is already attached to a different runtime workspace')
+      }
+
+      const sessionId = report.session_id ?? requestedSessionId
+      const session = sessionId ? this.session(sessionId) : null
+      const workspaceId = report.workspace_id ?? requestedWorkspaceId ?? session?.workspace_id ?? null
+      const workspace = workspaceId ? this.workspace(workspaceId) : null
+      const job = report.job_id ? this.job(report.job_id) : null
+      if (job && (job.board_id !== report.board_id || job.card_id !== report.card_id)) {
+        throw new ConflictError('delivery report job scope no longer matches its card or board')
+      }
+      if (workspace && workspace.board_id !== report.board_id) {
+        throw new ValidationError('workspace belongs to a different board')
+      }
+      const workspaceMatchesCard = workspace?.card_id === report.card_id
+      const workspaceMatchesJob = !!(workspace && job?.workspace_id === workspace.id)
+      if (workspace && !workspaceMatchesCard && !workspaceMatchesJob) {
+        throw new ValidationError('workspace does not belong to the delivery report card or job')
+      }
+      if (session && session.workspace_id !== workspaceId) {
+        throw new ValidationError('session belongs to a different workspace')
+      }
+      if (session && job) {
+        const sessionJobId = jsonString(parseJson<Record<string, unknown>>(session.context_json, {}).job_id)
+        if (sessionJobId !== job.id) throw new ValidationError('session belongs to a different job')
+      }
+
+      const nextSessionId = report.session_id ?? sessionId
+      const nextWorkspaceId = report.workspace_id ?? workspaceId
+      if (nextSessionId === report.session_id && nextWorkspaceId === report.workspace_id) return report
+      const at = timestamp()
+      this.db.prepare(`UPDATE delivery_reports SET session_id=?, workspace_id=?, updated_at=?
+        WHERE id=? AND session_id IS ? AND workspace_id IS ?`)
+        .run(nextSessionId, nextWorkspaceId, at, report.id, report.session_id, report.workspace_id)
+      const updated = this.get(report.id)
+      this.appendEvent('delivery.runtime_scope_attached', 'runtime', eventScope(updated, {
+        previous_session_id: report.session_id,
+        previous_workspace_id: report.workspace_id,
+      }))
+      return updated
+    })
+    return attach.immediate()
   }
 
   createForCard(cardId: number, links: CreateDeliveryReportLinks = {}): DeliveryReport {
@@ -398,7 +463,7 @@ export class DeliveryReportService {
       this.ensureResultCoverage(current, current.submitted_by ?? actor, current.submitted_at ?? at)
       const criterionUpdates = this.resolveResults(current, criterionInputs, 'criterion', actor, at)
       const deliverableUpdates = this.resolveResults(current, deliverableInputs, 'deliverable', actor, at)
-      let changed = current.status === 'submitted'
+      let changed = false
       for (const result of criterionUpdates.matched) changed = this.upsertResult('criterion', current, result) || changed
       for (const result of deliverableUpdates.matched) changed = this.upsertResult('deliverable', current, result) || changed
       if (!changed) return this.get(id)
@@ -681,6 +746,10 @@ export class DeliveryReportService {
       ? report.criterion_results.find((item) => item.criterion_id === result.id)
       : report.deliverable_results.find((item) => item.deliverable_id === result.id)
     if (current && storedResultEqual(current, result)) return false
+    if (current?.override) {
+      if (immutableOverrideResultEqual(current, result)) return false
+      throw new ConflictError(`audited ${kind} override is immutable; revise the delivery report to replace it`)
+    }
     const table = kind === 'criterion' ? 'delivery_criterion_results' : 'delivery_deliverable_results'
     const idColumn = kind === 'criterion' ? 'criterion_id' : 'deliverable_id'
     this.db.prepare(`INSERT INTO ${table}
@@ -745,8 +814,7 @@ export class DeliveryReportService {
       const row = this.db.prepare('SELECT board_id, card_id, workspace_id FROM os_events WHERE id=?').get(evidence.ref) as
         { board_id: number; card_id: number | null; workspace_id: string | null } | undefined
       if (!row) throw new NotFoundError('evidence event not found')
-      if (row.board_id !== report.board_id || (row.card_id != null && row.card_id !== report.card_id)
-        || (report.workspace_id && row.workspace_id && row.workspace_id !== report.workspace_id)) {
+      if (!evidenceScopeMatches(report, row)) {
         throw new ValidationError('evidence event belongs to a different delivery scope')
       }
       return
@@ -756,8 +824,7 @@ export class DeliveryReportService {
         JOIN workspaces w ON w.id=p.workspace_id WHERE p.id=?`).get(evidence.ref) as
         { board_id: number; card_id: number | null; workspace_id: string } | undefined
       if (!row) throw new NotFoundError('evidence process not found')
-      if (row.board_id !== report.board_id || (row.card_id != null && row.card_id !== report.card_id)
-        || (report.workspace_id && row.workspace_id !== report.workspace_id)) {
+      if (!evidenceScopeMatches(report, row)) {
         throw new ValidationError('evidence process belongs to a different delivery scope')
       }
       return
@@ -776,8 +843,7 @@ export class DeliveryReportService {
     const row = this.db.prepare('SELECT board_id, card_id, workspace_id FROM artifacts WHERE id=?').get(artifactId) as
       { board_id: number; card_id: number | null; workspace_id: string | null } | undefined
     if (!row) throw new NotFoundError('artifact not found')
-    if (row.board_id !== report.board_id || (row.card_id != null && row.card_id !== report.card_id)
-      || (report.workspace_id && row.workspace_id && row.workspace_id !== report.workspace_id)) {
+    if (!evidenceScopeMatches(report, row)) {
       throw new ValidationError('artifact belongs to a different delivery scope')
     }
   }
@@ -991,7 +1057,9 @@ function acceptanceBlockers(report: DeliveryReport): string[] {
     if (!result.override && item?.status !== 'delivered') {
       blockers.push(`required deliverable ${deliverable.id} is not recorded as delivered`)
     }
-    if (!result.evidence_refs.length) blockers.push(`required deliverable ${deliverable.id} has no evidence`)
+    if (!result.override && !result.evidence_refs.length) {
+      blockers.push(`required deliverable ${deliverable.id} has no evidence`)
+    }
   }
   for (const criterion of report.asked.acceptance_criteria.filter((item) => item.required)) {
     const result = report.criterion_results.find((candidate) => candidate.criterion_id === criterion.id)
@@ -999,7 +1067,7 @@ function acceptanceBlockers(report: DeliveryReport): string[] {
       blockers.push(`required criterion ${criterion.id} is not met or overridden`)
       continue
     }
-    if (!result.evidence_refs.length) blockers.push(`required criterion ${criterion.id} has no evidence`)
+    if (!result.override && !result.evidence_refs.length) blockers.push(`required criterion ${criterion.id} has no evidence`)
   }
   return [...new Set(blockers)]
 }
@@ -1012,7 +1080,7 @@ function addResultGap(
 ): void {
   if (!result) { gaps.add(`${label} ${id} has no outcome.`); return }
   if (result.outcome !== 'met' && !result.override) gaps.add(`${label} ${id} is ${result.outcome}.`)
-  if ((result.outcome === 'met' || result.override) && !result.evidence_refs.length) gaps.add(`${label} ${id} has no evidence.`)
+  if (result.outcome === 'met' && !result.override && !result.evidence_refs.length) gaps.add(`${label} ${id} has no evidence.`)
 }
 
 function resultOutcome(input: Record<string, unknown>): CriterionOutcome {
@@ -1101,6 +1169,24 @@ function storedResultEqual(
   return current.outcome === next.outcome && current.note === next.note
     && stableJson(current.evidence_refs) === stableJson(next.evidence_refs)
     && stableJson(current.override) === stableJson(next.override)
+}
+
+function immutableOverrideResultEqual(
+  current: { outcome: CriterionOutcome; note: string | null; evidence_refs: EvidenceReference[]; override: DeliveryOverride | null },
+  next: StoredResult,
+): boolean {
+  return !!current.override && !!next.override && current.outcome === next.outcome && current.note === next.note
+    && stableJson(current.evidence_refs) === stableJson(next.evidence_refs)
+    && current.override.actor === next.override.actor && current.override.reason === next.override.reason
+}
+
+function evidenceScopeMatches(
+  report: DeliveryReport,
+  row: { board_id: number; card_id: number | null; workspace_id: string | null },
+): boolean {
+  if (row.board_id !== report.board_id) return false
+  if (row.card_id === report.card_id) return true
+  return report.workspace_id != null && row.workspace_id === report.workspace_id
 }
 
 function renderResults(

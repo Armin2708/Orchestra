@@ -126,9 +126,10 @@ describe('DeliveryReportService', () => {
     expect(setup.deliveries.assertReviewReady(setup.cardId).id).toBe(submitted.id)
     expect(() => setup.deliveries.accept(submitted.id, { actor: 'reviewer' })).toThrow(/verified/)
 
-    const verified = setup.deliveries.verify(submitted.id, { actor: 'verifier', results: [], deliverableResults: [] })
-    expect(verified.status).toBe('verified')
-    expect(() => setup.deliveries.accept(verified.id, { actor: 'reviewer' })).toThrow(/not completion-ready/)
+    const unchanged = setup.deliveries.verify(submitted.id, { actor: 'verifier', results: [], deliverableResults: [] })
+    expect(unchanged).toMatchObject({ status: 'submitted', verified_by: null, verified_at: null })
+    expect(new EventStore(setup.db).listBoard(setup.boardId, { kind: 'delivery.verified' })).toHaveLength(0)
+    expect(() => setup.deliveries.accept(unchanged.id, { actor: 'reviewer' })).toThrow(/verified/)
   })
 
   it('accepts only when required deliverables and criteria have scoped evidence', () => {
@@ -170,7 +171,6 @@ describe('DeliveryReportService', () => {
       results: submitted.asked.acceptance_criteria.map((item) => item.id === criterion.id ? ({
         criterionId: item.id,
         outcome: 'missed',
-        evidenceRefs,
         override: { actor: 'human-reviewer', reason: 'Known non-blocking platform limitation' },
       }) : ({ criterionId: item.id, outcome: 'met', evidenceRefs })),
     })
@@ -184,7 +184,109 @@ describe('DeliveryReportService', () => {
     expect((setup.db.prepare(`SELECT outcome, override_actor FROM delivery_criterion_results
       WHERE report_id=? AND criterion_id=?`).get(verified.id, criterion.id) as any))
       .toEqual({ outcome: 'missed', override_actor: 'human-reviewer' })
+    const original = structuredClone(result)
+    const retried = setup.deliveries.verify(verified.id, {
+      actor: 'verifier',
+      results: [{
+        criterionId: criterion.id,
+        outcome: 'missed',
+        override: { actor: 'human-reviewer', reason: 'Known non-blocking platform limitation' },
+      }],
+    })
+    expect(retried.criterion_results.find((item) => item.criterion_id === criterion.id)).toEqual(original)
+    expect(() => setup.deliveries.verify(verified.id, {
+      actor: 'second-verifier',
+      results: [{ criterionId: criterion.id, outcome: 'met', evidenceRefs }],
+    })).toThrow(/audited criterion override is immutable/)
+    expect(setup.deliveries.get(verified.id).criterion_results.find((item) => item.criterion_id === criterion.id))
+      .toEqual(original)
     expect(setup.deliveries.accept(verified.id, { actor: 'reviewer' }).status).toBe('accepted')
+  })
+
+  it('rejects board-global evidence while accepting an exact report workspace scope', () => {
+    const globalSetup = fixture()
+    const globalSubmitted = submitAll(globalSetup)
+    const globalArtifact = new ArtifactStore(globalSetup.db).create({
+      boardId: globalSetup.boardId,
+      kind: 'global_report',
+      name: 'global.md',
+      content: 'Not scoped to this card or workspace',
+    })
+    expect(() => globalSetup.deliveries.verify(globalSubmitted.id, {
+      actor: 'verifier',
+      results: [{
+        criterionId: globalSubmitted.asked.acceptance_criteria[0].id,
+        outcome: 'met',
+        evidenceRefs: [{ kind: 'artifact', ref: globalArtifact.id }],
+      }],
+    })).toThrow(/different delivery scope/)
+    expect(globalSetup.deliveries.get(globalSubmitted.id).status).toBe('submitted')
+
+    const workspaceSetup = fixture()
+    const workspace = new WorkspaceStore(workspaceSetup.db).create({
+      boardId: workspaceSetup.boardId,
+      cardId: workspaceSetup.cardId,
+      name: 'runtime',
+      rootPath: '/repo',
+    })
+    const draft = workspaceSetup.deliveries.createForCard(workspaceSetup.cardId, { workspaceId: workspace.id })
+    const submitted = workspaceSetup.deliveries.submit(draft.id, {
+      actor: 'agent',
+      summary: 'Delivered in the exact runtime workspace.',
+      deliveredItems: draft.asked.deliverables.map((item) => ({ deliverableId: item.id, text: item.text })),
+    })
+    const workspaceArtifact = new ArtifactStore(workspaceSetup.db).create({
+      boardId: workspaceSetup.boardId,
+      workspaceId: workspace.id,
+      kind: 'workspace_report',
+      name: 'workspace.md',
+      content: 'Scoped runtime evidence',
+    })
+    const evidenceRefs = [{ kind: 'artifact' as const, ref: workspaceArtifact.id }]
+    const verified = workspaceSetup.deliveries.verify(submitted.id, {
+      actor: 'verifier',
+      deliverableResults: submitted.asked.deliverables.map((item) => ({
+        deliverableId: item.id, outcome: 'met', evidenceRefs,
+      })),
+      results: submitted.asked.acceptance_criteria.map((item) => ({
+        criterionId: item.id, outcome: 'met', evidenceRefs,
+      })),
+    })
+    expect(workspaceSetup.deliveries.accept(verified.id, { actor: 'reviewer' }).status).toBe('accepted')
+  })
+
+  it('attaches late runtime provenance once and rejects mismatched sessions', () => {
+    const setup = fixture()
+    const scheduler = new JobScheduler(setup.db)
+    const job = scheduler.create({ boardId: setup.boardId, cardId: setup.cardId, provider: 'claude' })
+    const prepared = setup.deliveries.prepareForJob(job.id)
+    expect(prepared).toMatchObject({ workspace_id: null, session_id: null })
+
+    const workspace = new WorkspaceStore(setup.db).create({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      name: 'late-runtime',
+      rootPath: '/repo',
+    })
+    setup.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
+    setup.db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json) VALUES (?, ?, 'claude', 'running', ?)`)
+      .run('wrong-session', workspace.id, JSON.stringify({ job_id: 'another-job' }))
+    expect(() => setup.deliveries.attachRuntimeScope(prepared.id, {
+      sessionId: 'wrong-session', workspaceId: workspace.id,
+    })).toThrow(/different job/)
+    expect(setup.deliveries.get(prepared.id)).toMatchObject({ workspace_id: null, session_id: null })
+
+    setup.db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json) VALUES (?, ?, 'claude', 'running', ?)`)
+      .run('runtime-session', workspace.id, JSON.stringify({ job_id: job.id }))
+    const attached = setup.deliveries.prepareForJob(job.id)
+    expect(attached).toMatchObject({ workspace_id: workspace.id, session_id: 'runtime-session' })
+    expect(setup.deliveries.attachRuntimeScope(attached.id, {
+      sessionId: 'runtime-session', workspaceId: workspace.id,
+    })).toMatchObject({ workspace_id: workspace.id, session_id: 'runtime-session' })
+    expect(new EventStore(setup.db).listBoard(setup.boardId, { kind: 'delivery.runtime_scope_attached' }))
+      .toHaveLength(1)
   })
 
   it('resolves legacy verification by exact text and never passes unmatched rows positionally', () => {
