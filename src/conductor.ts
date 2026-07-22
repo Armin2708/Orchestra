@@ -221,7 +221,11 @@ export class Conductor {
   private completedAccounting = new Map<number, { usage: UsageSplit; costUsd: number }>()
   private launchQueue: LaunchRequest[] = []
 
-  constructor(private db: Database.Database, private bus: EventEmitter) {}
+  constructor(
+    private db: Database.Database,
+    private bus: EventEmitter,
+    private readonly agentToken?: string,
+  ) {}
 
   private emit(boardId: number, type: string, data: unknown) {
     this.bus.emit('event', { board_id: boardId, type, data })
@@ -582,6 +586,7 @@ export class Conductor {
       ORCHESTRA_PORT: String(Number(process.env.ORCHESTRA_PORT ?? 4750)),
       ORCHESTRA_AGENT: name,
       ORCHESTRA_NAME: name,
+      ...(this.agentToken ? { ORCHESTRA_AGENT_TOKEN: this.agentToken } : {}),
     }
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
     // cannot auto-claim ownership, so their cards are born unowned

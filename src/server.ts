@@ -61,10 +61,12 @@ export interface ConductorLike extends AgentSessionControlHost {
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
+  interface FastifyRequest { orchestraPrincipal: 'operator' | 'agent' }
 }
 
 export interface ServerOptions {
   token?: string
+  agentToken?: string
   // test seam: replace the real ShipQueue (which runs git + the full suite)
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
   // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
@@ -81,6 +83,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const server = Fastify()
   server.decorate('db', db)
   server.decorate('bus', new EventEmitter())
+  server.decorateRequest('orchestraPrincipal', 'operator')
   if (opts.token) {
     const expected = opts.token
     // /health and the static UI stay open — the UI is where you enter the token
@@ -90,7 +93,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined
       // EventSource can't set headers, so SSE clients pass ?token= instead
       const query = (req.query ?? {}) as Record<string, string>
-      if (tokenEquals(bearer ?? query.token, expected)) return
+      const given = bearer ?? query.token
+      if (tokenEquals(given, expected)) {
+        req.orchestraPrincipal = 'operator'
+        return
+      }
+      if (opts.agentToken && tokenEquals(given, opts.agentToken)) {
+        req.orchestraPrincipal = 'agent'
+        return
+      }
       return reply.code(401).send({ error: 'unauthorized' })
     })
   }
@@ -104,6 +115,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return reply.code(error.statusCode).send({ error: error.message, code: error.code })
     }
     throw error
+  }
+  const requireOperator = (req: import('fastify').FastifyRequest, reply: any): boolean => {
+    if (req.orchestraPrincipal === 'operator') return true
+    reply.code(403).send({ error: 'operator authorization is required for this action' })
+    return false
   }
 
   server.get('/health', () => ({ ok: true, version: VERSION }))
@@ -393,6 +409,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (!card) return reply.code(404).send({ error: 'not found' })
       const { title, description, paths, column, agent } = req.body
       if (column && !COLUMNS.includes(column)) return reply.code(400).send({ error: 'invalid column' })
+      if (column === 'done' && !requireOperator(req, reply)) return
       const actor = agentByName(card.board_id, agent)
       try {
         if (column === 'review') deliveryLifecycle.ensureReviewReady({
@@ -421,6 +438,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (!COLUMNS.includes(req.body.column)) return reply.code(400).send({ error: 'invalid column' })
+      if (req.body.column === 'done' && !requireOperator(req, reply)) return
       const actor = agentByName(card.board_id, req.body.agent)
       try {
         if (req.body.column === 'review') deliveryLifecycle.ensureReviewReady({
@@ -624,6 +642,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { note?: string; confirm?: boolean } }>(
     '/api/v1/cards/:id/approve', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
@@ -681,6 +700,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { note: string } }>(
     '/api/v1/cards/:id/send-back', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       const card = getCard(Number(req.params.id))
       if (!card) return reply.code(404).send({ error: 'not found' })
       if (card.column !== 'review') return reply.code(409).send({ error: 'card is not in review' })
@@ -1322,6 +1342,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     db,
     drivers: opts.agentOs?.drivers ?? defaultAgentOsDrivers,
     providers: opts.agentOs?.providers ?? defaultAgentProviders,
+    isOperator: (request) => request.orchestraPrincipal === 'operator',
   })
 
   // static web UI (built by Task 13; 404s harmlessly before that)

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import type Database from 'better-sqlite3'
-import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions } from 'fastify'
-import { AgentOsError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
+import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions, FastifyRequest } from 'fastify'
+import { AgentOsError, ForbiddenError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
 import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import { Checkpoint, CheckpointForker, CheckpointService } from './checkpoints.js'
@@ -92,6 +92,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
+  isOperator?: (request: FastifyRequest) => boolean
 }
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
@@ -113,6 +114,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const context = new ContextStore(db)
   const scheduler = options.scheduler ?? new JobScheduler(db, options.jobExecutor)
   const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
+  const isOperator = options.isOperator ?? (() => true)
+  const requireOperator = (request: FastifyRequest) => {
+    if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this delivery action')
+  }
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
   const projection = new LegacyEventProjection(db)
@@ -380,33 +385,43 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       gaps: arrayValue(body.gaps ?? evidenceInput.gaps, 'gaps') as string[],
     })
     if (body.criteria !== undefined || body.criterion_results !== undefined || body.deliverable_results !== undefined) {
+      const criterionResults = arrayValue(body.criteria ?? body.criterion_results, 'criteria')
+      const deliverableResults = arrayValue(body.deliverable_results, 'deliverable_results')
+      const hasOverride = [...criterionResults, ...deliverableResults].some(resultHasOverride)
+      if (hasOverride) requireOperator(request)
       delivery = deliveries.verify(delivery.id, {
         actor,
-        results: arrayValue(body.criteria ?? body.criterion_results, 'criteria') as any,
-        deliverableResults: arrayValue(body.deliverable_results, 'deliverable_results') as any,
+        results: operatorizeOverrides(criterionResults) as any,
+        deliverableResults: operatorizeOverrides(deliverableResults) as any,
       })
     }
     return { delivery }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/verify', (request) => {
     const body = objectBody(request.body)
+    const results = arrayValue(body.results ?? body.criteria ?? body.criterion_results, 'results')
+    const deliverableResults = arrayValue(body.deliverable_results ?? body.deliverableResults, 'deliverable_results')
+    const hasOverride = [...results, ...deliverableResults].some(resultHasOverride)
+    if (hasOverride) requireOperator(request)
     return { delivery: deliveries.verify(request.params.id, {
       actor: requiredString(body.actor, 'actor'),
-      results: arrayValue(body.results ?? body.criteria ?? body.criterion_results, 'results') as any,
-      deliverableResults: arrayValue(body.deliverable_results ?? body.deliverableResults, 'deliverable_results') as any,
+      results: operatorizeOverrides(results) as any,
+      deliverableResults: operatorizeOverrides(deliverableResults) as any,
     }) }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/accept', (request) => {
+    requireOperator(request)
     const body = objectBody(request.body)
     return { delivery: deliveries.accept(request.params.id, {
-      actor: requiredString(body.actor, 'actor'),
+      actor: 'human',
       note: stringValue(body.note),
     }) }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/reject', (request) => {
+    requireOperator(request)
     const body = objectBody(request.body)
     return { delivery: deliveries.reject(request.params.id, {
-      actor: requiredString(body.actor, 'actor'),
+      actor: 'human',
       reason: requiredString(body.reason, 'reason'),
     }) }
   })
@@ -642,6 +657,23 @@ function arrayValue(value: unknown, field: string): unknown[] {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new ValidationError(`${field} must be an array`)
   return value
+}
+
+function resultHasOverride(value: unknown): boolean {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && ('override' in value || (value as Record<string, unknown>).outcome === 'overridden')
+}
+
+function operatorizeOverrides(values: unknown[]): unknown[] {
+  return values.map((value) => {
+    if (!resultHasOverride(value)) return value
+    const row = value as Record<string, unknown>
+    const raw = row.override
+    const override = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw as Record<string, unknown>
+      : {}
+    return { ...row, override: { reason: override.reason, actor: 'human' } }
+  })
 }
 
 function descriptors<T>(source: T[] | (() => T[]) | undefined, fallback: T[]): T[] {

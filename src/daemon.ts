@@ -9,7 +9,7 @@ import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
 import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
-import { ensureToken } from './token.js'
+import { ensureAgentToken, ensureToken } from './token.js'
 import { registerPush } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
@@ -121,6 +121,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const db = openDb(path.join(dataDir(), 'orchestra.db'))
   const token = authDisabled() ? undefined : ensureToken()
+  const agentToken = authDisabled() ? undefined : ensureAgentToken()
   const lease = acquireDaemonLease(db)
   let maestro: Conductor | undefined
   let manager: ProviderAgentManager | undefined
@@ -129,9 +130,11 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   const scheduler = agentOs.scheduler
   const orchestration = new OrchestrationService(db, scheduler)
   const codexCommand = process.env.ORCHESTRA_CODEX_COMMAND?.trim() || 'codex'
+  const codexEnvironment = sanitizedCodexEnvironment()
+  if (agentToken) codexEnvironment.ORCHESTRA_AGENT_TOKEN = agentToken
   const codexSupervisor = new CodexAppServerSupervisor({
     client: { requestTimeoutMs: 5_000 },
-    process: { command: codexCommand, env: sanitizedCodexEnvironment(), inheritEnv: false },
+    process: { command: codexCommand, env: codexEnvironment, inheritEnv: false },
   })
   const codexRpc = new CodexAppServerService(codexSupervisor)
   const codexDriver = new CodexAgentDriver({
@@ -158,13 +161,14 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     if (codexReady) agentOs.registerDriver(codexDriver)
     server = buildServer(db, (bus) => {
       agentOs.setBus(bus)
-      maestro = new Conductor(db, bus)
+      maestro = new Conductor(db, bus, agentToken)
       agentOs.registerClaude(maestro)
       const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
       manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor)
       return manager
     }, {
       token,
+      agentToken,
       autowakeAt: () => autowake?.scheduledAt() ?? null,
       agentOs: {
         runtime: agentOs.adapter,

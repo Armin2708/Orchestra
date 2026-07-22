@@ -21,6 +21,10 @@ export class ConflictError extends AgentOsError {
   constructor(message: string) { super(message, 409, 'conflict') }
 }
 
+export class ForbiddenError extends AgentOsError {
+  constructor(message: string) { super(message, 403, 'forbidden') }
+}
+
 export class UnsupportedError extends AgentOsError {
   constructor(message: string) { super(message, 501, 'not_supported') }
 }
