@@ -19,6 +19,8 @@ Status: implemented on `codex/agent-os`.
 - `AgentSession`: provider-backed conversation/process attached to a workspace.
 - `Process`: a PTY-backed command with durable output, status, exit code, and restart recipe.
 - `TaskContract`: executable metadata layered over an existing card.
+- `DeliveryReport`: immutable Asked snapshot plus revisioned Delivered, verification, override,
+  and acceptance records for one managed job.
 - `Event`: append-only causal record for commands, tools, files, tests, permissions, questions,
   reviews, and shipping.
 - `Artifact`: diff, patch, test report, screenshot, log, evidence bundle, or other durable output.
@@ -59,6 +61,13 @@ Add idempotent migrations in a separate module called by `openDb`:
   finished_at, error)`
 - `context_items(id, board_id, workspace_id, card_id, kind, source, content, tokens, pinned,
   provenance, created_at, updated_at)`
+- `delivery_reports(id, lineage_id, parent_report_id, sequence, board_id, card_id, job_id,
+  session_id, workspace_id, status, asked_snapshot, summary, delivered_items, claims_json,
+  changed_files, commits, artifact_ids, gaps, actors, timestamps...)`
+- `delivery_deliverable_results(report_id, deliverable_id, outcome, note, evidence_refs,
+  override_actor, override_reason, override_at, actor, timestamps...)`
+- `delivery_criterion_results(report_id, criterion_id, outcome, note, evidence_refs,
+  override_actor, override_reason, override_at, actor, timestamps...)`
 - `daemon_leases(name, owner_id, pid, acquired_at, heartbeat_at)`
 
 Foreign keys should cascade only for generated child records. Never delete a dirty worktree or
@@ -129,6 +138,11 @@ All new routes live under `/api/v1/os`:
 - `POST /checkpoints/:id/fork`
 - `GET|POST /boards/:id/jobs`
 - `POST /jobs/:id/cancel`
+- `GET /cards/:id/deliveries`
+- `POST /jobs/:id/deliveries/prepare`
+- `POST /jobs/:id/deliveries/submit`
+- `POST /deliveries/:id/verify|accept|reject|revise`
+- `GET /deliveries/:id/export?format=human|json`
 - `GET /boards/:id/conflicts`
 - `GET /drivers`
 - `GET /plugins`
@@ -145,6 +159,31 @@ a contract receive a deterministic default on first read.
 Evidence bundles are artifacts assembled from the contract, actual diff/diffstat, changed files,
 verification result, test/process exit evidence, review decisions, shipped commit, and relevant
 events. Agent claims are labeled as claims, never evidence.
+
+## Delivery lifecycle and gates
+
+The scheduler creates a draft delivery report before provider dispatch and freezes the current
+task-contract version into `asked_snapshot`. Contract edits affect later jobs only. Submission must
+account for every promised deliverable and criterion, including explicit gaps. Independent
+verification records evidence-backed results without converting agent claims into proof.
+
+The lifecycle is monotonic and audited:
+
+```text
+draft -> submitted -> verified -> accepted
+                   \-> rejected -> revised draft
+```
+
+Managed cards are identified by a canonical job record. Their move-to-review paths require a
+submitted report; move-to-done and approval paths require acceptance. Compatibility projection
+creates reports for legacy launches without retroactively placing strict gates on manual cards.
+Human overrides preserve the original partial, missed, or unverifiable outcome and add actor,
+reason, target, and timestamp rather than mutating history.
+
+The API authenticates operator and managed-agent credentials as distinct principals. Managed
+Claude/Codex subprocesses receive only the scoped agent credential during normal launch. Reporting
+and independent verification accept that credential; accept/reject/override, Board approval or
+send-back, and any move to `done` require the operator principal and record the actor server-side.
 
 ## Attention projection
 
@@ -176,6 +215,7 @@ Add a keyboard-first `WorkspaceCockpit` reachable from project navigation. It co
 - real xterm terminal and process controls;
 - agent conversation pane;
 - changed-files/diff/evidence pane;
+- Asked-versus-Delivered Trackbook with revision history and evidence gaps;
 - preview/process/port pane;
 - context manifest and policy pane;
 - global `Needs You` attention drawer;

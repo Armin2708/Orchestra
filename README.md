@@ -12,7 +12,9 @@ for agents paused by Claude usage limits.
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
 checkpoints, durable scheduling, and a single human-attention queue—without removing any CLI or
-raw-terminal capability.
+raw-terminal capability. Its [Delivery Trackbook](docs/delivery-trackbook.md) keeps the frozen
+Asked contract, reported result, observed evidence, human overrides, and acceptance visibly
+separate.
 
 ## Quickstart
 
@@ -117,6 +119,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra workspace ...` | Create, inspect, update, or archive Agent OS shared/worktree environments |
 | `orchestra process ...` | Start, attach, restart, resize, signal, and inspect durable PTY processes |
 | `orchestra contract|job|checkpoint|policy|attention ...` | Drive task contracts, scheduling, recovery, policy, and human-attention workflows |
+| `orchestra delivery show|submit|verify|accept|reject|revise|export ...` | Compare frozen Asked promises with delivered results, evidence, overrides, and acceptance |
 | `orchestra shipped <card-id> <hash>` | Link a delivery card to its ground-truth commit |
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project] [--provider claude\|codex\|both]` | Add provider hooks idempotently (default: `claude`) |

@@ -77,8 +77,11 @@ Reading a legacy card's contract creates a deterministic default.
 orchestra contract show 42 --json
 orchestra contract set 42 \
   --objective "Make session renewal race-free" \
+  --deliverables '[{"id":"renewal","text":"Serialize concurrent refresh","required":true}]' \
   --accept '["all auth tests pass","concurrent refresh is covered"]' \
   --verify '["npm test -- auth"]' \
+  --non-goals '["Redesign authentication"]' \
+  --risks '["Restart behavior needs explicit evidence"]' \
   --base HEAD
 ```
 
@@ -90,6 +93,37 @@ claims and are never promoted to evidence.
 orchestra evidence list 42 --json
 orchestra evidence add 42 test_report auth-tests --file ./test-results.txt --mime text/plain
 ```
+
+## Delivery Trackbook
+
+Every managed job freezes the task contract it was launched against as an immutable **Asked**
+snapshot. The agent then submits a structured delivery report that compares each requested
+deliverable and acceptance criterion with what was actually produced. Outcomes are explicit:
+`met`, `partial`, `missed`, or `unverifiable`; omitted promises are never silently treated as done.
+
+The Trackbook keeps three things separate:
+
+- **Asked**: the objective, promised deliverables, acceptance criteria, verification commands,
+  non-goals, risks, and contract version captured before dispatch;
+- **Delivered**: the agent's summary, item-by-item outcomes, claims, files, commits, artifacts, and
+  evidence references;
+- **Delta**: missing, partial, failed, overridden, or still-unverified work requiring attention.
+
+A managed card can enter **review** only after a complete report is submitted. It can enter
+**done** only after the report is verified and accepted, or after an explicitly attributed human
+override with a reason. Rejected reports remain in history and revisions create a new linked
+attempt instead of rewriting the old one. Unmanaged manual cards retain the original board flow.
+
+Managed Claude/Codex processes use a scoped agent credential. They can submit and verify work, but
+acceptance, audited overrides, Board approval/send-back, and moving a card to **done** require the
+operator credential used by the paired UI or normal human CLI session.
+
+This prevents ordinary managed-agent API calls from self-accepting; it cannot sandbox a hostile
+`full_access` process that runs as the same OS user and can read files or the SQLite database.
+Strong adversarial isolation requires a separate OS/container identity or future human-presence
+authentication.
+
+See [Delivery Trackbook](delivery-trackbook.md) for the lifecycle, API, CLI, and evidence rules.
 
 ## Attention, policy, and context
 

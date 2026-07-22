@@ -7,10 +7,10 @@
 export const verbose = () => process.env.ORCHESTRA_VERBOSE_RULES === '1'
 
 export const compactRules = (me: string) => `orchestra rules:
-- ID=${me}; use --agent/--from.
-- Board first; similar/conflict/claimed path → orchestra ask owner; wait.
-- Before edit: orchestra card create '<title>' --desc '<objective; deliverables; done when>' --paths <p1,p2> --column in_progress --agent ${me}; ⚠/≈ → ask.
-- Card current; done when finished = human-accepted only. Agent final: Delivered/Evidence/Remaining; move review, never done.
+- ${me}; --agent/--from.
+- Board first; overlap/claimed path → orchestra ask owner; wait.
+- Before edit: orchestra card create '<title>' --desc '<goal/deliverables/done>' --paths <p> --column in_progress --agent ${me}; ⚠/≈ ask.
+- Card current; done when finished = human-accepted only. Delivered/Evidence/Remaining; move review, never done.
 - Subagents: no orchestra commands.
 - Full: orchestra snapshot --full`
 
@@ -31,7 +31,7 @@ export const verboseRules = (me: string) => `orchestra rules (coordination board
 // cached; ORCHESTRA_VERBOSE_OUTPUT=1 removes the block, read per call like verbose().
 export const verboseOutput = () => process.env.ORCHESTRA_VERBOSE_OUTPUT === '1'
 
-export const OUTPUT_DISCIPLINE = `- OUTPUT: lead with the outcome; no preamble or play-by-play. Board updates state deltas only. Final report: Delivered / Evidence / Remaining, ≤3 bullets. Comment code only where code can't say it.`
+export const OUTPUT_DISCIPLINE = `- OUTPUT: outcome first; no preamble/recap. Board deltas. Final ≤3 bullets: Delivered/Evidence/Remaining. Essential comments only.`
 
 export const outputDiscipline = () => (verboseOutput() ? '' : `\n${OUTPUT_DISCIPLINE}`)
 
