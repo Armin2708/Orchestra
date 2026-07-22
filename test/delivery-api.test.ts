@@ -170,6 +170,93 @@ describe('Delivery Trackbook API', () => {
     expect(firstRevision.json().delivery.asked).toEqual(launched.delivery.asked)
   })
 
+  it('retries compound submit and verification without mutating or accepting conflicting payloads', async () => {
+    const { boardId, cardId, server } = await fixture()
+    const launched = await preparedReport(server, boardId, cardId)
+    const payload = {
+      actor: 'agent',
+      summary: 'Implemented the requested delivery API.',
+      items: [{ deliverableId: 'deliverable-api', status: 'delivered' }],
+      criteria: [{ criterionId: 'criterion-api', outcome: 'unverifiable', note: 'Independent evidence is pending.' }],
+    }
+
+    const first = await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${launched.job.id}/deliveries/submit`, headers: auth, payload,
+    })
+    const retry = await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${launched.job.id}/deliveries/submit`, headers: auth, payload,
+    })
+
+    expect(first.statusCode).toBe(200)
+    expect(retry.statusCode).toBe(200)
+    expect(retry.json().delivery).toMatchObject({ id: first.json().delivery.id, status: 'verified' })
+
+    const changedSummary = await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${launched.job.id}/deliveries/submit`, headers: auth,
+      payload: { ...payload, summary: 'A different claimed result.' },
+    })
+    expect(changedSummary.statusCode).toBe(409)
+    expect(changedSummary.json().error).toMatch(/conflicts with the persisted submission/i)
+
+    const changedVerification = await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${launched.job.id}/deliveries/submit`, headers: auth,
+      payload: {
+        ...payload,
+        criteria: [{ criterionId: 'criterion-api', outcome: 'missed', note: 'Changed on retry.' }],
+      },
+    })
+    expect(changedVerification.statusCode).toBe(409)
+    expect(changedVerification.json().error).toMatch(/conflicts with the persisted verification/i)
+
+    const persisted = await server.inject({
+      method: 'GET', url: `/api/v1/os/cards/${cardId}/deliveries`, headers: auth,
+    })
+    expect(persisted.json().deliveries).toHaveLength(1)
+    expect(persisted.json().current).toMatchObject({
+      id: first.json().delivery.id,
+      summary: payload.summary,
+      criterion_results: [expect.objectContaining({ outcome: 'unverifiable', note: 'Independent evidence is pending.' })],
+    })
+  })
+
+  it('gates review and approval on the latest managed job even when an older report sorts as current', async () => {
+    const { db, boardId, cardId, server } = await fixture()
+    const first = await preparedReport(server, boardId, cardId)
+    await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${first.job.id}/deliveries/submit`, headers: auth,
+      payload: { actor: 'first-agent', summary: 'First attempt.' },
+    })
+    await server.inject({
+      method: 'POST', url: `/api/v1/os/deliveries/${first.delivery.id}/reject`, headers: auth,
+      payload: { actor: 'human', reason: 'Run a newer job.' },
+    })
+    db.prepare(`UPDATE jobs SET status='succeeded', started_at=?, finished_at=? WHERE id=?`)
+      .run(new Date().toISOString(), new Date().toISOString(), first.job.id)
+
+    const second = await preparedReport(server, boardId, cardId)
+    await server.inject({
+      method: 'POST', url: `/api/v1/os/jobs/${second.job.id}/deliveries/submit`, headers: auth,
+      payload: { actor: 'second-agent', summary: 'Second attempt is ready.' },
+    })
+
+    db.prepare("UPDATE delivery_reports SET created_at='2999-01-01T00:00:00.000Z' WHERE id=?").run(first.delivery.id)
+    const reports = new DeliveryReportService(db)
+    expect(reports.currentForCard(cardId)?.id).toBe(first.delivery.id)
+    expect(() => reports.revise(first.delivery.id, { actor: 'first-agent' })).toThrow(/latest managed job/i)
+
+    const review = await server.inject({
+      method: 'POST', url: `/api/v1/cards/${cardId}/move`, headers: auth, payload: { column: 'review' },
+    })
+    expect(review.statusCode).toBe(200)
+    const approved = await server.inject({
+      method: 'POST', url: `/api/v1/cards/${cardId}/approve`, headers: auth, payload: { confirm: true },
+    })
+    expect(approved.statusCode).toBe(200)
+    expect(approved.json().card.column).toBe('done')
+    expect(reports.get(second.delivery.id).status).toBe('accepted')
+    expect(reports.get(first.delivery.id).status).toBe('rejected')
+  })
+
   it('lazily backfills an audited compatibility report for a terminal pre-Trackbook job', async () => {
     const { db, boardId, cardId, server } = await fixture()
     const job = new JobScheduler(db).create({ boardId, cardId, provider: 'historical-agent' })

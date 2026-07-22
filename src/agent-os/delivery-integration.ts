@@ -40,9 +40,11 @@ export class DeliveryLifecycleIntegration {
   }
 
   ensureReviewReady(input: ReviewDeliveryInput): DeliveryReport {
-    let delivery = this.reports.currentForCard(input.cardId)
     const managedJob = this.managedJob(input.cardId)
     const managed = !!managedJob
+    let delivery = managedJob
+      ? this.reports.currentForJob(managedJob.id)
+      : this.reports.currentForCard(input.cardId)
     let historicalCompatibility = false
     if (!delivery) {
       if (managedJob && !['succeeded', 'blocked', 'cancelled'].includes(managedJob.status)) {
@@ -65,12 +67,15 @@ export class DeliveryLifecycleIntegration {
       }
       delivery = this.submitCompatibility(delivery, input)
     }
-    return this.reports.assertReviewReady(input.cardId)
+    return managedJob
+      ? this.reports.assertJobReviewReady(managedJob.id)
+      : this.reports.assertReviewReady(input.cardId)
   }
 
   assertDoneReady(cardId: number): DeliveryReport | null {
-    if (!this.isManagedCard(cardId)) return null
-    return this.reports.assertCompletionReady(cardId)
+    const managedJob = this.managedJob(cardId)
+    if (!managedJob) return null
+    return this.reports.assertJobCompletionReady(managedJob.id)
   }
 
   recordVerification(
@@ -84,8 +89,11 @@ export class DeliveryLifecycleIntegration {
   }
 
   accept(input: ReviewDeliveryInput & { confirmed?: boolean }): DeliveryReport | null {
-    const managed = this.isManagedCard(input.cardId)
-    let delivery = this.reports.currentForCard(input.cardId)
+    const managedJob = this.managedJob(input.cardId)
+    const managed = !!managedJob
+    let delivery = managedJob
+      ? this.reports.currentForJob(managedJob.id)
+      : this.reports.currentForCard(input.cardId)
     if (!delivery) {
       delivery = this.ensureReviewReady(input)
     }
@@ -103,7 +111,10 @@ export class DeliveryLifecycleIntegration {
   }
 
   reject(input: ReviewDeliveryInput & { reason: string }): DeliveryReport | null {
-    let delivery = this.reports.currentForCard(input.cardId)
+    const managedJob = this.managedJob(input.cardId)
+    let delivery = managedJob
+      ? this.reports.currentForJob(managedJob.id)
+      : this.reports.currentForCard(input.cardId)
     if (!delivery) {
       delivery = this.ensureReviewReady(input)
     }
@@ -162,7 +173,7 @@ export class DeliveryLifecycleIntegration {
     }
 
     if (delivery.status === 'accepted') return delivery
-    return this.reports.assertReviewReady(input.cardId)
+    return this.reports.assertJobReviewReady(input.jobId)
   }
 
   private submitCompatibility(delivery: DeliveryReport, input: ReviewDeliveryInput): DeliveryReport {

@@ -412,11 +412,17 @@ export class DeliveryReportService {
     return row ? this.mapReport(row) : null
   }
 
+  currentForJob(jobId: string): DeliveryReport | null {
+    const id = boundedString(jobId, 'jobId', LIMITS.id)
+    this.job(id)
+    const row = this.db.prepare(`SELECT * FROM delivery_reports WHERE job_id=?
+      ORDER BY sequence DESC, created_at DESC, rowid DESC LIMIT 1`).get(id) as Record<string, unknown> | undefined
+    return row ? this.mapReport(row) : null
+  }
+
   submit(id: string, input: SubmitDeliveryInput): DeliveryReport {
     const actor = boundedString(input.actor, 'actor', LIMITS.actor)
     const report = this.get(id)
-    if (report.status === 'submitted') return report
-    if (report.status !== 'draft') throw new ConflictError('only a draft delivery report can be submitted')
     const summary = boundedString(input.summary, 'summary', LIMITS.summary)
     const deliveredItems = normalizeDeliveredItems(report, input.deliveredItems ?? [])
     const claims = normalizeClaims(report, input.claims ?? [])
@@ -424,11 +430,20 @@ export class DeliveryReportService {
     const commits = boundedStringArray(input.commits ?? [], 'commits', LIMITS.commits, LIMITS.commit)
     const artifactIds = boundedStringArray(input.artifactIds ?? [], 'artifactIds', LIMITS.artifacts, LIMITS.id)
     const gaps = boundedStringArray(input.gaps ?? [], 'gaps', LIMITS.gaps, LIMITS.text)
+    const submission = { actor, summary, deliveredItems, claims, changedFiles, commits, artifactIds, gaps }
+    if (['submitted', 'verified', 'accepted'].includes(report.status)) {
+      this.assertSubmissionRetry(report, submission)
+      return report
+    }
+    if (report.status !== 'draft') throw new ConflictError('only a draft delivery report can be submitted')
     for (const artifactId of artifactIds) this.assertArtifactScope(report, artifactId)
 
     const submit = this.db.transaction(() => {
       const current = this.get(id)
-      if (current.status === 'submitted') return current
+      if (['submitted', 'verified', 'accepted'].includes(current.status)) {
+        this.assertSubmissionRetry(current, submission)
+        return current
+      }
       if (current.status !== 'draft') throw new ConflictError('only a draft delivery report can be submitted')
       const at = timestamp()
       this.db.prepare(`UPDATE delivery_reports SET status='submitted', summary=?, delivered_items=?, claims_json=?,
@@ -480,6 +495,50 @@ export class DeliveryReportService {
     return verify.immediate()
   }
 
+  verifySubmission(id: string, input: VerifyDeliveryInput): DeliveryReport {
+    const report = this.get(id)
+    if (report.status === 'submitted') return this.verify(id, input)
+    if (!['verified', 'accepted'].includes(report.status)) return this.verify(id, input)
+
+    const actor = boundedString(input.actor, 'actor', LIMITS.actor)
+    const criterionInputs = boundedObjectArray(input.results ?? [], 'results', LIMITS.results)
+    const deliverableInputs = boundedObjectArray(input.deliverableResults ?? [], 'deliverableResults', LIMITS.results)
+    const at = report.verified_at ?? report.updated_at
+    const criterionUpdates = this.resolveResults(report, criterionInputs, 'criterion', actor, at)
+    const deliverableUpdates = this.resolveResults(report, deliverableInputs, 'deliverable', actor, at)
+    const event = this.db.prepare(`SELECT payload FROM os_events
+      WHERE kind='delivery.verified' AND json_valid(payload)
+        AND json_extract(payload, '$.delivery_report_id')=?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(report.id) as { payload: string } | undefined
+    const payload = event ? parseJson<Record<string, unknown>>(event.payload, {}) : {}
+    const expected = {
+      actor,
+      criterion_ids: criterionUpdates.matched.map((item) => item.id),
+      deliverable_ids: deliverableUpdates.matched.map((item) => item.id),
+      unmatched_criteria: criterionUpdates.unmatched,
+      unmatched_deliverables: deliverableUpdates.unmatched,
+    }
+    const persisted = {
+      actor: payload.actor,
+      criterion_ids: payload.criterion_ids,
+      deliverable_ids: payload.deliverable_ids,
+      unmatched_criteria: payload.unmatched_criteria,
+      unmatched_deliverables: payload.unmatched_deliverables,
+    }
+    const changedCriterion = criterionUpdates.matched.some((item) => {
+      const current = report.criterion_results.find((candidate) => candidate.criterion_id === item.id)
+      return !current || !storedResultEqual(current, item)
+    })
+    const changedDeliverable = deliverableUpdates.matched.some((item) => {
+      const current = report.deliverable_results.find((candidate) => candidate.deliverable_id === item.id)
+      return !current || !storedResultEqual(current, item)
+    })
+    if (stableJson(expected) !== stableJson(persisted) || changedCriterion || changedDeliverable) {
+      throw new ConflictError('delivery retry conflicts with the persisted verification')
+    }
+    return report
+  }
+
   accept(id: string, input: AcceptDeliveryInput): DeliveryReport {
     const actor = boundedString(input.actor, 'actor', LIMITS.actor)
     const note = nullableBoundedString(input.note, 'note', LIMITS.note)
@@ -524,6 +583,14 @@ export class DeliveryReportService {
         .get(report.id) as { id: string } | undefined
       if (existing) return this.get(existing.id)
       if (report.status !== 'rejected') throw new ConflictError('only a rejected delivery report can be revised')
+      const latestJob = this.db.prepare(`SELECT id FROM jobs WHERE card_id=?
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(report.card_id) as { id: string } | undefined
+      if (latestJob && report.job_id !== latestJob.id) {
+        throw new ConflictError('only the latest managed job delivery can be revised')
+      }
+      if (!latestJob && this.currentForCard(report.card_id)?.id !== report.id) {
+        throw new ConflictError('only the current delivery report can be revised')
+      }
       const childId = randomUUID()
       const at = timestamp()
       this.db.prepare(`INSERT INTO delivery_reports
@@ -557,6 +624,26 @@ export class DeliveryReportService {
   assertCompletionReady(cardId: number): DeliveryReport {
     const report = this.currentForCard(cardId)
     if (!report) throw new ConflictError('card has no delivery report')
+    if (report.status !== 'accepted') throw new ConflictError('delivery must be accepted before completion')
+    const blockers = acceptanceBlockers(report)
+    if (blockers.length) throw new ConflictError(`delivery is not completion-ready: ${blockers.join('; ')}`)
+    return report
+  }
+
+  assertJobReviewReady(jobId: string): DeliveryReport {
+    const report = this.currentForJob(jobId)
+    if (!report) throw new ConflictError('job has no delivery report')
+    if (!['submitted', 'verified'].includes(report.status)) {
+      throw new ConflictError('delivery must be submitted before review')
+    }
+    const missing = reviewCoverageGaps(report)
+    if (missing.length) throw new ConflictError(`delivery is not review-ready: ${missing.join('; ')}`)
+    return report
+  }
+
+  assertJobCompletionReady(jobId: string): DeliveryReport {
+    const report = this.currentForJob(jobId)
+    if (!report) throw new ConflictError('job has no delivery report')
     if (report.status !== 'accepted') throw new ConflictError('delivery must be accepted before completion')
     const blockers = acceptanceBlockers(report)
     if (blockers.length) throw new ConflictError(`delivery is not completion-ready: ${blockers.join('; ')}`)
@@ -845,6 +932,44 @@ export class DeliveryReportService {
     if (!row) throw new NotFoundError('artifact not found')
     if (!evidenceScopeMatches(report, row)) {
       throw new ValidationError('artifact belongs to a different delivery scope')
+    }
+  }
+
+  private assertSubmissionRetry(
+    report: DeliveryReport,
+    input: {
+      actor: string
+      summary: string
+      deliveredItems: DeliveryItem[]
+      claims: DeliveryClaim[]
+      changedFiles: string[]
+      commits: string[]
+      artifactIds: string[]
+      gaps: string[]
+    },
+  ): void {
+    const expected = {
+      actor: input.actor,
+      summary: input.summary,
+      delivered_items: input.deliveredItems,
+      claims: input.claims,
+      changed_files: input.changedFiles,
+      commits: input.commits,
+      artifact_ids: input.artifactIds,
+      gaps: input.gaps,
+    }
+    const persisted = {
+      actor: report.submitted_by,
+      summary: report.summary,
+      delivered_items: report.delivered_items,
+      claims: report.claims,
+      changed_files: report.changed_files,
+      commits: report.commits,
+      artifact_ids: report.artifact_ids,
+      gaps: report.gaps,
+    }
+    if (stableJson(expected) !== stableJson(persisted)) {
+      throw new ConflictError('delivery retry conflicts with the persisted submission')
     }
   }
 

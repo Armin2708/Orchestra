@@ -744,8 +744,19 @@ export class CodexManagedAgentRuntime {
         outcome,
         reason,
         to_column: column,
+        summary: this.finalAssistantOutput(state),
       },
     })
+  }
+
+  private finalAssistantOutput(state: CodexState): string | undefined {
+    for (let index = state.transcript.length - 1; index >= 0; index -= 1) {
+      const line = state.transcript[index]
+      if (line.kind !== 'text') continue
+      const output = line.text.trim()
+      if (output) return output
+    }
+    return undefined
   }
 
   private persist(state: CodexState): void {

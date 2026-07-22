@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { expect, it } from 'vitest'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
 import { writeProviderModelCache } from '../src/agent-providers.js'
+import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import { createAgentOsRuntime } from '../src/agent-os/runtime-integration.js'
 import { openDb } from '../src/db.js'
 import {
@@ -486,6 +487,56 @@ it('finishes a Codex card in review and records reported totals without cached-i
   expect(t.db.prepare('SELECT status FROM agents WHERE id=?').get(result.agent.id)).toMatchObject({ status: 'gone' })
   expect(t.db.prepare('SELECT provider, total_tokens, input_tokens, cached_input_tokens FROM agent_usage').get())
     .toMatchObject({ provider: 'codex', total_tokens: 150, input_tokens: 100, cached_input_tokens: 80 })
+})
+
+it('projects the final legacy Codex assistant output into the compatibility Trackbook', async () => {
+  const previousCanonicalLaunch = process.env.ORCHESTRA_CANONICAL_LAUNCH
+  const previousAutoship = process.env.ORCHESTRA_AUTOSHIP
+  delete process.env.ORCHESTRA_CANONICAL_LAUNCH
+  process.env.ORCHESTRA_AUTOSHIP = '0'
+  const db = openDb(':memory:')
+  db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/project', 'project')").run()
+  db.prepare(`INSERT INTO cards (id, board_id, title, description)
+    VALUES (7, 1, 'Legacy Codex delivery', 'Preserve the final answer')`).run()
+  const driver = new FakeCodexDriver()
+  const server = buildServer(db, (bus) => {
+    const codex = new CodexManagedAgentRuntime(db, bus, driver)
+    return new ProviderAgentManager(db, bus, claudeStub(db).stub, codex)
+  })
+
+  try {
+    await server.ready()
+    const launched = await server.inject({
+      method: 'POST', url: '/api/v1/cards/7/launch', payload: { provider: 'codex' },
+    })
+    expect(launched.statusCode).toBe(200)
+    await until(() => driver.sends.length === 1)
+    driver.emit('codex:1', {
+      type: 'output', data: 'Delivery summary: implemented ',
+      metadata: { method: 'item/agentMessage/delta', itemId: 'final-answer' },
+    })
+    driver.emit('codex:1', {
+      type: 'output', data: 'the requested behavior.\nEvidence: npm test passed.',
+      metadata: { method: 'item/agentMessage/delta', itemId: 'final-answer' },
+    })
+    driver.emit('codex:1', {
+      type: 'status', data: 'turn completed',
+      metadata: { method: 'turn/completed', turnCompleted: true, turnActive: false, status: 'completed' },
+    })
+
+    const reports = new DeliveryReportService(db)
+    await until(() => reports.currentForCard(7)?.status === 'submitted')
+    const delivery = reports.currentForCard(7)!
+    const expected = 'Delivery summary: implemented the requested behavior.\nEvidence: npm test passed.'
+    expect(delivery.summary).toBe('Delivery summary: implemented the requested behavior. Evidence: npm test passed.')
+    expect(delivery.claims).toEqual([expect.objectContaining({ text: expected })])
+  } finally {
+    await server.close()
+    if (previousCanonicalLaunch === undefined) delete process.env.ORCHESTRA_CANONICAL_LAUNCH
+    else process.env.ORCHESTRA_CANONICAL_LAUNCH = previousCanonicalLaunch
+    if (previousAutoship === undefined) delete process.env.ORCHESTRA_AUTOSHIP
+    else process.env.ORCHESTRA_AUTOSHIP = previousAutoship
+  }
 })
 
 it('accepts provider and access-profile controls through the server API', async () => {

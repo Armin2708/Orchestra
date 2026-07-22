@@ -389,7 +389,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const deliverableResults = arrayValue(body.deliverable_results, 'deliverable_results')
       const hasOverride = [...criterionResults, ...deliverableResults].some(resultHasOverride)
       if (hasOverride) requireOperator(request)
-      delivery = deliveries.verify(delivery.id, {
+      delivery = deliveries.verifySubmission(delivery.id, {
         actor,
         results: operatorizeOverrides(criterionResults) as any,
         deliverableResults: operatorizeOverrides(deliverableResults) as any,

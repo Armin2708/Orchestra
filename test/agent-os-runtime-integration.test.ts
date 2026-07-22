@@ -251,6 +251,30 @@ describe('Agent OS daemon runtime integration', () => {
     expect(delivery?.artifact_ids).toHaveLength(1)
   }, 25_000)
 
+  it('attaches a runtime-created workspace and session to the prepared delivery report', async () => {
+    const { boardId, cardId, db, server } = await fixture()
+    const commandText = `${quote(process.execPath)} -e ${quote(`process.stdout.write('runtime scope\\n')`)}`
+    expect((await server.inject({
+      method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, payload: { verify_commands: [commandText] },
+    })).statusCode).toBe(200)
+
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { card_id: cardId, provider: 'shell', max_attempts: 1 },
+    })
+    expect(response.statusCode).toBe(201)
+    const jobId = response.json().job.id as string
+    await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+
+    const job = db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(jobId) as { workspace_id: string }
+    const session = db.prepare(`SELECT id, workspace_id FROM agent_sessions
+      WHERE json_extract(context_json, '$.job_id')=?`).get(jobId) as { id: string; workspace_id: string }
+    const delivery = new DeliveryReportService(db).currentForCard(cardId)
+    expect(job.workspace_id).toBeTruthy()
+    expect(session.workspace_id).toBe(job.workspace_id)
+    expect(delivery).toMatchObject({ job_id: jobId, workspace_id: job.workspace_id, session_id: session.id })
+  }, 25_000)
+
   it('launches managed agent jobs with least-privilege defaults', async () => {
     const { boardId, repo, db, runtime, server } = await fixture()
     const requests: DriverLaunchRequest[] = []

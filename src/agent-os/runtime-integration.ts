@@ -930,6 +930,10 @@ export class AgentOsJobExecutor implements JobExecutor {
           managedAgentId,
         )
       this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
+      if (delivery) this.deliveries.reports.attachRuntimeScope(delivery.id, {
+        workspaceId: workspace.id,
+        sessionId,
+      })
       if (job.card_id && Number.isSafeInteger(agentId) && agentId > 0) this.claimCard(job, agentId)
     } catch (error) {
       await driver.stop(session.id).catch(() => undefined)
