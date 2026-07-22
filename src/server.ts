@@ -18,6 +18,8 @@ import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from '
 import { boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
+import { defaultsForRole } from './agent-defaults.js'
+import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 import {
@@ -758,7 +760,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
   server.post<{ Params: { id: string }; Body: { provider?: string; model?: string; effort?: string; access_profile?: AccessProfile } | null }>(
-    '/api/v1/cards/:id/launch', (req, reply) => {
+    '/api/v1/cards/:id/launch', async (req, reply) => {
     if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
@@ -776,6 +778,33 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return reply.code(400).send({ error: 'effort must be a provider effort identifier' })
     const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
     try {
+      if (process.env.ORCHESTRA_CANONICAL_LAUNCH === '1') {
+        const orchestration = opts.agentOs?.orchestration
+        if (!orchestration) throw new UnsupportedError('canonical orchestration service is not available')
+        const provider = (req.body?.provider ?? defaultsForRole(db).provider).trim().toLowerCase()
+        if (!opts.agentOs?.jobExecutor?.supportedProviders().includes(provider)) {
+          throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
+        }
+        const launched = await orchestration.launchCard({
+          cardId: card.id,
+          expectedBoardId: card.board_id,
+          requireLaunchable: true,
+          provider,
+          model: req.body?.model,
+          effort: req.body?.effort,
+          accessProfile: req.body?.access_profile,
+        })
+        const agent = launched.session?.agent_id == null ? undefined
+          : db.prepare('SELECT * FROM agents WHERE id=?').get(launched.session.agent_id)
+        return reply.code(200).send({
+          ...launched,
+          mode: 'canonical',
+          ...(agent ? { agent } : {}),
+          card: getCard(card.id),
+          queued: launched.job.status === 'queued',
+          provider: launched.job.provider,
+        })
+      }
       return maestro.launch({
         boardId: card.board_id,
         cardId: card.id,
@@ -788,6 +817,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       })
     } catch (error) {
       if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+      if (error instanceof AgentOsError) return reply.code(error.statusCode).send({ error: error.message, code: error.code })
       throw error
     }
   })

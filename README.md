@@ -190,6 +190,7 @@ orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tai
 | `ORCHESTRA_NAME` | auto-generated | Fix an agent name for a terminal (`export ORCHESTRA_NAME=lead-otter`) |
 | `ORCHESTRA_CODEX_COMMAND` | `codex` | Codex CLI executable used for the supervised app-server |
 | `ORCHESTRA_CODEX_FORWARD_ENV` | empty | Comma-separated extra environment-variable names to pass to app-server deliberately |
+| `ORCHESTRA_CANONICAL_LAUNCH` | off | Legacy Board launch stays authoritative; `1` opts into canonical contracts/jobs for compatibility evaluation and may reject unsupported effort/access |
 
 ## Uninstall
 

@@ -13,6 +13,7 @@ import { ensureToken } from './token.js'
 import { registerPush } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
+import { OrchestrationService } from './agent-os/orchestration-service.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
 import { CODEX_PROVIDER_ID } from './agent-providers.js'
 import {
@@ -126,6 +127,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let autowake: Autowake | undefined
   const agentOs = createAgentOsRuntime(db)
   const scheduler = agentOs.scheduler
+  const orchestration = new OrchestrationService(db, scheduler)
   const codexCommand = process.env.ORCHESTRA_CODEX_COMMAND?.trim() || 'codex'
   const codexSupervisor = new CodexAppServerSupervisor({
     client: { requestTimeoutMs: 5_000 },
@@ -168,6 +170,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         runtime: agentOs.adapter,
         jobExecutor: agentOs.jobExecutor,
         scheduler,
+        orchestration,
         drivers: () => agentOs.descriptors(),
       },
     })

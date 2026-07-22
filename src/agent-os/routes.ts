@@ -10,6 +10,7 @@ import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
 import { LegacyBusEvent, LegacyEventProjection } from './legacy-projection.js'
+import { OrchestrationService } from './orchestration-service.js'
 import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
 import { TaskContractService } from './task-contracts.js'
@@ -86,6 +87,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   runtime?: AgentOsRuntimeAdapter
   jobExecutor?: JobExecutor
   scheduler?: JobScheduler
+  orchestration?: OrchestrationService
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
@@ -105,6 +107,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
   const scheduler = options.scheduler ?? new JobScheduler(db, options.jobExecutor)
+  const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
   const projection = new LegacyEventProjection(db)
@@ -418,13 +421,38 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/jobs', async (request, reply) => {
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
-    const created = scheduler.create({ boardId, cardId: optionalPositiveId(body.card_id ?? body.cardId, 'card_id'),
-      workspaceId: nullableValue(body.workspace_id ?? body.workspaceId), provider: requiredString(body.provider, 'provider'),
-      model: nullableValue(body.model), priority: optionalSignedInteger(body.priority, 0, 'priority'),
-      maxAttempts: boundedInteger(body.max_attempts ?? body.maxAttempts, 1, 1, 100, 'max_attempts'),
-      budgetTokens: optionalNonNegative(body.budget_tokens ?? body.budgetTokens, 'budget_tokens'),
-      budgetCents: optionalNonNegative(body.budget_cents ?? body.budgetCents, 'budget_cents'),
-      scheduledAt: stringValue(body.scheduled_at ?? body.scheduledAt) })
+    const cardId = optionalPositiveId(body.card_id ?? body.cardId, 'card_id')
+    const workspaceValue = cardId && Object.prototype.hasOwnProperty.call(body, 'workspace_id')
+      ? body.workspace_id : body.workspace_id ?? body.workspaceId
+    const workspaceId = cardId && workspaceValue === undefined ? undefined : nullableValue(workspaceValue)
+    const provider = requiredString(body.provider, 'provider')
+    const model = nullableValue(body.model)
+    const priority = cardId && body.priority === undefined
+      ? undefined : optionalSignedInteger(body.priority, 0, 'priority')
+    const maxAttempts = boundedInteger(body.max_attempts ?? body.maxAttempts, 1, 1, 100, 'max_attempts')
+    const budgetTokensValue = cardId && Object.prototype.hasOwnProperty.call(body, 'budget_tokens')
+      ? body.budget_tokens : body.budget_tokens ?? body.budgetTokens
+    const budgetCentsValue = cardId && Object.prototype.hasOwnProperty.call(body, 'budget_cents')
+      ? body.budget_cents : body.budget_cents ?? body.budgetCents
+    const budgetTokens = cardId && budgetTokensValue === undefined
+      ? undefined : optionalNonNegative(budgetTokensValue, 'budget_tokens')
+    const budgetCents = cardId && budgetCentsValue === undefined
+      ? undefined : optionalNonNegative(budgetCentsValue, 'budget_cents')
+    const scheduledAt = stringValue(body.scheduled_at ?? body.scheduledAt)
+    if (cardId) {
+      const scopedCard = db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
+      if (!scopedCard) throw new NotFoundError('card not found')
+      if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
+      const launched = await orchestration.launchCard({ cardId, expectedBoardId: boardId, workspaceId,
+        provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt })
+      return reply.code(201).send({
+        job: launched.job,
+        dispatch: launched.dispatch,
+        dispatch_error: launched.dispatch_error,
+      })
+    }
+    const created = scheduler.create({ boardId, cardId, workspaceId, provider, model, priority,
+      maxAttempts, budgetTokens, budgetCents, scheduledAt })
     await scheduler.tick()
     return reply.code(201).send({ job: scheduler.get(created.id) })
   })
