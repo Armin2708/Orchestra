@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { Artifact, ArtifactStore } from './artifact-store.js'
+import { DeliveryReport, DeliveryReportService, deliveryReportGaps } from './delivery-reports.js'
 import { NotFoundError } from './errors.js'
 import { EventStore, OsEvent } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
@@ -10,6 +11,7 @@ export interface EvidenceBundle {
   card: { id: number; board_id: number; title: string; description: string; column: string }
   contract: TaskContract
   workspace: Workspace | null
+  delivery: { current: DeliveryReport | null; history: DeliveryReport[] }
   generated_at: string
   diff: { artifact_id: string; name: string; content: string | null; path: string | null } | null
   diffstat: { artifact_id: string; content: string | null } | null
@@ -28,12 +30,14 @@ export class EvidenceService {
   private readonly events: EventStore
   private readonly contracts: TaskContractService
   private readonly workspaces: WorkspaceStore
+  private readonly deliveries: DeliveryReportService
 
   constructor(private readonly db: Database.Database) {
     this.artifacts = new ArtifactStore(db)
     this.events = new EventStore(db)
     this.contracts = new TaskContractService(db)
     this.workspaces = new WorkspaceStore(db)
+    this.deliveries = new DeliveryReportService(db, this.events)
   }
 
   assemble(cardId: number): EvidenceBundle {
@@ -67,14 +71,18 @@ export class EvidenceService {
       .map((event) => ({ source: event.source, created_at: event.created_at,
         claim: event.payload && typeof event.payload === 'object' && 'claim' in event.payload ? event.payload.claim : event.payload }))
     const changedFiles = collectChangedFiles(artifacts, diffArtifact)
+    const deliveryHistory = this.deliveries.listCard(cardId)
+    const currentDelivery = deliveryHistory.at(-1) ?? null
     const gaps: string[] = []
     if (!diffArtifact) gaps.push('No diff or patch artifact has been recorded.')
     if (!verificationArtifacts.length && !verificationEvents.length) gaps.push('No verification evidence has been recorded.')
     if (!reviews.length) gaps.push('No human or independent review decision has been recorded.')
     if (card.column_name === 'done' && !shipped.length) gaps.push('The card is done but has no shipped-commit evidence.')
+    if (!currentDelivery) gaps.push('No canonical delivery report has been recorded.')
+    else gaps.push(...deliveryReportGaps(currentDelivery))
     return {
       card: { id: card.id, board_id: card.board_id, title: card.title, description: card.description, column: card.column_name },
-      contract, workspace, generated_at: timestamp(),
+      contract, workspace, delivery: { current: currentDelivery, history: deliveryHistory }, generated_at: timestamp(),
       diff: diffArtifact ? { artifact_id: diffArtifact.id, name: diffArtifact.name, content: diffArtifact.content, path: diffArtifact.path } : null,
       diffstat: diffstatArtifact ? { artifact_id: diffstatArtifact.id, content: diffstatArtifact.content } : null,
       changed_files: changedFiles,

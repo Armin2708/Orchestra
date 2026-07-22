@@ -281,6 +281,132 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '004-delivery-trackbook',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE task_contracts ADD COLUMN deliverables TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE task_contracts ADD COLUMN non_goals TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE task_contracts ADD COLUMN risks TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE task_contracts ADD COLUMN version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0);
+
+        CREATE TRIGGER task_contract_version_monotonic
+        BEFORE UPDATE OF version ON task_contracts
+        WHEN NEW.version < OLD.version
+        BEGIN
+          SELECT RAISE(ABORT, 'task contract version must increase monotonically');
+        END;
+
+        CREATE TABLE delivery_reports (
+          id TEXT PRIMARY KEY,
+          lineage_id TEXT NOT NULL,
+          parent_report_id TEXT REFERENCES delivery_reports(id) ON DELETE RESTRICT,
+          sequence INTEGER NOT NULL CHECK(sequence > 0),
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+          job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK(status IN ('draft','submitted','verified','accepted','rejected')),
+          asked_snapshot TEXT NOT NULL CHECK(json_valid(asked_snapshot)),
+          summary TEXT NOT NULL DEFAULT '',
+          delivered_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(delivered_items)),
+          claims_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(claims_json)),
+          changed_files TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_files)),
+          commits TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(commits)),
+          artifact_ids TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(artifact_ids)),
+          gaps TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(gaps)),
+          created_by TEXT NOT NULL,
+          submitted_by TEXT,
+          verified_by TEXT,
+          accepted_by TEXT,
+          rejected_by TEXT,
+          acceptance_note TEXT,
+          rejection_reason TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          submitted_at TEXT,
+          verified_at TEXT,
+          accepted_at TEXT,
+          rejected_at TEXT,
+          CHECK((parent_report_id IS NULL AND sequence=1)
+            OR (parent_report_id IS NOT NULL AND sequence>1))
+        );
+
+        CREATE TABLE delivery_deliverable_results (
+          report_id TEXT NOT NULL REFERENCES delivery_reports(id) ON DELETE CASCADE,
+          deliverable_id TEXT NOT NULL,
+          outcome TEXT NOT NULL CHECK(outcome IN ('met','partial','missed','unverifiable')),
+          note TEXT,
+          evidence_refs TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(evidence_refs)),
+          override_actor TEXT,
+          override_reason TEXT,
+          override_at TEXT,
+          actor TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(report_id, deliverable_id),
+          CHECK((override_actor IS NULL AND override_reason IS NULL AND override_at IS NULL)
+            OR (override_actor IS NOT NULL AND override_reason IS NOT NULL AND override_at IS NOT NULL))
+        );
+
+        CREATE TABLE delivery_criterion_results (
+          report_id TEXT NOT NULL REFERENCES delivery_reports(id) ON DELETE CASCADE,
+          criterion_id TEXT NOT NULL,
+          outcome TEXT NOT NULL CHECK(outcome IN ('met','partial','missed','unverifiable')),
+          note TEXT,
+          evidence_refs TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(evidence_refs)),
+          override_actor TEXT,
+          override_reason TEXT,
+          override_at TEXT,
+          actor TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(report_id, criterion_id),
+          CHECK((override_actor IS NULL AND override_reason IS NULL AND override_at IS NULL)
+            OR (override_actor IS NOT NULL AND override_reason IS NOT NULL AND override_at IS NOT NULL))
+        );
+
+        CREATE UNIQUE INDEX idx_delivery_reports_lineage_sequence
+          ON delivery_reports(lineage_id, sequence);
+        CREATE UNIQUE INDEX idx_delivery_reports_parent_revision
+          ON delivery_reports(parent_report_id) WHERE parent_report_id IS NOT NULL;
+        CREATE UNIQUE INDEX idx_delivery_reports_job_root
+          ON delivery_reports(job_id) WHERE job_id IS NOT NULL AND parent_report_id IS NULL;
+        CREATE INDEX idx_delivery_reports_card
+          ON delivery_reports(card_id, created_at, sequence);
+        CREATE INDEX idx_delivery_reports_status
+          ON delivery_reports(board_id, status, updated_at);
+
+        CREATE TRIGGER delivery_reports_asked_immutable
+        BEFORE UPDATE OF asked_snapshot, lineage_id, parent_report_id, sequence, board_id, card_id, job_id
+          ON delivery_reports
+        WHEN NEW.asked_snapshot IS NOT OLD.asked_snapshot
+          OR NEW.lineage_id IS NOT OLD.lineage_id
+          OR NEW.parent_report_id IS NOT OLD.parent_report_id
+          OR NEW.sequence IS NOT OLD.sequence
+          OR NEW.board_id IS NOT OLD.board_id
+          OR NEW.card_id IS NOT OLD.card_id
+          OR NEW.job_id IS NOT OLD.job_id
+        BEGIN
+          SELECT RAISE(ABORT, 'delivery asked snapshot and lineage are immutable');
+        END;
+
+        CREATE TRIGGER delivery_reports_status_transition
+        BEFORE UPDATE OF status ON delivery_reports
+        WHEN NEW.status != OLD.status AND NOT (
+          (OLD.status='draft' AND NEW.status='submitted')
+          OR (OLD.status='submitted' AND NEW.status='verified')
+          OR (OLD.status='submitted' AND NEW.status='rejected')
+          OR (OLD.status='verified' AND NEW.status IN ('accepted','rejected'))
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'invalid delivery status transition');
+        END;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */
