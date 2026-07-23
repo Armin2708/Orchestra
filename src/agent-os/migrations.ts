@@ -988,7 +988,55 @@ const migrations: Migration[] = [
         WHERE agent_id IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM agent_profiles profile
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
             WHERE profile.id='legacy-agent:' || agent_sessions.agent_id
+              AND profile.board_id=workspace.board_id
+          );
+
+        UPDATE agent_sessions
+        SET status='lost',
+            mode='compatibility',
+            driver_id=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.driver_id')='text'
+              THEN json_extract(context_json, '$.driver_id')
+              ELSE coalesce(driver_id, provider)
+            END,
+            effort=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.effort')='text'
+              THEN json_extract(context_json, '$.effort')
+              ELSE effort
+            END,
+            access_profile=CASE
+              WHEN json_valid(context_json)
+                AND json_extract(context_json, '$.access_profile')
+                  IN ('read_only','workspace_write','full_access')
+              THEN json_extract(context_json, '$.access_profile')
+              ELSE access_profile
+            END,
+            provider_thread_id=coalesce(provider_thread_id, external_id),
+            provider_cursor=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.last_event_seq') IN ('integer','text')
+              THEN CAST(json_extract(context_json, '$.last_event_seq') AS TEXT)
+              ELSE provider_cursor
+            END,
+            recovery_state='lost',
+            recovery_json=json_object(
+              'source', 'legacy_backfill',
+              'reason', 'agent_workspace_board_mismatch'
+            ),
+            history_state='unavailable',
+            started_at=coalesce(started_at, created_at),
+            ended_at=coalesce(ended_at, updated_at)
+        WHERE agent_id IS NOT NULL
+          AND profile_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM agents agent
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
+            WHERE agent.id=agent_sessions.agent_id
+              AND agent.board_id!=workspace.board_id
           );
 
         UPDATE agent_sessions

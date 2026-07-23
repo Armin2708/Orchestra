@@ -257,6 +257,34 @@ describe('durable Agent Home domain', () => {
     expect(first).toMatchObject({ replayed: false, event: { sequence: 1 } })
     expect(replay).toMatchObject({ replayed: true, event: { id: first.event.id, sequence: 1 } })
 
+    const replayWithNewCommandKey = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first:replay',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      providerEventId: 'event-1',
+      providerThreadId: 'thread-1',
+      providerCursor: 'cursor-1',
+      projectedText: 'First answer',
+      metadata: { usage: { output: 12 } },
+      rawArtifactId: artifactId,
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'turn-1',
+    })
+    expect(replayWithNewCommandKey).toMatchObject({
+      replayed: true,
+      event: { id: first.event.id, sequence: 1 },
+    })
+    expect((db.prepare(
+      "SELECT kind FROM os_events WHERE idempotency_key='event:append:first:replay'",
+    ).get() as any).kind).toBe('conversation.event_replayed')
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first:replay',
+      dedupeKey: 'provider:event:reused-command-key',
+      kind: 'status',
+      projectedText: 'This command key must stay bound to the replay',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/idempotency key/)
+
     const second = conversations.appendEvent(sessionId, {
       idempotencyKey: 'event:append:second',
       dedupeKey: 'provider:event:2',
@@ -362,6 +390,62 @@ describe('durable Agent Home domain', () => {
 
     expect(otherBoardId).not.toBe(boardId)
     expect(otherWorkspaceId).not.toBe(workspaceId)
+    db.close()
+  })
+
+  it('keeps event replay stable when provider thread metadata is discovered later', () => {
+    const db = openDb(':memory:')
+    const { boardId, sessionId } = seedScope(db)
+    db.prepare('UPDATE agent_sessions SET external_id=NULL WHERE id=?').run(sessionId)
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+    const profile = profiles.create({
+      boardId,
+      name: 'Recoverable builder',
+      actor,
+      idempotencyKey: 'profile:create:recoverable',
+    })
+    const conversation = conversations.listConversations(profile.id)[0]
+    conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor,
+      idempotencyKey: 'session:link:recoverable',
+    })
+
+    const beforeDiscovery = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:threadless:first',
+      dedupeKey: 'provider:threadless:first',
+      kind: 'assistant',
+      projectedText: 'Recorded before the provider thread was known',
+      actor: { type: 'agent', id: 'codex' },
+    })
+    conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:thread:discovered',
+      dedupeKey: 'provider:thread:discovered',
+      kind: 'status',
+      providerThreadId: 'thread-discovered-after-attach',
+      projectedText: 'Provider thread discovered',
+      actor: { type: 'system', id: 'recovery' },
+    })
+    expect(conversations.requireSession(sessionId).provider_thread_id)
+      .toBe('thread-discovered-after-attach')
+
+    const replay = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:threadless:first',
+      dedupeKey: 'provider:threadless:first',
+      kind: 'assistant',
+      projectedText: 'Recorded before the provider thread was known',
+      actor: { type: 'agent', id: 'codex' },
+    })
+    expect(replay).toMatchObject({
+      replayed: true,
+      event: { id: beforeDiscovery.event.id, sequence: beforeDiscovery.event.sequence },
+    })
+    expect((db.prepare(
+      'SELECT COUNT(*) AS count FROM conversation_event_conflicts',
+    ).get() as any).count).toBe(0)
     db.close()
   })
 
@@ -494,11 +578,16 @@ describe('durable Agent Home domain', () => {
         ('001-agent-os-kernel'), ('002-runtime-hardening'),
         ('003-provider-session-ownership'), ('004-delivery-trackbook'),
         ('005-delivery-report-revision-cascade'), ('006-canonical-launch-reservations');
-      INSERT INTO boards (id, project_path, name) VALUES (1, '/legacy-home', 'legacy home');
+      INSERT INTO boards (id, project_path, name) VALUES
+        (1, '/legacy-home', 'legacy home'),
+        (2, '/legacy-other', 'legacy other');
       INSERT INTO workspaces
         (id, board_id, name, kind, root_path, status, created_at, updated_at)
-        VALUES ('legacy-workspace', 1, 'legacy', 'shared', '/legacy-home', 'active',
-          '2026-07-20T10:00:00.000Z', '2026-07-20T10:00:00.000Z');
+        VALUES
+          ('legacy-workspace', 1, 'legacy', 'shared', '/legacy-home', 'active',
+            '2026-07-20T10:00:00.000Z', '2026-07-20T10:00:00.000Z'),
+          ('legacy-other-workspace', 2, 'legacy other', 'shared', '/legacy-other', 'active',
+            '2026-07-20T10:00:00.000Z', '2026-07-20T10:00:00.000Z');
       INSERT INTO jobs (id, board_id, workspace_id, provider)
         VALUES ('legacy-job', 1, 'legacy-workspace', 'codex');
       INSERT INTO agents
@@ -510,7 +599,10 @@ describe('durable Agent Home domain', () => {
             'medium', 'codex', 'workspace_write'),
           (42, 1, 'Managed legacy', 'active', '2026-07-20T12:00:00.000Z',
             '2026-07-20T10:00:00.000Z', 'hired', 'worker', 'codex-model',
-            'high', 'codex', 'full_access');
+            'high', 'codex', 'full_access'),
+          (43, 1, 'Mismatched legacy', 'active', '2026-07-20T12:00:00.000Z',
+            '2026-07-20T10:00:00.000Z', 'hired', 'worker', 'codex-model',
+            'medium', 'codex', 'workspace_write');
       INSERT INTO agent_sessions
         (id, workspace_id, agent_id, provider, external_id, model, status,
          context_json, created_at, updated_at)
@@ -520,6 +612,10 @@ describe('durable Agent Home domain', () => {
             '2026-07-20T10:00:00.000Z', '2026-07-20T12:00:00.000Z'),
           ('legacy-managed-session', 'legacy-workspace', 42, 'codex', 'thread-managed',
             'codex-model', 'stopped', '{"job_id":"legacy-job","effort":"max"}',
+            '2026-07-20T10:00:00.000Z', '2026-07-20T12:00:00.000Z'),
+          ('legacy-mismatched-session', 'legacy-other-workspace', 43, 'codex',
+            'thread-mismatched', 'codex-model', 'running',
+            '{"driver_id":"driver-x","last_event_seq":9,"effort":"high","access_profile":"read_only"}',
             '2026-07-20T10:00:00.000Z', '2026-07-20T12:00:00.000Z');
       INSERT INTO os_events
         (id, board_id, workspace_id, session_id, kind, source, payload, created_at)
@@ -543,6 +639,11 @@ describe('durable Agent Home domain', () => {
         legacy_agent_id: 42,
         name: 'Managed legacy',
       }),
+      expect.objectContaining({
+        id: 'legacy-agent:43',
+        legacy_agent_id: 43,
+        name: 'Mismatched legacy',
+      }),
     ])
     expect(db.prepare(`SELECT id, profile_id, is_default
       FROM agent_conversations ORDER BY profile_id`).all()).toEqual([
@@ -556,9 +657,14 @@ describe('durable Agent Home domain', () => {
         profile_id: 'legacy-agent:42',
         is_default: 1,
       },
+      {
+        id: 'legacy-conversation:43',
+        profile_id: 'legacy-agent:43',
+        is_default: 1,
+      },
     ])
-    expect(db.prepare(`SELECT id, profile_id, conversation_id, job_id, mode,
-      driver_id, effort, provider_thread_id, provider_cursor, recovery_state,
+    expect(db.prepare(`SELECT id, profile_id, conversation_id, job_id, mode, status,
+      driver_id, effort, access_profile, provider_thread_id, provider_cursor, recovery_state,
       history_state, started_at, ended_at
       FROM agent_sessions ORDER BY id`).all()).toEqual([
       expect.objectContaining({
@@ -586,7 +692,29 @@ describe('durable Agent Home domain', () => {
         history_state: 'unavailable',
         ended_at: '2026-07-20T12:00:00.000Z',
       }),
+      expect.objectContaining({
+        id: 'legacy-mismatched-session',
+        profile_id: null,
+        conversation_id: null,
+        job_id: null,
+        mode: 'compatibility',
+        status: 'lost',
+        driver_id: 'driver-x',
+        effort: 'high',
+        access_profile: 'read_only',
+        provider_thread_id: 'thread-mismatched',
+        provider_cursor: '9',
+        recovery_state: 'lost',
+        history_state: 'unavailable',
+        started_at: '2026-07-20T10:00:00.000Z',
+        ended_at: '2026-07-20T12:00:00.000Z',
+      }),
     ])
+    expect(JSON.parse((db.prepare(`SELECT recovery_json FROM agent_sessions
+      WHERE id='legacy-mismatched-session'`).get() as any).recovery_json)).toEqual({
+      source: 'legacy_backfill',
+      reason: 'agent_workspace_board_mismatch',
+    })
 
     db.prepare('DELETE FROM agents WHERE id=41').run()
     expect(db.prepare("SELECT id, legacy_agent_id FROM agent_profiles WHERE id='legacy-agent:41'").get())
@@ -597,9 +725,9 @@ describe('durable Agent Home domain', () => {
     reopened.pragma('foreign_keys = ON')
     applyAgentOsMigrations(reopened)
     expect((reopened.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get() as any).count)
-      .toBe(2)
+      .toBe(3)
     expect((reopened.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get() as any).count)
-      .toBe(2)
+      .toBe(3)
     reopened.close()
   })
 })

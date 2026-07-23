@@ -593,14 +593,15 @@ export class ConversationService {
     const actor = actorIdentity(input.actor)
     const provider = providerIdentifier(input.provider ?? session.provider, 'provider')
     if (provider !== session.provider) throw new ValidationError('event provider must match the agent session provider')
+    const requestedProviderThreadId = optionalBoundedString(
+      input.providerThreadId,
+      'provider thread id',
+      512,
+    )
     const normalized = {
       provider,
       provider_event_id: optionalBoundedString(input.providerEventId, 'provider event id', 512),
-      provider_thread_id: optionalBoundedString(
-        input.providerThreadId ?? session.provider_thread_id,
-        'provider thread id',
-        512,
-      ),
+      provider_thread_id: requestedProviderThreadId ?? session.provider_thread_id,
       provider_turn_id: optionalBoundedString(input.providerTurnId, 'provider turn id', 512),
       provider_item_id: optionalBoundedString(input.providerItemId, 'provider item id', 512),
       provider_cursor: optionalBoundedString(input.providerCursor, 'provider cursor', 2_000),
@@ -617,7 +618,10 @@ export class ConversationService {
       schema_version: positiveInteger(input.schemaVersion ?? 1, 'schema version'),
     }
     this.validateArtifactScope(normalized.raw_artifact_id, scope.board_id, session.workspace_id)
-    const contentHash = canonicalHash(normalized)
+    const contentHash = canonicalHash({
+      ...normalized,
+      provider_thread_id: requestedProviderThreadId,
+    })
     const idempotencyKey = boundedString(input.idempotencyKey, 'idempotency key', 200)
 
     const append = this.db.transaction((): AppendConversationEventResult | { conflictId: string } => {
@@ -655,6 +659,30 @@ export class ConversationService {
           throw new ConflictError(
             'idempotency key was already used for a different conversation event',
           )
+        }
+        if (!replay) {
+          this.events.append({
+            boardId: profile.board_id,
+            workspaceId: latest.workspace_id,
+            sessionId: latest.id,
+            jobId: latest.job_id,
+            correlationId: normalized.correlation_id ?? `conversation-replay:${canonical.id}`,
+            causationId: normalized.causation_id,
+            idempotencyKey,
+            kind: 'conversation.event_replayed',
+            source: 'agent-home',
+            payload: {
+              profile_id: profile.id,
+              conversation_id: conversation.id,
+              session_id: latest.id,
+              conversation_event_id: canonical.id,
+              replay_of_event_id: canonical.id,
+              sequence: canonical.sequence,
+              dedupe_key: normalized.dedupe_key,
+              content_hash: contentHash,
+              request_fingerprint: contentHash,
+            },
+          })
         }
         return { event: canonical, replayed: true }
       }
@@ -871,7 +899,7 @@ export class ConversationService {
     ).get(boardId, idempotencyKey) as { kind: string; payload: string } | undefined
     if (!row) return null
     const payload = parseJson<Record<string, unknown>>(row.payload, {})
-    if (row.kind !== 'conversation.event_appended'
+    if (!['conversation.event_appended', 'conversation.event_replayed'].includes(row.kind)
       || payload.request_fingerprint !== contentHash
       || payload.session_id !== sessionId
       || payload.dedupe_key !== dedupeKey
