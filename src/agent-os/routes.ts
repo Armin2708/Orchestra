@@ -32,6 +32,7 @@ import {
   writeAgentDefaults,
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
+import { agentHomePlugin } from './agent-home-routes.js'
 
 export interface ProcessRecord {
   id: string
@@ -106,6 +107,11 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
   server.register(agentOsPlugin, { ...options, prefix: '/api/v1/os' })
+  server.register(agentHomePlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
 }
 
 export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app, options) => {

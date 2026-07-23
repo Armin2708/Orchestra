@@ -612,6 +612,448 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '007-agent-home-domain',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE agent_profiles (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          legacy_agent_id INTEGER UNIQUE REFERENCES agents(id) ON DELETE SET NULL,
+          name TEXT NOT NULL,
+          role TEXT,
+          default_provider TEXT,
+          default_model TEXT,
+          default_effort TEXT,
+          default_access_profile TEXT
+            CHECK(default_access_profile IS NULL
+              OR default_access_profile IN ('read_only','workspace_write','full_access')),
+          capabilities_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(capabilities_json)),
+          owner_actor_type TEXT NOT NULL,
+          owner_actor_id TEXT,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active','archived')),
+          provenance_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(provenance_json)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT,
+          UNIQUE(board_id, name)
+        );
+
+        CREATE TABLE agent_conversations (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active','archived')),
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+          next_sequence INTEGER NOT NULL DEFAULT 1 CHECK(next_sequence > 0),
+          created_by_actor_type TEXT NOT NULL,
+          created_by_actor_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT
+        );
+
+        CREATE UNIQUE INDEX idx_agent_conversations_default
+          ON agent_conversations(profile_id)
+          WHERE is_default=1 AND status='active';
+        CREATE INDEX idx_agent_profiles_board
+          ON agent_profiles(board_id, status, name);
+        CREATE INDEX idx_agent_conversations_profile
+          ON agent_conversations(profile_id, status, updated_at);
+
+        ALTER TABLE agent_sessions
+          ADD COLUMN profile_id TEXT REFERENCES agent_profiles(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN conversation_id TEXT REFERENCES agent_conversations(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN mode TEXT NOT NULL DEFAULT 'compatibility'
+            CHECK(mode IN ('managed','ambient','compatibility'));
+        ALTER TABLE agent_sessions ADD COLUMN driver_id TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN effort TEXT;
+        ALTER TABLE agent_sessions
+          ADD COLUMN access_profile TEXT
+            CHECK(access_profile IS NULL
+              OR access_profile IN ('read_only','workspace_write','full_access'));
+        ALTER TABLE agent_sessions ADD COLUMN provider_thread_id TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN provider_cursor TEXT;
+        ALTER TABLE agent_sessions
+          ADD COLUMN recovery_state TEXT NOT NULL DEFAULT 'unknown'
+            CHECK(recovery_state IN ('unknown','attachable','detached','lost','unsupported'));
+        ALTER TABLE agent_sessions
+          ADD COLUMN recovery_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(recovery_json));
+        ALTER TABLE agent_sessions
+          ADD COLUMN history_state TEXT NOT NULL DEFAULT 'unavailable'
+            CHECK(history_state IN ('complete','partial','unavailable'));
+        ALTER TABLE agent_sessions ADD COLUMN started_at TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN ended_at TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN archived_at TEXT;
+
+        CREATE INDEX idx_agent_sessions_profile ON agent_sessions(profile_id);
+        CREATE INDEX idx_agent_sessions_conversation ON agent_sessions(conversation_id);
+        CREATE INDEX idx_agent_sessions_job ON agent_sessions(job_id);
+
+        CREATE TABLE conversation_events (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+          session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          sequence INTEGER NOT NULL CHECK(sequence > 0),
+          provider TEXT,
+          provider_event_id TEXT,
+          provider_thread_id TEXT,
+          provider_turn_id TEXT,
+          provider_item_id TEXT,
+          provider_cursor TEXT,
+          kind TEXT NOT NULL
+            CHECK(kind IN ('user','assistant','system','tool','tool_result',
+              'approval','usage','status','error')),
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          correlation_id TEXT,
+          causation_id TEXT,
+          projected_text TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadata_json)),
+          raw_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+          dedupe_key TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          redaction_state TEXT NOT NULL DEFAULT 'none'
+            CHECK(redaction_state IN ('none','redacted','withheld')),
+          retention_class TEXT NOT NULL DEFAULT 'transcript'
+            CHECK(retention_class IN ('transcript','audit','ephemeral','pinned')),
+          schema_version INTEGER NOT NULL DEFAULT 1 CHECK(schema_version > 0),
+          created_at TEXT NOT NULL,
+          archived_at TEXT,
+          UNIQUE(conversation_id, sequence),
+          UNIQUE(conversation_id, dedupe_key)
+        );
+
+        CREATE TABLE conversation_event_conflicts (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+          session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          canonical_event_id TEXT NOT NULL REFERENCES conversation_events(id) ON DELETE CASCADE,
+          dedupe_key TEXT NOT NULL,
+          received_content_hash TEXT NOT NULL,
+          received_projected_text TEXT,
+          received_metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(received_metadata_json)),
+          raw_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(canonical_event_id, received_content_hash)
+        );
+
+        CREATE INDEX idx_conversation_events_conversation
+          ON conversation_events(conversation_id, sequence);
+        CREATE INDEX idx_conversation_events_session
+          ON conversation_events(session_id, sequence);
+        CREATE INDEX idx_conversation_events_profile
+          ON conversation_events(profile_id, created_at);
+        CREATE INDEX idx_conversation_events_provider
+          ON conversation_events(session_id, provider, provider_event_id)
+          WHERE provider_event_id IS NOT NULL;
+        CREATE INDEX idx_conversation_event_conflicts_event
+          ON conversation_event_conflicts(canonical_event_id, created_at);
+
+        CREATE TRIGGER agent_conversations_profile_scope_insert
+        BEFORE INSERT ON agent_conversations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            WHERE profile.id=NEW.profile_id AND profile.board_id=NEW.board_id
+          ) THEN RAISE(ABORT, 'conversation profile belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER agent_conversations_profile_scope_update
+        BEFORE UPDATE OF board_id, profile_id ON agent_conversations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            WHERE profile.id=NEW.profile_id AND profile.board_id=NEW.board_id
+          ) THEN RAISE(ABORT, 'conversation profile belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_home_scope_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.profile_id IS NOT NULL OR NEW.conversation_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NEW.profile_id IS NULL OR NEW.conversation_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM agent_conversations conversation
+              JOIN agent_profiles profile ON profile.id=conversation.profile_id
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE conversation.id=NEW.conversation_id
+                AND profile.id=NEW.profile_id
+                AND profile.board_id=workspace.board_id
+            )
+          THEN RAISE(ABORT, 'session Agent Home scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_home_scope_update
+        BEFORE UPDATE OF workspace_id, profile_id, conversation_id ON agent_sessions
+        WHEN NEW.profile_id IS NOT NULL OR NEW.conversation_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NEW.profile_id IS NULL OR NEW.conversation_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM agent_conversations conversation
+              JOIN agent_profiles profile ON profile.id=conversation.profile_id
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE conversation.id=NEW.conversation_id
+                AND profile.id=NEW.profile_id
+                AND profile.board_id=workspace.board_id
+            )
+          THEN RAISE(ABORT, 'session Agent Home scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_scope_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE job.id=NEW.job_id
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=NEW.workspace_id)
+          ) THEN RAISE(ABORT, 'session job belongs to a different board or workspace') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_scope_update
+        BEFORE UPDATE OF workspace_id, job_id ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE job.id=NEW.job_id
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=NEW.workspace_id)
+          ) THEN RAISE(ABORT, 'session job belongs to a different board or workspace') END;
+        END;
+
+        CREATE TRIGGER conversation_events_scope_insert
+        BEFORE INSERT ON conversation_events
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_conversations conversation
+            JOIN agent_profiles profile ON profile.id=conversation.profile_id
+            WHERE conversation.id=NEW.conversation_id
+              AND conversation.board_id=NEW.board_id
+              AND profile.id=NEW.profile_id
+          ) THEN RAISE(ABORT, 'conversation event scope is inconsistent') END;
+          SELECT CASE WHEN NEW.session_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions session
+            WHERE session.id=NEW.session_id
+              AND session.profile_id=NEW.profile_id
+              AND session.conversation_id=NEW.conversation_id
+          ) THEN RAISE(ABORT, 'conversation event session scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER conversation_event_conflicts_scope_insert
+        BEFORE INSERT ON conversation_event_conflicts
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM conversation_events canonical
+            WHERE canonical.id=NEW.canonical_event_id
+              AND canonical.board_id=NEW.board_id
+              AND canonical.profile_id=NEW.profile_id
+              AND canonical.conversation_id=NEW.conversation_id
+              AND canonical.dedupe_key=NEW.dedupe_key
+          ) THEN RAISE(ABORT, 'conversation event conflict scope is inconsistent') END;
+          SELECT CASE WHEN NEW.session_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions session
+            WHERE session.id=NEW.session_id
+              AND session.profile_id=NEW.profile_id
+              AND session.conversation_id=NEW.conversation_id
+          ) THEN RAISE(ABORT, 'conversation event conflict session scope is inconsistent') END;
+        END;
+      `)
+
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE TRIGGER conversation_events_artifact_scope_insert
+          BEFORE INSERT ON conversation_events
+          WHEN NEW.raw_artifact_id IS NOT NULL
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              WHERE artifact.id=NEW.raw_artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND (
+                  artifact.workspace_id IS NULL
+                  OR EXISTS (
+                    SELECT 1 FROM agent_sessions session
+                    WHERE session.id=NEW.session_id
+                      AND session.workspace_id=artifact.workspace_id
+                  )
+                )
+            ) THEN RAISE(ABORT, 'conversation event artifact scope is inconsistent') END;
+          END;
+
+          CREATE TRIGGER conversation_event_conflicts_artifact_scope_insert
+          BEFORE INSERT ON conversation_event_conflicts
+          WHEN NEW.raw_artifact_id IS NOT NULL
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              WHERE artifact.id=NEW.raw_artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND (
+                  artifact.workspace_id IS NULL
+                  OR EXISTS (
+                    SELECT 1 FROM agent_sessions session
+                    WHERE session.id=NEW.session_id
+                      AND session.workspace_id=artifact.workspace_id
+                  )
+                )
+            ) THEN RAISE(ABORT, 'conversation event conflict artifact scope is inconsistent') END;
+          END;
+        `)
+      }
+
+      const hasLegacyAgents = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agents'",
+      ).get()
+      const sessionColumns = new Set(
+        (db.prepare("PRAGMA table_info('agent_sessions')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!hasLegacyAgents || !sessionColumns.has('agent_id')) return
+
+      db.exec(`
+        INSERT OR IGNORE INTO agent_profiles (
+          id, board_id, legacy_agent_id, name, role, default_provider, default_model,
+          default_effort, default_access_profile, capabilities_json, owner_actor_type,
+          owner_actor_id, status, provenance_json, created_at, updated_at, archived_at
+        )
+        SELECT
+          'legacy-agent:' || agent.id,
+          agent.board_id,
+          agent.id,
+          agent.name,
+          agent.role,
+          CASE WHEN trim(coalesce(agent.provider, ''))='' THEN NULL ELSE agent.provider END,
+          agent.model,
+          agent.effort,
+          CASE WHEN agent.access_profile IN ('read_only','workspace_write','full_access')
+            THEN agent.access_profile ELSE NULL END,
+          '[]',
+          'operator',
+          NULL,
+          'active',
+          json_object(
+            'source', 'legacy_agents',
+            'legacy_kind', coalesce(agent.kind, 'session'),
+            'legacy_status', coalesce(agent.status, 'unknown')
+          ),
+          agent.created_at,
+          agent.last_seen,
+          NULL
+        FROM agents agent;
+
+        INSERT OR IGNORE INTO agent_conversations (
+          id, board_id, profile_id, title, status, is_default, next_sequence,
+          created_by_actor_type, created_by_actor_id, created_at, updated_at, archived_at
+        )
+        SELECT
+          'legacy-conversation:' || agent.id,
+          agent.board_id,
+          'legacy-agent:' || agent.id,
+          agent.name || ' conversation',
+          'active',
+          1,
+          1,
+          'migration',
+          '007-agent-home-domain',
+          agent.created_at,
+          agent.last_seen,
+          NULL
+        FROM agents agent
+        JOIN agent_profiles profile ON profile.id='legacy-agent:' || agent.id;
+
+        UPDATE agent_sessions
+        SET profile_id='legacy-agent:' || agent_id,
+            conversation_id='legacy-conversation:' || agent_id
+        WHERE agent_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            WHERE profile.id='legacy-agent:' || agent_sessions.agent_id
+          );
+
+        UPDATE agent_sessions
+        SET job_id=json_extract(context_json, '$.job_id')
+        WHERE json_valid(context_json)
+          AND json_type(context_json, '$.job_id')='text'
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
+            WHERE job.id=json_extract(agent_sessions.context_json, '$.job_id')
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=agent_sessions.workspace_id)
+          );
+
+        UPDATE agent_sessions
+        SET driver_id=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.driver_id')='text'
+              THEN json_extract(context_json, '$.driver_id')
+              ELSE provider
+            END,
+            effort=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.effort')='text'
+              THEN json_extract(context_json, '$.effort')
+              ELSE effort
+            END,
+            access_profile=CASE
+              WHEN json_valid(context_json)
+                AND json_extract(context_json, '$.access_profile')
+                  IN ('read_only','workspace_write','full_access')
+              THEN json_extract(context_json, '$.access_profile')
+              ELSE access_profile
+            END,
+            provider_thread_id=external_id,
+            provider_cursor=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.last_event_seq') IN ('integer','text')
+              THEN CAST(json_extract(context_json, '$.last_event_seq') AS TEXT)
+              ELSE NULL
+            END,
+            mode=CASE
+              WHEN job_id IS NOT NULL THEN 'managed'
+              WHEN EXISTS (
+                SELECT 1 FROM agents agent
+                WHERE agent.id=agent_sessions.agent_id AND agent.kind='session'
+              ) THEN 'ambient'
+              ELSE 'compatibility'
+            END,
+            recovery_state=CASE
+              WHEN status='lost' THEN 'lost'
+              WHEN external_id IS NOT NULL THEN 'attachable'
+              ELSE 'unknown'
+            END,
+            recovery_json=json_object('source', 'legacy_backfill'),
+            history_state=CASE WHEN EXISTS (
+              SELECT 1 FROM os_events event
+              WHERE event.session_id=agent_sessions.id AND event.kind LIKE 'driver.%'
+            ) THEN 'partial' ELSE 'unavailable' END,
+            started_at=created_at,
+            ended_at=CASE WHEN status IN ('stopped','failed','lost') THEN updated_at ELSE NULL END
+        WHERE profile_id IS NOT NULL AND conversation_id IS NOT NULL;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

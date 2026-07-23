@@ -1,0 +1,672 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import Database from 'better-sqlite3'
+import { afterEach, describe, expect, it } from 'vitest'
+import { openDb } from '../src/db.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { ConversationService } from '../src/agent-os/conversations.js'
+import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
+
+const actor = { type: 'operator', id: 'test-operator' }
+const tempDirectories: string[] = []
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+describe('durable Agent Home domain', () => {
+  it('creates, replays, updates, and archives durable profiles and conversations', () => {
+    const db = openDb(':memory:')
+    const { boardId } = seedScope(db)
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+
+    const created = profiles.create({
+      boardId,
+      name: 'Builder',
+      role: 'implementation',
+      defaultProvider: 'codex',
+      defaultModel: 'gpt-codex',
+      defaultEffort: 'high',
+      defaultAccessProfile: 'workspace_write',
+      capabilities: ['code', 'review', 'code'],
+      actor,
+      idempotencyKey: 'profile:create:builder',
+    })
+    const replay = profiles.create({
+      boardId,
+      name: 'Builder',
+      role: 'implementation',
+      defaultProvider: 'codex',
+      defaultModel: 'gpt-codex',
+      defaultEffort: 'high',
+      defaultAccessProfile: 'workspace_write',
+      capabilities: ['code', 'review', 'code'],
+      actor,
+      idempotencyKey: 'profile:create:builder',
+    })
+    expect(replay.id).toBe(created.id)
+    expect(created).toMatchObject({
+      name: 'Builder',
+      role: 'implementation',
+      default_provider: 'codex',
+      capabilities: ['code', 'review'],
+      status: 'active',
+    })
+    expect(() => profiles.create({
+      boardId,
+      name: 'Different',
+      actor,
+      idempotencyKey: 'profile:create:builder',
+    })).toThrow(/idempotency key/)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get() as any).count).toBe(1)
+
+    const defaults = conversations.listConversations(created.id)
+    expect(defaults).toEqual([
+      expect.objectContaining({
+        profile_id: created.id,
+        title: 'Builder conversation',
+        is_default: true,
+      }),
+    ])
+    const updated = profiles.update(created.id, {
+      name: 'Senior Builder',
+      role: 'delivery',
+      capabilities: ['code', 'verification'],
+      actor,
+      idempotencyKey: 'profile:update:builder',
+    })
+    expect(updated).toMatchObject({
+      name: 'Senior Builder',
+      role: 'delivery',
+      capabilities: ['code', 'verification'],
+    })
+    expect(profiles.update(created.id, {
+      name: 'Senior Builder',
+      role: 'delivery',
+      capabilities: ['code', 'verification'],
+      actor,
+      idempotencyKey: 'profile:update:builder',
+    }).id).toBe(created.id)
+    expect(conversations.listConversations(created.id)[0].title)
+      .toBe('Senior Builder conversation')
+
+    const side = conversations.createConversation(created.id, {
+      title: 'Review thread',
+      actor,
+      idempotencyKey: 'conversation:create:review',
+    })
+    expect(conversations.createConversation(created.id, {
+      title: 'Review thread',
+      actor,
+      idempotencyKey: 'conversation:create:review',
+    }).id).toBe(side.id)
+    expect(conversations.updateConversation(side.id, {
+      title: 'Review and verification',
+      actor,
+      idempotencyKey: 'conversation:update:review',
+    }).title).toBe('Review and verification')
+    expect(conversations.archiveConversation(side.id, {
+      actor,
+      idempotencyKey: 'conversation:archive:review',
+    }).status).toBe('archived')
+    expect(() => conversations.archiveConversation(defaults[0].id, {
+      actor,
+      idempotencyKey: 'conversation:archive:default',
+    })).toThrow(/default conversation/)
+
+    const archived = profiles.archive(created.id, {
+      actor,
+      idempotencyKey: 'profile:archive:builder',
+    })
+    expect(archived.status).toBe('archived')
+    expect(conversations.listConversations(created.id, true).every(
+      (conversation) => conversation.status === 'archived',
+    )).toBe(true)
+    expect(profiles.update(created.id, {
+      name: 'Senior Builder',
+      role: 'delivery',
+      capabilities: ['code', 'verification'],
+      actor,
+      idempotencyKey: 'profile:update:builder',
+    })).toMatchObject({ id: created.id, status: 'archived' })
+    expect(conversations.createConversation(created.id, {
+      title: 'Review thread',
+      actor,
+      idempotencyKey: 'conversation:create:review',
+    })).toMatchObject({ id: side.id, status: 'archived' })
+    expect(conversations.updateConversation(side.id, {
+      title: 'Review and verification',
+      actor,
+      idempotencyKey: 'conversation:update:review',
+    })).toMatchObject({ id: side.id, status: 'archived' })
+    db.close()
+  })
+
+  it('links scoped sessions and atomically stores exact ordered event replay with retained conflicts', () => {
+    const db = openDb(':memory:')
+    const {
+      boardId,
+      otherBoardId,
+      workspaceId,
+      otherWorkspaceId,
+      sessionId,
+      otherSessionId,
+      jobId,
+      artifactId,
+      otherArtifactId,
+    } = seedScope(db)
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+    const profile = profiles.create({
+      boardId,
+      name: 'Scoped builder',
+      actor,
+      idempotencyKey: 'profile:create:scoped',
+    })
+    const conversation = conversations.listConversations(profile.id)[0]
+
+    const linked = conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId,
+      mode: 'managed',
+      driverId: 'codex-app-server',
+      effort: 'high',
+      accessProfile: 'workspace_write',
+      providerThreadId: 'thread-1',
+      recoveryState: 'attachable',
+      recovery: { source: 'test' },
+      historyState: 'complete',
+      actor,
+      idempotencyKey: 'session:link:primary',
+    })
+    expect(linked).toMatchObject({
+      id: sessionId,
+      workspace_id: workspaceId,
+      profile_id: profile.id,
+      conversation_id: conversation.id,
+      job_id: jobId,
+      mode: 'managed',
+      provider_thread_id: 'thread-1',
+      recovery_state: 'attachable',
+      recovery: { source: 'test' },
+      history_state: 'complete',
+    })
+    expect(conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId,
+      mode: 'managed',
+      driverId: 'codex-app-server',
+      effort: 'high',
+      accessProfile: 'workspace_write',
+      providerThreadId: 'thread-1',
+      recoveryState: 'attachable',
+      recovery: { source: 'test' },
+      historyState: 'complete',
+      actor,
+      idempotencyKey: 'session:link:primary',
+    }).id).toBe(sessionId)
+
+    expect(() => conversations.linkSession(otherSessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'ambient',
+      actor,
+      idempotencyKey: 'session:link:cross-board',
+    })).toThrow(/board scope/)
+    expect(() => conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId: 'job-other',
+      mode: 'managed',
+      actor,
+      idempotencyKey: 'session:link:cross-job',
+    })).toThrow(/different board or workspace/)
+
+    const first = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      providerEventId: 'event-1',
+      providerThreadId: 'thread-1',
+      providerCursor: 'cursor-1',
+      projectedText: 'First answer',
+      metadata: { usage: { output: 12 } },
+      rawArtifactId: artifactId,
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'turn-1',
+    })
+    const replay = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      providerEventId: 'event-1',
+      providerThreadId: 'thread-1',
+      providerCursor: 'cursor-1',
+      projectedText: 'First answer',
+      metadata: { usage: { output: 12 } },
+      rawArtifactId: artifactId,
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'turn-1',
+    })
+    expect(first).toMatchObject({ replayed: false, event: { sequence: 1 } })
+    expect(replay).toMatchObject({ replayed: true, event: { id: first.event.id, sequence: 1 } })
+
+    const second = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:second',
+      dedupeKey: 'provider:event:2',
+      kind: 'tool',
+      projectedText: 'npm test',
+      metadata: { tool: 'terminal' },
+      actor: { type: 'agent', id: 'codex' },
+    })
+    expect(second.event.sequence).toBe(2)
+    expect(conversations.listEvents(conversation.id).map((event) => event.sequence))
+      .toEqual([1, 2])
+    expect(conversations.listEvents(conversation.id, { afterSequence: 1 }))
+      .toEqual([expect.objectContaining({ id: second.event.id, sequence: 2 })])
+    expect(conversations.listSessionEvents(sessionId, { kinds: ['assistant'] }))
+      .toEqual([expect.objectContaining({ id: first.event.id })])
+
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:conflict',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      projectedText: 'Mutated answer',
+      metadata: { usage: { output: 99 } },
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+    expect(conversations.requireEvent(first.event.id).projected_text).toBe('First answer')
+    expect((db.prepare('SELECT COUNT(*) AS count FROM conversation_event_conflicts').get() as any).count)
+      .toBe(1)
+    expect((db.prepare(
+      "SELECT COUNT(*) AS count FROM os_events WHERE kind='conversation.event_conflict'",
+    ).get() as any).count).toBe(1)
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      projectedText: 'Corrupted retry using the original command key',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM conversation_event_conflicts').get() as any).count)
+      .toBe(2)
+
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:artifact-cross-board',
+      dedupeKey: 'provider:event:3',
+      kind: 'tool_result',
+      rawArtifactId: otherArtifactId,
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/different board or workspace/)
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:second',
+      dedupeKey: 'provider:event:different',
+      kind: 'status',
+      projectedText: 'different',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/idempotency key/)
+    expect(conversations.listEvents(conversation.id)).toHaveLength(2)
+
+    const home = conversations.home(profile.id)
+    expect(home).toMatchObject({
+      profile: { id: profile.id },
+      active_session: { id: sessionId },
+      active_scope: {
+        workspace: { id: workspaceId },
+        job: { id: jobId },
+      },
+    })
+    expect(() => profiles.archive(profile.id, {
+      actor,
+      idempotencyKey: 'profile:archive:active',
+    })).toThrow(/active session/)
+    db.prepare("UPDATE agent_sessions SET status='stopped' WHERE id=?").run(sessionId)
+    expect(profiles.archive(profile.id, {
+      actor,
+      idempotencyKey: 'profile:archive:stopped',
+    }).status).toBe('archived')
+    expect(conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId,
+      mode: 'managed',
+      driverId: 'codex-app-server',
+      effort: 'high',
+      accessProfile: 'workspace_write',
+      providerThreadId: 'thread-1',
+      recoveryState: 'attachable',
+      recovery: { source: 'test' },
+      historyState: 'complete',
+      actor,
+      idempotencyKey: 'session:link:primary',
+    }).id).toBe(sessionId)
+    expect(conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:append:first',
+      dedupeKey: 'provider:event:1',
+      kind: 'assistant',
+      providerEventId: 'event-1',
+      providerThreadId: 'thread-1',
+      providerCursor: 'cursor-1',
+      projectedText: 'First answer',
+      metadata: { usage: { output: 12 } },
+      rawArtifactId: artifactId,
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'turn-1',
+    })).toMatchObject({ replayed: true, event: { id: first.event.id } })
+
+    expect(otherBoardId).not.toBe(boardId)
+    expect(otherWorkspaceId).not.toBe(workspaceId)
+    db.close()
+  })
+
+  it('preserves command replay identities and event ordering after the database is reopened', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-home-reopen-'))
+    tempDirectories.push(directory)
+    const file = path.join(directory, 'orchestra.db')
+    const firstDb = openDb(file)
+    const { boardId, sessionId, jobId } = seedScope(firstDb)
+    const firstProfiles = new AgentProfileService(firstDb)
+    const firstConversations = new ConversationService(firstDb)
+    const profile = firstProfiles.create({
+      boardId,
+      name: 'Persistent builder',
+      actor,
+      idempotencyKey: 'persistent:profile',
+    })
+    const conversation = firstConversations.listConversations(profile.id)[0]
+    firstConversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId,
+      mode: 'managed',
+      historyState: 'complete',
+      actor,
+      idempotencyKey: 'persistent:link',
+    })
+    const event = firstConversations.appendEvent(sessionId, {
+      idempotencyKey: 'persistent:event',
+      dedupeKey: 'persistent:provider-event',
+      kind: 'assistant',
+      projectedText: 'Durable answer',
+      actor: { type: 'agent', id: 'codex' },
+    }).event
+    firstDb.close()
+
+    const reopened = openDb(file)
+    const profiles = new AgentProfileService(reopened)
+    const conversations = new ConversationService(reopened)
+    expect(profiles.create({
+      boardId,
+      name: 'Persistent builder',
+      actor,
+      idempotencyKey: 'persistent:profile',
+    }).id).toBe(profile.id)
+    expect(conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId,
+      mode: 'managed',
+      historyState: 'complete',
+      actor,
+      idempotencyKey: 'persistent:link',
+    }).id).toBe(sessionId)
+    expect(conversations.appendEvent(sessionId, {
+      idempotencyKey: 'persistent:event',
+      dedupeKey: 'persistent:provider-event',
+      kind: 'assistant',
+      projectedText: 'Durable answer',
+      actor: { type: 'agent', id: 'codex' },
+    })).toMatchObject({ replayed: true, event: { id: event.id, sequence: 1 } })
+    expect(conversations.listEvents(conversation.id))
+      .toEqual([expect.objectContaining({ id: event.id, projected_text: 'Durable answer' })])
+    reopened.close()
+  })
+
+  it('deterministically backfills legacy agents, conversations, and session history', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-home-backfill-'))
+    tempDirectories.push(directory)
+    const file = path.join(directory, 'legacy.db')
+    const db = new Database(file)
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE boards (
+        id INTEGER PRIMARY KEY, project_path TEXT NOT NULL UNIQUE, name TEXT NOT NULL
+      );
+      CREATE TABLE agents (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        name TEXT NOT NULL,
+        session_id TEXT,
+        status TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        role TEXT,
+        model TEXT,
+        effort TEXT,
+        provider TEXT,
+        access_profile TEXT
+      );
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY, board_id INTEGER NOT NULL REFERENCES boards(id),
+        name TEXT NOT NULL, kind TEXT NOT NULL, root_path TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE jobs (
+        id TEXT PRIMARY KEY, board_id INTEGER NOT NULL, card_id INTEGER,
+        workspace_id TEXT, provider TEXT NOT NULL
+      );
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+        provider TEXT NOT NULL,
+        external_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL,
+        context_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE os_events (
+        id TEXT PRIMARY KEY, board_id INTEGER NOT NULL, workspace_id TEXT, card_id INTEGER,
+        session_id TEXT, process_id TEXT, job_id TEXT, contract_id TEXT,
+        correlation_id TEXT, causation_id TEXT, idempotency_key TEXT,
+        event_version INTEGER NOT NULL DEFAULT 1,
+        kind TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY, board_id INTEGER NOT NULL, workspace_id TEXT,
+        card_id INTEGER, kind TEXT, name TEXT, mime_type TEXT, path TEXT,
+        content TEXT, metadata TEXT, created_at TEXT
+      );
+      CREATE TABLE os_schema_migrations (
+        id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO os_schema_migrations (id) VALUES
+        ('001-agent-os-kernel'), ('002-runtime-hardening'),
+        ('003-provider-session-ownership'), ('004-delivery-trackbook'),
+        ('005-delivery-report-revision-cascade'), ('006-canonical-launch-reservations');
+      INSERT INTO boards (id, project_path, name) VALUES (1, '/legacy-home', 'legacy home');
+      INSERT INTO workspaces
+        (id, board_id, name, kind, root_path, status, created_at, updated_at)
+        VALUES ('legacy-workspace', 1, 'legacy', 'shared', '/legacy-home', 'active',
+          '2026-07-20T10:00:00.000Z', '2026-07-20T10:00:00.000Z');
+      INSERT INTO jobs (id, board_id, workspace_id, provider)
+        VALUES ('legacy-job', 1, 'legacy-workspace', 'codex');
+      INSERT INTO agents
+        (id, board_id, name, status, last_seen, created_at, kind, role, model,
+         effort, provider, access_profile)
+        VALUES
+          (41, 1, 'Ambient legacy', 'active', '2026-07-20T12:00:00.000Z',
+            '2026-07-20T10:00:00.000Z', 'session', 'worker', 'codex-model',
+            'medium', 'codex', 'workspace_write'),
+          (42, 1, 'Managed legacy', 'active', '2026-07-20T12:00:00.000Z',
+            '2026-07-20T10:00:00.000Z', 'hired', 'worker', 'codex-model',
+            'high', 'codex', 'full_access');
+      INSERT INTO agent_sessions
+        (id, workspace_id, agent_id, provider, external_id, model, status,
+         context_json, created_at, updated_at)
+        VALUES
+          ('legacy-ambient-session', 'legacy-workspace', 41, 'codex', 'thread-ambient',
+            'codex-model', 'running', '{"driver_id":"codex-driver","last_event_seq":7}',
+            '2026-07-20T10:00:00.000Z', '2026-07-20T12:00:00.000Z'),
+          ('legacy-managed-session', 'legacy-workspace', 42, 'codex', 'thread-managed',
+            'codex-model', 'stopped', '{"job_id":"legacy-job","effort":"max"}',
+            '2026-07-20T10:00:00.000Z', '2026-07-20T12:00:00.000Z');
+      INSERT INTO os_events
+        (id, board_id, workspace_id, session_id, kind, source, payload, created_at)
+        VALUES ('driver-event', 1, 'legacy-workspace', 'legacy-ambient-session',
+          'driver.output', 'legacy', '{}', '2026-07-20T11:00:00.000Z');
+    `)
+
+    applyAgentOsMigrations(db)
+    applyAgentOsMigrations(db)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
+      .toBe(7)
+    expect(db.prepare(`SELECT id, legacy_agent_id, name, provenance_json
+      FROM agent_profiles ORDER BY legacy_agent_id`).all()).toEqual([
+      expect.objectContaining({
+        id: 'legacy-agent:41',
+        legacy_agent_id: 41,
+        name: 'Ambient legacy',
+      }),
+      expect.objectContaining({
+        id: 'legacy-agent:42',
+        legacy_agent_id: 42,
+        name: 'Managed legacy',
+      }),
+    ])
+    expect(db.prepare(`SELECT id, profile_id, is_default
+      FROM agent_conversations ORDER BY profile_id`).all()).toEqual([
+      {
+        id: 'legacy-conversation:41',
+        profile_id: 'legacy-agent:41',
+        is_default: 1,
+      },
+      {
+        id: 'legacy-conversation:42',
+        profile_id: 'legacy-agent:42',
+        is_default: 1,
+      },
+    ])
+    expect(db.prepare(`SELECT id, profile_id, conversation_id, job_id, mode,
+      driver_id, effort, provider_thread_id, provider_cursor, recovery_state,
+      history_state, started_at, ended_at
+      FROM agent_sessions ORDER BY id`).all()).toEqual([
+      expect.objectContaining({
+        id: 'legacy-ambient-session',
+        profile_id: 'legacy-agent:41',
+        conversation_id: 'legacy-conversation:41',
+        job_id: null,
+        mode: 'ambient',
+        driver_id: 'codex-driver',
+        provider_thread_id: 'thread-ambient',
+        provider_cursor: '7',
+        recovery_state: 'attachable',
+        history_state: 'partial',
+        ended_at: null,
+      }),
+      expect.objectContaining({
+        id: 'legacy-managed-session',
+        profile_id: 'legacy-agent:42',
+        conversation_id: 'legacy-conversation:42',
+        job_id: 'legacy-job',
+        mode: 'managed',
+        effort: 'max',
+        provider_thread_id: 'thread-managed',
+        recovery_state: 'attachable',
+        history_state: 'unavailable',
+        ended_at: '2026-07-20T12:00:00.000Z',
+      }),
+    ])
+
+    db.prepare('DELETE FROM agents WHERE id=41').run()
+    expect(db.prepare("SELECT id, legacy_agent_id FROM agent_profiles WHERE id='legacy-agent:41'").get())
+      .toEqual({ id: 'legacy-agent:41', legacy_agent_id: null })
+    db.close()
+
+    const reopened = new Database(file)
+    reopened.pragma('foreign_keys = ON')
+    applyAgentOsMigrations(reopened)
+    expect((reopened.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get() as any).count)
+      .toBe(2)
+    expect((reopened.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get() as any).count)
+      .toBe(2)
+    reopened.close()
+  })
+})
+
+function seedScope(db: Database.Database): {
+  boardId: number
+  otherBoardId: number
+  workspaceId: string
+  otherWorkspaceId: string
+  sessionId: string
+  otherSessionId: string
+  jobId: string
+  artifactId: string
+  otherArtifactId: string
+} {
+  const boardId = Number(db.prepare(
+    "INSERT INTO boards (project_path, name) VALUES ('/agent-home-primary', 'primary')",
+  ).run().lastInsertRowid)
+  const otherBoardId = Number(db.prepare(
+    "INSERT INTO boards (project_path, name) VALUES ('/agent-home-other', 'other')",
+  ).run().lastInsertRowid)
+  const workspaceId = 'agent-home-workspace'
+  const otherWorkspaceId = 'agent-home-workspace-other'
+  db.prepare(`INSERT INTO workspaces
+    (id, board_id, name, kind, root_path, status)
+    VALUES (?, ?, 'home', 'shared', '/agent-home-primary', 'active')`)
+    .run(workspaceId, boardId)
+  db.prepare(`INSERT INTO workspaces
+    (id, board_id, name, kind, root_path, status)
+    VALUES (?, ?, 'other', 'shared', '/agent-home-other', 'active')`)
+    .run(otherWorkspaceId, otherBoardId)
+  const sessionId = 'agent-home-session'
+  const otherSessionId = 'agent-home-session-other'
+  db.prepare(`INSERT INTO agent_sessions
+    (id, workspace_id, provider, external_id, model, status, context_json)
+    VALUES (?, ?, 'codex', 'thread-1', 'codex-model', 'running', '{}')`)
+    .run(sessionId, workspaceId)
+  db.prepare(`INSERT INTO agent_sessions
+    (id, workspace_id, provider, external_id, model, status, context_json)
+    VALUES (?, ?, 'claude', 'thread-other', 'claude-model', 'running', '{}')`)
+    .run(otherSessionId, otherWorkspaceId)
+  const jobId = 'job-primary'
+  db.prepare(`INSERT INTO jobs
+    (id, board_id, workspace_id, provider, status)
+    VALUES (?, ?, ?, 'codex', 'running')`).run(jobId, boardId, workspaceId)
+  db.prepare(`INSERT INTO jobs
+    (id, board_id, workspace_id, provider, status)
+    VALUES ('job-other', ?, ?, 'claude', 'running')`).run(otherBoardId, otherWorkspaceId)
+  const artifactId = 'artifact-primary'
+  const otherArtifactId = 'artifact-other'
+  db.prepare(`INSERT INTO artifacts
+    (id, board_id, workspace_id, kind, name, mime_type, metadata)
+    VALUES (?, ?, ?, 'transcript', 'primary.json', 'application/json', '{}')`)
+    .run(artifactId, boardId, workspaceId)
+  db.prepare(`INSERT INTO artifacts
+    (id, board_id, workspace_id, kind, name, mime_type, metadata)
+    VALUES (?, ?, ?, 'transcript', 'other.json', 'application/json', '{}')`)
+    .run(otherArtifactId, otherBoardId, otherWorkspaceId)
+  return {
+    boardId,
+    otherBoardId,
+    workspaceId,
+    otherWorkspaceId,
+    sessionId,
+    otherSessionId,
+    jobId,
+    artifactId,
+    otherArtifactId,
+  }
+}
