@@ -2,12 +2,17 @@ import type Database from 'better-sqlite3'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
+import { EventStore } from '../src/agent-os/event-store.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from '../src/agent-os/scheduler.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
 import { WorkspaceStore } from '../src/agent-os/workspace-store.js'
 import { openDb } from '../src/db.js'
 import { buildServer, type ConductorLike } from '../src/server.js'
+import {
+  normalizeCanonicalLifecycleRecord,
+  normalizeCanonicalLifecycleResponse,
+} from '../web/src/osApi.js'
 
 type LaunchCall = Parameters<ConductorLike['launch']>[0]
 
@@ -230,7 +235,12 @@ describe('canonical card launch routes', () => {
       job_id: body.job.id,
       workspace_id: body.workspace.id,
       session_id: body.session.id,
+      contract_id: `card:${cardId}:v${body.contract.version}`,
+      contract_version: body.contract.version,
+      correlation_id: body.session.context.correlation_id,
+      idempotency_key: null,
     })
+    expect(body.delivery.contract_id).toBe(body.orchestration.contract_id)
     expect(body.session.agent_id).toBe(body.agent.id)
     expect(executor.launches.map((job) => job.id)).toEqual([body.job.id])
     expect(legacyCalls).toHaveLength(0)
@@ -306,8 +316,131 @@ describe('canonical card launch routes', () => {
       dispatch: { started: [response.json().job.id], completed: [], blocked: [], deferred: [] },
       dispatch_error: null,
     })
+    const created = response.json()
+    expect(normalizeCanonicalLifecycleResponse(created).job.id).toBe(created.job.id)
+    expect(created.orchestration).toMatchObject({
+      contract_id: `card:${cardId}:v${created.contract.version}`,
+      contract_version: created.contract.version,
+      correlation_id: created.session.context.correlation_id,
+      idempotency_key: null,
+    })
+    expect(created.delivery.contract_id).toBe(created.orchestration.contract_id)
+
+    new EventStore(db).append({
+      boardId,
+      jobId: 'unrelated-job',
+      kind: 'job.queued',
+      source: 'test',
+      payload: { job_id: 'unrelated-job' },
+    })
+    const lifecycle = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/jobs/${created.job.id}`,
+    })
+    expect(lifecycle.statusCode).toBe(200)
+    expect(normalizeCanonicalLifecycleRecord(lifecycle.json()).job.id).toBe(created.job.id)
+    expect(lifecycle.json()).toMatchObject({
+      mode: 'canonical',
+      orchestration: {
+        job_id: created.job.id,
+        workspace_id: created.workspace.id,
+        session_id: created.session.id,
+        contract_id: created.orchestration.contract_id,
+      },
+      job: { id: created.job.id },
+      workspace: { id: created.workspace.id },
+      session: { id: created.session.id },
+      delivery: { id: created.delivery.id, contract_id: created.orchestration.contract_id },
+      events: expect.any(Array),
+    })
+    expect(lifecycle.json().events.length).toBeGreaterThan(0)
+    expect(lifecycle.json().events.every((event: { job_id: string }) => event.job_id === created.job.id)).toBe(true)
+    expect(lifecycle.json().events.some((event: { job_id: string }) => event.job_id === 'unrelated-job')).toBe(false)
+
+    new EventStore(db).append({
+      boardId,
+      cardId,
+      jobId: created.job.id,
+      workspaceId: 'wrong-workspace',
+      contractId: created.orchestration.contract_id,
+      correlationId: created.orchestration.correlation_id,
+      kind: 'job.started',
+      source: 'test',
+      payload: { job_id: created.job.id },
+    })
+    const corruptLifecycle = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/jobs/${created.job.id}`,
+    })
+    expect(corruptLifecycle.statusCode).toBe(409)
+    expect(corruptLifecycle.json().error).toMatch(/event scope is missing or inconsistent/)
     expect(executor.launches).toHaveLength(1)
     expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
+  })
+
+  it('replays and reads the frozen contract after the editable contract advances', async () => {
+    const { db, boardId, cardId, server } = await fixture()
+    const request = {
+      card_id: cardId,
+      provider: 'codex',
+      idempotency_key: 'frozen-contract-replay',
+    }
+    const first = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: request,
+    })
+    expect(first.statusCode).toBe(201)
+    const original = normalizeCanonicalLifecycleResponse(first.json())
+
+    const editable = new TaskContractService(db).put(cardId, { objective: 'A later contract revision' })
+    expect(editable.version).toBeGreaterThan(original.contract.version!)
+
+    const replay = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: request,
+    })
+    const refreshed = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/jobs/${original.job.id}`,
+    })
+
+    expect(replay.statusCode).toBe(201)
+    expect(refreshed.statusCode).toBe(200)
+    const replayed = normalizeCanonicalLifecycleResponse(replay.json())
+    const lifecycle = normalizeCanonicalLifecycleRecord(refreshed.json())
+    for (const snapshot of [replayed, lifecycle]) {
+      expect(snapshot.job.id).toBe(original.job.id)
+      expect(snapshot.contract).toMatchObject({
+        version: original.contract.version,
+        objective: original.contract.objective,
+      })
+      expect(snapshot.orchestration.contract_id).toBe(original.orchestration.contract_id)
+    }
+    expect(new TaskContractService(db).getOrCreate(cardId)).toMatchObject({
+      version: editable.version,
+      objective: 'A later contract revision',
+    })
+  })
+
+  it('does not manufacture canonical contract or delivery records for a scheduler-only job', async () => {
+    const { db, boardId, cardId, scheduler, server } = await fixture()
+    const job = scheduler.create({ boardId, cardId, provider: 'codex' })
+    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 0, jobs: 1, workspaces: 0, sessions: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM delivery_reports WHERE job_id=?').get(job.id))
+      .toEqual({ count: 0 })
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/jobs/${job.id}`,
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toMatch(/no durable delivery report/)
+    expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 0, jobs: 1, workspaces: 0, sessions: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM delivery_reports WHERE job_id=?').get(job.id))
+      .toEqual({ count: 0 })
   })
 
   it('forwards one idempotency key through Board and Agent OS canonical entrypoints', async () => {
@@ -358,6 +491,35 @@ describe('canonical card launch routes', () => {
     })
     expect(apiResponse.statusCode).toBe(400)
     expect(lifecycleCounts(api.db, api.cardId)).toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
+  })
+
+  it('rejects coalesced duplicate headers and singleton body arrays before creating canonical work', async () => {
+    process.env.ORCHESTRA_CANONICAL_LAUNCH = '1'
+    const setup = await fixture()
+
+    const repeatedHeader = await setup.server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${setup.boardId}/jobs`,
+      headers: { 'idempotency-key': ['one', 'two'] },
+      payload: { card_id: setup.cardId, provider: 'codex' },
+    })
+    const snakeArray = await setup.server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${setup.boardId}/jobs`,
+      payload: { card_id: setup.cardId, provider: 'codex', idempotency_key: ['one'] },
+    })
+    const camelArray = await setup.server.inject({
+      method: 'POST',
+      url: `/api/v1/cards/${setup.cardId}/launch`,
+      payload: { provider: 'codex', idempotencyKey: ['one'] },
+    })
+
+    expect([repeatedHeader.statusCode, snakeArray.statusCode, camelArray.statusCode]).toEqual([400, 400, 400])
+    expect(repeatedHeader.json().error).toMatch(/exactly once/)
+    expect(snakeArray.json().error).toMatch(/must be a string/)
+    expect(camelArray.json().error).toMatch(/must be a string/)
+    expect(lifecycleCounts(setup.db, setup.cardId))
+      .toEqual({ contracts: 0, jobs: 0, workspaces: 0, sessions: 0 })
   })
 
   it('allows only one lifecycle when Board and Agent OS endpoints race for the same card', async () => {

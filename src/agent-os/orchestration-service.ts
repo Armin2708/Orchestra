@@ -451,14 +451,40 @@ export class OrchestrationService {
   getJobSnapshot(jobId: string): CardJobSnapshot {
     const job = this.scheduler.get(jobId)
     if (!job?.card_id) throw new NotFoundError('card job not found')
-    const contract = this.contracts.getOrCreate(job.card_id)
-    const workspaceId = job.workspace_id ?? contract.workspace_id
+    const delivery = this.deliveries.currentForJob(job.id)
+    if (!delivery) throw new ConflictError('canonical job has no durable delivery report')
+    if (!job.contract_version || delivery.asked.contract_version !== job.contract_version) {
+      throw new ConflictError('canonical job contract snapshot is missing or inconsistent')
+    }
+    if (delivery.card_id !== job.card_id || delivery.job_id !== job.id) {
+      throw new ConflictError('canonical job delivery scope is inconsistent')
+    }
+    const workspaceId = job.workspace_id
+    if (!workspaceId || delivery.workspace_id !== workspaceId) {
+      throw new ConflictError('canonical job workspace scope is missing or inconsistent')
+    }
+    const workspace = this.workspaces.get(workspaceId)
+    if (!workspace || workspace.board_id !== job.board_id
+      || (workspace.card_id !== null && workspace.card_id !== job.card_id)) {
+      throw new ConflictError('canonical job workspace record is missing or inconsistent')
+    }
+    const session = this.sessionForJob(job.id)
+    if (!session || session.workspace_id !== workspaceId || delivery.session_id !== session.id) {
+      throw new ConflictError('canonical job session scope is missing or inconsistent')
+    }
+    if (session.context.job_id !== job.id) {
+      throw new ConflictError('canonical job session identity is inconsistent')
+    }
+    if (typeof session.context.correlation_id !== 'string' || !session.context.correlation_id) {
+      throw new ConflictError('canonical job correlation identity is missing')
+    }
+    const contract = frozenContract(delivery, workspaceId)
     return {
       contract,
-      delivery: this.deliveries.prepareForJob(job.id),
+      delivery,
       job,
-      workspace: workspaceId ? this.workspaces.get(workspaceId) : null,
-      session: this.sessionForJob(job.id),
+      workspace,
+      session,
     }
   }
 
@@ -538,6 +564,27 @@ function requestFingerprint(
 
 function contractIdentity(contract: TaskContract): string {
   return `card:${contract.card_id}:v${contract.version}`
+}
+
+function frozenContract(delivery: DeliveryReport, workspaceId: string): TaskContract {
+  return {
+    card_id: delivery.card_id,
+    objective: delivery.asked.objective,
+    deliverables: structuredClone(delivery.asked.deliverables),
+    acceptance_criteria: structuredClone(delivery.asked.acceptance_criteria),
+    dependencies: [...delivery.asked.dependencies],
+    base_ref: delivery.asked.base_ref,
+    verify_commands: [...delivery.asked.verify_commands],
+    non_goals: [...delivery.asked.non_goals],
+    risks: [...delivery.asked.risks],
+    budget_tokens: delivery.asked.budget_tokens,
+    budget_cents: delivery.asked.budget_cents,
+    priority: delivery.asked.priority,
+    policy_id: delivery.asked.policy_id,
+    workspace_id: workspaceId,
+    version: delivery.asked.contract_version,
+    updated_at: delivery.asked.contract_updated_at,
+  }
 }
 
 function slug(value: string): string {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalLifecycleForWorkspace } from '../web/src/CanonicalLifecycleStatus.js'
 import {
+  normalizeCanonicalLifecycleRecord,
   normalizeCanonicalLifecycleResponse,
+  type CanonicalLifecycleRecord,
   type DeliveryReport,
   type Job,
   type OsEvent,
@@ -43,6 +45,44 @@ const event = (id: string, jobId: string, kind: string, at: string): OsEvent => 
   job_id: jobId, kind, source: 'scheduler', payload: { job_id: jobId }, created_at: at,
 })
 
+const canonicalEnvelope = () => ({
+  mode: 'canonical',
+  orchestration: {
+    lifecycle: 'canonical', contract_attached: true, job_id: 'job-1', workspace_id: 'workspace-1',
+    session_id: 'session-1', contract_id: 'card:7:v3', contract_version: 3,
+    correlation_id: 'correlation-1', idempotency_key: 'launch-card-7',
+  },
+  contract: {
+    card_id: 7, objective: 'Ship', deliverables: [], acceptance_criteria: [], dependencies: [],
+    verify_commands: [], non_goals: [], risks: [], workspace_id: 'workspace-1', version: 3,
+  },
+  delivery: {
+    id: 'delivery-1', card_id: 7, contract_id: 'card:7:v3', job_id: 'job-1',
+    workspace_id: 'workspace-1', session_id: 'session-1', status: 'draft',
+    asked: {
+      objective: 'Ship', deliverables: [], acceptance_criteria: [], dependencies: [],
+      verify_commands: [], non_goals: [], risks: [], contract_version: 3,
+    },
+  },
+  job: {
+    id: 'job-1', board_id: 1, card_id: 7, workspace_id: 'workspace-1', provider: 'codex',
+    driver_id: 'codex', model: 'gpt-5', effort: 'high', access_profile: 'workspace_write',
+    contract_version: 3, idempotency_key: 'launch-card-7', priority: 4, status: 'running',
+    attempts: 1, max_attempts: 2, budget_tokens: 10_000, budget_cents: 300,
+    spent_tokens: 120, spent_cents: 4, scheduled_at: '2026-07-22T10:00:00Z',
+  },
+  workspace: {
+    id: 'workspace-1', board_id: 1, card_id: 7, name: 'card-7', kind: 'worktree', root_path: '/repo',
+    worktree_path: '/repo-card-7', branch: 'card-7', base_ref: 'main', status: 'running',
+  },
+  session: {
+    id: 'session-1', workspace_id: 'workspace-1', provider: 'codex', model: 'gpt-5', status: 'running',
+    context_json: JSON.stringify({ job_id: 'job-1', correlation_id: 'correlation-1' }),
+  },
+  dispatch: { started: ['job-1'], completed: [], blocked: [], deferred: [] },
+  dispatch_error: null,
+})
+
 describe('canonical lifecycle presentation', () => {
   it('joins job, workspace, session, contract, and dispatch only through exact durable ids', () => {
     const view = canonicalLifecycleForWorkspace({
@@ -67,7 +107,7 @@ describe('canonical lifecycle presentation', () => {
     })
   })
 
-  it('reports missing links instead of borrowing another workspace revision by card id', () => {
+  it('does not infer a lifecycle from workspace jobs when no scoped delivery exists', () => {
     const view = canonicalLifecycleForWorkspace({
       workspace: workspace(),
       jobs: [job('job-1', 'workspace-1')],
@@ -75,41 +115,27 @@ describe('canonical lifecycle presentation', () => {
       events: [],
     })
 
-    expect(view.job?.id).toBe('job-1')
+    expect(view.lifecycle).toBe('ambient')
+    expect(view.job).toBeNull()
     expect(view.sessionId).toBeNull()
     expect(view.contractId).toBeNull()
     expect(view.dispatchEvent).toBeNull()
-    expect(view.missing).toEqual(['session', 'contract', 'dispatch_event'])
+    expect(view.missing).toEqual(['job'])
+  })
+
+  it('does not choose another workspace job when a scoped delivery names a missing job', () => {
+    const view = canonicalLifecycleForWorkspace({
+      workspace: workspace(),
+      jobs: [job('job-1', 'workspace-1'), job('job-3', 'workspace-1')],
+      delivery: delivery({ job_id: 'job-2' }),
+      events: [event('wrong', 'job-1', 'job.started', '2026-07-22T10:03:00Z')],
+    })
+
+    expect(view).toMatchObject({ lifecycle: 'canonical', job: null, missing: ['job'] })
   })
 
   it('normalizes the shared Board/API/CLI canonical envelope without dropping runtime truth', () => {
-    const normalized = normalizeCanonicalLifecycleResponse({
-      mode: 'canonical',
-      orchestration: {
-        lifecycle: 'canonical', contract_attached: true, job_id: 'job-1', workspace_id: 'workspace-1',
-        session_id: 'session-1', contract_id: 'contract-1', contract_version: 3,
-        correlation_id: 'correlation-1', idempotency_key: 'launch-card-7',
-      },
-      contract: { card_id: 7, objective: 'Ship', acceptance_criteria: [], dependencies: [], verify_commands: [] },
-      delivery: { id: 'delivery-1', job_id: 'job-1', workspace_id: 'workspace-1', session_id: 'session-1' },
-      job: {
-        id: 'job-1', board_id: 1, card_id: 7, workspace_id: 'workspace-1', provider: 'codex',
-        driver_id: 'codex', model: 'gpt-5', effort: 'high', access_profile: 'workspace_write',
-        contract_version: 3, idempotency_key: 'launch-card-7', priority: 4, status: 'running',
-        attempts: 1, max_attempts: 2, budget_tokens: 10_000, budget_cents: 300,
-        spent_tokens: 120, spent_cents: 4, scheduled_at: '2026-07-22T10:00:00Z',
-      },
-      workspace: {
-        id: 'workspace-1', board_id: 1, card_id: 7, name: 'card-7', kind: 'worktree', root_path: '/repo',
-        worktree_path: '/repo-card-7', branch: 'card-7', base_ref: 'main', status: 'running',
-      },
-      session: {
-        id: 'session-1', workspace_id: 'workspace-1', provider: 'codex', model: 'gpt-5', status: 'running',
-        context_json: JSON.stringify({ job_id: 'job-1', correlation_id: 'correlation-1' }),
-      },
-      dispatch: { started: ['job-1'], completed: [], blocked: [], deferred: [] },
-      dispatch_error: null,
-    })
+    const normalized = normalizeCanonicalLifecycleResponse(canonicalEnvelope())
 
     expect(normalized.orchestration).toMatchObject({
       lifecycle: 'canonical', contract_attached: true, job_id: 'job-1', workspace_id: 'workspace-1',
@@ -123,10 +149,61 @@ describe('canonical lifecycle presentation', () => {
     expect(normalized.dispatch.started).toEqual(['job-1'])
   })
 
-  it('rejects partial or compatibility envelopes instead of inventing canonical links', () => {
-    expect(() => normalizeCanonicalLifecycleResponse({ mode: 'legacy' })).toThrow(/missing orchestration/)
+  it('normalizes one job-keyed lifecycle and uses only its exact causal events', () => {
+    const record = {
+      ...canonicalEnvelope(),
+      dispatch: undefined,
+      dispatch_error: undefined,
+      events: [{
+        id: 'event-1', board_id: 1, workspace_id: 'workspace-1', card_id: 7,
+        session_id: 'session-1', process_id: null, job_id: 'job-1', contract_id: 'card:7:v3',
+        correlation_id: 'correlation-1', causation_id: null, idempotency_key: 'job:job-1:queued',
+        event_version: 1, kind: 'job.queued', source: 'orchestration', payload: { job_id: 'job-1' },
+        created_at: '2026-07-22T10:00:00Z',
+      }],
+    }
+    const normalized = normalizeCanonicalLifecycleRecord(record)
+    const wrongSession = structuredClone(record)
+    wrongSession.events[0].session_id = 'another-session'
+    expect(() => normalizeCanonicalLifecycleRecord(wrongSession)).toThrow(/event.session_id does not match/)
+    const wrongCorrelation = structuredClone(record)
+    wrongCorrelation.events[0].correlation_id = 'another-correlation'
+    expect(() => normalizeCanonicalLifecycleRecord(wrongCorrelation)).toThrow(/event.correlation_id does not match/)
+    const view = canonicalLifecycleForWorkspace({
+      workspace: workspace(),
+      jobs: [job('wrong-job', 'workspace-1')],
+      delivery: delivery({ job_id: 'wrong-job' }),
+      events: [event('wrong-event', 'wrong-job', 'job.started', '2026-07-22T10:03:00Z')],
+      exact: normalized as CanonicalLifecycleRecord,
+    })
+
+    expect(view).toMatchObject({
+      lifecycle: 'canonical', job: { id: 'job-1' }, sessionId: 'session-1',
+      contractId: 'card:7:v3', dispatchEvent: { id: 'event-1' }, missing: [],
+    })
+  })
+
+  it('rejects partial, mismatched, or compatibility envelopes instead of inventing canonical links', () => {
+    expect(() => normalizeCanonicalLifecycleResponse({ mode: 'canonical' })).toThrow(/missing orchestration/)
+    expect(() => normalizeCanonicalLifecycleResponse({ mode: 'legacy' })).toThrow(/mode is not canonical/)
     expect(() => normalizeCanonicalLifecycleResponse({
       mode: 'canonical', orchestration: { lifecycle: 'canonical' },
-    })).toThrow(/missing contract/)
+    })).toThrow(/contract_attached must be true/)
+
+    const detached = canonicalEnvelope()
+    detached.orchestration.contract_attached = false
+    expect(() => normalizeCanonicalLifecycleResponse(detached)).toThrow(/contract_attached must be true/)
+
+    const mismatched = canonicalEnvelope()
+    mismatched.delivery.job_id = 'another-job'
+    expect(() => normalizeCanonicalLifecycleResponse(mismatched)).toThrow(/delivery.job_id does not match/)
+
+    const invalidAccess = canonicalEnvelope()
+    invalidAccess.job.access_profile = 'unrestricted'
+    expect(() => normalizeCanonicalLifecycleResponse(invalidAccess)).toThrow(/access_profile is invalid/)
+
+    const incompleteDispatch = canonicalEnvelope()
+    incompleteDispatch.dispatch = { started: [], completed: [], blocked: [] } as typeof incompleteDispatch.dispatch
+    expect(() => normalizeCanonicalLifecycleResponse(incompleteDispatch)).toThrow(/dispatch.deferred must be an array/)
   })
 })

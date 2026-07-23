@@ -908,6 +908,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         }
         const idempotencyKey = resolveIdempotencyKey({
           header: req.headers['idempotency-key'],
+          rawHeaders: req.raw.rawHeaders,
           snake: req.body?.idempotency_key,
           camel: req.body?.idempotencyKey,
         })
@@ -924,10 +925,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const launched = await orchestration.launchCard(launchInput)
         const agent = launched.session?.agent_id == null ? undefined
           : db.prepare('SELECT * FROM agents WHERE id=?').get(launched.session.agent_id)
+        const orchestrationEnvelope = orchestrationIdentity('canonical', launched)
         return reply.code(200).send({
           ...launched,
+          delivery: { ...launched.delivery, contract_id: orchestrationEnvelope.contract_id },
           mode: 'canonical',
-          orchestration: orchestrationIdentity('canonical', launched),
+          orchestration: orchestrationEnvelope,
           ...(agent ? { agent } : {}),
           card: getCard(card.id),
           queued: launched.job.status === 'queued',

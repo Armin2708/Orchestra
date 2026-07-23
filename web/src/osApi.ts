@@ -101,6 +101,7 @@ export type OsEvent = {
   correlation_id?: OsId | null
   causation_id?: OsId | null
   idempotency_key?: string | null
+  event_version?: number
   version?: number
   kind: string
   source: string
@@ -287,6 +288,8 @@ export type Checkpoint = {
   created_at: string
 }
 
+export type AgentAccessProfile = 'read_only' | 'workspace_write' | 'full_access'
+
 export type Job = {
   id: OsId
   board_id: number
@@ -296,7 +299,7 @@ export type Job = {
   driver_id?: string
   model: string | null
   effort?: string | null
-  access_profile?: 'read_only' | 'workspace_write' | 'full_access' | string | null
+  access_profile?: AgentAccessProfile | null
   policy_id?: OsId | null
   contract_version?: number | null
   idempotency_key?: string | null
@@ -323,7 +326,7 @@ export type SchedulerDispatch = {
 }
 
 export type OrchestrationIdentity = {
-  lifecycle: 'canonical' | 'ambient' | 'legacy' | string
+  lifecycle: 'canonical' | 'ambient' | 'legacy' | 'external'
   contract_attached: boolean
   job_id: OsId | null
   workspace_id: OsId | null
@@ -336,7 +339,7 @@ export type OrchestrationIdentity = {
 
 /** Exact durable lifecycle returned by canonical Board, API, and CLI launch entrypoints. */
 export type CanonicalLifecycleSnapshot = {
-  mode: 'canonical' | string
+  mode: 'canonical'
   orchestration: OrchestrationIdentity
   contract: TaskContract
   delivery: DeliveryReport
@@ -345,6 +348,11 @@ export type CanonicalLifecycleSnapshot = {
   session: AgentSession
   dispatch: SchedulerDispatch
   dispatch_error: string | null
+}
+
+/** Exact durable lifecycle read model, keyed by one canonical job. */
+export type CanonicalLifecycleRecord = Omit<CanonicalLifecycleSnapshot, 'dispatch' | 'dispatch_error'> & {
+  events: OsEvent[]
 }
 
 export type ContextItem = {
@@ -783,6 +791,13 @@ export const normalizeDeliveriesResponse = (value: unknown): DeliveryCollection 
   return { deliveries: ordered, current }
 }
 
+const accessProfiles = new Set<AgentAccessProfile>(['read_only', 'workspace_write', 'full_access'])
+
+const normalizeAccessProfile = (value: unknown): AgentAccessProfile | null => {
+  const profile = optionalString(value)
+  return profile && accessProfiles.has(profile as AgentAccessProfile) ? profile as AgentAccessProfile : null
+}
+
 export const normalizeJob = (value: unknown): Job => {
   const row = objectValue(value)
   return {
@@ -796,7 +811,7 @@ export const normalizeJob = (value: unknown): Job => {
     model: optionalString(firstValue(row, 'model')),
     ...(firstValue(row, 'effort') !== undefined ? { effort: optionalString(firstValue(row, 'effort')) } : {}),
     ...(firstValue(row, 'access_profile', 'accessProfile') !== undefined
-      ? { access_profile: optionalString(firstValue(row, 'access_profile', 'accessProfile')) } : {}),
+      ? { access_profile: normalizeAccessProfile(firstValue(row, 'access_profile', 'accessProfile')) } : {}),
     ...(firstValue(row, 'policy_id', 'policyId') !== undefined
       ? { policy_id: optionalId(firstValue(row, 'policy_id', 'policyId')) } : {}),
     ...(firstValue(row, 'contract_version', 'contractVersion') !== undefined
@@ -840,54 +855,320 @@ export const normalizeAgentSession = (value: unknown): AgentSession => {
   }
 }
 
-const normalizeDispatch = (value: unknown): SchedulerDispatch => {
-  const row = objectValue(value)
-  return {
-    started: normalizeIdList(firstValue(row, 'started')),
-    completed: normalizeIdList(firstValue(row, 'completed')),
-    blocked: normalizeIdList(firstValue(row, 'blocked')),
-    deferred: normalizeIdList(firstValue(row, 'deferred')),
-  }
-}
-
 const requiredEntity = (row: JsonObject, key: string): JsonObject => {
   const entity = objectValue(row[key])
   if (!Object.keys(entity).length) throw new Error(`canonical lifecycle response is missing ${key}`)
   return entity
 }
 
-/** Normalize the shared Board/API/CLI response without reconstructing missing canonical records. */
+const canonicalError = (detail: string): never => {
+  throw new Error(`invalid canonical lifecycle: ${detail}`)
+}
+
+const requiredCanonicalId = (value: unknown, label: string): OsId => {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value
+  return canonicalError(`${label} must be a non-empty id`)
+}
+
+const optionalCanonicalId = (value: unknown, label: string): OsId | null => {
+  if (value === null || value === undefined) return null
+  return requiredCanonicalId(value, label)
+}
+
+const requiredCanonicalString = (value: unknown, label: string): string => {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  return canonicalError(`${label} must be a non-empty string`)
+}
+
+const optionalCanonicalString = (value: unknown, label: string): string | null => {
+  if (value === null || value === undefined) return null
+  return requiredCanonicalString(value, label)
+}
+
+const requiredCanonicalInteger = (value: unknown, label: string): number => {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value
+  return canonicalError(`${label} must be a positive integer`)
+}
+
+const sameCanonicalId = (left: OsId | null | undefined, right: OsId | null | undefined) =>
+  left !== null && left !== undefined && right !== null && right !== undefined && String(left) === String(right)
+
+const requireSameCanonicalId = (left: OsId | null | undefined, right: OsId | null | undefined, label: string) => {
+  if (!sameCanonicalId(left, right)) canonicalError(`${label} does not match`)
+}
+
+const normalizeCanonicalIdentity = (row: JsonObject): OrchestrationIdentity => {
+  if (firstValue(row, 'lifecycle') !== 'canonical') canonicalError('orchestration.lifecycle is not canonical')
+  if (firstValue(row, 'contract_attached', 'contractAttached') !== true) {
+    canonicalError('orchestration.contract_attached must be true')
+  }
+  return {
+    lifecycle: 'canonical',
+    contract_attached: true,
+    job_id: requiredCanonicalId(firstValue(row, 'job_id', 'jobId'), 'orchestration.job_id'),
+    workspace_id: requiredCanonicalId(firstValue(row, 'workspace_id', 'workspaceId'), 'orchestration.workspace_id'),
+    session_id: requiredCanonicalId(firstValue(row, 'session_id', 'sessionId'), 'orchestration.session_id'),
+    contract_id: requiredCanonicalId(firstValue(row, 'contract_id', 'contractId'), 'orchestration.contract_id'),
+    contract_version: requiredCanonicalInteger(
+      firstValue(row, 'contract_version', 'contractVersion'),
+      'orchestration.contract_version',
+    ),
+    correlation_id: optionalCanonicalId(
+      firstValue(row, 'correlation_id', 'correlationId'),
+      'orchestration.correlation_id',
+    ),
+    idempotency_key: optionalCanonicalString(
+      firstValue(row, 'idempotency_key', 'idempotencyKey'),
+      'orchestration.idempotency_key',
+    ),
+  }
+}
+
+type CanonicalLifecycleCore = Omit<CanonicalLifecycleRecord, 'events'>
+
+const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
+  const row = objectValue(value)
+  if (firstValue(row, 'mode') !== 'canonical') canonicalError('mode is not canonical')
+  const identity = normalizeCanonicalIdentity(requiredEntity(row, 'orchestration'))
+  const contractRow = requiredEntity(row, 'contract')
+  const deliveryRow = requiredEntity(row, 'delivery')
+  const jobRow = requiredEntity(row, 'job')
+  const workspaceRow = requiredEntity(row, 'workspace')
+  const sessionRow = requiredEntity(row, 'session')
+
+  const contractCardId = requiredCanonicalInteger(firstValue(contractRow, 'card_id', 'cardId'), 'contract.card_id')
+  const contractVersion = requiredCanonicalInteger(firstValue(contractRow, 'version'), 'contract.version')
+  requiredCanonicalString(firstValue(contractRow, 'objective'), 'contract.objective')
+  for (const key of ['deliverables', 'acceptance_criteria', 'dependencies', 'verify_commands', 'non_goals', 'risks']) {
+    if (!Array.isArray(contractRow[key])) canonicalError(`contract.${key} must be an array`)
+  }
+  const contractWorkspaceId = requiredCanonicalId(
+    firstValue(contractRow, 'workspace_id', 'workspaceId'),
+    'contract.workspace_id',
+  )
+  const contract = contractRow as unknown as TaskContract
+
+  const delivery = normalizeDeliveryReport(deliveryRow)
+  const deliveryId = requiredCanonicalId(firstValue(deliveryRow, 'id'), 'delivery.id')
+  const deliveryCardId = requiredCanonicalInteger(firstValue(deliveryRow, 'card_id', 'cardId'), 'delivery.card_id')
+  const deliveryContractId = requiredCanonicalId(
+    firstValue(deliveryRow, 'contract_id', 'contractId'),
+    'delivery.contract_id',
+  )
+  const deliveryJobId = requiredCanonicalId(firstValue(deliveryRow, 'job_id', 'jobId'), 'delivery.job_id')
+  const deliveryWorkspaceId = requiredCanonicalId(
+    firstValue(deliveryRow, 'workspace_id', 'workspaceId'),
+    'delivery.workspace_id',
+  )
+  const deliverySessionId = requiredCanonicalId(
+    firstValue(deliveryRow, 'session_id', 'sessionId'),
+    'delivery.session_id',
+  )
+  requiredCanonicalString(firstValue(deliveryRow, 'status'), 'delivery.status')
+  delivery.id = deliveryId
+  delivery.card_id = deliveryCardId
+  delivery.contract_id = deliveryContractId
+  delivery.job_id = deliveryJobId
+  delivery.workspace_id = deliveryWorkspaceId
+  delivery.session_id = deliverySessionId
+
+  const job = normalizeJob(jobRow)
+  const jobId = requiredCanonicalId(firstValue(jobRow, 'id'), 'job.id')
+  const jobBoardId = requiredCanonicalInteger(firstValue(jobRow, 'board_id', 'boardId'), 'job.board_id')
+  const jobCardId = requiredCanonicalInteger(firstValue(jobRow, 'card_id', 'cardId'), 'job.card_id')
+  const jobWorkspaceId = requiredCanonicalId(firstValue(jobRow, 'workspace_id', 'workspaceId'), 'job.workspace_id')
+  const jobContractVersion = requiredCanonicalInteger(
+    firstValue(jobRow, 'contract_version', 'contractVersion'),
+    'job.contract_version',
+  )
+  requiredCanonicalString(firstValue(jobRow, 'provider'), 'job.provider')
+  requiredCanonicalString(firstValue(jobRow, 'driver_id', 'driverId'), 'job.driver_id')
+  requiredCanonicalString(firstValue(jobRow, 'status'), 'job.status')
+  const accessProfile = normalizeAccessProfile(firstValue(jobRow, 'access_profile', 'accessProfile'))
+  if (!accessProfile) canonicalError('job.access_profile is invalid')
+  job.id = jobId
+  job.board_id = jobBoardId
+  job.card_id = jobCardId
+  job.workspace_id = jobWorkspaceId
+  job.contract_version = jobContractVersion
+  job.access_profile = accessProfile
+
+  const workspace = normalizeWorkspace(workspaceRow)
+  const workspaceId = requiredCanonicalId(firstValue(workspaceRow, 'id'), 'workspace.id')
+  const workspaceBoardId = requiredCanonicalInteger(
+    firstValue(workspaceRow, 'board_id', 'boardId'),
+    'workspace.board_id',
+  )
+  const rawWorkspaceCardId = firstValue(workspaceRow, 'card_id', 'cardId')
+  const workspaceCardId = rawWorkspaceCardId === null
+    ? null : requiredCanonicalInteger(rawWorkspaceCardId, 'workspace.card_id')
+  requiredCanonicalString(firstValue(workspaceRow, 'status'), 'workspace.status')
+  workspace.id = workspaceId
+  workspace.board_id = workspaceBoardId
+  workspace.card_id = workspaceCardId
+
+  const session = normalizeAgentSession(sessionRow)
+  const sessionId = requiredCanonicalId(firstValue(sessionRow, 'id'), 'session.id')
+  const sessionWorkspaceId = requiredCanonicalId(
+    firstValue(sessionRow, 'workspace_id', 'workspaceId'),
+    'session.workspace_id',
+  )
+  requiredCanonicalString(firstValue(sessionRow, 'provider'), 'session.provider')
+  requiredCanonicalString(firstValue(sessionRow, 'status'), 'session.status')
+  session.id = sessionId
+  session.workspace_id = sessionWorkspaceId
+
+  requireSameCanonicalId(identity.job_id, jobId, 'orchestration.job_id')
+  requireSameCanonicalId(identity.workspace_id, workspaceId, 'orchestration.workspace_id')
+  requireSameCanonicalId(identity.session_id, sessionId, 'orchestration.session_id')
+  requireSameCanonicalId(jobWorkspaceId, workspaceId, 'job.workspace_id')
+  requireSameCanonicalId(contractWorkspaceId, workspaceId, 'contract.workspace_id')
+  requireSameCanonicalId(sessionWorkspaceId, workspaceId, 'session.workspace_id')
+  requireSameCanonicalId(deliveryJobId, jobId, 'delivery.job_id')
+  requireSameCanonicalId(deliveryWorkspaceId, workspaceId, 'delivery.workspace_id')
+  requireSameCanonicalId(deliverySessionId, sessionId, 'delivery.session_id')
+  requireSameCanonicalId(deliveryContractId, identity.contract_id, 'delivery.contract_id')
+  if (contractCardId !== jobCardId || contractCardId !== deliveryCardId
+    || (workspaceCardId !== null && contractCardId !== workspaceCardId)) {
+    canonicalError('card ids do not match')
+  }
+  if (jobBoardId !== workspaceBoardId) canonicalError('board ids do not match')
+  if (contractVersion !== jobContractVersion || contractVersion !== identity.contract_version) {
+    canonicalError('contract versions do not match')
+  }
+  const expectedContractId = `card:${contractCardId}:v${contractVersion}`
+  if (String(identity.contract_id) !== expectedContractId) canonicalError('orchestration.contract_id is invalid')
+  const sessionJobId = optionalCanonicalId(session.context?.job_id, 'session.context.job_id')
+  if (sessionJobId !== null) requireSameCanonicalId(sessionJobId, jobId, 'session.context.job_id')
+  const sessionCorrelationId = optionalCanonicalId(
+    session.context?.correlation_id,
+    'session.context.correlation_id',
+  )
+  if (identity.correlation_id !== null) {
+    requireSameCanonicalId(sessionCorrelationId, identity.correlation_id, 'session.context.correlation_id')
+  }
+  if (job.provider !== session.provider) canonicalError('provider identities do not match')
+  if (Number(delivery.asked.version) !== contractVersion) {
+    canonicalError('delivery asked contract version does not match')
+  }
+  if ((job.idempotency_key ?? null) !== (identity.idempotency_key ?? null)) {
+    canonicalError('idempotency keys do not match')
+  }
+
+  return {
+    mode: 'canonical',
+    orchestration: identity,
+    contract,
+    delivery,
+    job,
+    workspace,
+    session,
+  }
+}
+
+const normalizeCanonicalDispatch = (value: unknown, jobId: OsId): SchedulerDispatch => {
+  const row = requiredEntity({ dispatch: value }, 'dispatch')
+  const dispatch = {} as SchedulerDispatch
+  for (const key of ['started', 'completed', 'blocked', 'deferred'] as const) {
+    const values = row[key]
+    if (!Array.isArray(values)) canonicalError(`dispatch.${key} must be an array`)
+    dispatch[key] = (values as unknown[]).map((id: unknown, index: number) =>
+      requiredCanonicalId(id, `dispatch.${key}[${index}]`))
+    if (dispatch[key].some((id) => !sameCanonicalId(id, jobId))) {
+      canonicalError(`dispatch.${key} contains a different job`)
+    }
+  }
+  return dispatch
+}
+
+const normalizeCanonicalEvent = (
+  value: unknown,
+  jobId: OsId,
+  boardId: number,
+  workspaceId: OsId,
+  cardId: number,
+  contractId: OsId,
+  sessionId: OsId,
+  correlationId: OsId,
+): OsEvent => {
+  const row = objectValue(value)
+  if (!Object.keys(row).length) canonicalError('events contains a non-object record')
+  const eventJobId = requiredCanonicalId(firstValue(row, 'job_id', 'jobId'), 'event.job_id')
+  const eventBoardId = requiredCanonicalInteger(firstValue(row, 'board_id', 'boardId'), 'event.board_id')
+  requireSameCanonicalId(eventJobId, jobId, 'event.job_id')
+  if (eventBoardId !== boardId) canonicalError('event.board_id does not match')
+  const event: OsEvent = {
+    id: requiredCanonicalId(firstValue(row, 'id'), 'event.id'),
+    board_id: eventBoardId,
+    workspace_id: requiredCanonicalId(firstValue(row, 'workspace_id', 'workspaceId'), 'event.workspace_id'),
+    card_id: requiredCanonicalInteger(firstValue(row, 'card_id', 'cardId'), 'event.card_id'),
+    session_id: optionalCanonicalId(firstValue(row, 'session_id', 'sessionId'), 'event.session_id'),
+    process_id: optionalCanonicalId(firstValue(row, 'process_id', 'processId'), 'event.process_id'),
+    job_id: eventJobId,
+    contract_id: requiredCanonicalId(firstValue(row, 'contract_id', 'contractId'), 'event.contract_id'),
+    correlation_id: requiredCanonicalId(
+      firstValue(row, 'correlation_id', 'correlationId'),
+      'event.correlation_id',
+    ),
+    causation_id: optionalCanonicalId(firstValue(row, 'causation_id', 'causationId'), 'event.causation_id'),
+    idempotency_key: optionalCanonicalString(
+      firstValue(row, 'idempotency_key', 'idempotencyKey'),
+      'event.idempotency_key',
+    ),
+    event_version: firstValue(row, 'event_version', 'eventVersion') == null
+      ? 1 : requiredCanonicalInteger(firstValue(row, 'event_version', 'eventVersion'), 'event.event_version'),
+    kind: requiredCanonicalString(firstValue(row, 'kind'), 'event.kind'),
+    source: requiredCanonicalString(firstValue(row, 'source'), 'event.source'),
+    payload: parseJson<JsonObject | null>(firstValue(row, 'payload'), null),
+    created_at: requiredCanonicalString(firstValue(row, 'created_at', 'createdAt'), 'event.created_at'),
+  }
+  requireSameCanonicalId(event.workspace_id, workspaceId, 'event.workspace_id')
+  if (event.card_id !== cardId) canonicalError('event.card_id does not match')
+  requireSameCanonicalId(event.contract_id, contractId, 'event.contract_id')
+  if (event.session_id !== null) requireSameCanonicalId(event.session_id, sessionId, 'event.session_id')
+  requireSameCanonicalId(event.correlation_id, correlationId, 'event.correlation_id')
+  return event
+}
+
+/** Normalize a launch response only when all canonical records and exact links are present. */
 export const normalizeCanonicalLifecycleResponse = (value: unknown): CanonicalLifecycleSnapshot => {
   const row = objectValue(value)
-  const identity = requiredEntity(row, 'orchestration')
-  const lifecycle = optionalString(firstValue(identity, 'lifecycle'))
-  if (lifecycle !== 'canonical') throw new Error('response is not a canonical lifecycle')
-  const mode = optionalString(firstValue(row, 'mode'))
-  if (mode !== 'canonical') throw new Error('canonical lifecycle response is missing canonical mode')
+  const core = normalizeCanonicalCore(row)
   return {
-    mode,
-    orchestration: {
-      lifecycle,
-      contract_attached: requiredBoolean(firstValue(identity, 'contract_attached', 'contractAttached'), false),
-      job_id: optionalId(firstValue(identity, 'job_id', 'jobId')),
-      workspace_id: optionalId(firstValue(identity, 'workspace_id', 'workspaceId')),
-      session_id: optionalId(firstValue(identity, 'session_id', 'sessionId')),
-      ...(firstValue(identity, 'contract_id', 'contractId') !== undefined
-        ? { contract_id: optionalId(firstValue(identity, 'contract_id', 'contractId')) } : {}),
-      ...(firstValue(identity, 'contract_version', 'contractVersion') !== undefined
-        ? { contract_version: optionalNumber(firstValue(identity, 'contract_version', 'contractVersion')) } : {}),
-      ...(firstValue(identity, 'correlation_id', 'correlationId') !== undefined
-        ? { correlation_id: optionalId(firstValue(identity, 'correlation_id', 'correlationId')) } : {}),
-      ...(firstValue(identity, 'idempotency_key', 'idempotencyKey') !== undefined
-        ? { idempotency_key: optionalString(firstValue(identity, 'idempotency_key', 'idempotencyKey')) } : {}),
-    },
-    contract: requiredEntity(row, 'contract') as TaskContract,
-    delivery: normalizeDeliveryReport(requiredEntity(row, 'delivery')),
-    job: normalizeJob(requiredEntity(row, 'job')),
-    workspace: normalizeWorkspace(requiredEntity(row, 'workspace')),
-    session: normalizeAgentSession(requiredEntity(row, 'session')),
-    dispatch: normalizeDispatch(requiredEntity(row, 'dispatch')),
-    dispatch_error: optionalString(firstValue(row, 'dispatch_error', 'dispatchError')),
+    ...core,
+    dispatch: normalizeCanonicalDispatch(row.dispatch, core.job.id),
+    dispatch_error: optionalCanonicalString(
+      firstValue(row, 'dispatch_error', 'dispatchError'),
+      'dispatch_error',
+    ),
+  }
+}
+
+/** Normalize a job-keyed lifecycle read model without borrowing board/workspace state. */
+export const normalizeCanonicalLifecycleRecord = (value: unknown): CanonicalLifecycleRecord => {
+  const row = objectValue(value)
+  const core = normalizeCanonicalCore(row)
+  if (core.orchestration.correlation_id === null) {
+    canonicalError('orchestration.correlation_id is required for exact events')
+  }
+  const eventValues = row.events
+  if (!Array.isArray(eventValues) || eventValues.length === 0) {
+    canonicalError('events must contain at least one exact job event')
+  }
+  return {
+    ...core,
+    events: (eventValues as unknown[])
+      .map((event: unknown) => normalizeCanonicalEvent(
+        event,
+        core.job.id,
+        core.job.board_id,
+        core.workspace.id,
+        core.contract.card_id,
+        core.orchestration.contract_id!,
+        core.session.id,
+        core.orchestration.correlation_id!,
+      )),
   }
 }
 
@@ -963,6 +1244,8 @@ export const osApi = {
 
   listJobs: async (boardId: number) =>
     unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/jobs`), ['jobs']).map(normalizeJob),
+  getJobLifecycle: async (jobId: OsId) =>
+    normalizeCanonicalLifecycleRecord(await api('GET', `/os/jobs/${jobId}`)),
   createJob: async (boardId: number, input: Partial<Job> & { card_id: number }) =>
     normalizeCanonicalLifecycleResponse(await api('POST', `/os/boards/${boardId}/jobs`, input)),
   cancelJob: (jobId: OsId) => api('POST', `/os/jobs/${jobId}/cancel`),

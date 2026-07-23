@@ -1,7 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import type Database from 'better-sqlite3'
 import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions, FastifyRequest } from 'fastify'
-import { AgentOsError, ForbiddenError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
+import {
+  AgentOsError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  UnsupportedError,
+  ValidationError,
+} from './errors.js'
 import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import { Checkpoint, CheckpointForker, CheckpointService } from './checkpoints.js'
@@ -306,12 +313,20 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { ok: true, signal }
   })
 
-  app.get<{ Params: { id: string }; Querystring: { workspace?: string; card?: string; kind?: string; after?: string; limit?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: {
+    workspace?: string
+    card?: string
+    job?: string
+    kind?: string
+    after?: string
+    limit?: string
+  } }>(
     '/boards/:id/events', (request) => {
       const boardId = board(db, request.params.id)
       const page = events.listBoard(boardId, { workspaceId: request.query.workspace,
         cardId: request.query.card ? positiveId(request.query.card, 'card') : undefined,
-        kind: request.query.kind, after: request.query.after, limit: Number(request.query.limit) || undefined })
+        jobId: request.query.job, kind: request.query.kind,
+        after: request.query.after, limit: Number(request.query.limit) || undefined })
       const cursorEvent = request.query.after ? page.at(-1) : page[0]
       return { events: page, next_cursor: cursorEvent?.id ?? request.query.after ?? null }
     })
@@ -536,6 +551,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
       const idempotencyKey = resolveIdempotencyKey({
         header: request.headers['idempotency-key'],
+        rawHeaders: request.raw.rawHeaders,
         snake: body.idempotency_key,
         camel: body.idempotencyKey,
       })
@@ -543,12 +559,13 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
         provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt,
         idempotencyKey }
       const launched = await orchestration.launchCard(launchInput)
+      const identity = orchestrationIdentity('canonical', launched)
       return reply.code(201).send({
         mode: 'canonical',
-        orchestration: orchestrationIdentity('canonical', launched),
+        orchestration: identity,
         contract: launched.contract,
         job: launched.job,
-        delivery: launched.delivery,
+        delivery: { ...launched.delivery, contract_id: identity.contract_id },
         workspace: launched.workspace,
         session: launched.session,
         dispatch: launched.dispatch,
@@ -559,6 +576,30 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       maxAttempts, budgetTokens, budgetCents, scheduledAt })
     await scheduler.tick()
     return reply.code(201).send({ job: scheduler.get(created.id) })
+  })
+  app.get<{ Params: { id: string } }>('/jobs/:id', (request) => {
+    const snapshot = orchestration.getJobSnapshot(request.params.id)
+    const identity = orchestrationIdentity('canonical', snapshot)
+    const jobEvents = events.listBoard(snapshot.job.board_id, { jobId: snapshot.job.id, limit: 500 })
+    if (!identity.contract_id || !identity.correlation_id || !jobEvents.length
+      || jobEvents.some((event) =>
+        event.workspace_id !== snapshot.workspace?.id
+        || event.card_id !== snapshot.job.card_id
+        || event.contract_id !== identity.contract_id
+        || event.correlation_id !== identity.correlation_id
+        || (event.session_id !== null && event.session_id !== snapshot.session?.id))) {
+      throw new ConflictError('canonical job event scope is missing or inconsistent')
+    }
+    return {
+      mode: 'canonical',
+      orchestration: identity,
+      contract: snapshot.contract,
+      delivery: { ...snapshot.delivery, contract_id: identity.contract_id },
+      job: snapshot.job,
+      workspace: snapshot.workspace,
+      session: snapshot.session,
+      events: jobEvents,
+    }
   })
   app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => {
     requireOperator(request)

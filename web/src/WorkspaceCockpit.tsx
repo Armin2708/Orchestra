@@ -4,6 +4,7 @@ import { Agent, Card, Snapshot } from './api'
 import { CanonicalLifecycleStatus, canonicalLifecycleForWorkspace } from './CanonicalLifecycleStatus'
 import { ProviderBadge } from './ProviderBadge'
 import {
+  CanonicalLifecycleRecord,
   ContextItem,
   DeliveryCollection,
   DriverCapability,
@@ -113,6 +114,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const [conflicts, setConflicts] = useState<Resource<WorkspaceConflict[]>>(resource([]))
   const [drivers, setDrivers] = useState<Resource<DriverCapability[]>>(resource([]))
   const [jobs, setJobs] = useState<Resource<Job[]>>(resource([]))
+  const [lifecycle, setLifecycle] = useState<Resource<CanonicalLifecycleRecord | null>>(resource(null))
 
   const terminalRef = useRef<ProcessTerminalHandle>(null)
   const commandRef = useRef<HTMLInputElement>(null)
@@ -167,6 +169,9 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const card = selected?.card_id === null || selected?.card_id === undefined
     ? undefined : boardSnapshot?.cards.find((candidate) => candidate.id === selected.card_id)
   const owner = card?.owner ? boardSnapshot?.agents.find((agent) => agent.name === card.owner && agent.status !== 'gone') ?? null : null
+  const selectedDelivery = selected
+    ? deliveries.data.deliveries.find((delivery) => String(delivery.workspace_id) === String(selected.id)) ?? null
+    : null
 
   const refreshProcesses = useCallback(async (quiet = true) => {
     if (!selected) return
@@ -195,6 +200,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setContract({ status: 'ready', data: null, error: null })
       setConflicts({ status: 'ready', data: [], error: null })
       setJobs({ status: 'ready', data: [], error: null })
+      setLifecycle({ status: 'ready', data: null, error: null })
       return
     }
     const workspaceId = String(selected.id)
@@ -210,6 +216,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
       setPolicies({ status: 'loading', data: [], error: null })
       setConflicts({ status: 'loading', data: [], error: null })
       setJobs({ status: 'loading', data: [], error: null })
+      setLifecycle({ status: selected.card_id === null ? 'ready' : 'loading', data: null, error: null })
     }
     if (selected.card_id !== null && switched) {
       setContract({ status: 'loading', data: null, error: null })
@@ -242,6 +249,43 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     }
     return () => { alive = false }
   }, [selected?.id, selected?.board_id, selected?.card_id, reloadTick])
+
+  useEffect(() => {
+    if (!selected || selected.card_id === null) {
+      setLifecycle({ status: 'ready', data: null, error: null })
+      return
+    }
+    if (deliveries.status === 'loading') return
+    if (deliveries.status === 'error') {
+      setLifecycle({ status: 'error', data: null, error: 'Exact lifecycle could not be resolved without Trackbook.' })
+      return
+    }
+    const jobId = selectedDelivery?.job_id
+    if (jobId === null || jobId === undefined) {
+      setLifecycle({ status: 'ready', data: null, error: null })
+      return
+    }
+    const workspaceId = String(selected.id)
+    let alive = true
+    setLifecycle((current) => current.data && String(current.data.job.id) === String(jobId)
+      ? { ...current, error: null }
+      : { status: 'loading', data: null, error: null })
+    osApi.getJobLifecycle(jobId).then((data) => {
+      if (!alive || selectedIdRef.current !== workspaceId) return
+      if (String(data.workspace.id) !== workspaceId) {
+        throw new Error('The job lifecycle belongs to a different workspace.')
+      }
+      setLifecycle({ status: 'ready', data, error: null })
+    }).catch((error) => {
+      if (!alive || selectedIdRef.current !== workspaceId) return
+      setLifecycle({
+        status: 'error',
+        data: null,
+        error: errorMessage(error, 'Exact lifecycle could not be loaded.'),
+      })
+    })
+    return () => { alive = false }
+  }, [selected?.id, selected?.card_id, deliveries.status, selectedDelivery?.job_id, reloadTick])
 
   useEffect(() => {
     if (!selected) return
@@ -314,12 +358,16 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const workspaceConflicts = conflicts.data.filter((conflict) =>
     String(conflict.workspace_id ?? '') === String(selected?.id ?? '') || String(conflict.other_workspace_id ?? '') === String(selected?.id ?? '') ||
     conflict.workspace_ids?.some((id) => String(id) === String(selected?.id ?? '')))
+  const exactLifecycleRequired = selectedDelivery?.job_id !== null
+    && selectedDelivery?.job_id !== undefined
   const lifecycleView = selected && jobs.status === 'ready' && events.status === 'ready'
-    && (selected.card_id === null || deliveries.status === 'ready') ? canonicalLifecycleForWorkspace({
+    && (selected.card_id === null || deliveries.status === 'ready')
+    && (!exactLifecycleRequired || lifecycle.status === 'ready') ? canonicalLifecycleForWorkspace({
     workspace: selected,
     jobs: jobs.data,
-    delivery: deliveries.data.current,
+    delivery: selectedDelivery,
     events: events.data,
+    exact: lifecycle.data,
   }) : null
   const availableDrivers = drivers.data.filter((driver) => driver.available !== false)
 
@@ -452,6 +500,11 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
                   {selected.branch && <span><OsIcon name="branch" size={13} /> <code>{selected.branch}</code></span>}
                   <span title={selected.worktree_path ?? selected.root_path}><OsIcon name="folder" size={13} /> <code>{selected.worktree_path ?? selected.root_path}</code></span>
                 </div>
+                {exactLifecycleRequired && lifecycle.status === 'loading' && (
+                  <div className="os-workspace-paths" aria-label="Canonical lifecycle loading">
+                    <span><b>Lifecycle</b> loading exact job</span>
+                  </div>
+                )}
                 {lifecycleView && <CanonicalLifecycleStatus view={lifecycleView} />}
               </div>
               <div className="os-workspace-head-actions">
@@ -466,6 +519,9 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
               </div>
               {workspaceConflicts.length > 0 && (
                 <div className="os-conflict-banner"><OsIcon name="attention" /><b>{workspaceConflicts.length} scope conflict{workspaceConflicts.length === 1 ? '' : 's'}</b><span>Review overlapping paths before merging.</span></div>
+              )}
+              {lifecycle.status === 'error' && (
+                <div className="os-inline-error os-head-error" role="alert">{lifecycle.error}</div>
               )}
               {headerError && <div className="os-inline-error os-head-error" role="alert">{headerError}<button onClick={() => setHeaderError(null)} aria-label="Dismiss error"><OsIcon name="close" size={13} /></button></div>}
             </header>

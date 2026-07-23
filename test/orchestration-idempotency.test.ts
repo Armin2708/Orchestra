@@ -11,6 +11,12 @@ describe('canonical idempotency key parsing', () => {
   it('rejects conflicting, repeated, empty, non-string, overlong, and control-character keys', () => {
     expect(() => resolveIdempotencyKey({ snake: 'one', camel: 'two' })).toThrow(/must match/)
     expect(() => resolveIdempotencyKey({ header: ['one', 'one'] })).toThrow(/exactly once/)
+    expect(() => resolveIdempotencyKey({
+      header: 'one,two',
+      rawHeaders: ['Idempotency-Key', 'one', 'idempotency-key', 'two'],
+    })).toThrow(/exactly once/)
+    expect(() => resolveIdempotencyKey({ snake: ['one'] })).toThrow(/must be a string/)
+    expect(() => resolveIdempotencyKey({ camel: ['one'] })).toThrow(/must be a string/)
     expect(() => resolveIdempotencyKey({ snake: '   ' })).toThrow(/must not be empty/)
     expect(() => resolveIdempotencyKey({ camel: 42 })).toThrow(/must be a string/)
     expect(() => resolveIdempotencyKey({ header: 'x'.repeat(201) })).toThrow(/at most 200/)

@@ -1,5 +1,13 @@
 import React from 'react'
-import type { DeliveryReport, Job, JsonObject, OsEvent, OsId, Workspace } from './osApi'
+import type {
+  CanonicalLifecycleRecord,
+  DeliveryReport,
+  Job,
+  JsonObject,
+  OsEvent,
+  OsId,
+  Workspace,
+} from './osApi'
 import { parseJson } from './osApi'
 
 export type CanonicalLifecycleView = {
@@ -32,15 +40,42 @@ export function canonicalLifecycleForWorkspace(input: {
   jobs: Job[]
   delivery: DeliveryReport | null
   events: OsEvent[]
+  exact?: CanonicalLifecycleRecord | null
 }): CanonicalLifecycleView {
   const { workspace, jobs, events } = input
+  if (input.exact && sameId(input.exact.workspace.id, workspace.id)) {
+    const dispatchEvent = input.exact.events
+      .filter((event) => dispatchKinds.has(event.kind) && sameId(eventJobId(event), input.exact?.job.id))
+      .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0] ?? null
+    const missing: CanonicalLifecycleView['missing'] = []
+    if (dispatchEvent === null) missing.push('dispatch_event')
+    return {
+      lifecycle: 'canonical',
+      workspace,
+      job: input.exact.job,
+      sessionId: input.exact.session.id,
+      contractId: input.exact.orchestration.contract_id ?? input.exact.delivery.contract_id,
+      dispatchEvent,
+      missing,
+    }
+  }
   const scopedDelivery = input.delivery
     && sameId(input.delivery.workspace_id, workspace.id)
     ? input.delivery : null
+  if (!scopedDelivery) {
+    return {
+      lifecycle: 'ambient',
+      workspace,
+      job: null,
+      sessionId: null,
+      contractId: null,
+      dispatchEvent: null,
+      missing: ['job'],
+    }
+  }
   const deliveryJob = scopedDelivery?.job_id === null || scopedDelivery?.job_id === undefined
     ? null : jobs.find((job) => sameId(job.id, scopedDelivery.job_id) && sameId(job.workspace_id, workspace.id)) ?? null
-  const workspaceJobs = jobs.filter((job) => sameId(job.workspace_id, workspace.id))
-  const job = deliveryJob ?? workspaceJobs[0] ?? null
+  const job = deliveryJob
   const sessionId = job && scopedDelivery && sameId(scopedDelivery.job_id, job.id)
     ? scopedDelivery.session_id : null
   const contractId = job && scopedDelivery && sameId(scopedDelivery.job_id, job.id)
@@ -51,7 +86,15 @@ export function canonicalLifecycleForWorkspace(input: {
       .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0] ?? null
     : null
   if (!job) {
-    return { lifecycle: 'ambient', workspace, job: null, sessionId: null, contractId: null, dispatchEvent: null, missing: ['job'] }
+    return {
+      lifecycle: 'canonical',
+      workspace,
+      job: null,
+      sessionId: null,
+      contractId: null,
+      dispatchEvent: null,
+      missing: ['job'],
+    }
   }
   const missing: CanonicalLifecycleView['missing'] = []
   if (sessionId === null) missing.push('session')
@@ -69,7 +112,11 @@ export function CanonicalLifecycleStatus({ view }: { view: CanonicalLifecycleVie
   if (!view.job) {
     return (
       <div className="os-workspace-paths" aria-label="Canonical lifecycle">
-        <span title="This workspace is not linked to a canonical managed job."><b>Lifecycle</b> ambient</span>
+        <span title={view.lifecycle === 'canonical'
+          ? 'Canonical records exist, but no exact job link is available.'
+          : 'This workspace is not linked to a canonical managed job.'}>
+          <b>Lifecycle</b> {view.lifecycle === 'canonical' ? 'link incomplete' : 'ambient'}
+        </span>
         <span><b>Workspace</b> <code>{compactId(view.workspace.id)}</code></span>
       </div>
     )

@@ -43,6 +43,7 @@ export interface AppendEvent {
 export interface EventFilters {
   workspaceId?: string
   cardId?: number
+  jobId?: string
   kind?: string
   after?: string
   limit?: number
@@ -113,6 +114,7 @@ export class EventStore {
     const params: Record<string, unknown> = { board_id: boardId }
     if (filters.workspaceId) { where.push('workspace_id=@workspace_id'); params.workspace_id = filters.workspaceId }
     if (filters.cardId) { where.push('card_id=@card_id'); params.card_id = filters.cardId }
+    if (filters.jobId) { where.push('job_id=@job_id'); params.job_id = filters.jobId }
     if (filters.kind) { where.push('kind=@kind'); params.kind = filters.kind }
     let incremental = false
     if (filters.after) {
