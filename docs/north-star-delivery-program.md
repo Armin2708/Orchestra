@@ -1,6 +1,6 @@
 # Agent OS North Star Delivery Program
 
-Status: in progress on `codex/northstar-program` from baseline `388e3b2`.
+Status: Milestone A delivered on `codex/northstar-program` at `fce20fc`; Milestone B is next.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -79,16 +79,53 @@ installation, dogfood, rollback, diagnostics, release notes, and staged beta pro
 
 ## Current delivery slice
 
-Milestone A is active. Work is split across isolated branches for the orchestration domain,
-entrypoint compatibility, and acceptance/recovery presentation. The integration branch accepts
-only commits that preserve the baseline of 62 focused orchestration tests plus root TypeScript.
+### Asked
+
+Deliver Milestone A as one canonical, durable lifecycle shared by Board, Agent OS API, and CLI
+launches, with explicit compatibility/ambient classification and human-readable lifecycle truth.
+
+### Delivered
+
+- migration `006` reserves the job, frozen contract version, delivery, workspace assignment,
+  workspace, session, policy/profile, and causal identities before provider execution;
+- Board, Agent OS API, and CLI launches converge on the same idempotent orchestration service;
+- retry, cancellation, restart reconciliation, capacity deferral, provisioning compensation, and
+  same-key replay retain one lifecycle;
+- operator-only control boundaries prevent agent credentials from launching, hiring, steering, or
+  cancelling work;
+- authenticated `GET /api/v1/os/jobs/:id` is non-mutating and returns the exact frozen lifecycle
+  plus job-scoped, scope-validated causal events;
+- the Workspace Cockpit loads that exact job record and never substitutes another workspace/card
+  job when a delivery link is absent or invalid;
+- strict web normalization rejects incomplete, mismatched, compatibility, or causally inconsistent
+  envelopes instead of manufacturing canonical truth.
+
+### Evidence
+
+- commit: `fce20fc` (`feat(orchestration): close canonical lifecycle acceptance`);
+- repository suite: 88 files and 526 tests pass on Node 22.20.0;
+- focused orchestration/recovery/presentation gate: 5 files and 63 tests pass;
+- root and web TypeScript checks pass;
+- CLI and production web builds pass;
+- same-key replay after a mutable contract edit still returns the frozen Asked version;
+- a scheduler-only card job cannot cause the GET endpoint to create a contract or delivery;
+- an independent review reproduced and then verified closure of frozen-snapshot, event-scope, and
+  cockpit-fallback defects;
+- GitNexus staged review reports critical blast radius because shared server/event/UI entrypoints
+  are touched; the combined full-suite and independent-review gates passed.
+
+### Remaining
+
+Milestone B starts with the durable Agent Home conversation/event model, provider capture and
+recovery, then the Agent Home web/CLI/terminal surface. Milestones C–E remain open; Milestone A does
+not by itself make the product public plug-and-play.
 
 ## Evidence baseline
 
 - Runtime: Node 22.20.0; repository dependency ABI requires Node 22 rather than the machine's
   unrelated Homebrew Node 26 runtime.
 - Environment: no project `.env`, `.env.local`, `web/.env`, or `web/.env.local` files are present.
-- Focused orchestration/API/CLI/runtime baseline: 6 files and 62 tests pass.
-- Root TypeScript baseline: clean.
+- Combined Milestone A baseline: 88 test files and 526 tests pass.
+- Root/web TypeScript and production builds: clean.
 - Primary checkout user changes in `web/src/Board.tsx`, `web/src/styles.css`, and `graphify-out/`
   are outside the isolated program branches and must remain preserved.

@@ -2,10 +2,11 @@
 
 ## TL;DR
 
-Milestone A has one executable acceptance harness for Board, Agent OS API, and CLI launches. The
-harness compares persisted contract, job, workspace, session, and causal-event snapshots rather
-than trusting route-specific response text. It also proves one winner under a three-entrypoint race
-and verifies restart reconciliation does not duplicate a lifecycle.
+Milestone A is delivered at `fce20fc`. One executable acceptance harness proves Board, Agent OS
+API, and CLI launch parity from persisted contract, delivery, workspace assignment, workspace,
+session, job, and causal-event records. It also proves idempotent replay/conflict behavior, one
+winner under a three-entrypoint race, and restart recovery from a reopened database without
+duplicating a lifecycle.
 
 ## Asked
 
@@ -29,6 +30,10 @@ orchestration:
   job_id: <durable id>
   workspace_id: <durable id>
   session_id: <durable id>
+  contract_id: "card:<card id>:v<version>"
+  contract_version: <frozen version>
+  correlation_id: <operation id>
+  idempotency_key: <request key or null>
 contract: <frozen work contract>
 job: <scheduled execution>
 delivery: <prepared Trackbook report>
@@ -48,39 +53,38 @@ to its canonical normalizer for this reason.
 |---|---|
 | Board/API/CLI lifecycle parity | `test/canonical-orchestration-acceptance.test.ts` compares normalized durable snapshots from all three entrypoints |
 | Cross-entrypoint duplicate race | The same file races Board, API, and CLI and requires exactly one job/workspace/session lifecycle |
-| Restart reconciliation | The same file recreates the runtime and requires the original non-resumable job/session to be terminalized once |
-| Canonical presentation join | `test/canonical-lifecycle-presentation.test.ts` proves exact-ID joins and refuses card-owner inference |
-| Shared response contract | The presentation test covers provider controls, idempotency, correlation, dispatch, workspace, and session fields |
+| Restart reconciliation | The same file closes the original server/database, reopens the SQLite file, creates a new runtime, and terminalizes the original non-resumable job/session once |
+| Idempotency replay/conflict | The acceptance and route suites reuse snake/camel/header spellings, require the original IDs for the same fingerprint, reject changed fingerprints, duplicate raw headers, and body arrays |
+| Frozen non-mutating refresh | `test/orchestration-launch.test.ts` advances the editable contract after launch, then proves replay/GET return the frozen Asked version and that GET creates no records for a scheduler-only job |
+| Exact causal events | The route rejects same-job events with inconsistent workspace/card/session/contract/correlation scope; web normalization independently checks the same identifiers |
+| Canonical presentation join | `test/canonical-lifecycle-presentation.test.ts` proves exact-ID joins and refuses card-owner, board-job, or workspace-job inference without a scoped delivery |
+| Shared response contract | The presentation test covers provider controls, access profile, frozen contract, idempotency, correlation, dispatch, workspace, session, delivery, and causal events |
 | Existing resumable-provider recovery | `test/agent-os-runtime-integration.test.ts` resumes a Claude session and preserves the job identity |
 
 ## UI behavior
 
-The Workspace Cockpit loads canonical jobs beside workspaces, deliveries, and events. Its lifecycle
-strip presents:
+When a workspace-scoped delivery names a job, the Workspace Cockpit loads
+`GET /api/v1/os/jobs/:id` and presents:
 
 - the exact persisted job ID and status;
 - the selected workspace ID;
-- the delivery-scoped session ID, or `not linked` when none is persisted;
-- the latest exact job dispatch event, or `not recorded` when the event ledger has no match.
+- the exact session ID from that lifecycle;
+- the latest scope-validated causal dispatch event.
 
-Loading state is not labeled ambient. A workspace is called ambient only after the canonical job
-list has loaded and no job has that exact workspace ID.
+Loading state is not labeled ambient. Invalid or unavailable exact lifecycle data is a visible
+error. Without a workspace-scoped delivery, the cockpit remains ambient and does not select a job
+from board/workspace proximity.
 
 ## Remaining integration work
 
-- Add authenticated `GET /api/v1/os/jobs/:id` backed by
-  `OrchestrationService.getJobSnapshot(jobId)` after that domain read method lands. This is the
-  durable refresh/restart response counterpart to the launch envelope.
-- Run the harness again after idempotency-key routing lands, then extend the race case to assert
-  same-key replay and changed-fingerprint conflict.
 - BASE-009 remains broader than Milestone A: append delivery verification, accepted discussion
   promotion, and cited knowledge reuse when those north-star services are implemented.
 
 ## Delivered / Evidence / Remaining handoff
 
-- **Delivered:** executable entrypoint parity, duplicate-race and restart-recovery harnesses; strict
-  canonical response types; exact-ID Workspace Cockpit presentation.
-- **Evidence:** focused Vitest suite, root/web TypeScript checks, and the repository-wide test/build
-  evidence recorded with the implementing commit.
-- **Remaining:** the durable GET snapshot route and post-Milestone-A request-to-knowledge stages
-  listed above.
+- **Delivered:** durable entrypoint parity, atomic reservation, idempotent replay/conflict,
+  reopened-database recovery, non-mutating frozen lifecycle refresh, strict causal response
+  validation, and exact-ID Workspace Cockpit presentation.
+- **Evidence:** 88 files / 526 tests, root/web TypeScript, CLI/web builds, staged GitNexus review,
+  and an independent two-pass acceptance review.
+- **Remaining:** post-Milestone-A request-to-knowledge stages listed above.
