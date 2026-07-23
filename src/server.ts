@@ -1128,12 +1128,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/interrupt', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     const ok = await maestro.interruptAgent(Number(req.params.id))
     return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
   })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/fire', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     const ok = await maestro.fire(Number(req.params.id))
     return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
@@ -1143,6 +1145,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const PERMISSION_MODES = ['default', 'bypassPermissions', 'acceptEdits', 'plan']
   server.post<{ Params: { id: string }; Body: { mode?: string } | null }>(
     '/api/v1/agents/:id/permission-mode', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const mode = req.body?.mode ?? ''
       if (!PERMISSION_MODES.includes(mode)) return reply.code(400).send({ error: `mode must be one of: ${PERMISSION_MODES.join(', ')}` })
@@ -1152,6 +1155,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { profile?: AccessProfile } | null }>(
     '/api/v1/agents/:id/access-profile', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const profile = req.body?.profile
       if (!profile || !ACCESS_PROFILES.includes(profile))
@@ -1163,6 +1167,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // answer a pending canUseTool ask surfaced in the terminal
   server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string } | null }>(
     '/api/v1/agents/:id/permissions/:requestId', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const behavior = req.body?.behavior
       if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
@@ -1172,6 +1177,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string; requestId: string }; Body: { decision?: string; message?: string; answers?: Record<string, unknown> } | null }>(
     '/api/v1/agents/:id/approvals/:requestId', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const decision = req.body?.decision
       const decisions = ['allow', 'allow_session', 'deny', 'cancel'] as const
@@ -1198,6 +1204,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)
   server.post<{ Params: { id: string }; Body: { model?: string } | null }>(
     '/api/v1/agents/:id/model', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const model = req.body?.model
       if (!model || typeof model !== 'string') return reply.code(400).send({ error: 'model is required' })
@@ -1209,6 +1216,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // 409 while a turn is running, mirroring the launch gate
   server.post<{ Params: { id: string }; Body: { level?: string } | null }>(
     '/api/v1/agents/:id/effort', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const level = req.body?.level ?? ''
       if (!/^[a-zA-Z0-9_-]{1,40}$/.test(level)) return reply.code(400).send({ error: 'level must be a provider effort identifier' })

@@ -35,10 +35,20 @@ describe('operator and agent API principals', () => {
       task: () => { calls.push('task'); return true },
       transcript: () => ({ lines: [], working: null }),
       subagents: () => [],
-      interruptAgent: async () => true,
-      fire: async () => true,
+      interruptAgent: async () => { calls.push('interrupt'); return true },
+      fire: async () => { calls.push('fire'); return true },
       launch: () => { calls.push('launch'); return { queued: false } },
       isLaunched: () => false,
+      setPermissionMode: async () => { calls.push('permission-mode'); return true },
+      resolvePermission: async () => { calls.push('permission'); return true },
+      resolveApproval: async () => { calls.push('approval'); return true },
+      setAccessProfile: async () => { calls.push('access-profile'); return true },
+      setModel: async () => { calls.push('model'); return true },
+      setEffort: async () => { calls.push('effort'); return 'ok' },
+      mcpStatus: async () => [],
+      toggleMcpServer: async () => { calls.push('mcp-toggle'); return [] },
+      reconnectMcpServer: async () => { calls.push('mcp-reconnect'); return [] },
+      reloadPlugins: async () => { calls.push('plugin-reload'); return { plugins: [] } },
     }
     const server = buildServer(db, () => conductor, { token: OPERATOR_TOKEN, agentToken: AGENT_TOKEN })
     servers.push(server)
@@ -56,10 +66,104 @@ describe('operator and agent API principals', () => {
       }),
       server.inject({ method: 'POST', url: '/api/v1/agents/1/task', headers: agent, payload: { text: 'escalate' } }),
       server.inject({ method: 'POST', url: '/api/v1/os/jobs/unknown/cancel', headers: agent }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/interrupt', headers: agent }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/fire', headers: agent }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/permission-mode', headers: agent, payload: { mode: 'plan' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/access-profile', headers: agent, payload: { profile: 'read_only' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/permissions/request-1', headers: agent, payload: { behavior: 'allow' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/approvals/request-2', headers: agent, payload: { decision: 'allow' },
+      }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/model', headers: agent, payload: { model: 'test-model' } }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/effort', headers: agent, payload: { level: 'high' } }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/mcp/github/toggle', headers: agent, payload: { enabled: false },
+      }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/mcp/github/reconnect', headers: agent }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/plugins/reload', headers: agent }),
     ])
 
-    expect(attempts.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403])
+    expect(attempts.map((response) => response.statusCode)).toEqual(new Array(attempts.length).fill(403))
     expect(calls).toEqual([])
+  })
+
+  it('allows the operator to use live Agent Home controls while agent credentials remain read-only', async () => {
+    const db = openDb(':memory:')
+    const calls: string[] = []
+    const conductor: ConductorLike = {
+      isHired: () => true,
+      hire: () => ({ id: 1 }),
+      deliver: () => true,
+      task: () => true,
+      transcript: () => ({ lines: [{ kind: 'status', text: 'ready' }], working: null }),
+      subagents: () => [],
+      interruptAgent: async () => { calls.push('interrupt'); return true },
+      fire: async () => { calls.push('fire'); return true },
+      launch: () => ({}),
+      isLaunched: () => false,
+      setPermissionMode: async () => { calls.push('permission-mode'); return true },
+      setAccessProfile: async () => { calls.push('access-profile'); return true },
+      setModel: async () => { calls.push('model'); return true },
+      setEffort: async () => { calls.push('effort'); return 'ok' },
+      resolvePermission: async () => { calls.push('permission'); return true },
+      resolveApproval: async () => { calls.push('approval'); return true },
+      mcpStatus: async () => [{ name: 'github', status: 'connected', tools: [] }],
+      toggleMcpServer: async () => { calls.push('mcp-toggle'); return [] },
+      reconnectMcpServer: async () => { calls.push('mcp-reconnect'); return [] },
+      reloadPlugins: async () => { calls.push('plugin-reload'); return { plugins: [] } },
+    }
+    const server = buildServer(db, () => conductor, { token: OPERATOR_TOKEN, agentToken: AGENT_TOKEN })
+    servers.push(server)
+    await server.ready()
+
+    const controls = await Promise.all([
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/interrupt', headers: operator }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/fire', headers: operator }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/permission-mode', headers: operator, payload: { mode: 'plan' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/access-profile', headers: operator, payload: { profile: 'read_only' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/permissions/request-1', headers: operator, payload: { behavior: 'allow' },
+      }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/approvals/request-2', headers: operator, payload: { decision: 'allow' },
+      }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/model', headers: operator, payload: { model: 'test-model' } }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/effort', headers: operator, payload: { level: 'high' } }),
+      server.inject({
+        method: 'POST', url: '/api/v1/agents/1/mcp/github/toggle', headers: operator, payload: { enabled: false },
+      }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/mcp/github/reconnect', headers: operator }),
+      server.inject({ method: 'POST', url: '/api/v1/agents/1/plugins/reload', headers: operator }),
+    ])
+
+    expect(controls.map((response) => response.statusCode)).toEqual(new Array(controls.length).fill(200))
+    expect([...calls].sort()).toEqual([
+      'interrupt',
+      'fire',
+      'permission-mode',
+      'access-profile',
+      'permission',
+      'approval',
+      'model',
+      'effort',
+      'mcp-toggle',
+      'mcp-reconnect',
+      'plugin-reload',
+    ].sort())
+    const transcript = await server.inject({ method: 'GET', url: '/api/v1/agents/1/transcript', headers: agent })
+    const mcpStatus = await server.inject({ method: 'GET', url: '/api/v1/agents/1/mcp', headers: agent })
+    expect(transcript.statusCode).toBe(200)
+    expect(mcpStatus.statusCode).toBe(200)
   })
 
   it('keeps normal agent reporting open but reserves acceptance and done for the operator', async () => {
