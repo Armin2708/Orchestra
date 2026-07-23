@@ -242,6 +242,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/processes', async (request, reply) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process spawning requires the PTY runtime')
     const workspace = requireWorkspace(workspaces, request.params.id)
     const body = objectBody(request.body)
@@ -264,6 +265,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.get<{ Params: { id: string } }>('/processes/:id', (request) => ({ process: requireProcess(db, request.params.id) }))
 
   app.post<{ Params: { id: string } }>('/processes/:id/restart', async (request, reply) => {
+    requireOperator(request)
     if (!options.runtime?.restartProcess) throw new UnsupportedError('process restart requires the PTY runtime')
     const current = requireProcess(db, request.params.id)
     if (!current.restartable) throw new ValidationError('process does not have a restart recipe')
@@ -284,6 +286,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/input', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process input requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
@@ -295,6 +298,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/resize', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process resize requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
@@ -305,6 +309,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/signal', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process signals require the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer, type ConductorLike } from '../src/server.js'
+import type { AgentOsRuntimeAdapter } from '../src/agent-os/routes.js'
 import { ensureAgentToken, ensureToken, loadClientToken } from '../src/token.js'
 
 const OPERATOR_TOKEN = 'operator-token'
@@ -164,6 +165,189 @@ describe('operator and agent API principals', () => {
     const mcpStatus = await server.inject({ method: 'GET', url: '/api/v1/agents/1/mcp', headers: agent })
     expect(transcript.statusCode).toBe(200)
     expect(mcpStatus.statusCode).toBe(200)
+  })
+
+  it('keeps PTY state readable while reserving every process mutation for the operator', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/operator-pty', 'pty')")
+      .run().lastInsertRowid)
+    const workspaceId = 'operator-pty-workspace'
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES (?, ?, 'operator pty', 'shared', '/operator-pty', 'active')`).run(workspaceId, boardId)
+    db.prepare(`INSERT INTO processes (
+      id, workspace_id, name, command, cwd, status, restartable, cols, rows
+    ) VALUES ('operator-pty-process', ?, 'shell', 'zsh', '/operator-pty', 'running', 1, 80, 24)`)
+      .run(workspaceId)
+    db.prepare(`INSERT INTO process_output (process_id, seq, stream, data)
+      VALUES ('operator-pty-process', 1, 'pty', 'ready')`).run()
+
+    const calls: string[] = []
+    const processRecord = {
+      id: 'operator-pty-process',
+      workspace_id: workspaceId,
+      name: 'shell',
+      command: 'zsh',
+      cwd: '/operator-pty',
+      status: 'running',
+      pid: 123,
+      exit_code: null,
+      cols: 80,
+      rows: 24,
+      restartable: true,
+      started_at: '2026-07-23T00:00:00Z',
+      ended_at: null,
+    }
+    const runtime: AgentOsRuntimeAdapter = {
+      spawnProcess: async () => { calls.push('spawn'); return processRecord },
+      restartProcess: async () => { calls.push('restart'); return processRecord },
+      writeProcessInput: async () => { calls.push('input') },
+      resizeProcess: async () => { calls.push('resize') },
+      signalProcess: async () => { calls.push('signal') },
+    }
+    const server = buildServer(db, undefined, {
+      token: OPERATOR_TOKEN,
+      agentToken: AGENT_TOKEN,
+      agentOs: { runtime },
+    })
+    servers.push(server)
+    await server.ready()
+
+    const readable = await Promise.all([
+      server.inject({
+        method: 'GET',
+        url: `/api/v1/os/workspaces/${workspaceId}/processes`,
+        headers: agent,
+      }),
+      server.inject({
+        method: 'GET',
+        url: '/api/v1/os/processes/operator-pty-process',
+        headers: agent,
+      }),
+      server.inject({
+        method: 'GET',
+        url: '/api/v1/os/processes/operator-pty-process/output',
+        headers: agent,
+      }),
+    ])
+    expect(readable.map((response) => response.statusCode)).toEqual([200, 200, 200])
+
+    const attempts = await Promise.all([
+      server.inject({
+        method: 'POST',
+        url: `/api/v1/os/workspaces/${workspaceId}/processes`,
+        headers: agent,
+        payload: { interactive: true },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/restart',
+        headers: agent,
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/input',
+        headers: agent,
+        payload: { data: 'rm -rf .' },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/resize',
+        headers: agent,
+        payload: { cols: 120, rows: 40 },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/signal',
+        headers: agent,
+        payload: { signal: 'SIGTERM' },
+      }),
+    ])
+    expect(attempts.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403])
+    expect(calls).toEqual([])
+
+    const missingResourceAttempts = await Promise.all([
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/workspaces/missing-workspace/processes',
+        headers: agent,
+        payload: { interactive: true },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/missing-process/restart',
+        headers: agent,
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/missing-process/input',
+        headers: agent,
+        payload: { data: 'whoami\r' },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/missing-process/resize',
+        headers: agent,
+        payload: { cols: 120, rows: 40 },
+      }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/missing-process/signal',
+        headers: agent,
+        payload: { signal: 'SIGTERM' },
+      }),
+    ])
+    expect(missingResourceAttempts.map((response) => response.statusCode))
+      .toEqual([403, 403, 403, 403, 403])
+    expect(calls).toEqual([])
+
+    const noRuntimeServer = buildServer(db, undefined, {
+      token: OPERATOR_TOKEN,
+      agentToken: AGENT_TOKEN,
+    })
+    servers.push(noRuntimeServer)
+    await noRuntimeServer.ready()
+    const unavailableRuntimeAttempts = await Promise.all([
+      noRuntimeServer.inject({
+        method: 'POST',
+        url: `/api/v1/os/workspaces/${workspaceId}/processes`,
+        headers: agent,
+        payload: { interactive: true },
+      }),
+      noRuntimeServer.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/restart',
+        headers: agent,
+      }),
+      noRuntimeServer.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/input',
+        headers: agent,
+        payload: { data: 'whoami\r' },
+      }),
+      noRuntimeServer.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/resize',
+        headers: agent,
+        payload: { cols: 120, rows: 40 },
+      }),
+      noRuntimeServer.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/signal',
+        headers: agent,
+        payload: { signal: 'SIGTERM' },
+      }),
+    ])
+    expect(unavailableRuntimeAttempts.map((response) => response.statusCode))
+      .toEqual([403, 403, 403, 403, 403])
+
+    const operatorInput = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/operator-pty-process/input',
+      headers: operator,
+      payload: { data: 'pwd\r' },
+    })
+    expect(operatorInput.statusCode).toBe(200)
+    expect(calls).toEqual(['input'])
   })
 
   it('keeps normal agent reporting open but reserves acceptance and done for the operator', async () => {
