@@ -165,6 +165,27 @@ export type AgentHomeSearch = {
   links?: AgentHomeLinks | null
 }
 
+export type AgentHomeEventLookup = {
+  event: ConversationEvent
+  links: AgentHomeLinks | null
+}
+
+export const normalizeAgentHomeEventLookup = (
+  value: unknown,
+  conversationId: string,
+  eventId: string,
+): AgentHomeEventLookup => {
+  const raw = asRecord(value)
+  const event = raw.event as ConversationEvent
+  if (event.id !== eventId || event.conversation_id !== conversationId) {
+    throw new Error('Conversation event lookup returned a mismatched durable identity.')
+  }
+  return {
+    event,
+    links: Object.keys(asRecord(raw.links)).length ? raw.links as AgentHomeLinks : null,
+  }
+}
+
 export type ConversationSearchFilters = {
   query?: string
   after?: number
@@ -314,6 +335,15 @@ export const agentHomeApi = {
       links: Object.keys(asRecord(raw.links)).length ? raw.links as AgentHomeLinks : null,
     }
   },
+
+  getConversationEvent: async (
+    conversationId: string,
+    eventId: string,
+  ): Promise<AgentHomeEventLookup> =>
+    normalizeAgentHomeEventLookup(await api(
+      'GET',
+      `/os/conversations/${encodeURIComponent(conversationId)}/events/${encodeURIComponent(eventId)}`,
+    ), conversationId, eventId),
 
   searchConversation: async (
     conversationId: string,

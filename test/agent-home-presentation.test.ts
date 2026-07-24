@@ -7,6 +7,7 @@ import type {
   AgentSessionRecord,
   ConversationEvent,
 } from '../web/src/agentHomeApi.js'
+import { normalizeAgentHomeEventLookup } from '../web/src/agentHomeApi.js'
 import {
   agentHomeDeepLink,
   capabilityFor,
@@ -172,6 +173,27 @@ describe('Agent Home selection and provenance presentation', () => {
       processId: 'process-6',
       eventId: 'event-7',
     })
+  })
+
+  it('accepts only the exact event identity returned for a conversation deep link', () => {
+    const exact = event({ id: 'event-5001', sequence: 5001 })
+    expect(normalizeAgentHomeEventLookup({
+      event: exact,
+      links: { event_id: exact.id, href: '/?event=event-5001' },
+    }, exact.conversation_id, exact.id)).toMatchObject({
+      event: { id: 'event-5001', sequence: 5001 },
+      links: { event_id: 'event-5001' },
+    })
+    expect(() => normalizeAgentHomeEventLookup(
+      { event: exact },
+      'another-conversation',
+      exact.id,
+    )).toThrow(/mismatched durable identity/)
+    expect(() => normalizeAgentHomeEventLookup(
+      { event: exact },
+      exact.conversation_id,
+      'another-event',
+    )).toThrow(/mismatched durable identity/)
   })
 
   it('fails closed when lifecycle capability sidecars are unavailable', () => {

@@ -366,22 +366,14 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     eventCursorRef.current = 0
     const load = async () => {
       try {
-        let page = await requestEvents(0)
-        let loaded = page.events
-        let pageCount = 1
-        while (
-          selectedEventId
-          && !loaded.some((event) => event.id === selectedEventId)
-          && page.has_more
-          && pageCount < 25
-        ) {
-          const next = await requestEvents(page.next_cursor)
-          const byId = new Map(loaded.map((event) => [event.id, event]))
-          next.events.forEach((event) => byId.set(event.id, event))
-          loaded = [...byId.values()].sort((a, b) => a.sequence - b.sequence)
-          page = next
-          pageCount += 1
-        }
+        const exact = selectedEventId
+          ? await agentHomeApi.getConversationEvent(selectedConversation.id, selectedEventId)
+          : null
+        const contextCursor = exact ? Math.max(0, exact.event.sequence - 51) : 0
+        const page = await requestEvents(contextCursor)
+        const byId = new Map(page.events.map((event) => [event.id, event]))
+        if (exact) byId.set(exact.event.id, exact.event)
+        const loaded = [...byId.values()].sort((a, b) => a.sequence - b.sequence)
         if (!alive) return
         eventCursorRef.current = page.next_cursor
         setEventCursor(page.next_cursor)
