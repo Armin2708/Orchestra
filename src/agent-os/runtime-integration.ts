@@ -13,6 +13,7 @@ import type { DeliveryReport } from './delivery-reports.js'
 import { ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { parseJson } from './json.js'
+import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
 import { TaskContractService, type TaskContract } from './task-contracts.js'
 import type { AgentOsRuntimeAdapter, DriverDescriptor, ProcessRecord as ApiProcessRecord } from './routes.js'
@@ -863,13 +864,44 @@ export class AgentOsJobExecutor implements JobExecutor {
     const managedAgentId = !capabilities.rawTerminal && capabilities.managesAgentIdentity !== true
       ? this.prepareManagedAgent(effectiveJob, cwd, job.access_profile)
       : null
+    const agentName = job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`
+    const profileName = job.card_id ? `job-${job.card_id}-${job.id}` : `job-${job.id}`
+    const sessionContext = {
+      job_id: job.id,
+      card_id: job.card_id,
+      managed_identity: managedAgentId !== null,
+      driver_id: job.driver_id,
+      effort: job.effort,
+      access_profile: job.access_profile,
+      usage_total: null,
+    }
+    let agentHome: ManagedAgentSessionBinding | null = null
+    if (job.provider !== 'shell') {
+      try {
+        agentHome = new ManagedAgentSessionBinder(this.db).bind({
+          jobId: job.id,
+          boardId: job.board_id,
+          workspaceId: workspace.id,
+          provider: job.provider,
+          driverId: job.driver_id,
+          profileName,
+          model: job.model,
+          effort: job.effort,
+          accessProfile: job.access_profile,
+          context: sessionContext,
+        })
+      } catch (error) {
+        if (managedAgentId) this.markManagedAgentGone(managedAgentId)
+        throw error
+      }
+    }
     const request = job.provider === 'shell'
       ? this.shellRequest(effectiveJob, workspace, contract, cwd)
       : {
           workspaceId: workspace.id,
           boardId: job.board_id,
           cwd,
-          name: job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
+          name: agentName,
           prompt: this.prompt(job, contract, delivery),
           ...(job.model ? { model: job.model } : {}),
           ...(job.effort ? { effort: job.effort } : {}),
@@ -889,6 +921,9 @@ export class AgentOsJobExecutor implements JobExecutor {
             accessProfile: job.access_profile,
             driverId: job.driver_id,
             ...(managedAgentId ? { agentId: managedAgentId } : {}),
+            agentHomeSessionId: agentHome!.agentHomeSessionId,
+            agentProfileId: agentHome!.agentProfileId,
+            agentConversationId: agentHome!.agentConversationId,
           },
         }
     let session: DriverSession
@@ -903,22 +938,22 @@ export class AgentOsJobExecutor implements JobExecutor {
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw new Error(`job ${job.id} left the running state while its provider was launching`)
     }
-    const reservation = this.db.prepare(`SELECT id, context_json FROM agent_sessions
-      WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
-        AND status IN ('reserved','starting') ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
-      .get(job.id) as { id: string; context_json: string } | undefined
-    const sessionId = reservation?.id ?? randomUUID()
+    const reservation = agentHome
+      ? this.db.prepare('SELECT id, context_json FROM agent_sessions WHERE id=?')
+          .get(agentHome.agentHomeSessionId) as { id: string; context_json: string } | undefined
+      : this.db.prepare(`SELECT id, context_json FROM agent_sessions
+          WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
+            AND status IN ('reserved','starting') ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
+          .get(job.id) as { id: string; context_json: string } | undefined
+    const sessionId = agentHome?.agentHomeSessionId ?? reservation?.id ?? randomUUID()
     const agentId = Number(session.metadata.agentId ?? managedAgentId)
     try {
+      if (agentHome && !reservation) {
+        throw new Error(`bound Agent Home session disappeared before provider launch completed: ${sessionId}`)
+      }
       const context = {
         ...parseJson<Record<string, unknown>>(reservation?.context_json, {}),
-          job_id: job.id,
-          card_id: job.card_id,
-          managed_identity: managedAgentId !== null,
-          driver_id: job.driver_id,
-          effort: job.effort,
-          access_profile: job.access_profile,
-          usage_total: null,
+        ...sessionContext,
       }
       if (reservation) {
         this.db.prepare(`UPDATE agent_sessions SET workspace_id=?, agent_id=?, provider=?, external_id=?, model=?,

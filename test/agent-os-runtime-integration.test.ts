@@ -6,7 +6,9 @@ import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
+import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
 import { buildServer } from '../src/server.js'
@@ -274,6 +276,536 @@ describe('Agent OS daemon runtime integration', () => {
     expect(session.workspace_id).toBe(job.workspace_id)
     expect(delivery).toMatchObject({ job_id: jobId, workspace_id: job.workspace_id, session_id: session.id })
   }, 25_000)
+
+  it('binds a canonical managed session before provider launch and reuses the reserved identity', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const requests: DriverLaunchRequest[] = []
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        requests.push(request)
+        const metadata = request.metadata!
+        const bound = db.prepare(`SELECT s.id, s.status, s.profile_id, s.conversation_id,
+          p.status AS profile_status, c.status AS conversation_status, c.is_default
+          FROM agent_sessions s
+          JOIN agent_profiles p ON p.id=s.profile_id
+          JOIN agent_conversations c ON c.id=s.conversation_id
+          WHERE s.id=?`).get(metadata.agentHomeSessionId) as Record<string, unknown>
+        expect(bound).toMatchObject({
+          id: metadata.agentHomeSessionId,
+          status: 'starting',
+          profile_id: metadata.agentProfileId,
+          conversation_id: metadata.agentConversationId,
+          profile_status: 'active',
+          conversation_status: 'active',
+          is_default: 1,
+        })
+        return {
+          id: 'claude:bound', externalId: 'claude-bound-thread', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'bound-canonical', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const orchestration = new OrchestrationService(db, runtime.scheduler, {
+      materialize: async (item) => item,
+    })
+    const reserved = orchestration.createCardJob({
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      accessProfile: 'read_only',
+      maxAttempts: 1,
+    })
+
+    expect((await runtime.scheduler.tick()).started).toEqual([reserved.job.id])
+    await until(() => runtime.scheduler.get(reserved.job.id)?.status === 'succeeded')
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].metadata).toMatchObject({
+      jobId: reserved.job.id,
+      cardId,
+      driverId: 'claude',
+      accessProfile: 'read_only',
+      agentHomeSessionId: reserved.session?.id,
+    })
+    expect(requests[0].metadata?.agentProfileId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(requests[0].metadata?.agentConversationId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM agent_sessions
+      WHERE job_id=? OR json_extract(context_json, '$.job_id')=?`).get(reserved.job.id, reserved.job.id))
+      .toEqual({ count: 1 })
+    expect(db.prepare('SELECT id, external_id FROM agent_sessions WHERE id=?').get(reserved.session!.id))
+      .toEqual({ id: reserved.session!.id, external_id: 'claude-bound-thread' })
+  })
+
+  it('reuses one Agent Home identity when a managed provider launch is retried', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const identities: Array<Record<string, unknown>> = []
+    let attempts = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        attempts += 1
+        identities.push({
+          agentHomeSessionId: request.metadata?.agentHomeSessionId,
+          agentProfileId: request.metadata?.agentProfileId,
+          agentConversationId: request.metadata?.agentConversationId,
+        })
+        if (attempts === 1) throw new Error('transient provider launch failure')
+        return {
+          id: 'claude:retry', externalId: 'claude-retry-thread', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'bound-retry', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const orchestration = new OrchestrationService(db, runtime.scheduler, {
+      materialize: async (item) => item,
+    })
+    const reserved = orchestration.createCardJob({
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      accessProfile: 'read_only',
+      maxAttempts: 2,
+    })
+
+    expect((await runtime.scheduler.tick()).deferred).toEqual([reserved.job.id])
+    expect(runtime.scheduler.get(reserved.job.id)).toMatchObject({ status: 'queued', attempts: 1 })
+    expect((await runtime.scheduler.tick()).started).toEqual([reserved.job.id])
+    await until(() => runtime.scheduler.get(reserved.job.id)?.status === 'succeeded')
+
+    expect(identities).toHaveLength(2)
+    expect(identities[1]).toEqual(identities[0])
+    expect(identities[0]).toMatchObject({ agentHomeSessionId: reserved.session?.id })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM agent_sessions
+      WHERE job_id=? OR json_extract(context_json, '$.job_id')=?`).get(reserved.job.id, reserved.job.id))
+      .toEqual({ count: 1 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get()).toEqual({ count: 1 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get()).toEqual({ count: 1 })
+  })
+
+  it('does not invoke the managed provider when Agent Home binding fails', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        launches += 1
+        return {
+          id: 'claude:must-not-launch', externalId: 'must-not-launch', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'binding-failure', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const orchestration = new OrchestrationService(db, runtime.scheduler, {
+      materialize: async (item) => item,
+    })
+    const reserved = orchestration.createCardJob({
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      accessProfile: 'read_only',
+      maxAttempts: 1,
+    })
+    db.exec(`CREATE TRIGGER reject_agent_home_binding
+      BEFORE UPDATE OF profile_id, conversation_id ON agent_sessions
+      WHEN NEW.id='${reserved.session!.id}'
+      BEGIN SELECT RAISE(ABORT, 'Agent Home binding rejected'); END`)
+
+    expect((await runtime.scheduler.tick()).blocked).toEqual([reserved.job.id])
+
+    expect(launches).toBe(0)
+    expect(runtime.scheduler.get(reserved.job.id)).toMatchObject({
+      status: 'blocked',
+      error: expect.stringMatching(/Agent Home binding rejected/),
+    })
+    expect(db.prepare('SELECT status, profile_id, conversation_id FROM agent_sessions WHERE id=?')
+      .get(reserved.session!.id)).toEqual({
+        status: 'failed',
+        profile_id: null,
+        conversation_id: null,
+      })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get()).toEqual({ count: 0 })
+  })
+
+  it('binds compatibility jobs after persisting their runtime-created workspace', async () => {
+    const { boardId, db, runtime } = await fixture()
+    const requests: DriverLaunchRequest[] = []
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        requests.push(request)
+        return {
+          id: 'claude:compatibility', externalId: 'claude-compatibility-thread', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const job = runtime.scheduler.create({ boardId, provider: 'claude', maxAttempts: 1 })
+    expect(job.workspace_id).toBeNull()
+
+    expect((await runtime.scheduler.tick()).started).toEqual([job.id])
+    await until(() => runtime.scheduler.get(job.id)?.status === 'succeeded')
+
+    const persisted = runtime.scheduler.get(job.id)!
+    expect(persisted.workspace_id).toBeTruthy()
+    expect(requests).toHaveLength(1)
+    expect(requests[0].workspaceId).toBe(persisted.workspace_id)
+    const bound = db.prepare(`SELECT id, workspace_id, profile_id, conversation_id
+      FROM agent_sessions WHERE job_id=?`).get(job.id) as Record<string, unknown>
+    expect(bound).toMatchObject({
+      id: requests[0].metadata?.agentHomeSessionId,
+      workspace_id: persisted.workspace_id,
+      profile_id: requests[0].metadata?.agentProfileId,
+      conversation_id: requests[0].metadata?.agentConversationId,
+    })
+  })
+
+  it('rolls back NULL-workspace assignment and Agent Home identity when binding fails', async () => {
+    const { boardId, db, runtime } = await fixture()
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        launches += 1
+        return {
+          id: 'claude:null-workspace-failure', externalId: 'null-workspace-failure', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+    const job = runtime.scheduler.create({ boardId, provider: 'claude', maxAttempts: 1 })
+    db.exec(`CREATE TRIGGER reject_null_workspace_agent_home_binding
+      BEFORE UPDATE OF profile_id, conversation_id ON agent_sessions
+      BEGIN SELECT RAISE(ABORT, 'NULL-workspace Agent Home binding rejected'); END`)
+
+    expect((await runtime.scheduler.tick()).blocked).toEqual([job.id])
+
+    expect(launches).toBe(0)
+    expect(runtime.scheduler.get(job.id)).toMatchObject({
+      status: 'blocked',
+      workspace_id: null,
+      error: expect.stringMatching(/NULL-workspace Agent Home binding rejected/),
+    })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_sessions').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations').get()).toEqual({ count: 0 })
+  })
+
+  it('does not hijack an unrelated Agent Home profile with the generated job name', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        launches += 1
+        return {
+          id: 'claude:name-collision', externalId: 'name-collision', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'profile-collision', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+    const orchestration = new OrchestrationService(db, runtime.scheduler, {
+      materialize: async (item) => item,
+    })
+    const reserved = orchestration.createCardJob({
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      accessProfile: 'read_only',
+      maxAttempts: 1,
+    })
+    const unrelated = new AgentProfileService(db).create({
+      boardId,
+      name: `job-${cardId}-${reserved.job.id}`,
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'test:unrelated-profile',
+    })
+
+    expect((await runtime.scheduler.tick()).blocked).toEqual([reserved.job.id])
+
+    expect(launches).toBe(0)
+    expect(runtime.scheduler.get(reserved.job.id)).toMatchObject({
+      status: 'blocked',
+      error: expect.stringMatching(/already exists/),
+    })
+    expect(db.prepare('SELECT id FROM agent_profiles').all()).toEqual([{ id: unrelated.id }])
+    expect(db.prepare('SELECT profile_id, conversation_id FROM agent_sessions WHERE id=?')
+      .get(reserved.session!.id)).toEqual({ profile_id: null, conversation_id: null })
+  })
+
+  it('creates distinct deterministic profiles for sequential jobs on one card', async () => {
+    const { boardId, cardId, repo, db, runtime, server } = await fixture()
+    const identities: Array<Record<string, unknown>> = []
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        identities.push({
+          agentHomeSessionId: request.metadata?.agentHomeSessionId,
+          agentProfileId: request.metadata?.agentProfileId,
+          agentConversationId: request.metadata?.agentConversationId,
+        })
+        return {
+          id: `claude:sequential:${identities.length}`,
+          externalId: `claude-sequential-thread-${identities.length}`,
+          driverId: 'claude',
+          workspaceId: request.workspaceId,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield { sessionId, seq: 1, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'sequential-card-jobs', kind: 'shared', card_id: cardId, root_path: repo },
+    })).json().workspace
+
+    const first = runtime.scheduler.create({
+      boardId, cardId, workspaceId: workspace.id, provider: 'claude', maxAttempts: 1,
+    })
+    expect((await runtime.scheduler.tick()).started).toEqual([first.id])
+    await until(() => runtime.scheduler.get(first.id)?.status === 'succeeded')
+    const second = runtime.scheduler.create({
+      boardId, cardId, workspaceId: workspace.id, provider: 'claude', maxAttempts: 1,
+    })
+    expect((await runtime.scheduler.tick()).started).toEqual([second.id])
+    await until(() => runtime.scheduler.get(second.id)?.status === 'succeeded')
+
+    expect(identities).toHaveLength(2)
+    expect(identities[1].agentProfileId).not.toBe(identities[0].agentProfileId)
+    expect(identities[1].agentConversationId).not.toBe(identities[0].agentConversationId)
+    expect(db.prepare('SELECT name FROM agent_profiles ORDER BY name').all()).toEqual([
+      { name: `job-${cardId}-${first.id}` },
+      { name: `job-${cardId}-${second.id}` },
+    ].sort((left, right) => left.name.localeCompare(right.name)))
+  })
+
+  it('rejects two active reservations for one job before provider launch', async () => {
+    const { boardId, repo, db, runtime, server } = await fixture()
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        launches += 1
+        return {
+          id: 'claude:duplicate', externalId: 'duplicate', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'duplicate-reservations', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const job = runtime.scheduler.create({
+      boardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      maxAttempts: 1,
+    })
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, status, context_json, job_id, mode, driver_id, created_at, updated_at
+    ) VALUES (
+      'first-reservation', ?, 'claude', 'reserved', ?, ?, 'managed', 'claude',
+      datetime('now'), datetime('now')
+    )`).run(workspace.id, JSON.stringify({ job_id: job.id }), job.id)
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, status, context_json, job_id, mode, driver_id, created_at, updated_at
+    ) VALUES (
+      'second-reservation', ?, 'claude', 'reserved', ?, ?, 'managed', 'claude',
+      datetime('now'), datetime('now')
+    )`).run(workspace.id, JSON.stringify({ job_id: job.id }), job.id)
+
+    expect((await runtime.scheduler.tick()).blocked).toEqual([job.id])
+
+    expect(launches).toBe(0)
+    expect(runtime.scheduler.get(job.id)).toMatchObject({
+      status: 'blocked',
+      error: expect.stringMatching(/multiple active provider-session identities/),
+    })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM agent_sessions
+      WHERE job_id=? OR json_extract(context_json, '$.job_id')=?`)
+      .get(job.id, job.id)).toEqual({ count: 2 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_profiles').get()).toEqual({ count: 0 })
+  })
+
+  it('refuses a second provider launch behind an already-running linked session', async () => {
+    const { boardId, repo, db, runtime, server } = await fixture()
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => {
+        launches += 1
+        return {
+          id: 'claude:reused-running', externalId: 'reused-running-thread', driverId: 'claude',
+          workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+        }
+      },
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'running-reuse', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const job = runtime.scheduler.create({
+      boardId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      maxAttempts: 1,
+    })
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: `job-${job.id.slice(0, 8)}`,
+      defaultProvider: 'claude',
+      defaultAccessProfile: 'workspace_write',
+      actor: { type: 'system', id: 'test' },
+      idempotencyKey: 'test:running-profile',
+    })
+    const conversation = db.prepare(`SELECT id FROM agent_conversations
+      WHERE profile_id=? AND is_default=1`).get(profile.id) as { id: string }
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, external_id, status, context_json,
+      profile_id, conversation_id, job_id, mode, driver_id, access_profile,
+      created_at, updated_at, started_at
+    ) VALUES (
+      'already-running-session', ?, 'claude', 'old-running-thread', 'running', ?,
+      ?, ?, ?, 'managed', 'claude', 'workspace_write',
+      datetime('now'), datetime('now'), datetime('now')
+    )`).run(
+      workspace.id,
+      JSON.stringify({ job_id: job.id }),
+      profile.id,
+      conversation.id,
+      job.id,
+    )
+
+    expect((await runtime.scheduler.tick()).blocked).toEqual([job.id])
+
+    expect(launches).toBe(0)
+    expect(runtime.scheduler.get(job.id)).toMatchObject({
+      status: 'blocked',
+      error: expect.stringMatching(/already has an active running provider session/),
+    })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM agent_sessions
+      WHERE job_id=? OR json_extract(context_json, '$.job_id')=?`)
+      .get(job.id, job.id)).toEqual({ count: 1 })
+    expect(db.prepare("SELECT external_id FROM agent_sessions WHERE id='already-running-session'").get())
+      .toEqual({ external_id: 'old-running-thread' })
+  })
 
   it('launches managed agent jobs with least-privilege defaults', async () => {
     const { boardId, repo, db, runtime, server } = await fixture()
