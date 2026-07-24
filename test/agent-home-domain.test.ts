@@ -522,6 +522,16 @@ describe('durable Agent Home domain', () => {
       CREATE TABLE boards (
         id INTEGER PRIMARY KEY, project_path TEXT NOT NULL UNIQUE, name TEXT NOT NULL
       );
+      CREATE TABLE cards (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        title TEXT NOT NULL,
+        column_name TEXT NOT NULL DEFAULT 'backlog'
+      );
+      CREATE TABLE task_contracts (
+        card_id INTEGER PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         board_id INTEGER NOT NULL REFERENCES boards(id),
@@ -626,7 +636,7 @@ describe('durable Agent Home domain', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(8)
+      .toBe(9)
     expect(db.prepare(`SELECT id, legacy_agent_id, name, provenance_json
       FROM agent_profiles ORDER BY legacy_agent_id`).all()).toEqual([
       expect.objectContaining({

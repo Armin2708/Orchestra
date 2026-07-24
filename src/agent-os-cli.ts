@@ -483,13 +483,23 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--non-goals <json>', 'non-goal JSON array')
     .option('--risks <json>', 'risk JSON array')
     .option('--depends <ids>', 'comma-separated card ids')
+    .option('--dependency-rules <json>', 'dependency records with blocking reason and completion condition')
     .option('--verify <json>', 'verification command JSON array')
+    .option('--capabilities <json>', 'required capability JSON array')
+    .option('--providers <json>', 'allowed provider JSON array')
+    .option('--models <json>', 'allowed model JSON array')
+    .option('--access <json>', 'required access-profile JSON array')
     .option('--base <ref>')
     .option('--priority <number>', 'higher runs first', integer)
     .option('--tokens <number>', 'token budget', integer)
     .option('--cost <number>', 'cost budget', decimal)
+    .option('--time <seconds>', 'wall-time budget in seconds', integer)
+    .option('--retries <number>', 'retry budget', integer)
+    .option('--coordination-tokens <number>', 'coordination token budget', integer)
+    .option('--coordination-messages <number>', 'coordination message budget', integer)
     .option('--policy <id>', 'policy id')
     .option('--workspace <id>', 'workspace id')
+    .option('--actor <actor>', 'audited actor')
     .option('--json', 'print the complete response')
     .action(async (cardId, options) => {
       await ready()
@@ -501,14 +511,66 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         non_goals: parseJsonOption<string[]>(options.nonGoals, '--non-goals'),
         risks: parseJsonOption<string[]>(options.risks, '--risks'),
         dependencies,
+        dependency_rules: parseJsonOption<unknown[]>(options.dependencyRules, '--dependency-rules'),
         verify_commands: parseJsonOption<string[]>(options.verify, '--verify'),
+        required_capabilities: parseJsonOption<string[]>(options.capabilities, '--capabilities'),
+        provider_constraints: parseJsonOption<string[]>(options.providers, '--providers'),
+        model_constraints: parseJsonOption<string[]>(options.models, '--models'),
+        access_needs: parseJsonOption<string[]>(options.access, '--access'),
         base_ref: options.base,
         priority: options.priority,
         budget_tokens: options.tokens,
         budget_cents: options.cost,
+        budget_time_seconds: options.time,
+        budget_retries: options.retries,
+        budget_coordination_tokens: options.coordinationTokens,
+        budget_coordination_messages: options.coordinationMessages,
         policy_id: options.policy,
         workspace_id: options.workspace,
+        actor: options.actor,
       })), options.json)
+    })
+  contract.command('validate <card>')
+    .option('--mode <mode>', 'publish or launch', 'publish')
+    .option('--provider <name>')
+    .option('--model <model>')
+    .option('--access <profile>', 'read_only, workspace_write, or full_access')
+    .option('--json', 'print the complete response')
+    .action(async (cardId, options) => {
+      await ready()
+      const query = new URLSearchParams({ mode: options.mode })
+      if (options.provider) query.set('provider', options.provider)
+      if (options.model) query.set('model', options.model)
+      if (options.access) query.set('access_profile', options.access)
+      print(
+        await deps.api('GET', `/os/cards/${integer(cardId)}/contract/validate?${query}`),
+        options.json,
+      )
+    })
+  contract.command('publish <card>')
+    .option('--actor <actor>', 'audited actor', 'human')
+    .option('--json', 'print the complete response')
+    .action(async (cardId, options) => {
+      await ready()
+      print(
+        await deps.api('POST', `/os/cards/${integer(cardId)}/contract/publish`, { actor: options.actor }),
+        options.json,
+      )
+    })
+  contract.command('transition <card> <status>')
+    .option('--actor <actor>', 'audited actor', 'human')
+    .option('--reason <text>')
+    .option('--json', 'print the complete response')
+    .action(async (cardId, status, options) => {
+      await ready()
+      print(
+        await deps.api('POST', `/os/cards/${integer(cardId)}/contract/transition`, compact({
+          status,
+          actor: options.actor,
+          reason: options.reason,
+        })),
+        options.json,
+      )
     })
 
   const evidence = program.command('evidence').description('inspect or attach task evidence')

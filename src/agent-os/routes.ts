@@ -23,7 +23,7 @@ import { orchestrationIdentity } from './orchestration-envelope.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
-import { TaskContractService } from './task-contracts.js'
+import { JobMarketService, type ContractAccessNeed, type JobMarketStatus } from './job-market.js'
 import { CreateWorkspace, Workspace, WorkspaceStore } from './workspace-store.js'
 import {
   AGENT_DEFAULT_EFFORT_LEVELS,
@@ -138,7 +138,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const events = new EventStore(db)
   const deliveries = new DeliveryReportService(db, events)
   const artifacts = new ArtifactStore(db)
-  const contracts = new TaskContractService(db, events)
+  const jobMarket = new JobMarketService(db, events)
   const attention = new AttentionService(db)
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
@@ -373,9 +373,58 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { attention: item }
   })
 
-  app.get<{ Params: { id: string } }>('/cards/:id/contract', (request) => ({ contract: contracts.getOrCreate(positiveId(request.params.id)) }))
-  app.put<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract', (request) =>
-    ({ contract: contracts.put(positiveId(request.params.id), objectBody(request.body)) }))
+  app.get<{ Params: { id: string } }>('/cards/:id/contract', (request) => {
+    const cardId = positiveId(request.params.id)
+    const market = jobMarket.get(cardId)
+    return { contract: market.contract, job_market: market }
+  })
+  app.put<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract', (request) => {
+    const body = objectBody(request.body)
+    const market = jobMarket.update(
+      positiveId(request.params.id),
+      body,
+      stringValue(body.actor) ?? 'human',
+    )
+    return { contract: market.contract, job_market: market }
+  })
+  app.get<{
+    Params: { id: string }
+    Querystring: { mode?: string; provider?: string; model?: string; access_profile?: string }
+  }>('/cards/:id/contract/validate', (request) => {
+    const mode = request.query.mode ?? 'publish'
+    if (!['publish', 'launch'].includes(mode)) throw new ValidationError('mode must be publish or launch')
+    const launch = mode === 'launch'
+      ? {
+          provider: requiredString(request.query.provider, 'provider'),
+          model: request.query.model?.trim() || null,
+          accessProfile: requiredString(request.query.access_profile, 'access_profile') as ContractAccessNeed,
+        }
+      : undefined
+    return {
+      validation: jobMarket.validate(
+        positiveId(request.params.id),
+        mode as 'publish' | 'launch',
+        launch,
+      ),
+    }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/publish', (request) => {
+    requireOperator(request)
+    const body = request.body == null ? {} : objectBody(request.body)
+    const market = jobMarket.publish(positiveId(request.params.id), stringValue(body.actor) ?? 'human')
+    return { contract: market.contract, job_market: market }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/transition', (request) => {
+    requireOperator(request)
+    const body = objectBody(request.body)
+    const market = jobMarket.transition(
+      positiveId(request.params.id),
+      requiredString(body.status, 'status') as JobMarketStatus,
+      stringValue(body.actor) ?? 'human',
+      stringValue(body.reason),
+    )
+    return { contract: market.contract, job_market: market }
+  })
 
   app.get<{ Params: { id: string } }>('/cards/:id/evidence', (request) => {
     const bundle = evidence.assemble(positiveId(request.params.id))
@@ -642,7 +691,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     { id: 'shell', available: !!options.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'], detail: options.runtime ? undefined : 'requires the PTY runtime' },
   ]) }))
   app.get('/plugins', () => ({ plugins: descriptors(options.plugins, [
-    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
+    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'job-market', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
   ]) }))
 
   // Keep the store referenced: artifacts are deliberately durable and never receive a delete route.

@@ -323,28 +323,23 @@ describe('OrchestrationService', () => {
     expect(setup.orchestration.getJobSnapshot(firstAttempt.job.id).session?.status).toBe('starting')
   })
 
-  it('keeps dependency-blocked work queued instead of claiming it launched', async () => {
+  it('rejects dependency-blocked work before reserving a job or session', async () => {
     const executed: string[] = []
     const executor: JobExecutor = {
       supportedProviders: () => ['claude'],
       execute: async (job) => { executed.push(job.id); return { status: 'running' } },
     }
-    const { db, boardId, cardId, scheduler, orchestration } = fixture(executor)
+    const { db, boardId, cardId, orchestration } = fixture(executor)
     const dependencyId = Number(db.prepare("INSERT INTO cards (board_id, title) VALUES (?, 'Dependency')")
       .run(boardId).lastInsertRowid)
     new TaskContractService(db).put(cardId, { dependencies: [dependencyId] })
 
-    const launched = await orchestration.launchCard({ cardId, provider: 'claude' })
-
+    await expect(orchestration.launchCard({ cardId, provider: 'claude' }))
+      .rejects.toThrow(/dependency .* is not complete/)
     expect(executed).toEqual([])
-    expect(launched.dispatch.deferred).toEqual([launched.job.id])
-    expect(launched.job.status).toBe('queued')
-    expect(launched.session).toMatchObject({ status: 'reserved', context: { job_id: launched.job.id } })
-
-    new TaskContractService(db).put(cardId, { dependencies: [] })
-    const stillWaiting = await scheduler.tick()
-    expect(stillWaiting.deferred).toEqual([launched.job.id])
-    expect(executed).toEqual([])
+    expect(db.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM agent_sessions').get()).toEqual({ count: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM workspace_assignments').get()).toEqual({ count: 0 })
   })
 
   it('validates board scope and launchable card state before contract or job writes', () => {

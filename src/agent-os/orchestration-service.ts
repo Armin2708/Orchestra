@@ -5,6 +5,7 @@ import { AGENT_DEFAULT_EFFORT_LEVELS, defaultsForRole } from '../agent-defaults.
 import { DeliveryReportService, type DeliveryReport } from './delivery-reports.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import { JobMarketService } from './job-market.js'
 import { parseJson, timestamp } from './json.js'
 import {
   JobScheduler,
@@ -105,7 +106,7 @@ export class OrchestrationService {
         }
       }
 
-      this.assertPreflight(card.boardId, contract, input)
+      this.assertPreflight(card.boardId, contract, input, profile)
       const workspace = this.resolveWorkspace(card, contract, input, profile.accessProfile)
       if (contract.workspace_id !== workspace.id) {
         contract = this.contracts.put(input.cardId, { workspace_id: workspace.id })
@@ -343,7 +344,17 @@ export class OrchestrationService {
     }
   }
 
-  private assertPreflight(boardId: number, contract: TaskContract, input: CreateCardJob): void {
+  private assertPreflight(
+    boardId: number,
+    contract: TaskContract,
+    input: CreateCardJob,
+    profile: {
+      provider: string
+      model: string | null
+      accessProfile: 'read_only' | 'workspace_write' | 'full_access'
+    },
+  ): void {
+    new JobMarketService(this.db).assertLaunchable(contract.card_id, profile)
     for (const [name, value] of [
       ['budgetTokens', input.budgetTokens === undefined ? contract.budget_tokens : input.budgetTokens],
       ['budgetCents', input.budgetCents === undefined ? contract.budget_cents : input.budgetCents],

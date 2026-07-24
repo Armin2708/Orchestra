@@ -14,13 +14,36 @@ afterEach(() => {
 })
 
 describe('Agent OS migrations', () => {
+  it('does not record migration 009 when its prerequisite tables are absent', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE os_schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO os_schema_migrations (id) VALUES
+        ('001-agent-os-kernel'), ('002-runtime-hardening'),
+        ('003-provider-session-ownership'), ('004-delivery-trackbook'),
+        ('005-delivery-report-revision-cascade'), ('006-canonical-launch-reservations'),
+        ('007-agent-home-domain'), ('008-agent-home-controls');
+    `)
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/009-job-market-domain requires cards and task_contracts/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='009-job-market-domain'`).get()).toEqual({ count: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='table' AND name LIKE 'job_market_%'`).get()).toEqual({ count: 0 })
+    db.close()
+  })
+
   it('creates the kernel schema exactly once across repeated opens', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-os-schema-'))
     tempDirs.push(directory)
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
     first.close()
 
     const second = openDb(file)
@@ -29,10 +52,12 @@ describe('Agent OS migrations', () => {
       'policies', 'task_contracts', 'attention_items', 'checkpoints', 'jobs', 'context_items', 'daemon_leases',
       'delivery_reports', 'delivery_deliverable_results', 'delivery_criterion_results', 'workspace_assignments',
       'agent_profiles', 'agent_conversations', 'conversation_events',
-      'conversation_event_conflicts', 'agent_session_actions']) {
+      'conversation_event_conflicts', 'agent_session_actions',
+      'job_market_contracts', 'job_market_criteria',
+      'job_market_dependencies']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -122,7 +147,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -215,7 +240,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
     db.close()
   })
 

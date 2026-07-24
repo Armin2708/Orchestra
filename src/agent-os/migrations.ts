@@ -1200,6 +1200,100 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    // 008 is intentionally reserved for Agent Home controls in the integration train.
+    id: '009-job-market-domain',
+    apply(db) {
+      const prerequisites = (db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type='table' AND name IN ('cards','task_contracts')`).get() as { count: number }).count
+      if (prerequisites !== 2) {
+        throw new Error('migration 009-job-market-domain requires cards and task_contracts tables')
+      }
+      db.exec(`
+        CREATE TABLE job_market_contracts (
+          card_id INTEGER PRIMARY KEY REFERENCES task_contracts(card_id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'open'
+            CHECK(status IN ('draft','open','assigned','running','submitted',
+              'accepted','rejected','cancelled','archived')),
+          required_capabilities_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(required_capabilities_json)),
+          provider_constraints_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(provider_constraints_json)),
+          model_constraints_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(model_constraints_json)),
+          access_needs_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(access_needs_json)),
+          budget_time_seconds INTEGER CHECK(budget_time_seconds IS NULL OR budget_time_seconds > 0),
+          budget_retries INTEGER CHECK(budget_retries IS NULL OR budget_retries >= 0),
+          budget_coordination_tokens INTEGER
+            CHECK(budget_coordination_tokens IS NULL OR budget_coordination_tokens > 0),
+          budget_coordination_messages INTEGER
+            CHECK(budget_coordination_messages IS NULL OR budget_coordination_messages > 0),
+          version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+          published_at TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE job_market_criteria (
+          card_id INTEGER NOT NULL REFERENCES job_market_contracts(card_id) ON DELETE CASCADE,
+          criterion_id TEXT NOT NULL,
+          description TEXT NOT NULL,
+          verifier_json TEXT NOT NULL CHECK(json_valid(verifier_json)),
+          required_artifacts_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(required_artifacts_json)),
+          priority INTEGER NOT NULL DEFAULT 0,
+          owner TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(card_id, criterion_id)
+        );
+
+        CREATE TABLE job_market_dependencies (
+          card_id INTEGER NOT NULL REFERENCES job_market_contracts(card_id) ON DELETE CASCADE,
+          dependency_card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+          blocking_reason TEXT NOT NULL,
+          completion_condition TEXT NOT NULL DEFAULT 'card_done'
+            CHECK(completion_condition IN ('card_done')),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(card_id, dependency_card_id),
+          CHECK(card_id != dependency_card_id)
+        );
+
+        CREATE INDEX idx_job_market_contracts_status
+          ON job_market_contracts(status, updated_at, card_id);
+        CREATE INDEX idx_job_market_dependencies_target
+          ON job_market_dependencies(dependency_card_id, card_id);
+        CREATE INDEX idx_job_market_criteria_owner
+          ON job_market_criteria(owner, card_id) WHERE owner IS NOT NULL;
+
+        CREATE TRIGGER job_market_dependency_scope_insert
+        BEFORE INSERT ON job_market_dependencies
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM cards source
+            JOIN cards dependency ON dependency.id=NEW.dependency_card_id
+            WHERE source.id=NEW.card_id AND source.board_id=dependency.board_id
+          ) THEN RAISE(ABORT, 'job market dependency belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER job_market_dependency_scope_update
+        BEFORE UPDATE OF card_id, dependency_card_id ON job_market_dependencies
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM cards source
+            JOIN cards dependency ON dependency.id=NEW.dependency_card_id
+            WHERE source.id=NEW.card_id AND source.board_id=dependency.board_id
+          ) THEN RAISE(ABORT, 'job market dependency belongs to a different board') END;
+        END;
+
+        INSERT INTO job_market_contracts (
+          card_id, status, required_capabilities_json, provider_constraints_json,
+          model_constraints_json, access_needs_json, budget_time_seconds, budget_retries,
+          budget_coordination_tokens, budget_coordination_messages, version,
+          published_at, archived_at, created_at, updated_at
+        )
+        SELECT card_id, 'open', '[]', '[]', '[]', '[]', NULL, NULL, NULL, NULL, 1,
+          updated_at, NULL, updated_at, updated_at
+        FROM task_contracts;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */
