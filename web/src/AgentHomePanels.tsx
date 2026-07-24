@@ -23,7 +23,14 @@ import {
   usageSummary,
 } from './agentHomePresentation'
 import { OsIcon } from './OsIcon'
-import type { AttentionItem, ContextItem, Job, Workspace, WorkspaceProcess } from './osApi'
+import type {
+  AttentionItem,
+  ContextItem,
+  Job,
+  TaskContract,
+  Workspace,
+  WorkspaceProcess,
+} from './osApi'
 import { ProcessTerminal } from './ProcessTerminal'
 import { ProviderBadge } from './ProviderBadge'
 
@@ -44,6 +51,7 @@ export function AgentHomeHeader({
   conversation,
   workspace,
   job,
+  contract,
   process,
   attention,
   capabilities,
@@ -59,6 +67,7 @@ export function AgentHomeHeader({
   conversation: AgentConversation | null
   workspace: Workspace | null
   job: Job | null
+  contract: TaskContract | null
   process: WorkspaceProcess | null
   attention: AttentionItem[]
   capabilities: AgentHomeCapabilities | null
@@ -116,6 +125,9 @@ export function AgentHomeHeader({
       </div>
 
       <div className="ah-runtime-links" aria-label="Exact runtime links">
+        <RuntimeLink label="Contract" value={contract
+          ? `card-${contract.card_id}:v${contract.version ?? job?.contract_version ?? '—'}`
+          : null} />
         <RuntimeLink label="Job" value={job?.id} />
         <RuntimeLink label="Workspace" value={workspace?.id} />
         <RuntimeLink label="Branch" value={workspace?.branch} />
@@ -169,6 +181,7 @@ export function AgentConversationPanel({
   conversation,
   session,
   events,
+  highlightedEventId,
   query,
   kind,
   liveAgent,
@@ -185,6 +198,7 @@ export function AgentConversationPanel({
   conversation: AgentConversation | null
   session: AgentSessionRecord | null
   events: Loadable<ConversationEvent[]>
+  highlightedEventId: string | null
   query: string
   kind: AgentHomeEventKind | 'all'
   liveAgent: Agent | null
@@ -249,7 +263,9 @@ export function AgentConversationPanel({
           <AgentHomeInlineState icon="message" title="No durable events yet"
             detail="Provider-native messages, tool calls, approvals, usage, and status changes will appear here without replacing the CLI." />
         )}
-        {events.data.map((event) => <ConversationEventCard event={event} key={event.id} />)}
+        {events.data.map((event) => (
+          <ConversationEventCard event={event} highlighted={event.id === highlightedEventId} key={event.id} />
+        ))}
         {hasMore && (
           <button className="ah-load-more" type="button" onClick={onLoadMore} disabled={searching}>
             Load more matching events
@@ -267,11 +283,20 @@ export function AgentConversationPanel({
   )
 }
 
-function ConversationEventCard({ event }: { event: ConversationEvent }) {
+function ConversationEventCard({
+  event,
+  highlighted,
+}: {
+  event: ConversationEvent
+  highlighted: boolean
+}) {
   const tool = metadataName(event)
   const machineEvent = ['tool', 'tool_result', 'usage', 'status', 'approval'].includes(event.kind)
   return (
-    <article className={`ah-event ah-event-${event.kind}${machineEvent ? ' machine' : ''}`}>
+    <article
+      className={`ah-event ah-event-${event.kind}${machineEvent ? ' machine' : ''}${highlighted ? ' deep-linked' : ''}`}
+      data-agent-event-id={event.id}
+      tabIndex={-1}>
       <header>
         <span className="ah-event-kind">{eventLabel(event)}</span>
         <span>{eventActor(event)}</span>
@@ -389,6 +414,7 @@ export function AgentInspector({
   conversation,
   workspace,
   job,
+  contract,
   processes,
   attention,
   context,
@@ -404,6 +430,7 @@ export function AgentInspector({
   conversation: AgentConversation | null
   workspace: Workspace | null
   job: Job | null
+  contract: TaskContract | null
   processes: WorkspaceProcess[]
   attention: AttentionItem[]
   context: Loadable<ContextItem[]>
@@ -430,7 +457,7 @@ export function AgentInspector({
         ))}
       </nav>
       <div className="ah-detail-panel" role="tabpanel" tabIndex={0}>
-        {tab === 'work' && <WorkDetail workspace={workspace} job={job} session={session}
+        {tab === 'work' && <WorkDetail workspace={workspace} job={job} contract={contract} session={session}
           processes={processes} attention={attention} />}
         {tab === 'context' && <ContextDetail context={context} />}
         {tab === 'tools' && <ToolsDetail profile={profile} events={events} />}
@@ -442,9 +469,10 @@ export function AgentInspector({
   )
 }
 
-function WorkDetail({ workspace, job, session, processes, attention }: {
+function WorkDetail({ workspace, job, contract, session, processes, attention }: {
   workspace: Workspace | null
   job: Job | null
+  contract: TaskContract | null
   session: AgentSessionRecord | null
   processes: WorkspaceProcess[]
   attention: AttentionItem[]
@@ -454,6 +482,10 @@ function WorkDetail({ workspace, job, session, processes, attention }: {
     <div className="ah-detail-stack">
       <DetailSection title="Active assignment" eyebrow={job ? `Job ${shortId(job.id)}` : 'No canonical job'}>
         <dl className="ah-fact-list">
+          <Fact label="Contract" value={contract
+            ? `Card ${contract.card_id} · v${contract.version ?? job?.contract_version ?? '—'}`
+            : 'Not attached'} mono />
+          <Fact label="Objective" value={contract?.objective ?? 'No frozen objective'} />
           <Fact label="Job status" value={job?.status ?? 'Unassigned'} />
           <Fact label="Workspace" value={workspace?.name ?? 'Not bound'} />
           <Fact label="Branch" value={workspace?.branch ?? '—'} mono />

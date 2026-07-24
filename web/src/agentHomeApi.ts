@@ -144,9 +144,10 @@ export type AgentHomeCapabilities = {
 export type AgentHomeLinks = {
   profile_id: string | null
   conversation_id: string | null
-  session_id: string
+  session_id: string | null
   job_id: string | null
-  workspace_id: string
+  workspace_id: string | null
+  event_id: string | null
   process_ids: string[]
   href: string
 }

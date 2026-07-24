@@ -162,13 +162,15 @@ describe('Agent Home selection and provenance presentation', () => {
       jobId: 'job-4',
       workspaceId: 'workspace-5',
       processId: 'process-6',
+      eventId: 'event-7',
     }, { pathname: '/board', hash: '#inspect' })
-    expect(url).toBe('/board?card=9&debug=1&board=4&agent=agent-1&conversation=conversation-2&session=session-3&job=job-4&workspace=workspace-5&process=process-6#inspect')
+    expect(url).toBe('/board?card=9&debug=1&board=4&agent=agent-1&conversation=conversation-2&session=session-3&job=job-4&workspace=workspace-5&process=process-6&event=event-7#inspect')
     expect(parseAgentHomeSelection(url.split('?')[1].split('#')[0])).toEqual({
       profileId: 'agent-1',
       conversationId: 'conversation-2',
       sessionId: 'session-3',
       processId: 'process-6',
+      eventId: 'event-7',
     })
   })
 

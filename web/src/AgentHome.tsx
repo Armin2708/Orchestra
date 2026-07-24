@@ -38,6 +38,7 @@ import {
   type AttentionItem,
   type ContextItem,
   type Job,
+  type TaskContract,
   type Workspace,
   type WorkspaceProcess,
 } from './osApi'
@@ -67,6 +68,7 @@ type RuntimeState = {
   status: 'idle' | 'loading' | 'ready' | 'error'
   workspace: Workspace | null
   job: Job | null
+  contract: TaskContract | null
   processes: WorkspaceProcess[]
   attention: AttentionItem[]
   context: Loadable<ContextItem[]>
@@ -77,6 +79,7 @@ const emptyRuntime = (): RuntimeState => ({
   status: 'idle',
   workspace: null,
   job: null,
+  contract: null,
   processes: [],
   attention: [],
   context: { status: 'idle', data: [], error: null },
@@ -110,6 +113,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialSelection.current.sessionId)
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(initialSelection.current.conversationId)
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(initialSelection.current.processId)
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(initialSelection.current.eventId)
+  const focusedEventRef = useRef<string | null>(null)
   const [home, setHome] = useState<Loadable<AgentHomeSnapshot | null>>(emptyHome)
   const [sessionCapabilities, setSessionCapabilities] = useState<AgentHomeCapabilities | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(emptyRuntime)
@@ -247,6 +252,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
         status: 'loading',
         workspace: homeScopeMatches ? home.data?.active_scope.workspace ?? null : current.workspace,
         job: homeScopeMatches ? home.data?.active_scope.job ?? null : current.job,
+        contract: current.contract,
         processes: homeScopeMatches ? home.data?.active_scope.processes ?? [] : current.processes,
         attention: homeScopeMatches ? home.data?.active_scope.attention ?? [] : current.attention,
         context: { ...current.context, status: 'loading', error: null },
@@ -258,11 +264,17 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     const processesPromise = osApi.listProcesses(selectedSession.workspace_id)
     const attentionPromise = osApi.listAttention(selectedProfile.board_id)
     const contextPromise = osApi.getContext(selectedSession.workspace_id)
-    const jobPromise = selectedSession.job_id
-      ? osApi.getJobLifecycle(selectedSession.job_id).then((record) => record.job)
+    const lifecyclePromise = selectedSession.job_id
+      ? osApi.getJobLifecycle(selectedSession.job_id)
       : Promise.resolve(null)
-    const [workspaceResult, processesResult, attentionResult, contextResult, jobResult] =
-      await Promise.allSettled([workspacePromise, processesPromise, attentionPromise, contextPromise, jobPromise])
+    const [workspaceResult, processesResult, attentionResult, contextResult, lifecycleResult] =
+      await Promise.allSettled([
+        workspacePromise,
+        processesPromise,
+        attentionPromise,
+        contextPromise,
+        lifecyclePromise,
+      ])
     if (selectedSessionId !== selectedSession.id) return
 
     const workspace = workspaceResult.status === 'fulfilled'
@@ -275,9 +287,12 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
       ? attentionResult.value
       : homeScopeMatches ? home.data?.active_scope.attention ?? [] : [])
       .filter((item) => item.workspace_id === null || String(item.workspace_id) === selectedSession.workspace_id)
-    const job = jobResult.status === 'fulfilled'
-      ? jobResult.value
+    const job = lifecycleResult.status === 'fulfilled'
+      ? lifecycleResult.value?.job ?? null
       : homeScopeMatches ? home.data?.active_scope.job ?? null : null
+    const contract = lifecycleResult.status === 'fulfilled'
+      ? lifecycleResult.value?.contract ?? null
+      : null
     const failures = [
       workspaceResult.status === 'rejected' ? workspaceResult.reason : null,
       processesResult.status === 'rejected' ? processesResult.reason : null,
@@ -286,6 +301,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
       status: failures.length ? 'error' : 'ready',
       workspace,
       job,
+      contract,
       processes,
       attention,
       context: contextResult.status === 'fulfilled'
@@ -332,9 +348,9 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
       after,
       limit: 200,
       kinds: eventKind === 'all' ? undefined : [eventKind],
-      sessionId: selectedSession?.id,
+      sessionId: selectedEventId ? undefined : selectedSession?.id,
     })
-  }, [eventKind, searchQuery, selectedConversation?.id, selectedSession?.id])
+  }, [eventKind, searchQuery, selectedConversation?.id, selectedEventId, selectedSession?.id])
 
   useEffect(() => {
     if (!selectedConversation) {
@@ -348,22 +364,53 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     setEvents({ status: 'loading', data: [], error: null })
     setSearching(true)
     eventCursorRef.current = 0
-    requestEvents(0).then((page) => {
-      if (!alive) return
-      eventCursorRef.current = page.next_cursor
-      setEventCursor(page.next_cursor)
-      setHasMoreEvents(page.has_more)
-      setEvents({ status: 'ready', data: page.events, error: null })
-    }).catch((error) => {
-      if (!alive) return
-      setEvents({
-        status: 'error',
-        data: [],
-        error: messageFor(error, 'Conversation events could not be loaded.'),
-      })
-    }).finally(() => { if (alive) setSearching(false) })
+    const load = async () => {
+      try {
+        let page = await requestEvents(0)
+        let loaded = page.events
+        let pageCount = 1
+        while (
+          selectedEventId
+          && !loaded.some((event) => event.id === selectedEventId)
+          && page.has_more
+          && pageCount < 25
+        ) {
+          const next = await requestEvents(page.next_cursor)
+          const byId = new Map(loaded.map((event) => [event.id, event]))
+          next.events.forEach((event) => byId.set(event.id, event))
+          loaded = [...byId.values()].sort((a, b) => a.sequence - b.sequence)
+          page = next
+          pageCount += 1
+        }
+        if (!alive) return
+        eventCursorRef.current = page.next_cursor
+        setEventCursor(page.next_cursor)
+        setHasMoreEvents(page.has_more)
+        setEvents({ status: 'ready', data: loaded, error: null })
+      } catch (error) {
+        if (!alive) return
+        setEvents({
+          status: 'error',
+          data: [],
+          error: messageFor(error, 'Conversation events could not be loaded.'),
+        })
+      } finally {
+        if (alive) setSearching(false)
+      }
+    }
+    void load()
     return () => { alive = false }
-  }, [requestEvents, selectedConversation?.id])
+  }, [requestEvents, selectedConversation?.id, selectedEventId])
+
+  useEffect(() => {
+    if (!selectedEventId || focusedEventRef.current === selectedEventId || events.status !== 'ready') return
+    const target = Array.from(document.querySelectorAll<HTMLElement>('[data-agent-event-id]'))
+      .find((element) => element.dataset.agentEventId === selectedEventId)
+    if (!target) return
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    target.focus({ preventScroll: true })
+    focusedEventRef.current = selectedEventId
+  }, [events.data, events.status, selectedEventId])
 
   useEffect(() => {
     if (!selectedConversation) return
@@ -402,6 +449,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
       jobId: selectedSession?.job_id ?? null,
       workspaceId: selectedSession?.workspace_id ?? null,
       processId: selectedProcess ? String(selectedProcess.id) : null,
+      eventId: selectedEventId,
     }, { pathname: location.pathname, hash: location.hash })
     if (`${location.pathname}${location.search}${location.hash}` !== next) {
       history.replaceState(null, '', next)
@@ -411,6 +459,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     selectedProcess?.id,
     selectedProfile?.board_id,
     selectedProfile?.id,
+    selectedEventId,
     selectedSession?.id,
     selectedSession?.job_id,
     selectedSession?.workspace_id,
@@ -421,6 +470,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     setSelectedSessionId(null)
     setSelectedConversationId(null)
     setSelectedProcessId(null)
+    setSelectedEventId(null)
+    focusedEventRef.current = null
     setHeaderError(null)
     localStorage.setItem('orchestra-agent-home-profile', profile.id)
   }
@@ -429,10 +480,14 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     setSelectedSessionId(session.id)
     setSelectedConversationId(session.conversation_id)
     setSelectedProcessId(null)
+    setSelectedEventId(null)
+    focusedEventRef.current = null
   }
 
   const selectConversation = (conversation: AgentConversation) => {
     setSelectedConversationId(conversation.id)
+    setSelectedEventId(null)
+    focusedEventRef.current = null
     const matchingSession = home.data?.sessions.find((session) => session.conversation_id === conversation.id)
     if (matchingSession) setSelectedSessionId(matchingSession.id)
   }
@@ -670,6 +725,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
           <>
             <AgentHomeHeader profile={selectedProfile} session={selectedSession}
               conversation={selectedConversation} workspace={runtime.workspace} job={runtime.job}
+              contract={runtime.contract}
               process={selectedProcess} attention={runtime.attention} capabilities={sessionCapabilities}
               busyAction={busyAction} error={headerError ?? home.error ?? runtime.error} copied={copied}
               onAction={requestAction} onRefresh={() => {
@@ -693,10 +749,20 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                 <div className="ah-mobile-pane" role="tabpanel">
                   {mobilePane === 'conversation' ? (
                     <AgentConversationPanel conversation={selectedConversation} session={selectedSession}
-                      events={events} query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
+                      events={events} highlightedEventId={selectedEventId}
+                      query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
                       searching={searching} hasMore={hasMoreEvents} exportBusy={exportBusy}
-                      onQueryChange={setSearchDraft} onKindChange={setEventKind}
-                      onSearch={(event) => { event.preventDefault(); setSearchQuery(searchDraft.trim()) }}
+                      onQueryChange={setSearchDraft} onKindChange={(value) => {
+                        setSelectedEventId(null)
+                        focusedEventRef.current = null
+                        setEventKind(value)
+                      }}
+                      onSearch={(event) => {
+                        event.preventDefault()
+                        setSelectedEventId(null)
+                        focusedEventRef.current = null
+                        setSearchQuery(searchDraft.trim())
+                      }}
                       onLoadMore={() => void loadMoreEvents()} onOpenLiveAgent={() => legacyAgent && setLiveAgent(legacyAgent)}
                       onExport={(format) => void exportConversation(format)} />
                   ) : mobilePane === 'terminal' ? (
@@ -711,7 +777,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                   ) : (
                     <AgentInspector tab={detailTab} profile={selectedProfile} home={home.data}
                       session={selectedSession} conversation={selectedConversation} workspace={runtime.workspace}
-                      job={runtime.job} processes={runtime.processes} attention={runtime.attention}
+                      job={runtime.job} contract={runtime.contract}
+                      processes={runtime.processes} attention={runtime.attention}
                       context={runtime.context} events={events.data} onTabChange={setDetailTab}
                       onSelectSession={selectSession} onSelectConversation={selectConversation} />
                   )}
@@ -721,10 +788,20 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
               <div className="ah-desktop-layout">
                 <div className="ah-primary-pair">
                   <AgentConversationPanel conversation={selectedConversation} session={selectedSession}
-                    events={events} query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
+                    events={events} highlightedEventId={selectedEventId}
+                    query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
                     searching={searching} hasMore={hasMoreEvents} exportBusy={exportBusy}
-                    onQueryChange={setSearchDraft} onKindChange={setEventKind}
-                    onSearch={(event) => { event.preventDefault(); setSearchQuery(searchDraft.trim()) }}
+                    onQueryChange={setSearchDraft} onKindChange={(value) => {
+                      setSelectedEventId(null)
+                      focusedEventRef.current = null
+                      setEventKind(value)
+                    }}
+                    onSearch={(event) => {
+                      event.preventDefault()
+                      setSelectedEventId(null)
+                      focusedEventRef.current = null
+                      setSearchQuery(searchDraft.trim())
+                    }}
                     onLoadMore={() => void loadMoreEvents()} onOpenLiveAgent={() => legacyAgent && setLiveAgent(legacyAgent)}
                     onExport={(format) => void exportConversation(format)} />
                   <AgentTerminalPanel workspace={runtime.workspace} processes={runtime.processes}
@@ -738,7 +815,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                 </div>
                 <AgentInspector tab={detailTab} profile={selectedProfile} home={home.data}
                   session={selectedSession} conversation={selectedConversation} workspace={runtime.workspace}
-                  job={runtime.job} processes={runtime.processes} attention={runtime.attention}
+                  job={runtime.job} contract={runtime.contract}
+                  processes={runtime.processes} attention={runtime.attention}
                   context={runtime.context} events={events.data} onTabChange={setDetailTab}
                   onSelectSession={selectSession} onSelectConversation={selectConversation} />
               </div>

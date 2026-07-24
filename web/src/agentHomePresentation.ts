@@ -14,6 +14,7 @@ export type AgentHomeSelection = {
   conversationId: string | null
   sessionId: string | null
   processId: string | null
+  eventId: string | null
 }
 
 const activeSessionStatuses = new Set(['reserved', 'starting', 'running', 'idle', 'stopping'])
@@ -70,6 +71,7 @@ export const parseAgentHomeSelection = (search: string): AgentHomeSelection => {
     conversationId: params.get('conversation'),
     sessionId: params.get('session'),
     processId: params.get('process'),
+    eventId: params.get('event'),
   }
 }
 
@@ -87,6 +89,7 @@ export const agentHomeDeepLink = (
     ['job', selection.jobId],
     ['workspace', selection.workspaceId],
     ['process', selection.processId],
+    ['event', selection.eventId],
   ]
   for (const [key, value] of values) {
     if (value === null || value === undefined || value === '') params.delete(key)
