@@ -17,6 +17,7 @@ import { OrchestrationService } from './agent-os/orchestration-service.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
 import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
 import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
+import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
 import { CODEX_PROVIDER_ID } from './agent-providers.js'
 import {
   CodexAppServerService,
@@ -164,6 +165,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
   const agentOs = createAgentOsRuntime(db)
+  const claudeNativeEventSink = new AgentHomeClaudeNativeEventSink(db)
   const scheduler = agentOs.scheduler
   const orchestration = new OrchestrationService(db, scheduler)
   const codexCommand = process.env.ORCHESTRA_CODEX_COMMAND?.trim() || 'codex'
@@ -222,7 +224,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     if (codexReady) agentOs.registerDriver(codexDriver)
     server = buildServer(db, (bus) => {
       agentOs.setBus(bus)
-      maestro = new Conductor(db, bus, agentToken)
+      maestro = new Conductor(db, bus, agentToken, { nativeEventSink: claudeNativeEventSink })
       agentOs.registerClaude(maestro)
       const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
       manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor)

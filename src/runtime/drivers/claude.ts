@@ -21,6 +21,39 @@ export type ClaudeTranscriptLine = {
   text: string
 }
 
+export type ClaudeAgentHomeBinding = {
+  agentHomeSessionId: string
+  agentProfileId: string
+  agentConversationId: string
+}
+
+export type ClaudeNativeEventKind =
+  | 'session_start'
+  | 'outbound_user'
+  | 'provider_message'
+  | 'approval_request'
+  | 'approval_response'
+  | 'error'
+  | 'session_end'
+
+export type ClaudeNativeEvent = {
+  captureId: string
+  agentId: number
+  agentName: string
+  agentHome?: ClaudeAgentHomeBinding
+  kind: ClaudeNativeEventKind
+  direction: 'inbound' | 'outbound' | 'lifecycle'
+  at: string
+  providerSessionId?: string | null
+  resumed?: boolean
+  payload: unknown
+}
+
+export interface ClaudeNativeEventSink {
+  /** Persistence is synchronous so native capture completes before transcript projection. */
+  append(event: ClaudeNativeEvent): void
+}
+
 export interface ClaudeConductorPort {
   isHired(agentId: number): boolean
   hire(options: {
@@ -35,6 +68,7 @@ export interface ClaudeConductorPort {
     cardId?: number
     maxBudgetUsd?: number
     taskBudgetTokens?: number
+    agentHome?: ClaudeAgentHomeBinding
   }): ClaudeAgentRecord
   task(agentId: number, text: string): boolean
   transcript(agentId: number): { lines: ClaudeTranscriptLine[]; working: unknown; info?: Record<string, unknown> }
@@ -81,6 +115,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
   async launch(request: DriverLaunchRequest): Promise<DriverSession> {
     if (!Number.isInteger(request.boardId) || request.boardId! <= 0) throw new Error('Claude driver requires boardId')
     const cardId = request.metadata?.cardId
+    const agentHome = this.agentHomeBinding(request)
     const agent = this.options.conductor.hire({
       boardId: request.boardId!,
       cwd: request.cwd,
@@ -93,6 +128,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
       ...(request.maxBudgetUsd !== undefined ? { maxBudgetUsd: request.maxBudgetUsd } : {}),
       ...(request.taskBudgetTokens !== undefined ? { taskBudgetTokens: request.taskBudgetTokens } : {}),
       ...(typeof cardId === 'number' && Number.isInteger(cardId) ? { cardId } : {}),
+      ...(agentHome ? { agentHome } : {}),
     })
     const session = this.toSession(agent, request.workspaceId)
     this.sessions.set(session.id, { session, agentId: agent.id })
@@ -182,5 +218,19 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     const state = this.sessions.get(sessionId)
     if (!state) throw new Error(`Claude session not attached: ${sessionId}`)
     return state
+  }
+
+  private agentHomeBinding(request: DriverLaunchRequest): ClaudeAgentHomeBinding | undefined {
+    const sessionId = request.metadata?.agentHomeSessionId
+    const profileId = request.metadata?.agentProfileId
+    const conversationId = request.metadata?.agentConversationId
+    const present = [sessionId, profileId, conversationId].filter((value) => typeof value === 'string').length
+    if (present === 0) return undefined
+    if (present !== 3) throw new Error('Claude Agent Home binding metadata is incomplete')
+    return {
+      agentHomeSessionId: sessionId as string,
+      agentProfileId: profileId as string,
+      agentConversationId: conversationId as string,
+    }
   }
 }
