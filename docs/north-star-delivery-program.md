@@ -1,6 +1,7 @@
 # Agent OS North Star Delivery Program
 
-Status: Milestone A delivered on `codex/northstar-program` at `fce20fc`; Milestone B is next.
+Status: Milestone A is delivered; Milestone B's durable Agent Home domain foundation is delivered
+on `codex/northstar-program` through `63efbf3`.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -81,51 +82,51 @@ installation, dogfood, rollback, diagnostics, release notes, and staged beta pro
 
 ### Asked
 
-Deliver Milestone A as one canonical, durable lifecycle shared by Board, Agent OS API, and CLI
-launches, with explicit compatibility/ambient classification and human-readable lifecycle truth.
+Start Milestone B by giving every agent a durable identity, conversation, session link, and ordered
+history model that survives restart without weakening terminal or provider behavior.
 
 ### Delivered
 
-- migration `006` reserves the job, frozen contract version, delivery, workspace assignment,
-  workspace, session, policy/profile, and causal identities before provider execution;
-- Board, Agent OS API, and CLI launches converge on the same idempotent orchestration service;
-- retry, cancellation, restart reconciliation, capacity deferral, provisioning compensation, and
-  same-key replay retain one lifecycle;
-- operator-only control boundaries prevent agent credentials from launching, hiring, steering, or
-  cancelling work;
-- authenticated `GET /api/v1/os/jobs/:id` is non-mutating and returns the exact frozen lifecycle
-  plus job-scoped, scope-validated causal events;
-- the Workspace Cockpit loads that exact job record and never substitutes another workspace/card
-  job when a delivery link is absent or invalid;
-- strict web normalization rejects incomplete, mismatched, compatibility, or causally inconsistent
-  envelopes instead of manufacturing canonical truth.
+- migration `007-agent-home-domain` adds durable agent profiles, conversations, enriched session
+  ownership/recovery fields, monotonic conversation events, and retained replay-conflict records;
+- legacy agents receive deterministic profile and default-conversation identities, while valid
+  same-board sessions are linked without replacing compatibility tables;
+- invalid cross-board legacy sessions are quarantined as `compatibility/lost`, remain deliberately
+  unlinked, retain safe provider control metadata, and carry a machine-readable recovery reason;
+- one append path provides session-local sequence allocation, exact replay, durable command-key
+  binding, content hashes, causal metadata, scope validation, and preserved conflict evidence;
+- replay identity is stable when a provider thread is discovered after an earlier threadless event;
+- authenticated APIs expose agent profiles, conversations, sessions, timelines, and aggregate
+  Agent Home reads; mutations remain operator-only and reads remain available to agent principals;
+- terminal process controls retain the same operator-only boundary: agents may observe PTY state
+  but cannot spawn, restart, write, resize, or signal processes.
 
 ### Evidence
 
-- commit: `fce20fc` (`feat(orchestration): close canonical lifecycle acceptance`);
-- repository suite: 88 files and 526 tests pass on Node 22.20.0;
-- focused orchestration/recovery/presentation gate: 5 files and 63 tests pass;
-- root and web TypeScript checks pass;
-- CLI and production web builds pass;
-- same-key replay after a mutable contract edit still returns the frozen Asked version;
-- a scheduler-only card job cannot cause the GET endpoint to create a contract or delivery;
-- an independent review reproduced and then verified closure of frozen-snapshot, event-scope, and
-  cockpit-fallback defects;
-- GitNexus staged review reports critical blast radius because shared server/event/UI entrypoints
-  are touched; the combined full-suite and independent-review gates passed.
+- commits: `5c289fc` (`feat(agent-os): add durable Agent Home domain and API`) and `63efbf3`
+  (`fix(agent-os): harden Agent Home replay and migration`);
+- repository suite: 90 files and 535 tests pass on Node 22.20.0;
+- focused Agent Home, migration, API, and authorization gate: 4 files and 17 tests pass;
+- root TypeScript, CLI build, and production web build pass;
+- migration reopen/idempotency coverage proves deterministic backfill and safe quarantine;
+- regression coverage proves replay aliases cannot later be reused for different content and that
+  mutable session thread discovery cannot manufacture a false replay conflict;
+- independent executable review reproduced each prior defect, then returned `PASS`;
+- GitNexus staged review reports low indexed flow risk for the hardening patch; the original domain
+  integration was separately reviewed as a high-surface migration and route addition.
 
 ### Remaining
 
-Milestone B starts with the durable Agent Home conversation/event model, provider capture and
-recovery, then the Agent Home web/CLI/terminal surface. Milestones C–E remain open; Milestone A does
-not by itself make the product public plug-and-play.
+Milestone B is not complete. Next is provider-native Claude and Codex capture plus restart recovery,
+followed by lifecycle actions, search/export, CLI parity, and the additive responsive Agent Home
+web surface. Milestones C–E remain open; the product is not yet public plug-and-play.
 
 ## Evidence baseline
 
 - Runtime: Node 22.20.0; repository dependency ABI requires Node 22 rather than the machine's
   unrelated Homebrew Node 26 runtime.
 - Environment: no project `.env`, `.env.local`, `web/.env`, or `web/.env.local` files are present.
-- Combined Milestone A baseline: 88 test files and 526 tests pass.
+- Combined Milestone B domain baseline: 90 test files and 535 tests pass.
 - Root/web TypeScript and production builds: clean.
 - Primary checkout user changes in `web/src/Board.tsx`, `web/src/styles.css`, and `graphify-out/`
   are outside the isolated program branches and must remain preserved.
