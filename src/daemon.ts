@@ -15,6 +15,8 @@ import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
 import { OrchestrationService } from './agent-os/orchestration-service.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
+import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
+import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { CODEX_PROVIDER_ID } from './agent-providers.js'
 import {
   CodexAppServerService,
@@ -22,7 +24,12 @@ import {
   CodexProviderService,
   codexApprovalPolicyHandler,
 } from './codex/index.js'
-import { CodexAgentDriver } from './runtime/drivers/codex.js'
+import type { CodexThread } from './codex/protocol.js'
+import {
+  CodexAgentDriver,
+  type CodexAgentHomeBindContext,
+  type CodexAgentHomeBinding,
+} from './runtime/drivers/codex.js'
 import {
   CodexManagedAgentRuntime,
   ProviderAgentManager,
@@ -84,6 +91,36 @@ export const codexTokenBudgetForThread = (db: Database.Database, threadId: strin
   return row?.budget_tokens ?? null
 }
 
+export const codexAgentHomeForThread = (
+  db: Database.Database,
+  threadId: string,
+): CodexAgentHomeBinding | undefined =>
+  new CodexAgentHomeThreadBinder(db).lookup(threadId)
+
+export const bindCodexAgentHomeForThread = (
+  db: Database.Database,
+  threadId: string,
+  thread: CodexThread,
+  context: CodexAgentHomeBindContext,
+): CodexAgentHomeBinding => new CodexAgentHomeThreadBinder(db).bind({
+  threadId,
+  cwd: thread.cwd,
+  mode: context.mode,
+  boardId: context.boardId,
+  workspaceId: context.workspaceId,
+  agentId: typeof context.metadata.agentId === 'number'
+    ? context.metadata.agentId
+    : undefined,
+  jobId: typeof context.metadata.jobId === 'string'
+    ? context.metadata.jobId
+    : undefined,
+  expected: context.expectedBinding ? {
+    agentHomeSessionId: context.expectedBinding.agentHomeSessionId,
+    agentProfileId: context.expectedBinding.agentProfileId,
+    agentConversationId: context.expectedBinding.agentConversationId,
+  } : undefined,
+})
+
 const CODEX_ENV_ALLOWLIST = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM',
   'LANG', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
@@ -140,8 +177,29 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     process: { command: codexCommand, env: codexEnvironment, inheritEnv: false },
   })
   const codexRpc = new CodexAppServerService(codexSupervisor)
+  const codexNativeEventSink = new AgentHomeCodexNativeEventSink(db)
+  const codexAgentHomeBindings = new CodexAgentHomeThreadBinder(db)
   const codexDriver = new CodexAgentDriver({
     service: codexRpc,
+    nativeEventSink: codexNativeEventSink,
+    agentHomeForThread: (threadId, thread, context) => codexAgentHomeBindings.bind({
+      threadId,
+      cwd: thread.cwd,
+      mode: context.mode,
+      boardId: context.boardId,
+      workspaceId: context.workspaceId,
+      agentId: typeof context.metadata.agentId === 'number'
+        ? context.metadata.agentId
+        : undefined,
+      jobId: typeof context.metadata.jobId === 'string'
+        ? context.metadata.jobId
+        : undefined,
+      expected: context.expectedBinding ? {
+        agentHomeSessionId: context.expectedBinding.agentHomeSessionId,
+        agentProfileId: context.expectedBinding.agentProfileId,
+        agentConversationId: context.expectedBinding.agentConversationId,
+      } : undefined,
+    }),
     workspaceForThread: (threadId) => codexWorkspaceForThread(db, threadId),
     tokenBudgetForThread: (threadId) => codexTokenBudgetForThread(db, threadId),
     onApprovalRequest: codexApprovalPolicyHandler(db),

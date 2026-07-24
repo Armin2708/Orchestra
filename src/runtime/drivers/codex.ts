@@ -52,12 +52,53 @@ export type CodexDriverApprovalHandler = (
   request: CodexDriverApprovalRequest,
 ) => MaybePromise<unknown>
 
+export type CodexNativeEvent = {
+  agentHomeSessionId: string
+  agentProfileId: string
+  agentConversationId: string
+  captureCursor: string
+  threadId: string
+  turnId: string | null
+  itemId: string | null
+  method: string
+  params: unknown
+  receivedAt: string
+}
+
+export type CodexNativeEventSink = {
+  /** Must return synchronously so persistence completes before driver projection. */
+  append(event: CodexNativeEvent): undefined
+}
+
+export type CodexAgentHomeBinding = {
+  agentHomeSessionId: string
+  agentProfileId: string
+  agentConversationId: string
+  workspaceId?: OsId
+  providerCursor?: string | null
+  captureCursor?: string | null
+}
+
+export type CodexAgentHomeBindContext = {
+  mode: 'launch' | 'attach'
+  boardId?: number
+  workspaceId?: OsId
+  metadata: Record<string, unknown>
+  expectedBinding?: CodexAgentHomeBinding
+}
+
 export type CodexAgentDriverOptions = {
   service: CodexRuntimeService
   workspaceForThread?: (threadId: string, thread: CodexThread) => MaybePromise<OsId | undefined>
   tokenBudgetForThread?: (threadId: string) => MaybePromise<number | null | undefined>
+  agentHomeForThread?: (
+    threadId: string,
+    thread: CodexThread,
+    context: CodexAgentHomeBindContext,
+  ) => MaybePromise<CodexAgentHomeBinding | undefined>
   resolveLaunchPolicy?: (request: DriverLaunchRequest) => MaybePromise<CodexLaunchPolicy>
   onApprovalRequest?: CodexDriverApprovalHandler
+  nativeEventSink?: CodexNativeEventSink
   isMissingThreadError?: (error: unknown) => boolean
   approvalTimeoutMs?: number
   eventBufferSize?: number
@@ -101,6 +142,7 @@ type CodexSessionState = {
   pendingApprovals: Map<string, PendingApproval>
   tokenBudget: number | null
   tokenBudgetInterrupted: boolean
+  nativeEventSeq: number
 }
 
 const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
@@ -187,6 +229,18 @@ export class CodexAgentDriver implements AgentDriver {
       ...(typeof metadata.ephemeral === 'boolean' ? { ephemeral: metadata.ephemeral } : {}),
     }
     const started = await this.options.service.startThread(threadParams)
+    let agentHome: CodexAgentHomeBinding | undefined
+    try {
+      agentHome = await this.resolveAgentHomeBinding(started.thread, {
+        mode: 'launch',
+        boardId: request.boardId,
+        workspaceId: request.workspaceId,
+        metadata,
+      })
+    } catch (error) {
+      await this.options.service.unsubscribeThread(started.thread.id).catch(() => {})
+      throw error
+    }
     const state = this.createState(started.thread, request.workspaceId, started, request.taskBudgetTokens)
     Object.assign(state.session.metadata, {
       ...(request.model ? { model: request.model } : {}),
@@ -194,6 +248,7 @@ export class CodexAgentDriver implements AgentDriver {
       ...(accessProfile ? { accessProfile } : {}),
       ...(request.externalId ? { replacesExternalId: request.externalId } : {}),
     })
+    if (agentHome) this.applyAgentHomeBinding(state, agentHome)
     this.registerState(state)
     if (request.prompt?.length) {
       try {
@@ -225,20 +280,74 @@ export class CodexAgentDriver implements AgentDriver {
       if (this.isMissingThread(error)) return null
       throw error
     }
-    const read = await this.options.service.readThread(externalId, true)
+    const read = await this.options.service.readThread(externalId, true).catch(async (error) => {
+      await this.options.service.unsubscribeThread(externalId).catch(() => {})
+      throw error
+    })
     const thread = read.thread ?? resumed.thread
-    const workspaceId = await this.options.workspaceForThread?.(externalId, thread)
+    if (thread.id !== externalId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex resume returned thread ${thread.id} for requested thread ${externalId}`)
+    }
+    let agentHome: CodexAgentHomeBinding | undefined
+    try {
+      agentHome = await this.resolveAgentHomeBinding(thread, {
+        mode: 'attach',
+        metadata: {},
+      })
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    let resolvedWorkspaceId: OsId | undefined
+    try {
+      resolvedWorkspaceId = await this.options.workspaceForThread?.(externalId, thread)
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    if (agentHome?.workspaceId && resolvedWorkspaceId
+      && agentHome.workspaceId !== resolvedWorkspaceId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex thread ${externalId} has conflicting durable workspace identities`)
+    }
+    const workspaceId = agentHome?.workspaceId ?? resolvedWorkspaceId
     if (!workspaceId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
       throw new Error(`workspace for Codex thread ${externalId} is unknown`)
     }
-    const state = this.createState(
-      thread,
-      workspaceId,
-      resumed,
-      await this.options.tokenBudgetForThread?.(externalId),
-    )
+    let tokenBudget: number | null | undefined
+    try {
+      tokenBudget = await this.options.tokenBudgetForThread?.(externalId)
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    const state = this.createState(thread, workspaceId, resumed, tokenBudget)
+    if (agentHome) this.applyAgentHomeBinding(state, agentHome)
     const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
     if (activeTurn) this.setActiveTurn(state, activeTurn.id)
+    const attachedAt = this.now().toISOString()
+    const captureGap = {
+      method: 'orchestra/captureGap',
+      params: {
+        threadId: state.threadId,
+        turnId: activeTurn?.id ?? null,
+        reason: 'daemon-attach',
+        requestedThreadId: externalId,
+      },
+      receivedAt: attachedAt,
+    }
+    if (!this.captureNativeEvent(state, captureGap, state.threadId)) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex thread ${externalId} could not persist its daemon-attach capture boundary`)
+    }
+    state.session.metadata.nativeCaptureResume = {
+      reason: 'daemon-attach',
+      at: attachedAt,
+      priorProviderCursor: agentHome?.providerCursor ?? null,
+      priorCaptureCursor: agentHome?.captureCursor ?? null,
+    }
     this.registerState(state)
     if (!activeTurn) this.replayTerminalTurn(state, thread, 'daemon-attach')
     return state.session
@@ -428,6 +537,7 @@ export class CodexAgentDriver implements AgentDriver {
       pendingApprovals: new Map(),
       tokenBudget: this.tokenBudget(tokenBudget),
       tokenBudgetInterrupted: false,
+      nativeEventSeq: 0,
     }
   }
 
@@ -436,16 +546,135 @@ export class CodexAgentDriver implements AgentDriver {
     this.sessionsByThread.set(state.threadId, state)
   }
 
+  private async resolveAgentHomeBinding(
+    thread: CodexThread,
+    context: Omit<CodexAgentHomeBindContext, 'expectedBinding'>,
+  ): Promise<CodexAgentHomeBinding | undefined> {
+    const expectedBinding = this.agentHomeBindingFromMetadata(
+      context.metadata,
+      context.workspaceId,
+    )
+    const resolved = await this.options.agentHomeForThread?.(
+      thread.id,
+      thread,
+      {
+        ...context,
+        ...(expectedBinding ? { expectedBinding } : {}),
+      },
+    )
+    if (this.options.agentHomeForThread && !resolved) {
+      throw new Error(`Codex thread ${thread.id} Agent Home binding could not be validated`)
+    }
+    if (expectedBinding && resolved) this.assertSameAgentHomeBinding(expectedBinding, resolved)
+    const binding = resolved ?? expectedBinding
+    if (this.options.nativeEventSink && !binding) {
+      throw new Error(`Codex thread ${thread.id} has no durable Agent Home binding`)
+    }
+    if (binding) this.validateAgentHomeBinding(binding, context.workspaceId)
+    return binding
+  }
+
+  private agentHomeBindingFromMetadata(
+    metadata: Record<string, unknown>,
+    workspaceId?: OsId,
+  ): CodexAgentHomeBinding | undefined {
+    const agentHomeSessionId = metadata.agentHomeSessionId
+    const agentProfileId = metadata.agentProfileId
+    const agentConversationId = metadata.agentConversationId
+    const values = [agentHomeSessionId, agentProfileId, agentConversationId]
+    const present = values.filter((value) => typeof value === 'string' && value.length > 0).length
+    if (present === 0) return undefined
+    if (present !== values.length) {
+      throw new Error('Agent Home binding metadata is incomplete')
+    }
+    return {
+      agentHomeSessionId: agentHomeSessionId as string,
+      agentProfileId: agentProfileId as string,
+      agentConversationId: agentConversationId as string,
+      ...(workspaceId ? { workspaceId } : {}),
+    }
+  }
+
+  private assertSameAgentHomeBinding(
+    expected: CodexAgentHomeBinding,
+    resolved: CodexAgentHomeBinding,
+  ): void {
+    if (expected.agentHomeSessionId !== resolved.agentHomeSessionId
+      || expected.agentProfileId !== resolved.agentProfileId
+      || expected.agentConversationId !== resolved.agentConversationId
+      || (expected.workspaceId && resolved.workspaceId
+        && expected.workspaceId !== resolved.workspaceId)) {
+      throw new Error('resolved Agent Home binding does not match the supplied canonical identity')
+    }
+  }
+
+  private validateAgentHomeBinding(
+    binding: CodexAgentHomeBinding,
+    expectedWorkspaceId?: OsId,
+  ): void {
+    const values = [
+      binding.agentHomeSessionId,
+      binding.agentProfileId,
+      binding.agentConversationId,
+    ]
+    if (values.some((value) => typeof value !== 'string' || value.length === 0)) {
+      throw new Error('resolved Agent Home binding is incomplete')
+    }
+    if (expectedWorkspaceId && binding.workspaceId
+      && expectedWorkspaceId !== binding.workspaceId) {
+      throw new Error('resolved Agent Home binding belongs to another workspace')
+    }
+  }
+
+  private applyAgentHomeBinding(
+    state: CodexSessionState,
+    binding: CodexAgentHomeBinding,
+  ): void {
+    Object.assign(state.session.metadata, {
+      agentHomeSessionId: binding.agentHomeSessionId,
+      agentProfileId: binding.agentProfileId,
+      agentConversationId: binding.agentConversationId,
+    })
+    state.nativeEventSeq = this.captureCursorSequence(
+      binding.captureCursor ?? binding.providerCursor,
+    )
+  }
+
   private async reconcileSessionsNow(): Promise<CodexSessionReconcileResult> {
     const result: CodexSessionReconcileResult = { resumed: [], failed: [] }
     const states = [...this.sessionsByThread.values()].filter((state) => !state.stopped)
     await Promise.all(states.map(async (state) => {
       try {
         const priorActiveTurnId = state.activeTurnId
+        const reconnectAt = this.now().toISOString()
+        if (!this.captureNativeEvent(state, {
+          method: 'orchestra/captureGap',
+          params: {
+            threadId: state.threadId,
+            turnId: priorActiveTurnId,
+            reason: 'app-server-reconnect',
+          },
+          receivedAt: reconnectAt,
+        }, state.threadId)) {
+          throw new Error(`Codex thread ${state.threadId} could not persist its reconnect capture boundary`)
+        }
+        state.session.metadata.nativeCaptureResume = {
+          reason: 'app-server-reconnect',
+          at: reconnectAt,
+        }
         const resumed = await this.options.service.resumeThread(state.threadId)
         const read = await this.options.service.readThread(state.threadId, true)
         if (state.stopped) return
         const thread = read.thread ?? resumed.thread
+        if (thread.id !== state.threadId) {
+          throw new Error(
+            `Codex reconnect returned thread ${thread.id} for bound thread ${state.threadId}`,
+          )
+        }
+        if (typeof state.session.metadata.cwd === 'string'
+          && state.session.metadata.cwd !== thread.cwd) {
+          throw new Error(`Codex reconnect changed cwd for bound thread ${state.threadId}`)
+        }
         const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
         this.setActiveTurn(state, activeTurn?.id ?? null)
         const resolvedModel = typeof resumed.model === 'string' && resumed.model.trim()
@@ -495,10 +724,12 @@ export class CodexAgentDriver implements AgentDriver {
 
   private acceptNotification(notification: CodexServerNotification): void {
     const params = isRecord(notification.params) ? notification.params : {}
+    const threadId = this.threadId(params)
     if (notification.method === 'thread/started' && isRecord(params.thread)) {
       const parentThreadId = typeof params.thread.parentThreadId === 'string' ? params.thread.parentThreadId : null
       const parent = parentThreadId ? this.sessionsByThread.get(parentThreadId) : undefined
-      if (parent) {
+      if (parent && !parent.stopped) {
+        if (!this.captureNativeEvent(parent, notification, parent.threadId)) return
         this.emitEvent(parent, 'tool', 'Codex subagent started', notification, {
           subagentId: typeof params.thread.id === 'string' ? params.thread.id : null,
           subagentStatus: 'started',
@@ -514,10 +745,10 @@ export class CodexAgentDriver implements AgentDriver {
         })
       }
     }
-    const threadId = this.threadId(params)
     if (!threadId) return
     const state = this.sessionsByThread.get(threadId)
     if (!state || state.stopped) return
+    if (!this.captureNativeEvent(state, notification, threadId)) return
     switch (notification.method) {
       case 'turn/started': {
         const turn = isRecord(params.turn) ? params.turn : null
@@ -611,6 +842,85 @@ export class CodexAgentDriver implements AgentDriver {
     }
   }
 
+  private captureNativeEvent(
+    state: CodexSessionState,
+    notification: CodexServerNotification,
+    threadId: string,
+  ): boolean {
+    const sink = this.options.nativeEventSink
+    if (!sink) return true
+    const agentHomeSessionId = state.session.metadata.agentHomeSessionId
+    const agentProfileId = state.session.metadata.agentProfileId
+    const agentConversationId = state.session.metadata.agentConversationId
+    const present = [agentHomeSessionId, agentProfileId, agentConversationId]
+      .filter((value) => typeof value === 'string').length
+    if (present !== 3) {
+      this.emitNativeCaptureFailure(
+        state,
+        notification.method,
+        present === 0
+          ? 'Agent Home binding metadata is missing'
+          : 'Agent Home binding metadata is incomplete',
+      )
+      return false
+    }
+    const params = isRecord(notification.params) ? notification.params : {}
+    const captureCursor = `orchestra-codex:${++state.nativeEventSeq}`
+    try {
+      sink.append({
+        agentHomeSessionId: agentHomeSessionId as string,
+        agentProfileId: agentProfileId as string,
+        agentConversationId: agentConversationId as string,
+        captureCursor,
+        threadId,
+        turnId: this.turnId(params),
+        itemId: this.itemId(params),
+        method: notification.method,
+        params: notification.params,
+        receivedAt: notification.receivedAt,
+      })
+      return true
+    } catch (error) {
+      this.emitNativeCaptureFailure(
+        state,
+        notification.method,
+        error instanceof Error ? error.message : String(error),
+        captureCursor,
+      )
+      return false
+    }
+  }
+
+  private emitNativeCaptureFailure(
+    state: CodexSessionState,
+    nativeMethod: string,
+    detail: string,
+    captureCursor?: string,
+  ): void {
+    const message = detail.length > 1_000 ? `${detail.slice(0, 997)}...` : detail
+    state.session.metadata.nativeCaptureFailure = {
+      method: nativeMethod,
+      detail: message,
+      ...(captureCursor ? { captureCursor } : {}),
+    }
+    this.emitEvent(state, 'error', `Codex native event was not persisted: ${message}`, {
+      method: 'orchestra/nativeCaptureFailed',
+      params: { threadId: state.threadId },
+      receivedAt: this.now().toISOString(),
+    }, {
+      nativeCaptureFailed: true,
+      failedNativeMethod: nativeMethod,
+      ...(captureCursor ? { captureCursor } : {}),
+    })
+  }
+
+  private captureCursorSequence(providerCursor: string | null | undefined): number {
+    const match = /^orchestra-codex:(\d+)$/.exec(providerCursor ?? '')
+    if (!match) return 0
+    const value = Number(match[1])
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0
+  }
+
   private async acceptServerRequest(request: CodexServerRequest): Promise<CodexServerRequestHandlerResult> {
     if (request.method === 'currentTime/read') {
       return { currentTimeAt: Math.floor(this.now().getTime() / 1_000) }
@@ -623,6 +933,16 @@ export class CodexAgentDriver implements AgentDriver {
     if (!state || state.stopped) return CODEX_REQUEST_UNHANDLED
     const turnId = typeof request.params.turnId === 'string' ? request.params.turnId : null
     const itemId = typeof request.params.itemId === 'string' ? request.params.itemId : null
+    if (!this.captureNativeEvent(state, {
+      method: request.method,
+      params: {
+        ...request.params,
+        eventId: String(request.id),
+      },
+      receivedAt: request.receivedAt,
+    }, threadId)) {
+      return CODEX_REQUEST_UNHANDLED
+    }
     const elicitationQuestions = kind === 'mcp-elicitation'
       ? this.elicitationQuestions(request.params)
       : []
@@ -694,17 +1014,19 @@ export class CodexAgentDriver implements AgentDriver {
     const turn = thread.turns.at(-1)
     if (!turn || !['completed', 'failed', 'interrupted'].includes(turn.status)) return
     const failed = turn.status === 'failed' || turn.status === 'interrupted'
+    const native = {
+      method: 'turn/completed',
+      params: { threadId: state.threadId, turnId: turn.id, turn },
+      receivedAt: this.now().toISOString(),
+    }
+    if (!this.captureNativeEvent(state, native, state.threadId)) return
     this.emitEvent(
       state,
       failed ? 'error' : 'status',
       turn.status === 'interrupted'
         ? 'Codex turn interrupted'
         : failed ? this.turnError(turn) : `Codex turn ${turn.status}`,
-      {
-        method: 'turn/completed',
-        params: { threadId: state.threadId, turnId: turn.id, turn },
-        receivedAt: this.now().toISOString(),
-      },
+      native,
       {
         turnCompleted: true,
         turnActive: false,
