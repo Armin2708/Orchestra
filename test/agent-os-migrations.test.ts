@@ -20,7 +20,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(7)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
     first.close()
 
     const second = openDb(file)
@@ -29,10 +29,10 @@ describe('Agent OS migrations', () => {
       'policies', 'task_contracts', 'attention_items', 'checkpoints', 'jobs', 'context_items', 'daemon_leases',
       'delivery_reports', 'delivery_deliverable_results', 'delivery_criterion_results', 'workspace_assignments',
       'agent_profiles', 'agent_conversations', 'conversation_events',
-      'conversation_event_conflicts']) {
+      'conversation_event_conflicts', 'agent_session_actions']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(7)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -48,6 +48,14 @@ describe('Agent OS migrations', () => {
       (id, board_id, name, kind, root_path, base_ref) VALUES ('w2', 1, 'two', 'shared', '/provider-ownership', 'HEAD')`).run()
     second.prepare(`INSERT INTO agent_sessions
       (id, workspace_id, provider, external_id, status) VALUES ('s1', 'w1', 'codex', 'thread-1', 'running')`).run()
+    expect(second.prepare('SELECT control_state FROM agent_sessions WHERE id=?').get('s1'))
+      .toEqual({ control_state: 'active' })
+    second.prepare("UPDATE agent_sessions SET status='failed' WHERE id='s1'").run()
+    expect(second.prepare('SELECT control_state FROM agent_sessions WHERE id=?').get('s1'))
+      .toEqual({ control_state: 'stopped' })
+    second.prepare("UPDATE agent_sessions SET status='running' WHERE id='s1'").run()
+    expect(second.prepare('SELECT control_state FROM agent_sessions WHERE id=?').get('s1'))
+      .toEqual({ control_state: 'active' })
     expect(() => second.prepare(`INSERT INTO agent_sessions
       (id, workspace_id, provider, external_id, status) VALUES ('s2', 'w2', 'codex', 'thread-1', 'running')`).run())
       .toThrow(/UNIQUE/)
@@ -114,7 +122,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(7)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -207,7 +215,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(7)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(8)
     db.close()
   })
 

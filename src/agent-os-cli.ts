@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import type { Command } from 'commander'
 
 export type AgentOsApi = (method: string, path: string, body?: unknown) => Promise<any>
@@ -112,6 +113,9 @@ const compact = <T extends Record<string, unknown>>(value: T): Partial<T> => Obj
   Object.entries(value).filter(([, item]) => item !== undefined),
 ) as Partial<T>
 
+const commandKey = (scope: string, explicit?: string): string =>
+  explicit?.trim() || `orchestra-cli:${scope}:${randomUUID()}`
+
 const arrayFrom = (value: any, keys: string[]): any[] => {
   if (Array.isArray(value)) return value
   for (const key of keys) if (Array.isArray(value?.[key])) return value[key]
@@ -154,6 +158,165 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     }
     for (const row of rows) write(summarize(row))
   }
+
+  const agent = program.command('agent').description('manage durable Agent Home identities')
+  agent.command('list')
+    .option('--board <id>', 'board id', integer)
+    .option('--archived', 'include archived profiles')
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      const id = await boardId(options.board)
+      const suffix = options.archived ? '?archived=true' : ''
+      print(
+        await deps.api('GET', `/os/boards/${id}/agent-profiles${suffix}`),
+        options.json,
+        ['profiles'],
+      )
+    })
+  agent.command('create <name>')
+    .option('--board <id>', 'board id', integer)
+    .option('--role <role>')
+    .option('--provider <provider>')
+    .option('--model <model>')
+    .option('--effort <effort>')
+    .option('--access <profile>')
+    .option('--capabilities <items>', 'comma-separated capabilities')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (name, options) => {
+      const id = await boardId(options.board)
+      print(await deps.api('POST', `/os/boards/${id}/agent-profiles`, compact({
+        name,
+        role: options.role,
+        default_provider: options.provider,
+        default_model: options.model,
+        default_effort: options.effort,
+        default_access_profile: options.access,
+        capabilities: csv(options.capabilities),
+        idempotency_key: commandKey(`agent-create:${id}:${name}`, options.idempotency),
+      })), options.json, ['profile'])
+    })
+  agent.command('show <id>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('GET', `/os/agent-profiles/${segment(id)}`), options.json, ['profile'])
+    })
+  agent.command('home <id>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('GET', `/os/agent-profiles/${segment(id)}/home`), options.json, ['home'])
+    })
+  agent.command('rename <id> <name>')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (id, name, options) => {
+      await ready()
+      print(await deps.api('PATCH', `/os/agent-profiles/${segment(id)}`, {
+        name,
+        idempotency_key: commandKey(`agent-rename:${id}`, options.idempotency),
+      }), options.json, ['profile'])
+    })
+  agent.command('archive <id>')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/agent-profiles/${segment(id)}/archive`, {
+        idempotency_key: commandKey(`agent-archive:${id}`, options.idempotency),
+      }), options.json, ['profile'])
+    })
+
+  const session = program.command('session').description('inspect and control durable provider sessions')
+  session.command('list <agent-id>')
+    .option('--json', 'print the complete response')
+    .action(async (agentId, options) => {
+      await ready()
+      print(
+        await deps.api('GET', `/os/agent-profiles/${segment(agentId)}/sessions`),
+        options.json,
+        ['sessions'],
+      )
+    })
+  session.command('show <id>')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(await deps.api('GET', `/os/sessions/${segment(id)}`), options.json, ['session'])
+    })
+  for (const action of ['resume', 'pause', 'stop', 'retry', 'fork', 'archive'] as const) {
+    session.command(`${action} <id>`)
+      .option('--idempotency <key>')
+      .option('--json', 'print the complete response')
+      .action(async (id, options) => {
+        await ready()
+        print(await deps.api('POST', `/os/sessions/${segment(id)}/${action}`, {
+          idempotency_key: commandKey(`session-${action}:${id}`, options.idempotency),
+        }), options.json, ['created_session', 'session'])
+      })
+  }
+  session.command('rename <id> <name>')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (id, name, options) => {
+      await ready()
+      print(await deps.api('POST', `/os/sessions/${segment(id)}/rename`, {
+        name,
+        idempotency_key: commandKey(`session-rename:${id}`, options.idempotency),
+      }), options.json, ['session'])
+    })
+  session.command('search <id>')
+    .option('--query <text>')
+    .option('--after <sequence>', 'sequence cursor', integer)
+    .option('--limit <number>', 'maximum events', integer, 100)
+    .option('--kind <items>', 'comma-separated event kinds')
+    .option('--actor-type <type>')
+    .option('--actor-id <id>')
+    .option('--tool <tool>')
+    .option('--status <status>')
+    .option('--from <date>')
+    .option('--to <date>')
+    .option('--session <id>', 'restrict to one session')
+    .option('--archived', 'include archived events')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      const query = new URLSearchParams({ limit: String(options.limit) })
+      if (options.query) query.set('query', options.query)
+      if (options.after !== undefined) query.set('after', String(options.after))
+      if (options.kind) query.set('kind', options.kind)
+      if (options.actorType) query.set('actor_type', options.actorType)
+      if (options.actorId) query.set('actor_id', options.actorId)
+      if (options.tool) query.set('tool', options.tool)
+      if (options.status) query.set('status', options.status)
+      if (options.from) query.set('from', options.from)
+      if (options.to) query.set('to', options.to)
+      if (options.session) query.set('session_id', options.session)
+      if (options.archived) query.set('archived', 'true')
+      print(
+        await deps.api('GET', `/os/sessions/${segment(id)}/search?${query}`),
+        options.json,
+        ['events'],
+      )
+    })
+  session.command('export <id>')
+    .option('--json', 'export canonical JSON instead of human text')
+    .option('--artifact', 'persist the redacted export as an Agent OS artifact')
+    .option('--idempotency <key>')
+    .action(async (id, options) => {
+      await ready()
+      const format = options.json ? 'json' : 'human'
+      if (options.artifact) {
+        return print(await deps.api('POST', `/os/sessions/${segment(id)}/export`, {
+          format,
+          idempotency_key: commandKey(`session-export:${id}:${format}`, options.idempotency),
+        }), options.json, ['artifact'])
+      }
+      const result = await deps.api('GET', `/os/sessions/${segment(id)}/export?format=${format}`)
+      if (options.json) return print(result, true)
+      write(typeof result === 'string' ? result : String(result?.text ?? result))
+    })
 
   const workspace = program.command('workspace').description('manage isolated Agent OS workspaces')
   workspace.command('list')

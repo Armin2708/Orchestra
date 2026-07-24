@@ -79,6 +79,10 @@ export interface AgentSessionRecord {
   recovery_state: AgentSessionRecoveryState
   recovery: Record<string, unknown>
   history_state: AgentSessionHistoryState
+  display_name: string | null
+  parent_session_id: string | null
+  lineage_type: 'resume' | 'retry' | 'fork' | null
+  control_state: 'active' | 'paused' | 'stopped' | 'archived'
   started_at: string | null
   ended_at: string | null
   archived_at: string | null
@@ -1057,6 +1061,11 @@ export function mapAgentSession(row: Record<string, unknown>): AgentSessionRecor
     recovery_state: String(row.recovery_state) as AgentSessionRecoveryState,
     recovery: parseJson<Record<string, unknown>>(row.recovery_json, {}),
     history_state: String(row.history_state) as AgentSessionHistoryState,
+    display_name: row.display_name == null ? null : String(row.display_name),
+    parent_session_id: row.parent_session_id == null ? null : String(row.parent_session_id),
+    lineage_type: row.lineage_type == null
+      ? null : String(row.lineage_type) as AgentSessionRecord['lineage_type'],
+    control_state: String(row.control_state ?? 'active') as AgentSessionRecord['control_state'],
     started_at: row.started_at == null ? null : String(row.started_at),
     ended_at: row.ended_at == null ? null : String(row.ended_at),
     archived_at: row.archived_at == null ? null : String(row.archived_at),

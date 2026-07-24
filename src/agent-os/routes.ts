@@ -33,6 +33,7 @@ import {
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
 import { agentHomePlugin } from './agent-home-routes.js'
+import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
 
 export interface ProcessRecord {
   id: string
@@ -99,6 +100,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   jobExecutor?: JobExecutor
   scheduler?: JobScheduler
   orchestration?: OrchestrationService
+  agentHomeLifecycle?: AgentHomeRuntimeControl
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
@@ -110,8 +112,21 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   server.register(agentHomePlugin, {
     db: options.db,
     isOperator: options.isOperator,
+    lifecycleRuntime: options.agentHomeLifecycle
+      ?? (isAgentHomeRuntimeControl(options.jobExecutor) ? options.jobExecutor : undefined),
+    orchestration: options.orchestration,
+    scheduler: options.scheduler,
     prefix: '/api/v1/os',
   })
+}
+
+function isAgentHomeRuntimeControl(value: unknown): value is AgentHomeRuntimeControl {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<AgentHomeRuntimeControl>
+  return typeof candidate.agentHomeSessionCapabilities === 'function'
+    && typeof candidate.pauseAgentHomeSession === 'function'
+    && typeof candidate.resumeAgentHomeSession === 'function'
+    && typeof candidate.stopAgentHomeSession === 'function'
 }
 
 export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app, options) => {

@@ -26,6 +26,114 @@ const setup = (response: any = { id: 1 }) => {
 }
 
 describe('Agent OS CLI', () => {
+  it('manages Agent Home identities through authenticated profile APIs', async () => {
+    const { calls, run } = setup({ profile: { id: 'agent/a', name: 'Builder' } })
+
+    await run(
+      'agent', 'create', 'Builder',
+      '--board', '42',
+      '--role', 'implementation',
+      '--provider', 'codex',
+      '--model', 'gpt-codex',
+      '--effort', 'high',
+      '--access', 'workspace_write',
+      '--capabilities', 'code,review',
+      '--idempotency', 'agent-create-1',
+    )
+    await run('agent', 'show', 'agent/a')
+    await run('agent', 'home', 'agent/a')
+    await run('agent', 'rename', 'agent/a', 'Senior Builder', '--idempotency', 'agent-rename-1')
+    await run('agent', 'archive', 'agent/a', '--idempotency', 'agent-archive-1')
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/boards/42/agent-profiles',
+        body: {
+          name: 'Builder',
+          role: 'implementation',
+          default_provider: 'codex',
+          default_model: 'gpt-codex',
+          default_effort: 'high',
+          default_access_profile: 'workspace_write',
+          capabilities: ['code', 'review'],
+          idempotency_key: 'agent-create-1',
+        },
+      },
+      { method: 'GET', path: '/os/agent-profiles/agent%2Fa', body: undefined },
+      { method: 'GET', path: '/os/agent-profiles/agent%2Fa/home', body: undefined },
+      {
+        method: 'PATCH',
+        path: '/os/agent-profiles/agent%2Fa',
+        body: { name: 'Senior Builder', idempotency_key: 'agent-rename-1' },
+      },
+      {
+        method: 'POST',
+        path: '/os/agent-profiles/agent%2Fa/archive',
+        body: { idempotency_key: 'agent-archive-1' },
+      },
+    ])
+  })
+
+  it('controls, searches, and exports sessions through the same Agent Home APIs', async () => {
+    const { calls, run } = setup({ events: [] })
+
+    await run('session', 'pause', 'session/a', '--idempotency', 'session-pause-1')
+    await run('session', 'rename', 'session/a', 'Review session', '--idempotency', 'session-rename-1')
+    await run(
+      'session', 'search', 'session/a',
+      '--query', 'compile',
+      '--after', '7',
+      '--limit', '25',
+      '--kind', 'tool,status',
+      '--actor-type', 'agent',
+      '--actor-id', 'codex',
+      '--tool', 'terminal',
+      '--status', 'succeeded',
+      '--from', '2026-07-24T10:00:00.000Z',
+      '--to', '2026-07-24T12:00:00.000Z',
+      '--archived',
+    )
+    await run(
+      'session', 'export', 'session/a',
+      '--artifact',
+      '--idempotency', 'session-export-1',
+    )
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/pause',
+        body: { idempotency_key: 'session-pause-1' },
+      },
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/rename',
+        body: {
+          name: 'Review session',
+          idempotency_key: 'session-rename-1',
+        },
+      },
+      {
+        method: 'GET',
+        path: '/os/sessions/session%2Fa/search'
+          + '?limit=25&query=compile&after=7&kind=tool%2Cstatus&actor_type=agent'
+          + '&actor_id=codex&tool=terminal&status=succeeded'
+          + '&from=2026-07-24T10%3A00%3A00.000Z'
+          + '&to=2026-07-24T12%3A00%3A00.000Z&archived=true',
+        body: undefined,
+      },
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/export',
+        body: {
+          format: 'human',
+          idempotency_key: 'session-export-1',
+        },
+      },
+    ])
+  })
+
   it('creates an isolated workspace on the resolved project board', async () => {
     const { calls, deps, run } = setup({ id: 9, name: 'fix-auth' })
 

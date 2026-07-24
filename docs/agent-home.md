@@ -1,6 +1,7 @@
 # Durable Agent Home
 
-Status: planned next after the canonical Milestone A lifecycle.
+Status: the durable domain and lifecycle/search/export/CLI control surface are implemented.
+The responsive visual Agent Home remains a separate additive slice.
 
 Agent Home is the canonical visual and API surface for one durable agent identity and its provider
 sessions. It combines conversation, real terminal processes, assigned work, context, tools,
@@ -64,6 +65,63 @@ workspace, and process without depending on transient UI state.
 
 Provider-specific capabilities remain visible. Unsupported pause/resume/fork actions return an
 actionable capability result and never fall back to a different provider.
+
+### Implemented control contract
+
+Agent and operator principals may read the same durable profile, conversation, session,
+capability, search, export, and deep-link state. Only an operator may mutate a profile or session
+or persist an export artifact. Every mutation requires an idempotency key; replay returns the
+original action or artifact, while reuse for different input fails with a conflict.
+
+`GET /api/v1/os/sessions/:id` returns:
+
+- the durable session, including display name, parent session, lineage, and control state;
+- all seven action capabilities (`resume`, `pause`, `stop`, `retry`, `fork`, `rename`, `archive`)
+  with `supported`, `allowed`, `requires_operator`, and a human reason;
+- exact profile, conversation, session, job, workspace, event, and process identifiers plus a
+  canonical Agent Home deep link.
+
+Lifecycle mutations use `POST /api/v1/os/sessions/:id/:action`. Pause and resume act on the
+currently attached provider session. Stop cancels the canonical scheduler job. Retry creates one
+new canonical child job/session linked to the same Agent Home, records `parent_session_id` and
+`lineage_type=retry`, and is replay-safe. Rename is metadata-only. Archive requires a terminal
+session and records `control_state=archived` plus `archived_at` without erasing the terminal
+provider status (`stopped`, `failed`, `lost`, or `exited`). Lifecycle mutations are serialized per
+session and carry the owning daemon lease. On restart, unfinished non-retry actions are recorded as
+interrupted, replay the same durable error for the original key, and release the lock for a new
+operator action. Retry commits its child lineage and action result before best-effort dispatch, so
+a crash or scheduler failure can resume the same idempotency key without creating another child.
+Paused intent is persisted in `control_state`, restored before provider attach, and remains paused
+when Codex replays an interrupted turn or Claude reattaches. Codex and Claude do not currently
+expose provenance-safe native session forking, so
+`fork` fails explicitly with HTTP 501 instead of fabricating a clone.
+
+Conversation search is available at both
+`GET /api/v1/os/conversations/:id/search` and
+`GET /api/v1/os/sessions/:id/search`. It uses a stable monotonic sequence cursor and supports
+projected-text, event kind, actor type/ID, tool, status, time range, session, and archived-event
+filters. Each hit carries the exact session and event deep-link IDs.
+`GET /api/v1/os/conversations/:id/events/:eventId` resolves one stable event directly without a
+pagination scan, rejects an event from a different conversation, and returns `{ event, links }`.
+Canonical browser links follow the existing query contract:
+`/?board=<id>&agent=<profile>&conversation=<id>&session=<id>&job=<id>&workspace=<id>&process=<id>&event=<id>`.
+Profile and conversation links leave session, job, workspace, process, and event fields null rather
+than guessing a latest session; event links include a process only when the event names that exact
+process.
+
+Redacted transcript reads are available from the matching conversation or session `export`
+endpoint in human text or canonical JSON. Operator-only `POST` persists the export as an
+idempotent artifact. The export retains event/session/provider IDs, provider cursors, source
+content hashes, raw artifact references, and deep links, but never embeds raw artifact content.
+Credential-shaped keys and secret patterns are redacted recursively before either format is
+rendered.
+
+CLI parity is exposed as:
+
+- `orchestra agent list|create|show|home|rename|archive`;
+- `orchestra session list|show|resume|pause|stop|retry|fork|rename|archive`;
+- `orchestra session search` with the API filters;
+- `orchestra session export` in human, JSON, or persisted-artifact mode.
 
 ## Terminal invariants
 

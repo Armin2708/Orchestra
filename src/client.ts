@@ -23,5 +23,9 @@ export async function api(method: string, p: string, body?: unknown): Promise<an
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`${method} ${p} → ${res.status}: ${await res.text()}`)
-  return res.json()
+  if (res.status === 204) return undefined
+  const contentType = res.headers.get('content-type')?.toLowerCase() ?? ''
+  return contentType.includes('application/json') || contentType.includes('+json')
+    ? res.json()
+    : res.text()
 }

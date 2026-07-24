@@ -10,8 +10,22 @@ import {
   type ConversationEventKind,
 } from './conversations.js'
 import {
+  AgentHomeTranscriptExporter,
+  type AgentHomeExportFormat,
+} from './agent-home-export.js'
+import {
+  AGENT_HOME_SESSION_ACTIONS,
+  AgentHomeLifecycleService,
+  type AgentHomeRuntimeControl,
+  type AgentHomeSessionAction,
+} from './agent-home-lifecycle.js'
+import { AgentHomeLinkService } from './agent-home-links.js'
+import { AgentHomeSearchService } from './agent-home-search.js'
+import {
   AgentOsError,
+  ConflictError,
   ForbiddenError,
+  NotFoundError,
   ValidationError,
 } from './errors.js'
 import { resolveIdempotencyKey } from './idempotency.js'
@@ -22,16 +36,29 @@ import type {
   AgentSessionMode,
   AgentSessionRecoveryState,
 } from './agent-home-support.js'
+import type { OrchestrationService } from './orchestration-service.js'
+import type { JobScheduler } from './scheduler.js'
 
 export interface AgentHomeRouteOptions extends FastifyPluginOptions {
   db: Database.Database
   isOperator?: (request: FastifyRequest) => boolean
+  lifecycleRuntime?: AgentHomeRuntimeControl
+  orchestration?: OrchestrationService
+  scheduler?: JobScheduler
 }
 
 export const agentHomePlugin: FastifyPluginAsync<AgentHomeRouteOptions> = async (app, options) => {
   const profiles = new AgentProfileService(options.db)
   const conversations = new ConversationService(options.db)
   const isOperator = options.isOperator ?? (() => true)
+  const lifecycle = new AgentHomeLifecycleService(options.db, {
+    runtime: options.lifecycleRuntime,
+    orchestration: options.orchestration,
+    scheduler: options.scheduler,
+  })
+  const links = new AgentHomeLinkService(options.db)
+  const search = new AgentHomeSearchService(options.db)
+  const exporter = new AgentHomeTranscriptExporter(options.db)
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AgentOsError) {
@@ -192,9 +219,14 @@ export const agentHomePlugin: FastifyPluginAsync<AgentHomeRouteOptions> = async 
     sessions: conversations.listSessions(request.params.id),
   }))
 
-  app.get<{ Params: { id: string } }>('/sessions/:id', (request) => ({
-    session: conversations.requireSession(request.params.id),
-  }))
+  app.get<{ Params: { id: string } }>('/sessions/:id', (request) => {
+    const session = conversations.requireSession(request.params.id)
+    return {
+      session,
+      capabilities: lifecycle.capabilities(session, isOperator(request)),
+      links: session.profile_id ? links.forSession(session) : null,
+    }
+  })
 
   app.post<{ Params: { id: string }; Body: unknown }>(
     '/sessions/:id/link',
@@ -302,6 +334,169 @@ export const agentHomePlugin: FastifyPluginAsync<AgentHomeRouteOptions> = async 
       return reply.code(result.replayed ? 200 : 201).send(result)
     },
   )
+
+  app.get<{
+    Params: { id: string }
+    Querystring: {
+      query?: string
+      after?: string
+      limit?: string
+      kind?: string
+      kinds?: string
+      actor_type?: string
+      actor_id?: string
+      tool?: string
+      status?: string
+      from?: string
+      to?: string
+      session_id?: string
+      archived?: string
+    }
+  }>('/conversations/:id/search', (request) => search.search(request.params.id, {
+    query: request.query.query,
+    after: optionalNonNegativeInteger(request.query.after, 'after'),
+    limit: optionalPositiveInteger(request.query.limit, 'limit'),
+    kinds: eventKinds(request.query.kind ?? request.query.kinds),
+    actorType: request.query.actor_type,
+    actorId: request.query.actor_id,
+    tool: request.query.tool,
+    status: request.query.status,
+    from: request.query.from,
+    to: request.query.to,
+    sessionId: request.query.session_id,
+    includeArchived: truthyQuery(request.query.archived),
+  }))
+
+  app.get<{
+    Params: { id: string; eventId: string }
+  }>('/conversations/:id/events/:eventId', (request) => {
+    const conversation = conversations.requireConversation(request.params.id)
+    const event = conversations.requireEvent(request.params.eventId)
+    if (event.conversation_id !== conversation.id) {
+      throw new NotFoundError('conversation event not found')
+    }
+    return {
+      event,
+      links: links.forEvent(event),
+    }
+  })
+
+  app.get<{
+    Params: { id: string }
+    Querystring: { format?: string; session_id?: string }
+  }>('/conversations/:id/export', (request, reply) => {
+    const format = exportFormat(request.query.format)
+    const document = exporter.document(request.params.id, request.query.session_id)
+    if (format === 'human') {
+      return reply.type('text/plain; charset=utf-8').send(exporter.renderHuman(document))
+    }
+    return document
+  })
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/conversations/:id/export',
+    (request, reply) => {
+      const body = requestBody(request.body, true)
+      const command = mutation(request, body, isOperator)
+      const result = exporter.createArtifact({
+        conversationId: request.params.id,
+        sessionId: optionalValue(body, 'session_id', 'sessionId') ?? undefined,
+        format: exportFormat(optionalValue(body, 'format') ?? undefined),
+        actor: command.actor,
+        idempotencyKey: command.idempotencyKey,
+        correlationId: command.correlationId,
+      })
+      return reply.code(result.export.replayed ? 200 : 201).send(result)
+    },
+  )
+
+  app.get<{
+    Params: { id: string }
+    Querystring: { format?: string }
+  }>('/sessions/:id/export', (request, reply) => {
+    const session = conversations.requireSession(request.params.id)
+    if (!session.conversation_id) {
+      throw new ConflictError('session is not linked to an Agent Home conversation')
+    }
+    const format = exportFormat(request.query.format)
+    const document = exporter.document(session.conversation_id, session.id)
+    if (format === 'human') {
+      return reply.type('text/plain; charset=utf-8').send(exporter.renderHuman(document))
+    }
+    return document
+  })
+
+  app.get<{
+    Params: { id: string }
+    Querystring: {
+      query?: string
+      after?: string
+      limit?: string
+      kind?: string
+      kinds?: string
+      actor_type?: string
+      actor_id?: string
+      tool?: string
+      status?: string
+      from?: string
+      to?: string
+      archived?: string
+    }
+  }>('/sessions/:id/search', (request) => {
+    const session = conversations.requireSession(request.params.id)
+    if (!session.conversation_id) {
+      throw new ConflictError('session is not linked to an Agent Home conversation')
+    }
+    return search.search(session.conversation_id, {
+      query: request.query.query,
+      after: optionalNonNegativeInteger(request.query.after, 'after'),
+      limit: optionalPositiveInteger(request.query.limit, 'limit'),
+      kinds: eventKinds(request.query.kind ?? request.query.kinds),
+      actorType: request.query.actor_type,
+      actorId: request.query.actor_id,
+      tool: request.query.tool,
+      status: request.query.status,
+      from: request.query.from,
+      to: request.query.to,
+      sessionId: session.id,
+      includeArchived: truthyQuery(request.query.archived),
+    })
+  })
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/sessions/:id/export',
+    (request, reply) => {
+      const session = conversations.requireSession(request.params.id)
+      if (!session.conversation_id) {
+        throw new ConflictError('session is not linked to an Agent Home conversation')
+      }
+      const body = requestBody(request.body, true)
+      const command = mutation(request, body, isOperator)
+      const result = exporter.createArtifact({
+        conversationId: session.conversation_id,
+        sessionId: session.id,
+        format: exportFormat(optionalValue(body, 'format') ?? undefined),
+        actor: command.actor,
+        idempotencyKey: command.idempotencyKey,
+        correlationId: command.correlationId,
+      })
+      return reply.code(result.export.replayed ? 200 : 201).send(result)
+    },
+  )
+
+  for (const action of AGENT_HOME_SESSION_ACTIONS) {
+    app.post<{ Params: { id: string }; Body: unknown }>(
+      `/sessions/:id/${action}`,
+      async (request) => {
+        const body = requestBody(request.body, true)
+        const command = mutation(request, body, isOperator)
+        return lifecycle.run(request.params.id, action as AgentHomeSessionAction, {
+          ...command,
+          ...(action === 'rename' ? { name: body.name as string } : {}),
+        })
+      },
+    )
+  }
 }
 
 function mutation(
@@ -395,6 +590,12 @@ function eventKinds(value: unknown): ConversationEventKind[] | undefined {
   return [...new Set(
     value.split(',').map((kind) => kind.trim()).filter(Boolean),
   )] as ConversationEventKind[]
+}
+
+function exportFormat(value: unknown): AgentHomeExportFormat {
+  if (value === undefined || value === null || value === '' || value === 'human') return 'human'
+  if (value === 'json') return 'json'
+  throw new ValidationError('format must be human or json')
 }
 
 function truthyQuery(value: unknown): boolean {

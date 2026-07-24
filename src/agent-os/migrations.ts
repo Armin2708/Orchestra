@@ -1102,6 +1102,104 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '008-agent-home-controls',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_sessions ADD COLUMN display_name TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT
+          REFERENCES agent_sessions(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions ADD COLUMN lineage_type TEXT
+          CHECK(lineage_type IS NULL OR lineage_type IN ('resume','retry','fork'));
+        ALTER TABLE agent_sessions ADD COLUMN control_state TEXT NOT NULL DEFAULT 'active'
+          CHECK(control_state IN ('active','paused','stopped','archived'));
+      `)
+
+      const sessionColumns = new Set(
+        (db.prepare("PRAGMA table_info('agent_sessions')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (sessionColumns.has('archived_at') && sessionColumns.has('status')) {
+        db.exec(`
+        UPDATE agent_sessions
+        SET control_state=CASE
+          WHEN archived_at IS NOT NULL THEN 'archived'
+          WHEN status IN ('stopped','failed','lost','exited') THEN 'stopped'
+          ELSE 'active'
+        END;
+        `)
+      } else if (sessionColumns.has('archived_at')) {
+        db.exec(`UPDATE agent_sessions SET control_state=CASE
+          WHEN archived_at IS NOT NULL THEN 'archived' ELSE 'active' END;`)
+      } else if (sessionColumns.has('status')) {
+        db.exec(`UPDATE agent_sessions SET control_state=CASE
+          WHEN status IN ('stopped','failed','lost','exited') THEN 'stopped' ELSE 'active' END;`)
+      }
+
+      db.exec(`
+        CREATE INDEX idx_agent_sessions_parent
+          ON agent_sessions(parent_session_id);
+        CREATE INDEX idx_agent_sessions_control
+          ON agent_sessions(profile_id, control_state);
+
+        CREATE TABLE agent_session_actions (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+          result_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          idempotency_key TEXT NOT NULL,
+          action TEXT NOT NULL
+            CHECK(action IN ('resume','pause','stop','retry','fork','rename','archive')),
+          request_fingerprint TEXT NOT NULL,
+          status TEXT NOT NULL
+            CHECK(status IN ('pending','succeeded','failed')),
+          lease_id TEXT NOT NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE INDEX idx_agent_session_actions_session
+          ON agent_session_actions(session_id, created_at, id);
+        CREATE UNIQUE INDEX idx_agent_session_actions_pending
+          ON agent_session_actions(session_id) WHERE status='pending';
+      `)
+
+      if (sessionColumns.has('status')) {
+        db.exec(`
+          CREATE TRIGGER agent_sessions_control_state_insert
+          AFTER INSERT ON agent_sessions
+          WHEN NEW.status IN ('stopped','failed','lost','exited','archived')
+          BEGIN
+            UPDATE agent_sessions
+            SET control_state=CASE WHEN NEW.status='archived' THEN 'archived' ELSE 'stopped' END
+            WHERE id=NEW.id;
+          END;
+
+          CREATE TRIGGER agent_sessions_control_state_update
+          AFTER UPDATE OF status ON agent_sessions
+          WHEN NEW.control_state!='archived'
+            AND NEW.status IN (
+              'reserved','starting','running','stopping',
+              'stopped','failed','lost','exited','archived'
+            )
+          BEGIN
+            UPDATE agent_sessions
+            SET control_state=CASE
+              WHEN NEW.status='archived' THEN 'archived'
+              WHEN NEW.status IN ('stopped','failed','lost','exited') THEN 'stopped'
+              ELSE 'active'
+            END
+            WHERE id=NEW.id;
+          END;
+        `)
+      }
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

@@ -10,8 +10,13 @@ import type { Checkpoint } from './checkpoints.js'
 import { ContextStore } from './context-store.js'
 import { DeliveryLifecycleIntegration } from './delivery-integration.js'
 import type { DeliveryReport } from './delivery-reports.js'
-import { ValidationError } from './errors.js'
+import { ConflictError, UnsupportedError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import type {
+  AgentHomeRuntimeControl,
+  RuntimeActionCapabilities,
+} from './agent-home-lifecycle.js'
+import type { AgentSessionRecord } from './conversations.js'
 import { parseJson } from './json.js'
 import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
@@ -566,8 +571,9 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
 type LiveJob = { driver: AgentDriver; session: DriverSession }
 
 /** Executes durable jobs through provider-neutral drivers and completes them from driver events. */
-export class AgentOsJobExecutor implements JobExecutor {
+export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl {
   private readonly live = new Map<string, LiveJob>()
+  private readonly pausedJobs = new Set<string>()
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
   private readonly deliveries: DeliveryLifecycleIntegration
@@ -589,6 +595,115 @@ export class AgentOsJobExecutor implements JobExecutor {
 
   supportedProviders(): readonly string[] {
     return this.drivers.list().map((driver) => driver.id)
+  }
+
+  agentHomeSessionCapabilities(session: AgentSessionRecord): RuntimeActionCapabilities {
+    const driver = this.drivers.get(session.driver_id ?? session.provider)
+    if (!driver) {
+      const unavailable = (action: string) => ({
+        supported: false,
+        reason: `${session.provider} ${action} is unavailable because its driver is not registered`,
+      })
+      return {
+        resume: unavailable('resume'),
+        pause: unavailable('pause'),
+        stop: unavailable('stop'),
+        retry: unavailable('retry'),
+        fork: unavailable('fork'),
+      }
+    }
+    const capabilities = driver.capabilities()
+    const control = this.controlForSession(session.id)
+    const live = !!control?.live
+    const activeJob = !!control && ['queued', 'running', 'cancelling'].includes(control.job.status)
+    return {
+      pause: capabilities.interrupt && live
+        ? { supported: true, reason: null }
+        : {
+            supported: false,
+            reason: capabilities.interrupt
+              ? 'the provider session is not attached to this daemon'
+              : `${session.provider} does not support interruption`,
+          },
+      resume: capabilities.resume && live
+        ? { supported: true, reason: null }
+        : {
+            supported: false,
+            reason: capabilities.resume
+              ? 'the provider session is not attached to this daemon'
+              : `${session.provider} does not support resumable sessions`,
+          },
+      stop: capabilities.stop && activeJob
+        ? { supported: true, reason: null }
+        : {
+            supported: false,
+            reason: capabilities.stop
+              ? 'the canonical job is no longer active'
+              : `${session.provider} does not support session stop`,
+          },
+      retry: control
+        ? { supported: true, reason: null }
+        : {
+            supported: false,
+            reason: 'retry requires a canonical Agent OS job',
+          },
+      fork: {
+        supported: false,
+        reason: `${session.provider} does not expose provenance-safe native session forking`,
+      },
+    }
+  }
+
+  async pauseAgentHomeSession(sessionId: string): Promise<void> {
+    const control = this.controlForSession(sessionId)
+    if (!control?.live) {
+      throw new ConflictError('the provider session is not attached to this daemon')
+    }
+    if (!control.live.driver.capabilities().interrupt) {
+      throw new UnsupportedError(`${control.job.provider} does not support interruption`)
+    }
+    this.pausedJobs.add(control.job.id)
+    try {
+      await control.live.driver.interrupt(control.live.session.id)
+    } catch (error) {
+      this.pausedJobs.delete(control.job.id)
+      throw error
+    }
+  }
+
+  async resumeAgentHomeSession(sessionId: string): Promise<void> {
+    const control = this.controlForSession(sessionId)
+    if (!control?.live) {
+      throw new ConflictError('the provider session is not attached to this daemon')
+    }
+    if (!control.live.driver.capabilities().resume) {
+      throw new UnsupportedError(`${control.job.provider} does not support resumable sessions`)
+    }
+    this.pausedJobs.delete(control.job.id)
+    try {
+      await control.live.driver.send(
+        control.live.session.id,
+        'Resume the current Orchestra assignment from the durable conversation and workspace state. Verify existing work before continuing.',
+      )
+    } catch (error) {
+      this.pausedJobs.add(control.job.id)
+      throw error
+    }
+  }
+
+  async stopAgentHomeSession(sessionId: string): Promise<void> {
+    const control = this.controlForSession(sessionId)
+    if (!control || !this.scheduler) {
+      throw new ConflictError('session is not attached to a canonical Agent OS job')
+    }
+    const driver = control.live?.driver
+      ?? this.drivers.get(control.job.driver_id)
+      ?? this.drivers.get(control.job.provider)
+    if (!driver?.capabilities().stop && control.job.status === 'running') {
+      throw new UnsupportedError(`${control.job.provider} does not support session stop`)
+    }
+    this.pausedJobs.delete(control.job.id)
+    await this.scheduler.cancel(control.job.id)
   }
 
   prepareShutdown(): void {
@@ -791,8 +906,11 @@ export class AgentOsJobExecutor implements JobExecutor {
         continue
       }
       const sessionRow = this.sessionForJob(job.id)
+      const paused = sessionRow?.control_state === 'paused'
+      if (paused) this.pausedJobs.add(job.id)
       const driver = sessionRow ? this.drivers.get(sessionRow.provider) : undefined
       if (!sessionRow?.external_id || !driver || !driver.capabilities().resume) {
+        this.pausedJobs.delete(job.id)
         if (sessionRow) this.markSessionFailed(sessionRow.id)
         const reason = `daemon restarted; ${job.provider} session cannot be resumed`
         const recoveredJob = this.scheduler.recover(job.id, reason)
@@ -819,16 +937,21 @@ export class AgentOsJobExecutor implements JobExecutor {
           if (!update) throw new Error('Codex driver cannot restore persisted session overrides')
           await update.call(driver, session.id, patch)
         }
-        if (sessionRow.provider === 'claude') {
+        if (sessionRow.provider === 'claude' && !paused) {
           await driver.send(session.id,
             'The Orchestra daemon restarted while this durable job was active. Continue the existing job from the current workspace and conversation state; verify prior work before making further changes, then complete the assignment.')
         }
-        this.db.prepare("UPDATE agent_sessions SET status='running', updated_at=datetime('now') WHERE id=?")
-          .run(sessionRow.id)
+        this.db.prepare(`UPDATE agent_sessions SET status=?, control_state=?,
+          updated_at=datetime('now') WHERE id=?`).run(
+          paused ? 'idle' : 'running',
+          paused ? 'paused' : 'active',
+          sessionRow.id,
+        )
         this.live.set(job.id, { driver, session })
         void this.watch(job, sessionRow.id, driver, session, job.spent_tokens, job.spent_cents)
         resumed.push(job.id)
       } catch (error) {
+        this.pausedJobs.delete(job.id)
         this.markSessionFailed(sessionRow.id)
         const reason = `daemon restart recovery failed: ${error instanceof Error ? error.message : String(error)}`
         const recoveredJob = this.scheduler.recover(job.id, reason)
@@ -1157,7 +1280,9 @@ export class AgentOsJobExecutor implements JobExecutor {
     try {
       for await (const event of driver.events(session.id)) {
         this.recordDriverEvent(job, sessionId, event)
-        if (event.type === 'error') failure = event.data
+        const pausedTurnCompleted = event.metadata?.turnCompleted === true
+          && this.pausedJobs.has(job.id)
+        if (event.type === 'error' && !pausedTurnCompleted) failure = event.data
         const breakdown = this.codexUsageBreakdown(event)
         if (breakdown) this.recordManagedProviderUsage(sessionId, breakdown)
         const reportedTokens = breakdown?.total_tokens ?? this.reportedTokens(event)
@@ -1183,6 +1308,7 @@ export class AgentOsJobExecutor implements JobExecutor {
           }
         }
         if (event.metadata?.turnCompleted === true && !stopRequested) {
+          if (pausedTurnCompleted) continue
           stopRequested = true
           await driver.stop(session.id).catch((error) => {
             failure ??= error instanceof Error ? error.message : String(error)
@@ -1208,6 +1334,7 @@ export class AgentOsJobExecutor implements JobExecutor {
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error)
     } finally {
+      this.pausedJobs.delete(job.id)
       this.live.delete(job.id)
       if (detached || this.shuttingDown) return
       const current = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
@@ -1502,9 +1629,10 @@ export class AgentOsJobExecutor implements JobExecutor {
     model: string | null
     effort: string | null
     access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+    control_state: AgentSessionRecord['control_state']
   } | undefined {
     return this.db.prepare(`SELECT s.id, s.provider, s.external_id,
-      COALESCE(a.model, s.model) AS model, a.effort, a.access_profile
+      COALESCE(a.model, s.model) AS model, a.effort, a.access_profile, s.control_state
       FROM agent_sessions s LEFT JOIN agents a ON a.id=s.agent_id
       WHERE json_valid(s.context_json) AND json_extract(s.context_json, '$.job_id')=?
       ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId) as {
@@ -1514,6 +1642,7 @@ export class AgentOsJobExecutor implements JobExecutor {
         model: string | null
         effort: string | null
         access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+        control_state: AgentSessionRecord['control_state']
       } | undefined
   }
 
@@ -1523,6 +1652,19 @@ export class AgentOsJobExecutor implements JobExecutor {
       JOIN agents a ON a.id=s.agent_id
       WHERE s.agent_id=? AND a.session_id=('agent-os:' || j.id)
       ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as
+      (Record<string, unknown> & { session_id: string }) | undefined
+    if (!row) return undefined
+    const job = mapRuntimeJob(row)
+    return { job, sessionId: String(row.session_id), live: this.live.get(job.id) }
+  }
+
+  private controlForSession(sessionId: string): { job: Job; sessionId: string; live?: LiveJob } | undefined {
+    const row = this.db.prepare(`SELECT s.id AS session_id, j.* FROM agent_sessions s
+      JOIN jobs j ON j.id=coalesce(
+        s.job_id,
+        CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id') END
+      )
+      WHERE s.id=?`).get(sessionId) as
       (Record<string, unknown> & { session_id: string }) | undefined
     if (!row) return undefined
     const job = mapRuntimeJob(row)
