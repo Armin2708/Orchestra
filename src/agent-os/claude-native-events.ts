@@ -658,11 +658,7 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
         const providerCursor = canonical?.provider_cursor
           ?? suppliedCursor
           ?? this.nextCaptureCursor(binding.agentHomeSessionId)
-        const redactionState = projection.forceWithheld
-          ? 'withheld'
-          : canonical?.redaction_state
-            ?? (this.rawArtifactMode === 'full' ? 'none'
-              : this.rawArtifactMode === 'redacted' ? 'redacted' : 'withheld')
+        const redactionState = projection.forceWithheld ? 'withheld' : 'none'
         const metadata = {
           provider_native: true,
           provider_native_schema: 'claude-agent-sdk-message',
@@ -689,9 +685,6 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
           } : {}),
           ...projection.metadata,
         }
-        const projectedText = this.rawArtifactMode === 'redacted' && projection.projectedText
-          ? redactString(projection.projectedText)
-          : projection.projectedText
         this.conversations.appendEvent(binding.agentHomeSessionId, {
           idempotencyKey: `claude-native:${identity.hash}`,
           dedupeKey: identity.dedupeKey,
@@ -702,7 +695,7 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
           providerTurnId: projection.providerTurnId ?? messageId,
           providerItemId: projection.providerItemId ?? null,
           providerCursor,
-          projectedText,
+          projectedText: projection.projectedText,
           metadata,
           rawArtifactId: canonical ? canonical.raw_artifact_id : rawArtifactId,
           actor: event.direction === 'inbound'

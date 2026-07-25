@@ -320,6 +320,7 @@ describe('Claude provider-native Agent Home capture', () => {
       provider_thread_id: 'claude-session-native',
       provider_turn_id: 'claude-message-1',
       projected_text: 'I will inspect the repository.',
+      redaction_state: 'none',
     })
     expect(assistant.metadata).toMatchObject({
       native_request_id: 'claude-request-1',
@@ -445,6 +446,34 @@ describe('Claude provider-native Agent Home capture', () => {
     expect((scope.db.prepare(
       'SELECT COUNT(*) AS count FROM conversation_event_conflicts',
     ).get() as { count: number }).count).toBe(0)
+  })
+
+  it('redacts safe projected text even when the raw provider payload is withheld', () => {
+    const scope = createScope()
+    const secret = 'sk-ant-1234567890ABCDEF'
+    append(scope, {
+      kind: 'outbound_user',
+      direction: 'outbound',
+      captureId: 'claude-withheld-raw-redacted-projection',
+      providerSessionId: null,
+      payload: {
+        text: `Visible request with ${secret}`,
+        source: 'orchestra',
+        notification_ids: [],
+      },
+    })
+
+    expect(events(scope)).toEqual([
+      expect.objectContaining({
+        projected_text: 'Visible request with [REDACTED]',
+        redaction_state: 'redacted',
+        raw_artifact_id: null,
+        metadata: expect.objectContaining({
+          raw_payload_state: 'withheld',
+        }),
+      }),
+    ])
+    expect(JSON.stringify(events(scope))).not.toContain(secret)
   })
 
   it('stores redacted raw artifacts with provenance without leaking secrets', () => {

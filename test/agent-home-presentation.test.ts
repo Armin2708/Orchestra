@@ -222,6 +222,11 @@ describe('Agent Home selection and provenance presentation', () => {
       projected_text: 'secret-token',
       redaction_state: 'withheld',
     }))).not.toContain('secret-token')
+    expect(eventText(event({
+      projected_text: 'Usable answer with [REDACTED]',
+      redaction_state: 'redacted',
+    }))).toBe('Usable answer with [REDACTED]')
+    expect(eventText(event())).toBe('Delivered safely')
     expect(usageSummary([
       event({ id: 'usage-1', kind: 'usage', metadata: { input_tokens: 120, cached_input_tokens: 80, output_tokens: 40 } }),
       event({ id: 'usage-2', kind: 'usage', metadata: { input: 30, cache_read: 20, output: 10, cost_cents: 5 } }),

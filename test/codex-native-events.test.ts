@@ -130,7 +130,7 @@ describe('Agent Home Codex native event capture', () => {
         kind: 'assistant',
         projected_text: 'Canonical final answer',
         raw_artifact_id: null,
-        redaction_state: 'withheld',
+        redaction_state: 'none',
         metadata: {
           native_method: 'item/completed',
           raw_payload_state: 'withheld',
@@ -153,6 +153,59 @@ describe('Agent Home Codex native event capture', () => {
         received_projected_text: 'Conflicting final answer',
       })
       expect(scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)).toHaveLength(1)
+    } finally {
+      scope.db.close()
+    }
+  })
+
+  it('keeps safe projections visible, redacts credentials, and withholds reasoning text', () => {
+    const scope = createScope()
+    try {
+      const credential = 'sk-abcdefghijklmnopqrstuvwxyz123456'
+      scope.sink.append(capture(scope.binding, {
+        method: 'item/agentMessage/delta',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-redaction',
+          itemId: 'message-native-redaction',
+          delta: `Visible answer using ${credential}`,
+        },
+        receivedAt: '2026-07-24T08:05:00.000Z',
+      }, 'orchestra-codex:redaction:1'))
+      scope.sink.append(capture(scope.binding, {
+        method: 'item/reasoning/textDelta',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-redaction',
+          itemId: 'reasoning-native-redaction',
+          delta: `Private reasoning using ${credential}`,
+        },
+        receivedAt: '2026-07-24T08:05:00.100Z',
+      }, 'orchestra-codex:redaction:2'))
+
+      const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
+      expect(events).toEqual([
+        expect.objectContaining({
+          kind: 'assistant',
+          projected_text: 'Visible answer using [REDACTED]',
+          redaction_state: 'redacted',
+          metadata: expect.objectContaining({
+            raw_payload_state: 'withheld',
+          }),
+        }),
+        expect.objectContaining({
+          kind: 'status',
+          projected_text: null,
+          redaction_state: 'withheld',
+          metadata: expect.objectContaining({
+            native_method: 'item/reasoning/textDelta',
+            reasoning: true,
+            raw_payload_state: 'withheld',
+          }),
+        }),
+      ])
+      expect(JSON.stringify(events)).not.toContain(credential)
+      expect(JSON.stringify(events)).not.toContain('Private reasoning')
     } finally {
       scope.db.close()
     }
@@ -736,7 +789,7 @@ describe('Codex driver durable notification boundary', () => {
         provider_item_id: 'command-native-approval',
         provider_cursor: 'eventId:approval-native-1',
         projected_text: 'Codex command approval requested',
-        redaction_state: 'withheld',
+        redaction_state: 'none',
         metadata: {
           native_method: 'item/commandExecution/requestApproval',
           approval_kind: 'command',

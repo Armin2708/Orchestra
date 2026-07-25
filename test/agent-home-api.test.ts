@@ -285,6 +285,90 @@ describe('Agent Home API', () => {
     expect(bodyHeaderMismatch.statusCode).toBe(400)
     expect(bodyHeaderMismatch.json().error).toMatch(/must match/)
   })
+
+  it('redacts projected credentials before list, search, direct, and export reads', async () => {
+    const { db, server, boardId, sessionId } = await apiFixture()
+    const profile = (await createProfile(server, boardId)).json().profile
+    const conversation = (await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/agent-profiles/${profile.id}/conversations`,
+      headers: agent,
+    })).json().conversations[0]
+    const linked = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/sessions/${sessionId}/link`,
+      headers: { ...operator, 'idempotency-key': 'api:redaction:link' },
+      payload: {
+        profile_id: profile.id,
+        conversation_id: conversation.id,
+        mode: 'managed',
+        driver_id: 'codex-app-server',
+        provider_thread_id: 'api-thread',
+        recovery_state: 'attachable',
+        history_state: 'complete',
+      },
+    })
+    expect(linked.statusCode).toBe(200)
+
+    const credential = 'sk-abcdefghijklmnopqrstuvwxyz123456'
+    const safeText = 'Usable API answer with [REDACTED]'
+    const appended = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/sessions/${sessionId}/events`,
+      headers: { ...operator, 'idempotency-key': 'api:redaction:event' },
+      payload: {
+        dedupe_key: 'api-redaction-event',
+        kind: 'assistant',
+        projected_text: `Usable API answer with ${credential}`,
+      },
+    })
+    expect(appended.statusCode).toBe(201)
+    expect(appended.json().event).toMatchObject({
+      projected_text: safeText,
+      redaction_state: 'redacted',
+    })
+    const eventId = appended.json().event.id
+    expect((db.prepare('SELECT projected_text FROM conversation_events WHERE id=?')
+      .get(eventId) as { projected_text: string }).projected_text).toBe(safeText)
+
+    const list = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/conversations/${conversation.id}/events`,
+      headers: agent,
+    })
+    const search = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/conversations/${conversation.id}/search?query=Usable%20API`,
+      headers: agent,
+    })
+    const secretSearch = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/conversations/${conversation.id}/search?query=${encodeURIComponent(credential)}`,
+      headers: agent,
+    })
+    const direct = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/conversations/${conversation.id}/events/${eventId}`,
+      headers: agent,
+    })
+    const exported = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/conversations/${conversation.id}/export`,
+      headers: agent,
+    })
+
+    for (const response of [list, search, direct, exported]) {
+      expect(response.statusCode).toBe(200)
+      expect(response.body).toContain(safeText)
+      expect(response.body).not.toContain(credential)
+    }
+    expect(search.json().events).toEqual([
+      expect.objectContaining({ id: eventId, redaction_state: 'redacted' }),
+    ])
+    expect(secretSearch.statusCode).toBe(200)
+    expect(secretSearch.json().events).toEqual([])
+    expect(secretSearch.body).not.toContain(credential)
+  })
 })
 
 async function apiFixture(): Promise<{

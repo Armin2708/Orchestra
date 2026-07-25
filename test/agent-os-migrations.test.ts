@@ -5,6 +5,8 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
 
@@ -43,7 +45,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
     first.close()
 
     const second = openDb(file)
@@ -57,7 +59,7 @@ describe('Agent OS migrations', () => {
       'job_market_dependencies']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -88,6 +90,188 @@ describe('Agent OS migrations', () => {
       (id, workspace_id, provider, external_id, status) VALUES ('s3', 'w2', 'codex', 'thread-1', 'stopped')`).run())
       .not.toThrow()
     second.close()
+  })
+
+  it('repairs false-withheld native projections without restoring provider reasoning', () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare(
+      "INSERT INTO boards (project_path, name) VALUES ('/legacy-redaction', 'legacy redaction')",
+    ).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('legacy-redaction-workspace', ?, 'legacy', 'shared', '/legacy-redaction', 'active')`)
+      .run(boardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('legacy-claude-session', 'legacy-redaction-workspace', 'claude', 'running', '{}'),
+             ('legacy-codex-session', 'legacy-redaction-workspace', 'codex', 'running', '{}')`).run()
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Legacy redaction',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'legacy-redaction:profile',
+    })
+    const conversations = new ConversationService(db)
+    const conversation = conversations.listConversations(profile.id)[0]
+    for (const [sessionId, driverId] of [
+      ['legacy-claude-session', 'claude'],
+      ['legacy-codex-session', 'codex'],
+    ] as const) {
+      conversations.linkSession(sessionId, {
+        profileId: profile.id,
+        conversationId: conversation.id,
+        mode: 'managed',
+        driverId,
+        recoveryState: 'attachable',
+        historyState: 'complete',
+        actor: { type: 'operator', id: 'migration-test' },
+        idempotencyKey: `legacy-redaction:link:${driverId}`,
+      })
+    }
+    const appendLegacy = (
+      sessionId: string,
+      provider: 'claude' | 'codex',
+      dedupeKey: string,
+    ) => conversations.appendEvent(sessionId, {
+      idempotencyKey: `legacy-redaction:event:${dedupeKey}`,
+      dedupeKey,
+      kind: 'assistant',
+      provider,
+      projectedText: 'placeholder',
+      actor: { type: 'provider', id: provider },
+    }).event.id
+    const ids = {
+      claudeText: appendLegacy('legacy-claude-session', 'claude', 'legacy:claude:text'),
+      claudePreRedacted: appendLegacy('legacy-claude-session', 'claude', 'legacy:claude:pre-redacted'),
+      claudeThinking: appendLegacy('legacy-claude-session', 'claude', 'legacy:claude:thinking'),
+      codexText: appendLegacy('legacy-codex-session', 'codex', 'legacy:codex:text'),
+      codexReasoning: appendLegacy('legacy-codex-session', 'codex', 'legacy:codex:reasoning'),
+      explicitWithheld: appendLegacy('legacy-codex-session', 'codex', 'legacy:explicit:withheld'),
+    }
+    const mutate = db.prepare(`UPDATE conversation_events
+      SET projected_text=?, metadata_json=?, redaction_state='withheld', content_hash=?
+      WHERE id=?`)
+    mutate.run(
+      'Claude visible answer',
+      JSON.stringify({
+        provider_native: true,
+        provider_native_schema: 'claude-agent-sdk-message',
+        native_block_type: 'text',
+        raw_payload_state: 'withheld',
+      }),
+      'legacy-claude-text-hash',
+      ids.claudeText,
+    )
+    mutate.run(
+      'claude private reasoning',
+      JSON.stringify({
+        provider_native: true,
+        provider_native_schema: 'claude-agent-sdk-message',
+        native_block_type: 'thinking',
+        raw_payload_state: 'withheld',
+      }),
+      'legacy-claude-thinking-hash',
+      ids.claudeThinking,
+    )
+    db.prepare(`UPDATE conversation_events
+      SET projected_text='Already [REDACTED]', metadata_json=?,
+          redaction_state='redacted', content_hash=?
+      WHERE id=?`).run(
+      JSON.stringify({
+        provider_native: true,
+        provider_native_schema: 'claude-agent-sdk-message',
+        native_block_type: 'text',
+        raw_payload_state: 'redacted',
+      }),
+      'a'.repeat(64),
+      ids.claudePreRedacted,
+    )
+    mutate.run(
+      'Codex visible sk-abcdefghijklmnopqrstuvwxyz123456',
+      JSON.stringify({
+        native_method: 'item/agentMessage/delta',
+        raw_payload_state: 'withheld',
+      }),
+      'legacy-codex-text-hash',
+      ids.codexText,
+    )
+    mutate.run(
+      'codex private reasoning',
+      JSON.stringify({
+        native_method: 'item/reasoning/textDelta',
+        raw_payload_state: 'withheld',
+      }),
+      'legacy-codex-reasoning-hash',
+      ids.codexReasoning,
+    )
+    mutate.run(
+      'explicitly withheld secret',
+      '{}',
+      'legacy-explicit-withheld-hash',
+      ids.explicitWithheld,
+    )
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id='010-agent-home-projected-text-redaction'`).run()
+
+    applyAgentOsMigrations(db)
+    applyAgentOsMigrations(db)
+
+    const repaired = db.prepare(`SELECT id, projected_text, redaction_state, content_hash
+      FROM conversation_events WHERE id IN (?, ?, ?, ?, ?, ?) ORDER BY id`).all(
+      ids.claudeText,
+      ids.claudePreRedacted,
+      ids.claudeThinking,
+      ids.codexText,
+      ids.codexReasoning,
+      ids.explicitWithheld,
+    ) as Array<{
+      id: string
+      projected_text: string | null
+      redaction_state: string
+      content_hash: string
+    }>
+    const byId = new Map(repaired.map((event) => [event.id, event]))
+    expect(byId.get(ids.claudeText)).toMatchObject({
+      projected_text: 'Claude visible answer',
+      redaction_state: 'none',
+    })
+    expect(byId.get(ids.codexText)).toMatchObject({
+      projected_text: 'Codex visible [REDACTED]',
+      redaction_state: 'redacted',
+    })
+    expect(byId.get(ids.claudePreRedacted)).toMatchObject({
+      projected_text: 'Already [REDACTED]',
+      redaction_state: 'redacted',
+    })
+    for (const id of [ids.claudeThinking, ids.codexReasoning, ids.explicitWithheld]) {
+      expect(byId.get(id)).toMatchObject({
+        projected_text: null,
+        redaction_state: 'withheld',
+      })
+    }
+    expect(repaired.every((event) => /^[a-f0-9]{64}$/.test(event.content_hash))).toBe(true)
+    expect(conversations.appendEvent('legacy-codex-session', {
+      idempotencyKey: 'legacy-redaction:event:legacy:codex:text',
+      dedupeKey: 'legacy:codex:text',
+      kind: 'assistant',
+      provider: 'codex',
+      projectedText: 'Codex visible sk-abcdefghijklmnopqrstuvwxyz123456',
+      metadata: {
+        native_method: 'item/agentMessage/delta',
+        raw_payload_state: 'withheld',
+      },
+      actor: { type: 'provider', id: 'codex' },
+    })).toMatchObject({
+      replayed: true,
+      event: {
+        id: ids.codexText,
+        projected_text: 'Codex visible [REDACTED]',
+        redaction_state: 'redacted',
+      },
+    })
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
+      .toBe(10)
+    db.close()
   })
 
   it('upgrades a migration-003 database without rewriting legacy contract meaning', () => {
@@ -147,7 +331,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -240,7 +424,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(9)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
     db.close()
   })
 

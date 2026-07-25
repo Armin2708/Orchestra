@@ -1,8 +1,27 @@
 import type Database from 'better-sqlite3'
+import { canonicalHash } from './agent-home-support.js'
+import {
+  isNativeProviderProjection,
+  isWithheldProviderReasoning,
+  normalizeProjectedText,
+  redactProjectedText,
+  type ProjectedTextRedactionState,
+} from './projected-text-redaction.js'
 
 interface Migration {
   id: string
   apply(db: Database.Database): void
+}
+
+const metadataRecord = (serialized: string): Record<string, unknown> => {
+  try {
+    const value = JSON.parse(serialized) as unknown
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
 }
 
 const migrations: Migration[] = [
@@ -1292,6 +1311,109 @@ const migrations: Migration[] = [
           updated_at, NULL, updated_at, updated_at
         FROM task_contracts;
       `)
+    },
+  },
+  {
+    id: '010-agent-home-projected-text-redaction',
+    apply(db) {
+      const rows = db.prepare(`SELECT
+          id, provider, provider_event_id, provider_thread_id, provider_turn_id,
+          provider_item_id, provider_cursor, kind, actor_type, actor_id,
+          correlation_id, causation_id, projected_text, metadata_json,
+          raw_artifact_id, dedupe_key, redaction_state, retention_class, schema_version
+        FROM conversation_events`).all() as Array<{
+          id: string
+          provider: string | null
+          provider_event_id: string | null
+          provider_thread_id: string | null
+          provider_turn_id: string | null
+          provider_item_id: string | null
+          provider_cursor: string | null
+          kind: string
+          actor_type: string
+          actor_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+          projected_text: string | null
+          metadata_json: string
+          raw_artifact_id: string | null
+          dedupe_key: string
+          redaction_state: ProjectedTextRedactionState
+          retention_class: string
+          schema_version: number
+        }>
+      const update = db.prepare(`UPDATE conversation_events
+        SET projected_text=?, redaction_state=?, content_hash=? WHERE id=?`)
+      const updateAuditHash = db.prepare(`UPDATE os_events
+        SET payload=json_set(
+          payload,
+          '$.content_hash', ?,
+          '$.request_fingerprint', ?
+        )
+        WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+          AND json_valid(payload)
+          AND json_extract(payload, '$.conversation_event_id')=?`)
+      const updateConflictAuditHash = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.canonical_content_hash', ?)
+        WHERE kind='conversation.event_conflict'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.canonical_event_id')=?`)
+      for (const row of rows) {
+        const metadata = metadataRecord(row.metadata_json)
+        const nativeProjection = isNativeProviderProjection(row.provider, metadata)
+        const requestedState = isWithheldProviderReasoning(row.provider, metadata)
+          ? 'withheld'
+          : nativeProjection && row.redaction_state === 'withheld'
+            ? 'none'
+            : row.redaction_state
+        const projected = normalizeProjectedText(row.projected_text, requestedState)
+        if (projected.value === row.projected_text
+          && projected.redactionState === row.redaction_state) continue
+        const contentHash = canonicalHash({
+          provider: row.provider,
+          provider_event_id: row.provider_event_id,
+          provider_thread_id: row.provider_thread_id,
+          provider_turn_id: row.provider_turn_id,
+          provider_item_id: row.provider_item_id,
+          provider_cursor: row.provider_cursor,
+          kind: row.kind,
+          actor: { type: row.actor_type, id: row.actor_id },
+          correlation_id: row.correlation_id,
+          causation_id: row.causation_id,
+          projected_text: projected.value,
+          metadata,
+          raw_artifact_id: row.raw_artifact_id,
+          dedupe_key: row.dedupe_key,
+          redaction_state: projected.redactionState,
+          retention_class: row.retention_class,
+          schema_version: row.schema_version,
+        })
+        update.run(projected.value, projected.redactionState, contentHash, row.id)
+        updateAuditHash.run(contentHash, contentHash, row.id)
+        updateConflictAuditHash.run(contentHash, row.id)
+      }
+
+      const conflicts = db.prepare(`SELECT conflict.id, conflict.received_projected_text,
+          conflict.received_metadata_json, canonical.provider
+        FROM conversation_event_conflicts conflict
+        JOIN conversation_events canonical ON canonical.id=conflict.canonical_event_id`)
+        .all() as Array<{
+          id: string
+          received_projected_text: string | null
+          received_metadata_json: string
+          provider: string | null
+        }>
+      const updateConflict = db.prepare(`UPDATE conversation_event_conflicts
+        SET received_projected_text=? WHERE id=?`)
+      for (const conflict of conflicts) {
+        const metadata = metadataRecord(conflict.received_metadata_json)
+        const projected = isWithheldProviderReasoning(conflict.provider, metadata)
+          ? null
+          : redactProjectedText(conflict.received_projected_text).value
+        if (projected !== conflict.received_projected_text) {
+          updateConflict.run(projected, conflict.id)
+        }
+      }
     },
   },
 ]

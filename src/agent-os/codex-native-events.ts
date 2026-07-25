@@ -9,11 +9,13 @@ import {
   type ConversationEventKind,
 } from './conversations.js'
 import { ConflictError } from './errors.js'
+import { CODEX_WITHHELD_REASONING_METHODS } from './projected-text-redaction.js'
 
 type NativeProjection = {
   kind: ConversationEventKind
   projectedText: string | null
   metadata?: Record<string, unknown>
+  forceWithheld?: boolean
 }
 
 const TOOL_OUTPUT_METHODS = new Set([
@@ -21,12 +23,6 @@ const TOOL_OUTPUT_METHODS = new Set([
   'item/fileChange/outputDelta',
   'process/outputDelta',
   'command/exec/outputDelta',
-])
-
-const REASONING_METHODS = new Set([
-  'item/reasoning/summaryTextDelta',
-  'item/reasoning/summaryPartAdded',
-  'item/reasoning/textDelta',
 ])
 
 const APPROVAL_METHODS = new Set([
@@ -40,7 +36,7 @@ const APPROVAL_METHODS = new Set([
 const CURSOR_SENSITIVE_METHODS = new Set([
   'item/agentMessage/delta',
   ...TOOL_OUTPUT_METHODS,
-  ...REASONING_METHODS,
+  ...CODEX_WITHHELD_REASONING_METHODS,
   'thread/tokenUsage/updated',
   'turn/diff/updated',
   'turn/plan/updated',
@@ -61,7 +57,7 @@ const KNOWN_METHODS = new Set([
   'thread/tokenUsage/updated',
   'turn/diff/updated',
   'turn/plan/updated',
-  ...REASONING_METHODS,
+  ...CODEX_WITHHELD_REASONING_METHODS,
   'thread/status/changed',
   'error',
   'thread/closed',
@@ -205,8 +201,13 @@ const projectNativeEvent = (
   if (method === 'turn/plan/updated') {
     return { kind: 'status', projectedText: 'Codex plan updated' }
   }
-  if (REASONING_METHODS.has(method)) {
-    return { kind: 'status', projectedText: safeText(params.delta) ?? method, metadata: { reasoning: true } }
+  if (CODEX_WITHHELD_REASONING_METHODS.has(method)) {
+    return {
+      kind: 'status',
+      projectedText: null,
+      metadata: { reasoning: true },
+      forceWithheld: true,
+    }
   }
   if (method === 'thread/status/changed') {
     const status = isRecord(params.status) ? safeScalar(params.status.type, 120) ?? 'unknown' : 'unknown'
@@ -368,7 +369,7 @@ export class AgentHomeCodexNativeEventSink implements CodexNativeEventSink {
         thread_id: threadId,
         turn_id: turnId,
       })}`,
-      redactionState: 'withheld',
+      redactionState: projection.forceWithheld ? 'withheld' : 'none',
       retentionClass: projection.kind === 'usage' ? 'audit' : 'transcript',
       schemaVersion: 1,
     })

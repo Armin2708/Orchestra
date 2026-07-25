@@ -23,6 +23,7 @@ import {
   type AgentSessionMode,
   type AgentSessionRecoveryState,
 } from './agent-home-support.js'
+import { normalizeProjectedText } from './projected-text-redaction.js'
 
 export const CONVERSATION_EVENT_KINDS = [
   'user',
@@ -602,6 +603,10 @@ export class ConversationService {
       'provider thread id',
       512,
     )
+    const projectedText = normalizeProjectedText(
+      optionalProjectedText(input.projectedText),
+      redactionState(input.redactionState),
+    )
     const normalized = {
       provider,
       provider_event_id: optionalBoundedString(input.providerEventId, 'provider event id', 512),
@@ -613,11 +618,11 @@ export class ConversationService {
       actor,
       correlation_id: optionalBoundedString(input.correlationId, 'correlation id', 512),
       causation_id: optionalBoundedString(input.causationId, 'causation id', 512),
-      projected_text: optionalProjectedText(input.projectedText),
+      projected_text: projectedText.value,
       metadata: jsonRecord(input.metadata, 'metadata'),
       raw_artifact_id: optionalBoundedString(input.rawArtifactId, 'raw artifact id', 200),
       dedupe_key: boundedString(input.dedupeKey, 'dedupe key', 512),
-      redaction_state: redactionState(input.redactionState),
+      redaction_state: projectedText.redactionState,
       retention_class: retentionClass(input.retentionClass),
       schema_version: positiveInteger(input.schemaVersion ?? 1, 'schema version'),
     }
