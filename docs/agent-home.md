@@ -1,7 +1,8 @@
 # Durable Agent Home
 
-Status: the durable domain and lifecycle/search/export/CLI control surface are implemented.
-The responsive visual Agent Home remains a separate additive slice.
+Status: the durable domain, provider-native capture, lifecycle/search/export/CLI controls, and
+responsive visual Agent Home are implemented. Retention/compaction, provenance-safe native fork,
+and the real daemon-to-browser restart E2E gate remain open.
 
 Agent Home is the canonical visual and API surface for one durable agent identity and its provider
 sessions. It combines conversation, real terminal processes, assigned work, context, tools,
@@ -143,3 +144,8 @@ managers, Claude CLI, Codex CLI, MCP tools, plugins, and arbitrary installed com
 - Desktop, tablet, and phone layouts preserve selection, deep links, keyboard/focus behavior, and
   visible errors.
 - Transcript export proves provenance and secret redaction.
+
+Observed Playwright acceptance on the integrated train passed at 1440×1000 and 390×844. Direct
+lookup loaded and focused/highlighted `event-5001` with its surrounding context, Pause changed the
+mocked provider state from Running to Idle exactly once, neither viewport overflowed horizontally,
+and fresh desktop/phone reloads produced zero console errors, page errors, or unhandled mocks.
