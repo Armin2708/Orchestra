@@ -17,6 +17,7 @@ import { canonicalHash } from '../src/agent-os/agent-home-support.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
+import { EventStore } from '../src/agent-os/event-store.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import {
@@ -70,6 +71,17 @@ class FakeAgentHomeRuntime implements AgentHomeRuntimeControl {
 
   async stopAgentHomeSession(sessionId: string): Promise<void> {
     this.stopCalls.push(sessionId)
+  }
+}
+
+class HookedAgentHomeRuntime extends FakeAgentHomeRuntime {
+  constructor(private readonly onPause: (sessionId: string) => void | Promise<void>) {
+    super()
+  }
+
+  override async pauseAgentHomeSession(sessionId: string): Promise<void> {
+    this.pauseCalls.push(sessionId)
+    await this.onPause(sessionId)
   }
 }
 
@@ -201,6 +213,186 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       { action: 'archive', status: 'succeeded' },
       { action: 'fork', status: 'failed' },
     ])
+  })
+
+  it('reserves the caller audit identity before provider effects and preserves global conflicts', async () => {
+    const db = openDb(':memory:')
+    databases.push(db)
+    const fixture = seedHome(db)
+    const events = new EventStore(db)
+    const runtime = new FakeAgentHomeRuntime()
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'caller-audit-reservation',
+    })
+    events.append({
+      boardId: fixture.boardId,
+      idempotencyKey: 'occupied:caller-key',
+      kind: 'unrelated.command',
+      source: 'test',
+    })
+
+    await expect(lifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: 'occupied:caller-key',
+    })).rejects.toThrow(/idempotency key was already used/)
+    expect(runtime.pauseCalls).toEqual([])
+
+    const callerKey = 'pause:caller-key-reserved'
+    let competingError: unknown
+    const racingRuntime = new HookedAgentHomeRuntime(() => {
+      try {
+        events.append({
+          boardId: fixture.boardId,
+          idempotencyKey: callerKey,
+          kind: 'competing.event',
+          source: 'test',
+        })
+      } catch (error) {
+        competingError = error
+      }
+    })
+    const racingLifecycle = new AgentHomeLifecycleService(db, {
+      runtime: racingRuntime,
+      actionLeaseId: 'caller-audit-reservation',
+    })
+    const result = await racingLifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: callerKey,
+    })
+    const replay = await racingLifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: callerKey,
+    })
+
+    expect(competingError).toEqual(expect.objectContaining({
+      message: expect.stringMatching(/event idempotency key/),
+    }))
+    expect(result.action.replayed).toBe(false)
+    expect(replay.action.replayed).toBe(true)
+    expect(racingRuntime.pauseCalls).toEqual([fixture.sessionId])
+    expect(db.prepare(`SELECT kind FROM os_events
+      WHERE board_id=? AND idempotency_key=?`).get(fixture.boardId, callerKey))
+      .toEqual({ kind: 'agent_session.action_requested' })
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE board_id=? AND kind='agent_session.pause'`).get(fixture.boardId) as
+      { count: number }).count).toBe(1)
+  })
+
+  it('uses an action-scoped completion identity after a provider-side collision', async () => {
+    const db = openDb(':memory:')
+    databases.push(db)
+    const fixture = seedHome(db)
+    const events = new EventStore(db)
+    let collidedKey = ''
+    const runtime = new HookedAgentHomeRuntime(() => {
+      const action = db.prepare(`SELECT id FROM agent_session_actions
+        WHERE session_id=? AND status='pending'`).get(fixture.sessionId) as { id: string }
+      collidedKey = `agent-home-action:${action.id}:completed`
+      events.append({
+        boardId: fixture.boardId,
+        idempotencyKey: collidedKey,
+        kind: 'competing.event',
+        source: 'test',
+      })
+    })
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'completion-key-collision',
+    })
+
+    const result = await lifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: 'pause:completion-key-collision',
+    })
+    const replay = await lifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: 'pause:completion-key-collision',
+    })
+    const action = db.prepare(`SELECT id, status, result_session_id FROM agent_session_actions
+      WHERE idempotency_key='pause:completion-key-collision'`).get() as {
+        id: string
+        status: string
+        result_session_id: string | null
+      }
+    const completion = db.prepare(`SELECT idempotency_key FROM os_events
+      WHERE board_id=? AND kind='agent_session.pause'`).get(fixture.boardId) as {
+        idempotency_key: string
+      }
+
+    expect(result.action.id).toBe(action.id)
+    expect(result.action.replayed).toBe(false)
+    expect(replay.action.replayed).toBe(true)
+    expect(runtime.pauseCalls).toEqual([fixture.sessionId])
+    expect(action).toEqual({
+      id: result.action.id,
+      status: 'succeeded',
+      result_session_id: fixture.sessionId,
+    })
+    expect(db.prepare(`SELECT kind FROM os_events
+      WHERE board_id=? AND idempotency_key=?`).get(fixture.boardId, collidedKey))
+      .toEqual({ kind: 'competing.event' })
+    expect(completion.idempotency_key).toMatch(
+      new RegExp(`^agent-home-action:${result.action.id}:completed:`),
+    )
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE board_id=? AND kind IN ('agent_session.action_requested','agent_session.pause')`)
+      .get(fixture.boardId) as { count: number }).count).toBe(2)
+  })
+
+  it('recovers truthful completion after audit persistence fails post-provider success', async () => {
+    const db = openDb(':memory:')
+    databases.push(db)
+    const fixture = seedHome(db)
+    const runtime = new FakeAgentHomeRuntime()
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'daemon-before-audit-failure',
+    })
+    db.exec(`
+      CREATE TRIGGER reject_agent_home_completion
+      BEFORE INSERT ON os_events
+      WHEN NEW.kind='agent_session.pause'
+      BEGIN
+        SELECT RAISE(ABORT, 'completion audit unavailable');
+      END;
+    `)
+
+    await expect(lifecycle.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: 'pause:audit-persistence-failure',
+    })).rejects.toThrow(/completion audit unavailable/)
+    expect(runtime.pauseCalls).toEqual([fixture.sessionId])
+    expect(db.prepare(`SELECT status, result_session_id FROM agent_session_actions
+      WHERE idempotency_key='pause:audit-persistence-failure'`).get()).toEqual({
+      status: 'pending',
+      result_session_id: fixture.sessionId,
+    })
+    expect(new ConversationService(db).requireSession(fixture.sessionId)).toMatchObject({
+      status: 'idle',
+      control_state: 'paused',
+    })
+
+    db.exec('DROP TRIGGER reject_agent_home_completion')
+    const restarted = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'daemon-after-audit-failure',
+    })
+    const replay = await restarted.run(fixture.sessionId, 'pause', {
+      actor,
+      idempotencyKey: 'pause:audit-persistence-failure',
+    })
+
+    expect(replay.action.replayed).toBe(true)
+    expect(runtime.pauseCalls).toEqual([fixture.sessionId])
+    expect(db.prepare(`SELECT status, result_session_id FROM agent_session_actions
+      WHERE idempotency_key='pause:audit-persistence-failure'`).get()).toEqual({
+      status: 'succeeded',
+      result_session_id: fixture.sessionId,
+    })
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE board_id=? AND kind IN ('agent_session.action_requested','agent_session.pause')`)
+      .get(fixture.boardId) as { count: number }).count).toBe(2)
   })
 
   it('searches with stable cursors and every requested filter while preserving exact links', async () => {

@@ -19,7 +19,7 @@ import {
   canonicalHash,
   type ActorIdentity,
 } from './agent-home-support.js'
-import { timestamp } from './json.js'
+import { parseJson, timestamp } from './json.js'
 import type { OrchestrationService } from './orchestration-service.js'
 import type { JobScheduler } from './scheduler.js'
 
@@ -99,6 +99,23 @@ type ActionRow = {
 type ActionReservation = {
   row: ActionRow
   acquired: boolean
+}
+
+type ActionReservationInput = {
+  boardId: number
+  session: AgentSessionRecord
+  action: AgentHomeSessionAction
+  actor: ActorIdentity
+  idempotencyKey: string
+  requestFingerprint: string
+  correlationId: string | null
+  name?: string
+}
+
+type ActionRequestAudit = {
+  id: string
+  correlation_id: string | null
+  payload: Record<string, unknown>
 }
 
 const ACTIVE_STATUSES = new Set(['reserved', 'starting', 'running', 'idle', 'stopping'])
@@ -222,13 +239,21 @@ export class AgentHomeLifecycleService {
       actor,
       idempotencyKey,
       requestFingerprint,
+      correlationId: input.correlationId ?? idempotencyKey,
+      name,
     })
     if (reservation.row.status === 'succeeded') return this.result(reservation.row, true)
     if (reservation.row.status === 'failed') throw storedError(reservation.row)
+    if (reservation.row.result_session_id) {
+      const completed = this.completeAppliedAction(reservation.row)
+      return this.result(completed, true)
+    }
     if (!reservation.acquired && action !== 'retry') {
       throw new ConflictError(`session ${action} action is already in progress`)
     }
 
+    let effectApplied = false
+    let resultId: string | null = null
     try {
       // The reservation is a per-session mutation lock. Read state again only after
       // acquiring it so capability checks cannot race a different lifecycle action.
@@ -241,67 +266,45 @@ export class AgentHomeLifecycleService {
       let resultSession = session
       if (action === 'pause') {
         await this.options.runtime!.pauseAgentHomeSession(session.id)
-        this.db.prepare(`UPDATE agent_sessions SET status='idle', control_state='paused',
-          updated_at=? WHERE id=?`).run(timestamp(), session.id)
+        effectApplied = true
+        resultId = session.id
+        this.markApplied(reservation.row.id, resultId)
+        this.applySessionProjection(reservation.row)
       } else if (action === 'resume') {
         await this.options.runtime!.resumeAgentHomeSession(session.id)
-        this.db.prepare(`UPDATE agent_sessions SET status='running', control_state='active',
-          ended_at=NULL, updated_at=? WHERE id=?`).run(timestamp(), session.id)
+        effectApplied = true
+        resultId = session.id
+        this.markApplied(reservation.row.id, resultId)
+        this.applySessionProjection(reservation.row)
       } else if (action === 'stop') {
         await this.options.runtime!.stopAgentHomeSession(session.id)
-        this.db.prepare(`UPDATE agent_sessions SET status='stopped', control_state='stopped',
-          ended_at=coalesce(ended_at, ?), updated_at=? WHERE id=?`)
-          .run(timestamp(), timestamp(), session.id)
+        effectApplied = true
+        resultId = session.id
+        this.markApplied(reservation.row.id, resultId)
+        this.applySessionProjection(reservation.row)
       } else if (action === 'retry') {
         resultSession = this.createRetry(session, reservation.row.id, actor)
+        effectApplied = true
+        resultId = resultSession.id
+        this.markApplied(reservation.row.id, resultId)
       } else if (action === 'fork') {
         throw new UnsupportedError(
           `${session.provider} does not expose provenance-safe native session forking`,
         )
       } else if (action === 'rename') {
-        this.db.prepare('UPDATE agent_sessions SET display_name=?, updated_at=? WHERE id=?')
-          .run(name, timestamp(), session.id)
+        resultId = session.id
+        this.markApplied(reservation.row.id, resultId)
+        effectApplied = true
+        this.applySessionProjection(reservation.row)
       } else if (action === 'archive') {
-        const at = timestamp()
-        this.db.prepare(`UPDATE agent_sessions SET control_state='archived',
-          archived_at=coalesce(archived_at, ?), ended_at=coalesce(ended_at, ?), updated_at=?
-          WHERE id=?`).run(at, at, at, session.id)
+        resultId = session.id
+        this.markApplied(reservation.row.id, resultId)
+        effectApplied = true
+        this.applySessionProjection(reservation.row)
       }
 
-      const resultId = resultSession.id
-      const complete = this.db.transaction(() => {
-        const latest = this.conversations.requireSession(session.id)
-        const created = resultId === session.id
-          ? latest
-          : this.conversations.requireSession(resultId)
-        this.events.append({
-          boardId,
-          workspaceId: session.workspace_id,
-          sessionId: session.id,
-          jobId: session.job_id,
-          correlationId: input.correlationId ?? idempotencyKey,
-          idempotencyKey,
-          kind: `agent_session.${action}`,
-          source: 'agent-home',
-          payload: {
-            action_id: reservation.row.id,
-            action,
-            session_id: session.id,
-            result_session_id: created.id,
-            profile_id: session.profile_id,
-            conversation_id: session.conversation_id,
-            request_fingerprint: requestFingerprint,
-            actor,
-            ...(name ? { name } : {}),
-          },
-        })
-        this.db.prepare(`UPDATE agent_session_actions
-          SET status='succeeded', result_session_id=?, error_code=NULL, error_message=NULL,
-            updated_at=?
-          WHERE id=? AND status='pending'`).run(created.id, timestamp(), reservation.row.id)
-      })
-      complete.immediate()
-      const response = this.result(this.requireAction(reservation.row.id), false)
+      const completed = this.completeAppliedAction(this.requireAction(reservation.row.id))
+      const response = this.result(completed, false)
       if (action === 'retry') {
         // The durable action result and retry lineage are committed before dispatch.
         // A daemon crash or tick failure therefore leaves a recoverable queued job.
@@ -309,7 +312,16 @@ export class AgentHomeLifecycleService {
       }
       return response
     } catch (error) {
-      this.fail(reservation.row.id, error)
+      let latest = this.requireAction(reservation.row.id)
+      if (effectApplied && resultId && !latest.result_session_id) {
+        // The provider/session mutation has already returned success. Persist the applied
+        // marker again if the first acknowledgement failed, but never rewrite it as failed.
+        try { this.markApplied(reservation.row.id, resultId) } catch { /* replay repairs it */ }
+        latest = this.requireAction(reservation.row.id)
+      }
+      if (latest.status === 'pending' && !latest.result_session_id && !effectApplied) {
+        this.fail(reservation.row.id, error)
+      }
       throw error
     }
   }
@@ -404,14 +416,7 @@ export class AgentHomeLifecycleService {
     return this.conversations.requireSession(child.id)
   }
 
-  private reserve(input: {
-    boardId: number
-    session: AgentSessionRecord
-    action: AgentHomeSessionAction
-    actor: ActorIdentity
-    idempotencyKey: string
-    requestFingerprint: string
-  }): ActionReservation {
+  private reserve(input: ActionReservationInput): ActionReservation {
     const reserve = this.db.transaction(() => {
       const existing = this.db.prepare(`SELECT * FROM agent_session_actions
         WHERE board_id=? AND idempotency_key=?`).get(input.boardId, input.idempotencyKey) as
@@ -434,6 +439,7 @@ export class AgentHomeLifecycleService {
           )
           existing.lease_id = this.actionLeaseId
         }
+        if (existing.status === 'pending') this.ensureActionRequestAudit(existing, input)
         return { row: existing, acquired: false }
       }
       const occupied = this.db.prepare(`SELECT kind FROM os_events
@@ -479,6 +485,7 @@ export class AgentHomeLifecycleService {
         at,
         at,
       )
+      this.appendActionRequestAudit(row, input)
       return { row, acquired: true }
     })
     try {
@@ -488,6 +495,167 @@ export class AgentHomeLifecycleService {
         throw new ConflictError('another session action is already in progress')
       }
       throw error
+    }
+  }
+
+  private appendActionRequestAudit(row: ActionRow, input: ActionReservationInput): void {
+    this.events.append({
+      boardId: row.board_id,
+      workspaceId: input.session.workspace_id,
+      sessionId: row.session_id,
+      jobId: input.session.job_id,
+      correlationId: input.correlationId,
+      idempotencyKey: row.idempotency_key,
+      kind: 'agent_session.action_requested',
+      source: 'agent-home',
+      payload: {
+        action_id: row.id,
+        action: row.action,
+        session_id: row.session_id,
+        profile_id: input.session.profile_id,
+        conversation_id: input.session.conversation_id,
+        request_fingerprint: row.request_fingerprint,
+        actor: input.actor,
+        ...(input.name ? { name: input.name } : {}),
+      },
+    })
+  }
+
+  private ensureActionRequestAudit(row: ActionRow, input: ActionReservationInput): void {
+    const occupied = this.db.prepare(`SELECT kind, payload FROM os_events
+      WHERE board_id=? AND idempotency_key=?`).get(row.board_id, row.idempotency_key) as
+      { kind: string; payload: string } | undefined
+    if (!occupied) {
+      this.appendActionRequestAudit(row, input)
+      return
+    }
+    const payload = parseJson<Record<string, unknown>>(occupied.payload, {})
+    if (occupied.kind !== 'agent_session.action_requested'
+      || payload.action_id !== row.id
+      || payload.request_fingerprint !== row.request_fingerprint) {
+      throw new ConflictError('idempotency key was already used for a different event')
+    }
+  }
+
+  private markApplied(actionId: string, resultSessionId: string): ActionRow {
+    const current = this.requireAction(actionId)
+    if (current.status !== 'pending') return current
+    if (current.result_session_id && current.result_session_id !== resultSessionId) {
+      throw new ConflictError('session action already recorded a different applied result')
+    }
+    this.db.prepare(`UPDATE agent_session_actions SET result_session_id=coalesce(result_session_id, ?),
+      updated_at=? WHERE id=? AND status='pending'`).run(
+      resultSessionId,
+      timestamp(),
+      actionId,
+    )
+    return this.requireAction(actionId)
+  }
+
+  private applySessionProjection(row: ActionRow): void {
+    const request = this.actionRequestAudit(row)
+    const at = timestamp()
+    if (row.action === 'pause') {
+      this.db.prepare(`UPDATE agent_sessions SET status='idle', control_state='paused',
+        updated_at=? WHERE id=?`).run(at, row.session_id)
+    } else if (row.action === 'resume') {
+      this.db.prepare(`UPDATE agent_sessions SET status='running', control_state='active',
+        ended_at=NULL, updated_at=? WHERE id=?`).run(at, row.session_id)
+    } else if (row.action === 'stop') {
+      this.db.prepare(`UPDATE agent_sessions SET status='stopped', control_state='stopped',
+        ended_at=coalesce(ended_at, ?), updated_at=? WHERE id=?`)
+        .run(at, at, row.session_id)
+    } else if (row.action === 'rename') {
+      const name = typeof request?.payload.name === 'string' ? request.payload.name : null
+      if (!name) throw new ConflictError('rename action reservation is missing its requested name')
+      this.db.prepare('UPDATE agent_sessions SET display_name=?, updated_at=? WHERE id=?')
+        .run(name, at, row.session_id)
+    } else if (row.action === 'archive') {
+      this.db.prepare(`UPDATE agent_sessions SET control_state='archived',
+        archived_at=coalesce(archived_at, ?), ended_at=coalesce(ended_at, ?), updated_at=?
+        WHERE id=?`).run(at, at, at, row.session_id)
+    }
+  }
+
+  private completeAppliedAction(row: ActionRow): ActionRow {
+    if (row.status === 'succeeded') return row
+    if (row.status === 'failed') throw storedError(row)
+    if (!row.result_session_id) throw new ConflictError('session action has no applied result')
+    this.applySessionProjection(row)
+
+    const completionKey = `agent-home-action:${row.id}:completed`
+    try {
+      return this.commitActionCompletion(row.id, completionKey)
+    } catch (error) {
+      if (!isEventIdempotencyConflict(error)) throw error
+      // The caller key is already reserved by action_requested. A hostile or stale writer
+      // may still occupy the internal completion key after the provider returns, so retain
+      // action scope while choosing a fresh ledger identity rather than falsifying failure.
+      return this.commitActionCompletion(row.id, `${completionKey}:${randomUUID()}`)
+    }
+  }
+
+  private commitActionCompletion(actionId: string, completionKey: string): ActionRow {
+    const complete = this.db.transaction(() => {
+      const current = this.requireAction(actionId)
+      if (current.status === 'succeeded') return current
+      if (current.status === 'failed') throw storedError(current)
+      if (!current.result_session_id) throw new ConflictError('session action has no applied result')
+
+      const target = this.conversations.requireSession(current.session_id)
+      const created = this.conversations.requireSession(current.result_session_id)
+      const request = this.actionRequestAudit(current)
+      const actor = this.db.prepare(`SELECT actor_type, actor_id FROM agent_session_actions
+        WHERE id=?`).get(current.id) as { actor_type: string; actor_id: string | null }
+      this.events.append({
+        boardId: current.board_id,
+        workspaceId: target.workspace_id,
+        sessionId: target.id,
+        jobId: target.job_id,
+        correlationId: request?.correlation_id ?? current.id,
+        causationId: request?.id ?? null,
+        idempotencyKey: completionKey,
+        kind: `agent_session.${current.action}`,
+        source: 'agent-home',
+        payload: {
+          action_id: current.id,
+          action: current.action,
+          session_id: target.id,
+          result_session_id: created.id,
+          profile_id: target.profile_id,
+          conversation_id: target.conversation_id,
+          request_fingerprint: current.request_fingerprint,
+          actor: { type: actor.actor_type, id: actor.actor_id },
+          ...(typeof request?.payload.name === 'string' ? { name: request.payload.name } : {}),
+        },
+      })
+      const updated = this.db.prepare(`UPDATE agent_session_actions
+        SET status='succeeded', error_code=NULL, error_message=NULL, updated_at=?
+        WHERE id=? AND status='pending' AND result_session_id=?`).run(
+        timestamp(),
+        current.id,
+        created.id,
+      )
+      if (updated.changes !== 1) {
+        const raced = this.requireAction(current.id)
+        if (raced.status !== 'succeeded') {
+          throw new ConflictError('session action completion changed concurrently')
+        }
+      }
+      return this.requireAction(current.id)
+    })
+    return complete.immediate()
+  }
+
+  private actionRequestAudit(row: ActionRow): ActionRequestAudit | null {
+    const event = this.db.prepare(`SELECT id, kind, correlation_id, payload FROM os_events
+      WHERE board_id=? AND idempotency_key=?`).get(row.board_id, row.idempotency_key) as
+      { id: string; kind: string; correlation_id: string | null; payload: string } | undefined
+    if (!event || event.kind !== 'agent_session.action_requested') return null
+    return {
+      id: event.id,
+      correlation_id: event.correlation_id,
+      payload: parseJson<Record<string, unknown>>(event.payload, {}),
     }
   }
 
@@ -534,19 +702,23 @@ export class AgentHomeLifecycleService {
   }
 
   private reconcileInterruptedActions(): void {
-    const stale = this.db.prepare(`SELECT id, board_id, session_id, action, lease_id
+    const stale = this.db.prepare(`SELECT *
       FROM agent_session_actions
       WHERE status='pending' AND action!='retry' AND lease_id!=?
-      ORDER BY created_at, rowid`).all(this.actionLeaseId) as Array<{
-        id: string
-        board_id: number
-        session_id: string
-        action: AgentHomeSessionAction
-        lease_id: string
-      }>
+      ORDER BY created_at, rowid`).all(this.actionLeaseId) as ActionRow[]
     if (!stale.length) return
+    for (const action of stale.filter((candidate) => candidate.result_session_id !== null)) {
+      try {
+        this.completeAppliedAction(action)
+      } catch {
+        // The action ledger retains an applied pending result. Replay or the next daemon
+        // restart retries projection/audit without invoking the provider side effect again.
+      }
+    }
+    const interrupted = stale.filter((candidate) => candidate.result_session_id === null)
+    if (!interrupted.length) return
     const reconcile = this.db.transaction(() => {
-      for (const action of stale) {
+      for (const action of interrupted) {
         const message = `session ${action.action} action was interrupted by a daemon restart`
         const updated = this.db.prepare(`UPDATE agent_session_actions
           SET status='failed', error_code='action_interrupted', error_message=?, updated_at=?
@@ -615,4 +787,9 @@ function storedError(row: ActionRow): Error {
 function isPendingActionConstraint(error: unknown): boolean {
   return error instanceof Error
     && error.message.includes('UNIQUE constraint failed: agent_session_actions.session_id')
+}
+
+function isEventIdempotencyConflict(error: unknown): boolean {
+  return error instanceof ConflictError
+    && error.message.includes('event idempotency key')
 }
