@@ -163,12 +163,12 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provenance, budgeted injection, freshness, review controls, UI, and benchmarks;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
-- hosted exact-commit workflow proof for `QA-019`, public package publication, and clean-machine
-  plugin/npm installation.
+- public package publication and clean-machine plugin/npm installation; the successful hosted
+  `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 
-The strict master reconciliation is **122 / 373 checklist boxes delivered; 251 remain open**.
-The milestone summaries remain 2 / 15; this branch is a locally verified engineering train, not a
-hosted exact-commit release and not a public plug-and-play release.
+The strict master reconciliation is **123 / 373 checklist boxes delivered; 250 remain open**.
+The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
+plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
@@ -187,14 +187,17 @@ hosted exact-commit release and not a public plug-and-play release.
 | Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
 | Phase 13 — Secure remote/mobile | 1 / 21 | 20 |
 | Phase 14 — Reliability/security/ops | 1 / 23 | 22 |
-| Phase 15 — Quality gates | 7 / 21 | 14 |
+| Phase 15 — Quality gates | 8 / 21 | 13 |
 | Phase 16 — Packaging/docs | 5 / 19 | 14 |
 | Phase 17 — Public release | 0 / 17 | 17 |
 | Phase 18 — Deferred | 0 / 10 | 10 deferred |
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[local Gate C and JOB-010 phase-one checkpoint](./checkpoints/2026-07-25-agent-os-local-gate-c-job010-phase-one.md).
+[hosted QA-019 checkpoint](./checkpoints/2026-07-25-agent-os-hosted-qa019.md).
+The
+[local Gate C and JOB-010 phase-one checkpoint](./checkpoints/2026-07-25-agent-os-local-gate-c-job010-phase-one.md)
+is retained as the preceding local-evidence checkpoint.
 The [major blocker handoff](./checkpoints/2026-07-25-agent-os-major-handoff.md) is retained as
 superseded history.
 
@@ -208,8 +211,12 @@ superseded history.
 - JOB-010 phase-one code head `0c13237`: reviewed-tree full suites are 125 files / 850 tests
   serially and default-parallel; exact-integration focused checks are 9 files / 73 tests plus
   root/web TypeScript.
-- `QA-020` is delivered. `QA-019` remains open until hosted workflow evidence exists for the exact
-  candidate SHA.
-- Browser and mobile gates remain open on the split desktop-pass/phone-fail fallback result above.
+- Current frozen code head `3c543b52a32109747d5f0fa1521188380c55fa93`: hosted run
+  `30171494794` passed all 21 required exact-commit gates; serial and default-parallel suites each
+  passed 127 files / 890 tests, and retained evidence/package artifacts reproduced independently.
+- `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
+  hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
+- Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;
+  the labeled Playwright fallback passes desktop and phone after `30eb27e`.
 - Public npm installation is unavailable while `orchestra-board` returns `E404`.
 - Primary checkout user changes remain outside this isolated worktree and were not modified.
