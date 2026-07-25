@@ -49,6 +49,7 @@ const workflow = read(contract.workflow)
 const evidenceScript = read('scripts/exact-commit-evidence.mjs')
 const gitleaksInstaller = read('scripts/install-gitleaks.mjs')
 const packageSmoke = read('scripts/package-install-smoke.mjs')
+const publishVerifier = read('scripts/verify-publish-artifact.mjs')
 const temporaryDirectories: string[] = []
 
 afterEach(() => {
@@ -175,6 +176,29 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(packageSmoke).toContain('package-metadata.json')
     expect(evidenceScript).not.toContain('process.env.OPENAI_API_KEY')
     expect(evidenceScript).not.toContain('process.env.ANTHROPIC_API_KEY')
+    expect(publishVerifier).not.toContain('process.env.OPENAI_API_KEY')
+    expect(publishVerifier).not.toContain('process.env.ANTHROPIC_API_KEY')
+  })
+
+  it('publishes the retained tested tarball without rebuilding source', () => {
+    const publishJob = workflow.slice(workflow.indexOf('\n  publish:'))
+    expect(publishJob).toContain(
+      'uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1',
+    )
+    expect(publishJob.match(/actions\/download-artifact@/g)).toHaveLength(2)
+    expect(publishJob).toContain('artifact-ids: ${{ needs.test.outputs.package_artifact_id }}')
+    expect(publishJob).toContain('artifact-ids: ${{ needs.test.outputs.evidence_artifact_id }}')
+    expect(publishJob.match(/digest-mismatch: error/g)).toHaveLength(2)
+    expect(publishJob).toContain('node scripts/verify-publish-artifact.mjs')
+    expect(publishJob).toContain(
+      'npm publish "$RUNNER_TEMP/orchestra-release/verified/verified.tgz"',
+    )
+    expect(publishJob).toContain('--ignore-scripts --provenance --access public')
+    expect(publishJob).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
+    expect(publishJob).not.toContain('npm ci')
+    expect(publishJob).not.toContain('npm pack')
+    expect(publishJob).not.toContain('npm run build')
+    expect(publishJob).not.toContain('npm publish --provenance')
   })
 
   it('includes secrets introduced only by merge conflict resolution in the scanned history', () => {
