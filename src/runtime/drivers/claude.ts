@@ -1,3 +1,4 @@
+import path from 'node:path'
 import type {
   AgentDriver,
   DriverCapabilities,
@@ -26,6 +27,31 @@ export type ClaudeAgentHomeBinding = {
   agentProfileId: string
   agentConversationId: string
 }
+
+export type ClaudeSessionForkOptions = {
+  sourceExternalId: string
+  workspaceId: OsId
+  cwd: string
+  upToMessageId?: string
+  title?: string
+}
+
+export type ClaudeSessionForkResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  metadata: Record<string, unknown>
+}
+
+export type ClaudeNativeSessionFork = (
+  sourceExternalId: string,
+  options: {
+    dir: string
+    upToMessageId?: string
+    title?: string
+  },
+) => MaybePromise<{ sessionId: string }>
 
 export type ClaudeNativeEventKind =
   | 'session_start'
@@ -81,12 +107,14 @@ export type ClaudeAgentDriverOptions = {
   conductor: ClaudeConductorPort
   resolveAgent?: (externalId: string) => MaybePromise<ClaudeAgentRecord | null>
   workspaceForAgent?: (agentId: number) => MaybePromise<OsId | undefined>
+  forkSession?: ClaudeNativeSessionFork
   pollIntervalMs?: number
 }
 
 type ClaudeSessionState = {
   session: DriverSession
   agentId: number
+  cwd: string | null
 }
 
 export class ClaudeAgentDriverAdapter implements AgentDriver {
@@ -131,7 +159,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
       ...(agentHome ? { agentHome } : {}),
     })
     const session = this.toSession(agent, request.workspaceId)
-    this.sessions.set(session.id, { session, agentId: agent.id })
+    this.sessions.set(session.id, { session, agentId: agent.id, cwd: request.cwd })
     if (request.prompt && !this.options.conductor.task(agent.id, request.prompt))
       throw new Error(`Claude agent ${agent.id} rejected the initial prompt`)
     return session
@@ -145,8 +173,70 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     const workspaceId = await this.options.workspaceForAgent?.(agent.id)
     if (!workspaceId) throw new Error(`workspace for Claude agent ${agent.id} is unknown`)
     const session = this.toSession(agent, workspaceId)
-    this.sessions.set(session.id, { session, agentId: agent.id })
+    const transcript = this.options.conductor.transcript(agent.id)
+    const cwd = typeof transcript.info?.cwd === 'string' && transcript.info.cwd.trim()
+      ? transcript.info.cwd
+      : null
+    this.sessions.set(session.id, { session, agentId: agent.id, cwd })
     return session
+  }
+
+  /**
+   * Forks only the provider transcript. Claude SDK 0.3.212 does not copy the
+   * source session's undo history or file-history snapshots into the child.
+   */
+  async forkSession(
+    sessionId: string,
+    options: ClaudeSessionForkOptions,
+  ): Promise<ClaudeSessionForkResult> {
+    const state = this.required(sessionId)
+    const sourceExternalId = options.sourceExternalId.trim()
+    if (!sourceExternalId || sourceExternalId !== state.session.externalId) {
+      throw new Error(`Claude session ${sessionId} external provenance does not match`)
+    }
+    if (options.workspaceId !== state.session.workspaceId) {
+      throw new Error(`Claude session ${sessionId} belongs to another workspace`)
+    }
+    const requestedCwd = options.cwd.trim()
+    if (!requestedCwd) throw new Error('Claude session fork requires cwd provenance')
+    if (!state.cwd) throw new Error(`Claude session ${sessionId} cwd provenance is unavailable`)
+    if (path.resolve(requestedCwd) !== path.resolve(state.cwd)) {
+      throw new Error(`Claude session ${sessionId} belongs to another cwd`)
+    }
+
+    const upToMessageId = options.upToMessageId?.trim()
+    if (options.upToMessageId !== undefined && !upToMessageId) {
+      throw new Error('Claude session fork upToMessageId must not be empty')
+    }
+    const title = options.title?.trim()
+    const nativeFork = this.options.forkSession
+      ?? (await import('@anthropic-ai/claude-agent-sdk')).forkSession
+    const forked = await nativeFork(sourceExternalId, {
+      dir: state.cwd,
+      ...(upToMessageId ? { upToMessageId } : {}),
+      ...(title ? { title } : {}),
+    })
+    const externalId = typeof forked?.sessionId === 'string' ? forked.sessionId.trim() : ''
+    if (!externalId) throw new Error('Claude SDK fork did not return a session id')
+    if (externalId === sourceExternalId) {
+      throw new Error('Claude SDK fork returned the source session id')
+    }
+
+    return {
+      sourceExternalId,
+      externalId,
+      providerThreadId: externalId,
+      sourceProviderThreadId: sourceExternalId,
+      metadata: {
+        forkMethod: 'sdk.forkSession',
+        workspaceId: state.session.workspaceId,
+        cwd: state.cwd,
+        fileHistoryCopied: false,
+        undoHistoryCopied: false,
+        ...(upToMessageId ? { upToMessageId } : {}),
+        ...(title ? { title } : {}),
+      },
+    }
   }
 
   async send(sessionId: string, text: string): Promise<void> {
