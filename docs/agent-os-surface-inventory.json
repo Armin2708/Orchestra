@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "ecb38ee30e45def70ecefe869a4e6c853122fcaa",
+  "observed_at_commit": "18de61c764ca30fbc06a34f58348866222f438f5",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -18,6 +18,7 @@
       "agent_home_raw_artifact_archives",
       "agent_home_retention_policies",
       "agent_home_retention_runs",
+      "agent_home_transcript_repairs",
       "agent_profiles",
       "agent_session_actions",
       "agent_sessions",

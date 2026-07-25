@@ -1,6 +1,6 @@
 # Agent OS surface inventory
 
-Status: exact observed baseline at `ecb38ee30e45def70ecefe869a4e6c853122fcaa`.
+Status: exact observed baseline at `18de61c764ca30fbc06a34f58348866222f438f5`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -11,7 +11,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 28 | 3 | 10 | 2 | 43 |
+| SQLite application tables | 29 | 3 | 10 | 2 | 44 |
 | Registered HTTP routes | 83 | 29 | 25 | 9 | 146 |
 | CLI command families/subcommands | 77 | 5 | 18 | 8 | 108 |
 
@@ -33,15 +33,15 @@ The source contract is `docs/agent-os-domain.md:102`; route registration is root
 
 The exact live schema is obtained by opening a fresh database, applying every migration, and
 reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migrations start at
-`src/agent-os/migrations.ts:33`; the migration ledger is created at
-`src/agent-os/migrations.ts:1568`.
+`src/agent-os/migrations.ts:124`; the migration ledger is created at
+`src/agent-os/migrations.ts:1892`.
 
 ### Canonical
 
 | Domain | Tables |
 |---|---|
 | Agent Home | `agent_profiles`, `agent_conversations`, `agent_sessions`, `agent_session_actions`, `conversation_events`, `conversation_event_conflicts` |
-| Retention | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs` |
+| Retention and transcript integrity | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs`, `agent_home_transcript_repairs` |
 | Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
 | Contract/scheduling | `jobs`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
@@ -281,7 +281,7 @@ those routes and CLI commands cannot drift silently.
 
 | Ledger/channel | Class | Contract | Source |
 |---|---|---|---|
-| `conversation_events` | canonical | ordered provider-neutral transcript with 9 closed kinds: `user`, `assistant`, `system`, `tool`, `tool_result`, `approval`, `usage`, `status`, `error` | `src/agent-os/conversations.ts:28` |
+| `conversation_events` | canonical | ordered provider-neutral transcript with 9 closed kinds: `user`, `assistant`, `system`, `tool`, `tool_result`, `approval`, `usage`, `status`, `error` | `src/agent-os/conversations.ts:34` |
 | `conversation_event_conflicts` | canonical | retains conflicting provider replay instead of overwriting canonical history | `src/agent-os/conversations.ts:970` |
 | `os_events` | canonical | append-only causal operational ledger; open namespaces are enumerated in the JSON inventory | `src/agent-os/event-store.ts:55` |
 | `card_events` | legacy | original card activity log and shipped/review compatibility evidence | `src/db.ts:36` |
