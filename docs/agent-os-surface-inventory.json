@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "20b7a91a1182dd9f25066e9e2e2fde048c04d69e",
+  "observed_at_commit": "2e4783bd4de499cacf8ee72117eb21b36a0b8b11",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -33,6 +33,7 @@
       "delivery_criterion_results",
       "delivery_deliverable_results",
       "delivery_reports",
+      "job_market_assignments",
       "job_market_contracts",
       "job_market_criteria",
       "job_market_dependencies",
@@ -94,6 +95,10 @@
     {
       "file": "src/agent-os/agent-home-retention-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/job-assignment-routes.ts",
+      "prefix": "/api/v1/os"
     }
   ],
   "http_routes": {
@@ -111,6 +116,9 @@
       "GET /api/v1/os/boards/:id/policies",
       "GET /api/v1/os/boards/:id/retention",
       "GET /api/v1/os/boards/:id/workspaces",
+      "GET /api/v1/os/boards/:boardId/assignments",
+      "GET /api/v1/os/cards/:cardId/assignments",
+      "GET /api/v1/os/cards/:cardId/assignments/current",
       "GET /api/v1/os/cards/:id/contract",
       "GET /api/v1/os/cards/:id/contract/validate",
       "GET /api/v1/os/cards/:id/deliveries",
@@ -148,6 +156,10 @@
       "POST /api/v1/os/boards/:id/policies",
       "POST /api/v1/os/boards/:id/retention/run",
       "POST /api/v1/os/boards/:id/workspaces",
+      "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign",
+      "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release",
+      "POST /api/v1/os/cards/:cardId/assignments/assign",
+      "POST /api/v1/os/cards/:cardId/assignments/claim",
       "POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply",
       "POST /api/v1/os/cards/:id/contract/publish",
       "POST /api/v1/os/cards/:id/contract/transition",
@@ -258,7 +270,8 @@
   },
   "cli_sources": [
     "src/cli.ts",
-    "src/agent-os-cli.ts"
+    "src/agent-os-cli.ts",
+    "src/job-assignment-cli.ts"
   ],
   "cli_commands": {
     "canonical": [
@@ -304,6 +317,13 @@
       "evidence add",
       "evidence list",
       "job",
+      "job assignment",
+      "job assignment assign",
+      "job assignment claim",
+      "job assignment current",
+      "job assignment list",
+      "job assignment reassign",
+      "job assignment release",
       "job cancel",
       "job create",
       "job list",

@@ -1,6 +1,7 @@
 # Agent OS surface inventory
 
-Status: exact observed baseline at `20b7a91a1182dd9f25066e9e2e2fde048c04d69e`.
+Status: exact JOB-010 phase-one inventory observed at
+`2e4783bd4de499cacf8ee72117eb21b36a0b8b11`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -11,9 +12,9 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 30 | 3 | 10 | 2 | 45 |
-| Registered HTTP routes | 87 | 29 | 25 | 9 | 150 |
-| CLI command families/subcommands | 82 | 5 | 18 | 8 | 113 |
+| SQLite application tables | 31 | 3 | 10 | 2 | 46 |
+| Registered HTTP routes | 94 | 29 | 25 | 9 | 157 |
+| CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -43,7 +44,7 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migr
 | Agent Home | `agent_profiles`, `agent_conversations`, `agent_sessions`, `agent_session_actions`, `agent_session_action_reconciliations`, `conversation_events`, `conversation_event_conflicts` |
 | Retention and transcript integrity | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs`, `agent_home_transcript_repairs` |
 | Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
-| Contract/scheduling | `jobs`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
+| Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
 | Control plane | `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
 
@@ -81,7 +82,8 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/server.ts`, `src/push.ts`, `src/agent-session-controls.ts`,
 `src/agent-os/routes.ts`, `src/agent-os/contract-template-routes.ts`,
 `src/agent-os/agent-home-routes.ts`, and
-`src/agent-os/agent-home-retention-routes.ts`. The seven session action routes are expanded from
+`src/agent-os/agent-home-retention-routes.ts`, and
+`src/agent-os/job-assignment-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
@@ -100,6 +102,9 @@ GET /api/v1/os/boards/:id/jobs
 GET /api/v1/os/boards/:id/policies
 GET /api/v1/os/boards/:id/retention
 GET /api/v1/os/boards/:id/workspaces
+GET /api/v1/os/boards/:boardId/assignments
+GET /api/v1/os/cards/:cardId/assignments
+GET /api/v1/os/cards/:cardId/assignments/current
 GET /api/v1/os/cards/:id/contract
 GET /api/v1/os/cards/:id/contract/validate
 GET /api/v1/os/cards/:id/deliveries
@@ -137,6 +142,10 @@ POST /api/v1/os/boards/:id/jobs
 POST /api/v1/os/boards/:id/policies
 POST /api/v1/os/boards/:id/retention/run
 POST /api/v1/os/boards/:id/workspaces
+POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign
+POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release
+POST /api/v1/os/cards/:cardId/assignments/assign
+POST /api/v1/os/cards/:cardId/assignments/claim
 POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply
 POST /api/v1/os/cards/:id/contract/publish
 POST /api/v1/os/cards/:id/contract/transition
@@ -268,12 +277,12 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 113 command paths are machine-checked from `src/cli.ts` and
-`src/agent-os-cli.ts`. The compact human map is:
+The exact 120 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
+`src/job-assignment-cli.ts`. The compact human map is:
 
 | Class | Command surface |
 |---|---|
-| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
+| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
 | Infrastructure | `serve`; `stop`; `restart`; `token`; `remote`; `hook`; `install`; `uninstall` |
@@ -359,8 +368,8 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 147 signatures;
-3. extracts every Commander root/subcommand and exact-compares all 109 command paths;
+   actions, and exact-compares all 157 signatures;
+3. extracts every Commander root/subcommand and exact-compares all 120 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;

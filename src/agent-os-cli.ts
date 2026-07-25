@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { Command } from 'commander'
+import { registerJobAssignmentCommands } from './job-assignment-cli.js'
 
 export type AgentOsApi = (method: string, path: string, body?: unknown) => Promise<any>
 
@@ -923,6 +924,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       await ready()
       print(await deps.api('POST', `/os/jobs/${segment(id)}/cancel`), options.json)
     })
+  registerJobAssignmentCommands(job, deps)
 
   const policy = program.command('policy').description('manage agent filesystem, command, network, and secret policy')
   policy.command('list')

@@ -1,8 +1,10 @@
 # Typed Job Market Contracts
 
-Status: the typed contract, validation, lifecycle, dependency, budget, and audit foundation is
-implemented. Six deterministic built-in contract templates are available through API and CLI.
-Open Work UX, assignment lifecycle, the contract editor, and capability matching remain open.
+Status: the typed contract, validation, lifecycle, dependency, budget, audit, and exclusive
+assignment foundation is implemented. Six deterministic built-in contract templates and the
+canonical assignment lifecycle are available through API and CLI. Open Work UX, runtime
+job/session binding, scheduler matching, the contract editor, and collaborative ownership remain
+open.
 
 This slice is tracked in the [Agent OS North Star Delivery Program](./north-star-delivery-program.md).
 
@@ -21,6 +23,30 @@ Migration `009-job-market-domain` adds:
 
 Migration 009 reserves migration 008 for Agent Home controls and fails atomically when the
 compatibility `cards` and `task_contracts` prerequisites are absent.
+
+Migration `016-job-market-assignment-lifecycle` adds:
+
+- `job_market_assignments`, an immutable board/card/profile/workspace responsibility history;
+- one active exclusive assignment per card;
+- market-version and assignment-version compare-and-set guards;
+- frozen nullable assignment identity columns on `jobs` and `agent_sessions` for phase-two runtime
+  binding;
+- scope, capability, dependency, profile-archive, active-execution, lifecycle, and identity
+  triggers.
+
+Migration 016 requires migration 015 and the Job Market, Agent Home, event, workspace, and runtime
+tables. It creates no assignment rows for legacy card owners or pre-016 runtime state.
+
+Pre-016 ownerless `assigned` contracts with no active job or session are safely returned to `open`
+with a version increment. `assigned` contracts that still have active execution, plus `running` and
+`submitted` contracts, retain their legacy lifecycle state until that work finishes. Both outcomes
+write a migration audit event with an explicit remediation. Retained legacy states cannot be
+re-asserted through a same-state `assigned` transition and are ineligible for canonical assignment
+until their normal lifecycle returns them to `open`.
+
+`cards.owner_agent_id` remains a compatibility projection. Phase one rejects a non-null legacy
+owner instead of creating dual authority; the phase-two runtime-binding migration must replace
+that guard with a proven assignment-bound projection before the executor writes legacy ownership.
 
 ## Typed fields
 
@@ -52,8 +78,40 @@ The lifecycle supports:
 with explicit cancellation/rework paths. Updates use a market version and compare-and-swap state
 transition so concurrent writers reload instead of silently overwriting one another.
 
-Declared capabilities currently generate a validation warning because capability/capacity matching
-belongs to the future scheduler matcher; they are not represented as already enforced.
+Declared capabilities still generate a general contract-validation warning because scheduler
+capacity matching is not implemented. Canonical claim, assign, and reassign commands do enforce
+every declared required capability against the selected active AgentProfile before writing.
+
+## Exclusive assignment lifecycle
+
+`JobAssignmentService` is the authoritative responsibility boundary:
+
+`open contract → claim | assign → active assignment → release | reassign`
+
+- Claim and assign require an open contract, its exact market version, a same-board active profile,
+  complete dependencies, required capabilities, compatible active workspace scope, no legacy
+  owner, and no active job/session.
+- Reassign requires the exact active assignment and market versions. It atomically supersedes the
+  predecessor and creates one successor, so no intermediate dual-owner or ownerless state is
+  visible.
+- Release terminalizes the assignment and returns assigned/rejected/cancelled contracts to `open`;
+  accepted and archived contracts retain their terminal market status.
+- Every command has a board-scoped idempotency key and normalized request fingerprint. Identical
+  retries return the original result snapshot; changed intent under the same key conflicts.
+- Actor identity is derived at the API boundary. Raw request parameters and client-supplied actors
+  are never copied into managed `os_events`.
+- Direct generic lifecycle transition to `assigned`, or back to `open` while an assignment is
+  active, is rejected with a canonical-command remediation.
+
+Assignment history is append/terminalize only: identity fields cannot be rewritten, terminal rows
+cannot be reopened, and profile/card/workspace scope changes cannot displace retained history. A
+workspace must be active when selected, but phase one does not block later workspace
+failed/missing/archived cleanup because runtime coordination is not yet assignment-aware.
+
+Phase one deliberately does not wire assignment identity into scheduler-created jobs or managed
+sessions. The nullable frozen columns and invariants are ready for that phase-two cutover,
+including queued-only identity injection and ordinary profile/conversation linking after a bound
+job starts.
 
 ## Built-in templates
 
@@ -120,6 +178,11 @@ Routes under `/api/v1/os`:
 - `POST /contract-templates/:templateId/preview` with `{ card_id, variables }`
 - `POST /cards/:cardId/contract/templates/:templateId/apply` with
   `{ variables, expected_state, conflict_strategy?, actor? }`
+- `GET /boards/:boardId/assignments`
+- `GET /cards/:cardId/assignments`
+- `GET /cards/:cardId/assignments/current`
+- `POST /cards/:cardId/assignments/claim|assign`
+- `POST /cards/:cardId/assignments/:assignmentId/release|reassign`
 
 CLI parity:
 
@@ -130,20 +193,37 @@ CLI parity:
 - `orchestra contract-template list`
 - `orchestra contract-template preview <card> <template> --vars <json>`
 - `orchestra contract-template apply <card> <template> --vars <json> --expected <json> [--replace]`
+- `orchestra job assignment list [card]`
+- `orchestra job assignment current <card>`
+- `orchestra job assignment claim|assign <card> <profile> --expected-market-version <version>`
+- `orchestra job assignment release <card> <assignment> --expected-market-version <version> --expected-assignment-version <version>`
+- `orchestra job assignment reassign <card> <assignment> <profile> --expected-market-version <version> --expected-assignment-version <version>`
 
-Publish, transition, and template replacement remain operator-only. Contract/template reads and
-preview/validation retain the existing authenticated Agent OS boundary.
+Publish, transition, template replacement, and assignment mutations remain operator-only.
+Contract/template/assignment reads and preview/validation retain the existing authenticated Agent
+OS boundary.
 
 ## Evidence
 
 - Typed Job Market foundation commit: `8ae2eeb`.
 - JOB-013 template-specific gate: 3 files / 10 tests.
 - Combined Job Market, API, CLI, surface-inventory, and threat-model gate: 8 files / 39 tests.
-- Full Node 22.20.0 serial repository gate: 120 files / 813 tests.
-- Root TypeScript and production build pass.
+- The compare-and-set integration base passed the full Node 22.20.0 serial repository gate:
+  120 files / 813 tests, plus root TypeScript and production build.
+- JOB-010 phase-one focused gate: 10 files / 79 tests on Node 22.20.0.
+- The JOB-010 source candidate passed 122 files / 820 tests both serial and default-parallel,
+  root and web TypeScript checks, production builds, and an independent P0-P2 review.
 - Migration tests prove missing prerequisites roll back and are not recorded.
+- Assignment migration tests prove explicit pre-016 lifecycle remediation, no legacy-owner or
+  runtime backfill, one-active exclusivity, active-execution guards, scope,
+  capability/dependency, profile-archive, immutable audit history, and frozen job/session identity
+  invariants.
 - Domain tests prove typed round-trip, lifecycle CAS/idempotency, dependency completion,
   launch zero-write failure, and workspace-filterable audits.
+- Assignment domain/API/CLI tests prove original-snapshot replay, changed-intent conflicts,
+  retained-history validation, cross-handle stale-writer rejection, atomic reassignment,
+  dual-version release, server-derived actors, raw-parameter exclusion, operator boundaries, and
+  exact command/route parity.
 - Template tests prove stable built-in ordering, strict variables, complete verifier/evidence/risk/
   budget output, explicit replacement, atomic conflict rollback, lifecycle preservation,
   non-destructive release defaults, projected audits with an adversarial secret-marker scan,
@@ -152,8 +232,11 @@ preview/validation retain the existing authenticated Agent OS boundary.
 ## Remaining
 
 - Open Work filtering and dependency/critical-path visualization;
-- explicit claim, assignment, release, and reassignment;
 - validated contract editor and generated agent-brief preview;
+- scheduler job/session binding to the frozen assignment identity;
 - scheduler matching by declared capability and current capacity;
 - collaborative ownership through Teams;
-- full publish → match/assign → dependency-ready → exactly-one-job acceptance gate.
+- full publish → match/assign → dependency-ready → exactly-one-job acceptance gate;
+- desktop and phone browser acceptance still requires an available configured browser instance;
+- the release-level Codex protocol contract must be deliberately reconciled from pinned CLI
+  0.144.6 to the installed 0.145.0 protocol before the product can be called shippable.

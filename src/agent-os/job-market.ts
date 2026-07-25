@@ -348,6 +348,11 @@ export class JobMarketService {
     if (!JOB_MARKET_STATUSES.includes(status)) throw new ValidationError('invalid job contract status')
     const transition = this.db.transaction(() => {
       const current = this.get(cardId)
+      if (status === 'assigned') {
+        throw new ConflictError(
+          'use the canonical job assignment claim or assign command to assign this contract',
+        )
+      }
       if (current.status === status) return current
       if (!STATUS_TRANSITIONS[current.status].includes(status)) {
         throw new ConflictError(`contract cannot transition from ${current.status} to ${status}`)
@@ -369,6 +374,15 @@ export class JobMarketService {
     actor: string,
     reason?: string,
   ): JobMarketContract {
+    if (
+      ['open', 'draft'].includes(status)
+      && this.db.prepare(`SELECT 1 FROM job_market_assignments
+        WHERE card_id=? AND status='active' LIMIT 1`).get(current.card_id)
+    ) {
+      throw new ConflictError(
+        'release the active job market assignment before reopening or drafting the contract',
+      )
+    }
     const at = timestamp()
     const updated = this.db.prepare(`UPDATE job_market_contracts SET status=?, version=version+1, updated_at=?,
       published_at=CASE WHEN ?='open' THEN COALESCE(published_at, ?) ELSE published_at END,

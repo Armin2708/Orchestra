@@ -2343,6 +2343,1016 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    id: '016-job-market-assignment-lifecycle',
+    apply(db) {
+      const hasMigration015 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='015-agent-home-action-command-scope'`).get()
+      if (!hasMigration015) {
+        throw new Error(
+          'migration 016-job-market-assignment-lifecycle requires 015-agent-home-action-command-scope',
+        )
+      }
+      const prerequisites = (db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type='table' AND name IN (
+          'boards','cards','jobs','workspaces','agent_sessions','agent_profiles',
+          'task_contracts','job_market_contracts','job_market_dependencies','os_events'
+        )`).get() as { count: number }).count
+      if (prerequisites !== 10) {
+        throw new Error(
+          'migration 016-job-market-assignment-lifecycle requires Agent Home, Job Market, and runtime tables',
+        )
+      }
+      const cardColumns = new Set(
+        (db.prepare(`PRAGMA table_info('cards')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!cardColumns.has('column_name')) {
+        db.exec("ALTER TABLE cards ADD COLUMN column_name TEXT NOT NULL DEFAULT 'backlog'")
+      }
+      if (!cardColumns.has('owner_agent_id')) {
+        db.exec('ALTER TABLE cards ADD COLUMN owner_agent_id INTEGER')
+        cardColumns.add('owner_agent_id')
+      }
+      const jobColumns = new Set(
+        (db.prepare(`PRAGMA table_info('jobs')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!jobColumns.has('status')) {
+        db.exec("ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'")
+      }
+      const sessionColumns = new Set(
+        (db.prepare(`PRAGMA table_info('agent_sessions')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!sessionColumns.has('status')) {
+        db.exec("ALTER TABLE agent_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'starting'")
+      }
+
+      const legacyMarketStates = db.prepare(`
+        SELECT market.card_id, card.board_id, market.status, market.version,
+          CASE WHEN card.owner_agent_id IS NULL THEN 0 ELSE 1 END AS has_legacy_owner,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.card_id=market.card_id
+              AND job.status IN ('queued','running','cancelling')
+          ) OR EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=market.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN 1 ELSE 0 END AS has_active_execution
+        FROM job_market_contracts market
+        JOIN cards card ON card.id=market.card_id
+        WHERE market.status IN ('assigned','running','submitted')
+        ORDER BY market.card_id
+      `).all() as Array<{
+        card_id: number
+        board_id: number
+        status: 'assigned' | 'running' | 'submitted'
+        version: number
+        has_legacy_owner: 0 | 1
+        has_active_execution: 0 | 1
+      }>
+      const normalizeLegacyAssigned = db.prepare(`
+        UPDATE job_market_contracts
+        SET status='open', version=version+1, updated_at=datetime('now')
+        WHERE card_id=? AND status='assigned' AND version=?
+      `)
+      const recordLegacyState = db.prepare(`
+        INSERT INTO os_events (
+          id, board_id, card_id, kind, source, payload, idempotency_key, created_at
+        ) VALUES (?, ?, ?, ?, 'migration-016', ?, ?, datetime('now'))
+      `)
+      for (const legacy of legacyMarketStates) {
+        const retainedForLegacyOwner = legacy.status === 'assigned'
+          && legacy.has_active_execution === 0
+          && legacy.has_legacy_owner === 1
+        const normalized = legacy.status === 'assigned'
+          && legacy.has_active_execution === 0
+          && legacy.has_legacy_owner === 0
+        if (normalized) {
+          const result = normalizeLegacyAssigned.run(legacy.card_id, legacy.version)
+          if (result.changes !== 1) {
+            throw new Error('migration 016 could not normalize a legacy assigned contract')
+          }
+        }
+        const eventKey = `migration:016:legacy-market-state:${legacy.card_id}`
+        recordLegacyState.run(
+          eventKey,
+          legacy.board_id,
+          legacy.card_id,
+          normalized
+            ? 'job_market.legacy_assignment_state_normalized'
+            : 'job_market.legacy_assignment_state_retained',
+          JSON.stringify({
+            card_id: legacy.card_id,
+            previous_status: legacy.status,
+            legacy_owner_present: legacy.has_legacy_owner === 1,
+            disposition: normalized
+              ? 'normalized_to_open'
+              : retainedForLegacyOwner
+                ? 'retained_for_legacy_owner'
+                : 'retained_for_legacy_lifecycle',
+            remediation: normalized
+              ? 'use a canonical claim or assign command'
+              : retainedForLegacyOwner
+                ? 'finish or clear the legacy owner and return the contract to open before creating a canonical assignment'
+                : 'finish the legacy lifecycle before creating a canonical assignment',
+          }),
+          eventKey,
+        )
+      }
+
+      db.exec(`
+        CREATE TABLE job_market_assignments (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
+          card_id INTEGER NOT NULL
+            REFERENCES job_market_contracts(card_id) ON DELETE RESTRICT,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE RESTRICT,
+          workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+          ownership_mode TEXT NOT NULL DEFAULT 'exclusive'
+            CHECK(ownership_mode='exclusive'),
+          origin TEXT NOT NULL
+            CHECK(origin IN ('claim','assign','reassign')),
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('pending','active','released','superseded')),
+          assigned_market_version INTEGER NOT NULL CHECK(assigned_market_version > 0),
+          version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+          predecessor_assignment_id TEXT UNIQUE
+            REFERENCES job_market_assignments(id) ON DELETE RESTRICT,
+          predecessor_version INTEGER
+            CHECK(predecessor_version IS NULL OR predecessor_version > 0),
+          created_actor_type TEXT NOT NULL,
+          created_actor_id TEXT,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          reason TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          ended_at TEXT,
+          ended_actor_type TEXT,
+          ended_actor_id TEXT,
+          end_reason TEXT,
+          end_idempotency_key TEXT,
+          end_request_fingerprint TEXT,
+          ended_market_version INTEGER
+            CHECK(ended_market_version IS NULL OR ended_market_version > 0),
+          UNIQUE(board_id, idempotency_key),
+          CHECK(
+            (origin='reassign'
+              AND predecessor_assignment_id IS NOT NULL
+              AND predecessor_version IS NOT NULL)
+            OR
+            (origin IN ('claim','assign')
+              AND predecessor_assignment_id IS NULL
+              AND predecessor_version IS NULL)
+          ),
+          CHECK(
+            (status IN ('pending','active')
+              AND ended_at IS NULL
+              AND ended_actor_type IS NULL
+              AND ended_actor_id IS NULL
+              AND end_reason IS NULL
+              AND end_idempotency_key IS NULL
+              AND end_request_fingerprint IS NULL
+              AND ended_market_version IS NULL)
+            OR
+            (status IN ('released','superseded')
+              AND ended_at IS NOT NULL
+              AND ended_actor_type IS NOT NULL
+              AND end_idempotency_key IS NOT NULL
+              AND end_request_fingerprint IS NOT NULL
+              AND ended_market_version IS NOT NULL)
+          )
+        );
+
+        CREATE UNIQUE INDEX idx_job_market_assignments_active_exclusive
+          ON job_market_assignments(card_id)
+          WHERE status='active' AND ownership_mode='exclusive';
+        CREATE INDEX idx_job_market_assignments_board
+          ON job_market_assignments(board_id, status, updated_at, id);
+        CREATE INDEX idx_job_market_assignments_profile
+          ON job_market_assignments(profile_id, status, updated_at, id);
+        CREATE INDEX idx_job_market_assignments_workspace
+          ON job_market_assignments(workspace_id, status, updated_at, id)
+          WHERE workspace_id IS NOT NULL;
+        CREATE INDEX idx_job_market_assignments_history
+          ON job_market_assignments(card_id, created_at, id);
+
+        ALTER TABLE jobs ADD COLUMN job_assignment_id TEXT
+          REFERENCES job_market_assignments(id) ON DELETE RESTRICT;
+        ALTER TABLE jobs ADD COLUMN assigned_profile_id TEXT
+          REFERENCES agent_profiles(id) ON DELETE RESTRICT;
+        ALTER TABLE jobs ADD COLUMN assignment_market_version INTEGER
+          CHECK(assignment_market_version IS NULL OR assignment_market_version > 0);
+
+        ALTER TABLE agent_sessions ADD COLUMN job_assignment_id TEXT
+          REFERENCES job_market_assignments(id) ON DELETE RESTRICT;
+        ALTER TABLE agent_sessions ADD COLUMN assigned_profile_id TEXT
+          REFERENCES agent_profiles(id) ON DELETE RESTRICT;
+        ALTER TABLE agent_sessions ADD COLUMN assignment_market_version INTEGER
+          CHECK(assignment_market_version IS NULL OR assignment_market_version > 0);
+
+        CREATE INDEX idx_jobs_job_assignment
+          ON jobs(job_assignment_id) WHERE job_assignment_id IS NOT NULL;
+        CREATE INDEX idx_agent_sessions_job_assignment
+          ON agent_sessions(job_assignment_id) WHERE job_assignment_id IS NOT NULL;
+
+        CREATE TRIGGER job_market_assignment_insert_scope
+        BEFORE INSERT ON job_market_assignments
+        BEGIN
+          SELECT CASE WHEN NEW.version!=1 OR NOT (
+            (NEW.origin IN ('claim','assign') AND NEW.status='active')
+            OR (NEW.origin='reassign' AND NEW.status='pending')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment must begin at its canonical status and version'
+          ) END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM cards card
+            JOIN job_market_contracts market ON market.card_id=card.id
+            JOIN agent_profiles profile ON profile.id=NEW.profile_id
+            WHERE card.id=NEW.card_id
+              AND card.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND profile.status='active'
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment card, board, and active profile scope is inconsistent'
+          ) END;
+
+          SELECT CASE WHEN NEW.workspace_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM workspaces workspace
+            WHERE workspace.id=NEW.workspace_id
+              AND workspace.board_id=NEW.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL OR workspace.card_id=NEW.card_id)
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment workspace scope is inconsistent'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM task_contracts contract
+            WHERE contract.card_id=NEW.card_id
+              AND contract.workspace_id IS NOT NULL
+              AND contract.workspace_id IS NOT NEW.workspace_id
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment must use the contract workspace'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            JOIN agent_profiles profile ON profile.id=NEW.profile_id
+            JOIN json_each(market.required_capabilities_json) required
+            WHERE market.card_id=NEW.card_id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM json_each(profile.capabilities_json) capability
+                WHERE capability.value=required.value
+              )
+          ) THEN RAISE(
+            ABORT,
+            'agent profile does not satisfy required job capabilities'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM job_market_dependencies dependency
+            LEFT JOIN cards target ON target.id=dependency.dependency_card_id
+            WHERE dependency.card_id=NEW.card_id
+              AND (target.id IS NULL OR target.column_name!='done')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment dependencies are not complete'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id=NEW.card_id
+              AND status IN ('queued','running','cancelling')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot change while the card has an active job'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=NEW.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot change while the card has an active agent session'
+          ) END;
+
+          SELECT CASE WHEN NEW.origin IN ('claim','assign') AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            WHERE market.card_id=NEW.card_id
+              AND market.status='open'
+              AND market.version=NEW.assigned_market_version-1
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment requires the expected open market version'
+          ) END;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            JOIN job_market_assignments predecessor
+              ON predecessor.id=NEW.predecessor_assignment_id
+            WHERE market.card_id=NEW.card_id
+              AND market.status IN ('assigned','rejected')
+              AND market.version=NEW.assigned_market_version-1
+              AND predecessor.board_id=NEW.board_id
+              AND predecessor.card_id=NEW.card_id
+              AND predecessor.status='active'
+              AND predecessor.version=NEW.predecessor_version
+              AND (
+                predecessor.profile_id!=NEW.profile_id
+                OR (
+                  NEW.reason IS NOT NULL
+                  AND trim(NEW.reason)!=''
+                  AND predecessor.assigned_market_version<market.version
+                )
+              )
+          ) THEN RAISE(
+            ABORT,
+            'job market reassignment predecessor or market version is stale'
+          ) END;
+
+        END;
+
+        CREATE TRIGGER job_market_assignment_insert_market_cas
+        AFTER INSERT ON job_market_assignments
+        BEGIN
+          UPDATE job_market_assignments
+          SET status='superseded',
+              version=version+1,
+              updated_at=NEW.created_at,
+              ended_at=NEW.created_at,
+              ended_actor_type=NEW.created_actor_type,
+              ended_actor_id=NEW.created_actor_id,
+              end_reason=NEW.reason,
+              end_idempotency_key=NEW.idempotency_key,
+              end_request_fingerprint=NEW.request_fingerprint,
+              ended_market_version=NEW.assigned_market_version
+          WHERE NEW.origin='reassign'
+            AND id=NEW.predecessor_assignment_id
+            AND status='active'
+            AND version=NEW.predecessor_version;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND changes()!=1
+            THEN RAISE(ABORT, 'job market reassignment lost its predecessor race') END;
+
+          UPDATE job_market_assignments
+          SET status='active'
+          WHERE NEW.origin='reassign'
+            AND id=NEW.id
+            AND status='pending'
+            AND version=1;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND changes()!=1
+            THEN RAISE(ABORT, 'job market reassignment successor activation failed') END;
+
+          UPDATE job_market_contracts
+          SET status='assigned',
+              version=version+1,
+              updated_at=NEW.created_at,
+              published_at=COALESCE(published_at, NEW.created_at),
+              archived_at=NULL
+          WHERE card_id=NEW.card_id
+            AND version=NEW.assigned_market_version-1
+            AND (
+              (NEW.origin IN ('claim','assign') AND status='open')
+              OR
+              (NEW.origin='reassign' AND status IN ('assigned','rejected'))
+            );
+
+          SELECT CASE WHEN changes()!=1
+            THEN RAISE(ABORT, 'job market assignment version changed concurrently') END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_update
+        BEFORE UPDATE ON job_market_assignments
+        BEGIN
+          SELECT CASE WHEN
+            NEW.id IS NOT OLD.id
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+            OR NEW.profile_id IS NOT OLD.profile_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+            OR NEW.ownership_mode IS NOT OLD.ownership_mode
+            OR NEW.origin IS NOT OLD.origin
+            OR NEW.assigned_market_version IS NOT OLD.assigned_market_version
+            OR NEW.predecessor_assignment_id IS NOT OLD.predecessor_assignment_id
+            OR NEW.predecessor_version IS NOT OLD.predecessor_version
+            OR NEW.created_actor_type IS NOT OLD.created_actor_type
+            OR NEW.created_actor_id IS NOT OLD.created_actor_id
+            OR NEW.idempotency_key IS NOT OLD.idempotency_key
+            OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+            OR NEW.reason IS NOT OLD.reason
+            OR NEW.created_at IS NOT OLD.created_at
+          THEN RAISE(
+            ABORT,
+            'job market assignment identity is immutable'
+          ) END;
+
+          SELECT CASE WHEN OLD.status NOT IN ('pending','active')
+            THEN RAISE(ABORT, 'terminal job market assignments are immutable') END;
+          SELECT CASE WHEN OLD.status='pending' AND (
+            NEW.status!='active'
+            OR NEW.version!=OLD.version
+            OR NEW.ended_at IS NOT NULL
+            OR NEW.ended_actor_type IS NOT NULL
+            OR NEW.ended_actor_id IS NOT NULL
+            OR NEW.end_reason IS NOT NULL
+            OR NEW.end_idempotency_key IS NOT NULL
+            OR NEW.end_request_fingerprint IS NOT NULL
+            OR NEW.ended_market_version IS NOT NULL
+          ) THEN RAISE(
+            ABORT,
+            'invalid job market reassignment successor activation'
+          ) END;
+          SELECT CASE WHEN OLD.status='active'
+            AND NEW.status NOT IN ('released','superseded')
+            THEN RAISE(ABORT, 'invalid job market assignment status transition') END;
+          SELECT CASE WHEN OLD.status='active' AND NEW.version!=OLD.version+1
+            THEN RAISE(ABORT, 'job market assignment version must increment exactly once') END;
+          SELECT CASE WHEN OLD.status='active' AND (
+            NEW.ended_at IS NULL
+            OR NEW.ended_actor_type IS NULL
+            OR NEW.end_idempotency_key IS NULL
+            OR NEW.end_request_fingerprint IS NULL
+            OR NEW.ended_market_version IS NULL
+          ) THEN RAISE(ABORT, 'terminal job market assignment evidence is required') END;
+
+          SELECT CASE WHEN OLD.status='active'
+            AND NEW.status='superseded'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments successor
+              WHERE successor.status='pending'
+                AND successor.origin='reassign'
+                AND successor.predecessor_assignment_id=OLD.id
+                AND successor.predecessor_version=OLD.version
+                AND successor.idempotency_key=NEW.end_idempotency_key
+                AND successor.request_fingerprint=NEW.end_request_fingerprint
+                AND successor.assigned_market_version=NEW.ended_market_version
+                AND successor.created_actor_type=NEW.ended_actor_type
+                AND successor.created_actor_id IS NEW.ended_actor_id
+                AND successor.reason IS NEW.end_reason
+            )
+          THEN RAISE(
+            ABORT,
+            'job market assignment can only be superseded by its pending successor'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id=OLD.card_id
+              AND status IN ('queued','running','cancelling')
+          ) OR EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=OLD.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot end while the card has active execution'
+          ) END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_delete
+        BEFORE DELETE ON job_market_assignments
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment history is immutable'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_release_market_cas
+        AFTER UPDATE OF status ON job_market_assignments
+        WHEN OLD.status='active' AND NEW.status='released'
+        BEGIN
+          UPDATE job_market_contracts
+          SET status=CASE
+                WHEN status IN ('assigned','rejected','cancelled') THEN 'open'
+                ELSE status
+              END,
+              version=version+1,
+              updated_at=NEW.ended_at,
+              archived_at=CASE WHEN status='archived' THEN archived_at ELSE NULL END
+          WHERE card_id=NEW.card_id
+            AND version=NEW.ended_market_version-1
+            AND status IN ('assigned','rejected','cancelled','accepted','archived');
+
+          SELECT CASE WHEN changes()!=1
+            THEN RAISE(ABORT, 'job market assignment release version changed concurrently') END;
+        END;
+
+        CREATE TRIGGER job_market_contract_assignment_transition
+        BEFORE UPDATE OF status ON job_market_contracts
+        WHEN NEW.status!=OLD.status
+        BEGIN
+          SELECT CASE WHEN NEW.status='assigned' AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+              AND assignment.assigned_market_version=NEW.version
+          ) THEN RAISE(
+            ABORT,
+            'job market assigned status requires an active canonical assignment'
+          ) END;
+
+          SELECT CASE WHEN NEW.status IN ('open','draft') AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          ) THEN RAISE(
+            ABORT,
+            'release the active job market assignment before reopening or drafting the contract'
+          ) END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_profile_archive
+        BEFORE UPDATE OF status ON agent_profiles
+        WHEN OLD.status='active' AND NEW.status='archived'
+          AND EXISTS (
+            SELECT 1 FROM job_market_assignments assignment
+            WHERE assignment.profile_id=OLD.id AND assignment.status='active'
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent profile has an active job market assignment'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_card_scope_update
+        BEFORE UPDATE OF board_id ON cards
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.card_id=OLD.id AND assignment.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'card board change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_profile_scope_update
+        BEFORE UPDATE OF board_id ON agent_profiles
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.profile_id=OLD.id AND assignment.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'profile board change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_workspace_scope_update
+        BEFORE UPDATE OF board_id, card_id ON workspaces
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.workspace_id=OLD.id
+            AND (
+              assignment.board_id!=NEW.board_id
+              OR (NEW.card_id IS NOT NULL AND assignment.card_id!=NEW.card_id)
+            )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace scope change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.job_assignment_id IS NOT NULL
+          OR NEW.assigned_profile_id IS NOT NULL
+          OR NEW.assignment_market_version IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN
+            NEW.job_assignment_id IS NULL
+            OR NEW.assigned_profile_id IS NULL
+            OR NEW.assignment_market_version IS NULL
+          THEN RAISE(ABORT, 'job assignment identity must be complete') END;
+
+          SELECT CASE WHEN NEW.status!='queued' OR NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND workspace.board_id=assignment.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL
+                OR workspace.card_id=assignment.card_id)
+              AND (assignment.workspace_id IS NULL
+                OR assignment.workspace_id=workspace.id)
+          ) THEN RAISE(ABORT, 'job assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_update
+        BEFORE UPDATE OF
+          job_assignment_id, assigned_profile_id, assignment_market_version,
+          board_id, card_id, workspace_id
+        ON jobs
+        BEGIN
+          SELECT CASE WHEN
+            (NEW.job_assignment_id IS NULL)
+              != (NEW.assigned_profile_id IS NULL)
+            OR (NEW.job_assignment_id IS NULL)
+              != (NEW.assignment_market_version IS NULL)
+          THEN RAISE(ABORT, 'job assignment identity must be complete') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL AND (
+            NEW.job_assignment_id IS NOT OLD.job_assignment_id
+            OR NEW.assigned_profile_id IS NOT OLD.assigned_profile_id
+            OR NEW.assignment_market_version IS NOT OLD.assignment_market_version
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+          ) THEN RAISE(ABORT, 'job assignment identity is immutable') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND (NEW.status!='queued' OR NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE assignment.id=NEW.job_assignment_id
+                AND assignment.board_id=NEW.board_id
+                AND assignment.card_id=NEW.card_id
+                AND assignment.profile_id=NEW.assigned_profile_id
+                AND assignment.assigned_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND workspace.board_id=assignment.board_id
+                AND workspace.status='active'
+                AND (workspace.card_id IS NULL
+                  OR workspace.card_id=assignment.card_id)
+                AND (assignment.workspace_id IS NULL
+                  OR assignment.workspace_id=workspace.id)
+            ))
+          THEN RAISE(ABORT, 'job assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_status
+        BEFORE UPDATE OF status ON jobs
+        WHEN NEW.job_assignment_id IS NOT NULL
+          AND NEW.status IN ('queued','running','cancelling')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND workspace.board_id=assignment.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL
+                OR workspace.card_id=assignment.card_id)
+              AND (assignment.workspace_id IS NULL
+                OR assignment.workspace_id=workspace.id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active job status requires an active canonical assignment'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_assignment_id IS NOT NULL
+          OR NEW.assigned_profile_id IS NOT NULL
+          OR NEW.assignment_market_version IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN
+            NEW.job_assignment_id IS NULL
+            OR NEW.assigned_profile_id IS NULL
+            OR NEW.assignment_market_version IS NULL
+          THEN RAISE(ABORT, 'agent session assignment identity must be complete') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status='queued'
+              AND job.workspace_id=NEW.workspace_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+          ) THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_update
+        BEFORE UPDATE OF
+          job_assignment_id, assigned_profile_id, assignment_market_version,
+          job_id, workspace_id, profile_id
+        ON agent_sessions
+        BEGIN
+          SELECT CASE WHEN
+            (NEW.job_assignment_id IS NULL)
+              != (NEW.assigned_profile_id IS NULL)
+            OR (NEW.job_assignment_id IS NULL)
+              != (NEW.assignment_market_version IS NULL)
+          THEN RAISE(ABORT, 'agent session assignment identity must be complete') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL AND (
+            NEW.job_assignment_id IS NOT OLD.job_assignment_id
+            OR NEW.assigned_profile_id IS NOT OLD.assigned_profile_id
+            OR NEW.assignment_market_version IS NOT OLD.assignment_market_version
+            OR NEW.job_id IS NOT OLD.job_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+          ) THEN RAISE(ABORT, 'agent session assignment identity is immutable') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jobs job
+              JOIN job_market_assignments assignment
+                ON assignment.id=job.job_assignment_id
+              WHERE job.id=NEW.job_id
+                AND job.status='queued'
+                AND job.workspace_id=NEW.workspace_id
+                AND job.job_assignment_id=NEW.job_assignment_id
+                AND job.assigned_profile_id=NEW.assigned_profile_id
+                AND job.assignment_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+            )
+          THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jobs job
+              JOIN job_market_assignments assignment
+                ON assignment.id=job.job_assignment_id
+              WHERE job.id=NEW.job_id
+                AND job.status IN ('queued','running','cancelling')
+                AND job.workspace_id=NEW.workspace_id
+                AND job.job_assignment_id=NEW.job_assignment_id
+                AND job.assigned_profile_id=NEW.assigned_profile_id
+                AND job.assignment_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+            )
+          THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_status
+        BEFORE UPDATE OF status ON agent_sessions
+        WHEN NEW.job_assignment_id IS NOT NULL
+          AND NEW.status IN ('reserved','starting','running','idle','stopping')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status IN ('queued','running','cancelling')
+              AND job.workspace_id=NEW.workspace_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active agent session status requires an active canonical assignment'
+          );
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_insert
+        BEFORE INSERT ON os_events
+        WHEN NEW.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT CASE WHEN
+            NEW.source!='job-market'
+            OR NEW.idempotency_key IS NULL
+            OR NEW.card_id IS NULL
+            OR NOT json_valid(NEW.payload)
+            OR NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.id=json_extract(NEW.payload, '$.assignment_id')
+                AND assignment.board_id=NEW.board_id
+                AND assignment.card_id=NEW.card_id
+                AND assignment.workspace_id IS NEW.workspace_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.id'
+                )=assignment.id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.board_id'
+                )=assignment.board_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.card_id'
+                )=assignment.card_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.profile_id'
+                )=assignment.profile_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.workspace_id'
+                ) IS assignment.workspace_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.origin'
+                )=assignment.origin
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.status'
+                )=assignment.status
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.assigned_market_version'
+                )=assignment.assigned_market_version
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.version'
+                )=assignment.version
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.idempotency_key'
+                )=assignment.idempotency_key
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.request_fingerprint'
+                )=assignment.request_fingerprint
+                AND (
+                  (
+                    (
+                      (NEW.kind='job_market.assignment_claimed'
+                        AND assignment.origin='claim')
+                      OR (NEW.kind='job_market.assignment_assigned'
+                        AND assignment.origin='assign')
+                      OR (NEW.kind='job_market.assignment_reassigned'
+                        AND assignment.origin='reassign')
+                    )
+                    AND assignment.status='active'
+                    AND assignment.idempotency_key=NEW.idempotency_key
+                    AND assignment.request_fingerprint=
+                      json_extract(NEW.payload, '$.request_fingerprint')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.status'
+                    )='assigned'
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.market_version'
+                    )=assignment.assigned_market_version
+                  )
+                  OR
+                  (
+                    NEW.kind='job_market.assignment_released'
+                    AND assignment.status='released'
+                    AND assignment.end_idempotency_key=NEW.idempotency_key
+                    AND assignment.end_request_fingerprint=
+                      json_extract(NEW.payload, '$.request_fingerprint')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_idempotency_key'
+                    )=assignment.end_idempotency_key
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_request_fingerprint'
+                    )=assignment.end_request_fingerprint
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.updated_at'
+                    )=assignment.updated_at
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_at'
+                    )=assignment.ended_at
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_actor_type'
+                    )=assignment.ended_actor_type
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_actor_id'
+                    ) IS assignment.ended_actor_id
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_reason'
+                    ) IS assignment.end_reason
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_market_version'
+                    )=assignment.ended_market_version
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.status'
+                    ) IN ('open','accepted','archived')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.market_version'
+                    )=assignment.ended_market_version
+                  )
+                )
+            )
+          THEN RAISE(
+            ABORT,
+            'job market assignment audit scope or command identity is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_identity_update
+        BEFORE UPDATE ON os_events
+        WHEN OLD.kind GLOB 'job_market.assignment_*'
+          OR NEW.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment audit identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_delete
+        BEFORE DELETE ON os_events
+        WHEN OLD.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment audit history is immutable'
+          );
+        END;
+      `)
+      if (cardColumns.has('owner_agent_id')) {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_insert
+          BEFORE INSERT ON job_market_assignments
+          WHEN EXISTS (
+            SELECT 1 FROM cards
+            WHERE id=NEW.card_id AND owner_agent_id IS NOT NULL
+          )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has a legacy owner; clear it before canonical assignment'
+            );
+          END;
+
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id AND assignment.status='active'
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment'
+            );
+          END;
+        `)
+      }
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

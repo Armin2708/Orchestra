@@ -77,20 +77,25 @@ function registeredRoutes(): string[] {
 
 function registeredCliCommands(): string[] {
   const commands = new Set<string>()
-  for (const file of inventory.cli_sources) {
-    const source = read(file)
-    const parents = new Map<string, string>()
-    for (const match of source.matchAll(
-      /const\s+(\w+)\s*=\s*program\.command\('([^']+)'\)/g,
-    )) {
-      parents.set(match[1], commandName(match[2]))
+  const sources = inventory.cli_sources.map(read)
+  const parents = new Map<string, string>([['program', '']])
+  const declarations = sources.flatMap((source) =>
+    [...source.matchAll(/const\s+(\w+)\s*=\s*(\w+)\.command\('([^']+)'\)/g)])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const match of declarations) {
+      if (parents.has(match[1]) || !parents.has(match[2])) continue
+      const parent = parents.get(match[2])
+      parents.set(match[1], [parent, commandName(match[3])].filter(Boolean).join(' '))
+      changed = true
     }
-    for (const match of source.matchAll(/program\.command\('([^']+)'\)/g)) {
-      commands.add(commandName(match[1]))
-    }
+  }
+  for (const source of sources) {
     for (const match of source.matchAll(/(\w+)\.command\('([^']+)'\)/g)) {
       const parent = parents.get(match[1])
-      if (parent) commands.add(`${parent} ${commandName(match[2])}`)
+      if (parent === undefined) continue
+      commands.add([parent, commandName(match[2])].filter(Boolean).join(' '))
     }
   }
   for (const action of inventory.event_vocabularies.agent_home_session_actions) {

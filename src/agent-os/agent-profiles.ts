@@ -290,6 +290,11 @@ export class AgentProfileService {
         WHERE profile_id=? AND status IN ('reserved','starting','running','idle','stopping')
         LIMIT 1`).get(latest.id)
       if (active) throw new ConflictError('agent profile has an active session')
+      const activeAssignment = this.db.prepare(`SELECT id FROM job_market_assignments
+        WHERE profile_id=? AND status='active' LIMIT 1`).get(latest.id)
+      if (activeAssignment) {
+        throw new ConflictError('agent profile has an active job market assignment')
+      }
 
       const at = timestamp()
       this.db.prepare(`UPDATE agent_profiles

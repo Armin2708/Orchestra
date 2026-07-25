@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "20b7a91a1182dd9f25066e9e2e2fde048c04d69e",
+  "observed_at_commit": "2e4783bd4de499cacf8ee72117eb21b36a0b8b11",
   "backlog_item": "REM-001",
   "classification": "threat_model_only",
   "posture": "functional_beta_not_safe_remote_beta",
@@ -1034,9 +1034,9 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 55,
+    "total_get_routes": 58,
     "by_classification": {
-      "canonical": 38,
+      "canonical": 41,
       "compatibility": 3,
       "legacy": 9,
       "infrastructure": 5
@@ -1045,9 +1045,9 @@
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 95,
+    "total_non_get_routes": 99,
     "by_classification": {
-      "canonical": 49,
+      "canonical": 53,
       "compatibility": 26,
       "legacy": 16,
       "infrastructure": 4

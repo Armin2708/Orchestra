@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { EventStore } from '../src/agent-os/event-store.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { JobAssignmentService } from '../src/agent-os/job-assignments.js'
 import { JobMarketService } from '../src/agent-os/job-market.js'
 import { JobScheduler } from '../src/agent-os/scheduler.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
@@ -225,15 +227,47 @@ describe('typed Job Market domain', () => {
     expect(service.transition(cardId, 'cancelled', 'human', 'deprioritized').status).toBe('cancelled')
     expect(service.transition(cardId, 'draft', 'human', 'rewrite').status).toBe('draft')
     expect(service.publish(cardId, 'human').status).toBe('open')
-    const assigned = service.transition(cardId, 'assigned', 'scheduler')
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Lifecycle owner',
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:lifecycle-profile',
+    })
+    const assignments = new JobAssignmentService(db, events)
+    const firstAssignment = assignments.assign({
+      cardId,
+      profileId: profile.id,
+      expectedMarketVersion: service.get(cardId).market_version,
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:lifecycle-first-assignment',
+    })
+    const assigned = service.get(cardId)
     expect(assigned.status).toBe('assigned')
-    expect(service.transition(cardId, 'assigned', 'scheduler')).toEqual(assigned)
+    expect(() => service.transition(cardId, 'assigned', 'scheduler'))
+      .toThrow(/canonical job assignment/)
     expect(service.transition(cardId, 'running', 'runtime').status).toBe('running')
     expect(service.transition(cardId, 'submitted', 'agent').status).toBe('submitted')
     expect(service.transition(cardId, 'rejected', 'reviewer', 'missing proof').status).toBe('rejected')
+    assignments.release({
+      cardId,
+      assignmentId: firstAssignment.assignment.id,
+      expectedMarketVersion: service.get(cardId).market_version,
+      expectedAssignmentVersion: firstAssignment.assignment.version,
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:lifecycle-first-release',
+      reason: 'revise before retry',
+    })
+    expect(service.transition(cardId, 'cancelled', 'human').status).toBe('cancelled')
     expect(service.transition(cardId, 'draft', 'human').status).toBe('draft')
     expect(service.publish(cardId, 'human').status).toBe('open')
-    expect(service.transition(cardId, 'assigned', 'scheduler').status).toBe('assigned')
+    assignments.assign({
+      cardId,
+      profileId: profile.id,
+      expectedMarketVersion: service.get(cardId).market_version,
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:lifecycle-second-assignment',
+    })
+    expect(service.get(cardId).status).toBe('assigned')
     expect(service.transition(cardId, 'running', 'runtime').status).toBe('running')
     expect(service.transition(cardId, 'submitted', 'agent').status).toBe('submitted')
     expect(service.transition(cardId, 'accepted', 'reviewer').status).toBe('accepted')
@@ -245,15 +279,27 @@ describe('typed Job Market domain', () => {
       kind: 'job_market.lifecycle_changed',
       limit: 100,
     })
-    expect(transitions).toHaveLength(14)
+    expect(transitions).toHaveLength(13)
     db.close()
   })
 
   it('rejects stale lifecycle writes instead of applying an invalid concurrent transition', () => {
-    const { db, cardId } = fixture()
+    const { db, boardId, cardId } = fixture()
     const service = new JobMarketService(db)
     const stale = service.get(cardId)
-    service.transition(cardId, 'assigned', 'scheduler')
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Stale write owner',
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:stale-profile',
+    })
+    new JobAssignmentService(db).assign({
+      cardId,
+      profileId: profile.id,
+      expectedMarketVersion: stale.market_version,
+      actor: { type: 'operator', id: 'test' },
+      idempotencyKey: 'job-market:stale-assignment',
+    })
 
     expect(() => (
       service as unknown as {

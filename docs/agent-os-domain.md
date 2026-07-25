@@ -28,12 +28,21 @@ Stores provider/thread identifiers, model and effort, effective access, recovery
 and context. A profile may have many historical sessions but at most the policy-allowed number of
 active sessions.
 
+### JobMarketAssignment
+
+The authoritative, exclusive responsibility link from one open WorkContract/card to one active
+AgentProfile, optionally scoped to the contract Workspace. It records claim/assign/reassign origin,
+market and assignment compare-and-set versions, predecessor lineage, server-derived actors,
+idempotency fingerprints, reason, and terminal evidence. Identity and terminal history are
+immutable. `cards.owner_agent_id` is a compatibility projection, not this record's source of
+truth.
+
 ### Workspace and WorkspaceAssignment
 
 A Workspace is a durable execution root: managed git worktree by default, or an explicitly chosen
-shared checkout. WorkspaceAssignment links a contract/job/session to that workspace with access
-mode, lifecycle, and timestamps. Card ownership is a Board projection and is not the assignment's
-source of truth.
+shared checkout. WorkspaceAssignment is the scheduler/runtime reservation that links a
+contract/job/session to that workspace with access mode, lifecycle, and timestamps. It is distinct
+from JobMarketAssignment responsibility.
 
 ### WorkContract
 
@@ -44,8 +53,9 @@ priority, and token/cost/time/retry/coordination budgets. Each launch freezes th
 ### Job
 
 One schedulable attempt to execute a WorkContract. It records provider/driver selection, durable
-launch profile, assignment/session links, idempotency identity, priority, schedule, attempts,
-budgets, usage, recovery, and terminal state. A Job is not a Delivery.
+launch profile, frozen JobMarketAssignment/profile/market-version identity when canonically bound,
+session links, idempotency identity, priority, schedule, attempts, budgets, usage, recovery, and
+terminal state. A Job is not a Delivery.
 
 ### Delivery
 
@@ -122,6 +132,15 @@ Delivery revision without rewriting the prior request/result.
 `running → queued` is an explicit retry with incremented attempt and causal event. `cancelling` is a
 durable intermediate state. Unsupported providers stay queued/deferred with attention rather than
 silently falling back. Terminal states never return to running under the same execution identity.
+
+### JobMarketAssignment
+
+`active → released | superseded`
+
+Claim/assign creates an active row while atomically moving an exact-version open contract to
+assigned. Reassign atomically supersedes one exact-version predecessor and creates its successor.
+Release terminalizes the exact active assignment and increments the market version. No command may
+rewrite identity, reopen terminal history, or leave two active exclusive owners for one card.
 
 ### AgentSession
 

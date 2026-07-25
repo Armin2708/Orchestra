@@ -36,6 +36,7 @@ import { agentHomePlugin } from './agent-home-routes.js'
 import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
 import { registerTaskContractTemplateRoutes } from './contract-template-routes.js'
+import { jobAssignmentPlugin } from './job-assignment-routes.js'
 
 export interface ProcessRecord {
   id: string
@@ -121,6 +122,11 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
     prefix: '/api/v1/os',
   })
   server.register(agentHomeRetentionPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(jobAssignmentPlugin, {
     db: options.db,
     isOperator: options.isOperator,
     prefix: '/api/v1/os',
