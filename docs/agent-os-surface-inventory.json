@@ -1,0 +1,666 @@
+{
+  "schema_version": 1,
+  "observed_at_commit": "ecb38ee30e45def70ecefe869a4e6c853122fcaa",
+  "classification": {
+    "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
+    "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
+    "legacy": "The original Board, message, milestone, presence, review, or telemetry surface.",
+    "infrastructure": "Shared daemon, auth, streaming, push, migration, or settings infrastructure."
+  },
+  "table_sources": [
+    "src/db.ts",
+    "src/agent-os/migrations.ts"
+  ],
+  "database_tables": {
+    "canonical": [
+      "agent_conversations",
+      "agent_home_evidence_bundle_repairs",
+      "agent_home_raw_artifact_archives",
+      "agent_home_retention_policies",
+      "agent_home_retention_runs",
+      "agent_profiles",
+      "agent_session_actions",
+      "agent_sessions",
+      "artifacts",
+      "attention_items",
+      "checkpoints",
+      "context_items",
+      "conversation_event_conflicts",
+      "conversation_events",
+      "daemon_leases",
+      "delivery_criterion_results",
+      "delivery_deliverable_results",
+      "delivery_reports",
+      "job_market_contracts",
+      "job_market_criteria",
+      "job_market_dependencies",
+      "jobs",
+      "os_events",
+      "policies",
+      "process_output",
+      "processes",
+      "workspace_assignments",
+      "workspaces"
+    ],
+    "compatibility": [
+      "agent_usage",
+      "boards",
+      "task_contracts"
+    ],
+    "legacy": [
+      "agents",
+      "card_events",
+      "cards",
+      "deliveries",
+      "ideas",
+      "message_targets",
+      "messages",
+      "milestones",
+      "review_decisions",
+      "token_telemetry"
+    ],
+    "infrastructure": [
+      "kv",
+      "os_schema_migrations"
+    ]
+  },
+  "route_sources": [
+    {
+      "file": "src/server.ts",
+      "prefix": ""
+    },
+    {
+      "file": "src/push.ts",
+      "prefix": ""
+    },
+    {
+      "file": "src/agent-session-controls.ts",
+      "prefix": ""
+    },
+    {
+      "file": "src/agent-os/routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/agent-home-routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/agent-home-retention-routes.ts",
+      "prefix": "/api/v1/os"
+    }
+  ],
+  "http_routes": {
+    "canonical": [
+      "DELETE /api/v1/os/workspaces/:id",
+      "GET /api/v1/os/agent-profiles/:id",
+      "GET /api/v1/os/agent-profiles/:id/conversations",
+      "GET /api/v1/os/agent-profiles/:id/home",
+      "GET /api/v1/os/agent-profiles/:id/sessions",
+      "GET /api/v1/os/boards/:id/agent-profiles",
+      "GET /api/v1/os/boards/:id/attention",
+      "GET /api/v1/os/boards/:id/conflicts",
+      "GET /api/v1/os/boards/:id/events",
+      "GET /api/v1/os/boards/:id/jobs",
+      "GET /api/v1/os/boards/:id/policies",
+      "GET /api/v1/os/boards/:id/retention",
+      "GET /api/v1/os/boards/:id/workspaces",
+      "GET /api/v1/os/cards/:id/contract",
+      "GET /api/v1/os/cards/:id/contract/validate",
+      "GET /api/v1/os/cards/:id/deliveries",
+      "GET /api/v1/os/cards/:id/evidence",
+      "GET /api/v1/os/conversations/:id",
+      "GET /api/v1/os/conversations/:id/events",
+      "GET /api/v1/os/conversations/:id/events/:eventId",
+      "GET /api/v1/os/conversations/:id/export",
+      "GET /api/v1/os/conversations/:id/search",
+      "GET /api/v1/os/deliveries/:id/export",
+      "GET /api/v1/os/drivers",
+      "GET /api/v1/os/jobs/:id",
+      "GET /api/v1/os/plugins",
+      "GET /api/v1/os/processes/:id",
+      "GET /api/v1/os/processes/:id/output",
+      "GET /api/v1/os/providers",
+      "GET /api/v1/os/sessions/:id",
+      "GET /api/v1/os/sessions/:id/events",
+      "GET /api/v1/os/sessions/:id/export",
+      "GET /api/v1/os/sessions/:id/search",
+      "GET /api/v1/os/settings/agent-defaults",
+      "GET /api/v1/os/workspaces/:id",
+      "GET /api/v1/os/workspaces/:id/checkpoints",
+      "GET /api/v1/os/workspaces/:id/context",
+      "GET /api/v1/os/workspaces/:id/processes",
+      "PATCH /api/v1/os/agent-profiles/:id",
+      "PATCH /api/v1/os/conversations/:id",
+      "PATCH /api/v1/os/workspaces/:id",
+      "POST /api/v1/os/agent-profiles/:id/archive",
+      "POST /api/v1/os/agent-profiles/:id/conversations",
+      "POST /api/v1/os/attention/:id/resolve",
+      "POST /api/v1/os/boards/:id/agent-profiles",
+      "POST /api/v1/os/boards/:id/jobs",
+      "POST /api/v1/os/boards/:id/policies",
+      "POST /api/v1/os/boards/:id/retention/run",
+      "POST /api/v1/os/boards/:id/workspaces",
+      "POST /api/v1/os/cards/:id/contract/publish",
+      "POST /api/v1/os/cards/:id/contract/transition",
+      "POST /api/v1/os/cards/:id/evidence",
+      "POST /api/v1/os/checkpoints/:id/fork",
+      "POST /api/v1/os/conversations/:id/archive",
+      "POST /api/v1/os/conversations/:id/export",
+      "POST /api/v1/os/deliveries/:id/accept",
+      "POST /api/v1/os/deliveries/:id/reject",
+      "POST /api/v1/os/deliveries/:id/revise",
+      "POST /api/v1/os/deliveries/:id/verify",
+      "POST /api/v1/os/jobs/:id/cancel",
+      "POST /api/v1/os/jobs/:id/deliveries/prepare",
+      "POST /api/v1/os/jobs/:id/deliveries/submit",
+      "POST /api/v1/os/policies/:id/evaluate",
+      "POST /api/v1/os/processes/:id/input",
+      "POST /api/v1/os/processes/:id/resize",
+      "POST /api/v1/os/processes/:id/restart",
+      "POST /api/v1/os/processes/:id/signal",
+      "POST /api/v1/os/sessions/:id/archive",
+      "POST /api/v1/os/sessions/:id/events",
+      "POST /api/v1/os/sessions/:id/export",
+      "POST /api/v1/os/sessions/:id/fork",
+      "POST /api/v1/os/sessions/:id/link",
+      "POST /api/v1/os/sessions/:id/pause",
+      "POST /api/v1/os/sessions/:id/rename",
+      "POST /api/v1/os/sessions/:id/resume",
+      "POST /api/v1/os/sessions/:id/retry",
+      "POST /api/v1/os/sessions/:id/stop",
+      "POST /api/v1/os/workspaces/:id/checkpoints",
+      "POST /api/v1/os/workspaces/:id/processes",
+      "PUT /api/v1/os/boards/:id/retention",
+      "PUT /api/v1/os/cards/:id/contract",
+      "PUT /api/v1/os/settings/agent-defaults",
+      "PUT /api/v1/os/workspaces/:id/context"
+    ],
+    "compatibility": [
+      "DELETE /api/v1/agents/:id",
+      "GET /api/v1/agents/:id/inbox",
+      "GET /api/v1/agents/:id/mcp",
+      "GET /api/v1/agents/:id/transcript",
+      "POST /api/v1/agents/:id/access-profile",
+      "POST /api/v1/agents/:id/approvals/:requestId",
+      "POST /api/v1/agents/:id/effort",
+      "POST /api/v1/agents/:id/fire",
+      "POST /api/v1/agents/:id/heartbeat",
+      "POST /api/v1/agents/:id/interrupt",
+      "POST /api/v1/agents/:id/leave",
+      "POST /api/v1/agents/:id/mcp/:name/reconnect",
+      "POST /api/v1/agents/:id/mcp/:name/toggle",
+      "POST /api/v1/agents/:id/model",
+      "POST /api/v1/agents/:id/permission-mode",
+      "POST /api/v1/agents/:id/permissions/:requestId",
+      "POST /api/v1/agents/:id/plugins/reload",
+      "POST /api/v1/agents/:id/pulse",
+      "POST /api/v1/agents/:id/subping",
+      "POST /api/v1/agents/:id/task",
+      "POST /api/v1/agents/register",
+      "POST /api/v1/cards/:id/approve",
+      "POST /api/v1/cards/:id/launch",
+      "POST /api/v1/cards/:id/move",
+      "POST /api/v1/cards/:id/restore",
+      "POST /api/v1/cards/:id/send-back",
+      "POST /api/v1/cards/:id/shipped",
+      "POST /api/v1/cards/:id/verification",
+      "POST /api/v1/cards/:id/verify"
+    ],
+    "legacy": [
+      "DELETE /api/v1/boards/:id",
+      "DELETE /api/v1/cards/:id",
+      "DELETE /api/v1/ideas/:id",
+      "DELETE /api/v1/messages/:id",
+      "DELETE /api/v1/milestones/:id",
+      "GET /api/v1/boards",
+      "GET /api/v1/boards/:id/events",
+      "GET /api/v1/boards/:id/reviews",
+      "GET /api/v1/boards/:id/shipped",
+      "GET /api/v1/boards/:id/snapshot",
+      "GET /api/v1/boards/:id/telemetry",
+      "GET /api/v1/boards/:id/timeline",
+      "GET /api/v1/cards/:id/events",
+      "GET /api/v1/cards/:id/reviews",
+      "PATCH /api/v1/cards/:id",
+      "POST /api/v1/boards/:id/hire",
+      "POST /api/v1/boards/:id/wake",
+      "POST /api/v1/boards/resolve",
+      "POST /api/v1/cards",
+      "POST /api/v1/cards/:id/assign",
+      "POST /api/v1/ideas",
+      "POST /api/v1/ideas/:id/promote",
+      "POST /api/v1/messages",
+      "POST /api/v1/milestones",
+      "POST /api/v1/milestones/:id/steps"
+    ],
+    "infrastructure": [
+      "GET /api/v1/events",
+      "GET /api/v1/push/status",
+      "GET /api/v1/push/vapid-key",
+      "GET /api/v1/system",
+      "GET /health",
+      "POST /api/v1/push/ntfy",
+      "POST /api/v1/push/subscribe",
+      "POST /api/v1/push/test",
+      "POST /api/v1/push/unsubscribe"
+    ]
+  },
+  "cli_sources": [
+    "src/cli.ts",
+    "src/agent-os-cli.ts"
+  ],
+  "cli_commands": {
+    "canonical": [
+      "agent",
+      "agent archive",
+      "agent create",
+      "agent home",
+      "agent list",
+      "agent rename",
+      "agent show",
+      "attention",
+      "attention list",
+      "attention resolve",
+      "checkpoint",
+      "checkpoint create",
+      "checkpoint fork",
+      "checkpoint list",
+      "conflicts",
+      "context",
+      "context set",
+      "context show",
+      "contract",
+      "contract publish",
+      "contract set",
+      "contract show",
+      "contract transition",
+      "contract validate",
+      "delivery",
+      "delivery accept",
+      "delivery export",
+      "delivery reject",
+      "delivery revise",
+      "delivery show",
+      "delivery submit",
+      "delivery verify",
+      "drivers",
+      "events",
+      "evidence",
+      "evidence add",
+      "evidence list",
+      "job",
+      "job cancel",
+      "job create",
+      "job list",
+      "plugins",
+      "policy",
+      "policy create",
+      "policy evaluate",
+      "policy list",
+      "process",
+      "process attach",
+      "process input",
+      "process list",
+      "process output",
+      "process resize",
+      "process restart",
+      "process signal",
+      "process start",
+      "retention",
+      "retention run",
+      "retention set",
+      "retention show",
+      "session",
+      "session archive",
+      "session export",
+      "session fork",
+      "session list",
+      "session pause",
+      "session rename",
+      "session resume",
+      "session retry",
+      "session search",
+      "session show",
+      "session stop",
+      "workspace",
+      "workspace archive",
+      "workspace create",
+      "workspace list",
+      "workspace show",
+      "workspace update"
+    ],
+    "compatibility": [
+      "fire",
+      "hire",
+      "shipped",
+      "task",
+      "wake"
+    ],
+    "legacy": [
+      "announce",
+      "ask",
+      "card",
+      "card create",
+      "card move",
+      "card update",
+      "idea",
+      "idea-done",
+      "ideas",
+      "join",
+      "milestone",
+      "note",
+      "notify",
+      "pulse",
+      "reply",
+      "snapshot",
+      "step",
+      "swarm"
+    ],
+    "infrastructure": [
+      "hook",
+      "install",
+      "remote",
+      "restart",
+      "serve",
+      "stop",
+      "token",
+      "uninstall"
+    ]
+  },
+  "event_vocabularies": {
+    "conversation_event_kinds": [
+      "user",
+      "assistant",
+      "system",
+      "tool",
+      "tool_result",
+      "approval",
+      "usage",
+      "status",
+      "error"
+    ],
+    "message_kinds": [
+      "ask",
+      "reply",
+      "task",
+      "notify",
+      "announce",
+      "swarm"
+    ],
+    "agent_home_session_actions": [
+      "resume",
+      "pause",
+      "stop",
+      "retry",
+      "fork",
+      "rename",
+      "archive"
+    ],
+    "driver_event_types": [
+      "output",
+      "status",
+      "tool",
+      "error",
+      "exit"
+    ],
+    "runtime_event_kinds": [
+      "process.started",
+      "process.input",
+      "process.resized",
+      "process.signal",
+      "process.stopping",
+      "process.exited",
+      "process.failed",
+      "process.stopped",
+      "process.lost",
+      "process.restarted",
+      "process.persistence_error"
+    ],
+    "workspace_event_kinds": [
+      "workspace.created",
+      "workspace.updated",
+      "workspace.archived",
+      "workspace.removed"
+    ],
+    "legacy_bus_event_types": [
+      "agent",
+      "agent_effort",
+      "agent_model",
+      "board",
+      "card",
+      "idea",
+      "launch",
+      "limit_pause",
+      "message",
+      "milestone",
+      "permission",
+      "permission_mode",
+      "policy",
+      "review",
+      "ship",
+      "transcript"
+    ],
+    "canonical_bus_event_types": [
+      "os:driver",
+      "os:runtime",
+      "os:workspace"
+    ],
+    "open_os_event_namespaces": [
+      "agent_conversation.*",
+      "agent_home.*",
+      "agent_profile.*",
+      "agent_session.*",
+      "artifact.*",
+      "attention.*",
+      "checkpoint.*",
+      "conversation.*",
+      "delivery.*",
+      "driver.<DriverEvent.type>",
+      "evidence.*",
+      "job.*",
+      "job_market.*",
+      "legacy.<LegacyBusEvent.type>",
+      "orchestration.*",
+      "policy.*",
+      "process.*",
+      "task_contract.*",
+      "workspace.*"
+    ]
+  },
+  "event_sources": [
+    "src/server.ts",
+    "src/conductor.ts",
+    "src/runtime/types.ts",
+    "src/agent-os/event-store.ts",
+    "src/agent-os/conversations.ts",
+    "src/agent-os/legacy-projection.ts",
+    "src/agent-os/runtime-integration.ts"
+  ],
+  "ui_surfaces": [
+    {
+      "id": "primary.board",
+      "classification": "legacy",
+      "file": "web/src/App.tsx",
+      "evidence": ">Board</button>"
+    },
+    {
+      "id": "primary.roadmap",
+      "classification": "legacy",
+      "file": "web/src/App.tsx",
+      "evidence": ">Roadmap</button>"
+    },
+    {
+      "id": "primary.settings",
+      "classification": "infrastructure",
+      "file": "web/src/App.tsx",
+      "evidence": ">Settings</button>"
+    },
+    {
+      "id": "global.needs-you",
+      "classification": "canonical",
+      "file": "web/src/App.tsx",
+      "evidence": "<NeedsYou"
+    },
+    {
+      "id": "board.overview",
+      "classification": "legacy",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'overview', label: 'Overview' }"
+    },
+    {
+      "id": "board.agent-home",
+      "classification": "canonical",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'agents', label: 'Agents' }"
+    },
+    {
+      "id": "board.messages",
+      "classification": "legacy",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'messages', label: 'Messages' }"
+    },
+    {
+      "id": "board.workspace",
+      "classification": "canonical",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'workspace', label: 'Workspace' }"
+    },
+    {
+      "id": "board.timeline",
+      "classification": "legacy",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'timeline', label: 'Timeline' }"
+    },
+    {
+      "id": "board.shipped",
+      "classification": "compatibility",
+      "file": "web/src/boardNavigation.ts",
+      "evidence": "{ id: 'shipped', label: 'Shipped' }"
+    },
+    {
+      "id": "agent-home.mobile.conversation",
+      "classification": "canonical",
+      "file": "web/src/AgentHome.tsx",
+      "evidence": "['conversation', 'Conversation', 'message']"
+    },
+    {
+      "id": "agent-home.mobile.terminal",
+      "classification": "canonical",
+      "file": "web/src/AgentHome.tsx",
+      "evidence": "['terminal', 'Terminal', 'terminal']"
+    },
+    {
+      "id": "agent-home.mobile.details",
+      "classification": "canonical",
+      "file": "web/src/AgentHome.tsx",
+      "evidence": "['details', 'Details', 'context']"
+    },
+    {
+      "id": "agent-home.work",
+      "classification": "canonical",
+      "file": "web/src/AgentHomePanels.tsx",
+      "evidence": "{ id: 'work', label: 'Work' }"
+    },
+    {
+      "id": "agent-home.context",
+      "classification": "canonical",
+      "file": "web/src/AgentHomePanels.tsx",
+      "evidence": "{ id: 'context', label: 'Context' }"
+    },
+    {
+      "id": "agent-home.tools",
+      "classification": "canonical",
+      "file": "web/src/AgentHomePanels.tsx",
+      "evidence": "{ id: 'tools', label: 'Tools' }"
+    },
+    {
+      "id": "agent-home.usage",
+      "classification": "canonical",
+      "file": "web/src/AgentHomePanels.tsx",
+      "evidence": "{ id: 'usage', label: 'Usage' }"
+    },
+    {
+      "id": "agent-home.history",
+      "classification": "canonical",
+      "file": "web/src/AgentHomePanels.tsx",
+      "evidence": "{ id: 'history', label: 'History' }"
+    },
+    {
+      "id": "workspace.terminal",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'terminal', label: 'Terminal', icon: 'terminal' }"
+    },
+    {
+      "id": "workspace.agent",
+      "classification": "compatibility",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'agent', label: 'Agent', icon: 'message' }"
+    },
+    {
+      "id": "workspace.changes",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'changes', label: 'Changes', icon: 'diff' }"
+    },
+    {
+      "id": "workspace.trackbook",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'trackbook', label: 'Trackbook', icon: 'evidence' }"
+    },
+    {
+      "id": "workspace.processes",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'processes', label: 'Processes', icon: 'process' }"
+    },
+    {
+      "id": "workspace.context",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'context', label: 'Context', icon: 'context' }"
+    },
+    {
+      "id": "workspace.policy",
+      "classification": "canonical",
+      "file": "web/src/WorkspaceCockpit.tsx",
+      "evidence": "{ id: 'policy', label: 'Policy', icon: 'policy' }"
+    },
+    {
+      "id": "board.card-trackbook-summary",
+      "classification": "compatibility",
+      "file": "web/src/CardTrackbookSummary.tsx",
+      "evidence": "Open full Trackbook"
+    },
+    {
+      "id": "phone.pwa",
+      "classification": "infrastructure",
+      "file": "web/public/manifest.webmanifest",
+      "evidence": "\"display\": \"standalone\""
+    }
+  ],
+  "planned_not_implemented": [
+    {
+      "noun": "Discussion and DiscussionPost",
+      "reason": "Current ask/reply/message transport is not a durable searchable Q&A domain."
+    },
+    {
+      "noun": "Team and PlanningSession",
+      "reason": "There is no bounded team, planning-round, proposal, critique, or synthesis service."
+    },
+    {
+      "noun": "Conflict",
+      "reason": "Current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
+    },
+    {
+      "noun": "KnowledgeItem, ContextBuild, and ContextUse",
+      "reason": "Context items exist, but the cited freshness-aware Knowledge Compiler does not."
+    },
+    {
+      "noun": "DeviceSession",
+      "reason": "Remote pairing still uses the operator master token; named scoped revocable device credentials do not exist."
+    }
+  ]
+}
