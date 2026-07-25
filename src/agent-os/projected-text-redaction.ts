@@ -1,10 +1,31 @@
 export type ProjectedTextRedactionState = 'none' | 'redacted' | 'withheld'
 
-const SECRET_PATTERNS = [
-  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi,
-  /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[a-z]-[A-Za-z0-9-]{16,})\b/gi,
-  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|password|secret)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+const SECRET_PATTERNS: Array<{
+  pattern: RegExp
+  preservePrefix?: boolean
+  valueCapture?: boolean
+}> = [
+  {
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  },
+  {
+    pattern: /\b((?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+)(\[REDACTED\](?:[A-Za-z0-9._~+/=-]+)?|[A-Za-z0-9._~+/=-]{8,})/gi,
+    preservePrefix: true,
+    valueCapture: true,
+  },
+  {
+    pattern: /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[a-z]-[A-Za-z0-9-]{16,})\b/gi,
+  },
+  {
+    pattern: /\b((?:set-cookie|cookie)\s*:\s*)([^\r\n]+)/gi,
+    preservePrefix: true,
+    valueCapture: true,
+  },
+  {
+    pattern: /\b((?:(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?(?:token|id)|auth[_-]?token|token|password|passwd|secret(?:[_-][A-Za-z0-9]+)*|private[_-]?key|client[_-]?secret|cookie|set[_-]?cookie))\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+    preservePrefix: true,
+    valueCapture: true,
+  },
 ]
 
 export const CODEX_WITHHELD_REASONING_METHODS = new Set([
@@ -19,10 +40,14 @@ export function redactProjectedText(
   if (value === null) return { value: null, redactions: 0 }
   let redactions = 0
   let next = value
-  for (const pattern of SECRET_PATTERNS) {
-    next = next.replace(pattern, (_match, prefix: string | number | undefined) => {
+  for (const { pattern, preservePrefix, valueCapture } of SECRET_PATTERNS) {
+    next = next.replace(pattern, (match, prefix: string | number | undefined, secret: string | number | undefined) => {
+      const captured = valueCapture && typeof secret === 'string'
+        ? secret.trim().replace(/^(['"])(.*)\1$/, '$2')
+        : null
+      if (captured === '[REDACTED]') return match
       redactions += 1
-      return typeof prefix === 'string' ? `${prefix}[REDACTED]` : '[REDACTED]'
+      return preservePrefix && typeof prefix === 'string' ? `${prefix}[REDACTED]` : '[REDACTED]'
     })
   }
   return { value: next, redactions }

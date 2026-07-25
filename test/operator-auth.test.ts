@@ -102,7 +102,14 @@ describe('operator and agent API principals', () => {
       hire: () => ({ id: 1 }),
       deliver: () => true,
       task: () => true,
-      transcript: () => ({ lines: [{ kind: 'status', text: 'ready' }], working: null }),
+      transcript: () => ({
+        lines: [{ kind: 'status', text: 'ready' }],
+        working: null,
+        permissions: [{
+          id: 'approval-secret',
+          native: { command: 'LIVE_APPROVAL_SECRET_MUST_NOT_CROSS_AGENT_BOUNDARY' },
+        }],
+      }),
       subagents: () => [],
       interruptAgent: async () => { calls.push('interrupt'); return true },
       fire: async () => { calls.push('fire'); return true },
@@ -161,9 +168,25 @@ describe('operator and agent API principals', () => {
       'mcp-reconnect',
       'plugin-reload',
     ].sort())
-    const transcript = await server.inject({ method: 'GET', url: '/api/v1/agents/1/transcript', headers: agent })
+    const agentTranscript = await server.inject({
+      method: 'GET', url: '/api/v1/agents/1/transcript', headers: agent,
+    })
+    const operatorTranscript = await server.inject({
+      method: 'GET', url: '/api/v1/agents/1/transcript', headers: operator,
+    })
+    const agentEvents = await server.inject({
+      method: 'GET', url: '/api/v1/events', headers: agent,
+    })
+    const agentBoardEvents = await server.inject({
+      method: 'GET', url: '/api/v1/boards/1/events', headers: agent,
+    })
     const mcpStatus = await server.inject({ method: 'GET', url: '/api/v1/agents/1/mcp', headers: agent })
-    expect(transcript.statusCode).toBe(200)
+    expect(agentTranscript.statusCode).toBe(403)
+    expect(agentTranscript.body).not.toContain('LIVE_APPROVAL_SECRET_MUST_NOT_CROSS_AGENT_BOUNDARY')
+    expect(operatorTranscript.statusCode).toBe(200)
+    expect(operatorTranscript.body).toContain('LIVE_APPROVAL_SECRET_MUST_NOT_CROSS_AGENT_BOUNDARY')
+    expect(agentEvents.statusCode).toBe(403)
+    expect(agentBoardEvents.statusCode).toBe(403)
     expect(mcpStatus.statusCode).toBe(200)
   })
 

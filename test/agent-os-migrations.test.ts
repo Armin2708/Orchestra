@@ -45,7 +45,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
     first.close()
 
     const second = openDb(file)
@@ -59,7 +59,7 @@ describe('Agent OS migrations', () => {
       'job_market_dependencies']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -270,7 +270,159 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(10)
+      .toBe(11)
+    db.close()
+  })
+
+  it('scrubs legacy managed driver secrets while preserving safe transcript meaning', () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare(
+      "INSERT INTO boards (project_path, name) VALUES ('/legacy-approval-payload', 'legacy approval payload')",
+    ).run().lastInsertRowid)
+    const events = new EventStore(db)
+    const sentinels = {
+      command: 'LEGACY_APPROVAL_COMMAND_SECRET_1a2b',
+      path: '/private/LEGACY_APPROVAL_PATH_SECRET_3c4d',
+      message: 'LEGACY_APPROVAL_MESSAGE_SECRET_5e6f',
+      question: 'LEGACY_APPROVAL_QUESTION_SECRET_7a8b',
+      credential: 'sk-proj-LEGACY_APPROVAL_CREDENTIAL_SECRET_9c0d',
+      outputCredential: 'sk-proj-LEGACY_OUTPUT_CREDENTIAL_SECRET_2e3f',
+      reasoning: 'LEGACY_REASONING_SECRET_4a5b',
+    }
+    const leaked = events.append({
+      boardId,
+      kind: 'driver.tool',
+      source: 'codex',
+      payload: {
+        seq: 41,
+        data: sentinels.message,
+        metadata: {
+          provider: 'codex',
+          nativeMethod: 'item/commandExecution/requestApproval',
+          method: 'item/commandExecution/requestApproval',
+          native: {
+            command: sentinels.command,
+            path: sentinels.path,
+            credential: sentinels.credential,
+          },
+          approval: true,
+          kind: 'approval',
+          approvalKind: 'command',
+          questions: [{ id: 'secret', question: sentinels.question }],
+        },
+      },
+    })
+    const ordinary = events.append({
+      boardId,
+      kind: 'driver.tool',
+      source: 'codex',
+      payload: {
+        seq: 42,
+        data: 'ORDINARY_TOOL_EVENT_MUST_REMAIN',
+        metadata: {
+          nativeMethod: 'item/commandExecution/outputDelta',
+          native: { output: sentinels.command },
+        },
+      },
+    })
+    const output = events.append({
+      boardId,
+      kind: 'driver.output',
+      source: 'codex',
+      payload: {
+        seq: 43,
+        data: `Visible answer using ${sentinels.outputCredential}`,
+        metadata: {
+          nativeMethod: 'item/agentMessage/delta',
+          native: { delta: `Visible answer using ${sentinels.outputCredential}` },
+        },
+      },
+    })
+    const reasoningMethods = [
+      'item/reasoning/summaryTextDelta',
+      'item/reasoning/summaryPartAdded',
+      'item/reasoning/textDelta',
+    ]
+    const reasoning = reasoningMethods.map((method, index) => events.append({
+      boardId,
+      kind: 'driver.status',
+      source: 'codex',
+      payload: {
+        seq: 44 + index,
+        data: `${sentinels.reasoning}:${method}`,
+        metadata: index === 1
+          ? {
+              nativeMethod: 'future/non-sensitive',
+              method,
+              native: { delta: sentinels.reasoning },
+            }
+          : {
+              [index === 0 ? 'nativeMethod' : 'method']: method,
+              native: { delta: sentinels.reasoning },
+            },
+      },
+    }))
+    const nonDriver = events.append({
+      boardId,
+      kind: 'audit.note',
+      source: 'test',
+      payload: { data: 'NON_DRIVER_EVENT_MUST_REMAIN' },
+    })
+    db.prepare("DELETE FROM os_schema_migrations WHERE id='011-managed-driver-event-redaction'").run()
+
+    applyAgentOsMigrations(db)
+    const firstPass = db.prepare('SELECT payload FROM os_events WHERE id=?').get(leaked.id) as { payload: string }
+    db.prepare("DELETE FROM os_schema_migrations WHERE id='011-managed-driver-event-redaction'").run()
+    applyAgentOsMigrations(db)
+    const secondPass = db.prepare('SELECT payload FROM os_events WHERE id=?').get(leaked.id) as { payload: string }
+
+    expect(JSON.parse(firstPass.payload)).toEqual({
+      seq: 41,
+      data: 'Codex command approval requested',
+      metadata: {
+        approval: true,
+        kind: 'approval',
+        approvalKind: 'command',
+        approvalPayloadState: 'withheld',
+      },
+    })
+    expect(secondPass.payload).toBe(firstPass.payload)
+    const driverPayloads = (db.prepare("SELECT payload FROM os_events WHERE kind GLOB 'driver.*'")
+      .all() as Array<{ payload: string }>).map((row) => row.payload).join('\n')
+    for (const sentinel of Object.values(sentinels)) expect(driverPayloads).not.toContain(sentinel)
+    expect(JSON.parse((db.prepare('SELECT payload FROM os_events WHERE id=?').get(ordinary.id) as { payload: string }).payload))
+      .toEqual({
+        data: 'ORDINARY_TOOL_EVENT_MUST_REMAIN',
+        metadata: {
+          nativeMethod: 'item/commandExecution/outputDelta',
+          rawPayloadState: 'withheld',
+        },
+        seq: 42,
+      })
+    expect(JSON.parse((db.prepare('SELECT payload FROM os_events WHERE id=?').get(output.id) as { payload: string }).payload))
+      .toMatchObject({
+        data: 'Visible answer using [REDACTED]',
+        metadata: {
+          nativeMethod: 'item/agentMessage/delta',
+          rawPayloadState: 'withheld',
+          redactionState: 'redacted',
+        },
+      })
+    for (const event of reasoning) {
+      expect(JSON.parse((db.prepare('SELECT payload FROM os_events WHERE id=?').get(event.id) as { payload: string }).payload))
+        .toMatchObject({
+          data: 'Codex reasoning withheld',
+          metadata: {
+            reasoning: true,
+            reasoningPayloadState: 'withheld',
+            rawPayloadState: 'withheld',
+          },
+        })
+    }
+    expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
+      .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
+      .toBe(11)
     db.close()
   })
 
@@ -331,7 +483,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -424,7 +576,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(10)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
     db.close()
   })
 

@@ -849,6 +849,202 @@ describe('Agent OS daemon runtime integration', () => {
       .toMatchObject({ access_profile: 'workspace_write' })
   })
 
+  it('persists a safe managed transcript while preserving the live approval form', async () => {
+    const { boardId, repo, db, runtime, server } = await fixture()
+    const sentinels = {
+      command: 'APPROVAL_COMMAND_SECRET_7a6b',
+      path: '/private/APPROVAL_PATH_SECRET_8c9d',
+      message: 'APPROVAL_MESSAGE_SECRET_1e2f',
+      question: 'APPROVAL_QUESTION_SECRET_3a4b',
+      credential: 'sk-proj-APPROVAL_CREDENTIAL_SECRET_5c6d',
+      outputCredential: 'sk-proj-OUTPUT_CREDENTIAL_SECRET_7e8f',
+      reasoning: 'REASONING_TEXT_MUST_STAY_WITHHELD_9a0b',
+    }
+    let releaseJob = () => {}
+    const holdJob = new Promise<void>((resolve) => { releaseJob = resolve })
+    const liveEvents: any[] = []
+    ;(server as any).bus.on('event', (event: any) => liveEvents.push(event))
+    const driver: AgentDriver = {
+      id: 'codex',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async (request) => ({
+        id: 'codex:approval-privacy', externalId: 'approval-privacy-thread', driverId: 'codex',
+        workspaceId: request.workspaceId, status: 'running', startedAt: new Date().toISOString(), metadata: {},
+      }),
+      attach: async () => null,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* (sessionId) {
+        yield {
+          sessionId,
+          seq: 1,
+          type: 'tool',
+          at: new Date().toISOString(),
+          data: sentinels.message,
+          metadata: {
+            provider: 'codex',
+            threadId: 'thread-approval-privacy',
+            turnId: 'turn-approval-privacy',
+            itemId: 'item-approval-privacy',
+            nativeMethod: 'item/commandExecution/requestApproval',
+            method: 'item/commandExecution/requestApproval',
+            native: {
+              command: sentinels.command,
+              path: sentinels.path,
+              message: sentinels.message,
+              credential: sentinels.credential,
+              questions: [{ id: 'secret', question: sentinels.question }],
+            },
+            approval: true,
+            kind: 'approval',
+            requestId: 'approval-request-private',
+            approvalKind: 'command',
+            approvalRequest: {
+              kind: 'command',
+              requestId: 'approval-request-private',
+              turnId: 'turn-approval-privacy',
+              itemId: 'item-approval-privacy',
+            },
+            questions: [{ id: 'secret', question: sentinels.question }],
+          },
+        }
+        yield {
+          sessionId,
+          seq: 2,
+          type: 'output',
+          at: new Date().toISOString(),
+          data: `Visible answer using ${sentinels.outputCredential}`,
+          metadata: {
+            provider: 'codex',
+            nativeMethod: 'item/agentMessage/delta',
+            method: 'item/agentMessage/delta',
+            native: { delta: `Visible answer using ${sentinels.outputCredential}` },
+          },
+        }
+        yield {
+          sessionId,
+          seq: 3,
+          type: 'status',
+          at: new Date().toISOString(),
+          data: sentinels.reasoning,
+          metadata: {
+            provider: 'codex',
+            nativeMethod: 'future/non-sensitive',
+            method: 'item/reasoning/textDelta',
+            native: { delta: sentinels.reasoning },
+            kind: 'reasoning',
+          },
+        }
+        await holdJob
+        yield { sessionId, seq: 4, type: 'exit', at: new Date().toISOString(), data: 'completed' }
+      },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: { name: 'approval-privacy', kind: 'shared', root_path: repo },
+    })).json().workspace
+    const response = await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { workspace_id: workspace.id, provider: 'codex', max_attempts: 1 },
+    })
+    expect(response.statusCode).toBe(201)
+    const jobId = response.json().job.id as string
+    await until(() => (db.prepare(
+      "SELECT COUNT(*) AS count FROM os_events WHERE job_id=? AND kind='driver.status'",
+    ).get(jobId) as { count: number }).count === 1)
+
+    try {
+      const durable = db.prepare("SELECT payload FROM os_events WHERE job_id=? AND kind='driver.tool'")
+        .get(jobId) as { payload: string }
+      expect(JSON.parse(durable.payload)).toEqual({
+      seq: 1,
+      data: 'Codex command approval requested',
+      metadata: {
+        approval: true,
+        kind: 'approval',
+        approvalKind: 'command',
+        approvalPayloadState: 'withheld',
+      },
+    })
+    expect(JSON.parse((db.prepare("SELECT payload FROM os_events WHERE job_id=? AND kind='driver.output'")
+      .get(jobId) as { payload: string }).payload)).toMatchObject({
+      data: 'Visible answer using [REDACTED]',
+      metadata: {
+        nativeMethod: 'item/agentMessage/delta',
+        method: 'item/agentMessage/delta',
+        rawPayloadState: 'withheld',
+        redactionState: 'redacted',
+      },
+    })
+    expect(JSON.parse((db.prepare("SELECT payload FROM os_events WHERE job_id=? AND kind='driver.status'")
+      .get(jobId) as { payload: string }).payload)).toEqual({
+      seq: 3,
+      data: 'Codex reasoning withheld',
+      metadata: {
+        reasoning: true,
+        reasoningPayloadState: 'withheld',
+        rawPayloadState: 'withheld',
+      },
+    })
+    const managedPayloads = (db.prepare('SELECT payload FROM os_events WHERE job_id=?').all(jobId) as Array<{ payload: string }>)
+      .map((row) => row.payload).join('\n')
+    for (const sentinel of Object.values(sentinels)) expect(managedPayloads).not.toContain(sentinel)
+
+    const agent = db.prepare('SELECT id FROM agents WHERE session_id=?').get(`agent-os:${jobId}`) as { id: number }
+    const transcript = (runtime.jobExecutor as any).transcriptAgent(agent.id)
+    expect(transcript.permissions).toEqual([
+      expect.objectContaining({
+        id: 'approval-request-private',
+        summary: sentinels.message,
+        native: expect.objectContaining({
+          command: sentinels.command,
+          path: sentinels.path,
+          credential: sentinels.credential,
+        }),
+        questions: [{ id: 'secret', question: sentinels.question }],
+      }),
+    ])
+    expect(JSON.stringify(transcript.lines)).toContain('Visible answer using [REDACTED]')
+    expect(JSON.stringify(transcript.lines)).toContain('Codex reasoning withheld')
+    expect(JSON.stringify(transcript.lines)).not.toContain(sentinels.outputCredential)
+    expect(JSON.stringify(transcript.lines)).not.toContain(sentinels.reasoning)
+
+    const liveApproval = liveEvents.find((event) =>
+      event.type === 'os:driver'
+      && event.data?.job_id === jobId
+      && event.data?.type === 'tool')
+    expect(liveApproval?.data).toMatchObject({
+      data: sentinels.message,
+      metadata: {
+        native: {
+          command: sentinels.command,
+          path: sentinels.path,
+          credential: sentinels.credential,
+        },
+        questions: [{ id: 'secret', question: sentinels.question }],
+      },
+    })
+    const liveReasoning = liveEvents.find((event) =>
+      event.type === 'os:driver'
+      && event.data?.job_id === jobId
+      && event.data?.type === 'status')
+      expect(liveReasoning?.data).toMatchObject({
+        data: 'Codex reasoning withheld',
+        metadata: {
+          reasoning: true,
+          reasoningPayloadState: 'withheld',
+        },
+      })
+    } finally {
+      releaseJob()
+    }
+    await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
+  }, 20_000)
+
   it('hands agents the frozen Asked contract and idempotently converts final output into a review report', async () => {
     const { boardId, cardId, repo, db, runtime, server } = await fixture()
     const requests: DriverLaunchRequest[] = []

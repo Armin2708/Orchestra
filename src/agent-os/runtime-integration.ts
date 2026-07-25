@@ -18,6 +18,7 @@ import type {
 } from './agent-home-lifecycle.js'
 import type { AgentSessionRecord } from './conversations.js'
 import { parseJson } from './json.js'
+import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
 import { TaskContractService, type TaskContract } from './task-contracts.js'
@@ -1572,6 +1573,8 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   private recordDriverEvent(job: Job, sessionId: string, event: DriverEvent): void {
     this.trackManagedEvent(sessionId, event)
+    const projection = projectManagedDriverEvent(event, job.driver_id)
+    const durablePayload = projection.payload
     const current = this.db.prepare('SELECT workspace_id FROM jobs WHERE id=?').get(job.id) as { workspace_id: string | null } | undefined
     const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
       WHERE job_id=? ORDER BY rowid DESC LIMIT 1`).get(job.id) as
@@ -1587,13 +1590,19 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       causationId: previous?.id ?? null,
       kind: `driver.${event.type}`,
       source: job.driver_id,
-      payload: { seq: event.seq, data: event.data.slice(0, 8_000), metadata: event.metadata ?? {} },
+      payload: durablePayload,
       createdAt: event.at,
     })
     if (event.type !== 'output') this.bus.current?.emit('event', {
       board_id: job.board_id,
       type: 'os:driver',
-      data: { job_id: job.id, session_id: sessionId, type: event.type, data: event.data, metadata: event.metadata ?? {} },
+      data: {
+        job_id: job.id,
+        session_id: sessionId,
+        type: event.type,
+        data: projection.classification === 'approval' ? event.data : durablePayload.data,
+        metadata: projection.classification === 'approval' ? event.metadata ?? {} : durablePayload.metadata,
+      },
     })
   }
 

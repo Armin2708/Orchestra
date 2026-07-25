@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { canonicalHash } from './agent-home-support.js'
+import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
   isNativeProviderProjection,
   isWithheldProviderReasoning,
@@ -1413,6 +1414,31 @@ const migrations: Migration[] = [
         if (projected !== conflict.received_projected_text) {
           updateConflict.run(projected, conflict.id)
         }
+      }
+    },
+  },
+  {
+    id: '011-managed-driver-event-redaction',
+    apply(db) {
+      const rows = db.prepare(`SELECT id, source, payload FROM os_events
+        WHERE kind GLOB 'driver.*'`).all() as Array<{ id: string; source: string; payload: string }>
+      const update = db.prepare('UPDATE os_events SET payload=? WHERE id=?')
+      for (const row of rows) {
+        const payload = metadataRecord(row.payload)
+        const metadata = payload.metadata && typeof payload.metadata === 'object'
+          && !Array.isArray(payload.metadata)
+          ? payload.metadata as Record<string, unknown>
+          : {}
+        const projection = projectManagedDriverEvent({
+          seq: Number(payload.seq),
+          data: typeof payload.data === 'string' ? payload.data : '',
+          metadata,
+        }, row.source)
+        update.run(JSON.stringify({
+          data: projection.payload.data,
+          metadata: projection.payload.metadata,
+          seq: projection.payload.seq,
+        }), row.id)
       }
     },
   },

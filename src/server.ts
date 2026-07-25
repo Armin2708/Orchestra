@@ -1229,6 +1229,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     return maestro.transcript(Number(req.params.id))
   })
@@ -1355,6 +1356,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // one global stream — browsers cap per-host connections, so per-board streams starve the app
   server.get('/api/v1/events', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache', connection: 'keep-alive',
@@ -1366,6 +1368,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/events', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     const boardId = Number(req.params.id)
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',
