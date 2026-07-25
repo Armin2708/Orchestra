@@ -400,15 +400,57 @@ describe('canonical card launch routes', () => {
       idempotencyKey: 'canonical-transcript:profile',
     })
     const conversation = conversations.listConversations(profile.id)[0]
-    conversations.linkSession(created.session.id, {
+    const linkedWithoutJobInput = conversations.linkSession(created.session.id, {
       profileId: profile.id,
       conversationId: conversation.id,
-      jobId: created.job.id,
       mode: 'managed',
       actor: { type: 'system', id: 'test-runtime' },
       idempotencyKey: 'canonical-transcript:link',
       correlationId: 'provider-link-correlation',
     })
+    expect(linkedWithoutJobInput.job_id).toBe(created.job.id)
+    db.prepare(`UPDATE os_events SET correlation_id='stale-link-correlation'
+      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`).run(boardId)
+    expect(() => conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link',
+      correlationId: 'provider-link-correlation',
+    })).toThrow(/replay scope is inconsistent/)
+    db.prepare(`UPDATE os_events SET correlation_id=?
+      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+      .run(created.orchestration.correlation_id, boardId)
+    expect(conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId: null,
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link-null-job',
+      correlationId: 'provider-link-correlation',
+    }).job_id).toBe(created.job.id)
+    expect(() => conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId: 'different-job',
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link-request-mismatch',
+    })).toThrow(/job identities are inconsistent/)
+    const canonicalContext = conversations.requireSession(created.session.id).context
+    db.prepare('UPDATE agent_sessions SET context_json=? WHERE id=?')
+      .run(JSON.stringify({ ...canonicalContext, job_id: 'different-job' }), created.session.id)
+    expect(() => conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link-session-mismatch',
+    })).toThrow(/job identities are inconsistent/)
+    db.prepare('UPDATE agent_sessions SET context_json=? WHERE id=?')
+      .run(JSON.stringify(canonicalContext), created.session.id)
 
     const initial = conversations.appendEvent(created.session.id, {
       idempotencyKey: 'canonical-transcript:event',
@@ -494,6 +536,7 @@ describe('canonical card launch routes', () => {
       'conversation.event_replayed',
       'conversation.event_appended',
       'agent_session.linked',
+      'agent_session.linked',
     ])
     for (const event of agentHomeEvents) {
       expect(event).toMatchObject({
@@ -505,6 +548,44 @@ describe('canonical card launch routes', () => {
         correlation_id: created.orchestration.correlation_id,
       })
     }
+  })
+
+  it('fails closed when a stale no-job action claims another board', async () => {
+    const { db, boardId } = await fixture()
+    const workspaceId = 'cross-board-no-job-workspace'
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES (?, ?, 'No-job workspace', 'shared', '/cross-board-no-job', 'active')`)
+      .run(workspaceId, boardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('cross-board-no-job-session', ?, 'codex', 'running', '{}')`)
+      .run(workspaceId)
+    const otherBoardId = Number(db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/cross-board-stale-action', 'Cross-board stale action')
+    `).run().lastInsertRowid)
+    db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, actor_type, actor_id, created_at, updated_at
+    ) VALUES (
+      'cross-board-stale-action', ?, 'cross-board-no-job-session', NULL,
+      'cross-board-stale-action:request', 'rename', 'cross-board-stale-fingerprint',
+      'pending', 'stale-daemon-lease', 'operator', 'cross-board-test',
+      datetime('now'), datetime('now')
+    )`).run(otherBoardId)
+
+    expect(() => new AgentHomeLifecycleService(db, {
+      actionLeaseId: 'replacement-daemon-lease',
+    })).toThrow(/board scope is inconsistent/)
+    expect(db.prepare(`SELECT status, error_code FROM agent_session_actions
+      WHERE id='cross-board-stale-action'`).get()).toEqual({
+      status: 'pending',
+      error_code: null,
+    })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE idempotency_key='agent-home-action-reconciled:cross-board-stale-action'`)
+      .get()).toEqual({ count: 0 })
   })
 
   it('replays and reads the frozen contract after the editable contract advances', async () => {

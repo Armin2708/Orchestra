@@ -226,7 +226,7 @@ describe('durable Agent Home domain', () => {
       mode: 'managed',
       actor,
       idempotencyKey: 'session:link:cross-job',
-    })).toThrow(/different board or workspace/)
+    })).toThrow(/job identities are inconsistent/)
 
     const first = conversations.appendEvent(sessionId, {
       idempotencyKey: 'event:append:first',

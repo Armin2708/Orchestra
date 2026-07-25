@@ -503,11 +503,14 @@ export class AgentHomeLifecycleService {
     const eventScope = durableSessionEventScope(
       this.db,
       input.session,
-      row.board_id,
+      {
+        expectedBoardId: row.board_id,
+        expectedWorkspaceId: input.session.workspace_id,
+      },
     )
     this.events.append({
-      boardId: row.board_id,
-      workspaceId: input.session.workspace_id,
+      boardId: eventScope.boardId,
+      workspaceId: eventScope.workspaceId,
       cardId: eventScope.cardId,
       sessionId: row.session_id,
       jobId: eventScope.jobId,
@@ -618,11 +621,14 @@ export class AgentHomeLifecycleService {
       const eventScope = durableSessionEventScope(
         this.db,
         target,
-        current.board_id,
+        {
+          expectedBoardId: current.board_id,
+          expectedWorkspaceId: target.workspace_id,
+        },
       )
       this.events.append({
-        boardId: current.board_id,
-        workspaceId: target.workspace_id,
+        boardId: eventScope.boardId,
+        workspaceId: eventScope.workspaceId,
         cardId: eventScope.cardId,
         sessionId: target.id,
         jobId: eventScope.jobId,
@@ -744,18 +750,19 @@ export class AgentHomeLifecycleService {
           this.actionLeaseId,
         )
         if (updated.changes !== 1) continue
-        const session = this.conversations.getSession(action.session_id)
-        const eventScope = session
-          ? durableSessionEventScope(this.db, session, action.board_id)
-          : null
+        const session = this.conversations.requireSession(action.session_id)
+        const eventScope = durableSessionEventScope(this.db, session, {
+          expectedBoardId: action.board_id,
+          expectedWorkspaceId: session.workspace_id,
+        })
         this.events.append({
-          boardId: action.board_id,
-          workspaceId: session?.workspace_id ?? null,
-          cardId: eventScope?.cardId ?? null,
+          boardId: eventScope.boardId,
+          workspaceId: eventScope.workspaceId,
+          cardId: eventScope.cardId,
           sessionId: action.session_id,
-          jobId: eventScope?.jobId ?? null,
-          contractId: eventScope?.contractId ?? null,
-          correlationId: eventScope?.correlationId ?? action.id,
+          jobId: eventScope.jobId,
+          contractId: eventScope.contractId,
+          correlationId: eventScope.correlationId ?? action.id,
           idempotencyKey: `agent-home-action-reconciled:${action.id}`,
           kind: 'agent_session.action_interrupted',
           source: 'agent-home',

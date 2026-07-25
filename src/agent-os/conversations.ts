@@ -474,10 +474,13 @@ export class ConversationService {
       history_state: input.historyState === undefined
         ? undefined : historyState(input.historyState),
     }
-    const valuesFor = (session: AgentSessionRecord) => ({
+    const valuesFor = (
+      session: AgentSessionRecord,
+      eventScope: DurableSessionEventScope,
+    ) => ({
       profile_id: requested.profile_id,
       conversation_id: requested.conversation_id,
-      job_id: requested.job_id === undefined ? session.job_id : requested.job_id,
+      job_id: eventScope.jobId,
       mode: requested.mode,
       driver_id: requested.driver_id === undefined ? session.driver_id : requested.driver_id,
       effort: requested.effort === undefined ? session.effort : requested.effort,
@@ -493,34 +496,67 @@ export class ConversationService {
       history_state: requested.history_state === undefined
         ? session.history_state : requested.history_state,
     })
-    const currentValues = valuesFor(current)
+    const currentEventScope = durableSessionEventScope(this.db, current, {
+      expectedBoardId: profile.board_id,
+      expectedWorkspaceId: current.workspace_id,
+      requestedJobId: requested.job_id,
+    })
     const idempotencyKey = boundedString(input.idempotencyKey, 'idempotency key', 200)
     const requestFingerprint = canonicalHash({
       command: 'agent_session.link',
       sessionId: current.id,
       ...requested,
     })
-    const replay = commandReplay(this.db, {
-      boardId: scope.board_id,
-      idempotencyKey,
-      kind: 'agent_session.linked',
-      requestFingerprint,
-    })
-    if (replay) return this.replayedSession(replay)
-    if (profile.status !== 'active') throw new ConflictError('archived agent profiles cannot link sessions')
-    if (conversation.status !== 'active') throw new ConflictError('archived conversations cannot link sessions')
-    this.validateJobScope(currentValues.job_id, scope.board_id, current.workspace_id)
-
-    const link = this.db.transaction(() => {
-      const latest = this.requireSession(current.id)
-      const latestScope = this.sessionScope(latest)
-      const raced = commandReplay(this.db, {
-        boardId: latestScope.board_id,
+    const replayFor = (eventScope: DurableSessionEventScope): AgentSessionRecord | null => {
+      const replay = commandReplay(this.db, {
+        boardId: eventScope.boardId,
         idempotencyKey,
         kind: 'agent_session.linked',
         requestFingerprint,
       })
-      if (raced) return this.replayedSession(raced)
+      if (!replay) return null
+      const event = this.db.prepare(`SELECT workspace_id, card_id, session_id, job_id,
+        contract_id, correlation_id, causation_id
+        FROM os_events WHERE board_id=? AND idempotency_key=?`)
+        .get(eventScope.boardId, idempotencyKey) as {
+          workspace_id: string | null
+          card_id: number | null
+          session_id: string | null
+          job_id: string | null
+          contract_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+        } | undefined
+      const expectedCorrelationId = eventScope.correlationId
+        ?? input.correlationId
+        ?? idempotencyKey
+      if (!event
+        || event.workspace_id !== eventScope.workspaceId
+        || event.card_id !== eventScope.cardId
+        || event.session_id !== current.id
+        || event.job_id !== eventScope.jobId
+        || event.contract_id !== eventScope.contractId
+        || event.correlation_id !== expectedCorrelationId
+        || event.causation_id !== null) {
+        throw new ConflictError('agent session link replay scope is inconsistent')
+      }
+      return this.replayedSession(replay)
+    }
+    const replay = replayFor(currentEventScope)
+    if (replay) return replay
+    if (profile.status !== 'active') throw new ConflictError('archived agent profiles cannot link sessions')
+    if (conversation.status !== 'active') throw new ConflictError('archived conversations cannot link sessions')
+
+    const link = this.db.transaction(() => {
+      const latest = this.requireSession(current.id)
+      const latestScope = this.sessionScope(latest)
+      const eventScope = durableSessionEventScope(this.db, latest, {
+        expectedBoardId: profile.board_id,
+        expectedWorkspaceId: latest.workspace_id,
+        requestedJobId: requested.job_id,
+      })
+      const raced = replayFor(eventScope)
+      if (raced) return raced
       if (this.profiles.require(profile.id).status !== 'active') {
         throw new ConflictError('archived agent profiles cannot link sessions')
       }
@@ -536,8 +572,7 @@ export class ConversationService {
       if (latest.conversation_id && latest.conversation_id !== conversation.id) {
         throw new ConflictError('agent session is already linked to another conversation')
       }
-      const values = valuesFor(latest)
-      this.validateJobScope(values.job_id, latestScope.board_id, latest.workspace_id)
+      const values = valuesFor(latest, eventScope)
 
       const at = timestamp()
       const terminal = ['stopped', 'failed', 'lost', 'exited'].includes(latest.status)
@@ -564,15 +599,9 @@ export class ConversationService {
         at,
         latest.id,
       )
-      const eventScope = durableSessionEventScope(
-        this.db,
-        latest,
-        latestScope.board_id,
-        values.job_id,
-      )
       this.events.append({
-        boardId: latestScope.board_id,
-        workspaceId: latest.workspace_id,
+        boardId: eventScope.boardId,
+        workspaceId: eventScope.workspaceId,
         cardId: eventScope.cardId,
         sessionId: latest.id,
         jobId: eventScope.jobId,
@@ -651,7 +680,10 @@ export class ConversationService {
         throw new ConflictError('agent session Agent Home scope changed during event append')
       }
       const latestConversation = this.requireConversation(conversation.id)
-      const eventScope = durableSessionEventScope(this.db, latest, profile.board_id)
+      const eventScope = durableSessionEventScope(this.db, latest, {
+        expectedBoardId: profile.board_id,
+        expectedWorkspaceId: latest.workspace_id,
+      })
       const existing = this.db.prepare(
         'SELECT * FROM conversation_events WHERE conversation_id=? AND dedupe_key=?',
       ).get(conversation.id, normalized.dedupe_key) as Record<string, unknown> | undefined
@@ -672,7 +704,7 @@ export class ConversationService {
           }
         }
         const replay = this.replayEventCommand(
-          profile.board_id,
+          eventScope.boardId,
           idempotencyKey,
           contentHash,
           latest.id,
@@ -685,8 +717,8 @@ export class ConversationService {
         }
         if (!replay) {
           this.events.append({
-            boardId: profile.board_id,
-            workspaceId: latest.workspace_id,
+            boardId: eventScope.boardId,
+            workspaceId: eventScope.workspaceId,
             cardId: eventScope.cardId,
             sessionId: latest.id,
             jobId: eventScope.jobId,
@@ -714,7 +746,7 @@ export class ConversationService {
         return { event: canonical, replayed: true }
       }
       const commandReplay = this.replayEventCommand(
-        profile.board_id,
+        eventScope.boardId,
         idempotencyKey,
         contentHash,
         latest.id,
@@ -737,7 +769,7 @@ export class ConversationService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
         .run(
           id,
-          profile.board_id,
+          eventScope.boardId,
           profile.id,
           conversation.id,
           latest.id,
@@ -779,8 +811,8 @@ export class ConversationService {
         )
       }
       this.events.append({
-        boardId: profile.board_id,
-        workspaceId: latest.workspace_id,
+        boardId: eventScope.boardId,
+        workspaceId: eventScope.workspaceId,
         cardId: eventScope.cardId,
         sessionId: latest.id,
         jobId: eventScope.jobId,
@@ -1010,7 +1042,7 @@ export class ConversationService {
         received_metadata_json, raw_artifact_id, actor_type, actor_id, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         conflictId,
-        input.canonical.board_id,
+        input.eventScope.boardId,
         input.canonical.profile_id,
         input.canonical.conversation_id,
         input.session.id,
@@ -1026,8 +1058,8 @@ export class ConversationService {
       )
     }
     this.events.append({
-      boardId: input.canonical.board_id,
-      workspaceId: input.session.workspace_id,
+      boardId: input.eventScope.boardId,
+      workspaceId: input.eventScope.workspaceId,
       cardId: input.eventScope.cardId,
       sessionId: input.session.id,
       jobId: input.eventScope.jobId,
