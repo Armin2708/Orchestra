@@ -1104,7 +1104,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const agentId = Number(req.params.id)
       const ok = maestro.task(agentId, req.body.text)
       const managed = ok ? db.prepare(`SELECT j.id AS job_id,
-          COALESCE(s.workspace_id, j.workspace_id) AS workspace_id, s.id AS session_id
+          COALESCE(s.workspace_id, j.workspace_id) AS workspace_id, s.id AS session_id,
+          j.job_assignment_id, j.assigned_profile_id, j.assignment_market_version
         FROM agents a JOIN jobs j ON a.session_id=('agent-os:' || j.id)
         JOIN agent_sessions s ON s.agent_id=a.id
           AND j.id=coalesce(
@@ -1138,6 +1139,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           job_id: string
           workspace_id: string | null
           session_id: string | null
+          job_assignment_id: string | null
+          assigned_profile_id: string | null
+          assignment_market_version: number | null
         } | undefined : undefined
       const legacy = ok && !managed && db.prepare(`SELECT 1 FROM cards c
         JOIN card_events e ON e.card_id=c.id AND e.agent_id=? AND e.type='launched'
@@ -1147,7 +1151,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         ok: true,
         mode,
         orchestration: orchestrationIdentity(mode, managed ? {
-          job: { id: managed.job_id, workspace_id: managed.workspace_id },
+          job: {
+            id: managed.job_id,
+            workspace_id: managed.workspace_id,
+            job_assignment_id: managed.job_assignment_id,
+            assigned_profile_id: managed.assigned_profile_id,
+            assignment_market_version: managed.assignment_market_version,
+          },
           session: managed.session_id ? { id: managed.session_id } : null,
         } : {}),
       } : reply.code(404).send({ error: 'not a hired agent' })

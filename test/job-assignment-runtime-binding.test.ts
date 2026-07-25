@@ -23,6 +23,7 @@ import { TaskContractService } from '../src/agent-os/task-contracts.js'
 import { WorkspaceStore } from '../src/agent-os/workspace-store.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest, DriverSession } from '../src/runtime/index.js'
+import { buildServer, type ConductorLike } from '../src/server.js'
 import { normalizeCanonicalLifecycleResponse } from '../web/src/osApi.js'
 
 const MIGRATION_ID = '017-job-assignment-runtime-binding'
@@ -2201,5 +2202,68 @@ describe('phase-two assignment runtime behavior', () => {
     })).rejects.toThrow(/same active assignment and unchanged market version/)
     expect(counts()).toEqual(before)
     input.db.close()
+  })
+})
+
+describe('assigned task route projection', () => {
+  it('projects the exact durable assignment tuple from a genuine canonical session', async () => {
+    const prepared = prepareRecoverableAssignedJob('task-route-projection')
+    const { input, claimed, snapshot } = prepared
+    const agentId = insertAgent(input, 'task-route-projection-agent')
+    input.db.prepare(`
+      UPDATE agents SET session_id=?, provider='claude' WHERE id=?
+    `).run(`agent-os:${snapshot.job.id}`, agentId)
+    input.db.prepare(`
+      UPDATE agent_sessions SET agent_id=? WHERE id=?
+    `).run(agentId, snapshot.session!.id)
+    let tasked: { agentId: number; text: string } | null = null
+    const conductor: ConductorLike = {
+      isHired: () => true,
+      hire: () => ({}),
+      deliver: () => true,
+      task: (taskedAgentId, text) => {
+        tasked = { agentId: taskedAgentId, text }
+        return true
+      },
+      transcript: () => ({ lines: [], working: null }),
+      subagents: () => [],
+      interruptAgent: async () => true,
+      fire: async () => true,
+      launch: () => ({ queued: false }),
+      isLaunched: () => false,
+    }
+    const server = buildServer(input.db, () => conductor)
+
+    try {
+      await server.ready()
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/agents/${agentId}/task`,
+        payload: { text: 'continue the assigned canonical task' },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        ok: true,
+        mode: 'canonical',
+        orchestration: {
+          lifecycle: 'canonical',
+          contract_attached: true,
+          job_id: snapshot.job.id,
+          workspace_id: input.workspaceId,
+          session_id: snapshot.session!.id,
+          job_assignment_id: claimed.assignment.id,
+          assigned_profile_id: input.profileId,
+          assignment_market_version: claimed.assignment.assigned_market_version,
+        },
+      })
+      expect(tasked).toEqual({
+        agentId,
+        text: 'continue the assigned canonical task',
+      })
+    } finally {
+      await server.close()
+      input.db.close()
+    }
   })
 })
