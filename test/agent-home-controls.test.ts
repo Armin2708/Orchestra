@@ -801,6 +801,7 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       budgetTokens: null,
       budgetCents: null,
       idempotencyKey: `agent-home-retry:${actionId}`,
+      expectedJobAssignment: null,
     })
     if (!snapshot.session) throw new Error('recovery fixture did not reserve a child session')
     db.prepare(`UPDATE agent_sessions SET parent_session_id=?, lineage_type='retry',
@@ -946,7 +947,7 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       })
       expect(replacement.session.display_name).toBe('Recovered name')
       expect((reopened.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations`)
-        .get() as { count: number }).count).toBe(16)
+        .get() as { count: number }).count).toBe(17)
       expect((reopened.prepare(`SELECT status FROM agent_session_actions
         WHERE idempotency_key='reopen:rename'`).get() as { status: string }).status)
         .toBe('succeeded')

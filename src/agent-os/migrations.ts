@@ -3353,6 +3353,484 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '017-job-assignment-runtime-binding',
+    apply(db) {
+      const hasMigration016 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='016-job-market-assignment-lifecycle'`).get()
+      if (!hasMigration016) {
+        throw new Error(
+          'migration 017-job-assignment-runtime-binding requires 016-job-market-assignment-lifecycle',
+        )
+      }
+      const requiredColumns: Record<string, string[]> = {
+        cards: ['id', 'board_id', 'owner_agent_id'],
+        jobs: [
+          'id',
+          'board_id',
+          'card_id',
+          'workspace_id',
+          'status',
+          'job_assignment_id',
+          'assigned_profile_id',
+          'assignment_market_version',
+        ],
+        agent_sessions: [
+          'id',
+          'job_id',
+          'workspace_id',
+          'profile_id',
+          'status',
+          'job_assignment_id',
+          'assigned_profile_id',
+          'assignment_market_version',
+        ],
+        job_market_assignments: [
+          'id',
+          'board_id',
+          'card_id',
+          'profile_id',
+          'workspace_id',
+          'status',
+          'assigned_market_version',
+          'version',
+        ],
+        job_market_contracts: [
+          'card_id',
+          'version',
+        ],
+        workspaces: [
+          'id',
+          'board_id',
+          'status',
+        ],
+      }
+      const columnsByTable = new Map<string, Set<string>>()
+      for (const [table, columns] of Object.entries(requiredColumns)) {
+        const available = new Set(
+          (db.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>)
+            .map((column) => column.name),
+        )
+        columnsByTable.set(table, available)
+        if (columns.some((column) => !available.has(column))) {
+          throw new Error(
+            'migration 017-job-assignment-runtime-binding requires complete assignment runtime columns',
+          )
+        }
+      }
+      const workspaceHasCardId = columnsByTable.get('workspaces')?.has('card_id') === true
+      const workspaceRuntimeUpdateColumns = workspaceHasCardId
+        ? 'status, board_id, card_id'
+        : 'status, board_id'
+      const workspaceRuntimeScopeChange = workspaceHasCardId
+        ? 'OR NEW.card_id IS NOT OLD.card_id'
+        : ''
+
+      db.exec(`
+        CREATE TRIGGER jobs_job_assignment_required_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.card_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job assignment identity must be complete: active job assignment requires exact frozen job identity'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_required_activation
+        BEFORE UPDATE OF status, board_id, card_id ON jobs
+        WHEN NEW.card_id IS NOT NULL
+          AND (
+            NEW.status IN ('running','cancelling')
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active job assignment requires exact frozen job identity before execution'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_binding_current_guard
+        BEFORE UPDATE OF
+          workspace_id, job_assignment_id, assigned_profile_id, assignment_market_version
+        ON jobs
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'new job assignment binding requires the current active market assignment'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_session_binding_guard
+        BEFORE UPDATE OF
+          workspace_id, job_assignment_id, assigned_profile_id, assignment_market_version
+        ON jobs
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            WHERE session.job_id=NEW.id
+              AND (
+                session.job_assignment_id IS NOT NEW.job_assignment_id
+                OR session.assigned_profile_id IS NOT NEW.assigned_profile_id
+                OR session.assignment_market_version IS NOT NEW.assignment_market_version
+                OR session.workspace_id IS NOT NEW.workspace_id
+                OR (
+                  session.profile_id IS NOT NULL
+                  AND session.profile_id IS NOT NEW.assigned_profile_id
+                )
+              )
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job assignment binding would strand an unbound agent session'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR (
+                  NEW.status IN ('reserved','starting','running','idle','stopping')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_market_assignments assignment
+                    WHERE assignment.card_id=job.card_id
+                      AND assignment.status='active'
+                  )
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session assignment identity or scope is inconsistent; agent session assignment identity must be complete: bound job requires exact frozen agent session assignment identity'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_binding_current_guard
+        BEFORE UPDATE OF
+          job_id, workspace_id, job_assignment_id,
+          assigned_profile_id, assignment_market_version
+        ON agent_sessions
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'new agent session assignment binding requires the current active market assignment'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_update
+        BEFORE UPDATE OF
+          job_id, workspace_id, profile_id,
+          job_assignment_id, assigned_profile_id, assignment_market_version
+        ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR (
+                  NEW.status IN ('reserved','starting','running','idle','stopping')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_market_assignments assignment
+                    WHERE assignment.card_id=job.card_id
+                      AND assignment.status='active'
+                  )
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session assignment identity is immutable and its scope is inconsistent: bound job requires exact frozen agent session assignment identity'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_status
+        BEFORE UPDATE OF status ON agent_sessions
+        WHEN NEW.status IN ('reserved','starting','running','idle','stopping')
+          AND NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR EXISTS (
+                  SELECT 1
+                  FROM job_market_assignments assignment
+                  WHERE assignment.card_id=job.card_id
+                    AND assignment.status='active'
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status IN ('queued','running','cancelling')
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active agent session status requires an active canonical assignment with exact frozen identity'
+          );
+        END;
+
+        CREATE TRIGGER job_assignment_workspace_runtime_guard
+        BEFORE UPDATE OF ${workspaceRuntimeUpdateColumns} ON workspaces
+        WHEN (
+            (OLD.status='active' AND NEW.status!='active')
+            OR NEW.board_id IS NOT OLD.board_id
+            ${workspaceRuntimeScopeChange}
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+            WHERE job.workspace_id=OLD.id
+              AND job.board_id=OLD.board_id
+              AND job.status IN ('running','cancelling')
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace has an active assignment runtime and cannot change status or scope'
+          );
+        END;
+      `)
+
+      db.exec('DROP TRIGGER IF EXISTS job_market_assignment_legacy_owner_update')
+      const legacyAgentColumns = new Set(
+        (db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      const canProjectLegacyOwner = (
+        columnsByTable.get('agent_sessions')?.has('agent_id') === true
+        && columnsByTable.get('agent_sessions')?.has('conversation_id') === true
+        && columnsByTable.get('agent_sessions')?.has('external_id') === true
+        && legacyAgentColumns.has('id')
+        && legacyAgentColumns.has('board_id')
+        && legacyAgentColumns.has('session_id')
+      )
+      if (canProjectLegacyOwner) {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id
+                AND assignment.status='active'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              JOIN jobs job
+                ON job.job_assignment_id=assignment.id
+                AND job.board_id=assignment.board_id
+                AND job.card_id=assignment.card_id
+                AND job.assigned_profile_id=assignment.profile_id
+                AND job.assignment_market_version=assignment.assigned_market_version
+              JOIN agent_sessions session
+                ON session.job_id=job.id
+                AND session.job_assignment_id=job.job_assignment_id
+                AND session.assigned_profile_id=job.assigned_profile_id
+                AND session.assignment_market_version=job.assignment_market_version
+                AND session.workspace_id=job.workspace_id
+                AND session.agent_id=NEW.owner_agent_id
+                AND session.profile_id=assignment.profile_id
+                AND session.conversation_id IS NOT NULL
+                AND session.external_id IS NOT NULL
+              JOIN agent_conversations conversation
+                ON conversation.id=session.conversation_id
+                AND conversation.board_id=assignment.board_id
+                AND conversation.profile_id=assignment.profile_id
+                AND conversation.status='active'
+              JOIN agents owner
+                ON owner.id=NEW.owner_agent_id
+                AND owner.board_id=assignment.board_id
+                AND owner.session_id=('agent-os:' || job.id)
+              WHERE assignment.card_id=NEW.id
+                AND assignment.board_id=NEW.board_id
+                AND assignment.status='active'
+                AND job.status IN ('running','cancelling')
+                AND session.status IN ('running','idle','stopping')
+                AND (assignment.workspace_id IS NULL
+                  OR assignment.workspace_id=job.workspace_id)
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment without a matching active assignment runtime'
+            );
+          END;
+        `)
+      } else {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id
+                AND assignment.status='active'
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment'
+            );
+          END;
+        `)
+      }
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

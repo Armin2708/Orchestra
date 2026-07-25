@@ -208,9 +208,18 @@ function removeMigration016Schema(db: Database.Database): void {
     DROP TRIGGER IF EXISTS jobs_job_assignment_insert;
     DROP TRIGGER IF EXISTS jobs_job_assignment_update;
     DROP TRIGGER IF EXISTS jobs_job_assignment_status;
+    DROP TRIGGER IF EXISTS jobs_job_assignment_required_insert;
+    DROP TRIGGER IF EXISTS jobs_job_assignment_required_activation;
+    DROP TRIGGER IF EXISTS jobs_job_assignment_binding_current_guard;
+    DROP TRIGGER IF EXISTS jobs_job_assignment_session_binding_guard;
     DROP TRIGGER IF EXISTS agent_sessions_job_assignment_insert;
     DROP TRIGGER IF EXISTS agent_sessions_job_assignment_update;
     DROP TRIGGER IF EXISTS agent_sessions_job_assignment_status;
+    DROP TRIGGER IF EXISTS agent_sessions_job_assignment_required_insert;
+    DROP TRIGGER IF EXISTS agent_sessions_job_assignment_binding_current_guard;
+    DROP TRIGGER IF EXISTS agent_sessions_job_assignment_required_update;
+    DROP TRIGGER IF EXISTS agent_sessions_job_assignment_required_status;
+    DROP TRIGGER IF EXISTS job_assignment_workspace_runtime_guard;
     DROP TRIGGER IF EXISTS os_events_job_assignment_insert;
     DROP TRIGGER IF EXISTS os_events_job_assignment_identity_update;
     DROP TRIGGER IF EXISTS os_events_job_assignment_delete;
@@ -225,6 +234,7 @@ function removeMigration016Schema(db: Database.Database): void {
     ALTER TABLE agent_sessions DROP COLUMN assigned_profile_id;
     ALTER TABLE agent_sessions DROP COLUMN job_assignment_id;
     DROP TABLE job_market_assignments;
+    DELETE FROM os_schema_migrations WHERE id='017-job-assignment-runtime-binding';
     DELETE FROM os_schema_migrations WHERE id='016-job-market-assignment-lifecycle';
   `)
 }
@@ -343,9 +353,15 @@ describe('job assignment migration 016', () => {
       'jobs_job_assignment_insert',
       'jobs_job_assignment_update',
       'jobs_job_assignment_status',
+      'jobs_job_assignment_required_insert',
+      'jobs_job_assignment_required_activation',
+      'jobs_job_assignment_session_binding_guard',
       'agent_sessions_job_assignment_insert',
       'agent_sessions_job_assignment_update',
       'agent_sessions_job_assignment_status',
+      'agent_sessions_job_assignment_required_insert',
+      'agent_sessions_job_assignment_required_update',
+      'agent_sessions_job_assignment_required_status',
       'os_events_job_assignment_insert',
       'os_events_job_assignment_identity_update',
       'os_events_job_assignment_delete',

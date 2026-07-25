@@ -77,6 +77,9 @@ export interface AgentSessionRecord {
   profile_id: string | null
   conversation_id: string | null
   job_id: string | null
+  job_assignment_id: string | null
+  assigned_profile_id: string | null
+  assignment_market_version: number | null
   mode: AgentSessionMode
   driver_id: string | null
   effort: string | null
@@ -1214,6 +1217,7 @@ export function mapConversation(row: Record<string, unknown>): AgentConversation
 }
 
 export function mapAgentSession(row: Record<string, unknown>): AgentSessionRecord {
+  const assignment = sessionAssignmentIdentity(row)
   return {
     id: String(row.id),
     workspace_id: String(row.workspace_id),
@@ -1226,6 +1230,9 @@ export function mapAgentSession(row: Record<string, unknown>): AgentSessionRecor
     profile_id: row.profile_id == null ? null : String(row.profile_id),
     conversation_id: row.conversation_id == null ? null : String(row.conversation_id),
     job_id: row.job_id == null ? null : String(row.job_id),
+    job_assignment_id: assignment?.jobAssignmentId ?? null,
+    assigned_profile_id: assignment?.assignedProfileId ?? null,
+    assignment_market_version: assignment?.assignmentMarketVersion ?? null,
     mode: String(row.mode) as AgentSessionMode,
     driver_id: row.driver_id == null ? null : String(row.driver_id),
     effort: row.effort == null ? null : String(row.effort),
@@ -1247,6 +1254,31 @@ export function mapAgentSession(row: Record<string, unknown>): AgentSessionRecor
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   }
+}
+
+function sessionAssignmentIdentity(row: Record<string, unknown>): {
+  jobAssignmentId: string
+  assignedProfileId: string
+  assignmentMarketVersion: number
+} | null {
+  const present = [
+    row.job_assignment_id,
+    row.assigned_profile_id,
+    row.assignment_market_version,
+  ].map((value) => value != null)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) {
+    throw new ValidationError('stored agent session assignment identity is incomplete')
+  }
+  const jobAssignmentId = String(row.job_assignment_id).trim()
+  const assignedProfileId = String(row.assigned_profile_id).trim()
+  const assignmentMarketVersion = Number(row.assignment_market_version)
+  if (!jobAssignmentId || !assignedProfileId
+    || !Number.isSafeInteger(assignmentMarketVersion)
+    || assignmentMarketVersion <= 0) {
+    throw new ValidationError('stored agent session assignment identity is invalid')
+  }
+  return { jobAssignmentId, assignedProfileId, assignmentMarketVersion }
 }
 
 export function mapConversationEvent(row: Record<string, unknown>): ConversationEvent {

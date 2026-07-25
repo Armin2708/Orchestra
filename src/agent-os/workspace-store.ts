@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { pathsIntersect } from '../overlap.js'
-import { NotFoundError, ValidationError } from './errors.js'
+import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { parseJson, timestamp } from './json.js'
 
 export interface Workspace {
@@ -80,21 +80,29 @@ export class WorkspaceStore {
     const cardValue = Object.hasOwn(patch, 'card_id') ? patch.card_id : patch.cardId
     const cardId = changesCard ? nullableCardId(cardValue) : current.card_id
     this.assertScope(current.board_id, cardId)
-    this.db.prepare(`UPDATE workspaces SET name=@name, card_id=@card_id, status=@status, branch=@branch,
-      base_ref=@base_ref, worktree_path=@worktree_path, env_json=@env_json, updated_at=@updated_at WHERE id=@id`).run({
-      id, name, card_id: cardId,
-      status: patch.status === undefined ? current.status : workspaceStatus(patch.status),
-      branch: patch.branch === undefined ? current.branch : nullableString(patch.branch),
-      base_ref: patch.base_ref === undefined ? current.base_ref : nullableString(patch.base_ref),
-      worktree_path: patch.worktree_path === undefined ? current.worktree_path : nullableString(patch.worktree_path),
-      env_json: JSON.stringify(env), updated_at: timestamp(),
-    })
+    try {
+      this.db.prepare(`UPDATE workspaces SET name=@name, card_id=@card_id, status=@status, branch=@branch,
+        base_ref=@base_ref, worktree_path=@worktree_path, env_json=@env_json, updated_at=@updated_at WHERE id=@id`).run({
+        id, name, card_id: cardId,
+        status: patch.status === undefined ? current.status : workspaceStatus(patch.status),
+        branch: patch.branch === undefined ? current.branch : nullableString(patch.branch),
+        base_ref: patch.base_ref === undefined ? current.base_ref : nullableString(patch.base_ref),
+        worktree_path: patch.worktree_path === undefined ? current.worktree_path : nullableString(patch.worktree_path),
+        env_json: JSON.stringify(env), updated_at: timestamp(),
+      })
+    } catch (error) {
+      throwWorkspaceRuntimeConflict(error)
+    }
     return this.get(id)!
   }
 
   archive(id: string): Workspace {
     if (!this.get(id)) throw new NotFoundError('workspace not found')
-    this.db.prepare("UPDATE workspaces SET status='archived', updated_at=? WHERE id=?").run(timestamp(), id)
+    try {
+      this.db.prepare("UPDATE workspaces SET status='archived', updated_at=? WHERE id=?").run(timestamp(), id)
+    } catch (error) {
+      throwWorkspaceRuntimeConflict(error)
+    }
     return this.get(id)!
   }
 
@@ -171,4 +179,12 @@ function nullableCardId(value: unknown): number | null {
   const id = Number(value)
   if (!Number.isSafeInteger(id) || id <= 0) throw new ValidationError('card_id must be a positive integer or null')
   return id
+}
+
+function throwWorkspaceRuntimeConflict(error: unknown): never {
+  if (error instanceof Error
+    && error.message.includes('workspace has an active assignment runtime')) {
+    throw new ConflictError('workspace has an active assignment runtime and cannot change status or scope')
+  }
+  throw error
 }

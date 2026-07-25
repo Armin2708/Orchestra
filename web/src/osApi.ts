@@ -29,6 +29,13 @@ export type AgentSession = {
   status: string
   context?: JsonObject
   context_json?: string | JsonObject | null
+  job_id?: OsId | null
+  workspace_assignment_id?: OsId | null
+  profile_id?: OsId | null
+  conversation_id?: OsId | null
+  job_assignment_id?: OsId | null
+  assigned_profile_id?: OsId | null
+  assignment_market_version?: number | null
   created_at: string
   updated_at: string
 }
@@ -303,6 +310,9 @@ export type Job = {
   policy_id?: OsId | null
   contract_version?: number | null
   idempotency_key?: string | null
+  job_assignment_id?: OsId | null
+  assigned_profile_id?: OsId | null
+  assignment_market_version?: number | null
   priority: number
   status: string
   attempts: number
@@ -331,6 +341,11 @@ export type OrchestrationIdentity = {
   job_id: OsId | null
   workspace_id: OsId | null
   session_id: OsId | null
+  job_assignment_id: OsId | null
+  assigned_profile_id: OsId | null
+  assignment_market_version: number | null
+  assignment_id?: OsId | null
+  workspace_assignment_id?: OsId | null
   contract_id?: OsId | null
   contract_version?: number | null
   correlation_id?: OsId | null
@@ -818,6 +833,11 @@ export const normalizeJob = (value: unknown): Job => {
       ? { contract_version: optionalNumber(firstValue(row, 'contract_version', 'contractVersion')) } : {}),
     ...(firstValue(row, 'idempotency_key', 'idempotencyKey') !== undefined
       ? { idempotency_key: optionalString(firstValue(row, 'idempotency_key', 'idempotencyKey')) } : {}),
+    job_assignment_id: optionalId(firstValue(row, 'job_assignment_id', 'jobAssignmentId')),
+    assigned_profile_id: optionalId(firstValue(row, 'assigned_profile_id', 'assignedProfileId')),
+    assignment_market_version: optionalNumber(
+      firstValue(row, 'assignment_market_version', 'assignmentMarketVersion'),
+    ),
     priority: optionalNumber(firstValue(row, 'priority')) ?? 0,
     status: optionalString(firstValue(row, 'status')) ?? 'unknown',
     attempts: optionalNumber(firstValue(row, 'attempts')) ?? 0,
@@ -850,6 +870,17 @@ export const normalizeAgentSession = (value: unknown): AgentSession => {
     status: optionalString(firstValue(row, 'status')) ?? 'unknown',
     context: objectValue(contextValue),
     context_json: contextValue as AgentSession['context_json'],
+    job_id: optionalId(firstValue(row, 'job_id', 'jobId')),
+    workspace_assignment_id: optionalId(
+      firstValue(row, 'workspace_assignment_id', 'workspaceAssignmentId'),
+    ),
+    profile_id: optionalId(firstValue(row, 'profile_id', 'profileId')),
+    conversation_id: optionalId(firstValue(row, 'conversation_id', 'conversationId')),
+    job_assignment_id: optionalId(firstValue(row, 'job_assignment_id', 'jobAssignmentId')),
+    assigned_profile_id: optionalId(firstValue(row, 'assigned_profile_id', 'assignedProfileId')),
+    assignment_market_version: optionalNumber(
+      firstValue(row, 'assignment_market_version', 'assignmentMarketVersion'),
+    ),
     created_at: optionalString(firstValue(row, 'created_at', 'createdAt')) ?? '',
     updated_at: optionalString(firstValue(row, 'updated_at', 'updatedAt')) ?? '',
   }
@@ -891,12 +922,54 @@ const requiredCanonicalInteger = (value: unknown, label: string): number => {
   return canonicalError(`${label} must be a positive integer`)
 }
 
+const optionalCanonicalInteger = (value: unknown, label: string): number | null => {
+  if (value === null || value === undefined) return null
+  return requiredCanonicalInteger(value, label)
+}
+
 const sameCanonicalId = (left: OsId | null | undefined, right: OsId | null | undefined) =>
   left !== null && left !== undefined && right !== null && right !== undefined && String(left) === String(right)
 
 const requireSameCanonicalId = (left: OsId | null | undefined, right: OsId | null | undefined, label: string) => {
   if (!sameCanonicalId(left, right)) canonicalError(`${label} does not match`)
 }
+
+type CanonicalAssignmentIdentity = {
+  jobAssignmentId: OsId
+  assignedProfileId: OsId
+  assignmentMarketVersion: number
+}
+
+const canonicalAssignmentIdentity = (
+  row: JsonObject,
+  label: string,
+): CanonicalAssignmentIdentity | null => {
+  const values = [
+    firstValue(row, 'job_assignment_id', 'jobAssignmentId'),
+    firstValue(row, 'assigned_profile_id', 'assignedProfileId'),
+    firstValue(row, 'assignment_market_version', 'assignmentMarketVersion'),
+  ]
+  const present = values.map((value) => value !== null && value !== undefined)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) canonicalError(`${label} assignment identity is incomplete`)
+  return {
+    jobAssignmentId: requiredCanonicalId(values[0], `${label}.job_assignment_id`),
+    assignedProfileId: requiredCanonicalId(values[1], `${label}.assigned_profile_id`),
+    assignmentMarketVersion: requiredCanonicalInteger(
+      values[2],
+      `${label}.assignment_market_version`,
+    ),
+  }
+}
+
+const sameCanonicalAssignment = (
+  left: CanonicalAssignmentIdentity | null,
+  right: CanonicalAssignmentIdentity | null,
+) => left === null && right === null
+  || left !== null && right !== null
+    && String(left.jobAssignmentId) === String(right.jobAssignmentId)
+    && String(left.assignedProfileId) === String(right.assignedProfileId)
+    && left.assignmentMarketVersion === right.assignmentMarketVersion
 
 const normalizeCanonicalIdentity = (row: JsonObject): OrchestrationIdentity => {
   if (firstValue(row, 'lifecycle') !== 'canonical') canonicalError('orchestration.lifecycle is not canonical')
@@ -909,6 +982,26 @@ const normalizeCanonicalIdentity = (row: JsonObject): OrchestrationIdentity => {
     job_id: requiredCanonicalId(firstValue(row, 'job_id', 'jobId'), 'orchestration.job_id'),
     workspace_id: requiredCanonicalId(firstValue(row, 'workspace_id', 'workspaceId'), 'orchestration.workspace_id'),
     session_id: requiredCanonicalId(firstValue(row, 'session_id', 'sessionId'), 'orchestration.session_id'),
+    job_assignment_id: optionalCanonicalId(
+      firstValue(row, 'job_assignment_id', 'jobAssignmentId'),
+      'orchestration.job_assignment_id',
+    ),
+    assigned_profile_id: optionalCanonicalId(
+      firstValue(row, 'assigned_profile_id', 'assignedProfileId'),
+      'orchestration.assigned_profile_id',
+    ),
+    assignment_market_version: optionalCanonicalInteger(
+      firstValue(row, 'assignment_market_version', 'assignmentMarketVersion'),
+      'orchestration.assignment_market_version',
+    ),
+    assignment_id: optionalCanonicalId(
+      firstValue(row, 'assignment_id', 'assignmentId'),
+      'orchestration.assignment_id',
+    ),
+    workspace_assignment_id: optionalCanonicalId(
+      firstValue(row, 'workspace_assignment_id', 'workspaceAssignmentId'),
+      'orchestration.workspace_assignment_id',
+    ),
     contract_id: requiredCanonicalId(firstValue(row, 'contract_id', 'contractId'), 'orchestration.contract_id'),
     contract_version: requiredCanonicalInteger(
       firstValue(row, 'contract_version', 'contractVersion'),
@@ -974,6 +1067,7 @@ const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
   delivery.session_id = deliverySessionId
 
   const job = normalizeJob(jobRow)
+  const jobAssignment = canonicalAssignmentIdentity(jobRow, 'job')
   const jobId = requiredCanonicalId(firstValue(jobRow, 'id'), 'job.id')
   const jobBoardId = requiredCanonicalInteger(firstValue(jobRow, 'board_id', 'boardId'), 'job.board_id')
   const jobCardId = requiredCanonicalInteger(firstValue(jobRow, 'card_id', 'cardId'), 'job.card_id')
@@ -984,7 +1078,7 @@ const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
   )
   requiredCanonicalString(firstValue(jobRow, 'provider'), 'job.provider')
   requiredCanonicalString(firstValue(jobRow, 'driver_id', 'driverId'), 'job.driver_id')
-  requiredCanonicalString(firstValue(jobRow, 'status'), 'job.status')
+  const jobStatus = requiredCanonicalString(firstValue(jobRow, 'status'), 'job.status')
   const accessProfile = normalizeAccessProfile(firstValue(jobRow, 'access_profile', 'accessProfile'))
   if (!accessProfile) canonicalError('job.access_profile is invalid')
   job.id = jobId
@@ -993,6 +1087,9 @@ const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
   job.workspace_id = jobWorkspaceId
   job.contract_version = jobContractVersion
   job.access_profile = accessProfile
+  job.job_assignment_id = jobAssignment?.jobAssignmentId ?? null
+  job.assigned_profile_id = jobAssignment?.assignedProfileId ?? null
+  job.assignment_market_version = jobAssignment?.assignmentMarketVersion ?? null
 
   const workspace = normalizeWorkspace(workspaceRow)
   const workspaceId = requiredCanonicalId(firstValue(workspaceRow, 'id'), 'workspace.id')
@@ -1009,15 +1106,28 @@ const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
   workspace.card_id = workspaceCardId
 
   const session = normalizeAgentSession(sessionRow)
+  const sessionAssignment = canonicalAssignmentIdentity(sessionRow, 'session')
   const sessionId = requiredCanonicalId(firstValue(sessionRow, 'id'), 'session.id')
   const sessionWorkspaceId = requiredCanonicalId(
     firstValue(sessionRow, 'workspace_id', 'workspaceId'),
     'session.workspace_id',
   )
   requiredCanonicalString(firstValue(sessionRow, 'provider'), 'session.provider')
-  requiredCanonicalString(firstValue(sessionRow, 'status'), 'session.status')
+  const sessionStatus = requiredCanonicalString(firstValue(sessionRow, 'status'), 'session.status')
   session.id = sessionId
   session.workspace_id = sessionWorkspaceId
+  session.job_assignment_id = sessionAssignment?.jobAssignmentId ?? null
+  session.assigned_profile_id = sessionAssignment?.assignedProfileId ?? null
+  session.assignment_market_version = sessionAssignment?.assignmentMarketVersion ?? null
+
+  const identityAssignment = canonicalAssignmentIdentity(
+    identity as unknown as JsonObject,
+    'orchestration',
+  )
+  if (!sameCanonicalAssignment(jobAssignment, sessionAssignment)
+    || !sameCanonicalAssignment(jobAssignment, identityAssignment)) {
+    canonicalError('job, session, and orchestration assignment identities do not match')
+  }
 
   requireSameCanonicalId(identity.job_id, jobId, 'orchestration.job_id')
   requireSameCanonicalId(identity.workspace_id, workspaceId, 'orchestration.workspace_id')
@@ -1041,6 +1151,51 @@ const normalizeCanonicalCore = (value: unknown): CanonicalLifecycleCore => {
   if (String(identity.contract_id) !== expectedContractId) canonicalError('orchestration.contract_id is invalid')
   const sessionJobId = optionalCanonicalId(session.context?.job_id, 'session.context.job_id')
   if (sessionJobId !== null) requireSameCanonicalId(sessionJobId, jobId, 'session.context.job_id')
+  const relationalSessionJobId = optionalCanonicalId(
+    firstValue(sessionRow, 'job_id', 'jobId'),
+    'session.job_id',
+  )
+  const sessionWorkspaceAssignmentId = requiredCanonicalId(
+    firstValue(sessionRow, 'workspace_assignment_id', 'workspaceAssignmentId'),
+    'session.workspace_assignment_id',
+  )
+  requireSameCanonicalId(
+    identity.assignment_id,
+    sessionWorkspaceAssignmentId,
+    'orchestration.assignment_id',
+  )
+  requireSameCanonicalId(
+    identity.workspace_assignment_id,
+    sessionWorkspaceAssignmentId,
+    'orchestration.workspace_assignment_id',
+  )
+  if (relationalSessionJobId !== null) {
+    requireSameCanonicalId(relationalSessionJobId, jobId, 'session.job_id')
+  }
+  if (jobAssignment) {
+    requireSameCanonicalId(relationalSessionJobId, jobId, 'session.job_id')
+    const sessionProfileId = optionalCanonicalId(
+      firstValue(sessionRow, 'profile_id', 'profileId'),
+      'session.profile_id',
+    )
+    if (sessionProfileId === null) {
+      const unlinkedState = `${jobStatus}:${sessionStatus}`
+      if (![
+        'queued:reserved',
+        'blocked:failed',
+        'cancelled:stopped',
+        'cancelled:failed',
+      ].includes(unlinkedState)) {
+        canonicalError('active assigned session.profile_id is missing')
+      }
+    } else {
+      requireSameCanonicalId(
+        sessionProfileId,
+        jobAssignment.assignedProfileId,
+        'session.profile_id',
+      )
+    }
+  }
   const sessionCorrelationId = optionalCanonicalId(
     session.context?.correlation_id,
     'session.context.correlation_id',

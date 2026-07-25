@@ -1302,6 +1302,7 @@ describe('Agent OS daemon runtime integration', () => {
   it('continues a resumable Claude job after daemon restart instead of attaching it idle', async () => {
     const { boardId, repo, db, runtime, server } = await fixture()
     const sent: Array<[string, string]> = []
+    let attachedWorkspaceId = 'restart-workspace'
     const driver: AgentDriver = {
       id: 'claude',
       capabilities: () => ({
@@ -1309,7 +1310,7 @@ describe('Agent OS daemon runtime integration', () => {
       }),
       launch: async () => { throw new Error('not used') },
       attach: async () => ({
-        id: 'claude:resumed', externalId: 'claude-thread', driverId: 'claude', workspaceId: 'restart-workspace',
+        id: 'claude:resumed', externalId: 'claude-thread', driverId: 'claude', workspaceId: attachedWorkspaceId,
         status: 'idle', startedAt: new Date().toISOString(), metadata: {},
       }),
       send: async (sessionId, text) => { sent.push([sessionId, text]) },
@@ -1324,6 +1325,7 @@ describe('Agent OS daemon runtime integration', () => {
       method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
       payload: { id: 'restart-workspace', name: 'restart-claude', kind: 'shared', root_path: repo },
     })).json().workspace
+    attachedWorkspaceId = String(workspace.id)
     const job = runtime.scheduler.create({ boardId, workspaceId: workspace.id, provider: 'claude', maxAttempts: 1 })
     db.prepare("UPDATE jobs SET status='running', attempts=1, started_at=datetime('now') WHERE id=?").run(job.id)
     db.prepare(`INSERT INTO agent_sessions

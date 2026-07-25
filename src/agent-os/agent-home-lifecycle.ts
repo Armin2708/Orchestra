@@ -630,7 +630,98 @@ export class AgentHomeLifecycleService {
     const card = this.db.prepare('SELECT column_name FROM cards WHERE id=?').get(job.card_id) as
       { column_name: string } | undefined
     if (card?.column_name === 'done') return unsupported('completed cards cannot be retried')
-    return supported()
+    return this.retryAssignmentSupport(session)
+  }
+
+  private retryAssignmentSupport(session: AgentSessionRecord): RuntimeActionSupport {
+    if (!session.job_id) return unsupported('retry requires a canonical job')
+    const job = this.db.prepare(`SELECT id, board_id, card_id, workspace_id,
+      job_assignment_id, assigned_profile_id, assignment_market_version
+      FROM jobs WHERE id=?`).get(session.job_id) as {
+        id: string
+        board_id: number
+        card_id: number | null
+        workspace_id: string | null
+        job_assignment_id: string | null
+        assigned_profile_id: string | null
+        assignment_market_version: number | null
+      } | undefined
+    if (!job?.card_id) return unsupported('retry requires a card-backed canonical job')
+    if (!job.workspace_id) {
+      return unsupported('retry requires the frozen workspace to remain active and correctly scoped')
+    }
+    const workspace = this.db.prepare(`SELECT 1 FROM workspaces
+      WHERE id=?
+        AND board_id=?
+        AND status='active'
+        AND (card_id IS NULL OR card_id=?)`).get(
+      job.workspace_id,
+      job.board_id,
+      job.card_id,
+    )
+    if (!workspace) {
+      return unsupported('retry requires the frozen workspace to remain active and correctly scoped')
+    }
+    const jobAssignment = lifecycleAssignmentIdentity(job, 'retry job')
+    const sessionAssignment = lifecycleAssignmentIdentity(session, 'retry session')
+    if (!jobAssignment) {
+      if (sessionAssignment) {
+        return unsupported('unassigned retry job has an assigned parent session')
+      }
+      const current = this.db.prepare(`SELECT 1 FROM job_market_assignments
+        WHERE board_id=? AND card_id=? AND status='active' LIMIT 1`).get(
+        job.board_id,
+        job.card_id,
+      )
+      return current
+        ? unsupported('legacy retry cannot adopt a newer Job Market assignment')
+        : supported()
+    }
+    if (!sessionAssignment
+      || session.job_id !== job.id
+      || session.workspace_id !== job.workspace_id
+      || session.profile_id !== jobAssignment.assignedProfileId
+      || !session.conversation_id
+      || !sameLifecycleAssignment(jobAssignment, sessionAssignment)) {
+      return unsupported('retry parent does not retain the frozen Job Market assignment')
+    }
+    const current = this.db.prepare(`SELECT 1
+      FROM job_market_assignments assignment
+      JOIN job_market_contracts market ON market.card_id=assignment.card_id
+      JOIN agent_profiles profile ON profile.id=assignment.profile_id
+      JOIN agent_conversations conversation ON conversation.id=?
+      JOIN workspaces workspace ON workspace.id=?
+      WHERE assignment.id=?
+        AND assignment.board_id=?
+        AND assignment.card_id=?
+        AND assignment.profile_id=?
+        AND assignment.assigned_market_version=?
+        AND assignment.status='active'
+        AND assignment.version=1
+        AND (assignment.workspace_id IS NULL OR assignment.workspace_id=?)
+        AND market.version=assignment.assigned_market_version
+        AND profile.status='active'
+        AND conversation.board_id=assignment.board_id
+        AND conversation.profile_id=assignment.profile_id
+        AND conversation.status='active'
+        AND workspace.board_id=assignment.board_id
+        AND workspace.status='active'
+        AND (workspace.card_id IS NULL
+          OR workspace.card_id=assignment.card_id)`).get(
+      session.conversation_id,
+      job.workspace_id,
+      jobAssignment.jobAssignmentId,
+      job.board_id,
+      job.card_id,
+      jobAssignment.assignedProfileId,
+      jobAssignment.assignmentMarketVersion,
+      job.workspace_id,
+    )
+    return current
+      ? supported()
+      : unsupported(
+          'retry requires the same active assignment and unchanged market version, plus the exact active frozen workspace',
+        )
   }
 
   private forkSupport(
@@ -667,7 +758,8 @@ export class AgentHomeLifecycleService {
       throw new UnsupportedError('canonical retry orchestration is unavailable for this session')
     }
     const job = this.db.prepare(`SELECT card_id, board_id, workspace_id, provider,
-      model, effort, access_profile, priority, max_attempts, budget_tokens, budget_cents
+      model, effort, access_profile, priority, max_attempts, budget_tokens, budget_cents,
+      job_assignment_id, assigned_profile_id, assignment_market_version
       FROM jobs WHERE id=?`).get(parent.job_id) as {
         card_id: number | null
         board_id: number
@@ -680,8 +772,19 @@ export class AgentHomeLifecycleService {
         max_attempts: number
         budget_tokens: number | null
         budget_cents: number | null
+        job_assignment_id: string | null
+        assigned_profile_id: string | null
+        assignment_market_version: number | null
       } | undefined
     if (!job?.card_id) throw new UnsupportedError('retry requires a card-backed canonical job')
+    const assignment = lifecycleAssignmentIdentity(job, 'retry job')
+    const retryKey = `agent-home-retry:${actionId}`
+    const replay = this.db.prepare(`SELECT 1 FROM jobs
+      WHERE board_id=? AND idempotency_key=?`).get(job.board_id, retryKey)
+    if (!replay) {
+      const support = this.retryAssignmentSupport(parent)
+      if (!support.supported) throw new ConflictError(support.reason ?? 'retry assignment is stale')
+    }
     const snapshot = this.options.orchestration.createCardJob({
       cardId: job.card_id,
       expectedBoardId: job.board_id,
@@ -694,10 +797,19 @@ export class AgentHomeLifecycleService {
       maxAttempts: job.max_attempts,
       budgetTokens: job.budget_tokens,
       budgetCents: job.budget_cents,
-      idempotencyKey: `agent-home-retry:${actionId}`,
+      idempotencyKey: retryKey,
+      expectedJobAssignment: assignment,
     })
     if (!snapshot.session) throw new ConflictError('retry reservation did not create a session')
     const child = this.conversations.requireSession(snapshot.session.id)
+    const childAssignment = lifecycleAssignmentIdentity(snapshot.job, 'retry child job')
+    const childSessionAssignment = lifecycleAssignmentIdentity(child, 'retry child session')
+    if (!sameLifecycleAssignment(childAssignment, assignment)
+      || !sameLifecycleAssignment(childSessionAssignment, assignment)
+      || (assignment && child.profile_id !== null
+        && child.profile_id !== assignment.assignedProfileId)) {
+      throw new ConflictError('retry child does not preserve its parent assignment identity')
+    }
     const childContext = {
       ...child.context,
       parent_session_id: parent.id,
@@ -769,6 +881,20 @@ export class AgentHomeLifecycleService {
           )
         }
         if (existing.status === 'pending' && existing.action === 'retry'
+          && !existing.result_session_id) {
+          const replay = this.db.prepare(`SELECT 1 FROM jobs
+            WHERE board_id=? AND idempotency_key=?`).get(
+            existing.board_id,
+            `agent-home-retry:${existing.id}`,
+          )
+          if (!replay) {
+            const support = this.retryAssignmentSupport(input.session)
+            if (!support.supported) {
+              throw new ConflictError(support.reason ?? 'retry assignment is stale')
+            }
+          }
+        }
+        if (existing.status === 'pending' && existing.action === 'retry'
           && existing.lease_id !== this.actionLeaseId) {
           this.db.prepare(`UPDATE agent_session_actions SET lease_id=?, updated_at=?
             WHERE id=? AND status='pending'`).run(
@@ -817,6 +943,12 @@ export class AgentHomeLifecycleService {
         { action: AgentHomeSessionAction } | undefined
       if (pending) {
         throw new ConflictError(`session ${pending.action} action is already in progress`)
+      }
+      if (input.action === 'retry') {
+        const support = this.retryAssignmentSupport(input.session)
+        if (!support.supported) {
+          throw new ConflictError(support.reason ?? 'retry assignment is stale')
+        }
       }
       const at = timestamp()
       const reservedSessionId = input.action === 'fork' ? randomUUID() : null
@@ -1847,6 +1979,51 @@ export class AgentHomeLifecycleService {
       WHERE name='orchestra-daemon'`).get() as { owner_id: string } | undefined
     return row?.owner_id ?? null
   }
+}
+
+type LifecycleAssignmentIdentity = {
+  jobAssignmentId: string
+  assignedProfileId: string
+  assignmentMarketVersion: number
+}
+
+function lifecycleAssignmentIdentity(
+  value: {
+    job_assignment_id: string | null
+    assigned_profile_id: string | null
+    assignment_market_version: number | null
+  },
+  label: string,
+): LifecycleAssignmentIdentity | null {
+  const present = [
+    value.job_assignment_id,
+    value.assigned_profile_id,
+    value.assignment_market_version,
+  ].map((part) => part != null)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) {
+    throw new ConflictError(`${label} assignment identity is incomplete`)
+  }
+  const jobAssignmentId = value.job_assignment_id!.trim()
+  const assignedProfileId = value.assigned_profile_id!.trim()
+  const assignmentMarketVersion = Number(value.assignment_market_version)
+  if (!jobAssignmentId || !assignedProfileId
+    || !Number.isSafeInteger(assignmentMarketVersion)
+    || assignmentMarketVersion <= 0) {
+    throw new ConflictError(`${label} assignment identity is invalid`)
+  }
+  return { jobAssignmentId, assignedProfileId, assignmentMarketVersion }
+}
+
+function sameLifecycleAssignment(
+  left: LifecycleAssignmentIdentity | null,
+  right: LifecycleAssignmentIdentity | null,
+): boolean {
+  return left === null && right === null
+    || left !== null && right !== null
+      && left.jobAssignmentId === right.jobAssignmentId
+      && left.assignedProfileId === right.assignedProfileId
+      && left.assignmentMarketVersion === right.assignmentMarketVersion
 }
 
 function supported(): RuntimeActionSupport {

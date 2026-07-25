@@ -1106,8 +1106,34 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const managed = ok ? db.prepare(`SELECT j.id AS job_id,
           COALESCE(s.workspace_id, j.workspace_id) AS workspace_id, s.id AS session_id
         FROM agents a JOIN jobs j ON a.session_id=('agent-os:' || j.id)
-        LEFT JOIN agent_sessions s ON s.agent_id=a.id
-          AND CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id')=j.id ELSE 0 END
+        JOIN agent_sessions s ON s.agent_id=a.id
+          AND j.id=coalesce(
+            s.job_id,
+            CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id') END
+          )
+          AND (j.workspace_id IS NULL OR s.workspace_id=j.workspace_id)
+          AND (
+            (
+              j.job_assignment_id IS NULL
+              AND j.assigned_profile_id IS NULL
+              AND j.assignment_market_version IS NULL
+              AND s.job_assignment_id IS NULL
+              AND s.assigned_profile_id IS NULL
+              AND s.assignment_market_version IS NULL
+            )
+            OR
+            (
+              j.job_assignment_id IS NOT NULL
+              AND s.job_id=j.id
+              AND s.job_assignment_id=j.job_assignment_id
+              AND s.assigned_profile_id=j.assigned_profile_id
+              AND s.assignment_market_version=j.assignment_market_version
+              AND s.workspace_id=j.workspace_id
+              AND s.profile_id=j.assigned_profile_id
+              AND s.conversation_id IS NOT NULL
+              AND s.external_id IS NOT NULL
+            )
+          )
         WHERE a.id=? ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as {
           job_id: string
           workspace_id: string | null

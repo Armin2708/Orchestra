@@ -3,6 +3,10 @@ import type Database from 'better-sqlite3'
 import { AttentionService } from './attention.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import {
+  resolveCurrentJobAssignment,
+  type FrozenJobAssignmentIdentity,
+} from './job-assignment-runtime.js'
 import { optionalInteger, parseJson, timestamp } from './json.js'
 
 export type JobStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'blocked' | 'cancelled'
@@ -20,6 +24,9 @@ export interface Job {
   policy_id: string | null
   contract_version: number | null
   idempotency_key: string | null
+  job_assignment_id: string | null
+  assigned_profile_id: string | null
+  assignment_market_version: number | null
   priority: number
   status: JobStatus
   attempts: number
@@ -48,6 +55,7 @@ export interface CreateJob {
   contractVersion?: number | null
   idempotencyKey?: string | null
   requestFingerprint?: string | null
+  jobAssignment?: FrozenJobAssignmentIdentity | null
   correlationId?: string | null
   causationId?: string | null
   priority?: number
@@ -87,6 +95,28 @@ export class JobScheduler {
 
   create(input: CreateJob): Job {
     this.assertScope(input.boardId, input.cardId, input.workspaceId)
+    const jobAssignment = normalizeJobAssignment(input.jobAssignment)
+    if (jobAssignment && !input.cardId) {
+      throw new ValidationError('cardless jobs cannot carry a Job Market assignment')
+    }
+    if (input.cardId) {
+      const currentAssignment = resolveCurrentJobAssignment(this.db, input.boardId, input.cardId)
+      if (currentAssignment && !jobAssignment) {
+        throw new ConflictError('card has an active Job Market assignment; exact job assignment identity is required')
+      }
+      if (jobAssignment && (
+        !currentAssignment
+        || currentAssignment.jobAssignmentId !== jobAssignment.jobAssignmentId
+        || currentAssignment.assignedProfileId !== jobAssignment.assignedProfileId
+        || currentAssignment.assignmentMarketVersion !== jobAssignment.assignmentMarketVersion
+      )) {
+        throw new ConflictError('job assignment identity is stale or inconsistent')
+      }
+      if (currentAssignment?.workspaceId
+        && currentAssignment.workspaceId !== (input.workspaceId ?? null)) {
+        throw new ConflictError('job workspace must match the active Job Market assignment')
+      }
+    }
     if (!input.provider?.trim()) throw new ValidationError('provider is required')
     const driverId = input.driverId?.trim() || input.provider.trim()
     if (!driverId) throw new ValidationError('driverId is required')
@@ -106,6 +136,9 @@ export class JobScheduler {
       model: input.model ?? null, effort: input.effort ?? null, access_profile: accessProfile,
       policy_id: input.policyId ?? null, contract_version: input.contractVersion ?? null,
       idempotency_key: input.idempotencyKey ?? null, request_fingerprint: input.requestFingerprint ?? null,
+      job_assignment_id: jobAssignment?.jobAssignmentId ?? null,
+      assigned_profile_id: jobAssignment?.assignedProfileId ?? null,
+      assignment_market_version: jobAssignment?.assignmentMarketVersion ?? null,
       priority, status: 'queued', attempts: 0, max_attempts: maxAttempts,
       budget_tokens: input.budgetTokens ?? null, budget_cents: input.budgetCents ?? null,
       scheduled_at: scheduledAt, started_at: null, finished_at: null, error: null, created_at: timestamp(),
@@ -117,12 +150,14 @@ export class JobScheduler {
     try {
       this.db.prepare(`INSERT INTO jobs
         (id, board_id, card_id, workspace_id, provider, driver_id, model, effort, access_profile, policy_id,
-         contract_version, idempotency_key, request_fingerprint, priority, status, attempts, max_attempts,
-         budget_tokens, budget_cents, scheduled_at, started_at, finished_at, error, created_at)
+         contract_version, idempotency_key, request_fingerprint, job_assignment_id, assigned_profile_id,
+         assignment_market_version, priority, status, attempts, max_attempts, budget_tokens, budget_cents,
+         scheduled_at, started_at, finished_at, error, created_at)
         VALUES (@id, @board_id, @card_id, @workspace_id, @provider, @driver_id, @model, @effort,
-         @access_profile, @policy_id, @contract_version, @idempotency_key, @request_fingerprint, @priority,
-         @status, @attempts, @max_attempts, @budget_tokens, @budget_cents, @scheduled_at, @started_at,
-         @finished_at, @error, @created_at)`)
+         @access_profile, @policy_id, @contract_version, @idempotency_key, @request_fingerprint,
+         @job_assignment_id, @assigned_profile_id, @assignment_market_version, @priority, @status, @attempts,
+         @max_attempts, @budget_tokens, @budget_cents, @scheduled_at, @started_at, @finished_at, @error,
+         @created_at)`)
         .run(row)
     } catch (error) {
       if (String(error).includes('card already has an active job')) throw new ConflictError('card already has an active job')
@@ -134,7 +169,8 @@ export class JobScheduler {
       correlationId: input.correlationId ?? row.id, causationId: input.causationId ?? null,
       idempotencyKey: `job:${row.id}:queued`, kind: 'job.queued', source: 'scheduler',
       payload: { job_id: row.id, provider: row.provider, driver_id: row.driver_id,
-        model: row.model, effort: row.effort, access_profile: row.access_profile, priority } })
+        model: row.model, effort: row.effort, access_profile: row.access_profile, priority,
+        ...assignmentEventPayload(row) } })
     return mapJob(row)
   }
 
@@ -341,15 +377,46 @@ export class JobScheduler {
         .run(timestamp(), id)
       const assignment = this.db.prepare('SELECT id FROM workspace_assignments WHERE job_id=?').get(id) as
         { id: string } | undefined
-      if (assignment) this.appendJobEvent(job, 'workspace.assignment_activated', { assignment_id: assignment.id })
-      this.db.prepare(`UPDATE agent_sessions SET status='starting', updated_at=?
-        WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=? AND status='reserved'`)
-        .run(timestamp(), id)
-      const session = this.db.prepare(`SELECT id FROM agent_sessions
-        WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
-        ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(id) as { id: string } | undefined
-      if (session) this.appendJobEvent(job, 'agent_session.starting', { session_id: session.id })
-      this.appendJobEvent(job, 'job.started', { attempt: job.attempts, provider: job.provider })
+      if (assignment) this.appendJobEvent(job, 'workspace.assignment_activated', {
+        assignment_id: assignment.id,
+        ...assignmentEventPayload(job),
+      })
+      const session = job.job_assignment_id
+        ? this.db.prepare(`SELECT id FROM agent_sessions
+            WHERE job_id=?
+              AND job_assignment_id=?
+              AND assigned_profile_id=?
+              AND assignment_market_version=?
+              AND status='reserved'
+            ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(
+            id,
+            job.job_assignment_id,
+            job.assigned_profile_id,
+            job.assignment_market_version,
+          ) as { id: string } | undefined
+        : this.db.prepare(`SELECT id FROM agent_sessions
+            WHERE (
+              job_id=? OR (
+                job_id IS NULL
+                AND json_valid(context_json)
+                AND json_extract(context_json, '$.job_id')=?
+              )
+            ) AND status='reserved'
+            ORDER BY CASE WHEN job_id=? THEN 0 ELSE 1 END,
+              updated_at DESC, rowid DESC LIMIT 1`).get(id, id, id) as { id: string } | undefined
+      if (session) {
+        this.db.prepare(`UPDATE agent_sessions SET status='starting', updated_at=?
+          WHERE id=? AND status='reserved'`).run(timestamp(), session.id)
+      }
+      if (session) this.appendJobEvent(job, 'agent_session.starting', {
+        session_id: session.id,
+        ...assignmentEventPayload(job),
+      })
+      this.appendJobEvent(job, 'job.started', {
+        attempt: job.attempts,
+        provider: job.provider,
+        ...assignmentEventPayload(job),
+      })
       return 'claimed' as const
     })
     return reserve.immediate()
@@ -398,14 +465,34 @@ export class JobScheduler {
         : status === 'released' ? 'workspace.assignment_released' : 'workspace.assignment_failed',
       { assignment_id: assignment.id })
     }
-    const session = this.db.prepare(`SELECT id, status FROM agent_sessions
-      WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
-      ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(job.id) as
-      { id: string; status: string } | undefined
+    const session = job.job_assignment_id
+      ? this.db.prepare(`SELECT id, status FROM agent_sessions
+          WHERE job_id=?
+            AND job_assignment_id=?
+            AND assigned_profile_id=?
+            AND assignment_market_version=?
+          ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(
+          job.id,
+          job.job_assignment_id,
+          job.assigned_profile_id,
+          job.assignment_market_version,
+        ) as { id: string; status: string } | undefined
+      : this.db.prepare(`SELECT id, status FROM agent_sessions
+          WHERE job_id=? OR (
+            job_id IS NULL
+            AND json_valid(context_json)
+            AND json_extract(context_json, '$.job_id')=?
+          )
+          ORDER BY CASE WHEN job_id=? THEN 0 ELSE 1 END,
+            updated_at DESC, rowid DESC LIMIT 1`).get(job.id, job.id, job.id) as
+          { id: string; status: string } | undefined
     const sessionStatus = status === 'reserved' ? 'reserved' : status === 'failed' ? 'failed' : 'stopped'
     if (session && session.status !== sessionStatus) {
       this.db.prepare('UPDATE agent_sessions SET status=?, updated_at=? WHERE id=?').run(sessionStatus, at, session.id)
-      this.appendJobEvent(job, `agent_session.${sessionStatus}`, { session_id: session.id })
+      this.appendJobEvent(job, `agent_session.${sessionStatus}`, {
+        session_id: session.id,
+        ...assignmentEventPayload(job),
+      })
     }
   }
 
@@ -461,6 +548,7 @@ export class JobScheduler {
 
 function mapJob(row: Record<string, unknown>): Job {
   const access = String(row.access_profile ?? 'workspace_write')
+  const assignment = assignmentIdentityFromRow(row)
   return {
     id: String(row.id), board_id: Number(row.board_id), card_id: row.card_id == null ? null : Number(row.card_id),
     workspace_id: row.workspace_id == null ? null : String(row.workspace_id), provider: String(row.provider),
@@ -471,6 +559,9 @@ function mapJob(row: Record<string, unknown>): Job {
     policy_id: row.policy_id == null ? null : String(row.policy_id),
     contract_version: row.contract_version == null ? null : Number(row.contract_version),
     idempotency_key: row.idempotency_key == null ? null : String(row.idempotency_key),
+    job_assignment_id: assignment?.jobAssignmentId ?? null,
+    assigned_profile_id: assignment?.assignedProfileId ?? null,
+    assignment_market_version: assignment?.assignmentMarketVersion ?? null,
     priority: Number(row.priority), status: String(row.status) as JobStatus,
     attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
     budget_tokens: optionalInteger(row.budget_tokens, 'budget_tokens'), budget_cents: optionalInteger(row.budget_cents, 'budget_cents'),
@@ -478,5 +569,68 @@ function mapJob(row: Record<string, unknown>): Job {
     scheduled_at: String(row.scheduled_at), started_at: row.started_at == null ? null : String(row.started_at),
     finished_at: row.finished_at == null ? null : String(row.finished_at), error: row.error == null ? null : String(row.error),
     created_at: String(row.created_at),
+  }
+}
+
+function normalizeJobAssignment(
+  value: FrozenJobAssignmentIdentity | null | undefined,
+): FrozenJobAssignmentIdentity | null {
+  if (value == null) return null
+  const jobAssignmentId = value.jobAssignmentId?.trim()
+  const assignedProfileId = value.assignedProfileId?.trim()
+  if (!jobAssignmentId || jobAssignmentId.length > 200) {
+    throw new ValidationError('jobAssignment.jobAssignmentId must be 1-200 characters')
+  }
+  if (!assignedProfileId || assignedProfileId.length > 200) {
+    throw new ValidationError('jobAssignment.assignedProfileId must be 1-200 characters')
+  }
+  if (!Number.isSafeInteger(value.assignmentMarketVersion)
+    || value.assignmentMarketVersion <= 0) {
+    throw new ValidationError('jobAssignment.assignmentMarketVersion must be a positive integer')
+  }
+  return {
+    jobAssignmentId,
+    assignedProfileId,
+    assignmentMarketVersion: value.assignmentMarketVersion,
+  }
+}
+
+function assignmentIdentityFromRow(
+  row: Record<string, unknown>,
+): FrozenJobAssignmentIdentity | null {
+  const values = [
+    row.job_assignment_id,
+    row.assigned_profile_id,
+    row.assignment_market_version,
+  ]
+  const present = values.map((value) => value != null)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) {
+    throw new ValidationError('stored job assignment identity is incomplete')
+  }
+  return normalizeJobAssignment({
+    jobAssignmentId: String(row.job_assignment_id),
+    assignedProfileId: String(row.assigned_profile_id),
+    assignmentMarketVersion: Number(row.assignment_market_version),
+  })
+}
+
+function assignmentEventPayload(
+  value: Pick<Job, 'job_assignment_id' | 'assigned_profile_id' | 'assignment_market_version'>
+    | {
+      job_assignment_id: string | null
+      assigned_profile_id: string | null
+      assignment_market_version: number | null
+    },
+): Record<string, string | number> {
+  if (!value.job_assignment_id
+    || !value.assigned_profile_id
+    || value.assignment_market_version === null) {
+    return {}
+  }
+  return {
+    job_assignment_id: value.job_assignment_id,
+    assigned_profile_id: value.assigned_profile_id,
+    assignment_market_version: value.assignment_market_version,
   }
 }

@@ -6,6 +6,9 @@ const ambientIdentity = {
   lifecycle: 'ambient',
   contract_attached: false,
   job_id: null,
+  job_assignment_id: null,
+  assigned_profile_id: null,
+  assignment_market_version: null,
   workspace_id: null,
   session_id: null,
 }
@@ -17,6 +20,72 @@ afterEach(async () => {
 })
 
 describe('orchestration compatibility entrypoints', () => {
+  it('projects canonical task identity from the relational session job before mutable context', async () => {
+    const db = openDb(':memory:')
+    db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/repo', 'repo')").run()
+    db.prepare(`INSERT INTO workspaces (
+      id, board_id, name, kind, root_path, status
+    ) VALUES ('relational-workspace', 1, 'relational', 'shared', '/repo', 'active')`).run()
+    db.prepare(`INSERT INTO jobs (
+      id, board_id, workspace_id, provider, driver_id, status
+    ) VALUES
+      ('relational-job', 1, 'relational-workspace', 'claude', 'claude', 'running'),
+      ('forged-context-job', 1, 'relational-workspace', 'claude', 'claude', 'queued')`).run()
+    const agentId = Number(db.prepare(`INSERT INTO agents (
+      board_id, name, session_id, kind, provider, status
+    ) VALUES (
+      1, 'relational-agent', 'agent-os:forged-context-job', 'hired', 'claude', 'active'
+    )`).run().lastInsertRowid)
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, agent_id, provider, external_id, status, context_json, job_id
+    ) VALUES (
+      'relational-session', 'relational-workspace', ?, 'claude', 'thread-relational',
+      'running', json_object('job_id', 'forged-context-job'), 'relational-job'
+    )`).run(agentId)
+    const conductor: ConductorLike = {
+      isHired: () => true,
+      hire: () => ({}),
+      deliver: () => true,
+      task: () => true,
+      transcript: () => ({ lines: [], working: null }),
+      subagents: () => [],
+      interruptAgent: async () => true,
+      fire: async () => true,
+      launch: () => ({ queued: false }),
+      isLaunched: () => false,
+    }
+    const server = buildServer(db, () => conductor)
+    servers.push(server)
+    await server.ready()
+
+    const forged = await server.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/task`,
+      payload: { text: 'must not project the forged context job' },
+    })
+    expect(forged.json()).toMatchObject({
+      mode: 'ambient',
+      orchestration: { lifecycle: 'ambient', job_id: null, session_id: null },
+    })
+
+    db.prepare(`UPDATE agents SET session_id='agent-os:relational-job' WHERE id=?`)
+      .run(agentId)
+    const relational = await server.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/task`,
+      payload: { text: 'project the relational session job' },
+    })
+    expect(relational.json()).toMatchObject({
+      mode: 'canonical',
+      orchestration: {
+        lifecycle: 'canonical',
+        job_id: 'relational-job',
+        workspace_id: 'relational-workspace',
+        session_id: 'relational-session',
+      },
+    })
+  })
+
   it('uses durable launch evidence instead of card ownership to classify direct task steering', async () => {
     const db = openDb(':memory:')
     db.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/repo', 'repo')").run()

@@ -2,9 +2,15 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { AGENT_DEFAULT_EFFORT_LEVELS, defaultsForRole } from '../agent-defaults.js'
+import { AgentProfileService } from './agent-profiles.js'
 import { DeliveryReportService, type DeliveryReport } from './delivery-reports.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import {
+  resolveCurrentJobAssignment,
+  type FrozenJobAssignmentIdentity,
+  type ResolvedJobAssignment,
+} from './job-assignment-runtime.js'
 import { JobMarketService } from './job-market.js'
 import { parseJson, timestamp } from './json.js'
 import {
@@ -32,6 +38,7 @@ export interface CreateCardJob {
   budgetCents?: number | null
   scheduledAt?: string
   idempotencyKey?: string
+  expectedJobAssignment?: FrozenJobAssignmentIdentity | null
 }
 
 export interface OrchestratedAgentSession {
@@ -43,6 +50,13 @@ export interface OrchestratedAgentSession {
   model: string | null
   status: string
   context: Record<string, unknown>
+  profile_id: string | null
+  conversation_id: string | null
+  job_id: string | null
+  workspace_assignment_id: string
+  job_assignment_id: string | null
+  assigned_profile_id: string | null
+  assignment_market_version: number | null
   created_at: string
   updated_at: string
 }
@@ -90,10 +104,9 @@ export class OrchestrationService {
     const create = this.db.transaction(() => {
       const card = this.cardForCommand(input)
       let contract = this.contracts.getOrCreate(input.cardId)
-      const profile = this.resolveProfile(input, contract)
-      this.assertSupportedOptions(input, profile)
+      const requestedProfile = this.resolveProfile(input, contract)
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
-      const fingerprint = requestFingerprint(card.boardId, input, profile)
+      const fingerprint = requestFingerprint(card.boardId, input, requestedProfile)
       if (idempotencyKey) {
         const existing = this.db.prepare(`SELECT id, request_fingerprint FROM jobs
           WHERE board_id=? AND idempotency_key=?`).get(card.boardId, idempotencyKey) as
@@ -106,8 +119,26 @@ export class OrchestrationService {
         }
       }
 
+      const assignment = resolveCurrentJobAssignment(this.db, card.boardId, input.cardId)
+      assertExpectedJobAssignment(input.expectedJobAssignment, assignment)
+      const profile = assignment
+        ? this.resolveAssignedProfile(input, assignment, requestedProfile)
+        : requestedProfile
+      this.assertSupportedOptions(input, profile)
       this.assertPreflight(card.boardId, contract, input, profile)
-      const workspace = this.resolveWorkspace(card, contract, input, profile.accessProfile)
+      if (assignment?.workspaceId && input.workspaceId !== undefined
+        && input.workspaceId !== null && input.workspaceId !== assignment.workspaceId) {
+        throw new ConflictError('requested workspace differs from the active Job Market assignment')
+      }
+      const workspaceInput = assignment?.workspaceId
+        ? { ...input, workspaceId: assignment.workspaceId }
+        : input
+      const workspace = this.resolveWorkspace(card, contract, workspaceInput, profile.accessProfile)
+      if (assignment && workspace.status !== 'active') {
+        throw new ConflictError(
+          'Job Market assigned launches require an active workspace before runtime binding',
+        )
+      }
       if (contract.workspace_id !== workspace.id) {
         contract = this.contracts.put(input.cardId, { workspace_id: workspace.id })
       }
@@ -129,6 +160,7 @@ export class OrchestrationService {
           effort: profile.effort,
           access_profile: profile.accessProfile,
           contract_version: contract.version,
+          ...assignmentEventPayload(assignment),
         },
       })
       const workspaceEvent = workspace.status === 'reserved' ? this.events.append({
@@ -156,6 +188,7 @@ export class OrchestrationService {
         contractVersion: contract.version,
         idempotencyKey,
         requestFingerprint: fingerprint,
+        jobAssignment: assignment ? frozenJobAssignment(assignment) : null,
         correlationId,
         causationId: workspaceEvent.id,
         priority: input.priority ?? contract.priority,
@@ -166,7 +199,7 @@ export class OrchestrationService {
       }
       const job = this.scheduler.create(jobInput)
       const queuedEvent = this.latestJobEvent(job.id)
-      const assignmentId = randomUUID()
+      const workspaceAssignmentId = randomUUID()
       const sessionId = randomUUID()
       const at = timestamp()
       const isolationMode = workspace.kind === 'shared' ? 'explicit_shared'
@@ -175,7 +208,7 @@ export class OrchestrationService {
         (id, board_id, card_id, job_id, workspace_id, status, isolation_mode, access_profile,
          created_at, updated_at, released_at)
         VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, NULL)`).run(
-        assignmentId, card.boardId, input.cardId, job.id, workspace.id, isolationMode,
+        workspaceAssignmentId, card.boardId, input.cardId, job.id, workspace.id, isolationMode,
         profile.accessProfile, at, at,
       )
       const assignmentEvent = this.events.append({
@@ -189,12 +222,16 @@ export class OrchestrationService {
         idempotencyKey: `job:${job.id}:workspace-assignment-reserved`,
         kind: 'workspace.assignment_reserved',
         source: 'orchestration',
-        payload: { assignment_id: assignmentId, isolation_mode: isolationMode,
-          workspace_status: workspace.status, access_profile: profile.accessProfile },
+        payload: { assignment_id: workspaceAssignmentId,
+          workspace_assignment_id: workspaceAssignmentId,
+          isolation_mode: isolationMode, workspace_status: workspace.status,
+          access_profile: profile.accessProfile, ...assignmentEventPayload(assignment) },
       })
       this.db.prepare(`INSERT INTO agent_sessions
-        (id, workspace_id, agent_id, provider, external_id, model, status, context_json, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, NULL, ?, 'reserved', ?, ?, ?)`).run(
+        (id, workspace_id, agent_id, provider, external_id, model, status, context_json,
+         job_id, job_assignment_id, assigned_profile_id, assignment_market_version,
+         created_at, updated_at)
+        VALUES (?, ?, NULL, ?, NULL, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?)`).run(
         sessionId,
         workspace.id,
         profile.provider,
@@ -202,14 +239,20 @@ export class OrchestrationService {
         JSON.stringify({
           job_id: job.id,
           card_id: input.cardId,
-          assignment_id: assignmentId,
+          assignment_id: workspaceAssignmentId,
+          workspace_assignment_id: workspaceAssignmentId,
           correlation_id: correlationId,
           driver_id: profile.driverId,
           effort: profile.effort,
           access_profile: profile.accessProfile,
           managed_identity: false,
           usage_total: null,
+          ...assignmentEventPayload(assignment),
         }),
+        job.id,
+        assignment?.jobAssignmentId ?? null,
+        assignment?.assignedProfileId ?? null,
+        assignment?.assignmentMarketVersion ?? null,
         at,
         at,
       )
@@ -227,7 +270,13 @@ export class OrchestrationService {
         idempotencyKey: `job:${job.id}:session-reserved`,
         kind: 'agent_session.reserved',
         source: 'orchestration',
-        payload: { assignment_id: assignmentId, provider: profile.provider, driver_id: profile.driverId },
+        payload: {
+          assignment_id: workspaceAssignmentId,
+          workspace_assignment_id: workspaceAssignmentId,
+          provider: profile.provider,
+          driver_id: profile.driverId,
+          ...assignmentEventPayload(assignment),
+        },
       })
       return job.id
     })
@@ -341,6 +390,45 @@ export class OrchestrationService {
       model: typeof modelValue === 'string' ? modelValue.trim() : null,
       effort: typeof effortValue === 'string' ? effortValue.trim() : null,
       accessProfile,
+    }
+  }
+
+  private resolveAssignedProfile(
+    input: CreateCardJob,
+    assignment: ResolvedJobAssignment,
+    fallback: {
+      provider: string
+      driverId: string
+      model: string | null
+      effort: string | null
+      accessProfile: 'read_only' | 'workspace_write' | 'full_access'
+    },
+  ): {
+    provider: string
+    driverId: string
+    model: string | null
+    effort: string | null
+    accessProfile: 'read_only' | 'workspace_write' | 'full_access'
+  } {
+    const profile = new AgentProfileService(this.db).require(assignment.assignedProfileId)
+    if (profile.board_id !== assignment.boardId || profile.status !== 'active') {
+      throw new ConflictError('assigned AgentProfile is no longer active in the job board')
+    }
+    const provider = (input.provider ?? profile.default_provider ?? fallback.provider).trim()
+    const model = input.model === undefined
+      ? profile.default_model ?? (provider === fallback.provider ? fallback.model : null)
+      : input.model
+    const effort = input.effort === undefined
+      ? profile.default_effort ?? (provider === fallback.provider ? fallback.effort : null)
+      : input.effort
+    return {
+      provider,
+      driverId: provider,
+      model: typeof model === 'string' ? model.trim() : null,
+      effort: typeof effort === 'string' ? effort.trim() : null,
+      accessProfile: input.accessProfile
+        ?? profile.default_access_profile
+        ?? fallback.accessProfile,
     }
   }
 
@@ -479,12 +567,54 @@ export class OrchestrationService {
       || (workspace.card_id !== null && workspace.card_id !== job.card_id)) {
       throw new ConflictError('canonical job workspace record is missing or inconsistent')
     }
-    const session = this.sessionForJob(job.id)
+    const workspaceAssignments = this.db.prepare(`
+      SELECT id, board_id, card_id, job_id, workspace_id
+      FROM workspace_assignments
+      WHERE job_id=?
+      ORDER BY rowid
+      LIMIT 2
+    `).all(job.id) as Array<{
+      id: string
+      board_id: number
+      card_id: number
+      job_id: string
+      workspace_id: string
+    }>
+    if (workspaceAssignments.length !== 1) {
+      throw new ConflictError('canonical job workspace assignment identity is missing or ambiguous')
+    }
+    const workspaceAssignment = workspaceAssignments[0]!
+    if (workspaceAssignment.board_id !== job.board_id
+      || workspaceAssignment.card_id !== job.card_id
+      || workspaceAssignment.job_id !== job.id
+      || workspaceAssignment.workspace_id !== workspaceId) {
+      throw new ConflictError('canonical job workspace assignment scope is inconsistent')
+    }
+    const session = this.sessionForJob(job.id, workspaceAssignment.id)
     if (!session || session.workspace_id !== workspaceId || delivery.session_id !== session.id) {
       throw new ConflictError('canonical job session scope is missing or inconsistent')
     }
     if (session.context.job_id !== job.id) {
       throw new ConflictError('canonical job session identity is inconsistent')
+    }
+    for (const key of ['assignment_id', 'workspace_assignment_id'] as const) {
+      const contextId = session.context[key]
+      if (contextId !== undefined && contextId !== null
+        && (typeof contextId !== 'string'
+          || contextId.trim() !== workspaceAssignment.id)) {
+        throw new ConflictError('canonical job workspace assignment context is inconsistent')
+      }
+    }
+    if (session.job_id !== null && session.job_id !== job.id) {
+      throw new ConflictError('canonical job relational session identity is inconsistent')
+    }
+    if (job.job_assignment_id) {
+      if (session.job_id !== job.id
+        || session.job_assignment_id !== job.job_assignment_id
+        || session.assigned_profile_id !== job.assigned_profile_id
+        || session.assignment_market_version !== job.assignment_market_version) {
+        throw new ConflictError('canonical job assignment session identity is inconsistent')
+      }
     }
     if (typeof session.context.correlation_id !== 'string' || !session.context.correlation_id) {
       throw new ConflictError('canonical job correlation identity is missing')
@@ -499,12 +629,20 @@ export class OrchestrationService {
     }
   }
 
-  private sessionForJob(jobId: string): OrchestratedAgentSession | null {
+  private sessionForJob(
+    jobId: string,
+    workspaceAssignmentId: string,
+  ): OrchestratedAgentSession | null {
     const row = this.db.prepare(`SELECT * FROM agent_sessions
-      WHERE CASE WHEN json_valid(context_json)
-        THEN json_extract(context_json, '$.job_id')=? ELSE 0 END
-      ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(jobId) as Record<string, unknown> | undefined
+      WHERE job_id=? OR (
+        job_id IS NULL
+        AND CASE WHEN json_valid(context_json)
+          THEN json_extract(context_json, '$.job_id')=? ELSE 0 END
+      )
+      ORDER BY CASE WHEN job_id=? THEN 0 ELSE 1 END, updated_at DESC, rowid DESC
+      LIMIT 1`).get(jobId, jobId, jobId) as Record<string, unknown> | undefined
     if (!row) return null
+    const assignment = orchestrationSessionAssignment(row)
     return {
       id: String(row.id),
       workspace_id: String(row.workspace_id),
@@ -514,6 +652,13 @@ export class OrchestrationService {
       model: row.model == null ? null : String(row.model),
       status: String(row.status),
       context: parseJson<Record<string, unknown>>(row.context_json, {}),
+      profile_id: row.profile_id == null ? null : String(row.profile_id),
+      conversation_id: row.conversation_id == null ? null : String(row.conversation_id),
+      job_id: row.job_id == null ? null : String(row.job_id),
+      workspace_assignment_id: workspaceAssignmentId,
+      job_assignment_id: assignment?.jobAssignmentId ?? null,
+      assigned_profile_id: assignment?.assignedProfileId ?? null,
+      assignment_market_version: assignment?.assignmentMarketVersion ?? null,
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     }
@@ -524,6 +669,27 @@ export class OrchestrationService {
       ORDER BY rowid DESC LIMIT 1`).get(jobId) as
       { id: string; correlation_id: string | null } | undefined) ?? null
   }
+}
+
+function orchestrationSessionAssignment(row: Record<string, unknown>): FrozenJobAssignmentIdentity | null {
+  const present = [
+    row.job_assignment_id,
+    row.assigned_profile_id,
+    row.assignment_market_version,
+  ].map((value) => value != null)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) {
+    throw new ConflictError('canonical job session assignment identity is incomplete')
+  }
+  const jobAssignmentId = String(row.job_assignment_id).trim()
+  const assignedProfileId = String(row.assigned_profile_id).trim()
+  const assignmentMarketVersion = Number(row.assignment_market_version)
+  if (!jobAssignmentId || !assignedProfileId
+    || !Number.isSafeInteger(assignmentMarketVersion)
+    || assignmentMarketVersion <= 0) {
+    throw new ConflictError('canonical job session assignment identity is invalid')
+  }
+  return { jobAssignmentId, assignedProfileId, assignmentMarketVersion }
 }
 
 function filterDispatch(dispatch: SchedulerTick, jobId: string): SchedulerTick {
@@ -569,8 +735,53 @@ function requestFingerprint(
     budget_tokens: input.budgetTokens ?? null,
     budget_cents: input.budgetCents ?? null,
     scheduled_at: input.scheduledAt ?? null,
+    ...(input.expectedJobAssignment === undefined
+      ? {}
+      : { expected_job_assignment: input.expectedJobAssignment }),
   }
   return createHash('sha256').update(JSON.stringify(request)).digest('hex')
+}
+
+function assertExpectedJobAssignment(
+  expected: FrozenJobAssignmentIdentity | null | undefined,
+  current: ResolvedJobAssignment | null,
+): void {
+  if (expected === undefined) return
+  if (expected === null) {
+    if (current) {
+      throw new ConflictError('expected no active Job Market assignment')
+    }
+    return
+  }
+  if (!current
+    || expected.jobAssignmentId !== current.jobAssignmentId
+    || expected.assignedProfileId !== current.assignedProfileId
+    || expected.assignmentMarketVersion !== current.assignmentMarketVersion
+    || current.assignmentVersion !== 1
+    || current.currentMarketVersion !== current.assignmentMarketVersion) {
+    throw new ConflictError('expected Job Market assignment is stale or no longer active')
+  }
+}
+
+function frozenJobAssignment(
+  assignment: ResolvedJobAssignment,
+): FrozenJobAssignmentIdentity {
+  return {
+    jobAssignmentId: assignment.jobAssignmentId,
+    assignedProfileId: assignment.assignedProfileId,
+    assignmentMarketVersion: assignment.assignmentMarketVersion,
+  }
+}
+
+function assignmentEventPayload(
+  assignment: ResolvedJobAssignment | null,
+): Record<string, string | number> {
+  if (!assignment) return {}
+  return {
+    job_assignment_id: assignment.jobAssignmentId,
+    assigned_profile_id: assignment.assignedProfileId,
+    assignment_market_version: assignment.assignmentMarketVersion,
+  }
 }
 
 function contractIdentity(contract: TaskContract): string {

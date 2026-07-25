@@ -71,6 +71,9 @@ export type AgentSessionRecord = {
   profile_id: string | null
   conversation_id: string | null
   job_id: string | null
+  job_assignment_id: string | null
+  assigned_profile_id: string | null
+  assignment_market_version: number | null
   mode: 'managed' | 'ambient' | 'compatibility' | string
   driver_id: string | null
   effort: string | null

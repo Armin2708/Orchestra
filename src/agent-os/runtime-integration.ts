@@ -1555,23 +1555,120 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       const sessionRow = this.sessionForJob(job.id)
       const paused = sessionRow?.control_state === 'paused'
       if (paused) this.pausedJobs.add(job.id)
-      const driver = sessionRow ? this.drivers.get(sessionRow.provider) : undefined
-      if (!sessionRow?.external_id || !driver || !driver.capabilities().resume) {
+      const bindingError = this.recoveryBindingError(job, sessionRow)
+      const driver = sessionRow
+        ? this.drivers.get(sessionRow.driver_id ?? sessionRow.provider)
+        : undefined
+      if (bindingError || !sessionRow?.external_id || !driver || !driver.capabilities().resume) {
         this.pausedJobs.delete(job.id)
         if (sessionRow) this.markSessionFailed(sessionRow.id)
-        const reason = `daemon restarted; ${job.provider} session cannot be resumed`
+        const reason = bindingError
+          ? `daemon restart recovery rejected: ${bindingError}`
+          : `daemon restarted; ${job.provider} session cannot be resumed`
         const recoveredJob = this.scheduler.recover(job.id, reason)
         if (sessionRow) this.finalizeManagedAgent(job, sessionRow.id, reason, recoveredJob.status)
         recovered.push(job.id)
         continue
       }
       let providerSessionLost = false
+      let attachedSession: DriverSession | null = null
+      let attachedSessionTrusted = false
+      let recoveryHandleReleased = false
+      const detachRecoveryHandle = async (): Promise<void> => {
+        if (!attachedSession || recoveryHandleReleased || !attachedSession.id.trim()) return
+        recoveryHandleReleased = true
+        if (driver.detach) await driver.detach(attachedSession.id).catch(() => undefined)
+      }
+      const stopTrustedRecoveryHandle = async (): Promise<string | null> => {
+        if (!attachedSession
+          || !attachedSessionTrusted
+          || recoveryHandleReleased
+          || !attachedSession.id.trim()) return null
+        recoveryHandleReleased = true
+        try {
+          await driver.stop(attachedSession.id)
+          return null
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      }
+      const revalidateDurableBinding = (): NonNullable<
+        ReturnType<AgentOsJobExecutor['sessionForJob']>
+      > => {
+        const currentJob = this.scheduler!.get(job.id)
+        if (!currentJob) throw new Error('durable job disappeared during provider recovery')
+        if (currentJob.status !== 'running') {
+          throw new Error(`durable job entered ${currentJob.status} during provider recovery`)
+        }
+        if (currentJob.board_id !== job.board_id
+          || currentJob.card_id !== job.card_id
+          || currentJob.workspace_id !== job.workspace_id
+          || currentJob.provider !== job.provider
+          || currentJob.driver_id !== job.driver_id
+          || currentJob.job_assignment_id !== job.job_assignment_id
+          || currentJob.assigned_profile_id !== job.assigned_profile_id
+          || currentJob.assignment_market_version !== job.assignment_market_version) {
+          throw new Error('durable job identity changed during provider recovery')
+        }
+        const currentSession = this.sessionForJob(job.id)
+        if (!currentSession
+          || currentSession.id !== sessionRow.id
+          || currentSession.job_id !== sessionRow.job_id
+          || currentSession.workspace_id !== sessionRow.workspace_id
+          || currentSession.provider !== sessionRow.provider
+          || currentSession.driver_id !== sessionRow.driver_id
+          || currentSession.external_id !== sessionRow.external_id
+          || currentSession.job_assignment_id !== sessionRow.job_assignment_id
+          || currentSession.assigned_profile_id !== sessionRow.assigned_profile_id
+          || currentSession.assignment_market_version !== sessionRow.assignment_market_version
+          || currentSession.profile_id !== sessionRow.profile_id
+          || currentSession.conversation_id !== sessionRow.conversation_id) {
+          throw new Error('durable provider session identity changed during provider recovery')
+        }
+        if (!['starting', 'running', 'idle'].includes(currentSession.status)
+          || !['active', 'paused'].includes(currentSession.control_state)) {
+          throw new Error('durable provider session is no longer recoverable')
+        }
+        const durableBindingError = this.recoveryBindingError(currentJob, currentSession)
+        if (durableBindingError) throw new Error(durableBindingError)
+        if (!currentJob.workspace_id || !currentSession.external_id || !attachedSession) {
+          throw new Error('durable provider session binding is incomplete')
+        }
+        const currentProviderBindingError = providerSessionBindingError({
+          job: currentJob,
+          driver,
+          session: attachedSession,
+          workspaceId: currentJob.workspace_id,
+          externalId: currentSession.external_id,
+        })
+        if (currentProviderBindingError) {
+          throw new Error(`attached ${currentProviderBindingError}`)
+        }
+        return currentSession
+      }
       try {
         const session = await driver.attach(sessionRow.external_id)
         if (!session) {
           providerSessionLost = true
           throw new Error('provider session is no longer live')
         }
+        attachedSession = session
+        const providerBindingError = providerSessionBindingError({
+          job,
+          driver,
+          session,
+          workspaceId: job.workspace_id!,
+          externalId: sessionRow.external_id,
+        })
+        if (providerBindingError) {
+          if (session.id.trim() && driver.detach) await detachRecoveryHandle()
+          throw new Error(`attached ${providerBindingError}`)
+        }
+        attachedSessionTrusted = true
+        let currentSession = revalidateDurableBinding()
+        let currentlyPaused = currentSession.control_state === 'paused'
+        if (currentlyPaused) this.pausedJobs.add(job.id)
+        else this.pausedJobs.delete(job.id)
         if (sessionRow.provider === 'codex') {
           const update = (driver as AgentDriver & {
             updateSession?(sessionId: string, patch: {
@@ -1587,25 +1684,47 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           }
           if (!update) throw new Error('Codex driver cannot restore persisted session overrides')
           await update.call(driver, session.id, patch)
+          currentSession = revalidateDurableBinding()
+          currentlyPaused = currentSession.control_state === 'paused'
+          if (currentlyPaused) this.pausedJobs.add(job.id)
+          else this.pausedJobs.delete(job.id)
         }
-        if (sessionRow.provider === 'claude' && !paused) {
+        if (sessionRow.provider === 'claude' && !currentlyPaused) {
           await driver.send(session.id,
             'The Orchestra daemon restarted while this durable job was active. Continue the existing job from the current workspace and conversation state; verify prior work before making further changes, then complete the assignment.')
+          currentSession = revalidateDurableBinding()
+          currentlyPaused = currentSession.control_state === 'paused'
+          if (currentlyPaused) this.pausedJobs.add(job.id)
+          else this.pausedJobs.delete(job.id)
         }
         this.db.prepare(`UPDATE agent_sessions SET status=?, control_state=?,
           updated_at=datetime('now') WHERE id=?`).run(
-          paused ? 'idle' : 'running',
-          paused ? 'paused' : 'active',
-          sessionRow.id,
+          currentlyPaused ? 'idle' : 'running',
+          currentlyPaused ? 'paused' : 'active',
+          currentSession.id,
         )
         this.live.set(job.id, { driver, session })
-        void this.watch(job, sessionRow.id, driver, session, job.spent_tokens, job.spent_cents)
+        void this.watch(job, currentSession.id, driver, session, job.spent_tokens, job.spent_cents)
         resumed.push(job.id)
       } catch (error) {
         this.pausedJobs.delete(job.id)
+        const currentJob = this.scheduler.get(job.id)
+        if (!currentJob || currentJob.status !== 'running') {
+          await detachRecoveryHandle()
+          recovered.push(job.id)
+          continue
+        }
+        const cleanupError = await stopTrustedRecoveryHandle()
+        const retainedJob = this.scheduler.get(job.id)
+        if (!retainedJob || retainedJob.status !== 'running') {
+          recovered.push(job.id)
+          continue
+        }
         if (providerSessionLost) this.markSessionLost(sessionRow.id)
         else this.markSessionFailed(sessionRow.id)
-        const reason = `daemon restart recovery failed: ${error instanceof Error ? error.message : String(error)}`
+        const reason = `daemon restart recovery failed: ${
+          error instanceof Error ? error.message : String(error)
+        }${cleanupError ? `; exact provider session cleanup failed: ${cleanupError}` : ''}`
         const recoveredJob = this.scheduler.recover(job.id, reason)
         if (providerSessionLost) this.markSessionLost(sessionRow.id)
         this.finalizeManagedAgent(job, sessionRow.id, reason, recoveredJob.status)
@@ -1670,8 +1789,17 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   async execute(job: Job): Promise<JobExecutionResult> {
     const driver = this.drivers.require(job.driver_id)
     const capabilities = driver.capabilities()
-    const contract = job.card_id ? new TaskContractService(this.db).getOrCreate(job.card_id) : null
-    const delivery = job.card_id ? this.deliveries.reports.prepareForJob(job.id) : null
+    const assignment = runtimeJobAssignment(job)
+    const delivery = job.card_id
+      ? assignment
+        ? this.deliveries.reports.currentForJob(job.id)
+        : this.deliveries.reports.prepareForJob(job.id)
+      : null
+    const contract = job.card_id
+      ? assignment
+        ? frozenRuntimeContract(job, delivery)
+        : new TaskContractService(this.db).getOrCreate(job.card_id)
+      : null
     const budgetTokens = job.budget_tokens ?? contract?.budget_tokens ?? null
     const budgetCents = job.budget_cents ?? contract?.budget_cents ?? null
     this.db.prepare(`UPDATE jobs SET budget_tokens=COALESCE(budget_tokens, ?), budget_cents=COALESCE(budget_cents, ?)
@@ -1684,7 +1812,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     if (budgetCents !== null && !capabilities.costBudget)
       throw new Error(`driver ${job.driver_id} does not expose an authoritative cost budget`)
     const workspace = await this.resolveWorkspace(effectiveJob, contract)
-    if (job.card_id && contract?.workspace_id !== workspace.id) {
+    if (!assignment && job.card_id && contract?.workspace_id !== workspace.id) {
       new TaskContractService(this.db).put(job.card_id, { workspace_id: workspace.id })
     }
     this.assertCardClaimable(job)
@@ -1702,9 +1830,10 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       effort: job.effort,
       access_profile: job.access_profile,
       usage_total: null,
+      ...runtimeAssignmentEventPayload(job),
     }
     let agentHome: ManagedAgentSessionBinding | null = null
-    if (job.provider !== 'shell') {
+    if (job.provider !== 'shell' || assignment) {
       try {
         agentHome = new ManagedAgentSessionBinder(this.db).bind({
           jobId: job.id,
@@ -1716,6 +1845,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           model: job.model,
           effort: job.effort,
           accessProfile: job.access_profile,
+          jobAssignment: assignment,
           context: sessionContext,
         })
       } catch (error) {
@@ -1748,6 +1878,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
             effort: job.effort,
             accessProfile: job.access_profile,
             driverId: job.driver_id,
+            ...runtimeAssignmentEventPayload(job),
             ...(managedAgentId ? { agentId: managedAgentId } : {}),
             agentHomeSessionId: agentHome!.agentHomeSessionId,
             agentProfileId: agentHome!.agentProfileId,
@@ -1760,6 +1891,33 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw error
     }
+    const providerBindingError = providerSessionBindingError({
+      job,
+      driver,
+      session,
+      workspaceId: workspace.id,
+    })
+    if (providerBindingError) {
+      if (session.id.trim()) await driver.stop(session.id).catch(() => undefined)
+      if (managedAgentId) this.markManagedAgentGone(managedAgentId)
+      throw new Error(providerBindingError)
+    }
+    if (assignment) {
+      try {
+        const retainedWorkspace = await this.resolveWorkspace(effectiveJob, contract)
+        if (retainedWorkspace.id !== workspace.id) {
+          throw new Error('assigned job resolved a different workspace after provider launch')
+        }
+      } catch (error) {
+        await driver.stop(session.id).catch(() => undefined)
+        if (managedAgentId) this.markManagedAgentGone(managedAgentId)
+        throw new ConflictError(
+          `assigned job workspace was revoked during provider launch: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
+    }
     const launchState = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
     if (launchState?.status !== 'running') {
       await driver.stop(session.id).catch(() => undefined)
@@ -1769,23 +1927,54 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     const reservation = agentHome
       ? this.db.prepare('SELECT id, context_json FROM agent_sessions WHERE id=?')
           .get(agentHome.agentHomeSessionId) as { id: string; context_json: string } | undefined
+      : assignment
+        ? this.db.prepare(`SELECT id, context_json FROM agent_sessions
+            WHERE job_id=?
+              AND job_assignment_id=?
+              AND assigned_profile_id=?
+              AND assignment_market_version=?
+              AND status IN ('reserved','starting')
+            ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
+            .get(
+              job.id,
+              assignment.jobAssignmentId,
+              assignment.assignedProfileId,
+              assignment.assignmentMarketVersion,
+            ) as { id: string; context_json: string } | undefined
       : this.db.prepare(`SELECT id, context_json FROM agent_sessions
-          WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
+          WHERE (
+            job_id=? OR (
+              job_id IS NULL
+              AND json_valid(context_json)
+              AND json_extract(context_json, '$.job_id')=?
+            )
+          )
             AND status IN ('reserved','starting') ORDER BY updated_at DESC, rowid DESC LIMIT 1`)
-          .get(job.id) as { id: string; context_json: string } | undefined
+          .get(job.id, job.id) as { id: string; context_json: string } | undefined
     const sessionId = agentHome?.agentHomeSessionId ?? reservation?.id ?? randomUUID()
     const agentId = Number(session.metadata.agentId ?? managedAgentId)
     try {
       if (agentHome && !reservation) {
         throw new Error(`bound Agent Home session disappeared before provider launch completed: ${sessionId}`)
       }
+      if (assignment && !reservation) {
+        throw new Error('assigned job reservation disappeared before provider launch completed')
+      }
       const context = {
         ...parseJson<Record<string, unknown>>(reservation?.context_json, {}),
         ...sessionContext,
       }
       if (reservation) {
-        this.db.prepare(`UPDATE agent_sessions SET workspace_id=?, agent_id=?, provider=?, external_id=?, model=?,
-          status='running', context_json=?, updated_at=datetime('now') WHERE id=?`).run(
+        const updated = this.db.prepare(`UPDATE agent_sessions
+          SET workspace_id=?, agent_id=?, provider=?, external_id=?, model=?,
+            status='running', context_json=?, updated_at=datetime('now')
+          WHERE id=?
+            AND (? IS NULL OR (
+              job_id=?
+              AND job_assignment_id=?
+              AND assigned_profile_id=?
+              AND assignment_market_version=?
+            ))`).run(
           workspace.id,
           Number.isSafeInteger(agentId) && agentId > 0 ? agentId : null,
           job.provider,
@@ -1793,7 +1982,15 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           job.model,
           JSON.stringify(context),
           sessionId,
+          assignment?.jobAssignmentId ?? null,
+          job.id,
+          assignment?.jobAssignmentId ?? null,
+          assignment?.assignedProfileId ?? null,
+          assignment?.assignmentMarketVersion ?? null,
         )
+        if (updated.changes !== 1) {
+          throw new Error('reserved provider session changed before launch completion')
+        }
       } else {
         this.db.prepare(`INSERT INTO agent_sessions
           (id, workspace_id, agent_id, provider, external_id, model, status, context_json, created_at, updated_at)
@@ -1820,7 +2017,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           }),
           managedAgentId,
         )
-      this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
+      if (!assignment) {
+        this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
+      }
       if (delivery) this.deliveries.reports.attachRuntimeScope(delivery.id, {
         workspaceId: workspace.id,
         sessionId,
@@ -1840,7 +2039,12 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         idempotencyKey: `job:${job.id}:session-started:${job.attempts}`,
         kind: 'agent_session.started',
         source: job.driver_id,
-        payload: { provider: job.provider, driver_id: job.driver_id, external_id: session.externalId },
+        payload: {
+          provider: job.provider,
+          driver_id: job.driver_id,
+          external_id: session.externalId,
+          ...runtimeAssignmentEventPayload(job),
+        },
       })
       if (job.card_id && Number.isSafeInteger(agentId) && agentId > 0) this.claimCard(job, agentId)
     } catch (error) {
@@ -1860,21 +2064,72 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     } else {
       const row = this.sessionForJob(job.id)
       if (row?.external_id) {
-        const driver = this.drivers.get(row.provider)
+        if (runtimeJobAssignment(job)) {
+          const bindingError = this.recoveryBindingError(job, row)
+          if (bindingError) throw new ConflictError(`cancel rejected: ${bindingError}`)
+        }
+        const driver = this.drivers.get(row.driver_id ?? row.provider)
         const attached = driver ? await driver.attach(row.external_id) : null
-        if (driver && attached) await driver.stop(attached.id)
+        if (driver && attached) {
+          const providerBindingError = providerSessionBindingError({
+            job,
+            driver,
+            session: attached,
+            workspaceId: job.workspace_id ?? row.workspace_id,
+            externalId: row.external_id,
+          })
+          if (providerBindingError) {
+            if (attached.id.trim() && driver.detach) {
+              await driver.detach(attached.id).catch(() => undefined)
+            }
+            throw new ConflictError(`cancel rejected: attached ${providerBindingError}`)
+          }
+          await driver.stop(attached.id)
+        }
       }
     }
-    const stopped = this.db.prepare(`UPDATE agent_sessions SET status='stopped', updated_at=datetime('now')
-      WHERE json_valid(context_json) AND json_extract(context_json, '$.job_id')=?
-        AND status NOT IN ('stopped','failed')`).run(job.id)
+    const session = this.sessionForJob(job.id)
+    const stopped = session
+      ? this.db.prepare(`UPDATE agent_sessions SET status='stopped', updated_at=datetime('now')
+          WHERE id=? AND status NOT IN ('stopped','failed')`).run(session.id)
+      : { changes: 0 }
     if (stopped.changes > 0) {
-      const session = this.sessionForJob(job.id)
       if (session) this.recordSessionTransition(job, session.id, 'stopped', job.driver_id)
     }
   }
 
   private async resolveWorkspace(job: Job, contract: TaskContract | null): Promise<WorkspaceRecord> {
+    const assignment = runtimeJobAssignment(job)
+    if (assignment) {
+      if (!job.workspace_id || !job.card_id || contract?.workspace_id !== job.workspace_id) {
+        throw new Error('assigned job is missing its frozen card workspace scope')
+      }
+      const retained = this.db.prepare(`SELECT 1
+        FROM job_market_assignments assignment
+        WHERE assignment.id=?
+          AND assignment.board_id=?
+          AND assignment.card_id=?
+          AND assignment.profile_id=?
+          AND assignment.assigned_market_version=?
+          AND assignment.status='active'
+          AND (assignment.workspace_id IS NULL OR assignment.workspace_id=?)`).get(
+        assignment.jobAssignmentId,
+        job.board_id,
+        job.card_id,
+        assignment.assignedProfileId,
+        assignment.assignmentMarketVersion,
+        job.workspace_id,
+      )
+      if (!retained) throw new Error('assigned job no longer has its exact active assignment')
+      const workspace = await this.workspaces.get(job.workspace_id)
+      if (!workspace
+        || workspace.status !== 'active'
+        || workspace.boardId !== job.board_id
+        || (workspace.cardId !== null && workspace.cardId !== job.card_id)) {
+        throw new Error('assigned job workspace no longer matches its frozen runtime scope')
+      }
+      return workspace
+    }
     const requested = job.workspace_id ?? contract?.workspace_id
     if (requested) {
       const existing = await this.workspaces.get(requested)
@@ -1918,7 +2173,11 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       name: job.card_id ? `verify-${job.card_id}` : `job-${job.id.slice(0, 8)}`,
       command,
       env: workspace.env,
-      metadata: { jobId: job.id, cardId: job.card_id },
+      metadata: {
+        jobId: job.id,
+        cardId: job.card_id,
+        ...runtimeAssignmentEventPayload(job),
+      },
     }
   }
 
@@ -2436,33 +2695,158 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   private sessionForJob(jobId: string): {
     id: string
+    workspace_id: string
+    job_id: string | null
+    job_assignment_id: string | null
+    assigned_profile_id: string | null
+    assignment_market_version: number | null
+    profile_id: string | null
+    conversation_id: string | null
     provider: string
+    driver_id: string | null
     external_id: string | null
     model: string | null
     effort: string | null
     access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+    status: AgentSessionRecord['status']
     control_state: AgentSessionRecord['control_state']
   } | undefined {
-    return this.db.prepare(`SELECT s.id, s.provider, s.external_id,
-      COALESCE(a.model, s.model) AS model, a.effort, a.access_profile, s.control_state
+    return this.db.prepare(`SELECT s.id, s.workspace_id, s.job_id,
+      s.job_assignment_id, s.assigned_profile_id, s.assignment_market_version,
+      s.profile_id, s.conversation_id, s.provider, s.driver_id, s.external_id,
+      COALESCE(a.model, s.model) AS model,
+      COALESCE(a.effort, s.effort) AS effort,
+      COALESCE(a.access_profile, s.access_profile) AS access_profile,
+      s.status, s.control_state
       FROM agent_sessions s LEFT JOIN agents a ON a.id=s.agent_id
-      WHERE json_valid(s.context_json) AND json_extract(s.context_json, '$.job_id')=?
-      ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId) as {
+      WHERE s.job_id=? OR (
+        s.job_id IS NULL
+        AND json_valid(s.context_json)
+        AND json_extract(s.context_json, '$.job_id')=?
+      )
+      ORDER BY CASE WHEN s.job_id=? THEN 0 ELSE 1 END,
+        s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId, jobId, jobId) as {
         id: string
+        workspace_id: string
+        job_id: string | null
+        job_assignment_id: string | null
+        assigned_profile_id: string | null
+        assignment_market_version: number | null
+        profile_id: string | null
+        conversation_id: string | null
         provider: string
+        driver_id: string | null
         external_id: string | null
         model: string | null
         effort: string | null
         access_profile: 'read_only' | 'workspace_write' | 'full_access' | null
+        status: AgentSessionRecord['status']
         control_state: AgentSessionRecord['control_state']
       } | undefined
   }
 
+  private recoveryBindingError(
+    job: Job,
+    session: ReturnType<AgentOsJobExecutor['sessionForJob']>,
+  ): string | null {
+    if (!session) return 'durable provider session is missing'
+    if (!job.workspace_id
+      || session.workspace_id !== job.workspace_id
+      || session.provider !== job.provider
+      || (session.driver_id ?? session.provider) !== job.driver_id
+      || (session.job_id !== null && session.job_id !== job.id)) {
+      return 'job, provider, or workspace identity is inconsistent'
+    }
+    const workspace = this.db.prepare(`SELECT 1
+      FROM workspaces
+      WHERE id=?
+        AND board_id=?
+        AND status='active'
+        AND (? IS NULL OR card_id IS NULL OR card_id=?)`).get(
+      job.workspace_id,
+      job.board_id,
+      job.card_id,
+      job.card_id,
+    )
+    if (!workspace) return 'job workspace is no longer active or correctly scoped'
+    let sessionAssignment: ReturnType<typeof runtimeAssignmentFromRow>
+    try {
+      sessionAssignment = runtimeAssignmentFromRow(session)
+    } catch {
+      return 'provider session assignment identity is incomplete'
+    }
+    const jobAssignment = runtimeJobAssignment(job)
+    if (!jobAssignment) {
+      return sessionAssignment
+        ? 'an unassigned job cannot recover through an assigned provider session'
+        : null
+    }
+    if (!sessionAssignment
+      || session.job_id !== job.id
+      || sessionAssignment.jobAssignmentId !== jobAssignment.jobAssignmentId
+      || sessionAssignment.assignedProfileId !== jobAssignment.assignedProfileId
+      || sessionAssignment.assignmentMarketVersion !== jobAssignment.assignmentMarketVersion
+      || session.profile_id !== jobAssignment.assignedProfileId
+      || !session.conversation_id) {
+      return 'provider session does not retain the frozen job assignment'
+    }
+    const retained = this.db.prepare(`SELECT 1
+      FROM job_market_assignments assignment
+      JOIN agent_profiles profile ON profile.id=assignment.profile_id
+      JOIN agent_conversations conversation ON conversation.id=?
+      WHERE assignment.id=?
+        AND assignment.board_id=?
+        AND assignment.card_id=?
+        AND assignment.profile_id=?
+        AND assignment.assigned_market_version=?
+        AND assignment.status='active'
+        AND (assignment.workspace_id IS NULL OR assignment.workspace_id=?)
+        AND profile.status='active'
+        AND conversation.board_id=assignment.board_id
+        AND conversation.profile_id=assignment.profile_id
+        AND conversation.status='active'`).get(
+      session.conversation_id,
+      jobAssignment.jobAssignmentId,
+      job.board_id,
+      job.card_id,
+      jobAssignment.assignedProfileId,
+      jobAssignment.assignmentMarketVersion,
+      job.workspace_id,
+    )
+    return retained ? null : 'frozen job assignment is no longer recoverable'
+  }
+
   private controlForAgent(agentId: number): { job: Job; sessionId: string; live?: LiveJob } | undefined {
     const row = this.db.prepare(`SELECT s.id AS session_id, j.* FROM agent_sessions s
-      JOIN jobs j ON j.id=json_extract(s.context_json, '$.job_id')
+      JOIN jobs j ON j.id=coalesce(
+        s.job_id,
+        CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id') END
+      )
       JOIN agents a ON a.id=s.agent_id
       WHERE s.agent_id=? AND a.session_id=('agent-os:' || j.id)
+        AND (j.workspace_id IS NULL OR s.workspace_id=j.workspace_id)
+        AND (
+          (
+            j.job_assignment_id IS NULL
+            AND j.assigned_profile_id IS NULL
+            AND j.assignment_market_version IS NULL
+            AND s.job_assignment_id IS NULL
+            AND s.assigned_profile_id IS NULL
+            AND s.assignment_market_version IS NULL
+          )
+          OR
+          (
+            j.job_assignment_id IS NOT NULL
+            AND s.job_id=j.id
+            AND s.job_assignment_id=j.job_assignment_id
+            AND s.assigned_profile_id=j.assigned_profile_id
+            AND s.assignment_market_version=j.assignment_market_version
+            AND s.workspace_id=j.workspace_id
+            AND s.profile_id=j.assigned_profile_id
+            AND s.conversation_id IS NOT NULL
+            AND s.external_id IS NOT NULL
+          )
+        )
       ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as
       (Record<string, unknown> & { session_id: string }) | undefined
     if (!row) return undefined
@@ -2476,7 +2860,38 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         s.job_id,
         CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id') END
       )
-      WHERE s.id=?`).get(sessionId) as
+      WHERE s.id=?
+        AND (j.workspace_id IS NULL OR s.workspace_id=j.workspace_id)
+        AND (
+          (
+            j.job_assignment_id IS NULL
+            AND j.assigned_profile_id IS NULL
+            AND j.assignment_market_version IS NULL
+            AND s.job_assignment_id IS NULL
+            AND s.assigned_profile_id IS NULL
+            AND s.assignment_market_version IS NULL
+          )
+          OR
+          (
+            j.job_assignment_id IS NOT NULL
+            AND s.job_id=j.id
+            AND s.job_assignment_id=j.job_assignment_id
+            AND s.assigned_profile_id=j.assigned_profile_id
+            AND s.assignment_market_version=j.assignment_market_version
+            AND s.workspace_id=j.workspace_id
+            AND (
+              (
+                s.profile_id IS NULL
+                AND s.conversation_id IS NULL
+              )
+              OR
+              (
+                s.profile_id=j.assigned_profile_id
+                AND s.conversation_id IS NOT NULL
+              )
+            )
+          )
+        )`).get(sessionId) as
       (Record<string, unknown> & { session_id: string }) | undefined
     if (!row) return undefined
     const job = mapRuntimeJob(row)
@@ -2526,8 +2941,120 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   }
 }
 
+function providerSessionBindingError(input: {
+  job: Job
+  driver: AgentDriver
+  session: DriverSession
+  workspaceId: string
+  externalId?: string
+}): string | null {
+  if (!input.session.id.trim() || !input.session.externalId.trim()) {
+    return 'provider session identity is empty'
+  }
+  if (input.driver.id !== input.job.driver_id
+    || input.session.driverId !== input.job.driver_id) {
+    return 'provider session driver does not match the frozen job'
+  }
+  if (input.session.workspaceId !== input.workspaceId) {
+    return 'provider session workspace does not match the frozen managed launch'
+  }
+  if (!['starting', 'running', 'idle'].includes(input.session.status)) {
+    return `provider session returned terminal or stopping status ${input.session.status}`
+  }
+  if (input.externalId !== undefined
+    && input.session.externalId !== input.externalId) {
+    return 'provider session external identity does not match the durable session'
+  }
+  return null
+}
+
+function runtimeAssignmentFromRow(row: {
+  job_assignment_id?: unknown
+  assigned_profile_id?: unknown
+  assignment_market_version?: unknown
+}): {
+  jobAssignmentId: string
+  assignedProfileId: string
+  assignmentMarketVersion: number
+} | null {
+  const present = [
+    row.job_assignment_id,
+    row.assigned_profile_id,
+    row.assignment_market_version,
+  ].map((value) => value != null)
+  if (!present.some(Boolean)) return null
+  if (!present.every(Boolean)) {
+    throw new ValidationError('stored runtime job assignment identity is incomplete')
+  }
+  const jobAssignmentId = String(row.job_assignment_id).trim()
+  const assignedProfileId = String(row.assigned_profile_id).trim()
+  const assignmentMarketVersion = Number(row.assignment_market_version)
+  if (!jobAssignmentId || !assignedProfileId
+    || !Number.isSafeInteger(assignmentMarketVersion)
+    || assignmentMarketVersion <= 0) {
+    throw new ValidationError('stored runtime job assignment identity is invalid')
+  }
+  return { jobAssignmentId, assignedProfileId, assignmentMarketVersion }
+}
+
+function runtimeJobAssignment(job: Pick<
+  Job,
+  'job_assignment_id' | 'assigned_profile_id' | 'assignment_market_version'
+>): {
+  jobAssignmentId: string
+  assignedProfileId: string
+  assignmentMarketVersion: number
+} | null {
+  return runtimeAssignmentFromRow(job)
+}
+
+function runtimeAssignmentEventPayload(job: Pick<
+  Job,
+  'job_assignment_id' | 'assigned_profile_id' | 'assignment_market_version'
+>): Record<string, string | number> {
+  const assignment = runtimeJobAssignment(job)
+  return assignment ? {
+    job_assignment_id: assignment.jobAssignmentId,
+    assigned_profile_id: assignment.assignedProfileId,
+    assignment_market_version: assignment.assignmentMarketVersion,
+  } : {}
+}
+
+function frozenRuntimeContract(job: Job, delivery: DeliveryReport | null): TaskContract {
+  if (!delivery
+    || !job.card_id
+    || !job.workspace_id
+    || !job.contract_version
+    || delivery.board_id !== job.board_id
+    || delivery.card_id !== job.card_id
+    || delivery.job_id !== job.id
+    || delivery.workspace_id !== job.workspace_id
+    || delivery.asked.contract_version !== job.contract_version) {
+    throw new ConflictError('assigned job delivery snapshot is missing or inconsistent')
+  }
+  return {
+    card_id: delivery.card_id,
+    objective: delivery.asked.objective,
+    deliverables: structuredClone(delivery.asked.deliverables),
+    acceptance_criteria: structuredClone(delivery.asked.acceptance_criteria),
+    dependencies: [...delivery.asked.dependencies],
+    base_ref: delivery.asked.base_ref,
+    verify_commands: [...delivery.asked.verify_commands],
+    non_goals: [...delivery.asked.non_goals],
+    risks: [...delivery.asked.risks],
+    budget_tokens: delivery.asked.budget_tokens,
+    budget_cents: delivery.asked.budget_cents,
+    priority: delivery.asked.priority,
+    policy_id: delivery.asked.policy_id,
+    workspace_id: job.workspace_id,
+    version: delivery.asked.contract_version,
+    updated_at: delivery.asked.contract_updated_at,
+  }
+}
+
 const mapRuntimeJob = (row: Record<string, unknown>): Job => {
   const access = String(row.access_profile ?? 'workspace_write')
+  const assignment = runtimeAssignmentFromRow(row)
   return {
     id: String(row.id), board_id: Number(row.board_id), card_id: row.card_id == null ? null : Number(row.card_id),
     workspace_id: row.workspace_id == null ? null : String(row.workspace_id), provider: String(row.provider),
@@ -2538,6 +3065,9 @@ const mapRuntimeJob = (row: Record<string, unknown>): Job => {
     policy_id: row.policy_id == null ? null : String(row.policy_id),
     contract_version: row.contract_version == null ? null : Number(row.contract_version),
     idempotency_key: row.idempotency_key == null ? null : String(row.idempotency_key),
+    job_assignment_id: assignment?.jobAssignmentId ?? null,
+    assigned_profile_id: assignment?.assignedProfileId ?? null,
+    assignment_market_version: assignment?.assignmentMarketVersion ?? null,
     priority: Number(row.priority), status: String(row.status) as Job['status'],
     attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
     budget_tokens: row.budget_tokens == null ? null : Number(row.budget_tokens),

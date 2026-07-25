@@ -50,6 +50,8 @@ const canonicalEnvelope = () => ({
   orchestration: {
     lifecycle: 'canonical', contract_attached: true, job_id: 'job-1', workspace_id: 'workspace-1',
     session_id: 'session-1', contract_id: 'card:7:v3', contract_version: 3,
+    assignment_id: 'workspace-assignment-1',
+    workspace_assignment_id: 'workspace-assignment-1',
     correlation_id: 'correlation-1', idempotency_key: 'launch-card-7',
   },
   contract: {
@@ -77,6 +79,7 @@ const canonicalEnvelope = () => ({
   },
   session: {
     id: 'session-1', workspace_id: 'workspace-1', provider: 'codex', model: 'gpt-5', status: 'running',
+    workspace_assignment_id: 'workspace-assignment-1',
     context_json: JSON.stringify({ job_id: 'job-1', correlation_id: 'correlation-1' }),
   },
   dispatch: { started: ['job-1'], completed: [], blocked: [], deferred: [] },

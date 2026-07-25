@@ -432,6 +432,10 @@ function mapForkSession(row: Record<string, unknown>): AgentSessionRecord {
     profile_id: row.profile_id == null ? null : String(row.profile_id),
     conversation_id: row.conversation_id == null ? null : String(row.conversation_id),
     job_id: row.job_id == null ? null : String(row.job_id),
+    job_assignment_id: row.job_assignment_id == null ? null : String(row.job_assignment_id),
+    assigned_profile_id: row.assigned_profile_id == null ? null : String(row.assigned_profile_id),
+    assignment_market_version: row.assignment_market_version == null
+      ? null : Number(row.assignment_market_version),
     mode: String(row.mode) as AgentSessionRecord['mode'],
     driver_id: row.driver_id == null ? null : String(row.driver_id),
     effort: row.effort == null ? null : String(row.effort),
