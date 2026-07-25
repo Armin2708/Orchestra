@@ -198,6 +198,23 @@ type ActionRequestAudit = {
   payload: Record<string, unknown>
 }
 
+type ActionRequestAuditCandidate = {
+  id: string
+  board_id: number
+  kind: string
+  source: string
+  workspace_id: string | null
+  card_id: number | null
+  session_id: string | null
+  process_id: string | null
+  job_id: string | null
+  contract_id: string | null
+  correlation_id: string | null
+  causation_id: string | null
+  event_version: number
+  payload: string
+}
+
 const ACTIVE_STATUSES = new Set(['reserved', 'starting', 'running', 'idle', 'stopping'])
 const TERMINAL_STATUSES = new Set(['stopped', 'failed', 'lost', 'exited'])
 
@@ -711,13 +728,42 @@ export class AgentHomeLifecycleService {
 
   private reserve(input: ActionReservationInput): ActionReservation {
     const reserve = this.db.transaction(() => {
-      const existing = this.db.prepare(`SELECT * FROM agent_session_actions
-        WHERE board_id=? AND idempotency_key=?`).get(input.boardId, input.idempotencyKey) as
-        ActionRow | undefined
+      const requestIdentityMatches = this.db.prepare(`SELECT * FROM agent_session_actions
+        WHERE idempotency_key=? AND request_fingerprint=?
+        ORDER BY rowid`).all(
+        input.idempotencyKey,
+        input.requestFingerprint,
+      ) as ActionRow[]
+      if (requestIdentityMatches.length > 1) {
+        throw new ConflictError('session action request identity is ambiguous')
+      }
+      const anchored = requestIdentityMatches[0]
+      if (anchored?.board_id !== undefined && anchored.board_id !== input.boardId) {
+        throw new ConflictError('session action command board scope is inconsistent')
+      }
+      if (anchored
+        && (anchored.session_id !== input.session.id || anchored.action !== input.action)) {
+        throw new ConflictError('session action request identity scope is inconsistent')
+      }
+      const commandMatches = this.db.prepare(`SELECT * FROM agent_session_actions
+        WHERE session_id=? AND action=? AND idempotency_key=?
+        ORDER BY rowid`).all(
+        input.session.id,
+        input.action,
+        input.idempotencyKey,
+      ) as ActionRow[]
+      if (commandMatches.length > 1) {
+        throw new ConflictError('session action command identity is ambiguous')
+      }
+      const existing = commandMatches[0]
       if (existing) {
-        if (existing.request_fingerprint !== input.requestFingerprint
-          || existing.action !== input.action
-          || existing.session_id !== input.session.id) {
+        if (anchored && anchored.id !== existing.id) {
+          throw new ConflictError('session action command identity is ambiguous')
+        }
+        if (existing.board_id !== input.boardId) {
+          throw new ConflictError('session action command board scope is inconsistent')
+        }
+        if (existing.request_fingerprint !== input.requestFingerprint) {
           throw new ConflictError(
             'idempotency key was already used for a different Agent Home action',
           )
@@ -735,6 +781,30 @@ export class AgentHomeLifecycleService {
         this.ensureActionRequestAudit(existing, input)
         if (existing.status === 'succeeded') this.ensureActionCompletionAudit(existing)
         return { row: existing, acquired: false }
+      }
+      const localAction = this.db.prepare(`SELECT action FROM agent_session_actions
+        WHERE board_id=? AND idempotency_key=?`).get(input.boardId, input.idempotencyKey) as
+        { action: AgentHomeSessionAction } | undefined
+      if (localAction) {
+        throw new ConflictError(
+          'idempotency key was already used for a different Agent Home action',
+        )
+      }
+      const commandAudits = this.matchingActionRequestAudits(
+        input.session.id,
+        input.action,
+        input.idempotencyKey,
+        input.requestFingerprint,
+      )
+      if (commandAudits.length > 1) {
+        throw new ConflictError('session action request audit identity is ambiguous')
+      }
+      if (commandAudits.length === 1) {
+        throw new ConflictError(
+          commandAudits[0]!.board_id === input.boardId
+            ? 'session action request audit is orphaned from its command'
+            : 'session action request audit board scope is inconsistent',
+        )
       }
       const occupied = this.db.prepare(`SELECT kind FROM os_events
         WHERE board_id=? AND idempotency_key=?`).get(input.boardId, input.idempotencyKey) as
@@ -1136,24 +1206,16 @@ export class AgentHomeLifecycleService {
       expectedBoardId: row.board_id,
       expectedWorkspaceId: input.session.workspace_id,
     })
-    const occupied = this.db.prepare(`SELECT kind, source, workspace_id, card_id,
-      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
-      event_version, payload FROM os_events
-      WHERE board_id=? AND idempotency_key=?`).get(row.board_id, row.idempotency_key) as
-      {
-        kind: string
-        source: string
-        workspace_id: string | null
-        card_id: number | null
-        session_id: string | null
-        process_id: string | null
-        job_id: string | null
-        contract_id: string | null
-        correlation_id: string | null
-        causation_id: string | null
-        event_version: number
-        payload: string
-      } | undefined
+    const matching = this.matchingActionRequestAudits(
+      row.session_id,
+      row.action,
+      row.idempotency_key,
+      row.request_fingerprint,
+    )
+    if (matching.length > 1) {
+      throw new ConflictError('session action request audit identity is ambiguous')
+    }
+    const occupied = matching[0]
     if (!occupied) {
       if (row.status === 'pending') {
         this.appendActionRequestAudit(row, input)
@@ -1185,9 +1247,37 @@ export class AgentHomeLifecycleService {
       || occupied.correlation_id !== expectedCorrelationId
       || occupied.causation_id !== null
       || occupied.event_version !== 1
+      || occupied.board_id !== row.board_id
       || canonicalHash(payload) !== canonicalHash(expectedPayload)) {
       throw new ConflictError('session action request audit scope is inconsistent')
     }
+  }
+
+  private matchingActionRequestAudits(
+    sessionId: string,
+    action: AgentHomeSessionAction,
+    idempotencyKey: string,
+    requestFingerprint: string,
+  ): ActionRequestAuditCandidate[] {
+    return this.db.prepare(`SELECT id, board_id, kind, source, workspace_id, card_id,
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
+      event_version, payload
+      FROM os_events
+      WHERE idempotency_key=?
+        AND json_valid(payload)
+        AND (
+          json_extract(payload, '$.request_fingerprint')=?
+          OR (
+            json_extract(payload, '$.session_id')=?
+            AND json_extract(payload, '$.action')=?
+          )
+        )
+      ORDER BY rowid`).all(
+      idempotencyKey,
+      requestFingerprint,
+      sessionId,
+      action,
+    ) as ActionRequestAuditCandidate[]
   }
 
   private ensureActionCompletionAudit(row: ActionRow): void {

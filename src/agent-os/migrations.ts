@@ -1967,6 +1967,382 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    // 014 is already deployed, so command identity and board-scope hardening must
+    // remain a forward migration for existing databases as well as fresh installs.
+    id: '015-agent-home-action-command-scope',
+    apply(db) {
+      const ambiguousAction = db.prepare(`SELECT session_id, action, idempotency_key
+        FROM agent_session_actions
+        GROUP BY session_id, action, idempotency_key
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAction) {
+        throw new Error(
+          'agent session action command identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousActionRequestIdentity = db.prepare(`SELECT
+          idempotency_key, request_fingerprint
+        FROM agent_session_actions
+        GROUP BY idempotency_key, request_fingerprint
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousActionRequestIdentity) {
+        throw new Error(
+          'agent session action request identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousAudit = db.prepare(`SELECT
+          json_extract(payload, '$.session_id') AS session_id,
+          json_extract(payload, '$.action') AS action,
+          idempotency_key
+        FROM os_events
+        WHERE kind='agent_session.action_requested'
+          AND idempotency_key IS NOT NULL
+          AND json_valid(payload)
+          AND json_type(payload, '$.session_id')='text'
+          AND json_type(payload, '$.action')='text'
+        GROUP BY
+          json_extract(payload, '$.session_id'),
+          json_extract(payload, '$.action'),
+          idempotency_key
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAudit) {
+        throw new Error(
+          'agent session action request audit identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousAuditRequestIdentity = db.prepare(`SELECT
+          idempotency_key,
+          json_extract(payload, '$.request_fingerprint') AS request_fingerprint
+        FROM os_events
+        WHERE kind='agent_session.action_requested'
+          AND idempotency_key IS NOT NULL
+          AND json_valid(payload)
+          AND json_type(payload, '$.request_fingerprint')='text'
+        GROUP BY
+          idempotency_key,
+          json_extract(payload, '$.request_fingerprint')
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAuditRequestIdentity) {
+        throw new Error(
+          'agent session action request audit fingerprint is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const displacedAudit = db.prepare(`SELECT event.id
+        FROM os_events event
+        JOIN agent_session_actions action
+          ON action.id=CASE WHEN json_valid(event.payload)
+            THEN json_extract(event.payload, '$.action_id') END
+        WHERE event.kind='agent_session.action_requested'
+          AND (
+            event.board_id IS NOT action.board_id
+            OR event.idempotency_key IS NOT action.idempotency_key
+            OR event.session_id IS NOT action.session_id
+            OR json_extract(event.payload, '$.session_id') IS NOT action.session_id
+            OR json_extract(event.payload, '$.action') IS NOT action.action
+            OR json_extract(event.payload, '$.request_fingerprint')
+              IS NOT action.request_fingerprint
+          )
+        LIMIT 1`).get()
+      if (displacedAudit) {
+        throw new Error(
+          'agent session action request audit scope is inconsistent; migration 015 cannot continue',
+        )
+      }
+
+      const auditNames = new Map<string, string>()
+      const auditedActionIds = new Set<string>()
+      const requestAudits = db.prepare(`SELECT id, idempotency_key, payload
+        FROM os_events
+        WHERE kind='agent_session.action_requested'`).all() as Array<{
+          id: string
+          idempotency_key: string | null
+          payload: string
+        }>
+      for (const audit of requestAudits) {
+        const payload = metadataRecord(audit.payload)
+        const actionId = payload.action_id
+        const sessionId = payload.session_id
+        const action = payload.action
+        const requestFingerprint = payload.request_fingerprint
+        const name = action === 'rename' ? payload.name : undefined
+        if (audit.idempotency_key === null
+          || typeof actionId !== 'string'
+          || typeof sessionId !== 'string'
+          || typeof action !== 'string'
+          || typeof requestFingerprint !== 'string'
+          || (action === 'rename'
+            && (typeof name !== 'string'
+              || name !== name.trim()
+              || name.length === 0
+              || name.length > 200))) {
+          throw new Error(
+            'agent session action request audit fingerprint cannot be verified; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        const expectedFingerprint = canonicalHash({
+          command: `agent_session.${action}`,
+          sessionId,
+          ...(typeof name === 'string' ? { name } : {}),
+        })
+        if (requestFingerprint !== expectedFingerprint) {
+          throw new Error(
+            'agent session action request audit fingerprint is inconsistent; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        if (auditedActionIds.has(actionId)) {
+          throw new Error(
+            'agent session action request audit identity is ambiguous; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        auditedActionIds.add(actionId)
+        if (typeof name === 'string') auditNames.set(actionId, name)
+      }
+
+      const actions = db.prepare(`SELECT id, session_id, action, request_fingerprint
+        FROM agent_session_actions`).all() as Array<{
+          id: string
+          session_id: string
+          action: string
+          request_fingerprint: string
+        }>
+      for (const action of actions) {
+        const name = action.action === 'rename' ? auditNames.get(action.id) : undefined
+        if (action.action === 'rename' && name === undefined) {
+          throw new Error(
+            'agent session action request fingerprint cannot be verified; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        const expectedFingerprint = canonicalHash({
+          command: `agent_session.${action.action}`,
+          sessionId: action.session_id,
+          ...(name === undefined ? {} : { name }),
+        })
+        if (action.request_fingerprint !== expectedFingerprint) {
+          throw new Error(
+            'agent session action request fingerprint is inconsistent; '
+              + 'migration 015 cannot continue',
+          )
+        }
+      }
+
+      db.exec(`
+        CREATE INDEX idx_os_events_idempotency_key_global
+          ON os_events(idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+        CREATE UNIQUE INDEX idx_agent_session_actions_command_identity
+          ON agent_session_actions(session_id, action, idempotency_key);
+        CREATE UNIQUE INDEX idx_agent_session_actions_request_identity
+          ON agent_session_actions(idempotency_key, request_fingerprint);
+        CREATE UNIQUE INDEX idx_os_events_action_request_command_identity
+          ON os_events(
+            json_extract(payload, '$.session_id'),
+            json_extract(payload, '$.action'),
+            idempotency_key
+          )
+          WHERE kind='agent_session.action_requested'
+            AND idempotency_key IS NOT NULL
+            AND json_valid(payload)
+            AND json_type(payload, '$.session_id')='text'
+            AND json_type(payload, '$.action')='text';
+        CREATE UNIQUE INDEX idx_os_events_action_request_fingerprint_identity
+          ON os_events(
+            idempotency_key,
+            json_extract(payload, '$.request_fingerprint')
+          )
+          WHERE kind='agent_session.action_requested'
+            AND idempotency_key IS NOT NULL
+            AND json_valid(payload)
+            AND json_type(payload, '$.request_fingerprint')='text';
+
+        CREATE TRIGGER agent_session_actions_command_identity_update
+        BEFORE UPDATE OF
+          id, board_id, session_id, action, idempotency_key, request_fingerprint
+        ON agent_session_actions
+        WHEN NEW.id IS NOT OLD.id
+          OR NEW.board_id IS NOT OLD.board_id
+          OR NEW.session_id IS NOT OLD.session_id
+          OR NEW.action IS NOT OLD.action
+          OR NEW.idempotency_key IS NOT OLD.idempotency_key
+          OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session action command identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER os_events_action_request_identity_update
+        BEFORE UPDATE OF
+          id, board_id, session_id, idempotency_key, kind, source, payload
+        ON os_events
+        WHEN OLD.kind='agent_session.action_requested'
+          AND (
+            NEW.id IS NOT OLD.id
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.session_id IS NOT OLD.session_id
+            OR NEW.idempotency_key IS NOT OLD.idempotency_key
+            OR NEW.kind IS NOT OLD.kind
+            OR NEW.source IS NOT OLD.source
+            OR NOT json_valid(NEW.payload)
+            OR json_extract(NEW.payload, '$.action_id')
+              IS NOT json_extract(OLD.payload, '$.action_id')
+            OR json_extract(NEW.payload, '$.session_id')
+              IS NOT json_extract(OLD.payload, '$.session_id')
+            OR json_extract(NEW.payload, '$.action')
+              IS NOT json_extract(OLD.payload, '$.action')
+            OR json_extract(NEW.payload, '$.request_fingerprint')
+              IS NOT json_extract(OLD.payload, '$.request_fingerprint')
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session action request audit identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER agent_session_actions_home_scope_insert
+        BEFORE INSERT ON agent_session_actions
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN workspaces workspace ON workspace.id=session.workspace_id
+            JOIN agent_profiles profile ON profile.id=session.profile_id
+            JOIN agent_conversations conversation
+              ON conversation.id=session.conversation_id
+            WHERE session.id=NEW.session_id
+              AND workspace.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND conversation.board_id=NEW.board_id
+              AND conversation.profile_id=profile.id
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER agent_session_actions_home_scope_update
+        BEFORE UPDATE OF board_id, session_id ON agent_session_actions
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN workspaces workspace ON workspace.id=session.workspace_id
+            JOIN agent_profiles profile ON profile.id=session.profile_id
+            JOIN agent_conversations conversation
+              ON conversation.id=session.conversation_id
+            WHERE session.id=NEW.session_id
+              AND workspace.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND conversation.board_id=NEW.board_id
+              AND conversation.profile_id=profile.id
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER agent_sessions_action_scope_update
+        BEFORE UPDATE OF workspace_id, profile_id, conversation_id ON agent_sessions
+        WHEN EXISTS (
+          SELECT 1 FROM agent_session_actions action
+          WHERE action.session_id=OLD.id
+        )
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM agent_session_actions action
+            WHERE action.session_id=OLD.id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM workspaces workspace
+                JOIN agent_profiles profile ON profile.id=NEW.profile_id
+                JOIN agent_conversations conversation
+                  ON conversation.id=NEW.conversation_id
+                WHERE workspace.id=NEW.workspace_id
+                  AND workspace.board_id=action.board_id
+                  AND profile.board_id=action.board_id
+                  AND conversation.board_id=action.board_id
+                  AND conversation.profile_id=profile.id
+              )
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER workspaces_session_action_scope_update
+        BEFORE UPDATE OF board_id ON workspaces
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.workspace_id=OLD.id
+            AND action.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace board change would displace an agent session action'
+          );
+        END;
+
+        CREATE TRIGGER agent_profiles_session_action_scope_update
+        BEFORE UPDATE OF board_id ON agent_profiles
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.profile_id=OLD.id
+            AND action.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'profile board change would displace an agent session action'
+          );
+        END;
+
+        CREATE TRIGGER agent_conversations_session_action_scope_update
+        BEFORE UPDATE OF board_id, profile_id ON agent_conversations
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.conversation_id=OLD.id
+            AND (
+              action.board_id!=NEW.board_id
+              OR session.profile_id!=NEW.profile_id
+            )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversation scope change would displace an agent session action'
+          );
+        END;
+
+        UPDATE agent_session_actions
+        SET board_id=board_id, session_id=session_id;
+
+        UPDATE agent_session_action_reconciliations
+        SET board_id=board_id, action_id=action_id;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

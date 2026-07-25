@@ -13,6 +13,8 @@ import {
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { ConversationService, type AgentSessionRecord } from '../src/agent-os/conversations.js'
+import { EventStore } from '../src/agent-os/event-store.js'
+import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
@@ -297,7 +299,8 @@ describe('Agent Home native fork lifecycle', () => {
       idempotencyKey: 'fork:unknown',
     })).rejects.toThrow('provider fork outcome is unknown and requires operator reconciliation')
 
-    const action = db.prepare(`SELECT status, effect_state, error_code, error_message, effect_json
+    const action = db.prepare(`SELECT id, status, effect_state, error_code,
+      error_message, effect_json
       FROM agent_session_actions WHERE idempotency_key='fork:unknown'`).get() as
       Record<string, unknown>
     expect(action).toMatchObject({
@@ -333,6 +336,14 @@ describe('Agent Home native fork lifecycle', () => {
       card_id: fixture.cardId,
     })
     expect(audit.payload).not.toContain('RAW_RPC_PAYLOAD_SHOULD_NOT_PERSIST')
+    expect(() => db.prepare(`UPDATE agent_session_actions
+      SET idempotency_key='fork:unknown-rewritten'
+      WHERE id=?`).run(action.id)).toThrow(/command identity is immutable/)
+    expect(() => db.prepare(`UPDATE os_events
+      SET idempotency_key='fork:unknown-rewritten'
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`).run(action.id))
+      .toThrow(/request audit identity is immutable/)
 
     await expect(lifecycle.run(fixture.sessionId, 'fork', {
       actor,
@@ -457,6 +468,339 @@ describe('Agent Home native fork lifecycle', () => {
       { count: number }).count).toBe(1)
     expect((db.prepare(`SELECT COUNT(*) AS count FROM os_events
       WHERE kind='agent_session.fork'`).get() as { count: number }).count).toBe(1)
+  })
+
+  it('fails closed when a completed fork command and its request audit are displaced together', async () => {
+    const db = trackedDb()
+    const fixture = seedForkHome(db)
+    const runtime = new ForkRuntime(successfulFork(fixture), fixture.targetWorkspaceId)
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'fork-displaced-command-daemon',
+    })
+    const idempotencyKey = 'fork:displaced-command'
+    const first = await lifecycle.run(fixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })
+    const otherBoardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/fork-displaced-command', 'Fork displaced command')`)
+      .run().lastInsertRowid)
+
+    // Simulate corruption written by a pre-015 database. Current databases reject
+    // the action move at the trigger boundary before runtime replay is involved.
+    db.exec(`
+      DROP TRIGGER os_events_action_request_identity_update;
+      DROP TRIGGER agent_session_actions_command_identity_update;
+      DROP TRIGGER agent_session_actions_home_scope_update;
+    `)
+    db.prepare('UPDATE agent_session_actions SET board_id=? WHERE id=?')
+      .run(otherBoardId, first.action.id)
+    db.prepare(`UPDATE os_events SET board_id=?
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`)
+      .run(otherBoardId, first.action.id)
+
+    await expect(lifecycle.run(fixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })).rejects.toThrow(/command board scope is inconsistent/)
+    expect(runtime.calls).toEqual([fixture.sessionId])
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM agent_session_actions
+      WHERE session_id=? AND action='fork' AND idempotency_key=?`)
+      .get(fixture.sessionId, idempotencyKey) as { count: number }).count).toBe(1)
+  })
+
+  it('rejects a compound pre-015 session move and never reforks the original request', async () => {
+    const db = trackedDb()
+    const source = seedForkHome(db, 'compound-source')
+    const target = seedForkHome(db, 'compound-target')
+    const runtime = new ForkRuntime(() => {
+      throw new AgentHomeForkOutcomeUnknownError(
+        'provider result was lost after dispatch',
+        source.sourceExternalId,
+        source.sourceExternalId,
+      )
+    }, source.targetWorkspaceId)
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'fork-compound-displacement-daemon',
+    })
+    const idempotencyKey = 'fork:compound-displacement'
+
+    await expect(lifecycle.run(source.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })).rejects.toThrow(
+      'provider fork outcome is unknown and requires operator reconciliation',
+    )
+    expect(runtime.calls).toEqual([source.sessionId])
+    const action = db.prepare(`SELECT id, request_fingerprint
+      FROM agent_session_actions WHERE session_id=? AND idempotency_key=?`).get(
+      source.sessionId,
+      idempotencyKey,
+    ) as { id: string; request_fingerprint: string }
+
+    // Reproduce a pre-015 compound displacement: both the command and its audit
+    // are rewritten to a different valid Agent Home while the original request
+    // fingerprint remains the only durable anchor to the caller's session.
+    db.exec(`
+      DROP TRIGGER agent_conversations_session_action_scope_update;
+      DROP TRIGGER agent_profiles_session_action_scope_update;
+      DROP TRIGGER workspaces_session_action_scope_update;
+      DROP TRIGGER agent_sessions_action_scope_update;
+      DROP TRIGGER os_events_action_request_identity_update;
+      DROP TRIGGER agent_session_actions_command_identity_update;
+      DROP TRIGGER agent_session_actions_home_scope_update;
+      DROP TRIGGER agent_session_actions_home_scope_insert;
+      DROP INDEX idx_os_events_idempotency_key_global;
+      DROP INDEX idx_os_events_action_request_fingerprint_identity;
+      DROP INDEX idx_os_events_action_request_command_identity;
+      DROP INDEX idx_agent_session_actions_request_identity;
+      DROP INDEX idx_agent_session_actions_command_identity;
+      DELETE FROM os_schema_migrations
+        WHERE id='015-agent-home-action-command-scope';
+    `)
+    db.prepare(`UPDATE agent_session_actions SET board_id=?, session_id=?
+      WHERE id=?`).run(target.boardId, target.sessionId, action.id)
+    db.prepare(`UPDATE os_events
+      SET board_id=?, workspace_id=?, card_id=NULL, session_id=?,
+        job_id=NULL, contract_id=NULL,
+        payload=json_set(
+          payload,
+          '$.session_id', ?,
+          '$.profile_id', ?,
+          '$.conversation_id', ?
+        )
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`).run(
+      target.boardId,
+      target.workspaceId,
+      target.sessionId,
+      target.sessionId,
+      target.profileId,
+      target.conversationId,
+      action.id,
+    )
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/request audit fingerprint is inconsistent/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 0 })
+
+    await expect(lifecycle.run(source.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })).rejects.toThrow(/command board scope is inconsistent/)
+    expect(runtime.calls).toEqual([source.sessionId])
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM agent_session_actions
+      WHERE idempotency_key=? AND request_fingerprint=?`).get(
+      idempotencyKey,
+      action.request_fingerprint,
+    )).toEqual({ count: 1 })
+  })
+
+  it('keeps completed fork command and request-audit identities immutable', async () => {
+    const db = trackedDb()
+    const fixture = seedForkHome(db)
+    const runtime = new ForkRuntime(successfulFork(fixture), fixture.targetWorkspaceId)
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime,
+      actionLeaseId: 'fork-immutable-command-daemon',
+    })
+    const idempotencyKey = 'fork:immutable-command'
+    const completed = await lifecycle.run(fixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })
+
+    expect(() => db.prepare(`UPDATE agent_session_actions
+      SET idempotency_key='fork:rewritten-command'
+      WHERE id=?`).run(completed.action.id))
+      .toThrow(/command identity is immutable/)
+    expect(() => db.prepare(`UPDATE agent_session_actions
+      SET request_fingerprint='rewritten-fingerprint'
+      WHERE id=?`).run(completed.action.id))
+      .toThrow(/command identity is immutable/)
+    expect(() => db.prepare(`UPDATE os_events
+      SET idempotency_key='fork:rewritten-command'
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`).run(completed.action.id))
+      .toThrow(/request audit identity is immutable/)
+    expect(() => db.prepare(`UPDATE os_events
+      SET payload=json_set(payload, '$.action', 'pause')
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`).run(completed.action.id))
+      .toThrow(/request audit identity is immutable/)
+
+    const replay = await lifecycle.run(fixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey,
+    })
+    expect(replay.action).toMatchObject({
+      id: completed.action.id,
+      replayed: true,
+    })
+    expect(runtime.calls).toEqual([fixture.sessionId])
+  })
+
+  it('fails closed on ambiguous command rows and request audits before reforking', async () => {
+    const actionDb = trackedDb()
+    const actionFixture = seedForkHome(actionDb)
+    const actionRuntime = new ForkRuntime(
+      successfulFork(actionFixture),
+      actionFixture.targetWorkspaceId,
+    )
+    const actionLifecycle = new AgentHomeLifecycleService(actionDb, {
+      runtime: actionRuntime,
+      actionLeaseId: 'fork-ambiguous-action-daemon',
+    })
+    const actionKey = 'fork:ambiguous-action'
+    const completed = await actionLifecycle.run(actionFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: actionKey,
+    })
+    const actionOtherBoardId = Number(actionDb.prepare(`INSERT INTO boards
+      (project_path, name) VALUES ('/fork-ambiguous-action', 'Fork ambiguous action')`)
+      .run().lastInsertRowid)
+    actionDb.exec(`
+      DROP INDEX idx_agent_session_actions_command_identity;
+      DROP INDEX idx_agent_session_actions_request_identity;
+      DROP TRIGGER agent_session_actions_home_scope_insert;
+    `)
+    actionDb.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, reserved_session_id, effect_state,
+      effect_json, actor_type, actor_id, error_code, error_message, created_at, updated_at
+    )
+    SELECT 'fork-ambiguous-action-copy', ?, session_id, result_session_id,
+      idempotency_key, action, request_fingerprint, status, lease_id,
+      reserved_session_id, effect_state, effect_json, actor_type, actor_id,
+      error_code, error_message, created_at, updated_at
+    FROM agent_session_actions WHERE id=?`).run(
+      actionOtherBoardId,
+      completed.action.id,
+    )
+
+    await expect(actionLifecycle.run(actionFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: actionKey,
+    })).rejects.toThrow(/request identity is ambiguous/)
+    expect(actionRuntime.calls).toEqual([actionFixture.sessionId])
+
+    const auditDb = trackedDb()
+    const auditFixture = seedForkHome(auditDb)
+    const auditRuntime = new ForkRuntime(
+      successfulFork(auditFixture),
+      auditFixture.targetWorkspaceId,
+    )
+    const auditLifecycle = new AgentHomeLifecycleService(auditDb, {
+      runtime: auditRuntime,
+      actionLeaseId: 'fork-ambiguous-audit-daemon',
+    })
+    const auditKey = 'fork:ambiguous-audit'
+    const auditCompleted = await auditLifecycle.run(auditFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: auditKey,
+    })
+    const auditOtherBoardId = Number(auditDb.prepare(`INSERT INTO boards
+      (project_path, name) VALUES ('/fork-ambiguous-audit', 'Fork ambiguous audit')`)
+      .run().lastInsertRowid)
+    const request = auditDb.prepare(`SELECT workspace_id, card_id, session_id,
+      process_id, job_id, contract_id, correlation_id, causation_id, event_version,
+      kind, source, payload
+      FROM os_events
+      WHERE kind='agent_session.action_requested'
+        AND json_extract(payload, '$.action_id')=?`).get(auditCompleted.action.id) as {
+          workspace_id: string | null
+          card_id: number | null
+          session_id: string | null
+          process_id: string | null
+          job_id: string | null
+          contract_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+          event_version: number
+          kind: string
+          source: string
+          payload: string
+        }
+    auditDb.exec(`
+      DROP INDEX idx_os_events_action_request_command_identity;
+      DROP INDEX idx_os_events_action_request_fingerprint_identity;
+    `)
+    new EventStore(auditDb).append({
+      boardId: auditOtherBoardId,
+      workspaceId: request.workspace_id,
+      cardId: request.card_id,
+      sessionId: request.session_id,
+      processId: request.process_id,
+      jobId: request.job_id,
+      contractId: request.contract_id,
+      correlationId: request.correlation_id,
+      causationId: request.causation_id,
+      idempotencyKey: auditKey,
+      eventVersion: request.event_version,
+      kind: request.kind,
+      source: request.source,
+      payload: JSON.parse(request.payload),
+    })
+
+    await expect(auditLifecycle.run(auditFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: auditKey,
+    })).rejects.toThrow(/request audit identity is ambiguous/)
+    expect(auditRuntime.calls).toEqual([auditFixture.sessionId])
+  })
+
+  it('allows the same caller key on independent boards when command fingerprints differ', async () => {
+    const db = trackedDb()
+    const firstFixture = seedForkHome(db, 'first')
+    const secondFixture = seedForkHome(db, 'second')
+    const firstRuntime = new ForkRuntime(
+      successfulFork(firstFixture),
+      firstFixture.targetWorkspaceId,
+    )
+    const secondRuntime = new ForkRuntime(
+      successfulFork(secondFixture),
+      secondFixture.targetWorkspaceId,
+    )
+    const sharedKey = 'fork:independent-board-key'
+
+    await new AgentHomeLifecycleService(db, {
+      runtime: firstRuntime,
+      actionLeaseId: 'fork-independent-first',
+    }).run(firstFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: sharedKey,
+    })
+    await new AgentHomeLifecycleService(db, {
+      runtime: secondRuntime,
+      actionLeaseId: 'fork-independent-second',
+    }).run(secondFixture.sessionId, 'fork', {
+      actor,
+      idempotencyKey: sharedKey,
+    })
+
+    expect(firstRuntime.calls).toEqual([firstFixture.sessionId])
+    expect(secondRuntime.calls).toEqual([secondFixture.sessionId])
+    expect(db.prepare(`SELECT board_id, session_id, request_fingerprint
+      FROM agent_session_actions WHERE idempotency_key=? ORDER BY board_id`)
+      .all(sharedKey)).toEqual([
+      {
+        board_id: firstFixture.boardId,
+        session_id: firstFixture.sessionId,
+        request_fingerprint: expect.any(String),
+      },
+      {
+        board_id: secondFixture.boardId,
+        session_id: secondFixture.sessionId,
+        request_fingerprint: expect.any(String),
+      },
+    ])
+    const fingerprints = db.prepare(`SELECT DISTINCT request_fingerprint
+      FROM agent_session_actions WHERE idempotency_key=?`).all(sharedKey)
+    expect(fingerprints).toHaveLength(2)
   })
 
   it('rolls back every local child row when persistence fails after provider success', async () => {
@@ -910,32 +1254,40 @@ function trackedDb(): Database.Database {
   return db
 }
 
-function seedForkHome(db: Database.Database) {
+function seedForkHome(db: Database.Database, namespace = '') {
+  const suffix = namespace ? `-${namespace}` : ''
+  const rootPath = `/agent-home-fork${suffix}`
   const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
-    VALUES ('/agent-home-fork', 'Agent Home fork')`).run().lastInsertRowid)
+    VALUES (?, ?)`).run(rootPath, `Agent Home fork${suffix}`).lastInsertRowid)
   const cardId = Number(db.prepare(`INSERT INTO cards
     (board_id, title, description) VALUES (?, 'Fork session', 'fork lifecycle fixture')`)
     .run(boardId).lastInsertRowid)
-  const workspaceId = 'fork-workspace'
-  const targetWorkspaceId = 'fork-target-workspace'
+  const workspaceId = `fork-workspace${suffix}`
+  const targetWorkspaceId = `fork-target-workspace${suffix}`
   db.prepare(`INSERT INTO workspaces
     (id, board_id, card_id, name, kind, root_path, status)
-    VALUES (?, ?, ?, 'Fork workspace', 'shared', '/agent-home-fork', 'active')`)
-    .run(workspaceId, boardId, cardId)
+    VALUES (?, ?, ?, 'Fork workspace', 'shared', ?, 'active')`)
+    .run(workspaceId, boardId, cardId, rootPath)
   db.prepare(`INSERT INTO workspaces
     (id, board_id, card_id, name, kind, root_path, worktree_path, branch, status)
-    VALUES (?, ?, ?, 'Fork target', 'worktree', '/agent-home-fork',
-      '/agent-home-fork-worktrees/fork-target', 'orchestra/fork-target', 'active')`)
-    .run(targetWorkspaceId, boardId, cardId)
-  const jobId = 'fork-job'
+    VALUES (?, ?, ?, 'Fork target', 'worktree', ?, ?, ?, 'active')`)
+    .run(
+      targetWorkspaceId,
+      boardId,
+      cardId,
+      rootPath,
+      `/agent-home-fork-worktrees/fork-target${suffix}`,
+      `orchestra/fork-target${suffix}`,
+    )
+  const jobId = `fork-job${suffix}`
   db.prepare(`INSERT INTO jobs
     (id, board_id, card_id, workspace_id, provider, driver_id, access_profile,
       contract_version, priority, status, max_attempts)
     VALUES (?, ?, ?, ?, 'codex', 'codex', 'read_only', 2, 0, 'running', 1)`)
     .run(jobId, boardId, cardId, workspaceId)
-  const sourceExternalId = 'thread-fork-source'
-  const childExternalId = 'thread-fork-child'
-  const sessionId = 'fork-session'
+  const sourceExternalId = `thread-fork-source${suffix}`
+  const childExternalId = `thread-fork-child${suffix}`
+  const sessionId = `fork-session${suffix}`
   db.prepare(`INSERT INTO agent_sessions
     (id, workspace_id, provider, external_id, status, context_json)
     VALUES (?, ?, 'codex', ?, 'running', ?)`).run(
@@ -946,10 +1298,10 @@ function seedForkHome(db: Database.Database) {
   )
   const profile = new AgentProfileService(db).create({
     boardId,
-    name: 'Fork agent',
+    name: `Fork agent${suffix}`,
     defaultProvider: 'codex',
     actor,
-    idempotencyKey: 'fork:profile',
+    idempotencyKey: `fork:profile${suffix}`,
   })
   const conversations = new ConversationService(db)
   const conversation = conversations.listConversations(profile.id)[0]!
@@ -964,7 +1316,7 @@ function seedForkHome(db: Database.Database) {
     historyState: 'complete',
     accessProfile: 'read_only',
     actor,
-    idempotencyKey: 'fork:link',
+    idempotencyKey: `fork:link${suffix}`,
   })
   db.prepare('UPDATE agent_conversations SET title=? WHERE id=?')
     .run('Release password=FORK_NAME_SECRET', conversation.id)

@@ -774,6 +774,8 @@ describe('canonical card launch routes', () => {
       INSERT INTO boards (project_path, name)
       VALUES ('/cross-board-stale-action', 'Cross-board stale action')
     `).run().lastInsertRowid)
+    // Simulate a stale pre-015 row; current writes reject this at the trigger boundary.
+    db.exec('DROP TRIGGER agent_session_actions_home_scope_insert')
     db.prepare(`INSERT INTO agent_session_actions (
       id, board_id, session_id, result_session_id, idempotency_key, action,
       request_fingerprint, status, lease_id, actor_type, actor_id, created_at, updated_at

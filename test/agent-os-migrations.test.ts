@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { canonicalHash } from '../src/agent-os/agent-home-support.js'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
@@ -47,7 +48,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(15)
     first.close()
 
     const second = openDb(file)
@@ -64,16 +65,17 @@ describe('Agent OS migrations', () => {
       'agent_home_evidence_bundle_repairs', 'agent_home_transcript_repairs']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(15)
     const migrationIds = (second.prepare(
       'SELECT id FROM os_schema_migrations ORDER BY rowid',
     ).all() as Array<{ id: string }>).map((row) => row.id)
-    expect(migrationIds.slice(-3)).toEqual([
+    expect(migrationIds.slice(-4)).toEqual([
       '012-agent-home-retention',
       '013-agent-home-structured-metadata-redaction',
       '014-agent-home-native-fork-lifecycle',
+      '015-agent-home-action-command-scope',
     ])
-    expect(migrationIds.at(-1)).toBe('014-agent-home-native-fork-lifecycle')
+    expect(migrationIds.at(-1)).toBe('015-agent-home-action-command-scope')
     expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
@@ -124,7 +126,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(14)
+    }).count).toBe(15)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -639,8 +641,30 @@ describe('Agent OS migrations', () => {
         (id, workspace_id, provider, status, context_json)
         VALUES (?, 'fork-migration-workspace', 'codex', 'idle', '{}')`).run(id)
     }
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Fork migration profile',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'fork-migration:profile',
+    })
+    const conversation = new ConversationService(db).listConversations(profile.id)[0]!
+    db.prepare(`UPDATE agent_sessions SET profile_id=?, conversation_id=?
+      WHERE workspace_id='fork-migration-workspace'`).run(profile.id, conversation.id)
     const at = '2026-07-25T00:00:00.000Z'
     db.exec(`
+      DROP TRIGGER agent_conversations_session_action_scope_update;
+      DROP TRIGGER agent_profiles_session_action_scope_update;
+      DROP TRIGGER workspaces_session_action_scope_update;
+      DROP TRIGGER agent_sessions_action_scope_update;
+      DROP TRIGGER os_events_action_request_identity_update;
+      DROP TRIGGER agent_session_actions_command_identity_update;
+      DROP TRIGGER agent_session_actions_home_scope_update;
+      DROP TRIGGER agent_session_actions_home_scope_insert;
+      DROP INDEX idx_os_events_idempotency_key_global;
+      DROP INDEX idx_os_events_action_request_fingerprint_identity;
+      DROP INDEX idx_os_events_action_request_command_identity;
+      DROP INDEX idx_agent_session_actions_request_identity;
+      DROP INDEX idx_agent_session_actions_command_identity;
       DROP TRIGGER agent_session_action_reconciliation_scope_update;
       DROP TRIGGER agent_session_action_reconciliation_scope_insert;
       DROP TABLE agent_session_action_reconciliations;
@@ -649,7 +673,10 @@ describe('Agent OS migrations', () => {
       ALTER TABLE agent_session_actions DROP COLUMN effect_state;
       ALTER TABLE agent_session_actions DROP COLUMN reserved_session_id;
       DELETE FROM os_schema_migrations
-        WHERE id='014-agent-home-native-fork-lifecycle';
+        WHERE id IN (
+          '014-agent-home-native-fork-lifecycle',
+          '015-agent-home-action-command-scope'
+        );
     `)
     const insert = db.prepare(`INSERT INTO agent_session_actions (
       id, board_id, session_id, result_session_id, idempotency_key, action,
@@ -664,7 +691,7 @@ describe('Agent OS migrations', () => {
       'legacy-child',
       'legacy-fork',
       'fork',
-      'legacy-fork-fingerprint',
+      canonicalHash({ command: 'agent_session.fork', sessionId: 'legacy-parent' }),
       'succeeded',
       at,
       at,
@@ -676,7 +703,7 @@ describe('Agent OS migrations', () => {
       null,
       'legacy-pending',
       'pause',
-      'legacy-pending-fingerprint',
+      canonicalHash({ command: 'agent_session.pause', sessionId: 'legacy-pending' }),
       'pending',
       at,
       at,
@@ -688,7 +715,7 @@ describe('Agent OS migrations', () => {
       null,
       'legacy-failed',
       'stop',
-      'legacy-failed-fingerprint',
+      canonicalHash({ command: 'agent_session.stop', sessionId: 'legacy-failed' }),
       'failed',
       at,
       at,
@@ -722,12 +749,191 @@ describe('Agent OS migrations', () => {
       .get() as { count: number }).count).toBe(1)
     const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
       .all() as Array<{ id: string }>).map((row) => row.id)
-    expect(ids.slice(-3)).toEqual([
+    expect(ids.slice(-4)).toEqual([
       '012-agent-home-retention',
       '013-agent-home-structured-metadata-redaction',
       '014-agent-home-native-fork-lifecycle',
+      '015-agent-home-action-command-scope',
     ])
-    expect(ids.at(-1)).toBe('014-agent-home-native-fork-lifecycle')
+    expect(ids.at(-1)).toBe('015-agent-home-action-command-scope')
+    db.close()
+  })
+
+  it('applies migration 015 forward and fails closed on displaced or ambiguous action state', () => {
+    const db = openDb(':memory:')
+    const firstBoardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/action-scope-first', 'Action scope first')`).run().lastInsertRowid)
+    const secondBoardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/action-scope-second', 'Action scope second')`).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('action-scope-first-workspace', ?, 'First', 'shared',
+        '/action-scope-first', 'active')`).run(firstBoardId)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('action-scope-second-workspace', ?, 'Second', 'shared',
+        '/action-scope-second', 'active')`).run(secondBoardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('action-scope-session', 'action-scope-first-workspace',
+        'codex', 'idle', '{}')`).run()
+    const firstProfile = new AgentProfileService(db).create({
+      boardId: firstBoardId,
+      name: 'Action scope first',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'action-scope:first-profile',
+    })
+    const secondProfile = new AgentProfileService(db).create({
+      boardId: secondBoardId,
+      name: 'Action scope second',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'action-scope:second-profile',
+    })
+    const firstConversation = new ConversationService(db)
+      .listConversations(firstProfile.id)[0]!
+    const secondConversation = new ConversationService(db)
+      .listConversations(secondProfile.id)[0]!
+    db.prepare(`UPDATE agent_sessions SET profile_id=?, conversation_id=?
+      WHERE id='action-scope-session'`).run(firstProfile.id, firstConversation.id)
+    const actionScopeFingerprint = canonicalHash({
+      command: 'agent_session.pause',
+      sessionId: 'action-scope-session',
+    })
+
+    db.exec(`
+      DROP TRIGGER agent_conversations_session_action_scope_update;
+      DROP TRIGGER agent_profiles_session_action_scope_update;
+      DROP TRIGGER workspaces_session_action_scope_update;
+      DROP TRIGGER agent_sessions_action_scope_update;
+      DROP TRIGGER os_events_action_request_identity_update;
+      DROP TRIGGER agent_session_actions_command_identity_update;
+      DROP TRIGGER agent_session_actions_home_scope_update;
+      DROP TRIGGER agent_session_actions_home_scope_insert;
+      DROP INDEX idx_os_events_idempotency_key_global;
+      DROP INDEX idx_os_events_action_request_fingerprint_identity;
+      DROP INDEX idx_os_events_action_request_command_identity;
+      DROP INDEX idx_agent_session_actions_request_identity;
+      DROP INDEX idx_agent_session_actions_command_identity;
+      DELETE FROM os_schema_migrations
+        WHERE id='015-agent-home-action-command-scope';
+    `)
+    db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, reserved_session_id, effect_state,
+      effect_json, actor_type, actor_id, error_code, error_message, created_at, updated_at
+    ) VALUES (
+      'action-scope-legacy', ?, 'action-scope-session', NULL,
+      'action-scope:legacy', 'pause', ?, 'failed',
+      'legacy-lease', NULL, 'completed', '{}', 'operator', 'migration-test',
+      'action_interrupted', 'legacy interrupted action', datetime('now'), datetime('now')
+    )`).run(
+      secondBoardId,
+      actionScopeFingerprint,
+    )
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/agent session action board scope is inconsistent/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='trigger' AND name='agent_session_actions_home_scope_update'`).get())
+      .toEqual({ count: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='index' AND name='idx_os_events_idempotency_key_global'`).get())
+      .toEqual({ count: 0 })
+
+    db.prepare(`UPDATE agent_session_actions SET board_id=?
+      WHERE id='action-scope-legacy'`).run(firstBoardId)
+    const displacedRequest = new EventStore(db).append({
+      boardId: secondBoardId,
+      sessionId: 'action-scope-session',
+      idempotencyKey: 'action-scope:legacy',
+      kind: 'agent_session.action_requested',
+      source: 'agent-home',
+      payload: {
+        action_id: 'action-scope-legacy',
+        action: 'pause',
+        session_id: 'action-scope-session',
+        profile_id: firstProfile.id,
+        conversation_id: firstConversation.id,
+        request_fingerprint: actionScopeFingerprint,
+        actor: { type: 'operator', id: 'migration-test' },
+      },
+    })
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/request audit scope is inconsistent/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 0 })
+    db.prepare('DELETE FROM os_events WHERE id=?').run(displacedRequest.id)
+
+    db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, reserved_session_id, effect_state,
+      effect_json, actor_type, actor_id, error_code, error_message, created_at, updated_at
+    )
+    SELECT 'action-scope-ambiguous', ?, session_id, result_session_id,
+      idempotency_key, action, request_fingerprint, status, lease_id,
+      reserved_session_id, effect_state, effect_json, actor_type, actor_id,
+      error_code, error_message, created_at, updated_at
+    FROM agent_session_actions WHERE id='action-scope-legacy'`).run(secondBoardId)
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/command identity is ambiguous/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 0 })
+
+    db.prepare("DELETE FROM agent_session_actions WHERE id='action-scope-ambiguous'").run()
+    expect(() => applyAgentOsMigrations(db)).not.toThrow()
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 1 })
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations')
+      .get() as { count: number }).count).toBe(15)
+    const requestLookupPlan = db.prepare(`EXPLAIN QUERY PLAN
+      SELECT id, board_id, kind, source, workspace_id, card_id, session_id,
+        process_id, job_id, contract_id, correlation_id, causation_id,
+        event_version, payload
+      FROM os_events
+      WHERE idempotency_key=?
+        AND json_valid(payload)
+        AND (
+          json_extract(payload, '$.request_fingerprint')=?
+          OR (
+            json_extract(payload, '$.session_id')=?
+            AND json_extract(payload, '$.action')=?
+          )
+        )
+      ORDER BY rowid`).all(
+      'action-scope:legacy',
+      actionScopeFingerprint,
+      'action-scope-session',
+      'pause',
+    ) as Array<{ detail: string }>
+    expect(requestLookupPlan.map((step) => step.detail).join('\n'))
+      .toContain('idx_os_events_idempotency_key_global')
+
+    expect(() => db.prepare(`UPDATE agent_session_actions SET board_id=?
+      WHERE id='action-scope-legacy'`).run(secondBoardId))
+      .toThrow(/agent session action board scope is inconsistent/)
+    expect(() => db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, reserved_session_id, effect_state,
+      effect_json, actor_type, actor_id, error_code, error_message, created_at, updated_at
+    ) VALUES (
+      'action-scope-invalid-insert', ?, 'action-scope-session', NULL,
+      'action-scope:invalid-insert', 'pause', 'invalid-insert-fingerprint', 'failed',
+      'legacy-lease', NULL, 'completed', '{}', 'operator', 'migration-test',
+      'action_interrupted', 'invalid insert', datetime('now'), datetime('now')
+    )`).run(secondBoardId)).toThrow(/agent session action board scope is inconsistent/)
+    expect(() => db.prepare(`UPDATE agent_sessions
+      SET workspace_id='action-scope-second-workspace',
+        profile_id=?, conversation_id=?
+      WHERE id='action-scope-session'`).run(
+      secondProfile.id,
+      secondConversation.id,
+    )).toThrow(/agent session action board scope is inconsistent/)
+    expect(() => db.prepare(`UPDATE workspaces SET board_id=?
+      WHERE id='action-scope-first-workspace'`).run(secondBoardId))
+      .toThrow(/would displace an agent session action/)
     db.close()
   })
 
@@ -909,7 +1115,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(14)
+      .toBe(15)
     db.close()
   })
 
@@ -1061,7 +1267,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(14)
+      .toBe(15)
     db.close()
   })
 
@@ -1122,7 +1328,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(15)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1215,7 +1421,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(15)
     db.close()
   })
 
