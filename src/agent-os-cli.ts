@@ -646,19 +646,23 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       await ready()
       print(await deps.api('GET', '/os/contract-templates'), options.json, ['templates'])
     })
-  contractTemplate.command('preview <template>')
+  contractTemplate.command('preview <card> <template>')
     .requiredOption('--vars <json>', 'required template variable JSON object')
     .option('--json', 'print the complete response')
-    .action(async (templateId, options) => {
+    .action(async (cardId, templateId, options) => {
       await ready()
       print(await deps.api(
         'POST',
         `/os/contract-templates/${segment(templateId)}/preview`,
-        { variables: parseJsonOption<Record<string, string>>(options.vars, '--vars') },
+        {
+          card_id: integer(cardId),
+          variables: parseJsonOption<Record<string, string>>(options.vars, '--vars'),
+        },
       ), options.json)
     })
   contractTemplate.command('apply <card> <template>')
     .requiredOption('--vars <json>', 'required template variable JSON object')
+    .requiredOption('--expected <json>', 'expected-state JSON object from template preview')
     .option('--replace', 'explicitly replace conflicting template-owned fields')
     .option('--actor <actor>', 'audited actor', 'human')
     .option('--json', 'print the complete response')
@@ -669,6 +673,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         `/os/cards/${integer(cardId)}/contract/templates/${segment(templateId)}/apply`,
         {
           variables: parseJsonOption<Record<string, string>>(options.vars, '--vars'),
+          expected_state: parseJsonOption<Record<string, unknown>>(options.expected, '--expected'),
           conflict_strategy: options.replace ? 'replace' : 'reject',
           actor: options.actor,
         },

@@ -51,7 +51,10 @@ function fixture() {
   const cardId = Number(db.prepare(
     "INSERT INTO cards (board_id, title, description) VALUES (?, 'Template card', 'Initial scope')",
   ).run(boardId).lastInsertRowid)
-  return { db, boardId, cardId }
+  const dependencyId = Number(db.prepare(
+    "INSERT INTO cards (board_id, title, description, column_name) VALUES (?, 'Dependency', 'Keep me', 'done')",
+  ).run(boardId).lastInsertRowid)
+  return { db, boardId, cardId, dependencyId }
 }
 
 describe('built-in task contract templates', () => {
@@ -122,19 +125,91 @@ describe('built-in task contract templates', () => {
   })
 
   it('requires explicit replacement, audits a real apply, and makes identical reapply a zero-write no-op', () => {
-    const { db, boardId, cardId } = fixture()
+    const { db, boardId, cardId, dependencyId } = fixture()
     const events = new EventStore(db)
-    const market = new JobMarketService(db, events)
+    const market = new JobMarketService(db)
     const templates = new TaskContractTemplateService(db, events)
+    const objectiveMarker = 'QA013_OBJECTIVE_SECRET'
+    const affectedAreaMarker = 'QA013_AFFECTED_AREA_SECRET'
+    const reproductionMarker = 'QA013_REPRODUCTION_SECRET'
+    const metadataKeyMarker = 'QA013_METADATA_KEY_SECRET'
+    const secretMarkers = [
+      objectiveMarker,
+      affectedAreaMarker,
+      reproductionMarker,
+      metadataKeyMarker,
+    ]
+    const secretVariables = {
+      ...variables['bug-fix'],
+      objective: objectiveMarker,
+      affected_area: affectedAreaMarker,
+      reproduction: reproductionMarker,
+    }
+    const workspaceId = 'template-workspace'
+    const policyId = 'template-policy'
+    db.prepare(`INSERT INTO workspaces (id, board_id, card_id, name, kind, root_path)
+      VALUES (?, ?, ?, 'template', 'shared', '/templates')`).run(workspaceId, boardId, cardId)
+    db.prepare(`INSERT INTO policies (id, board_id, name)
+      VALUES (?, ?, 'template policy')`).run(policyId, boardId)
+    market.update(cardId, {
+      deliverables: [{
+        id: 'legacy-deliverable',
+        text: 'Replace this legacy deliverable.',
+        required: true,
+      }],
+      acceptance_criteria: [{
+        id: 'legacy-criterion',
+        text: 'Replace this legacy criterion.',
+        required: true,
+        deliverable_ids: ['legacy-deliverable'],
+        metadata: { [metadataKeyMarker]: 'Legacy metadata value.' },
+        description: 'Legacy criterion description.',
+        verifier: { kind: 'human', instructions: 'Inspect the legacy result.' },
+        required_artifacts: [{ kind: 'legacy-log', name: 'legacy-result' }],
+        priority: 2,
+        owner: 'agent:legacy-owner',
+      }],
+      dependency_rules: [{
+        card_id: dependencyId,
+        blocking_reason: 'Preserve this dependency.',
+        completion_condition: 'card_done',
+      }],
+      policy_id: policyId,
+      workspace_id: workspaceId,
+    }, 'test:setup')
     const initial = market.get(cardId)
     const initialEventCount = events.listBoard(boardId, { cardId, limit: 500 }).length
+    const initialPreview = templates.previewForCard(cardId, 'bug-fix', secretVariables)
 
-    expect(() => templates.apply(cardId, 'bug-fix', variables['bug-fix']))
+    expect(initialPreview.expected_state).toMatchObject({
+      card_id: cardId,
+      market_version: initial.market_version,
+      contract_version: initial.contract.version,
+      template_id: 'bug-fix',
+      template_version: 1,
+    })
+    expect(initialPreview.expected_state.state_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(initialPreview.expected_state.preview_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(initialPreview.conflicting_fields).toContain('objective')
+
+    expect(() => templates.apply(
+      cardId,
+      'bug-fix',
+      secretVariables,
+      initialPreview.expected_state,
+    ))
       .toThrow(/retry with conflict_strategy=replace/)
     expect(market.get(cardId).contract.version).toBe(initial.contract.version)
     expect(events.listBoard(boardId, { cardId, limit: 500 })).toHaveLength(initialEventCount)
 
-    const applied = templates.apply(cardId, 'bug-fix', variables['bug-fix'], 'replace', 'agent:planner')
+    const applied = templates.apply(
+      cardId,
+      'bug-fix',
+      secretVariables,
+      initialPreview.expected_state,
+      'replace',
+      'agent:planner',
+    )
     expect(applied).toMatchObject({
       changed: true,
       conflict_strategy: 'replace',
@@ -143,9 +218,17 @@ describe('built-in task contract templates', () => {
         card_id: cardId,
         status: initial.status,
         contract: {
-          objective: variables['bug-fix'].objective,
+          objective: secretVariables.objective,
           verify_commands: ['npm test'],
+          dependencies: [dependencyId],
+          policy_id: policyId,
+          workspace_id: workspaceId,
         },
+        dependency_rules: [{
+          card_id: dependencyId,
+          blocking_reason: 'Preserve this dependency.',
+          completion_condition: 'card_done',
+        }],
       },
     })
     expect(applied.replaced_fields).toEqual(expect.arrayContaining([
@@ -157,12 +240,20 @@ describe('built-in task contract templates', () => {
     ]))
 
     const afterApplyEvents = events.listBoard(boardId, { cardId, limit: 500 })
-    expect(afterApplyEvents.map((event) => event.kind)).toEqual(expect.arrayContaining([
+    const appliedAuditEvents = afterApplyEvents
+      .filter((event) => (event.payload as { actor?: string }).actor === 'agent:planner')
+      .reverse()
+    expect(appliedAuditEvents.map((event) => event.kind)).toEqual([
+      'task_contract.updated',
       'job_market.scope_changed',
       'job_market.criterion_changed',
+      'job_market.owner_changed',
       'job_market.budget_changed',
       'job_market.template_applied',
-    ]))
+    ])
+    expect(appliedAuditEvents).toHaveLength(6)
+    expect(afterApplyEvents.some((event) => event.kind === 'job_market.dependency_changed'
+      && (event.payload as { actor?: string }).actor === 'agent:planner')).toBe(false)
     expect(afterApplyEvents.some((event) => event.kind === 'job_market.lifecycle_changed')).toBe(false)
     const templateAudit = afterApplyEvents.find((event) => event.kind === 'job_market.template_applied')!
     expect(templateAudit.payload).toEqual(expect.objectContaining({
@@ -171,25 +262,95 @@ describe('built-in task contract templates', () => {
       template_version: 1,
       conflict_strategy: 'replace',
       variable_keys: ['objective', 'affected_area', 'reproduction'],
+      expected_market_version: initial.market_version,
+      expected_contract_version: initial.contract.version,
+      expected_state_hash: initialPreview.expected_state.state_hash,
+      preview_hash: initialPreview.expected_state.preview_hash,
+      result_state_hash: applied.next_expected_state.state_hash,
       published: false,
     }))
-    expect(JSON.stringify(templateAudit.payload)).not.toContain(variables['bug-fix'].reproduction)
+    const authorizedRenderedContract = JSON.stringify(applied.contract)
+    for (const marker of [objectiveMarker, affectedAreaMarker, reproductionMarker]) {
+      expect(authorizedRenderedContract).toContain(marker)
+    }
+    const managedEventPayloads = JSON.stringify(afterApplyEvents.map((event) => event.payload))
+    for (const marker of secretMarkers) expect(managedEventPayloads).not.toContain(marker)
+    const projectedChanges = appliedAuditEvents
+      .filter((event) => event.kind.startsWith('job_market.') && event.kind.endsWith('_changed'))
+    expect(JSON.stringify(projectedChanges.map((event) => event.payload))).not.toContain('npm test')
+    expect(JSON.stringify(projectedChanges.map((event) => event.payload))).not.toContain('test-log')
+    expect(JSON.stringify(projectedChanges.map((event) => event.payload))).not.toContain('implementation')
+    const projectedScope = afterApplyEvents.find((event) => event.kind === 'job_market.scope_changed')!
+    expect(projectedScope.payload).toMatchObject({
+      projection_format: 'sha256-shape-v1',
+      changed_fields: expect.arrayContaining(['deliverables', 'non_goals', 'risks']),
+      before: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), shape: { type: 'object' } },
+      after: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), shape: { type: 'object' } },
+    })
 
     const version = applied.job_market.contract.version
     const marketVersion = applied.job_market.market_version
     const eventCount = afterApplyEvents.length
-    const reapplied = templates.apply(cardId, 'bug-fix', variables['bug-fix'])
+    db.prepare('DELETE FROM job_market_criteria WHERE card_id=?').run(cardId)
+    const criterionRowCount = () => (db.prepare(
+      'SELECT COUNT(*) AS count FROM job_market_criteria WHERE card_id=?',
+    ).get(cardId) as { count: number }).count
+    expect(criterionRowCount()).toBe(0)
+    const reapplied = templates.apply(
+      cardId,
+      'bug-fix',
+      secretVariables,
+      initialPreview.expected_state,
+      'replace',
+      'agent:planner',
+    )
     expect(reapplied).toMatchObject({
       changed: false,
       replaced_fields: [],
+      expected_state: initialPreview.expected_state,
+      next_expected_state: applied.next_expected_state,
       job_market: {
         market_version: marketVersion,
         contract: { version },
       },
     })
     expect(events.listBoard(boardId, { cardId, limit: 500 })).toHaveLength(eventCount)
+    expect(criterionRowCount()).toBe(0)
+    const freshNoOpPreview = templates.previewForCard(cardId, 'bug-fix', secretVariables)
+    expect(criterionRowCount()).toBe(0)
+    expect(templates.apply(
+      cardId,
+      'bug-fix',
+      secretVariables,
+      freshNoOpPreview.expected_state,
+    )).toMatchObject({
+      changed: false,
+      replaced_fields: [],
+      next_expected_state: freshNoOpPreview.expected_state,
+    })
+    expect(criterionRowCount()).toBe(0)
+    expect(events.listBoard(boardId, { cardId, limit: 500 })).toHaveLength(eventCount)
+    expect(() => templates.apply(
+      cardId,
+      'bug-fix',
+      secretVariables,
+      { ...initialPreview.expected_state, state_hash: 'f'.repeat(64) },
+      'replace',
+      'agent:planner',
+    )).toThrow(/changed since preview/)
+    expect(events.listBoard(boardId, { cardId, limit: 500 })).toHaveLength(eventCount)
+    expect(criterionRowCount()).toBe(0)
+    const finalManagedEventPayloads = JSON.stringify(events.listBoard(boardId, { cardId, limit: 500 })
+      .map((event) => event.payload))
+    for (const marker of secretMarkers) expect(finalManagedEventPayloads).not.toContain(marker)
 
-    expect(() => templates.apply(cardId, 'feature', variables.feature))
+    const featurePreview = templates.previewForCard(cardId, 'feature', variables.feature)
+    expect(() => templates.apply(
+      cardId,
+      'feature',
+      variables.feature,
+      featurePreview.expected_state,
+    ))
       .toThrow(/template conflicts with existing contract fields/)
     expect(market.get(cardId).contract.version).toBe(version)
     db.close()

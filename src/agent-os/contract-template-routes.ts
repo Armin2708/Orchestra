@@ -26,7 +26,13 @@ export function registerTaskContractTemplateRoutes(
     '/contract-templates/:templateId/preview',
     (request) => {
       const body = objectBody(request.body)
-      return { preview: templates.preview(request.params.templateId, body.variables) }
+      return {
+        preview: templates.previewForCard(
+          positiveId(body.card_id ?? body.cardId, 'card id'),
+          request.params.templateId,
+          body.variables,
+        ),
+      }
     },
   )
 
@@ -40,6 +46,7 @@ export function registerTaskContractTemplateRoutes(
         positiveId(request.params.cardId, 'card id'),
         request.params.templateId,
         body.variables,
+        body.expected_state ?? body.expectedState,
         strategy,
         actor(body.actor),
       )
@@ -49,6 +56,8 @@ export function registerTaskContractTemplateRoutes(
         conflict_strategy: result.conflict_strategy,
         changed: result.changed,
         replaced_fields: result.replaced_fields,
+        expected_state: result.expected_state,
+        next_expected_state: result.next_expected_state,
         contract: result.job_market.contract,
         job_market: result.job_market,
       }

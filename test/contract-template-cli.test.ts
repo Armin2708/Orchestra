@@ -29,12 +29,22 @@ const vars = JSON.stringify({
   affected_area: 'the scheduler dispatch loop',
   reproduction: 'Two workers claim the same exclusive job',
 })
+const expectedState = {
+  card_id: 7,
+  market_version: 2,
+  contract_version: 3,
+  state_hash: 'a'.repeat(64),
+  template_id: 'bug-fix',
+  template_version: 1,
+  preview_hash: 'b'.repeat(64),
+}
+const expected = JSON.stringify(expectedState)
 
 describe('task contract template CLI', () => {
   it('lists and previews built-in templates through the Agent OS API', async () => {
     const { calls, run } = fixture()
     await run('contract-template', 'list')
-    await run('contract-template', 'preview', 'bug-fix', '--vars', vars)
+    await run('contract-template', 'preview', '7', 'bug-fix', '--vars', vars)
 
     expect(calls).toEqual([
       { method: 'GET', path: '/os/contract-templates', body: undefined },
@@ -42,6 +52,7 @@ describe('task contract template CLI', () => {
         method: 'POST',
         path: '/os/contract-templates/bug-fix/preview',
         body: {
+          card_id: 7,
           variables: {
             objective: 'Stop duplicate dispatch',
             affected_area: 'the scheduler dispatch loop',
@@ -61,6 +72,8 @@ describe('task contract template CLI', () => {
       'bug-fix',
       '--vars',
       vars,
+      '--expected',
+      expected,
       '--actor',
       'agent:planner',
     )
@@ -71,6 +84,8 @@ describe('task contract template CLI', () => {
       'bug-fix',
       '--vars',
       vars,
+      '--expected',
+      expected,
       '--replace',
       '--actor',
       'agent:planner',
@@ -86,6 +101,7 @@ describe('task contract template CLI', () => {
             affected_area: 'the scheduler dispatch loop',
             reproduction: 'Two workers claim the same exclusive job',
           },
+          expected_state: expectedState,
           conflict_strategy: 'reject',
           actor: 'agent:planner',
         },
@@ -99,6 +115,7 @@ describe('task contract template CLI', () => {
             affected_area: 'the scheduler dispatch loop',
             reproduction: 'Two workers claim the same exclusive job',
           },
+          expected_state: expectedState,
           conflict_strategy: 'replace',
           actor: 'agent:planner',
         },
@@ -108,8 +125,23 @@ describe('task contract template CLI', () => {
 
   it('rejects invalid variable JSON before making an API request', async () => {
     const { calls, run } = fixture()
-    await expect(run('contract-template', 'preview', 'bug-fix', '--vars', '{bad'))
+    await expect(run('contract-template', 'preview', '7', 'bug-fix', '--vars', '{bad'))
       .rejects.toThrow(/--vars must be valid JSON/)
+    expect(calls).toEqual([])
+  })
+
+  it('rejects invalid expected-state JSON before applying', async () => {
+    const { calls, run } = fixture()
+    await expect(run(
+      'contract-template',
+      'apply',
+      '7',
+      'bug-fix',
+      '--vars',
+      vars,
+      '--expected',
+      '{bad',
+    )).rejects.toThrow(/--expected must be valid JSON/)
     expect(calls).toEqual([])
   })
 })

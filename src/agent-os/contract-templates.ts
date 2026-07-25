@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import { parseJson } from './json.js'
 import {
   JobMarketService,
   type ContractAccessNeed,
@@ -95,7 +97,24 @@ export interface TaskContractTemplatePreview {
   contract: TaskContractTemplateContract
 }
 
+export interface TaskContractTemplateExpectedState {
+  card_id: number
+  market_version: number
+  contract_version: number
+  state_hash: string
+  template_id: BuiltInTaskContractTemplateId
+  template_version: 1
+  preview_hash: string
+}
+
+export interface TaskContractTemplateCardPreview extends TaskContractTemplatePreview {
+  expected_state: TaskContractTemplateExpectedState
+  conflicting_fields: string[]
+}
+
 export interface ApplyTaskContractTemplateResult extends TaskContractTemplatePreview {
+  expected_state: TaskContractTemplateExpectedState
+  next_expected_state: TaskContractTemplateExpectedState
   conflict_strategy: TemplateConflictStrategy
   changed: boolean
   replaced_fields: string[]
@@ -493,7 +512,7 @@ export class TaskContractTemplateService {
     private readonly db: Database.Database,
     private readonly events?: EventStore,
   ) {
-    this.jobMarket = new JobMarketService(db, events)
+    this.jobMarket = new JobMarketService(db)
   }
 
   list(): TaskContractTemplateDescriptor[] {
@@ -504,29 +523,84 @@ export class TaskContractTemplateService {
     return previewTaskContractTemplate(templateId, variables)
   }
 
+  previewForCard(
+    cardId: number,
+    templateId: string,
+    variables: unknown,
+  ): TaskContractTemplateCardPreview {
+    assertCardId(cardId)
+    const preview = this.preview(templateId, variables)
+    const current = this.snapshotForPreview(cardId)
+    return {
+      ...preview,
+      expected_state: templateExpectedStateToken(current, preview),
+      conflicting_fields: templateConflictFields(current, preview.contract),
+    }
+  }
+
+  private snapshotForPreview(cardId: number): JobMarketContract {
+    let snapshot: JobMarketContract | undefined
+    const rollback = {}
+    const inspect = this.db.transaction(() => {
+      snapshot = clone(this.jobMarket.get(cardId))
+      throw rollback
+    })
+    try {
+      inspect.immediate()
+    } catch (error) {
+      if (error !== rollback) throw error
+    }
+    if (!snapshot) throw new NotFoundError('card not found')
+    return snapshot
+  }
+
   apply(
     cardId: number,
     templateId: string,
     variables: unknown,
+    rawExpectedState: unknown,
     conflictStrategy: TemplateConflictStrategy = 'reject',
     actor = 'human',
   ): ApplyTaskContractTemplateResult {
-    if (!Number.isSafeInteger(cardId) || cardId <= 0) throw new ValidationError('card id must be a positive integer')
+    assertCardId(cardId)
     if (!['reject', 'replace'].includes(conflictStrategy)) {
       throw new ValidationError('conflict_strategy must be reject or replace')
     }
     const preview = this.preview(templateId, variables)
+    const expectedState = normalizeExpectedState(rawExpectedState)
+    const rollbackNoWrite = {}
+    let noWriteResult: ApplyTaskContractTemplateResult | undefined
+    const returnWithoutWrites = (result: ApplyTaskContractTemplateResult): never => {
+      noWriteResult = clone(result)
+      throw rollbackNoWrite
+    }
     const apply = this.db.transaction(() => {
       const before = this.jobMarket.get(cardId)
+      const currentExpectedState = templateExpectedStateToken(before, preview)
+      if (stable(expectedState) !== stable(currentExpectedState)) {
+        const replay = this.replayedApplication(
+          before,
+          preview,
+          expectedState,
+          conflictStrategy,
+          actor,
+        )
+        if (replay) returnWithoutWrites(replay)
+        throw new ConflictError(
+          'contract or rendered template changed since preview; preview again before applying',
+        )
+      }
       const replacedFields = templateConflictFields(before, preview.contract)
       if (!replacedFields.length) {
-        return {
+        returnWithoutWrites({
           ...preview,
+          expected_state: expectedState,
+          next_expected_state: currentExpectedState,
           conflict_strategy: conflictStrategy,
           changed: false,
           replaced_fields: [],
           job_market: before,
-        }
+        })
       }
       if (conflictStrategy !== 'replace') {
         throw new ConflictError(
@@ -534,22 +608,40 @@ export class TaskContractTemplateService {
         )
       }
       const after = this.jobMarket.update(cardId, preview.contract as unknown as Record<string, unknown>, actor)
-      this.auditApplication(before, after, preview, actor, replacedFields)
+      const nextExpectedState = templateExpectedStateToken(after, preview)
+      this.auditApplication(
+        before,
+        after,
+        preview,
+        expectedState,
+        nextExpectedState,
+        actor,
+        replacedFields,
+      )
       return {
         ...preview,
+        expected_state: expectedState,
+        next_expected_state: nextExpectedState,
         conflict_strategy: conflictStrategy,
         changed: true,
         replaced_fields: replacedFields,
         job_market: after,
       }
     })
-    return apply.immediate()
+    try {
+      return apply.immediate()
+    } catch (error) {
+      if (error !== rollbackNoWrite || !noWriteResult) throw error
+      return noWriteResult
+    }
   }
 
   private auditApplication(
     before: JobMarketContract,
     after: JobMarketContract,
     preview: TaskContractTemplatePreview,
+    expectedState: TaskContractTemplateExpectedState,
+    nextExpectedState: TaskContractTemplateExpectedState,
     actor: string,
     replacedFields: string[],
   ): void {
@@ -557,6 +649,45 @@ export class TaskContractTemplateService {
     const board = this.db.prepare('SELECT board_id FROM cards WHERE id=?')
       .get(after.card_id) as { board_id: number } | undefined
     if (!board) throw new NotFoundError('card not found')
+    if (before.contract.version !== after.contract.version) {
+      this.events.append({
+        boardId: board.board_id,
+        workspaceId: after.contract.workspace_id,
+        cardId: after.card_id,
+        contractId: `card:${after.card_id}:v${after.contract.version}`,
+        kind: 'task_contract.updated',
+        source: 'api',
+        payload: {
+          actor: normalizeActor(actor),
+          objective: '[redacted]',
+          objective_hash: sha256(after.contract.objective),
+          dependencies: after.contract.dependencies,
+          priority: after.contract.priority,
+          version: after.contract.version,
+          semantic_change: true,
+          projection: safeAuditProjection(after.contract),
+        },
+      })
+    }
+    for (const change of templateAuditChanges(before, after)) {
+      this.events.append({
+        boardId: board.board_id,
+        workspaceId: after.contract.workspace_id,
+        cardId: after.card_id,
+        contractId: `card:${after.card_id}:v${after.contract.version}`,
+        kind: change.kind,
+        source: 'job-market',
+        payload: {
+          actor: normalizeActor(actor),
+          reason: null,
+          market_version: after.market_version,
+          projection_format: 'sha256-shape-v1',
+          changed_fields: change.changed_fields,
+          before: safeAuditProjection(change.before),
+          after: safeAuditProjection(change.after),
+        },
+      })
+    }
     this.events.append({
       boardId: board.board_id,
       workspaceId: after.contract.workspace_id,
@@ -565,18 +696,66 @@ export class TaskContractTemplateService {
       kind: 'job_market.template_applied',
       source: 'job-market',
       payload: {
-        actor: actor.trim() || 'human',
+        actor: normalizeActor(actor),
         template_id: preview.template.id,
         template_version: preview.template.version,
         conflict_strategy: 'replace',
         variable_keys: preview.template.variables.map((item) => item.key),
         replaced_fields: replacedFields,
+        expected_market_version: expectedState.market_version,
+        expected_contract_version: expectedState.contract_version,
+        expected_state_hash: expectedState.state_hash,
+        preview_hash: expectedState.preview_hash,
+        result_state_hash: nextExpectedState.state_hash,
         previous_contract_version: before.contract.version,
         contract_version: after.contract.version,
         market_version: after.market_version,
         published: false,
       },
     })
+  }
+
+  private replayedApplication(
+    current: JobMarketContract,
+    preview: TaskContractTemplatePreview,
+    expectedState: TaskContractTemplateExpectedState,
+    conflictStrategy: TemplateConflictStrategy,
+    actor: string,
+  ): ApplyTaskContractTemplateResult | null {
+    const row = this.db.prepare(`SELECT payload FROM os_events
+      WHERE card_id=? AND kind='job_market.template_applied' AND source='job-market'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(current.card_id) as { payload: string } | undefined
+    if (!row) return null
+    const payload = parseJson<Record<string, unknown>>(row.payload, {})
+    const nextExpectedState = templateExpectedStateToken(current, preview)
+    const hasReplacedFields = Array.isArray(payload.replaced_fields)
+      && payload.replaced_fields.every((field) => typeof field === 'string')
+    if (!hasReplacedFields) return null
+    const exactPriorApplication = expectedState.card_id === current.card_id
+      && payload.actor === normalizeActor(actor)
+      && payload.template_id === expectedState.template_id
+      && Number(payload.template_version) === expectedState.template_version
+      && payload.conflict_strategy === conflictStrategy
+      && Number(payload.expected_market_version) === expectedState.market_version
+      && Number(payload.expected_contract_version) === expectedState.contract_version
+      && payload.expected_state_hash === expectedState.state_hash
+      && payload.preview_hash === expectedState.preview_hash
+      && Number(payload.market_version) === current.market_version
+      && Number(payload.contract_version) === current.contract.version
+      && payload.result_state_hash === nextExpectedState.state_hash
+      && nextExpectedState.template_id === expectedState.template_id
+      && nextExpectedState.template_version === expectedState.template_version
+      && nextExpectedState.preview_hash === expectedState.preview_hash
+    if (!exactPriorApplication) return null
+    return {
+      ...preview,
+      expected_state: expectedState,
+      next_expected_state: nextExpectedState,
+      conflict_strategy: conflictStrategy,
+      changed: false,
+      replaced_fields: [],
+      job_market: current,
+    }
   }
 }
 
@@ -684,6 +863,226 @@ function templateExpectedState(contract: TaskContractTemplateContract): Record<s
     budget_coordination_tokens: contract.budget_coordination_tokens,
     budget_coordination_messages: contract.budget_coordination_messages,
   }
+}
+
+interface TemplateAuditChange {
+  kind: string
+  before: unknown
+  after: unknown
+  changed_fields: string[]
+}
+
+function templateAuditChanges(
+  before: JobMarketContract,
+  after: JobMarketContract,
+): TemplateAuditChange[] {
+  const groups: Array<Omit<TemplateAuditChange, 'changed_fields'>> = [
+    {
+      kind: 'job_market.scope_changed',
+      before: templateAuditScope(before),
+      after: templateAuditScope(after),
+    },
+    {
+      kind: 'job_market.criterion_changed',
+      before: before.criteria.map(templateCriterionWithoutOwner),
+      after: after.criteria.map(templateCriterionWithoutOwner),
+    },
+    {
+      kind: 'job_market.owner_changed',
+      before: before.criteria.map((criterion) => ({ criterion_id: criterion.id, owner: criterion.owner })),
+      after: after.criteria.map((criterion) => ({ criterion_id: criterion.id, owner: criterion.owner })),
+    },
+    {
+      kind: 'job_market.dependency_changed',
+      before: before.dependency_rules,
+      after: after.dependency_rules,
+    },
+    {
+      kind: 'job_market.budget_changed',
+      before: before.budgets,
+      after: after.budgets,
+    },
+  ]
+  return groups
+    .filter((group) => stable(group.before) !== stable(group.after))
+    .map((group) => ({
+      ...group,
+      changed_fields: changedAuditFields(group.before, group.after),
+    }))
+}
+
+function templateAuditScope(market: JobMarketContract): Record<string, unknown> {
+  return {
+    objective: market.contract.objective,
+    deliverables: market.contract.deliverables,
+    base_ref: market.contract.base_ref,
+    verify_commands: market.contract.verify_commands,
+    non_goals: market.contract.non_goals,
+    risks: market.contract.risks,
+    priority: market.contract.priority,
+    policy_id: market.contract.policy_id,
+    workspace_id: market.contract.workspace_id,
+    constraints: market.constraints,
+  }
+}
+
+function templateCriterionWithoutOwner(
+  criterion: JobMarketContract['criteria'][number],
+): Omit<JobMarketContract['criteria'][number], 'owner'> {
+  const { owner: _owner, ...rest } = criterion
+  const { owner: _metadataOwner, ...metadata } = rest.metadata
+  return { ...rest, metadata }
+}
+
+function changedAuditFields(before: unknown, after: unknown): string[] {
+  if (before && after && typeof before === 'object' && typeof after === 'object'
+    && !Array.isArray(before) && !Array.isArray(after)) {
+    const left = before as Record<string, unknown>
+    const right = after as Record<string, unknown>
+    return [...new Set([...Object.keys(left), ...Object.keys(right)])]
+      .filter((key) => stable(left[key]) !== stable(right[key]))
+      .sort()
+  }
+  return ['records']
+}
+
+function safeAuditProjection(value: unknown): Record<string, unknown> {
+  return {
+    sha256: sha256(value),
+    shape: auditShape(value),
+  }
+}
+
+function auditShape(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const uniqueShapes = new Map<string, unknown>()
+    for (const item of value) {
+      const shape = auditShape(item)
+      uniqueShapes.set(stable(shape), shape)
+    }
+    return {
+      type: 'array',
+      count: value.length,
+      item_shapes: [...uniqueShapes.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, shape]) => shape),
+    }
+  }
+  if (value && typeof value === 'object') {
+    const row = value as Record<string, unknown>
+    const uniqueShapes = new Map<string, unknown>()
+    for (const item of Object.values(row)) {
+      const shape = auditShape(item)
+      uniqueShapes.set(stable(shape), shape)
+    }
+    return {
+      type: 'object',
+      field_count: Object.keys(row).length,
+      field_shapes: [...uniqueShapes.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, shape]) => shape),
+    }
+  }
+  return { type: value === null ? 'null' : typeof value }
+}
+
+function assertCardId(cardId: number): void {
+  if (!Number.isSafeInteger(cardId) || cardId <= 0) {
+    throw new ValidationError('card id must be a positive integer')
+  }
+}
+
+function normalizeExpectedState(raw: unknown): TaskContractTemplateExpectedState {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ValidationError('expected_state from template preview is required')
+  }
+  const state = raw as Record<string, unknown>
+  const requiredKeys = [
+    'card_id',
+    'market_version',
+    'contract_version',
+    'state_hash',
+    'template_id',
+    'template_version',
+    'preview_hash',
+  ]
+  const unknownKeys = Object.keys(state).filter((key) => !requiredKeys.includes(key)).sort()
+  if (unknownKeys.length) {
+    throw new ValidationError(`unknown expected_state fields: ${unknownKeys.join(', ')}`)
+  }
+  for (const key of ['card_id', 'market_version', 'contract_version'] as const) {
+    if (!Number.isSafeInteger(state[key]) || Number(state[key]) <= 0) {
+      throw new ValidationError(`expected_state.${key} must be a positive integer`)
+    }
+  }
+  if (state.template_version !== 1) {
+    throw new ValidationError('expected_state.template_version must be 1')
+  }
+  if (!BUILT_IN_TASK_CONTRACT_TEMPLATE_IDS.includes(state.template_id as BuiltInTaskContractTemplateId)) {
+    throw new ValidationError('expected_state.template_id is invalid')
+  }
+  for (const key of ['state_hash', 'preview_hash'] as const) {
+    if (typeof state[key] !== 'string' || !/^[a-f0-9]{64}$/.test(state[key])) {
+      throw new ValidationError(`expected_state.${key} must be a lowercase SHA-256 hash`)
+    }
+  }
+  return {
+    card_id: Number(state.card_id),
+    market_version: Number(state.market_version),
+    contract_version: Number(state.contract_version),
+    state_hash: state.state_hash as string,
+    template_id: state.template_id as BuiltInTaskContractTemplateId,
+    template_version: 1,
+    preview_hash: state.preview_hash as string,
+  }
+}
+
+function templateExpectedStateToken(
+  market: JobMarketContract,
+  preview: TaskContractTemplatePreview,
+): TaskContractTemplateExpectedState {
+  return {
+    card_id: market.card_id,
+    market_version: market.market_version,
+    contract_version: market.contract.version,
+    state_hash: sha256({
+      card_id: market.card_id,
+      status: market.status,
+      market_version: market.market_version,
+      contract: {
+        card_id: market.contract.card_id,
+        objective: market.contract.objective,
+        deliverables: market.contract.deliverables,
+        acceptance_criteria: market.contract.acceptance_criteria,
+        dependencies: market.contract.dependencies,
+        base_ref: market.contract.base_ref,
+        verify_commands: market.contract.verify_commands,
+        non_goals: market.contract.non_goals,
+        risks: market.contract.risks,
+        budget_tokens: market.contract.budget_tokens,
+        budget_cents: market.contract.budget_cents,
+        priority: market.contract.priority,
+        policy_id: market.contract.policy_id,
+        workspace_id: market.contract.workspace_id,
+        version: market.contract.version,
+      },
+      criteria: market.criteria,
+      dependency_rules: market.dependency_rules,
+      constraints: market.constraints,
+      budgets: market.budgets,
+    }),
+    template_id: preview.template.id,
+    template_version: preview.template.version,
+    preview_hash: sha256(preview),
+  }
+}
+
+function sha256(value: unknown): string {
+  return createHash('sha256').update(stable(value)).digest('hex')
+}
+
+function normalizeActor(actor: string): string {
+  return actor.trim() || 'human'
 }
 
 function stable(value: unknown): string {

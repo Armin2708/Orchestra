@@ -80,6 +80,20 @@ adds no duplicate audit event.
 
 Templates never publish a contract or mutate remote state. In particular, the release template
 performs local test/build verification only; it does not push, publish, tag, or deploy.
+Authenticated preview/apply responses intentionally return the rendered contract requested by the
+caller and can therefore echo caller-supplied template values. Managed events are a different trust
+boundary and never retain those raw values.
+
+Template preview is card-specific. It returns `expected_state`, an exact compare-and-set token with
+the card, Job Market version, task-contract version, current-state SHA-256 hash, template identity,
+and rendered-preview hash. Preview obtains the canonical initial state through a rollback-only snapshot,
+so it commits no task-contract, Job Market, criterion, dependency, or event rows. Apply requires the
+complete token. The server validates it inside the same immediate transaction as replacement; any
+intervening lifecycle, dependency, policy, workspace, contract, or rendered-template change returns
+HTTP `409` before contract or event writes. A successful apply returns `next_expected_state`, which
+can be used for an unchanged idempotent reapply. Retrying the exact original successful apply is also
+a zero-write `200`: the server accepts a stale token only when the durable template-application audit
+matches its card, template, preview, actor, strategy, expected state, and the still-current result hash.
 
 ## Audit contract
 
@@ -87,6 +101,11 @@ Scope, deliverable, criterion, owner, dependency, constraint, budget, and lifecy
 field-level causal events with board, workspace, card, contract version, actor, before/after value,
 and optional reason. A changed template apply also appends `job_market.template_applied` with the
 template/version, variable names (not values), replaced fields, actor, and resulting versions.
+For template applies, `task_contract.updated` and the normal changed-group events retain their kinds,
+ordering, actor, versions, changed field names, and before/after SHA-256 + structural shape, but redact
+rendered strings before they enter `os_events`. Structural projections record counts and value shapes,
+not arbitrary nested metadata keys. This keeps provenance and lost-response replay proof without
+turning the event ledger into a credential or prompt store.
 Workspace scope is queryable through the canonical event ledger.
 
 ## API and CLI
@@ -98,8 +117,9 @@ Routes under `/api/v1/os`:
 - `POST /cards/:id/contract/publish`
 - `POST /cards/:id/contract/transition`
 - `GET /contract-templates`
-- `POST /contract-templates/:templateId/preview`
-- `POST /cards/:cardId/contract/templates/:templateId/apply`
+- `POST /contract-templates/:templateId/preview` with `{ card_id, variables }`
+- `POST /cards/:cardId/contract/templates/:templateId/apply` with
+  `{ variables, expected_state, conflict_strategy?, actor? }`
 
 CLI parity:
 
@@ -108,8 +128,8 @@ CLI parity:
 - `orchestra contract publish`
 - `orchestra contract transition`
 - `orchestra contract-template list`
-- `orchestra contract-template preview <template> --vars <json>`
-- `orchestra contract-template apply <card> <template> --vars <json> [--replace]`
+- `orchestra contract-template preview <card> <template> --vars <json>`
+- `orchestra contract-template apply <card> <template> --vars <json> --expected <json> [--replace]`
 
 Publish, transition, and template replacement remain operator-only. Contract/template reads and
 preview/validation retain the existing authenticated Agent OS boundary.
@@ -117,16 +137,17 @@ preview/validation retain the existing authenticated Agent OS boundary.
 ## Evidence
 
 - Typed Job Market foundation commit: `8ae2eeb`.
-- JOB-013 template-specific gate: 3 files / 8 tests.
+- JOB-013 template-specific gate: 3 files / 10 tests.
 - Combined Job Market, API, CLI, surface-inventory, and threat-model gate: 8 files / 39 tests.
-- Full Node 22.20.0 serial repository gate: 117 files / 787 tests.
+- Full Node 22.20.0 serial repository gate: 120 files / 813 tests.
 - Root TypeScript and production build pass.
 - Migration tests prove missing prerequisites roll back and are not recorded.
 - Domain tests prove typed round-trip, lifecycle CAS/idempotency, dependency completion,
   launch zero-write failure, and workspace-filterable audits.
 - Template tests prove stable built-in ordering, strict variables, complete verifier/evidence/risk/
   budget output, explicit replacement, atomic conflict rollback, lifecycle preservation,
-  non-destructive release defaults, audited apply, and zero-write deterministic reapply.
+  non-destructive release defaults, projected audits with an adversarial secret-marker scan,
+  exact-request replay proof, and zero-write deterministic reapply.
 
 ## Remaining
 
