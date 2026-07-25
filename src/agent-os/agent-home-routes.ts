@@ -16,6 +16,7 @@ import {
 import {
   AGENT_HOME_SESSION_ACTIONS,
   AgentHomeLifecycleService,
+  type AgentHomeForkReconciliationResolution,
   type AgentHomeRuntimeControl,
   type AgentHomeSessionAction,
 } from './agent-home-lifecycle.js'
@@ -497,6 +498,26 @@ export const agentHomePlugin: FastifyPluginAsync<AgentHomeRouteOptions> = async 
       },
     )
   }
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/session-actions/:id/reconcile',
+    async (request) => {
+      const body = requestBody(request.body)
+      const command = mutation(request, body, isOperator)
+      const resolution = optionalValue(body, 'resolution')
+      if (resolution !== 'verify_adopt' && resolution !== 'confirm_absent') {
+        throw new ValidationError(
+          'resolution must be verify_adopt or confirm_absent',
+        )
+      }
+      return lifecycle.reconcileFork(request.params.id, {
+        actor: command.actor,
+        idempotencyKey: command.idempotencyKey,
+        resolution: resolution as AgentHomeForkReconciliationResolution,
+        note: optionalValue(body, 'note'),
+      })
+    },
+  )
 }
 
 function mutation(

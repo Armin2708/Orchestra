@@ -266,6 +266,33 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         idempotency_key: commandKey(`session-rename:${id}`, options.idempotency),
       }), options.json, ['session'])
     })
+  session.command('reconcile-fork <action-id>')
+    .requiredOption(
+      '--resolution <resolution>',
+      'verify_adopt or confirm_absent',
+    )
+    .option('--note <text>', 'operator reconciliation note')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (actionId, options) => {
+      await ready()
+      if (options.resolution !== 'verify_adopt'
+        && options.resolution !== 'confirm_absent') {
+        throw new Error('resolution must be verify_adopt or confirm_absent')
+      }
+      print(await deps.api(
+        'POST',
+        `/os/session-actions/${segment(actionId)}/reconcile`,
+        compact({
+          resolution: options.resolution,
+          note: options.note,
+          idempotency_key: commandKey(
+            `session-fork-reconcile:${actionId}:${options.resolution}`,
+            options.idempotency,
+          ),
+        }),
+      ), options.json, ['created_session', 'session', 'reconciliation'])
+    })
   session.command('search <id>')
     .option('--query <text>')
     .option('--after <sequence>', 'sequence cursor', integer)

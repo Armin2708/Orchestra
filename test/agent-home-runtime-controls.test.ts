@@ -1,9 +1,12 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import type Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConversationService } from '../src/agent-os/conversations.js'
+import { AgentHomeForkOutcomeUnknownError } from '../src/agent-os/agent-home-fork.js'
+import { AgentHomeLifecycleService } from '../src/agent-os/agent-home-lifecycle.js'
 import {
   createAgentOsRuntime,
   type AgentOsRuntime,
@@ -28,6 +31,485 @@ afterEach(async () => {
 })
 
 describe('Agent Home real runtime controls', () => {
+  it('maps a live native Codex fork through a closed provenance contract', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-home-runtime-fork-'))
+    roots.push(root)
+    roots.push(`${root}-workspaces`)
+    initializeGit(root)
+    const db = openDb(':memory:')
+    databases.push(db)
+    const boardId = Number(db.prepare(
+      'INSERT INTO boards (project_path, name) VALUES (?, ?)',
+    ).run(root, 'Runtime fork').lastInsertRowid)
+    const cardId = Number(db.prepare(`INSERT INTO cards
+      (board_id, title, description) VALUES (?, 'Runtime fork', 'native fork mapping')`)
+      .run(boardId).lastInsertRowid)
+    const workspace = new WorkspaceStore(db).create({
+      boardId,
+      cardId,
+      name: 'Runtime fork',
+      kind: 'shared',
+      rootPath: root,
+      status: 'active',
+    })
+    const runtime = createAgentOsRuntime(db)
+    runtimes.push(runtime)
+    let releaseSourceEvents: (() => void) | undefined
+    const sourceStopped = new Promise<void>((resolve) => {
+      releaseSourceEvents = resolve
+    })
+    let releaseChildEvents: (() => void) | undefined
+    const childStopped = new Promise<void>((resolve) => {
+      releaseChildEvents = resolve
+    })
+    const forkCalls: Array<{
+      sessionId: string
+      options: {
+        sourceExternalId: string
+        sourceWorkspaceId: string
+        sourceCwd: string
+        targetWorkspaceId: string
+        targetCwd: string
+        workspaceId: string
+        cwd: string
+      }
+    }> = []
+    let unknown = false
+    let metadataOverrides: Record<string, unknown> = {}
+    let latestTargetWorkspaceId: string | null = null
+    let returnParentBindingForChild = false
+    const attachCalls: string[] = []
+    const detachCalls: string[] = []
+    const verifyCalls: Array<{
+      sourceExternalId: string
+      childExternalId: string
+      childProviderThreadId: string
+      childProviderSessionId: string | null
+      sourceWorkspaceId: string
+      sourceCwd: string
+      targetWorkspaceId: string
+      targetCwd: string
+    }> = []
+    const driver: AgentDriver & {
+      forkSession(
+        sessionId: string,
+        options: {
+          sourceExternalId: string
+          sourceWorkspaceId: string
+          sourceCwd: string
+          targetWorkspaceId: string
+          targetCwd: string
+          workspaceId: string
+          cwd: string
+        },
+      ): Promise<{
+        sourceExternalId: string
+        externalId: string
+        providerThreadId: string
+        sourceProviderThreadId: string
+        metadata: Record<string, unknown>
+      }>
+      updateSession(sessionId: string): Promise<void>
+      verifyForkSession(options: {
+        sourceExternalId: string
+        childExternalId: string
+        childProviderThreadId: string
+        childProviderSessionId: string | null
+        sourceWorkspaceId: string
+        sourceCwd: string
+        targetWorkspaceId: string
+        targetCwd: string
+      }): Promise<{
+        sourceExternalId: string
+        externalId: string
+        providerThreadId: string
+        sourceProviderThreadId: string
+        metadata: Record<string, unknown>
+      }>
+    } = {
+      id: 'codex',
+      capabilities: () => ({
+        attach: true,
+        streaming: true,
+        interrupt: true,
+        stop: true,
+        rawTerminal: false,
+        resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async (request) => ({
+        id: 'codex:runtime-fork-source',
+        externalId: 'runtime-fork-source',
+        driverId: 'codex',
+        workspaceId: request.workspaceId,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        metadata: {},
+      }),
+      attach: async (externalId) => {
+        attachCalls.push(externalId)
+        if (externalId === 'runtime-fork-source'
+          || returnParentBindingForChild) {
+          return {
+            id: 'codex:runtime-fork-source',
+            externalId: 'runtime-fork-source',
+            driverId: 'codex',
+            workspaceId: workspace.id,
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            metadata: {},
+          }
+        }
+        if (externalId === 'runtime-fork-child' && latestTargetWorkspaceId) {
+          return {
+            id: 'codex:runtime-fork-child',
+            externalId,
+            driverId: 'codex',
+            workspaceId: latestTargetWorkspaceId,
+            status: 'idle',
+            startedAt: new Date().toISOString(),
+            metadata: {},
+          }
+        }
+        return null
+      },
+      detach: async (sessionId) => { detachCalls.push(sessionId) },
+      updateSession: async () => undefined,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async (sessionId) => {
+        if (sessionId.includes('child')) releaseChildEvents?.()
+        else releaseSourceEvents?.()
+      },
+      forkSession: async (sessionId, options) => {
+        forkCalls.push({ sessionId, options })
+        latestTargetWorkspaceId = options.targetWorkspaceId
+        if (unknown) {
+          const error = Object.assign(new Error('RAW_RPC_ERROR_MUST_NOT_ESCAPE'), {
+            outcomeUnknown: true as const,
+            sourceExternalId: 'runtime-fork-source',
+            sourceProviderThreadId: 'runtime-fork-source',
+            knownChild: {
+              externalId: 'runtime-fork-quarantined-child',
+              providerThreadId: 'runtime-fork-quarantined-child',
+              forkedFromId: 'runtime-fork-source',
+              childProviderSessionId: 'runtime-fork-child-session',
+              subscriptionReleased: true,
+            },
+            rawRpcPayload: { authorization: 'Bearer RAW_SECRET' },
+          })
+          throw error
+        }
+        return {
+          sourceExternalId: 'runtime-fork-source',
+          externalId: 'runtime-fork-child',
+          providerThreadId: 'runtime-fork-child',
+          sourceProviderThreadId: 'runtime-fork-source',
+          metadata: {
+            forkMethod: 'thread/fork',
+            forkedFromId: 'runtime-fork-source',
+            providerSessionId: 'runtime-fork-child-session',
+            childCwd: options.targetCwd,
+            targetWorkspaceAttestation: {
+              value: options.targetWorkspaceId,
+              authority: 'orchestrator',
+            },
+            readVerified: true,
+            subscriptionReleased: true,
+            cwdVerified: true,
+            threadReadVerified: true,
+            childUnsubscribeVerified: true,
+            rawRpcPayload: { authorization: 'Bearer RAW_SECRET' },
+            ...metadataOverrides,
+          },
+        }
+      },
+      verifyForkSession: async (options) => {
+        verifyCalls.push(options)
+        return {
+          sourceExternalId: options.sourceExternalId,
+          externalId: options.childExternalId,
+          providerThreadId: options.childProviderThreadId,
+          sourceProviderThreadId: 'runtime-fork-source',
+          metadata: {
+            forkMethod: 'thread/fork',
+            forkedFromId: 'runtime-fork-source',
+            providerSessionId: options.childProviderSessionId,
+            childCwd: options.targetCwd,
+            targetWorkspaceAttestation: {
+              value: options.targetWorkspaceId,
+              authority: 'orchestrator',
+            },
+            readVerified: true,
+            cwdVerified: true,
+            threadReadVerified: true,
+          },
+        }
+      },
+      events: async function* (sessionId) {
+        if (sessionId.includes('child')) {
+          await childStopped
+          return
+        }
+        await sourceStopped
+        yield {
+          sessionId,
+          seq: 1,
+          type: 'exit',
+          at: new Date().toISOString(),
+          data: 'process.stopped',
+          metadata: { exitCode: 0 },
+        }
+      },
+    }
+    runtime.registerDriver(driver)
+    const orchestration = new OrchestrationService(db, runtime.scheduler, {
+      materialize: async (item) => item,
+    })
+    const reserved = orchestration.createCardJob({
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'codex',
+      accessProfile: 'read_only',
+      maxAttempts: 1,
+    })
+    expect((await runtime.scheduler.tick()).started).toEqual([reserved.job.id])
+    await until(() => new ConversationService(db).requireSession(reserved.session!.id).status === 'running')
+    db.prepare(`UPDATE agent_sessions SET provider_thread_id=external_id
+      WHERE id=?`).run(reserved.session!.id)
+    const session = new ConversationService(db).requireSession(reserved.session!.id)
+
+    expect(runtime.jobExecutor.agentHomeSessionCapabilities(session).fork)
+      .toEqual({ supported: true, reason: null })
+    const operation = {
+      actionId: 'runtime-fork-action',
+      reservedSessionId: 'runtime-fork-child-session-id',
+    }
+    const target = await runtime.jobExecutor.prepareAgentHomeForkSession(session, operation)
+    const fork = await runtime.jobExecutor.forkAgentHomeSession(session, {
+      ...operation,
+      ...target,
+    })
+    expect(fork).toEqual({
+      sourceExternalId: 'runtime-fork-source',
+      externalId: 'runtime-fork-child',
+      providerThreadId: 'runtime-fork-child',
+      sourceProviderThreadId: 'runtime-fork-source',
+      provenance: {
+        fork_method: 'thread/fork',
+        history_boundary: 'full',
+        read_verified: true,
+        subscription_released: true,
+      },
+    })
+    expect(JSON.stringify(fork)).not.toContain('RAW_SECRET')
+    expect(forkCalls[0]).toEqual({
+      sessionId: 'codex:runtime-fork-source',
+      options: {
+        sourceExternalId: 'runtime-fork-source',
+        sourceWorkspaceId: workspace.id,
+        sourceCwd: root,
+        targetWorkspaceId: target.workspaceId,
+        targetCwd: expect.stringContaining('runtime-fork-child-session-id'),
+        workspaceId: workspace.id,
+        cwd: root,
+      },
+    })
+    const providerCallsBeforeVerification = forkCalls.length
+    expect(await runtime.jobExecutor.verifyAgentHomeForkChild(
+      session,
+      {
+        externalId: 'runtime-fork-verified-child',
+        providerThreadId: 'runtime-fork-verified-child',
+        forkedFromId: 'runtime-fork-source',
+        childProviderSessionId: 'runtime-fork-verified-provider-session',
+        subscriptionReleased: true,
+      },
+      {
+        ...operation,
+        ...target,
+      },
+    )).toEqual({
+      sourceExternalId: 'runtime-fork-source',
+      externalId: 'runtime-fork-verified-child',
+      providerThreadId: 'runtime-fork-verified-child',
+      sourceProviderThreadId: 'runtime-fork-source',
+      provenance: {
+        fork_method: 'thread/fork',
+        history_boundary: 'full',
+        read_verified: true,
+        subscription_released: true,
+      },
+    })
+    expect(verifyCalls).toEqual([{
+      sourceExternalId: 'runtime-fork-source',
+      childExternalId: 'runtime-fork-verified-child',
+      childProviderThreadId: 'runtime-fork-verified-child',
+      childProviderSessionId: 'runtime-fork-verified-provider-session',
+      sourceWorkspaceId: workspace.id,
+      sourceCwd: root,
+      targetWorkspaceId: target.workspaceId,
+      targetCwd: expect.stringContaining('runtime-fork-child-session-id'),
+    }])
+    expect(forkCalls).toHaveLength(providerCallsBeforeVerification)
+
+    const incompleteProofs: Array<Record<string, unknown>> = [
+      { forkedFromId: 'another-source' },
+      { providerSessionId: null },
+      { cwdVerified: false },
+      { targetWorkspaceAttestation: null },
+      { threadReadVerified: false },
+      { childUnsubscribeVerified: false },
+      { readVerified: false },
+      { subscriptionReleased: false },
+    ]
+    for (const override of incompleteProofs) {
+      metadataOverrides = override
+      let invalid: unknown
+      try {
+        await runtime.jobExecutor.forkAgentHomeSession(session, {
+          ...operation,
+          ...target,
+        })
+      } catch (error) {
+        invalid = error
+      }
+      expect(invalid).toBeInstanceOf(AgentHomeForkOutcomeUnknownError)
+      expect(invalid).toMatchObject({
+        message: 'provider fork returned an incomplete or unsupported provenance contract',
+        sourceExternalId: 'runtime-fork-source',
+        sourceProviderThreadId: 'runtime-fork-source',
+        knownChild: {
+          externalId: 'runtime-fork-child',
+          providerThreadId: 'runtime-fork-child',
+          subscriptionReleased: override.subscriptionReleased !== false,
+        },
+      })
+      expect(JSON.stringify(invalid)).not.toContain('RAW_SECRET')
+    }
+    metadataOverrides = {}
+    unknown = true
+    let caught: unknown
+    try {
+      await runtime.jobExecutor.forkAgentHomeSession(session, {
+        ...operation,
+        ...target,
+      })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(AgentHomeForkOutcomeUnknownError)
+    expect(caught).toMatchObject({
+      message: 'provider fork outcome is unknown',
+      sourceExternalId: 'runtime-fork-source',
+      sourceProviderThreadId: 'runtime-fork-source',
+      knownChild: {
+        externalId: 'runtime-fork-quarantined-child',
+        providerThreadId: 'runtime-fork-quarantined-child',
+        forkedFromId: 'runtime-fork-source',
+        childProviderSessionId: 'runtime-fork-child-session',
+        subscriptionReleased: true,
+      },
+    })
+    expect(JSON.stringify(caught)).not.toContain('RAW_SECRET')
+    expect(JSON.stringify(caught)).not.toContain('RAW_RPC_ERROR_MUST_NOT_ESCAPE')
+
+    unknown = false
+    returnParentBindingForChild = true
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      runtime: runtime.jobExecutor,
+    })
+    const lifecycleInput = {
+      actor: { type: 'operator', id: 'runtime-test' },
+      idempotencyKey: 'runtime-fork-adoption-replay',
+    }
+    const providerCallsBeforeLifecycle = forkCalls.length
+    await expect(lifecycle.run(session.id, 'fork', lifecycleInput))
+      .rejects.toThrow('provider attached a different or non-isolated fork child')
+    const pendingAction = db.prepare(`SELECT id, result_session_id, status,
+      effect_state FROM agent_session_actions WHERE idempotency_key=?`).get(
+      lifecycleInput.idempotencyKey,
+    ) as {
+      id: string
+      result_session_id: string
+      status: string
+      effect_state: string
+    }
+    expect(pendingAction).toMatchObject({
+      status: 'pending',
+      effect_state: 'applied',
+    })
+    expect(new ConversationService(db).requireSession(pendingAction.result_session_id))
+      .toMatchObject({
+        parent_session_id: session.id,
+        status: 'idle',
+        control_state: 'paused',
+        recovery_state: 'attachable',
+      })
+
+    returnParentBindingForChild = false
+    const [adopted, concurrentReplay] = await Promise.all([
+      lifecycle.run(session.id, 'fork', lifecycleInput),
+      lifecycle.run(session.id, 'fork', lifecycleInput),
+    ])
+    expect(adopted.action).toMatchObject({
+      id: pendingAction.id,
+      replayed: true,
+    })
+    expect(concurrentReplay.action).toMatchObject({
+      id: pendingAction.id,
+      replayed: true,
+    })
+    expect(forkCalls).toHaveLength(providerCallsBeforeLifecycle + 1)
+    expect(adopted.created_session).toMatchObject({
+      id: pendingAction.result_session_id,
+      parent_session_id: session.id,
+      status: 'idle',
+      control_state: 'active',
+      recovery_state: 'attachable',
+      context: {
+        fork_action_id: pendingAction.id,
+        adoption_state: 'attached',
+      },
+    })
+
+    await runtime.shutdown()
+    runtimes.splice(runtimes.indexOf(runtime), 1)
+    expect(detachCalls).toContain('codex:runtime-fork-child')
+    const restartedRuntime = createAgentOsRuntime(db)
+    runtimes.push(restartedRuntime)
+    restartedRuntime.registerDriver(driver)
+    expect(await restartedRuntime.reconcileJobs()).toEqual({
+      resumed: [reserved.job.id, pendingAction.result_session_id],
+      recovered: [],
+    })
+    expect(attachCalls.filter((externalId) =>
+      externalId === 'runtime-fork-child')).toHaveLength(3)
+    expect(restartedRuntime.jobExecutor.agentHomeSessionCapabilities(
+      new ConversationService(db).requireSession(pendingAction.result_session_id),
+    )).toMatchObject({
+      pause: { supported: true },
+      resume: { supported: true },
+      stop: { supported: true },
+    })
+
+    await restartedRuntime.jobExecutor.stopAgentHomeSession(pendingAction.result_session_id)
+    expect(new ConversationService(db).requireSession(pendingAction.result_session_id))
+      .toMatchObject({
+        status: 'stopped',
+        control_state: 'stopped',
+      })
+    expect(Number((db.prepare(`SELECT COUNT(*) AS count FROM attention_items
+      WHERE board_id=? AND kind IN ('agent_session.failed','agent_session.lost')
+        AND title LIKE ?`).get(
+      boardId,
+      `%${pendingAction.result_session_id}%`,
+    ) as { count: number }).count)).toBe(0)
+
+    await restartedRuntime.jobExecutor.stopAgentHomeSession(session.id)
+    await until(() => restartedRuntime.scheduler.get(reserved.job.id)?.status === 'cancelled')
+  })
+
   it('maps pause, resume, and stop to the attached provider and canonical scheduler', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-home-runtime-controls-'))
     roots.push(root)
@@ -366,6 +848,20 @@ function seedPausedRuntimeJob(
     JSON.stringify({ job_id: jobId }),
   )
   return { jobId, sessionId }
+}
+
+function initializeGit(root: string): void {
+  execFileSync('git', ['init', '-q'], { cwd: root })
+  execFileSync('git', [
+    '-c',
+    'user.email=agent-home-runtime@test.invalid',
+    '-c',
+    'user.name=Agent Home Runtime Test',
+    'commit',
+    '--allow-empty',
+    '-qm',
+    'initial',
+  ], { cwd: root })
 }
 
 async function until(condition: () => boolean, timeoutMs = 5_000): Promise<void> {

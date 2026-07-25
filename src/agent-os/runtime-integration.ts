@@ -13,10 +13,18 @@ import type { DeliveryReport } from './delivery-reports.js'
 import { ConflictError, UnsupportedError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import type {
+  AgentHomeForkOperation,
   AgentHomeRuntimeControl,
   RuntimeActionCapabilities,
 } from './agent-home-lifecycle.js'
-import type { AgentSessionRecord } from './conversations.js'
+import {
+  AgentHomeForkOutcomeUnknownError,
+  forkTargetFromEffect,
+  type AgentHomeForkTarget,
+  type AgentHomeKnownForkChild,
+  type AgentHomeNativeForkResult,
+} from './agent-home-fork.js'
+import { ConversationService, type AgentSessionRecord } from './conversations.js'
 import { parseJson } from './json.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
@@ -571,9 +579,148 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
 
 type LiveJob = { driver: AgentDriver; session: DriverSession }
 
+type DriverNativeForkResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  metadata: Record<string, unknown>
+}
+
+type NativeForkDriver = AgentDriver & {
+  forkSession(
+    sessionId: string,
+    options: {
+      sourceExternalId: string
+      sourceWorkspaceId: string
+      sourceCwd: string
+      targetWorkspaceId: string
+      targetCwd: string
+      lastTurnId?: string
+      // Backward-compatible aliases used only by the current Claude adapter.
+      workspaceId: string
+      cwd: string
+    },
+  ): Promise<DriverNativeForkResult>
+  verifyForkSession?(
+    options: {
+      sourceExternalId: string
+      childExternalId: string
+      childProviderThreadId: string
+      childProviderSessionId: string | null
+      sourceWorkspaceId: string
+      sourceCwd: string
+      targetWorkspaceId: string
+      targetCwd: string
+      lastTurnId?: string
+    },
+  ): Promise<DriverNativeForkResult>
+}
+
+type DriverForkOutcomeUnknown = Error & {
+  outcomeUnknown: true
+  sourceExternalId: string
+  sourceProviderThreadId: string
+  knownChild?: {
+    externalId: string
+    providerThreadId: string
+    forkedFromId: string | null
+    childProviderSessionId: string | null
+    subscriptionReleased: boolean
+  } | null
+}
+
+function isNativeForkDriver(driver: AgentDriver): driver is NativeForkDriver {
+  return typeof (driver as Partial<NativeForkDriver>).forkSession === 'function'
+}
+
+function safeOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function safeIdentity(value: unknown, fallback: string): string {
+  return safeOptionalString(value) ?? fallback
+}
+
+function samePath(value: unknown, expected: string): boolean {
+  return typeof value === 'string'
+    && value.trim().length > 0
+    && path.resolve(value) === path.resolve(expected)
+}
+
+function hasOrchestratorWorkspaceAttestation(
+  value: unknown,
+  expectedWorkspaceId: string,
+): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const attestation = value as Record<string, unknown>
+  return attestation.authority === 'orchestrator'
+    && attestation.value === expectedWorkspaceId
+}
+
+async function isolatedForkWorkspaces(
+  source: WorkspaceRecord,
+  target: WorkspaceRecord,
+): Promise<boolean> {
+  try {
+    const [sourceRepo, targetRepo, sourceExecution, targetExecution] = await Promise.all([
+      realpath(source.rootPath),
+      realpath(target.rootPath),
+      realpath(source.worktreePath ?? source.rootPath),
+      realpath(target.worktreePath ?? target.rootPath),
+    ])
+    return sourceRepo === targetRepo && sourceExecution !== targetExecution
+  } catch {
+    return false
+  }
+}
+
+function safeKnownForkChild(
+  value: unknown,
+): AgentHomeForkOutcomeUnknownError['knownChild'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const child = value as Record<string, unknown>
+  const externalId = safeOptionalString(child.externalId)
+  const providerThreadId = safeOptionalString(child.providerThreadId)
+  if (!externalId || !providerThreadId || providerThreadId !== externalId) return null
+  const forkedFromId = child.forkedFromId == null
+    ? null
+    : safeOptionalString(child.forkedFromId)
+  const childProviderSessionId = child.childProviderSessionId == null
+    ? null
+    : safeOptionalString(child.childProviderSessionId)
+  if ((child.forkedFromId != null && !forkedFromId)
+    || (child.childProviderSessionId != null && !childProviderSessionId)
+    || typeof child.subscriptionReleased !== 'boolean') {
+    return null
+  }
+  return {
+    externalId,
+    providerThreadId,
+    forkedFromId,
+    childProviderSessionId,
+    subscriptionReleased: child.subscriptionReleased,
+  }
+}
+
+function isDriverForkOutcomeUnknown(error: unknown): error is DriverForkOutcomeUnknown {
+  if (!(error instanceof Error)) return false
+  const candidate = error as Partial<DriverForkOutcomeUnknown>
+  if (candidate.outcomeUnknown !== true
+    || !safeOptionalString(candidate.sourceExternalId)
+    || !safeOptionalString(candidate.sourceProviderThreadId)) {
+    return false
+  }
+  return candidate.knownChild == null || safeKnownForkChild(candidate.knownChild) !== null
+}
+
 /** Executes durable jobs through provider-neutral drivers and completes them from driver events. */
 export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl {
   private readonly live = new Map<string, LiveJob>()
+  /** Parked native-fork bindings are keyed only by their durable child session id. */
+  private readonly forkLive = new Map<string, LiveJob>()
+  private readonly forkAdoptions = new Map<string, Promise<void>>()
+  private readonly forkStopIntents = new Set<string>()
   private readonly pausedJobs = new Set<string>()
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
@@ -615,7 +762,8 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     }
     const capabilities = driver.capabilities()
     const control = this.controlForSession(session.id)
-    const live = !!control?.live
+    const attached = this.forkLive.get(session.id) ?? control?.live
+    const live = !!attached
     const activeJob = !!control && ['queued', 'running', 'cancelling'].includes(control.job.status)
     return {
       pause: capabilities.interrupt && live
@@ -634,7 +782,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
               ? 'the provider session is not attached to this daemon'
               : `${session.provider} does not support resumable sessions`,
           },
-      stop: capabilities.stop && activeJob
+      stop: capabilities.stop && (this.forkLive.has(session.id) || activeJob)
         ? { supported: true, reason: null }
         : {
             supported: false,
@@ -648,14 +796,32 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
             supported: false,
             reason: 'retry requires a canonical Agent OS job',
           },
-      fork: {
-        supported: false,
-        reason: `${session.provider} does not expose provenance-safe native session forking`,
-      },
+      fork: (session.provider === 'claude' || session.provider === 'codex')
+        && isNativeForkDriver(driver) && live && !!session.external_id
+        && !!session.provider_thread_id
+        ? { supported: true, reason: null }
+        : {
+            supported: false,
+            reason: session.provider !== 'claude' && session.provider !== 'codex'
+              ? `${session.provider} does not expose a verified native session fork contract`
+              : !isNativeForkDriver(driver)
+              ? `${session.provider} does not expose provenance-safe native session forking`
+              : !session.external_id || !session.provider_thread_id
+                ? 'fork requires durable provider session provenance'
+                : 'the provider session is not attached to this daemon',
+          },
     }
   }
 
   async pauseAgentHomeSession(sessionId: string): Promise<void> {
+    const fork = this.forkLive.get(sessionId)
+    if (fork) {
+      if (!fork.driver.capabilities().interrupt) {
+        throw new UnsupportedError(`${fork.driver.id} does not support interruption`)
+      }
+      await fork.driver.interrupt(fork.session.id)
+      return
+    }
     const control = this.controlForSession(sessionId)
     if (!control?.live) {
       throw new ConflictError('the provider session is not attached to this daemon')
@@ -673,6 +839,17 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   }
 
   async resumeAgentHomeSession(sessionId: string): Promise<void> {
+    const fork = this.forkLive.get(sessionId)
+    if (fork) {
+      if (!fork.driver.capabilities().resume) {
+        throw new UnsupportedError(`${fork.driver.id} does not support resumable sessions`)
+      }
+      await fork.driver.send(
+        fork.session.id,
+        'Resume this independent Agent Home fork from its durable conversation and isolated workspace. Verify existing work before continuing.',
+      )
+      return
+    }
     const control = this.controlForSession(sessionId)
     if (!control?.live) {
       throw new ConflictError('the provider session is not attached to this daemon')
@@ -693,6 +870,31 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   }
 
   async stopAgentHomeSession(sessionId: string): Promise<void> {
+    const fork = this.forkLive.get(sessionId)
+    if (fork) {
+      if (!fork.driver.capabilities().stop) {
+        throw new UnsupportedError(`${fork.driver.id} does not support session stop`)
+      }
+      this.forkStopIntents.add(sessionId)
+      try {
+        await fork.driver.stop(fork.session.id)
+      } catch (error) {
+        this.forkStopIntents.delete(sessionId)
+        throw error
+      }
+      if (this.forkLive.get(sessionId)?.session.id === fork.session.id) {
+        this.forkLive.delete(sessionId)
+      }
+      this.db.prepare(`UPDATE agent_sessions SET status='stopped',
+        control_state='stopped', ended_at=coalesce(ended_at, datetime('now')),
+        updated_at=datetime('now')
+        WHERE id=? AND external_id=? AND workspace_id=?`).run(
+        sessionId,
+        fork.session.externalId,
+        fork.session.workspaceId,
+      )
+      return
+    }
     const control = this.controlForSession(sessionId)
     if (!control || !this.scheduler) {
       throw new ConflictError('session is not attached to a canonical Agent OS job')
@@ -707,8 +909,452 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     await this.scheduler.cancel(control.job.id)
   }
 
+  async prepareAgentHomeForkSession(
+    session: AgentSessionRecord,
+    operation: AgentHomeForkOperation,
+  ): Promise<AgentHomeForkTarget> {
+    if (operation.reservedSessionId === session.id) {
+      throw new ConflictError('fork child reservation cannot reuse the parent session')
+    }
+    const source = await this.workspaces.get(session.workspace_id)
+    if (!source || source.status !== 'active') {
+      throw new ConflictError('fork source workspace is unavailable')
+    }
+    const target = await this.workspaces.create({
+      boardId: source.boardId,
+      cardId: source.cardId,
+      name: `fork-${operation.reservedSessionId}`,
+      kind: 'worktree',
+      rootPath: source.rootPath,
+      branch: `orchestra/fork-${operation.reservedSessionId}`,
+      baseRef: source.branch ?? source.baseRef ?? 'HEAD',
+      reuseExisting: true,
+    })
+    if (target.id === source.id
+      || target.boardId !== source.boardId
+      || target.kind !== 'worktree'
+      || target.status !== 'active'
+      || !target.worktreePath
+      || !(await isolatedForkWorkspaces(source, target))) {
+      throw new ConflictError('fork target did not resolve to a distinct managed worktree')
+    }
+    return { workspaceId: target.id }
+  }
+
+  async forkAgentHomeSession(
+    session: AgentSessionRecord,
+    operation: AgentHomeForkOperation & AgentHomeForkTarget,
+  ): Promise<AgentHomeNativeForkResult> {
+    const attached = this.forkLive.get(session.id) ?? this.controlForSession(session.id)?.live
+    if (!attached) {
+      throw new ConflictError('the provider session is not attached to this daemon')
+    }
+    if (session.provider !== 'claude' && session.provider !== 'codex') {
+      throw new UnsupportedError(
+        `${session.provider} does not expose a verified native session fork contract`,
+      )
+    }
+    if (!isNativeForkDriver(attached.driver)) {
+      throw new UnsupportedError(
+        `${session.provider} does not expose provenance-safe native session forking`,
+      )
+    }
+    if (!session.external_id || !session.provider_thread_id) {
+      throw new ConflictError('fork requires durable provider session provenance')
+    }
+    const expectedDriverId = session.driver_id ?? session.provider
+    if (attached.driver.id !== expectedDriverId
+      || attached.session.externalId !== session.external_id
+      || attached.session.workspaceId !== session.workspace_id) {
+      throw new ConflictError('fork runtime binding no longer matches the durable session')
+    }
+    if (operation.reservedSessionId === session.id
+      || operation.workspaceId === session.workspace_id) {
+      throw new ConflictError('fork target cannot reuse the parent live binding')
+    }
+    const sourceWorkspace = await this.workspaces.get(session.workspace_id)
+    const targetWorkspace = await this.workspaces.get(operation.workspaceId)
+    if (!sourceWorkspace || !targetWorkspace
+      || targetWorkspace.boardId !== sourceWorkspace.boardId
+      || targetWorkspace.kind !== 'worktree'
+      || targetWorkspace.status !== 'active'
+      || !targetWorkspace.worktreePath
+      || !(await isolatedForkWorkspaces(sourceWorkspace, targetWorkspace))) {
+      throw new ConflictError('fork target workspace binding is invalid')
+    }
+    const sourceCwd = this.workspaces.root(sourceWorkspace)
+    const targetCwd = this.workspaces.root(targetWorkspace)
+    if (path.resolve(sourceCwd) === path.resolve(targetCwd)) {
+      throw new ConflictError('fork target execution root cannot reuse the parent cwd')
+    }
+    let result: DriverNativeForkResult
+    try {
+      result = await attached.driver.forkSession(attached.session.id, {
+        sourceExternalId: session.external_id,
+        sourceWorkspaceId: session.workspace_id,
+        sourceCwd,
+        targetWorkspaceId: operation.workspaceId,
+        targetCwd,
+        workspaceId: session.workspace_id,
+        cwd: sourceCwd,
+      })
+    } catch (error) {
+      if (isDriverForkOutcomeUnknown(error)) {
+        throw new AgentHomeForkOutcomeUnknownError(
+          'provider fork outcome is unknown',
+          safeIdentity(error.sourceExternalId, session.external_id),
+          safeIdentity(error.sourceProviderThreadId, session.provider_thread_id),
+          safeKnownForkChild(error.knownChild),
+        )
+      }
+      throw new AgentHomeForkOutcomeUnknownError(
+        'provider fork outcome is unknown',
+        session.external_id,
+        session.provider_thread_id,
+      )
+    }
+    if (result.sourceExternalId !== session.external_id
+      || result.sourceProviderThreadId !== session.provider_thread_id
+      || !result.externalId
+      || result.externalId === session.external_id
+      || result.providerThreadId !== result.externalId) {
+      throw new AgentHomeForkOutcomeUnknownError(
+        'provider fork returned inconsistent provenance',
+        session.external_id,
+        session.provider_thread_id,
+        result.externalId && result.providerThreadId ? {
+          externalId: result.externalId,
+          providerThreadId: result.providerThreadId,
+          forkedFromId: safeOptionalString(result.metadata.forkedFromId),
+          childProviderSessionId: safeOptionalString(result.metadata.providerSessionId),
+          subscriptionReleased: result.metadata.subscriptionReleased === true,
+        } : null,
+      )
+    }
+
+    if (session.provider === 'claude') {
+      if (result.metadata.forkMethod !== 'sdk.forkSession'
+        || result.metadata.fileHistoryCopied !== false
+        || result.metadata.undoHistoryCopied !== false) {
+        throw new AgentHomeForkOutcomeUnknownError(
+          'Claude fork returned incomplete history provenance',
+          session.external_id,
+          session.provider_thread_id,
+          {
+            externalId: result.externalId,
+            providerThreadId: result.providerThreadId,
+            forkedFromId: null,
+            childProviderSessionId: null,
+            subscriptionReleased: false,
+          },
+        )
+      }
+      return {
+        sourceExternalId: result.sourceExternalId,
+        externalId: result.externalId,
+        sourceProviderThreadId: result.sourceProviderThreadId,
+        providerThreadId: result.providerThreadId,
+        provenance: {
+          fork_method: 'sdk.forkSession',
+          history_boundary: 'full',
+          file_history_copied: false,
+          undo_history_copied: false,
+        },
+      }
+    }
+    if (session.provider === 'codex'
+      && result.metadata.forkMethod === 'thread/fork'
+      && result.metadata.forkedFromId === session.provider_thread_id
+      && safeOptionalString(result.metadata.providerSessionId) !== null
+      && hasOrchestratorWorkspaceAttestation(
+        result.metadata.targetWorkspaceAttestation,
+        operation.workspaceId,
+      )
+      && samePath(result.metadata.childCwd ?? result.metadata.targetCwd, targetCwd)
+      && result.metadata.cwdVerified === true
+      && result.metadata.threadReadVerified === true
+      && result.metadata.childUnsubscribeVerified === true
+      && result.metadata.readVerified === true
+      && result.metadata.subscriptionReleased === true) {
+      return {
+        sourceExternalId: result.sourceExternalId,
+        externalId: result.externalId,
+        sourceProviderThreadId: result.sourceProviderThreadId,
+        providerThreadId: result.providerThreadId,
+        provenance: {
+          fork_method: 'thread/fork',
+          history_boundary: 'full',
+          read_verified: result.metadata.readVerified === true,
+          subscription_released: result.metadata.subscriptionReleased === true,
+        },
+      }
+    }
+    throw new AgentHomeForkOutcomeUnknownError(
+      'provider fork returned an incomplete or unsupported provenance contract',
+      session.external_id,
+      session.provider_thread_id,
+      {
+        externalId: result.externalId,
+        providerThreadId: result.providerThreadId,
+        forkedFromId: safeOptionalString(result.metadata.forkedFromId),
+        childProviderSessionId: safeOptionalString(result.metadata.providerSessionId),
+        subscriptionReleased: result.metadata.subscriptionReleased === true,
+      },
+    )
+  }
+
+  async verifyAgentHomeForkChild(
+    session: AgentSessionRecord,
+    child: AgentHomeKnownForkChild,
+    operation: AgentHomeForkOperation & AgentHomeForkTarget,
+  ): Promise<AgentHomeNativeForkResult> {
+    if (!session.external_id || !session.provider_thread_id) {
+      throw new ConflictError('fork verification requires durable source provenance')
+    }
+    if (!child.externalId
+      || child.providerThreadId !== child.externalId
+      || child.externalId === session.external_id
+      || child.subscriptionReleased !== true
+      || (child.forkedFromId !== null
+        && child.forkedFromId !== session.provider_thread_id)) {
+      throw new ConflictError('fork verification child identity is inconsistent')
+    }
+    const driver = this.drivers.get(session.driver_id ?? session.provider)
+    if (!driver || !isNativeForkDriver(driver) || !driver.verifyForkSession) {
+      throw new UnsupportedError(
+        `${session.provider} does not expose read-only exact-child fork verification`,
+      )
+    }
+    const sourceWorkspace = await this.workspaces.get(session.workspace_id)
+    const targetWorkspace = await this.workspaces.get(operation.workspaceId)
+    if (!sourceWorkspace || !targetWorkspace
+      || targetWorkspace.boardId !== sourceWorkspace.boardId
+      || targetWorkspace.kind !== 'worktree'
+      || targetWorkspace.status !== 'active'
+      || !targetWorkspace.worktreePath
+      || !(await isolatedForkWorkspaces(sourceWorkspace, targetWorkspace))) {
+      throw new ConflictError('fork verification target workspace is invalid')
+    }
+    const sourceCwd = this.workspaces.root(sourceWorkspace)
+    const targetCwd = this.workspaces.root(targetWorkspace)
+    if (path.resolve(sourceCwd) === path.resolve(targetCwd)) {
+      throw new ConflictError('fork verification target cannot reuse the parent cwd')
+    }
+    // This provider contract is intentionally verification-only. It receives no
+    // prompt and no source driver session id, so it cannot resume, start, or fork.
+    const verified = await driver.verifyForkSession({
+      sourceExternalId: session.external_id,
+      childExternalId: child.externalId,
+      childProviderThreadId: child.providerThreadId,
+      childProviderSessionId: child.childProviderSessionId,
+      sourceWorkspaceId: session.workspace_id,
+      sourceCwd,
+      targetWorkspaceId: operation.workspaceId,
+      targetCwd,
+    })
+    if (verified.sourceExternalId !== session.external_id
+      || verified.sourceProviderThreadId !== session.provider_thread_id
+      || verified.externalId !== child.externalId
+      || verified.providerThreadId !== child.providerThreadId) {
+      throw new ConflictError('read-only fork verification returned another child')
+    }
+    if (session.provider === 'codex') {
+      const verifiedProviderSessionId = safeOptionalString(
+        verified.metadata.providerSessionId,
+      )
+      if (verified.metadata.forkMethod !== 'thread/fork'
+        || verified.metadata.forkedFromId !== session.provider_thread_id
+        || verifiedProviderSessionId === null
+        || (child.childProviderSessionId !== null
+          && verifiedProviderSessionId !== child.childProviderSessionId)
+        || !hasOrchestratorWorkspaceAttestation(
+          verified.metadata.targetWorkspaceAttestation,
+          operation.workspaceId,
+        )
+        || !samePath(
+          verified.metadata.childCwd ?? verified.metadata.targetCwd,
+          targetCwd,
+        )
+        || verified.metadata.cwdVerified !== true
+        || verified.metadata.threadReadVerified !== true
+        || verified.metadata.readVerified !== true) {
+        throw new ConflictError('read-only Codex fork verification proof is incomplete')
+      }
+      return {
+        sourceExternalId: verified.sourceExternalId,
+        externalId: verified.externalId,
+        sourceProviderThreadId: verified.sourceProviderThreadId,
+        providerThreadId: verified.providerThreadId,
+        provenance: {
+          fork_method: 'thread/fork',
+          history_boundary: 'full',
+          read_verified: true,
+          subscription_released: child.subscriptionReleased,
+        },
+      }
+    }
+    if (session.provider === 'claude'
+      && verified.metadata.forkMethod === 'sdk.forkSession'
+      && verified.metadata.fileHistoryCopied === false
+      && verified.metadata.undoHistoryCopied === false) {
+      return {
+        sourceExternalId: verified.sourceExternalId,
+        externalId: verified.externalId,
+        sourceProviderThreadId: verified.sourceProviderThreadId,
+        providerThreadId: verified.providerThreadId,
+        provenance: {
+          fork_method: 'sdk.forkSession',
+          history_boundary: 'full',
+          file_history_copied: false,
+          undo_history_copied: false,
+        },
+      }
+    }
+    throw new ConflictError('provider read-only fork verification contract is unsupported')
+  }
+
+  async adoptAgentHomeForkSession(
+    parent: AgentSessionRecord,
+    child: AgentSessionRecord,
+    operation: AgentHomeForkOperation,
+  ): Promise<void> {
+    const existing = this.forkLive.get(child.id)
+    if (existing) {
+      this.assertExactForkRuntimeBinding(parent, child, existing)
+      return
+    }
+    const inFlight = this.forkAdoptions.get(child.id)
+    if (inFlight) {
+      await inFlight
+      const adopted = this.forkLive.get(child.id)
+      if (!adopted) throw new ConflictError('fork adoption did not retain its child binding')
+      this.assertExactForkRuntimeBinding(parent, child, adopted)
+      return
+    }
+    const adoption = this.adoptForkSessionNow(parent, child, operation)
+    this.forkAdoptions.set(child.id, adoption)
+    try {
+      await adoption
+    } finally {
+      if (this.forkAdoptions.get(child.id) === adoption) {
+        this.forkAdoptions.delete(child.id)
+      }
+    }
+  }
+
+  private async adoptForkSessionNow(
+    parent: AgentSessionRecord,
+    child: AgentSessionRecord,
+    operation: AgentHomeForkOperation,
+  ): Promise<void> {
+    if (operation.reservedSessionId !== child.id
+      || child.id === parent.id
+      || child.parent_session_id !== parent.id
+      || child.lineage_type !== 'fork'
+      || child.provider !== parent.provider
+      || child.workspace_id === parent.workspace_id
+      || !child.external_id
+      || child.external_id === parent.external_id
+      || child.provider_thread_id !== child.external_id) {
+      throw new ConflictError('fork adoption does not match the exact child reservation')
+    }
+    const action = this.db.prepare(`SELECT session_id, result_session_id,
+      reserved_session_id, action, status, effect_state, effect_json
+      FROM agent_session_actions WHERE id=?`).get(operation.actionId) as {
+        session_id: string
+        result_session_id: string | null
+        reserved_session_id: string | null
+        action: string
+        status: string
+        effect_state: string
+        effect_json: string
+      } | undefined
+    const target = action
+      ? forkTargetFromEffect(parseJson<Record<string, unknown>>(action.effect_json, {}))
+      : null
+    if (!action
+      || action.action !== 'fork'
+      || action.session_id !== parent.id
+      || action.result_session_id !== child.id
+      || action.reserved_session_id !== child.id
+      || !['pending', 'succeeded'].includes(action.status)
+      || !['applied', 'completed'].includes(action.effect_state)
+      || target?.workspaceId !== child.workspace_id) {
+      throw new ConflictError('fork adoption action ledger is inconsistent')
+    }
+    const sourceWorkspace = await this.workspaces.get(parent.workspace_id)
+    const targetWorkspace = await this.workspaces.get(child.workspace_id)
+    if (!sourceWorkspace || !targetWorkspace
+      || targetWorkspace.boardId !== sourceWorkspace.boardId
+      || targetWorkspace.kind !== 'worktree'
+      || targetWorkspace.status !== 'active'
+      || !targetWorkspace.worktreePath
+      || !(await isolatedForkWorkspaces(sourceWorkspace, targetWorkspace))) {
+      throw new ConflictError('fork adoption workspace isolation is invalid')
+    }
+    const driver = this.drivers.get(child.driver_id ?? child.provider)
+    if (!driver) throw new UnsupportedError(`${child.provider} driver is not registered`)
+    const parentLive = this.forkLive.get(parent.id) ?? this.controlForSession(parent.id)?.live
+    const targetCwd = this.workspaces.root(targetWorkspace)
+    let attached: DriverSession | null = null
+    try {
+      attached = child.provider === 'claude'
+        ? await driver.launch({
+            workspaceId: child.workspace_id,
+            boardId: targetWorkspace.boardId,
+            cwd: targetCwd,
+            externalId: child.external_id,
+            ...(child.model ? { model: child.model } : {}),
+            ...(child.effort ? { effort: child.effort } : {}),
+            ...(child.access_profile ? { accessProfile: child.access_profile } : {}),
+            metadata: {
+              agentHomeSessionId: child.id,
+              agentProfileId: child.profile_id,
+              agentConversationId: child.conversation_id,
+              forkActionId: operation.actionId,
+            },
+          })
+        : await driver.attach(child.external_id)
+      if (!attached) throw new ConflictError('provider fork child is no longer attachable')
+      const binding = { driver, session: attached }
+      this.assertExactForkRuntimeBinding(parent, child, binding)
+      if (parentLive
+        && (attached.id === parentLive.session.id
+          || attached.externalId === parentLive.session.externalId
+          || attached.workspaceId === parentLive.session.workspaceId)) {
+        throw new ConflictError('fork adoption attempted to reuse the parent live binding')
+      }
+      this.forkLive.set(child.id, binding)
+      void this.watchForkSession(child.id, binding)
+    } catch (error) {
+      if (attached) await driver.detach?.(attached.id).catch(() => undefined)
+      throw error
+    }
+  }
+
+  private assertExactForkRuntimeBinding(
+    parent: AgentSessionRecord,
+    child: AgentSessionRecord,
+    binding: LiveJob,
+  ): void {
+    const expectedDriverId = child.driver_id ?? child.provider
+    if (binding.driver.id !== expectedDriverId
+      || binding.session.driverId !== expectedDriverId
+      || binding.session.externalId !== child.external_id
+      || binding.session.externalId === parent.external_id
+      || binding.session.workspaceId !== child.workspace_id
+      || binding.session.workspaceId === parent.workspace_id) {
+      throw new ConflictError('provider attached a different or non-isolated fork child')
+    }
+  }
+
   prepareShutdown(): void {
     this.shuttingDown = true
+    for (const [sessionId, binding] of this.forkLive) {
+      void binding.driver.detach?.(binding.session.id).catch(() => undefined)
+      this.forkLive.delete(sessionId)
+    }
+    this.forkStopIntents.clear()
   }
 
   ownsAgent(agentId: number): boolean {
@@ -964,6 +1610,58 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         if (providerSessionLost) this.markSessionLost(sessionRow.id)
         this.finalizeManagedAgent(job, sessionRow.id, reason, recoveredJob.status)
         recovered.push(job.id)
+      }
+    }
+    const forks = await this.reconcileAdoptedForkSessions()
+    resumed.push(...forks.resumed)
+    recovered.push(...forks.recovered)
+    return { resumed, recovered }
+  }
+
+  private async reconcileAdoptedForkSessions(): Promise<{
+    resumed: string[]
+    recovered: string[]
+  }> {
+    const resumed: string[] = []
+    const recovered: string[] = []
+    const rows = this.db.prepare(`SELECT session.id, session.parent_session_id,
+        json_extract(session.context_json, '$.fork_action_id') AS action_id
+      FROM agent_sessions session
+      WHERE session.lineage_type='fork'
+        AND session.parent_session_id IS NOT NULL
+        AND session.external_id IS NOT NULL
+        AND session.recovery_state='attachable'
+        AND session.control_state IN ('active','paused')
+        AND session.status IN ('running','idle')
+        AND json_valid(session.context_json)
+        AND json_extract(session.context_json, '$.adoption_state')='attached'
+      ORDER BY session.created_at, session.rowid`).all() as Array<{
+        id: string
+        parent_session_id: string
+        action_id: string | null
+      }>
+    const conversations = new ConversationService(this.db)
+    for (const row of rows) {
+      try {
+        if (!row.action_id) throw new Error('fork action identity is missing')
+        const parent = conversations.requireSession(row.parent_session_id)
+        const child = conversations.requireSession(row.id)
+        await this.adoptAgentHomeForkSession(parent, child, {
+          actionId: row.action_id,
+          reservedSessionId: child.id,
+        })
+        this.db.prepare(`UPDATE agent_sessions SET status=?,
+          updated_at=datetime('now') WHERE id=?`).run(
+          'idle',
+          child.id,
+        )
+        resumed.push(child.id)
+      } catch {
+        this.forkLive.delete(row.id)
+        this.db.prepare(`UPDATE agent_sessions SET status='lost',
+          control_state='stopped', ended_at=coalesce(ended_at, datetime('now')),
+          updated_at=datetime('now') WHERE id=?`).run(row.id)
+        recovered.push(row.id)
       }
     }
     return { resumed, recovered }
@@ -1269,6 +1967,105 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       .get(job.card_id, job.board_id) as { owner_agent_id: number | null } | undefined
     if (!card) throw new Error('job card not found')
     if (card.owner_agent_id) throw new Error('job card is already owned by another agent')
+  }
+
+  private async watchForkSession(
+    childSessionId: string,
+    binding: LiveJob,
+  ): Promise<void> {
+    const scope = this.db.prepare(`SELECT workspace.board_id, workspace.card_id
+      FROM agent_sessions session
+      JOIN workspaces workspace ON workspace.id=session.workspace_id
+      WHERE session.id=? AND session.workspace_id=?`).get(
+      childSessionId,
+      binding.session.workspaceId,
+    ) as { board_id: number; card_id: number | null } | undefined
+    if (!scope) {
+      this.forkLive.delete(childSessionId)
+      return
+    }
+    let terminal: 'stopped' | 'failed' | 'lost' | null = null
+    let detachedByControl = false
+    try {
+      for await (const event of binding.driver.events(binding.session.id)) {
+        const current = this.forkLive.get(childSessionId)
+        if (!current || current.session.id !== binding.session.id) {
+          detachedByControl = true
+          return
+        }
+        const projection = projectManagedDriverEvent(event, binding.driver.id)
+        const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
+          WHERE session_id=? ORDER BY rowid DESC LIMIT 1`).get(childSessionId) as
+          { id: string; correlation_id: string | null } | undefined
+        new EventStore(this.db).append({
+          boardId: scope.board_id,
+          workspaceId: binding.session.workspaceId,
+          cardId: scope.card_id,
+          sessionId: childSessionId,
+          correlationId: previous?.correlation_id ?? childSessionId,
+          causationId: previous?.id ?? null,
+          kind: `driver.${event.type}`,
+          source: binding.driver.id,
+          payload: projection.payload,
+          createdAt: event.at,
+        })
+        if (event.type !== 'output') {
+          this.bus.current?.emit('event', {
+            board_id: scope.board_id,
+            type: 'os:driver',
+            data: {
+              session_id: childSessionId,
+              type: event.type,
+              data: projection.payload.data,
+              metadata: projection.payload.metadata,
+            },
+          })
+        }
+        if (event.type === 'exit') {
+          const exitCode = Number(event.metadata?.exitCode)
+          terminal = event.data.includes('lost')
+            ? 'lost'
+            : event.data.includes('failed')
+              || (Number.isFinite(exitCode) && exitCode !== 0)
+              ? 'failed'
+              : 'stopped'
+          break
+        }
+      }
+      terminal ??= this.forkStopIntents.has(childSessionId)
+        ? 'stopped'
+        : 'lost'
+    } catch {
+      terminal = this.forkStopIntents.has(childSessionId)
+        ? 'stopped'
+        : 'lost'
+    } finally {
+      const intentionallyStopped = this.forkStopIntents.delete(childSessionId)
+      if (this.forkLive.get(childSessionId)?.session.id === binding.session.id) {
+        this.forkLive.delete(childSessionId)
+      }
+      if (this.shuttingDown || (detachedByControl && !intentionallyStopped)) return
+      const finalStatus = intentionallyStopped ? 'stopped' : terminal ?? 'lost'
+      this.db.prepare(`UPDATE agent_sessions SET status=?, control_state='stopped',
+        ended_at=coalesce(ended_at, datetime('now')), updated_at=datetime('now')
+        WHERE id=? AND external_id=? AND workspace_id=?`).run(
+        finalStatus,
+        childSessionId,
+        binding.session.externalId,
+        binding.session.workspaceId,
+      )
+      if (finalStatus === 'failed' || finalStatus === 'lost') {
+        new AttentionService(this.db).create({
+          boardId: scope.board_id,
+          workspaceId: binding.session.workspaceId,
+          cardId: scope.card_id,
+          kind: `agent_session.${finalStatus}`,
+          severity: finalStatus === 'lost' ? 'high' : 'critical',
+          title: `Fork session ${childSessionId} ${finalStatus}`,
+          detail: 'The independently adopted provider session is no longer attached.',
+        })
+      }
+    }
   }
 
   private async watch(

@@ -191,17 +191,17 @@ describe('Agent Home lifecycle, search, and export controls', () => {
     })
     expect(runtime.stopCalls).toEqual([fixture.sessionId])
 
+    const fork = await sessionAction(server, fixture.sessionId, 'fork', 'operator:fork')
+    expect(fork.statusCode).toBe(501)
+    expect(fork.json()).toMatchObject({ code: 'not_supported' })
+    expect(fork.json().error).toMatch(/provenance-safe native session forking/)
+
     const archived = await sessionAction(server, fixture.sessionId, 'archive', 'operator:archive')
     expect(archived.json().session).toMatchObject({
       status: 'stopped',
       control_state: 'archived',
     })
     expect(archived.json().session.archived_at).toEqual(expect.any(String))
-
-    const fork = await sessionAction(server, fixture.sessionId, 'fork', 'operator:fork')
-    expect(fork.statusCode).toBe(501)
-    expect(fork.json()).toMatchObject({ code: 'not_supported' })
-    expect(fork.json().error).toMatch(/provenance-safe native session forking/)
 
     const actions = db.prepare(`SELECT action, status FROM agent_session_actions
       ORDER BY created_at, rowid`).all()
@@ -210,8 +210,8 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       { action: 'resume', status: 'succeeded' },
       { action: 'rename', status: 'succeeded' },
       { action: 'stop', status: 'succeeded' },
-      { action: 'archive', status: 'succeeded' },
       { action: 'fork', status: 'failed' },
+      { action: 'archive', status: 'succeeded' },
     ])
   })
 
@@ -946,7 +946,7 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       })
       expect(replacement.session.display_name).toBe('Recovered name')
       expect((reopened.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations`)
-        .get() as { count: number }).count).toBe(13)
+        .get() as { count: number }).count).toBe(14)
       expect((reopened.prepare(`SELECT status FROM agent_session_actions
         WHERE idempotency_key='reopen:rename'`).get() as { status: string }).status)
         .toBe('succeeded')
@@ -964,6 +964,13 @@ describe('Agent Home lifecycle, search, and export controls', () => {
         'parent_session_id',
         'lineage_type',
         'control_state',
+      ]))
+      const actionColumns = reopened.prepare(`PRAGMA table_info(agent_session_actions)`).all() as
+        Array<{ name: string }>
+      expect(actionColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+        'reserved_session_id',
+        'effect_state',
+        'effect_json',
       ]))
       reopened.close()
     } finally {

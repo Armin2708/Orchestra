@@ -180,6 +180,45 @@ describe('Agent OS CLI', () => {
     ])
   })
 
+  it('reconciles an outcome-unknown fork through an explicit operator decision', async () => {
+    const { calls, run } = setup({ reconciliation: { id: 'reconciliation/1' } })
+
+    await run(
+      'session',
+      'reconcile-fork',
+      'action/a',
+      '--resolution',
+      'verify_adopt',
+      '--note',
+      'Verified through the provider read API',
+      '--idempotency',
+      'fork-reconciliation-1',
+    )
+
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/os/session-actions/action%2Fa/reconcile',
+      body: {
+        resolution: 'verify_adopt',
+        note: 'Verified through the provider read API',
+        idempotency_key: 'fork-reconciliation-1',
+      },
+    }])
+  })
+
+  it('rejects ambiguous fork reconciliation choices before making an API request', async () => {
+    const { calls, run } = setup()
+
+    await expect(run(
+      'session',
+      'reconcile-fork',
+      'action/a',
+      '--resolution',
+      'retry',
+    )).rejects.toThrow('resolution must be verify_adopt or confirm_absent')
+    expect(calls).toEqual([])
+  })
+
   it('creates an isolated workspace on the resolved project board', async () => {
     const { calls, deps, run } = setup({ id: 9, name: 'fix-auth' })
 

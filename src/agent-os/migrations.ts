@@ -1884,6 +1884,89 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    // 012 (retention) and 013 (structured transcript metadata) are supplied by the
+    // integration train. This lifecycle ledger must remain ordered after both.
+    id: '014-agent-home-native-fork-lifecycle',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_session_actions ADD COLUMN reserved_session_id TEXT;
+        ALTER TABLE agent_session_actions
+          ADD COLUMN effect_state TEXT NOT NULL DEFAULT 'reserved'
+            CHECK(effect_state IN (
+              'reserved','invoking','applied','completed','outcome_unknown'
+            ));
+        ALTER TABLE agent_session_actions
+          ADD COLUMN effect_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(effect_json));
+
+        UPDATE agent_session_actions
+        SET effect_state=CASE
+          WHEN status='succeeded' THEN 'completed'
+          WHEN result_session_id IS NOT NULL THEN 'applied'
+          WHEN status='failed' THEN 'completed'
+          ELSE 'reserved'
+        END,
+        reserved_session_id=CASE
+          WHEN action='fork' AND result_session_id IS NOT NULL THEN result_session_id
+          ELSE reserved_session_id
+        END;
+
+        CREATE INDEX idx_agent_session_actions_fork_outcome
+          ON agent_session_actions(session_id, action, effect_state, updated_at);
+
+        CREATE TABLE agent_session_action_reconciliations (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          action_id TEXT NOT NULL REFERENCES agent_session_actions(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          resolution TEXT NOT NULL
+            CHECK(resolution IN ('verify_adopt','confirm_absent')),
+          status TEXT NOT NULL CHECK(status IN ('pending','succeeded','failed')),
+          result_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          note TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE INDEX idx_agent_session_action_reconciliations_board
+          ON agent_session_action_reconciliations(board_id, updated_at, id);
+        CREATE UNIQUE INDEX idx_agent_session_action_reconciliations_pending
+          ON agent_session_action_reconciliations(action_id)
+          WHERE status='pending';
+        CREATE UNIQUE INDEX idx_agent_session_action_reconciliations_succeeded
+          ON agent_session_action_reconciliations(action_id)
+          WHERE status='succeeded';
+
+        CREATE TRIGGER agent_session_action_reconciliation_scope_insert
+        BEFORE INSERT ON agent_session_action_reconciliations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_session_actions action
+            WHERE action.id=NEW.action_id
+              AND action.board_id=NEW.board_id
+              AND action.action='fork'
+          ) THEN RAISE(ABORT, 'fork reconciliation action scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_session_action_reconciliation_scope_update
+        BEFORE UPDATE OF board_id, action_id ON agent_session_action_reconciliations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_session_actions action
+            WHERE action.id=NEW.action_id
+              AND action.board_id=NEW.board_id
+              AND action.action='fork'
+          ) THEN RAISE(ABORT, 'fork reconciliation action scope is inconsistent') END;
+        END;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

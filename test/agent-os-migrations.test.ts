@@ -47,7 +47,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
     first.close()
 
     const second = openDb(file)
@@ -57,13 +57,24 @@ describe('Agent OS migrations', () => {
       'delivery_reports', 'delivery_deliverable_results', 'delivery_criterion_results', 'workspace_assignments',
       'agent_profiles', 'agent_conversations', 'conversation_events',
       'conversation_event_conflicts', 'agent_session_actions',
+      'agent_session_action_reconciliations',
       'job_market_contracts', 'job_market_criteria',
       'job_market_dependencies', 'agent_home_retention_policies',
       'agent_home_retention_runs', 'agent_home_raw_artifact_archives',
       'agent_home_evidence_bundle_repairs', 'agent_home_transcript_repairs']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
+    const migrationIds = (second.prepare(
+      'SELECT id FROM os_schema_migrations ORDER BY rowid',
+    ).all() as Array<{ id: string }>).map((row) => row.id)
+    expect(migrationIds.slice(-3)).toEqual([
+      '012-agent-home-retention',
+      '013-agent-home-structured-metadata-redaction',
+      '014-agent-home-native-fork-lifecycle',
+    ])
+    expect(migrationIds.at(-1)).toBe('014-agent-home-native-fork-lifecycle')
+    expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -72,6 +83,14 @@ describe('Agent OS migrations', () => {
       .toBe('0')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('task_contracts') WHERE name='version'").get() as any).dflt_value)
       .toBe('1')
+    expect(second.prepare(`SELECT name, dflt_value, "notnull" AS required
+      FROM pragma_table_info('agent_session_actions')
+      WHERE name IN ('reserved_session_id','effect_state','effect_json')
+      ORDER BY name`).all()).toEqual([
+      { name: 'effect_json', dflt_value: "'{}'", required: 1 },
+      { name: 'effect_state', dflt_value: "'reserved'", required: 1 },
+      { name: 'reserved_session_id', dflt_value: null, required: 0 },
+    ])
     second.prepare("INSERT INTO boards (id, project_path, name) VALUES (1, '/provider-ownership', 'ownership')").run()
     second.prepare(`INSERT INTO workspaces
       (id, board_id, name, kind, root_path, base_ref) VALUES ('w1', 1, 'one', 'shared', '/provider-ownership', 'HEAD')`).run()
@@ -105,7 +124,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(13)
+    }).count).toBe(14)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -606,6 +625,112 @@ describe('Agent OS migrations', () => {
     db.close()
   })
 
+  it('orders migration 014 after prior migrations and backfills legacy action state', () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare(
+      "INSERT INTO boards (project_path, name) VALUES ('/fork-migration', 'fork migration')",
+    ).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('fork-migration-workspace', ?, 'fork migration', 'shared',
+        '/fork-migration', 'active')`).run(boardId)
+    for (const id of ['legacy-parent', 'legacy-child', 'legacy-pending', 'legacy-failed']) {
+      db.prepare(`INSERT INTO agent_sessions
+        (id, workspace_id, provider, status, context_json)
+        VALUES (?, 'fork-migration-workspace', 'codex', 'idle', '{}')`).run(id)
+    }
+    const at = '2026-07-25T00:00:00.000Z'
+    db.exec(`
+      DROP TRIGGER agent_session_action_reconciliation_scope_update;
+      DROP TRIGGER agent_session_action_reconciliation_scope_insert;
+      DROP TABLE agent_session_action_reconciliations;
+      DROP INDEX idx_agent_session_actions_fork_outcome;
+      ALTER TABLE agent_session_actions DROP COLUMN effect_json;
+      ALTER TABLE agent_session_actions DROP COLUMN effect_state;
+      ALTER TABLE agent_session_actions DROP COLUMN reserved_session_id;
+      DELETE FROM os_schema_migrations
+        WHERE id='014-agent-home-native-fork-lifecycle';
+    `)
+    const insert = db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, actor_type, actor_id,
+      error_code, error_message, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'legacy-lease', 'operator', 'migration',
+      NULL, NULL, ?, ?)`)
+    insert.run(
+      'legacy-fork-action',
+      boardId,
+      'legacy-parent',
+      'legacy-child',
+      'legacy-fork',
+      'fork',
+      'legacy-fork-fingerprint',
+      'succeeded',
+      at,
+      at,
+    )
+    insert.run(
+      'legacy-pending-action',
+      boardId,
+      'legacy-pending',
+      null,
+      'legacy-pending',
+      'pause',
+      'legacy-pending-fingerprint',
+      'pending',
+      at,
+      at,
+    )
+    insert.run(
+      'legacy-failed-action',
+      boardId,
+      'legacy-failed',
+      null,
+      'legacy-failed',
+      'stop',
+      'legacy-failed-fingerprint',
+      'failed',
+      at,
+      at,
+    )
+
+    applyAgentOsMigrations(db)
+
+    expect(db.prepare(`SELECT id, reserved_session_id, effect_state, effect_json
+      FROM agent_session_actions ORDER BY id`).all()).toEqual([
+      {
+        id: 'legacy-failed-action',
+        reserved_session_id: null,
+        effect_state: 'completed',
+        effect_json: '{}',
+      },
+      {
+        id: 'legacy-fork-action',
+        reserved_session_id: 'legacy-child',
+        effect_state: 'completed',
+        effect_json: '{}',
+      },
+      {
+        id: 'legacy-pending-action',
+        reserved_session_id: null,
+        effect_state: 'reserved',
+        effect_json: '{}',
+      },
+    ])
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='table' AND name='agent_session_action_reconciliations'`)
+      .get() as { count: number }).count).toBe(1)
+    const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
+      .all() as Array<{ id: string }>).map((row) => row.id)
+    expect(ids.slice(-3)).toEqual([
+      '012-agent-home-retention',
+      '013-agent-home-structured-metadata-redaction',
+      '014-agent-home-native-fork-lifecycle',
+    ])
+    expect(ids.at(-1)).toBe('014-agent-home-native-fork-lifecycle')
+    db.close()
+  })
+
   it('repairs false-withheld native projections without restoring provider reasoning', () => {
     const db = openDb(':memory:')
     const boardId = Number(db.prepare(
@@ -784,7 +909,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(13)
+      .toBe(14)
     db.close()
   })
 
@@ -936,7 +1061,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(13)
+      .toBe(14)
     db.close()
   })
 
@@ -997,7 +1122,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1090,7 +1215,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(14)
     db.close()
   })
 
