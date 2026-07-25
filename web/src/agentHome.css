@@ -288,6 +288,7 @@
 .ah-health.running::before,
 .ah-health.idle::before,
 .ah-health.starting::before { background: #5f7d55; }
+.ah-health.paused::before { background: #a87426; }
 .ah-health.failed::before,
 .ah-health.lost::before { background: #a34e47; }
 
@@ -407,6 +408,7 @@
   background: #fff;
   box-shadow: 0 10px 28px rgba(45,40,33,.12);
 }
+.ah-mobile-control-actions { display: none; }
 .ah-menu-action,
 .ah-export-menu button {
   width: 100%;
@@ -1162,6 +1164,13 @@
   .ah-header-actions { grid-row: 1; grid-column: 2; }
   .ah-header-actions .ah-action { display: none; }
   .ah-header-actions .ah-icon-action:first-of-type { display: none; }
+  .ah-mobile-control-actions {
+    display: grid;
+    gap: 2px;
+    margin-bottom: 2px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e6e3dc;
+  }
   .ah-header-error {
     right: 9px;
     bottom: 7px;

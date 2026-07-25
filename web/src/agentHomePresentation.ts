@@ -19,6 +19,46 @@ export type AgentHomeSelection = {
 
 const activeSessionStatuses = new Set(['reserved', 'starting', 'running', 'idle', 'stopping'])
 const runningProcessStatuses = new Set(['starting', 'running', 'stopping'])
+const terminalSessionStatuses = new Set(['stopped', 'failed', 'lost', 'exited'])
+const mobileSessionActions: AgentHomeAction[] = ['resume', 'pause', 'stop', 'retry']
+
+export const agentHomeSessionPresentation = (
+  session: AgentSessionRecord | null,
+): {
+  status: string
+  quickActions: AgentHomeAction[]
+  mobileActions: AgentHomeAction[]
+} => {
+  if (!session) {
+    return {
+      status: 'no session',
+      quickActions: [],
+      mobileActions: [...mobileSessionActions],
+    }
+  }
+  const paused = session.control_state === 'paused'
+  const archived = session.control_state === 'archived'
+  const stopped = session.control_state === 'stopped'
+  let status = session.status
+  let quickActions: AgentHomeAction[] = activeSessionStatuses.has(session.status)
+    ? ['pause', 'stop']
+    : ['resume', 'retry']
+  if (paused) {
+    status = 'paused'
+    quickActions = ['resume', 'stop']
+  } else if (archived) {
+    status = 'archived'
+    quickActions = []
+  } else if (stopped) {
+    if (!terminalSessionStatuses.has(session.status)) status = 'stopped'
+    quickActions = ['retry']
+  }
+  return {
+    status,
+    quickActions,
+    mobileActions: [...mobileSessionActions],
+  }
+}
 
 export const chooseProfile = (
   profiles: AgentProfile[],
@@ -107,6 +147,24 @@ export const capabilityFor = (
   allowed: false,
   requires_operator: true,
   reason: 'Capability information is not available for this session yet.',
+}
+
+export const agentHomeActionPresentation = (
+  capabilities: AgentHomeCapabilities | null,
+  action: AgentHomeAction,
+  options: { hasSession: boolean; busyAction: AgentHomeAction | null },
+) => {
+  const capability = capabilityFor(capabilities, action)
+  return {
+    disabled: !options.hasSession
+      || !capability.supported
+      || !capability.allowed
+      || options.busyAction !== null,
+    reason: !options.hasSession
+      ? 'No provider session is selected.'
+      : capability.reason
+        ?? (!capability.allowed ? 'Operator authorization is required.' : undefined),
+  }
 }
 
 export const eventText = (event: ConversationEvent) => {

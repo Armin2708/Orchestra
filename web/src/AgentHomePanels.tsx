@@ -12,8 +12,9 @@ import {
   type ConversationEvent,
 } from './agentHomeApi'
 import {
+  agentHomeActionPresentation,
+  agentHomeSessionPresentation,
   attentionSummary,
-  capabilityFor,
   eventActor,
   eventLabel,
   eventText,
@@ -79,19 +80,18 @@ export function AgentHomeHeader({
   onCopyLink: () => void
 }) {
   const attentionCount = attentionSummary(attention)
-  const quickActions: AgentHomeAction[] = session?.status === 'running' || session?.status === 'idle'
-    ? ['pause', 'stop']
-    : ['resume', 'retry']
+  const sessionPresentation = agentHomeSessionPresentation(session)
+  const quickActions = sessionPresentation.quickActions
   const overflowActions: AgentHomeAction[] = ['fork', 'rename', 'archive']
 
   const actionButton = (action: AgentHomeAction, compact = false) => {
-    const capability = capabilityFor(capabilities, action)
-    const disabled = !session || !capability.supported || !capability.allowed || busyAction !== null
-    const reason = !session ? 'No provider session is selected.'
-      : capability.reason ?? (!capability.allowed ? 'Operator authorization is required.' : undefined)
+    const actionPresentation = agentHomeActionPresentation(capabilities, action, {
+      hasSession: session !== null,
+      busyAction,
+    })
     return (
       <button key={action} type="button" className={compact ? 'ah-menu-action' : 'ah-action'}
-        disabled={disabled} title={reason} onClick={() => onAction(action)}>
+        disabled={actionPresentation.disabled} title={actionPresentation.reason} onClick={() => onAction(action)}>
         {busyAction === action ? 'Working…' : action}
       </button>
     )
@@ -105,7 +105,9 @@ export function AgentHomeHeader({
         </div>
         <div>
           <div className="ah-kicker">
-            <span className={`ah-health ${session?.status ?? 'offline'}`}>{session?.status ?? 'no session'}</span>
+            <span className={`ah-health ${session ? sessionPresentation.status : 'offline'}`}>
+              {sessionPresentation.status}
+            </span>
             <span>{session?.mode ?? 'durable identity'}</span>
             <span>Agent {shortId(profile.id)}</span>
           </div>
@@ -141,8 +143,13 @@ export function AgentHomeHeader({
       <div className="ah-header-actions">
         {quickActions.map((action) => actionButton(action))}
         <details className="ah-action-menu">
-          <summary aria-label="More session actions">More</summary>
-          <div>{overflowActions.map((action) => actionButton(action, true))}</div>
+          <summary aria-label="More session actions including lifecycle controls">More</summary>
+          <div>
+            <div className="ah-mobile-control-actions" role="group" aria-label="Session lifecycle controls">
+              {sessionPresentation.mobileActions.map((action) => actionButton(action, true))}
+            </div>
+            {overflowActions.map((action) => actionButton(action, true))}
+          </div>
         </details>
         <button className="ah-icon-action" type="button" onClick={onCopyLink}
           aria-label="Copy exact Agent Home link" title="Copy exact Agent Home link">

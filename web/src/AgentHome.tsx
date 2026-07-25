@@ -14,6 +14,7 @@ import {
 } from './agentHomeApi'
 import {
   agentHomeDeepLink,
+  agentHomeSessionPresentation,
   chooseConversation,
   chooseProcess,
   chooseProfile,
@@ -671,17 +672,20 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
           {visibleProfiles.map((profile) => {
             const active = profile.id === selectedProfile?.id
             const profileSession = active ? selectedSession : null
+            const profileSessionPresentation = profileSession
+              ? agentHomeSessionPresentation(profileSession)
+              : null
             return (
               <button className={`ah-profile-card${active ? ' active' : ''}`} type="button"
                 onClick={() => selectProfile(profile)} key={profile.id} aria-current={active ? 'page' : undefined}>
                 <span className="ah-profile-avatar">
                   {profile.name.split(/[\s-_]+/).map((part) => part[0]?.toUpperCase()).slice(0, 2).join('')}
-                  <i className={profileSession?.status ?? profile.status} />
+                  <i className={profileSessionPresentation?.status ?? profile.status} />
                 </span>
                 <span className="ah-profile-copy">
                   <strong>{profile.name}</strong>
                   <small>{profile.role ?? 'General agent'}</small>
-                  <span>{profileSession?.status ?? profile.status} · {profileSession?.mode ?? 'identity'}</span>
+                  <span>{profileSessionPresentation?.status ?? profile.status} · {profileSession?.mode ?? 'identity'}</span>
                 </span>
                 {profileSession?.provider || profile.default_provider
                   ? <ProviderBadge provider={profileSession?.provider ?? profile.default_provider!} compact />

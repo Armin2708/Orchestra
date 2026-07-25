@@ -66,6 +66,7 @@ export type AgentSessionRecord = {
   external_id: string | null
   model: string | null
   status: string
+  control_state: 'active' | 'paused' | 'stopped' | 'archived'
   context: JsonObject
   profile_id: string | null
   conversation_id: string | null
