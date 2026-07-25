@@ -61,12 +61,39 @@ export class ArtifactStore {
     return row ? mapArtifact(row) : null
   }
 
-  list(input: { boardId: number; workspaceId?: string; cardId?: number; kind?: string; limit?: number }): Artifact[] {
+  list(input: {
+    boardId: number
+    workspaceId?: string
+    cardId?: number
+    kind?: string
+    excludeKinds?: string[]
+    excludeConversationRawArtifacts?: boolean
+    limit?: number
+  }): Artifact[] {
     const where = ['board_id=@board_id']
     const params: Record<string, unknown> = { board_id: input.boardId }
     if (input.workspaceId) { where.push('workspace_id=@workspace_id'); params.workspace_id = input.workspaceId }
     if (input.cardId) { where.push('card_id=@card_id'); params.card_id = input.cardId }
     if (input.kind) { where.push('kind=@kind'); params.kind = input.kind }
+    const excludedKinds = [...new Set(input.excludeKinds?.map((kind) => kind.trim()).filter(Boolean) ?? [])]
+    if (excludedKinds.length) {
+      const placeholders = excludedKinds.map((kind, index) => {
+        const parameter = `exclude_kind_${index}`
+        params[parameter] = kind
+        return `@${parameter}`
+      })
+      where.push(`kind NOT IN (${placeholders.join(', ')})`)
+    }
+    if (input.excludeConversationRawArtifacts) {
+      where.push(`NOT EXISTS (
+        SELECT 1 FROM conversation_events
+        WHERE conversation_events.raw_artifact_id=artifacts.id
+      )`)
+      where.push(`NOT EXISTS (
+        SELECT 1 FROM conversation_event_conflicts
+        WHERE conversation_event_conflicts.raw_artifact_id=artifacts.id
+      )`)
+    }
     params.limit = Math.min(500, Math.max(1, input.limit ?? 100))
     return (this.db.prepare(`SELECT * FROM artifacts WHERE ${where.join(' AND ')}
       ORDER BY created_at DESC, rowid DESC LIMIT @limit`).all(params) as Record<string, unknown>[]).map(mapArtifact)

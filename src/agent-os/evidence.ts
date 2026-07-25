@@ -46,8 +46,13 @@ export class EvidenceService {
     const contract = this.contracts.getOrCreate(cardId)
     const workspace = contract.workspace_id ? this.workspaces.get(contract.workspace_id) :
       this.workspaces.listBoard(card.board_id).find((item) => item.card_id === cardId) ?? null
-    const artifacts = this.artifacts.list({ boardId: card.board_id, cardId, limit: 200 })
-      .filter((artifact) => artifact.kind !== 'evidence_bundle')
+    const artifacts = this.artifacts.list({
+      boardId: card.board_id,
+      cardId,
+      excludeKinds: ['evidence_bundle', 'provider_event'],
+      excludeConversationRawArtifacts: true,
+      limit: 200,
+    })
     const diffArtifact = artifacts.find((artifact) => artifact.kind === 'diff' || artifact.kind === 'patch') ?? null
     const diffstatArtifact = artifacts.find((artifact) => artifact.kind === 'diffstat') ?? null
     const events = this.events.listBoard(card.board_id, { cardId, limit: 500 })

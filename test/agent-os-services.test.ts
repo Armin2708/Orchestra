@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { AttentionService } from '../src/agent-os/attention.js'
 import { CheckpointService } from '../src/agent-os/checkpoints.js'
+import { ConversationService } from '../src/agent-os/conversations.js'
 import { EvidenceService } from '../src/agent-os/evidence.js'
 import { EventStore } from '../src/agent-os/event-store.js'
 import { evaluatePolicy, PolicyEngine } from '../src/agent-os/policy-engine.js'
@@ -237,6 +239,8 @@ describe('Agent OS core services', () => {
       content: 'diff --git a/src/core.ts b/src/core.ts\n--- a/src/core.ts\n+++ b/src/core.ts', metadata: { changed_files: ['src/core.ts'] } })
     artifacts.create({ boardId, workspaceId: workspace.id, cardId, kind: 'test_report', name: 'vitest.json',
       mimeType: 'application/json', content: '{"passed":true}' })
+    artifacts.create({ boardId, workspaceId: workspace.id, cardId, kind: 'provider_event', name: 'raw-provider-event.json',
+      mimeType: 'application/json', content: '{"credential":"provider-secret-sentinel"}' })
     const events = new EventStore(db)
     events.append({ boardId, workspaceId: workspace.id, cardId, kind: 'agent.claim', source: 'agent', payload: { claim: 'all tests pass' } })
     events.append({ boardId, workspaceId: workspace.id, cardId, kind: 'verification.completed', source: 'verifier', payload: { passed: true } })
@@ -248,9 +252,115 @@ describe('Agent OS core services', () => {
     expect(bundle.changed_files).toEqual(['src/core.ts'])
     expect(bundle.claims).toEqual([expect.objectContaining({ claim: 'all tests pass' })])
     expect(bundle.verification.events).toHaveLength(1)
+    expect(bundle.artifacts.some((artifact) => artifact.kind === 'provider_event')).toBe(false)
+    expect(JSON.stringify(bundle)).not.toContain('provider-secret-sentinel')
     expect(bundle.delivery).toEqual({ current: null, history: [] })
     expect(bundle.gaps).toEqual(['No canonical delivery report has been recorded.'])
     const persisted = service.persist(cardId)
     expect(persisted.artifact.kind).toBe('evidence_bundle')
+    expect(persisted.artifact.content).not.toContain('provider-secret-sentinel')
+  })
+
+  it('excludes every conversation raw artifact before applying the evidence limit', () => {
+    const { db, boardId, cardId } = fixture()
+    const workspace = new WorkspaceStore(db).create({
+      boardId,
+      cardId,
+      name: 'raw-evidence-boundary',
+      rootPath: '/repo',
+    })
+    const artifacts = new ArtifactStore(db)
+    const diff = artifacts.create({
+      boardId,
+      workspaceId: workspace.id,
+      cardId,
+      kind: 'diff',
+      name: 'delivery.diff',
+      content: 'diff --git a/src/safe.ts b/src/safe.ts',
+    })
+    const canonicalRaw = artifacts.create({
+      boardId,
+      workspaceId: workspace.id,
+      cardId,
+      kind: 'provider_raw_event',
+      name: 'canonical-raw.json',
+      content: '{"credential":"canonical-raw-sentinel"}',
+    })
+    const conflictRaw = artifacts.create({
+      boardId,
+      workspaceId: workspace.id,
+      cardId,
+      kind: 'provider_conflict_blob',
+      name: 'conflict-raw.json',
+      content: '{"credential":"conflict-raw-sentinel"}',
+    })
+    const unreferenced = artifacts.create({
+      boardId,
+      workspaceId: workspace.id,
+      cardId,
+      kind: 'provider_raw_event',
+      name: 'ordinary-unreferenced.json',
+      content: '{"result":"ordinary-unreferenced-sentinel"}',
+    })
+    const actor = { type: 'human' as const, id: 'evidence-security-test' }
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Evidence security',
+      defaultProvider: 'codex',
+      actor,
+      idempotencyKey: 'evidence-security-profile',
+    })
+    const conversations = new ConversationService(db)
+    const conversation = conversations.listConversations(profile.id)[0]
+    const sessionId = 'evidence-security-session'
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, external_id, status, context_json
+    ) VALUES (?, ?, 'codex', 'evidence-security-thread', 'running', '{}')`)
+      .run(sessionId, workspace.id)
+    conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor,
+      idempotencyKey: 'evidence-security-link',
+    })
+    conversations.appendEvent(sessionId, {
+      kind: 'assistant',
+      actor,
+      projectedText: 'safe canonical text',
+      rawArtifactId: canonicalRaw.id,
+      dedupeKey: 'provider-event-1',
+      idempotencyKey: 'evidence-security-event-1',
+    })
+    expect(() => conversations.appendEvent(sessionId, {
+      kind: 'assistant',
+      actor,
+      projectedText: 'different safe text',
+      rawArtifactId: conflictRaw.id,
+      dedupeKey: 'provider-event-1',
+      idempotencyKey: 'evidence-security-event-conflict',
+    })).toThrow(/conflicts with an existing dedupe key/)
+    for (let index = 0; index < 201; index += 1) {
+      artifacts.create({
+        boardId,
+        workspaceId: workspace.id,
+        cardId,
+        kind: 'provider_event',
+        name: `excluded-provider-event-${index}.json`,
+        content: `{"secret":"excluded-provider-sentinel-${index}"}`,
+      })
+    }
+
+    const evidence = new EvidenceService(db).assemble(cardId)
+    expect(evidence.diff?.artifact_id).toBe(diff.id)
+    expect(evidence.artifacts).toContainEqual(expect.objectContaining({ id: unreferenced.id }))
+    expect(evidence.artifacts).not.toContainEqual(expect.objectContaining({ id: canonicalRaw.id }))
+    expect(evidence.artifacts).not.toContainEqual(expect.objectContaining({ id: conflictRaw.id }))
+    expect(evidence.artifacts).not.toContainEqual(expect.objectContaining({ kind: 'provider_event' }))
+    const serialized = JSON.stringify(evidence)
+    expect(serialized).toContain('ordinary-unreferenced-sentinel')
+    expect(serialized).not.toContain('canonical-raw-sentinel')
+    expect(serialized).not.toContain('conflict-raw-sentinel')
+    expect(serialized).not.toContain('excluded-provider-sentinel')
   })
 })

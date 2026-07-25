@@ -5,7 +5,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer, type ConductorLike } from '../src/server.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { ArtifactStore } from '../src/agent-os/artifact-store.js'
+import { ConversationService } from '../src/agent-os/conversations.js'
 import type { AgentOsRuntimeAdapter } from '../src/agent-os/routes.js'
+import { WorkspaceStore } from '../src/agent-os/workspace-store.js'
 import { ensureAgentToken, ensureToken, loadClientToken } from '../src/token.js'
 
 const OPERATOR_TOKEN = 'operator-token'
@@ -22,6 +26,88 @@ afterEach(async () => {
 })
 
 describe('operator and agent API principals', () => {
+  it('keeps raw provider artifacts out of agent evidence responses and generated bundles', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/operator-auth', 'auth')")
+      .run().lastInsertRowid)
+    const cardId = Number(db.prepare("INSERT INTO cards (board_id, title) VALUES (?, 'Private provider event')")
+      .run(boardId).lastInsertRowid)
+    const workspace = new WorkspaceStore(db).create({
+      boardId,
+      cardId,
+      name: 'private-provider-event',
+      rootPath: '/operator-auth',
+    })
+    const raw = new ArtifactStore(db).create({
+      boardId,
+      workspaceId: workspace.id,
+      cardId,
+      kind: 'provider_raw_event',
+      name: 'raw-provider-event.json',
+      mimeType: 'application/json',
+      content: '{"credential":"provider-secret-sentinel"}',
+    })
+    const actor = { type: 'human' as const, id: 'evidence-security-test' }
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Evidence security',
+      defaultProvider: 'codex',
+      actor,
+      idempotencyKey: 'evidence-security-profile',
+    })
+    const conversations = new ConversationService(db)
+    const conversation = conversations.listConversations(profile.id)[0]
+    const sessionId = 'evidence-security-session'
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, external_id, status, context_json
+    ) VALUES (?, ?, 'codex', 'evidence-security-thread', 'running', '{}')`)
+      .run(sessionId, workspace.id)
+    conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor,
+      idempotencyKey: 'evidence-security-link',
+    })
+    conversations.appendEvent(sessionId, {
+      kind: 'assistant',
+      actor,
+      projectedText: 'safe visible transcript',
+      rawArtifactId: raw.id,
+      dedupeKey: 'private-provider-event',
+      idempotencyKey: 'private-provider-event',
+    })
+    const server = buildServer(db, undefined, { token: OPERATOR_TOKEN, agentToken: AGENT_TOKEN })
+    servers.push(server)
+    await server.ready()
+
+    for (const headers of [agent, operator]) {
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/os/cards/${cardId}/evidence`,
+        headers,
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.body).not.toContain('provider-secret-sentinel')
+      expect(response.json().evidence.artifacts).not.toContainEqual(
+        expect.objectContaining({ id: raw.id }),
+      )
+
+      const generated = await server.inject({
+        method: 'POST',
+        url: `/api/v1/os/cards/${cardId}/evidence`,
+        headers,
+      })
+      expect(generated.statusCode).toBe(201)
+      expect(generated.body).not.toContain('provider-secret-sentinel')
+    }
+    const persisted = db.prepare("SELECT content FROM artifacts WHERE card_id=? AND kind='evidence_bundle'")
+      .all(cardId) as Array<{ content: string }>
+    expect(persisted).toHaveLength(2)
+    expect(persisted.every((artifact) => !artifact.content.includes('provider-secret-sentinel')))
+      .toBe(true)
+  })
+
   it('prevents an agent credential from launching, hiring, steering, or cancelling work', async () => {
     const db = openDb(':memory:')
     const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/operator-auth', 'auth')")
