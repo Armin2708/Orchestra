@@ -191,7 +191,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
   ): Promise<ClaudeSessionForkResult> {
     const state = this.required(sessionId)
     const sourceExternalId = options.sourceExternalId.trim()
-    if (!sourceExternalId || sourceExternalId !== state.session.externalId) {
+    if (!sourceExternalId) {
       throw new Error(`Claude session ${sessionId} external provenance does not match`)
     }
     if (options.workspaceId !== state.session.workspaceId) {
@@ -202,6 +202,30 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     if (!state.cwd) throw new Error(`Claude session ${sessionId} cwd provenance is unavailable`)
     if (path.resolve(requestedCwd) !== path.resolve(state.cwd)) {
       throw new Error(`Claude session ${sessionId} belongs to another cwd`)
+    }
+
+    const numericFallback = String(state.agentId)
+    if (sourceExternalId !== state.session.externalId) {
+      if (state.session.externalId !== numericFallback
+        || !this.options.resolveAgent
+        || !this.options.workspaceForAgent) {
+        throw new Error(`Claude session ${sessionId} external provenance does not match`)
+      }
+      const resolved = await this.options.resolveAgent(sourceExternalId)
+      if (!resolved
+        || resolved.id !== state.agentId
+        || resolved.sdk_session !== sourceExternalId) {
+        throw new Error(`Claude provider session ${sourceExternalId} does not belong to agent ${state.agentId}`)
+      }
+      const resolvedWorkspaceId = await this.options.workspaceForAgent(resolved.id)
+      if (!resolvedWorkspaceId
+        || resolvedWorkspaceId !== state.session.workspaceId
+        || resolvedWorkspaceId !== options.workspaceId) {
+        throw new Error(`Claude session ${sessionId} belongs to another workspace`)
+      }
+      state.session.externalId = sourceExternalId
+    } else if (sourceExternalId === numericFallback) {
+      throw new Error(`Claude session ${sessionId} provider provenance is not initialized`)
     }
 
     const upToMessageId = options.upToMessageId?.trim()

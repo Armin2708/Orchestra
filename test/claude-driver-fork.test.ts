@@ -14,12 +14,16 @@ const workspaceId = 'workspace-claude-fork'
 const conductor = (
   input: {
     cwd?: string
-    externalId?: string
+    externalId?: string | null
     live?: boolean
   } = {},
 ): ClaudeConductorPort => ({
   isHired: () => input.live ?? true,
-  hire: () => ({ id: 41, name: 'fork-source', sdk_session: input.externalId ?? sourceExternalId }),
+  hire: () => ({
+    id: 41,
+    name: 'fork-source',
+    sdk_session: input.externalId === undefined ? sourceExternalId : input.externalId,
+  }),
   task: () => true,
   transcript: () => ({
     lines: [],
@@ -34,7 +38,7 @@ const launch = async (
   forkSession: ClaudeNativeSessionFork,
   input: {
     cwd?: string
-    externalId?: string
+    externalId?: string | null
   } = {},
 ) => {
   const cwd = input.cwd ?? sourceCwd
@@ -104,6 +108,103 @@ describe('ClaudeAgentDriverAdapter native session fork', () => {
     const { driver, session } = await launch(nativeFork)
 
     await expect(driver.forkSession(session.id, forkOptions(override))).rejects.toThrow(message)
+    expect(nativeFork).not.toHaveBeenCalled()
+  })
+
+  it('refreshes a numeric launch fallback only from matching durable provider provenance', async () => {
+    const childExternalId = randomUUID()
+    const nativeFork = vi.fn<ClaudeNativeSessionFork>(async () => ({ sessionId: childExternalId }))
+    const resolveAgent = vi.fn(() => ({
+      id: 41,
+      sdk_session: sourceExternalId,
+    }))
+    const workspaceForAgent = vi.fn(() => workspaceId)
+    const driver = new ClaudeAgentDriverAdapter({
+      conductor: conductor({ cwd: sourceCwd, externalId: null }),
+      forkSession: nativeFork,
+      resolveAgent,
+      workspaceForAgent,
+    })
+    const session = await driver.launch({
+      workspaceId,
+      boardId: 7,
+      cwd: sourceCwd,
+    })
+    expect(session.externalId).toBe('41')
+
+    const result = await driver.forkSession(session.id, forkOptions())
+
+    expect(resolveAgent).toHaveBeenCalledWith(sourceExternalId)
+    expect(workspaceForAgent).toHaveBeenCalledWith(41)
+    expect(session.externalId).toBe(sourceExternalId)
+    expect(nativeFork).toHaveBeenCalledWith(sourceExternalId, { dir: sourceCwd })
+    expect(result).toMatchObject({
+      sourceExternalId,
+      externalId: childExternalId,
+      sourceProviderThreadId: sourceExternalId,
+      providerThreadId: childExternalId,
+    })
+  })
+
+  it('rejects a real provider UUID resolved to another agent before invoking the SDK', async () => {
+    const nativeFork = vi.fn<ClaudeNativeSessionFork>(async () => ({ sessionId: randomUUID() }))
+    const workspaceForAgent = vi.fn(() => workspaceId)
+    const driver = new ClaudeAgentDriverAdapter({
+      conductor: conductor({ cwd: sourceCwd, externalId: null }),
+      forkSession: nativeFork,
+      resolveAgent: () => ({ id: 42, sdk_session: sourceExternalId }),
+      workspaceForAgent,
+    })
+    const session = await driver.launch({
+      workspaceId,
+      boardId: 7,
+      cwd: sourceCwd,
+    })
+
+    await expect(driver.forkSession(session.id, forkOptions())).rejects.toThrow(
+      'does not belong to agent 41',
+    )
+    expect(session.externalId).toBe('41')
+    expect(workspaceForAgent).not.toHaveBeenCalled()
+    expect(nativeFork).not.toHaveBeenCalled()
+  })
+
+  it('rejects a refreshed provider UUID when durable workspace provenance changed', async () => {
+    const nativeFork = vi.fn<ClaudeNativeSessionFork>(async () => ({ sessionId: randomUUID() }))
+    const driver = new ClaudeAgentDriverAdapter({
+      conductor: conductor({ cwd: sourceCwd, externalId: null }),
+      forkSession: nativeFork,
+      resolveAgent: () => ({ id: 41, sdk_session: sourceExternalId }),
+      workspaceForAgent: () => 'workspace-other',
+    })
+    const session = await driver.launch({
+      workspaceId,
+      boardId: 7,
+      cwd: sourceCwd,
+    })
+
+    await expect(driver.forkSession(session.id, forkOptions())).rejects.toThrow(
+      'belongs to another workspace',
+    )
+    expect(session.externalId).toBe('41')
+    expect(nativeFork).not.toHaveBeenCalled()
+  })
+
+  it('rejects a numeric fallback until real provider provenance is initialized', async () => {
+    const nativeFork = vi.fn<ClaudeNativeSessionFork>(async () => ({ sessionId: randomUUID() }))
+    const driver = new ClaudeAgentDriverAdapter({
+      conductor: conductor({ cwd: sourceCwd, externalId: null }),
+      forkSession: nativeFork,
+    })
+    const session = await driver.launch({
+      workspaceId,
+      boardId: 7,
+      cwd: sourceCwd,
+    })
+
+    await expect(driver.forkSession(session.id, forkOptions({
+      sourceExternalId: '41',
+    }))).rejects.toThrow('provider provenance is not initialized')
     expect(nativeFork).not.toHaveBeenCalled()
   })
 
