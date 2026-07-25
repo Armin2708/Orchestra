@@ -160,11 +160,13 @@ describe('raw PTY reliability contract', () => {
     async () => {
       const persistence = new MemoryRuntimePersistence()
       const supervisor = runtime({ persistence })
+      // Node refreshes cached stdout dimensions on SIGWINCH; input and resize callbacks may run in either order.
       const script = [
         "process.stdin.setRawMode(true)",
         'process.stdin.resume()',
         "const size=()=>process.stdout.getWindowSize().join('x')",
-        "process.stdin.on('data',data=>{if(data.includes(115))process.stdout.write('RESIZE:'+size())})",
+        "process.stdout.once('resize',()=>process.stdout.write('RESIZE:'+size()))",
+        "process.stdin.on('data',data=>{if(data.includes(115))process.stdout.write('INPUT:s')})",
         "process.on('SIGINT',()=>process.stdout.write('SIGNAL:SIGINT',()=>process.exit(42)))",
         "process.stdout.write('READY:'+size())",
       ].join(';')
@@ -181,7 +183,10 @@ describe('raw PTY reliability contract', () => {
 
       const resized = await supervisor.resize(processRecord.id, 137, 43)
       await supervisor.write(processRecord.id, 's')
-      await waitForOutput(supervisor, processRecord.id, 'RESIZE:137x43')
+      await Promise.all([
+        waitForOutput(supervisor, processRecord.id, 'RESIZE:137x43'),
+        waitForOutput(supervisor, processRecord.id, 'INPUT:s'),
+      ])
       await supervisor.signal(processRecord.id, 'SIGINT')
       const ended = await waitForTerminal(supervisor, processRecord.id)
       const output = await outputText(supervisor, processRecord.id)
@@ -189,6 +194,7 @@ describe('raw PTY reliability contract', () => {
       expect(resized).toMatchObject({ cols: 137, rows: 43, status: 'running' })
       expect(output).toContain('READY:91x27')
       expect(output).toContain('RESIZE:137x43')
+      expect(output).toContain('INPUT:s')
       expect(output).toContain('SIGNAL:SIGINT')
       expect(ended).toMatchObject({ status: 'failed', exitCode: 42, pid: null, cols: 137, rows: 43 })
       expect(persistence.events.map((event) => event.kind)).toEqual(expect.arrayContaining([
