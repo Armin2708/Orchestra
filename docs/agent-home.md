@@ -2,8 +2,9 @@
 
 Status: the durable domain, provider-native capture, lifecycle/search/export/CLI controls, and
 responsive visual Agent Home are implemented. Configurable retention, bounded compaction, and
-legacy evidence-bundle repair are implemented. Provenance-safe native fork and the real
-daemon-to-browser restart E2E gate remain open.
+legacy evidence-bundle repair are implemented. Provenance-safe Claude/Codex native fork, parked
+child adoption, and operator reconciliation are implemented. The real daemon-to-browser restart
+E2E gate remains open.
 
 Agent Home is the canonical visual and API surface for one durable agent identity and its provider
 sessions. It combines conversation, real terminal processes, assigned work, context, tools,
@@ -94,9 +95,21 @@ interrupted, replay the same durable error for the original key, and release the
 operator action. Retry commits its child lineage and action result before best-effort dispatch, so
 a crash or scheduler failure can resume the same idempotency key without creating another child.
 Paused intent is persisted in `control_state`, restored before provider attach, and remains paused
-when Codex replays an interrupted turn or Claude reattaches. Codex and Claude do not currently
-expose provenance-safe native session forking, so
-`fork` fails explicitly with HTTP 501 instead of fabricating a clone.
+when Codex replays an interrupted turn or Claude reattaches.
+
+Migration `014-agent-home-native-fork-lifecycle` reserves a fork action before any provider effect.
+Claude and Codex create one provider-native child in a distinct managed worktree; Agent Home parks
+that child without a job or agent binding until its identity, native lineage, provider-session
+identity, target working directory, and parent exclusion have been verified. Codex supplies the
+provider evidence while the target workspace mapping remains explicitly orchestrator-attested.
+Only the exact parked child can be adopted and complete the original idempotent action.
+
+An ambiguous provider result is quarantined as `outcome_unknown` and is never automatically
+reforked. An operator can reconcile the durable action with
+`POST /api/v1/os/session-actions/:id/reconcile`: `verify_adopt` performs read-only exact-child
+verification before adoption, while `confirm_absent` releases a fork only after the operator
+confirms that no child exists. Unsupported providers still return an actionable capability result
+instead of fabricating a clone.
 
 Conversation search is available at both
 `GET /api/v1/os/conversations/:id/search` and
@@ -122,6 +135,7 @@ CLI parity is exposed as:
 
 - `orchestra agent list|create|show|home|rename|archive`;
 - `orchestra session list|show|resume|pause|stop|retry|fork|rename|archive`;
+- `orchestra session reconcile-fork <action-id>` with `verify_adopt` or `confirm_absent`;
 - `orchestra session search` with the API filters;
 - `orchestra session export` in human, JSON, or persisted-artifact mode.
 - `orchestra retention show|set|run` for operator policy and bounded sweeps.

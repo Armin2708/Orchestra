@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml)
 
-The v0.1 release also includes milestone review gates, independent delivery
+The current engineering train also includes milestone review gates, independent delivery
 verification, a test-gated auto-ship queue, shipped-commit history, remote phone
 access, push notifications, per-agent token accounting, and manual/automatic wake
 for agents paused by Claude usage limits.
@@ -16,41 +16,27 @@ raw-terminal capability. Its [Delivery Trackbook](docs/delivery-trackbook.md) ke
 Asked contract, reported result, observed evidence, human overrides, and acceptance visibly
 separate.
 
-## Quickstart
+## Installation status
 
-**Claude Code plugin:** inside Claude Code, run
+**Public installation is not available yet.** On 2026-07-25 the public npm registry returned
+`E404` for `orchestra-board`. Both plugin hook manifests currently invoke
+`npx -y orchestra-board@0.1.0`, so the Claude/Codex plugin commands and the npm/npx commands
+previously shown here are not working plug-and-play paths. This repository is an engineering
+preview, not a public release.
 
-```
-/plugin marketplace add Armin2708/Orchestra
-/plugin install orchestra@orchestra
-```
-
-That's it. Hooks come bundled with the plugin, the CLI auto-downloads from npm on first use, and the daemon auto-starts with your next session. Open http://localhost:4750 to watch the board.
-
-**Codex plugin:** from a terminal, run
+For contributor evaluation from an already verified source checkout, use a supported Node 22/npm
+10 environment and build both packages locally:
 
 ```bash
-codex plugin marketplace add Armin2708/Orchestra
-codex plugin add orchestra@orchestra
+npm ci
+npm --prefix web ci
+npm run build
+npm --prefix web run build
+node dist/cli.js serve
 ```
 
-Start a new Codex session in the project, then open `/hooks` once to review and trust Orchestra's project/plugin hooks. Codex hook trust is tied to the exact hook definition, so review is requested again when the manifest changes.
-
-**Manual install (npm):**
-
-```bash
-npm i -g orchestra-board
-orchestra install --provider both  # Claude + Codex hooks; global by default
-orchestra doctor --provider both
-orchestra serve &    # or let the hooks auto-start it
-open http://localhost:4750
-```
-
-For a zero-install run, invoke the package's `orchestra` binary explicitly:
-
-```bash
-npx --yes --package orchestra-board orchestra serve
-```
+Then open http://localhost:4750. This starts the local daemon and UI; it does not turn the
+unpublished package/plugin flow into a supported installation.
 
 For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
 Orchestra:
@@ -59,9 +45,9 @@ Orchestra:
 npm i -g @openai/codex@0.144.6
 codex login
 codex login status
-orchestra doctor --provider codex
-orchestra restart
-orchestra hire --provider codex --access-profile workspace_write
+node dist/cli.js doctor --provider codex
+node dist/cli.js restart
+node dist/cli.js hire --provider codex --access-profile workspace_write
 ```
 
 The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning

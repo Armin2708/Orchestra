@@ -1,9 +1,12 @@
 # Agent OS North Star Delivery Program
 
-Status: Milestone A is delivered. Milestone B now has provider-native durable Agent Home capture,
-controls, search/export, CLI parity, the responsive visual workspace, and the integrated
-privacy/audit blocker closure. Milestone C has its first typed Job Market contract foundation. The
-product is not yet public plug-and-play.
+Status: the canonical Milestone A acceptance harness is delivered, while its legacy-launch-removal
+summary remains open. Milestone B now has provider-native durable Agent Home capture, controls,
+search/export, retention, native fork reconciliation, CLI parity, the responsive visual workspace,
+and the integrated privacy/audit blocker closure; its daemon-to-browser restart and current mobile
+acceptance gates remain open. Milestone C has typed Job Market contracts, built-in templates, and a
+phase-one exclusive-assignment history, but runtime assignment binding, Open Work, and the
+Knowledge Compiler remain open. The product is not yet public plug-and-play.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -84,9 +87,9 @@ installation, dogfood, rollback, diagnostics, release notes, and staged beta pro
 
 ### Asked
 
-Finish the usable Agent Home surface without weakening the real terminal, then establish typed,
-validated Job Market contracts so requested work can move toward matching, execution, and verified
-delivery with an auditable human-readable handoff.
+Close the known Agent Home durability, fork, privacy, and test-reliability blockers without
+weakening the real terminal; add deterministic contract templates; and establish the first
+explicit assignment lifecycle while keeping unfinished runtime binding visible.
 
 ### Delivered
 
@@ -112,57 +115,100 @@ delivery with an auditable human-readable handoff.
   projections and managed driver events while preserving visible safe transcript text;
 - managed `os_events` exclude raw approval parameters, credentials, Codex reasoning, and Claude
   thinking, while authenticated operators retain the complete live approval form and agent tokens
-  are denied operator transcript/SSE surfaces.
+  are denied operator transcript/SSE surfaces;
+- migrations `012-agent-home-retention`, `013-agent-home-structured-metadata-redaction`,
+  `014-agent-home-native-fork-lifecycle`, and `015-agent-home-action-command-scope` add bounded
+  retention/repair, safe structured projections, provider-native Claude/Codex fork, parked-child
+  adoption, operator reconciliation, and globally scoped replay identity;
+- six deterministic contract templates support strict preview, compare-and-set apply,
+  credential-safe audit projection, and exact lost-response replay;
+- migration `016-job-market-assignment-lifecycle` and the assignment API/CLI add exclusive claim,
+  assign, release, and atomic reassign history with version guards and integrity triggers;
+- the default parallel test suite is deterministic, verified delivery summaries are available for
+  later knowledge ingestion, and the release workflow retains and verifies the tested package
+  artifact instead of rebuilding it before publication.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
 ### Evidence
 
-- Agent Home integration train: `5c289fc`, `63efbf3`, `cacba47`, `6953d97`, `ff86cf4`,
-  `72d78c4`, `c785e5d`, `24e984a`, and `fc808b7`;
-- typed Job Market integration: `8ae2eeb`;
-- blocker/security integration: `f82ab4a`, `a59580d`, `883683f`, and `1b1dfbe`;
-- serialized Node 22.20.0 repository gate: 99 test files / 631 tests;
-- root and web TypeScript checks, CLI production build, and web production build pass;
-- focused final security/auth gate: 7 files / 86 tests;
-- `scripts/e2e.sh`, `npm pack --dry-run`, and isolated Codex protocol 0.144.6 verification pass;
-- independent regression/security review returned PASS;
-- focused migration/controls/Job Market integration: 6 files / 51 tests;
-- focused Agent Home controls/UI integration: 10 files / 66 tests;
-- independent Playwright acceptance passed at 1440×1000 and 390×844: exact event lookup/context
-  focused and highlighted `event-5001`, pause changed Running → Idle, no horizontal overflow, and
-  fresh reloads produced zero console/page errors or unhandled mock requests;
-- independent reviews returned PASS after migration rollback, dependency completion, event lookup,
-  replay safety, workspace audit scope, and lifecycle crash-recovery defects were corrected;
-- GitNexus was rebuilt at `1b1dfbe` and reports a critical full-train surface (82 files, 252 changed
-  symbols, 88 dependent symbols), so combined tests/builds and browser acceptance remain required
-  release evidence.
+- Gate C passed from a fresh detached checkout of
+  `ddbb3fc05853f51f045ae329a44979810e1387f8` on Node 22.20.0: 23 focused files / 200 tests,
+  121 files / 822 tests serially, and three fresh default-parallel runs at 121 / 822 each;
+- the same Gate C passed root/web TypeScript and production builds, credential-free E2E, package
+  pack/install/publish dry-runs from one retained 539,638-byte tarball, audits, Actionlint,
+  merge-aware Gitleaks, Codex protocol 0.144.6, and both-provider doctor;
+- the reviewed JOB-010 phase-one candidate passed 20 focused files / 151 tests, the complete serial
+  and default-parallel suites at 125 files / 850 tests, root/web TypeScript and production builds,
+  and independent P0–P2 review;
+- `0c1323780b5f776eb419c4dabbbe42b2bcf1c0ee` has the byte-identical reviewed tree and passed an
+  exact-integration 9-file / 73-test gate plus root/web TypeScript;
+- in-app Browser inventory remained empty. The configured Playwright fallback passed desktop but
+  failed phone acceptance: mobile hid pause/resume/stop/retry, paused-idle state offered the wrong
+  controls, and a card deep link canonicalized to `/` so refresh lost the drawer. Console/page
+  errors were zero and all observed API responses were HTTP 200; browser/mobile gates stay open;
+- the public npm registry returned `E404` for `orchestra-board` on 2026-07-25.
 
 ### Remaining
 
-- Agent Home retention/compaction/raw-event archival policy, provenance-safe native forking, and a
-  real daemon-mid-session to browser-continuation E2E gate;
-- current combined desktop/phone browser acceptance; the configured browser backend returned zero
-  available browsers, so no pass is claimed from the older baseline;
-- Open Work filters, dependency/critical-path UI, explicit assignment/release/reassignment,
-  templates, editor/brief preview, and capability/capacity matching;
-- Knowledge Compiler, Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone
-  control, token/outcome analytics, operations hardening, clean-machine packaging, and release.
+- a real daemon-mid-session to browser-continuation E2E gate;
+- the current phone control-state and deep-link defects, followed by combined desktop/phone
+  acceptance in the intended browser surface;
+- JOB-010 phase-two binding from assignments through launch, job, session, executor,
+  recovery/retry, and compatibility ownership; phase one alone does not close JOB-010;
+- Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
+  and capability/capacity matching;
+- every `KNO-*` item, including durable source/chunk/context schemas, ingestion, retrieval,
+  provenance, budgeted injection, freshness, review controls, UI, and benchmarks;
+- Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
+  analytics, operations hardening, clean-machine packaging, and release;
+- hosted exact-commit workflow proof for `QA-019`, public package publication, and clean-machine
+  plugin/npm installation.
 
-The strict master reconciliation is 106 / 373 checklist boxes delivered. Milestones C–E remain
-open; this branch is a verified engineering train, not yet a public plug-and-play release.
+The strict master reconciliation is **122 / 373 checklist boxes delivered; 251 remain open**.
+The milestone summaries remain 2 / 15; this branch is a locally verified engineering train, not a
+hosted exact-commit release and not a public plug-and-play release.
 
-The safe multi-agent continuation point, including the integrated blocker/security closure and the
-still-open browser gate, is recorded in the
-[2026-07-25 major handoff](./checkpoints/2026-07-25-agent-os-major-handoff.md).
+| Area | Delivered | Open |
+|---|---:|---:|
+| Phase 0 — Product contract/baseline | 10 / 13 | 3 |
+| Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
+| Phase 2 — Canonical orchestration | 19 / 21 | 2 |
+| Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
+| Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
+| Phase 5 — Contracts/job market | 11 / 18 | 7 |
+| Phase 6 — Delivery Trackbook | 14 / 21 | 7 |
+| Phase 7 — Knowledge Compiler | 0 / 28 | 28 |
+| Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
+| Phase 9 — Teams/conflicts | 0 / 21 | 21 |
+| Phase 10 — Tools/permissions | 2 / 13 | 11 |
+| Phase 11 — Visual command center | 1 / 18 | 17 |
+| Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
+| Phase 13 — Secure remote/mobile | 1 / 21 | 20 |
+| Phase 14 — Reliability/security/ops | 1 / 23 | 22 |
+| Phase 15 — Quality gates | 7 / 21 | 14 |
+| Phase 16 — Packaging/docs | 5 / 19 | 14 |
+| Phase 17 — Public release | 0 / 17 | 17 |
+| Phase 18 — Deferred | 0 / 10 | 10 deferred |
+| Release milestone summaries | 2 / 15 | 13 |
+
+The current continuation point is the
+[local Gate C and JOB-010 phase-one checkpoint](./checkpoints/2026-07-25-agent-os-local-gate-c-job010-phase-one.md).
+The [major blocker handoff](./checkpoints/2026-07-25-agent-os-major-handoff.md) is retained as
+superseded history.
 
 ## Evidence baseline
 
 - Runtime: Node 22.20.0; the repository dependency ABI requires Node 22 rather than the machine's
   unrelated Homebrew Node 26 runtime.
 - Environment: no project `.env`, `.env.local`, `web/.env`, or `web/.env.local` files are present.
-- Combined current baseline: 99 test files / 631 tests pass serially.
-- Root/web TypeScript and production builds: clean.
-- The default parallel suite remains tracked by `QA-020`; this slice used the deterministic serial
-  gate.
+- Gate C base `ddbb3fc`: 121 files / 822 tests serially and in three fresh default-parallel runs;
+  root/web TypeScript and production builds are clean.
+- JOB-010 phase-one code head `0c13237`: reviewed-tree full suites are 125 files / 850 tests
+  serially and default-parallel; exact-integration focused checks are 9 files / 73 tests plus
+  root/web TypeScript.
+- `QA-020` is delivered. `QA-019` remains open until hosted workflow evidence exists for the exact
+  candidate SHA.
+- Browser and mobile gates remain open on the split desktop-pass/phone-fail fallback result above.
+- Public npm installation is unavailable while `orchestra-board` returns `E404`.
 - Primary checkout user changes remain outside this isolated worktree and were not modified.

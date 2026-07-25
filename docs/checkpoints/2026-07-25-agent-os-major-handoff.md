@@ -1,5 +1,10 @@
 # Agent OS Major Handoff — 2026-07-25
 
+> **Superseded historical checkpoint.** This document preserves the verified `1b1dfbe` /
+> 106-of-373 state and must not be read as current release evidence. Continue from the
+> [local Gate C and JOB-010 phase-one checkpoint](./2026-07-25-agent-os-local-gate-c-job010-phase-one.md),
+> whose tested code head is `0c1323780b5f776eb419c4dabbbe42b2bcf1c0ee`.
+
 Status: blocker integration is complete on the isolated integration branch. The combined code,
 security, protocol, package, and build gates pass; current desktop/phone browser acceptance remains
 open because the browser runtime exposed no usable browser. The product is not yet public
