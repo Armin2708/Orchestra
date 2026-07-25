@@ -154,22 +154,30 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       (event) => event.projected_text === 'persisted before daemon restart',
     )).toHaveLength(1)
 
-    // Known AGT-GATE gap captured explicitly for the separate production-fix lane:
-    // conversation audit events currently omit canonical card/contract scope, so
-    // the strict single-job snapshot rejects the otherwise durable job stream.
-    const scopedSnapshotGap = await rawApi(
+    const scopedSnapshot = await rawApi(
       port,
       token,
       'GET',
       `/api/v1/os/jobs/${encodeURIComponent(ids.job)}`,
     )
-    expect(scopedSnapshotGap).toEqual({
-      status: 409,
+    expect(scopedSnapshot).toMatchObject({
+      status: 200,
       body: {
-        error: 'canonical job event scope is missing or inconsistent',
-        code: 'conflict',
+        mode: 'canonical',
+        job: { id: ids.job },
+        workspace: { id: ids.workspace },
+        session: { id: ids.session },
+        orchestration: {
+          job_id: ids.job,
+          workspace_id: ids.workspace,
+          session_id: ids.session,
+        },
       },
     })
+    expect(scopedSnapshot.body.events).not.toHaveLength(0)
+    expect(scopedSnapshot.body.events.every(
+      (event: Json) => event.job_id === ids.job,
+    )).toBe(true)
 
     await stopDaemon(daemon)
     activeDaemons.delete(daemon)
