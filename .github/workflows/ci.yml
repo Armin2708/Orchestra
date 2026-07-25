@@ -1,34 +1,203 @@
 name: ci
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   test:
+    name: Exact-commit release evidence
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
+      CI: true
+      CI_EVIDENCE_DIR: ${{ github.workspace }}/ci-evidence-${{ github.sha }}
+      CI_EVIDENCE_SHA: ${{ github.sha }}
+      NPM_CONFIG_FUND: false
       ORCHESTRA_COMPATIBILITY_EVIDENCE_PROFILE: github-actions-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 22.12.0 }
-      - run: npm ci
-      - run: npm ci --prefix web
-      - run: npm exec --prefix web -- tsc --noEmit
-      - run: npm install -g @openai/codex@0.144.6
-      - run: npm run check:codex-protocol
-      - run: npx tsc --noEmit
-      - run: npm test
-      - run: ./scripts/e2e.sh
-      - run: npm run build
-      - run: node dist/cli.js doctor --provider both --json
-      - run: npm pack --dry-run
+      - name: Check out the triggering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Fail closed before executing checked-out code
+        id: checkout_identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Use the validated Node toolchain
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+
+      - name: Verify the exact checked-out commit
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs verify-commit exact-commit "$GITHUB_SHA"
+
+      - name: Verify the exact Node and npm toolchain
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs verify-toolchain toolchain
+
+      - name: Install root dependencies from lockfile
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run root-install -- npm ci
+
+      - name: Install web dependencies from lockfile
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run web-install -- npm ci --prefix web
+
+      - name: Check root TypeScript
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run root-types -- npm exec -- tsc --noEmit
+
+      - name: Check web TypeScript
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run web-types -- npm exec --prefix web -- tsc --noEmit
+
+      - name: Run the serial test suite
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run tests-serial -- npm test -- --no-file-parallelism
+
+      - name: Run the default-parallel test suite
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run tests-default-parallel -- npm test
+
+      - name: Build the root package
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run root-build -- npm run build
+
+      - name: Build the web application
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run web-build -- npm run build --prefix web
+
+      - name: Audit root dependencies at the high/critical threshold
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs audit dependency-audit-root
+
+      - name: Audit web dependencies at the high/critical threshold
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs audit dependency-audit-web --prefix web
+
+      - name: Install checksum-pinned gitleaks
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run gitleaks-install -- node scripts/install-gitleaks.mjs
+
+      - name: Guard the reviewed gitleaks exceptions
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run gitleaks-exception-guard --
+          npm exec -- vitest run test/gitleaks-ignore.test.ts
+
+      - name: Scan all reachable Git history with redacted output
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run gitleaks-scan --
+          "$CI_EVIDENCE_DIR/tools/gitleaks" git . --redact --no-banner
+          "--log-opts=--full-history -m $GITHUB_SHA"
+
+      - name: Install the protocol-pinned Codex CLI
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run codex-cli-install --
+          npm install --global @openai/codex@0.144.6
+
+      - name: Verify the Codex app-server protocol snapshot
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run codex-protocol -- npm run check:codex-protocol
+
+      - name: Run credential-free end-to-end smoke
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs run e2e -- ./scripts/e2e.sh
+
+      - name: Run fail-closed environment doctor
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run doctor --
+          node dist/cli.js doctor --provider both --json
+
+      - name: Build, digest, and install-smoke the package artifact
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run package-artifact --
+          node scripts/package-install-smoke.mjs
+
+      - name: Upload the exact package artifact
+        id: package_upload
+        if: ${{ always() && steps.checkout_identity.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orchestra-package-${{ github.sha }}
+          path: ${{ env.CI_EVIDENCE_DIR }}/package/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Record package artifact retention evidence
+        if: ${{ always() && steps.checkout_identity.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs record package-upload
+          "${{ steps.package_upload.outcome }}"
+          "artifact_digest=${{ steps.package_upload.outputs.artifact-digest }}"
+          "artifact_id=${{ steps.package_upload.outputs.artifact-id }}"
+
+      - name: Finalize the exact-commit evidence manifest
+        id: finalize
+        if: ${{ always() && steps.checkout_identity.outcome == 'success' }}
+        continue-on-error: true
+        run: node scripts/exact-commit-evidence.mjs finalize "$GITHUB_SHA"
+
+      - name: Retain the exact-commit evidence manifest
+        id: evidence_upload
+        if: ${{ always() && steps.checkout_identity.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orchestra-ci-evidence-${{ github.sha }}
+          path: ${{ env.CI_EVIDENCE_DIR }}/manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce the combined evidence result
+        if: ${{ always() }}
+        env:
+          EVIDENCE_UPLOAD_OUTCOME: ${{ steps.evidence_upload.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+        run: |
+          test "$FINALIZE_OUTCOME" = "success"
+          test "$EVIDENCE_UPLOAD_OUTCOME" = "success"
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-24.04
-    permissions: { id-token: write, contents: read }
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 22.12.0, registry-url: 'https://registry.npmjs.org' }
+      - name: Check out the exact tested tag commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Use the validated Node toolchain
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Assert the publish checkout identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
       - run: npm ci
       - run: npm publish --provenance --access public
-        env: { NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}' }
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
