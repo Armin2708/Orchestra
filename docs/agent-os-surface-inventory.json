@@ -84,6 +84,10 @@
       "prefix": "/api/v1/os"
     },
     {
+      "file": "src/agent-os/contract-template-routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
       "file": "src/agent-os/agent-home-routes.ts",
       "prefix": "/api/v1/os"
     },
@@ -111,6 +115,7 @@
       "GET /api/v1/os/cards/:id/contract/validate",
       "GET /api/v1/os/cards/:id/deliveries",
       "GET /api/v1/os/cards/:id/evidence",
+      "GET /api/v1/os/contract-templates",
       "GET /api/v1/os/conversations/:id",
       "GET /api/v1/os/conversations/:id/events",
       "GET /api/v1/os/conversations/:id/events/:eventId",
@@ -143,10 +148,12 @@
       "POST /api/v1/os/boards/:id/policies",
       "POST /api/v1/os/boards/:id/retention/run",
       "POST /api/v1/os/boards/:id/workspaces",
+      "POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply",
       "POST /api/v1/os/cards/:id/contract/publish",
       "POST /api/v1/os/cards/:id/contract/transition",
       "POST /api/v1/os/cards/:id/evidence",
       "POST /api/v1/os/checkpoints/:id/fork",
+      "POST /api/v1/os/contract-templates/:templateId/preview",
       "POST /api/v1/os/conversations/:id/archive",
       "POST /api/v1/os/conversations/:id/export",
       "POST /api/v1/os/deliveries/:id/accept",
@@ -279,6 +286,10 @@
       "contract show",
       "contract transition",
       "contract validate",
+      "contract-template",
+      "contract-template apply",
+      "contract-template list",
+      "contract-template preview",
       "delivery",
       "delivery accept",
       "delivery export",

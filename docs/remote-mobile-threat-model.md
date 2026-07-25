@@ -93,7 +93,7 @@ The target default message scope therefore terminates in a no-tool discussion/Q&
 
 ### Sensitive reads
 
-The baseline inventory has 54 GET routes: 37 canonical, 3 compatibility, 9 legacy, and 5 infrastructure. They are not all equivalent. Health and the static shell are public bootstrap surfaces; process output, transcripts, conversations, context, search/export, live approval detail, settings, and system/provider information can reveal source, prompts, commands, paths, usage, or credentials.
+The baseline inventory has 55 GET routes: 38 canonical, 3 compatibility, 9 legacy, and 5 infrastructure. They are not all equivalent. Health and the static shell are public bootstrap surfaces; process output, transcripts, conversations, context, search/export, contract-template previews, live approval detail, settings, and system/provider information can reveal source, prompts, commands, paths, usage, or credentials.
 
 Some handlers bound pagination, validate object existence, or require the generic operator. There is no DeviceSession policy that classifies each read by scope, board/workspace/agent/process resource, field allowlist, data sensitivity, cache behavior, and reauthentication need. A default `observe` scope that only denies mutations would still enable raw-output exposure, cross-resource identifier attacks, and newly added GET routes.
 
@@ -309,7 +309,7 @@ For approvals, the `approve` scope can permit safe review and `deny`/`cancel` of
 
 The authorization layer must default-deny every `DeviceSession` request, not only mutations. A newly added route of any method remains unavailable until it has explicit scope, resource, field, data-class, cache, step-up, audit, and abuse classification. Compatibility, legacy, canonical, and infrastructure routes all pass through the same decision point.
 
-The observed baseline has 54 GET routes—37 canonical, 3 compatibility, 9 legacy, and 5 infrastructure—and 93 non-GET routes—47 canonical, 26 compatibility, 16 legacy, and 4 infrastructure. These are drift tripwires, not grant lists. Any surface-count change forces the model and future centralized policy to be reviewed.
+The observed baseline has 55 GET routes—38 canonical, 3 compatibility, 9 legacy, and 5 infrastructure—and 95 non-GET routes—49 canonical, 26 compatibility, 16 legacy, and 4 infrastructure. These are drift tripwires, not grant lists. Any surface-count change forces the model and future centralized policy to be reviewed.
 
 | Scope | Default phone | Intended access | Always excluded or elevated |
 | --- | --- | --- | --- |

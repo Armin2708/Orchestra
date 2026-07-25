@@ -12,8 +12,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 30 | 3 | 10 | 2 | 45 |
-| Registered HTTP routes | 84 | 29 | 25 | 9 | 147 |
-| CLI command families/subcommands | 78 | 5 | 18 | 8 | 109 |
+| Registered HTTP routes | 87 | 29 | 25 | 9 | 150 |
+| CLI command families/subcommands | 82 | 5 | 18 | 8 | 113 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -79,7 +79,8 @@ migrations. SQLite's own internal tables are intentionally excluded.
 
 The extractor reads literal Fastify `get/post/put/patch/delete` registrations from
 `src/server.ts`, `src/push.ts`, `src/agent-session-controls.ts`,
-`src/agent-os/routes.ts`, `src/agent-os/agent-home-routes.ts`, and
+`src/agent-os/routes.ts`, `src/agent-os/contract-template-routes.ts`,
+`src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
@@ -103,6 +104,7 @@ GET /api/v1/os/cards/:id/contract
 GET /api/v1/os/cards/:id/contract/validate
 GET /api/v1/os/cards/:id/deliveries
 GET /api/v1/os/cards/:id/evidence
+GET /api/v1/os/contract-templates
 GET /api/v1/os/conversations/:id
 GET /api/v1/os/conversations/:id/events
 GET /api/v1/os/conversations/:id/events/:eventId
@@ -135,10 +137,12 @@ POST /api/v1/os/boards/:id/jobs
 POST /api/v1/os/boards/:id/policies
 POST /api/v1/os/boards/:id/retention/run
 POST /api/v1/os/boards/:id/workspaces
+POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply
 POST /api/v1/os/cards/:id/contract/publish
 POST /api/v1/os/cards/:id/contract/transition
 POST /api/v1/os/cards/:id/evidence
 POST /api/v1/os/checkpoints/:id/fork
+POST /api/v1/os/contract-templates/:templateId/preview
 POST /api/v1/os/conversations/:id/archive
 POST /api/v1/os/conversations/:id/export
 POST /api/v1/os/deliveries/:id/accept
@@ -264,12 +268,12 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 109 command paths are machine-checked from `src/cli.ts` and
+The exact 113 command paths are machine-checked from `src/cli.ts` and
 `src/agent-os-cli.ts`. The compact human map is:
 
 | Class | Command surface |
 |---|---|
-| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
+| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
 | Infrastructure | `serve`; `stop`; `restart`; `token`; `remote`; `hook`; `install`; `uninstall` |

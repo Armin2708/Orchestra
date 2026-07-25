@@ -35,6 +35,7 @@ import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-provi
 import { agentHomePlugin } from './agent-home-routes.js'
 import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
+import { registerTaskContractTemplateRoutes } from './contract-template-routes.js'
 
 export interface ProcessRecord {
   id: string
@@ -169,6 +170,8 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }
     return reply.send(error)
   })
+
+  registerTaskContractTemplateRoutes(app, { db, events, requireOperator })
 
   app.get('/providers', async () => ({ providers: await asyncDescriptors(options.providers, [
     claudeProviderCatalog({
@@ -697,7 +700,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     { id: 'shell', available: !!options.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'], detail: options.runtime ? undefined : 'requires the PTY runtime' },
   ]) }))
   app.get('/plugins', () => ({ plugins: descriptors(options.plugins, [
-    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'job-market', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
+    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'contract-templates', 'job-market', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
   ]) }))
 
   // Keep the store referenced: artifacts are deliberately durable and never receive a delete route.

@@ -638,6 +638,43 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       )
     })
 
+  const contractTemplate = program.command('contract-template')
+    .description('list, preview, and explicitly apply built-in task contract templates')
+  contractTemplate.command('list')
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      await ready()
+      print(await deps.api('GET', '/os/contract-templates'), options.json, ['templates'])
+    })
+  contractTemplate.command('preview <template>')
+    .requiredOption('--vars <json>', 'required template variable JSON object')
+    .option('--json', 'print the complete response')
+    .action(async (templateId, options) => {
+      await ready()
+      print(await deps.api(
+        'POST',
+        `/os/contract-templates/${segment(templateId)}/preview`,
+        { variables: parseJsonOption<Record<string, string>>(options.vars, '--vars') },
+      ), options.json)
+    })
+  contractTemplate.command('apply <card> <template>')
+    .requiredOption('--vars <json>', 'required template variable JSON object')
+    .option('--replace', 'explicitly replace conflicting template-owned fields')
+    .option('--actor <actor>', 'audited actor', 'human')
+    .option('--json', 'print the complete response')
+    .action(async (cardId, templateId, options) => {
+      await ready()
+      print(await deps.api(
+        'POST',
+        `/os/cards/${integer(cardId)}/contract/templates/${segment(templateId)}/apply`,
+        {
+          variables: parseJsonOption<Record<string, string>>(options.vars, '--vars'),
+          conflict_strategy: options.replace ? 'replace' : 'reject',
+          actor: options.actor,
+        },
+      ), options.json)
+    })
+
   const evidence = program.command('evidence').description('inspect or attach task evidence')
   evidence.command('list <card>')
     .option('--json', 'print the complete response')
