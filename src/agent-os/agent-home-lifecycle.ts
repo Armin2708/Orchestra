@@ -441,6 +441,7 @@ export class AgentHomeLifecycleService {
           existing.lease_id = this.actionLeaseId
         }
         this.ensureActionRequestAudit(existing, input)
+        if (existing.status === 'succeeded') this.ensureActionCompletionAudit(existing)
         return { row: existing, acquired: false }
       }
       const occupied = this.db.prepare(`SELECT kind FROM os_events
@@ -538,8 +539,8 @@ export class AgentHomeLifecycleService {
       expectedWorkspaceId: input.session.workspace_id,
     })
     const occupied = this.db.prepare(`SELECT kind, source, workspace_id, card_id,
-      session_id, process_id, job_id, contract_id, correlation_id, causation_id, payload
-      FROM os_events
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
+      event_version, payload FROM os_events
       WHERE board_id=? AND idempotency_key=?`).get(row.board_id, row.idempotency_key) as
       {
         kind: string
@@ -552,6 +553,7 @@ export class AgentHomeLifecycleService {
         contract_id: string | null
         correlation_id: string | null
         causation_id: string | null
+        event_version: number
         payload: string
       } | undefined
     if (!occupied) {
@@ -564,6 +566,16 @@ export class AgentHomeLifecycleService {
     }
     const expectedCorrelationId = eventScope.correlationId ?? input.correlationId
     const payload = parseJson<Record<string, unknown>>(occupied.payload, {})
+    const expectedPayload = {
+      action_id: row.id,
+      action: row.action,
+      session_id: row.session_id,
+      profile_id: input.session.profile_id,
+      conversation_id: input.session.conversation_id,
+      request_fingerprint: row.request_fingerprint,
+      actor: input.actor,
+      ...(input.name ? { name: input.name } : {}),
+    }
     if (occupied.kind !== 'agent_session.action_requested'
       || occupied.source !== 'agent-home'
       || occupied.workspace_id !== eventScope.workspaceId
@@ -574,9 +586,67 @@ export class AgentHomeLifecycleService {
       || occupied.contract_id !== eventScope.contractId
       || occupied.correlation_id !== expectedCorrelationId
       || occupied.causation_id !== null
-      || payload.action_id !== row.id
-      || payload.request_fingerprint !== row.request_fingerprint) {
+      || occupied.event_version !== 1
+      || canonicalHash(payload) !== canonicalHash(expectedPayload)) {
       throw new ConflictError('session action request audit scope is inconsistent')
+    }
+  }
+
+  private ensureActionCompletionAudit(row: ActionRow): void {
+    const session = this.conversations.requireSession(row.session_id)
+    const eventScope = durableSessionEventScope(this.db, session, {
+      expectedBoardId: row.board_id,
+      expectedWorkspaceId: session.workspace_id,
+    })
+    const request = this.actionRequestAudit(row)
+    if (!request || !row.result_session_id) {
+      throw new ConflictError('session action completion audit is missing')
+    }
+    const expectedPayload = {
+      action_id: row.id,
+      action: row.action,
+      session_id: row.session_id,
+      result_session_id: row.result_session_id,
+      profile_id: session.profile_id,
+      conversation_id: session.conversation_id,
+      request_fingerprint: row.request_fingerprint,
+      actor: request.payload.actor,
+      ...(typeof request.payload.name === 'string' ? { name: request.payload.name } : {}),
+    }
+    const events = this.db.prepare(`SELECT kind, source, workspace_id, card_id,
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
+      event_version, payload FROM os_events
+      WHERE board_id=? AND kind=? AND json_extract(payload, '$.action_id')=?`)
+      .all(row.board_id, `agent_session.${row.action}`, row.id) as Array<{
+        kind: string
+        source: string
+        workspace_id: string | null
+        card_id: number | null
+        session_id: string | null
+        process_id: string | null
+        job_id: string | null
+        contract_id: string | null
+        correlation_id: string | null
+        causation_id: string | null
+        event_version: number
+        payload: string
+      }>
+    const completion = events.length === 1 ? events[0] : undefined
+    const expectedCorrelationId = eventScope.correlationId ?? request.correlation_id ?? row.id
+    if (!completion
+      || completion.kind !== `agent_session.${row.action}`
+      || completion.source !== 'agent-home'
+      || completion.workspace_id !== eventScope.workspaceId
+      || completion.card_id !== eventScope.cardId
+      || completion.session_id !== row.session_id
+      || completion.process_id !== null
+      || completion.job_id !== eventScope.jobId
+      || completion.contract_id !== eventScope.contractId
+      || completion.correlation_id !== expectedCorrelationId
+      || completion.causation_id !== request.id
+      || completion.event_version !== 1
+      || canonicalHash(parseJson(completion.payload, {})) !== canonicalHash(expectedPayload)) {
+      throw new ConflictError('session action completion audit scope is inconsistent')
     }
   }
 

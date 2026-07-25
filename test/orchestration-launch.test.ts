@@ -409,19 +409,61 @@ describe('canonical card launch routes', () => {
       correlationId: 'provider-link-correlation',
     })
     expect(linkedWithoutJobInput.job_id).toBe(created.job.id)
-    db.prepare(`UPDATE os_events SET correlation_id='stale-link-correlation'
-      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`).run(boardId)
-    expect(() => conversations.linkSession(created.session.id, {
+    const replayCanonicalLink = () => conversations.linkSession(created.session.id, {
       profileId: profile.id,
       conversationId: conversation.id,
       mode: 'managed',
       actor: { type: 'system', id: 'test-runtime' },
       idempotencyKey: 'canonical-transcript:link',
       correlationId: 'provider-link-correlation',
-    })).toThrow(/replay scope is inconsistent/)
-    db.prepare(`UPDATE os_events SET correlation_id=?
+    })
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('canonical-link-replay-other-session', ?, 'codex', 'running', '{}')`)
+      .run(created.workspace.id)
+    const canonicalLinkAudit = db.prepare(`SELECT source, workspace_id, card_id,
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
+      event_version, payload
+      FROM os_events
       WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
-      .run(created.orchestration.correlation_id, boardId)
+      .get(boardId) as Record<string, unknown>
+    const envelopeMutations = [
+      ['source', 'hostile'],
+      ['workspace_id', 'wrong-workspace'],
+      ['card_id', cardId + 100],
+      ['session_id', 'canonical-link-replay-other-session'],
+      ['process_id', 'wrong-process'],
+      ['job_id', 'wrong-job'],
+      ['contract_id', 'wrong-contract'],
+      ['correlation_id', 'stale-link-correlation'],
+      ['causation_id', 'wrong-causation'],
+      ['event_version', 2],
+    ] as const
+    for (const [column, corruptValue] of envelopeMutations) {
+      db.prepare(`UPDATE os_events SET ${column}=?
+        WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+        .run(corruptValue, boardId)
+      expect(replayCanonicalLink).toThrow(/replay scope is inconsistent/)
+      db.prepare(`UPDATE os_events SET ${column}=?
+        WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+        .run(canonicalLinkAudit[column], boardId)
+    }
+    const payloadMutations = [
+      ['$.session_id', 'canonical-link-replay-other-session'],
+      ['$.profile_id', 'wrong-profile'],
+      ['$.conversation_id', 'wrong-conversation'],
+      ['$.actor.id', 'hostile-actor'],
+    ] as const
+    for (const [path, corruptValue] of payloadMutations) {
+      db.prepare(`UPDATE os_events SET payload=json_set(payload, ?, ?)
+        WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+        .run(path, corruptValue, boardId)
+      expect(replayCanonicalLink).toThrow(/replay payload is inconsistent/)
+      db.prepare(`UPDATE os_events SET payload=?
+        WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+        .run(canonicalLinkAudit.payload, boardId)
+    }
+    expect(replayCanonicalLink().id).toBe(created.session.id)
     expect(conversations.linkSession(created.session.id, {
       profileId: profile.id,
       conversationId: conversation.id,
@@ -519,12 +561,65 @@ describe('canonical card launch routes', () => {
     db.prepare(`UPDATE os_events SET correlation_id=?
       WHERE board_id=? AND idempotency_key='canonical-transcript:rename'`)
       .run(created.orchestration.correlation_id, boardId)
-    expect((await lifecycle.run(created.session.id, 'rename', {
+    const replayCanonicalRename = () => lifecycle.run(created.session.id, 'rename', {
       actor: { type: 'operator', id: 'canonical-scope-test' },
       idempotencyKey: 'canonical-transcript:rename',
       correlationId: 'operator-action-correlation',
       name: 'Durable canonical transcript',
-    })).action.replayed).toBe(true)
+    })
+    const canonicalCompletionAudit = db.prepare(`SELECT source, workspace_id, card_id,
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id,
+      event_version, payload
+      FROM os_events
+      WHERE board_id=? AND kind='agent_session.rename'
+        AND json_extract(payload, '$.action_id')=?`)
+      .get(boardId, renamed.action.id) as Record<string, unknown>
+    const completionEnvelopeMutations = [
+      ['source', 'hostile'],
+      ['workspace_id', 'wrong-workspace'],
+      ['card_id', cardId + 100],
+      ['session_id', 'canonical-link-replay-other-session'],
+      ['process_id', 'wrong-process'],
+      ['job_id', 'wrong-job'],
+      ['contract_id', 'wrong-contract'],
+      ['correlation_id', 'stale-completion-correlation'],
+      ['causation_id', 'wrong-causation'],
+      ['event_version', 2],
+    ] as const
+    for (const [column, corruptValue] of completionEnvelopeMutations) {
+      db.prepare(`UPDATE os_events SET ${column}=?
+        WHERE board_id=? AND kind='agent_session.rename'
+          AND json_extract(payload, '$.action_id')=?`)
+        .run(corruptValue, boardId, renamed.action.id)
+      await expect(replayCanonicalRename()).rejects
+        .toThrow(/completion audit scope is inconsistent/)
+      db.prepare(`UPDATE os_events SET ${column}=?
+        WHERE board_id=? AND kind='agent_session.rename'
+          AND json_extract(payload, '$.action_id')=?`)
+        .run(canonicalCompletionAudit[column], boardId, renamed.action.id)
+    }
+    const completionPayloadMutations = [
+      ['$.session_id', 'canonical-link-replay-other-session'],
+      ['$.result_session_id', 'canonical-link-replay-other-session'],
+      ['$.profile_id', 'wrong-profile'],
+      ['$.conversation_id', 'wrong-conversation'],
+      ['$.action', 'pause'],
+      ['$.request_fingerprint', 'wrong-fingerprint'],
+      ['$.actor.id', 'hostile-actor'],
+    ] as const
+    for (const [path, corruptValue] of completionPayloadMutations) {
+      db.prepare(`UPDATE os_events SET payload=json_set(payload, ?, ?)
+        WHERE board_id=? AND kind='agent_session.rename'
+          AND json_extract(payload, '$.action_id')=?`)
+        .run(path, corruptValue, boardId, renamed.action.id)
+      await expect(replayCanonicalRename()).rejects
+        .toThrow(/completion audit scope is inconsistent/)
+      db.prepare(`UPDATE os_events SET payload=?
+        WHERE board_id=? AND kind='agent_session.rename'
+          AND json_extract(payload, '$.action_id')=?`)
+        .run(canonicalCompletionAudit.payload, boardId, renamed.action.id)
+    }
+    expect((await replayCanonicalRename()).action.replayed).toBe(true)
 
     db.prepare(`INSERT INTO agent_session_actions (
       id, board_id, session_id, result_session_id, idempotency_key, action,

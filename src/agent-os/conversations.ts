@@ -515,29 +515,45 @@ export class ConversationService {
         requestFingerprint,
       })
       if (!replay) return null
-      const event = this.db.prepare(`SELECT workspace_id, card_id, session_id, job_id,
-        contract_id, correlation_id, causation_id
+      const expectedPayload = {
+        profile_id: profile.id,
+        conversation_id: conversation.id,
+        session_id: current.id,
+        actor,
+        request_fingerprint: requestFingerprint,
+      }
+      if (canonicalHash(replay) !== canonicalHash(expectedPayload)) {
+        throw new ConflictError('agent session link replay payload is inconsistent')
+      }
+      const event = this.db.prepare(`SELECT source, workspace_id, card_id, session_id,
+        process_id, job_id, contract_id, correlation_id, causation_id, event_version
         FROM os_events WHERE board_id=? AND idempotency_key=?`)
         .get(eventScope.boardId, idempotencyKey) as {
+          source: string
           workspace_id: string | null
           card_id: number | null
           session_id: string | null
+          process_id: string | null
           job_id: string | null
           contract_id: string | null
           correlation_id: string | null
           causation_id: string | null
+          event_version: number
         } | undefined
       const expectedCorrelationId = eventScope.correlationId
         ?? input.correlationId
         ?? idempotencyKey
       if (!event
+        || event.source !== 'agent-home'
         || event.workspace_id !== eventScope.workspaceId
         || event.card_id !== eventScope.cardId
         || event.session_id !== current.id
+        || event.process_id !== null
         || event.job_id !== eventScope.jobId
         || event.contract_id !== eventScope.contractId
         || event.correlation_id !== expectedCorrelationId
-        || event.causation_id !== null) {
+        || event.causation_id !== null
+        || event.event_version !== 1) {
         throw new ConflictError('agent session link replay scope is inconsistent')
       }
       return this.replayedSession(replay)
