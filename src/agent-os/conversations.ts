@@ -703,13 +703,15 @@ export class ConversationService {
             }),
           }
         }
-        const replay = this.replayEventCommand(
-          eventScope.boardId,
+        const replay = this.replayEventCommand({
+          eventScope,
           idempotencyKey,
           contentHash,
-          latest.id,
-          normalized.dedupe_key,
-        )
+          sessionId: latest.id,
+          dedupeKey: normalized.dedupe_key,
+          correlationId: normalized.correlation_id,
+          causationId: normalized.causation_id,
+        })
         if (replay && replay.id !== canonical.id) {
           throw new ConflictError(
             'idempotency key was already used for a different conversation event',
@@ -745,13 +747,15 @@ export class ConversationService {
         }
         return { event: canonical, replayed: true }
       }
-      const commandReplay = this.replayEventCommand(
-        eventScope.boardId,
+      const commandReplay = this.replayEventCommand({
+        eventScope,
         idempotencyKey,
         contentHash,
-        latest.id,
-        normalized.dedupe_key,
-      )
+        sessionId: latest.id,
+        dedupeKey: normalized.dedupe_key,
+        correlationId: normalized.correlation_id,
+        causationId: normalized.causation_id,
+      })
       if (commandReplay) return { event: commandReplay, replayed: true }
       if (latestConversation.status !== 'active') {
         throw new ConflictError('archived conversations cannot receive new events')
@@ -950,26 +954,58 @@ export class ConversationService {
     }
   }
 
-  private replayEventCommand(
-    boardId: number,
-    idempotencyKey: string,
-    contentHash: string,
-    sessionId: string,
-    dedupeKey: string,
-  ): ConversationEvent | null {
-    const row = this.db.prepare(
-      'SELECT kind, payload FROM os_events WHERE board_id=? AND idempotency_key=?',
-    ).get(boardId, idempotencyKey) as { kind: string; payload: string } | undefined
+  private replayEventCommand(input: {
+    eventScope: DurableSessionEventScope
+    idempotencyKey: string
+    contentHash: string
+    sessionId: string
+    dedupeKey: string
+    correlationId: string | null
+    causationId: string | null
+  }): ConversationEvent | null {
+    const row = this.db.prepare(`SELECT kind, source, workspace_id, card_id, session_id,
+      process_id, job_id, contract_id, correlation_id, causation_id, payload
+      FROM os_events WHERE board_id=? AND idempotency_key=?`)
+      .get(input.eventScope.boardId, input.idempotencyKey) as {
+        kind: string
+        source: string
+        workspace_id: string | null
+        card_id: number | null
+        session_id: string | null
+        process_id: string | null
+        job_id: string | null
+        contract_id: string | null
+        correlation_id: string | null
+        causation_id: string | null
+        payload: string
+      } | undefined
     if (!row) return null
     const payload = parseJson<Record<string, unknown>>(row.payload, {})
     if (!['conversation.event_appended', 'conversation.event_replayed'].includes(row.kind)
-      || payload.request_fingerprint !== contentHash
-      || payload.session_id !== sessionId
-      || payload.dedupe_key !== dedupeKey
+      || payload.request_fingerprint !== input.contentHash
+      || payload.session_id !== input.sessionId
+      || payload.dedupe_key !== input.dedupeKey
       || typeof payload.conversation_event_id !== 'string') {
       throw new ConflictError(
         'idempotency key was already used for a different conversation event',
       )
+    }
+    const fallbackCorrelationId = row.kind === 'conversation.event_appended'
+      ? `conversation-event:${payload.conversation_event_id}`
+      : `conversation-replay:${payload.conversation_event_id}`
+    const expectedCorrelationId = input.eventScope.correlationId
+      ?? input.correlationId
+      ?? fallbackCorrelationId
+    if (row.source !== 'agent-home'
+      || row.workspace_id !== input.eventScope.workspaceId
+      || row.card_id !== input.eventScope.cardId
+      || row.session_id !== input.sessionId
+      || row.process_id !== null
+      || row.job_id !== input.eventScope.jobId
+      || row.contract_id !== input.eventScope.contractId
+      || row.correlation_id !== expectedCorrelationId
+      || row.causation_id !== input.causationId) {
+      throw new ConflictError('conversation event replay scope is inconsistent')
     }
     return this.requireEvent(payload.conversation_event_id)
   }

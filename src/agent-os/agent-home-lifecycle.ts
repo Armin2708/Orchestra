@@ -440,7 +440,7 @@ export class AgentHomeLifecycleService {
           )
           existing.lease_id = this.actionLeaseId
         }
-        if (existing.status === 'pending') this.ensureActionRequestAudit(existing, input)
+        this.ensureActionRequestAudit(existing, input)
         return { row: existing, acquired: false }
       }
       const occupied = this.db.prepare(`SELECT kind FROM os_events
@@ -533,18 +533,50 @@ export class AgentHomeLifecycleService {
   }
 
   private ensureActionRequestAudit(row: ActionRow, input: ActionReservationInput): void {
-    const occupied = this.db.prepare(`SELECT kind, payload FROM os_events
+    const eventScope = durableSessionEventScope(this.db, input.session, {
+      expectedBoardId: row.board_id,
+      expectedWorkspaceId: input.session.workspace_id,
+    })
+    const occupied = this.db.prepare(`SELECT kind, source, workspace_id, card_id,
+      session_id, process_id, job_id, contract_id, correlation_id, causation_id, payload
+      FROM os_events
       WHERE board_id=? AND idempotency_key=?`).get(row.board_id, row.idempotency_key) as
-      { kind: string; payload: string } | undefined
+      {
+        kind: string
+        source: string
+        workspace_id: string | null
+        card_id: number | null
+        session_id: string | null
+        process_id: string | null
+        job_id: string | null
+        contract_id: string | null
+        correlation_id: string | null
+        causation_id: string | null
+        payload: string
+      } | undefined
     if (!occupied) {
-      this.appendActionRequestAudit(row, input)
-      return
+      if (row.status === 'pending') {
+        this.appendActionRequestAudit(row, input)
+        return
+      }
+      if (row.status === 'failed' && row.error_code === 'action_interrupted') return
+      throw new ConflictError('session action request audit is missing')
     }
+    const expectedCorrelationId = eventScope.correlationId ?? input.correlationId
     const payload = parseJson<Record<string, unknown>>(occupied.payload, {})
     if (occupied.kind !== 'agent_session.action_requested'
+      || occupied.source !== 'agent-home'
+      || occupied.workspace_id !== eventScope.workspaceId
+      || occupied.card_id !== eventScope.cardId
+      || occupied.session_id !== row.session_id
+      || occupied.process_id !== null
+      || occupied.job_id !== eventScope.jobId
+      || occupied.contract_id !== eventScope.contractId
+      || occupied.correlation_id !== expectedCorrelationId
+      || occupied.causation_id !== null
       || payload.action_id !== row.id
       || payload.request_fingerprint !== row.request_fingerprint) {
-      throw new ConflictError('idempotency key was already used for a different event')
+      throw new ConflictError('session action request audit scope is inconsistent')
     }
   }
 

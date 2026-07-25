@@ -460,6 +460,19 @@ describe('canonical card launch routes', () => {
       actor: { type: 'agent', id: 'codex' },
       correlationId: 'provider-turn-correlation',
     })
+    db.prepare(`UPDATE os_events SET correlation_id='stale-conversation-correlation'
+      WHERE board_id=? AND idempotency_key='canonical-transcript:event'`).run(boardId)
+    expect(() => conversations.appendEvent(created.session.id, {
+      idempotencyKey: 'canonical-transcript:event',
+      dedupeKey: 'provider:event:canonical',
+      kind: 'assistant',
+      projectedText: 'One durable response',
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'provider-turn-correlation',
+    })).toThrow(/replay scope is inconsistent/)
+    db.prepare(`UPDATE os_events SET correlation_id=?
+      WHERE board_id=? AND idempotency_key='canonical-transcript:event'`)
+      .run(created.orchestration.correlation_id, boardId)
     expect(conversations.appendEvent(created.session.id, {
       idempotencyKey: 'canonical-transcript:event',
       dedupeKey: 'provider:event:canonical',
@@ -495,6 +508,17 @@ describe('canonical card launch routes', () => {
       name: 'Durable canonical transcript',
     })
     expect(renamed.session.display_name).toBe('Durable canonical transcript')
+    db.prepare(`UPDATE os_events SET correlation_id='stale-action-correlation'
+      WHERE board_id=? AND idempotency_key='canonical-transcript:rename'`).run(boardId)
+    await expect(lifecycle.run(created.session.id, 'rename', {
+      actor: { type: 'operator', id: 'canonical-scope-test' },
+      idempotencyKey: 'canonical-transcript:rename',
+      correlationId: 'operator-action-correlation',
+      name: 'Durable canonical transcript',
+    })).rejects.toThrow(/request audit scope is inconsistent/)
+    db.prepare(`UPDATE os_events SET correlation_id=?
+      WHERE board_id=? AND idempotency_key='canonical-transcript:rename'`)
+      .run(created.orchestration.correlation_id, boardId)
     expect((await lifecycle.run(created.session.id, 'rename', {
       actor: { type: 'operator', id: 'canonical-scope-test' },
       idempotencyKey: 'canonical-transcript:rename',
