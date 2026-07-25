@@ -1,8 +1,9 @@
 # Agent OS North Star Delivery Program
 
 Status: Milestone A is delivered. Milestone B now has provider-native durable Agent Home capture,
-controls, search/export, CLI parity, and the responsive visual workspace. Milestone C has its first
-typed Job Market contract foundation. The product is not yet public plug-and-play.
+controls, search/export, CLI parity, the responsive visual workspace, and the integrated
+privacy/audit blocker closure. Milestone C has its first typed Job Market contract foundation. The
+product is not yet public plug-and-play.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -104,7 +105,14 @@ delivery with an auditable human-readable handoff.
   requirements, capability/provider/model/access constraints, complete budgets, dependency rules,
   lifecycle validation, optimistic concurrency, and workspace-scoped field audit events;
 - publish and launch reject incomplete dependencies or invalid constraints before creating durable
-  job/session/assignment records; API and CLI support contract show/set/validate/publish/transition.
+  job/session/assignment records; API and CLI support contract show/set/validate/publish/transition;
+- recoverable lifecycle auditing, safe transcript projection, and durable Codex approval outcomes
+  are integrated in the required order;
+- migrations `010-agent-home-redaction` and `011-managed-driver-event-redaction` repair legacy
+  projections and managed driver events while preserving visible safe transcript text;
+- managed `os_events` exclude raw approval parameters, credentials, Codex reasoning, and Claude
+  thinking, while authenticated operators retain the complete live approval form and agent tokens
+  are denied operator transcript/SSE surfaces.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -113,8 +121,12 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - Agent Home integration train: `5c289fc`, `63efbf3`, `cacba47`, `6953d97`, `ff86cf4`,
   `72d78c4`, `c785e5d`, `24e984a`, and `fc808b7`;
 - typed Job Market integration: `8ae2eeb`;
-- serialized Node 22.20.0 repository gate: 97 test files / 596 tests;
+- blocker/security integration: `f82ab4a`, `a59580d`, `883683f`, and `1b1dfbe`;
+- serialized Node 22.20.0 repository gate: 99 test files / 631 tests;
 - root and web TypeScript checks, CLI production build, and web production build pass;
+- focused final security/auth gate: 7 files / 86 tests;
+- `scripts/e2e.sh`, `npm pack --dry-run`, and isolated Codex protocol 0.144.6 verification pass;
+- independent regression/security review returned PASS;
 - focused migration/controls/Job Market integration: 6 files / 51 tests;
 - focused Agent Home controls/UI integration: 10 files / 66 tests;
 - independent Playwright acceptance passed at 1440×1000 and 390×844: exact event lookup/context
@@ -122,13 +134,16 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   fresh reloads produced zero console/page errors or unhandled mock requests;
 - independent reviews returned PASS after migration rollback, dependency completion, event lookup,
   replay safety, workspace audit scope, and lifecycle crash-recovery defects were corrected;
-- GitNexus reports a critical full-train surface (76 files, 230 changed symbols, 87 dependent
-  symbols), so the combined tests/builds and browser acceptance remain required release evidence.
+- GitNexus was rebuilt at `1b1dfbe` and reports a critical full-train surface (82 files, 252 changed
+  symbols, 88 dependent symbols), so combined tests/builds and browser acceptance remain required
+  release evidence.
 
 ### Remaining
 
 - Agent Home retention/compaction/raw-event archival policy, provenance-safe native forking, and a
   real daemon-mid-session to browser-continuation E2E gate;
+- current combined desktop/phone browser acceptance; the configured browser backend returned zero
+  available browsers, so no pass is claimed from the older baseline;
 - Open Work filters, dependency/critical-path UI, explicit assignment/release/reassignment,
   templates, editor/brief preview, and capability/capacity matching;
 - Knowledge Compiler, Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone
@@ -137,8 +152,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 The strict master reconciliation is 106 / 373 checklist boxes delivered. Milestones C–E remain
 open; this branch is a verified engineering train, not yet a public plug-and-play release.
 
-The safe multi-agent continuation point, including three reviewed blocker-fix commits awaiting a
-combined integration gate, is recorded in the
+The safe multi-agent continuation point, including the integrated blocker/security closure and the
+still-open browser gate, is recorded in the
 [2026-07-25 major handoff](./checkpoints/2026-07-25-agent-os-major-handoff.md).
 
 ## Evidence baseline
@@ -146,7 +161,7 @@ combined integration gate, is recorded in the
 - Runtime: Node 22.20.0; the repository dependency ABI requires Node 22 rather than the machine's
   unrelated Homebrew Node 26 runtime.
 - Environment: no project `.env`, `.env.local`, `web/.env`, or `web/.env.local` files are present.
-- Combined current baseline: 97 test files / 596 tests pass serially.
+- Combined current baseline: 99 test files / 631 tests pass serially.
 - Root/web TypeScript and production builds: clean.
 - The default parallel suite remains tracked by `QA-020`; this slice used the deterministic serial
   gate.
