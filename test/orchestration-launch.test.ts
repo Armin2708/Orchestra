@@ -421,23 +421,102 @@ describe('canonical card launch routes', () => {
       (id, workspace_id, provider, status, context_json)
       VALUES ('canonical-link-replay-other-session', ?, 'codex', 'running', '{}')`)
       .run(created.workspace.id)
-    const canonicalLinkAudit = db.prepare(`SELECT source, workspace_id, card_id,
+    const canonicalLinkAudit = db.prepare(`SELECT id, source, workspace_id, card_id,
       session_id, process_id, job_id, contract_id, correlation_id, causation_id,
-      event_version, payload
+      idempotency_key, event_version, payload,
+      json_extract(payload, '$.request_fingerprint') AS request_fingerprint
       FROM os_events
       WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
       .get(boardId) as Record<string, unknown>
+    db.prepare(`UPDATE os_events SET idempotency_key='mutated-link-key'
+      WHERE id=?`).run(canonicalLinkAudit.id)
+    expect(replayCanonicalLink).toThrow(/replay command identity is inconsistent/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE json_extract(payload, '$.request_fingerprint')=?`)
+      .get(canonicalLinkAudit.request_fingerprint)).toEqual({ count: 1 })
+    db.prepare(`UPDATE os_events SET idempotency_key=?
+      WHERE id=?`).run(canonicalLinkAudit.idempotency_key, canonicalLinkAudit.id)
+    expect(() => conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link-same-command-new-key',
+      correlationId: 'provider-link-correlation',
+    })).toThrow(/replay command identity is inconsistent/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE json_extract(payload, '$.request_fingerprint')=?`)
+      .get(canonicalLinkAudit.request_fingerprint)).toEqual({ count: 1 })
     const displacedBoardId = Number(db.prepare(`
       INSERT INTO boards (project_path, name)
       VALUES ('/displaced-link-audit', 'Displaced link audit')
     `).run().lastInsertRowid)
-    db.prepare(`UPDATE os_events SET board_id=?
-      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
-      .run(displacedBoardId, boardId)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('displaced-link-workspace', ?, 'Displaced link workspace',
+        'shared', '/displaced-link-audit', 'active')`)
+      .run(displacedBoardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('displaced-link-session', 'displaced-link-workspace',
+        'codex', 'running', '{}')`).run()
+    db.prepare(`UPDATE os_events SET board_id=?, session_id=?
+      WHERE id=?`)
+      .run(displacedBoardId, 'displaced-link-session', canonicalLinkAudit.id)
     expect(replayCanonicalLink).toThrow(/replay scope is inconsistent/)
-    db.prepare(`UPDATE os_events SET board_id=?
-      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
-      .run(boardId, displacedBoardId)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE json_extract(payload, '$.request_fingerprint')=?`)
+      .get(canonicalLinkAudit.request_fingerprint)).toEqual({ count: 1 })
+    db.prepare(`UPDATE os_events SET board_id=?, session_id=?
+      WHERE id=?`)
+      .run(boardId, canonicalLinkAudit.session_id, canonicalLinkAudit.id)
+    db.prepare(`INSERT INTO os_events (
+      id, board_id, workspace_id, card_id, session_id, process_id, job_id,
+      contract_id, correlation_id, causation_id, idempotency_key, event_version,
+      kind, source, payload, created_at
+    )
+    SELECT 'ambiguous-link-audit', board_id, workspace_id, card_id, session_id,
+      process_id, job_id, contract_id, correlation_id, causation_id,
+      'ambiguous-link-key', event_version, kind, source, payload, created_at
+    FROM os_events WHERE id=?`).run(canonicalLinkAudit.id)
+    expect(replayCanonicalLink).toThrow(/replay command identity is ambiguous/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE json_extract(payload, '$.request_fingerprint')=?`)
+      .get(canonicalLinkAudit.request_fingerprint)).toEqual({ count: 2 })
+    db.prepare(`DELETE FROM os_events WHERE id='ambiguous-link-audit'`).run()
+
+    const independentBoardId = Number(db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/independent-link-board', 'Independent link board')
+    `).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('independent-link-workspace', ?, 'Independent link workspace',
+        'shared', '/independent-link-board', 'active')`)
+      .run(independentBoardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('independent-link-session', 'independent-link-workspace',
+        'codex', 'running', '{}')`).run()
+    const independentProfile = profiles.create({
+      boardId: independentBoardId,
+      name: 'Independent transcript',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'independent-transcript:profile',
+    })
+    const independentConversation = conversations.listConversations(independentProfile.id)[0]
+    const linkIndependentSession = () => conversations.linkSession('independent-link-session', {
+      profileId: independentProfile.id,
+      conversationId: independentConversation.id,
+      mode: 'managed' as const,
+      actor: { type: 'system' as const, id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link',
+    })
+    expect(linkIndependentSession().id).toBe('independent-link-session')
+    expect(linkIndependentSession().id).toBe('independent-link-session')
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE idempotency_key='canonical-transcript:link'
+        AND kind='agent_session.linked'`).get()).toEqual({ count: 2 })
     const envelopeMutations = [
       ['source', 'hostile'],
       ['workspace_id', 'wrong-workspace'],

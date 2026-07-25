@@ -508,13 +508,52 @@ export class ConversationService {
       ...requested,
     })
     const replayFor = (eventScope: DurableSessionEventScope): AgentSessionRecord | null => {
-      const replay = commandReplay(this.db, {
-        boardId: eventScope.boardId,
-        idempotencyKey,
-        kind: 'agent_session.linked',
-        requestFingerprint,
-      })
-      if (!replay) {
+      type LinkReplayEvent = {
+        id: string
+        board_id: number
+        source: string
+        workspace_id: string | null
+        card_id: number | null
+        session_id: string | null
+        process_id: string | null
+        job_id: string | null
+        contract_id: string | null
+        correlation_id: string | null
+        causation_id: string | null
+        idempotency_key: string | null
+        event_version: number
+        kind: string
+        payload: string
+      }
+      const candidates = this.db.prepare(`SELECT id, board_id, source, workspace_id,
+        card_id, session_id, process_id, job_id, contract_id, correlation_id,
+        causation_id, idempotency_key, event_version, kind, payload
+        FROM os_events
+        WHERE (board_id=? AND idempotency_key=?)
+          OR CASE WHEN json_valid(payload)
+            THEN json_extract(payload, '$.request_fingerprint') END=?
+        ORDER BY rowid`)
+        .all(eventScope.boardId, idempotencyKey, requestFingerprint) as LinkReplayEvent[]
+      const payloads = new Map(candidates.map((candidate) => [
+        candidate.id,
+        parseJson<Record<string, unknown>>(candidate.payload, {}),
+      ]))
+      const addressed = candidates.filter((candidate) => (
+        candidate.board_id === eventScope.boardId
+        && candidate.idempotency_key === idempotencyKey
+      ))
+      const identified = candidates.filter((candidate) => (
+        payloads.get(candidate.id)?.request_fingerprint === requestFingerprint
+      ))
+      if (addressed.length > 1 || identified.length > 1
+        || (addressed[0] && identified[0] && addressed[0].id !== identified[0].id)) {
+        throw new ConflictError('agent session link replay command identity is ambiguous')
+      }
+      if (addressed[0] && !identified[0]) {
+        throw new ConflictError('agent session link replay command identity is inconsistent')
+      }
+      const event = addressed[0] ?? identified[0]
+      if (!event) {
         const displaced = this.db.prepare(`SELECT 1 FROM os_events
           WHERE board_id!=? AND session_id=? AND idempotency_key=? LIMIT 1`)
           .get(eventScope.boardId, current.id, idempotencyKey)
@@ -523,6 +562,10 @@ export class ConversationService {
         }
         return null
       }
+      if (event.kind !== 'agent_session.linked') {
+        throw new ConflictError('agent session link replay command identity is inconsistent')
+      }
+      const replay = payloads.get(event.id) ?? {}
       const expectedPayload = {
         profile_id: profile.id,
         conversation_id: conversation.id,
@@ -533,25 +576,10 @@ export class ConversationService {
       if (canonicalHash(replay) !== canonicalHash(expectedPayload)) {
         throw new ConflictError('agent session link replay payload is inconsistent')
       }
-      const event = this.db.prepare(`SELECT source, workspace_id, card_id, session_id,
-        process_id, job_id, contract_id, correlation_id, causation_id, event_version
-        FROM os_events WHERE board_id=? AND idempotency_key=?`)
-        .get(eventScope.boardId, idempotencyKey) as {
-          source: string
-          workspace_id: string | null
-          card_id: number | null
-          session_id: string | null
-          process_id: string | null
-          job_id: string | null
-          contract_id: string | null
-          correlation_id: string | null
-          causation_id: string | null
-          event_version: number
-        } | undefined
       const expectedCorrelationId = eventScope.correlationId
         ?? input.correlationId
         ?? idempotencyKey
-      if (!event
+      if (event.board_id !== eventScope.boardId
         || event.source !== 'agent-home'
         || event.workspace_id !== eventScope.workspaceId
         || event.card_id !== eventScope.cardId
@@ -559,9 +587,14 @@ export class ConversationService {
         || event.process_id !== null
         || event.job_id !== eventScope.jobId
         || event.contract_id !== eventScope.contractId
-        || event.correlation_id !== expectedCorrelationId
         || event.causation_id !== null
         || event.event_version !== 1) {
+        throw new ConflictError('agent session link replay scope is inconsistent')
+      }
+      if (!addressed[0]) {
+        throw new ConflictError('agent session link replay command identity is inconsistent')
+      }
+      if (event.correlation_id !== expectedCorrelationId) {
         throw new ConflictError('agent session link replay scope is inconsistent')
       }
       return this.replayedSession(replay)
