@@ -29,6 +29,10 @@ type ArmResult = { by_event: Record<string, EventCount>; total: EventCount; comp
 
 const tok = (chars: number) => Math.ceil(chars / 4)
 const TEN_MIN_AGO = () => new Date(Date.now() - 11 * 60_000)
+// Board names are derived from project_path and are part of both injected arms.
+// Keep that shared fixture identity representative and independent of the checkout
+// path, otherwise a long worktree name dilutes the measured rules reduction.
+const SCENARIO_PROJECT_ROOT = path.join(path.parse(process.cwd()).root, 'orchestra-fixtures', 'agentboard')
 
 const cleanups: (() => Promise<void> | void)[] = []
 afterAll(async () => { for (const fn of cleanups.reverse()) await fn() })
@@ -57,7 +61,7 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
   }
 
   const hooks = await import('../src/hooks.js')
-  const projectRoot = process.cwd()
+  const projectRoot = SCENARIO_PROJECT_ROOT
   const out: string[] = []
   const logSpy = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { out.push(String(s)) })
   cleanups.push(() => logSpy.mockRestore())
