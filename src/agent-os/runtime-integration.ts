@@ -525,6 +525,7 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
     writeProcessInput: (processId, data) => layer.supervisor.write(processId, data, 'human'),
     resizeProcess: async (processId, cols, rows) => { await layer.supervisor.resize(processId, cols, rows) },
     signalProcess: (processId, signal) => layer.supervisor.signal(processId, signal as NodeJS.Signals),
+    stopProcess: async (processId) => mapApiProcess(await layer.supervisor.stop(processId)),
     restartProcess: async (processId) => mapApiProcess(await layer.supervisor.restart(processId)),
     listProcessPorts: (workspaceId) => layer.supervisor.discoverPorts(workspaceId),
     captureCheckpoint,

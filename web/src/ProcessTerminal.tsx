@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { OsId, osApi, WorkspaceProcess } from './osApi'
 import { OsIcon } from './OsIcon'
+import { isResizableProcess } from './processTerminalState'
 
 export type ProcessTerminalHandle = { focus: () => void; fit: () => void }
 
@@ -83,10 +84,13 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     const sendResize = () => {
       try { fit.fit() } catch { return }
       const active = processRef.current
-      if (!active) return
+      if (!isResizableProcess(active)) return
+      const processId = active.id
       if (resizeTimerRef.current) window.clearTimeout(resizeTimerRef.current)
       resizeTimerRef.current = window.setTimeout(() => {
-        osApi.resizeProcess(active.id, terminal.cols, terminal.rows).catch(() => {})
+        const current = processRef.current
+        if (!isResizableProcess(current) || String(current.id) !== String(processId)) return
+        osApi.resizeProcess(current.id, terminal.cols, terminal.rows).catch(() => {})
       }, 120)
     }
     const frame = window.requestAnimationFrame(sendResize)
@@ -140,10 +144,12 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     terminal.reset()
     terminal.clear()
     let frame: number | undefined
-    if (process) {
+    if (isResizableProcess(process)) {
       frame = window.requestAnimationFrame(() => {
         try { fitRef.current?.fit() } catch { return }
-        osApi.resizeProcess(process.id, terminal.cols, terminal.rows).catch(() => {})
+        const current = processRef.current
+        if (!isResizableProcess(current) || String(current.id) !== String(process.id)) return
+        osApi.resizeProcess(current.id, terminal.cols, terminal.rows).catch(() => {})
       })
     }
     return () => { if (frame) window.cancelAnimationFrame(frame) }

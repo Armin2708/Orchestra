@@ -1353,6 +1353,11 @@ export const osApi = {
   writeProcessInput: (processId: OsId, data: string) => api('POST', `/os/processes/${processId}/input`, { data }),
   resizeProcess: (processId: OsId, cols: number, rows: number) => api('POST', `/os/processes/${processId}/resize`, { cols, rows }),
   signalProcess: (processId: OsId, signal: string) => api('POST', `/os/processes/${processId}/signal`, { signal }),
+  stopProcess: async (processId: OsId) =>
+    normalizeProcess(unwrapEntity<unknown>(
+      await api('POST', `/os/processes/${processId}/signal`, { signal: 'SIGTERM', escalate: true }),
+      ['process'],
+    )),
   restartProcess: async (processId: OsId) =>
     normalizeProcess(unwrapEntity<unknown>(await api('POST', `/os/processes/${processId}/restart`), ['process'])),
 

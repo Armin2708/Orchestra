@@ -380,7 +380,8 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 
   const signalProcess = async (process: WorkspaceProcess, signal: string) => {
     try {
-      await osApi.signalProcess(process.id, signal)
+      if (signal === 'SIGTERM') await osApi.stopProcess(process.id)
+      else await osApi.signalProcess(process.id, signal)
       setHeaderError(null)
       window.setTimeout(() => refreshProcesses(true), 250)
     } catch (error) { setHeaderError(errorMessage(error, `Could not send ${signal}.`)) }

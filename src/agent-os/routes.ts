@@ -72,6 +72,7 @@ export interface AgentOsRuntimeAdapter {
   writeProcessInput(processId: string, data: string): Promise<void>
   resizeProcess(processId: string, cols: number, rows: number): Promise<void>
   signalProcess(processId: string, signal: string): Promise<void>
+  stopProcess?(processId: string): Promise<ProcessRecord>
   restartProcess?(processId: string): Promise<ProcessRecord>
   listProcessPorts?(workspaceId: string): Promise<Array<{ processId: string; port: number }>>
   forkCheckpoint?: CheckpointForker
@@ -340,7 +341,24 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const body = objectBody(request.body)
     const cols = boundedInteger(body.cols, process.cols, 20, 500, 'cols')
     const rows = boundedInteger(body.rows, process.rows, 5, 300, 'rows')
-    await options.runtime.resizeProcess(process.id, cols, rows)
+    if (!['starting', 'running'].includes(process.status)) {
+      return { ok: true, skipped: true, status: process.status, cols: process.cols, rows: process.rows }
+    }
+    try {
+      await options.runtime.resizeProcess(process.id, cols, rows)
+    } catch (error) {
+      const refreshed = requireProcess(db, process.id)
+      if (!['starting', 'running'].includes(refreshed.status)) {
+        return {
+          ok: true,
+          skipped: true,
+          status: refreshed.status,
+          cols: refreshed.cols,
+          rows: refreshed.rows,
+        }
+      }
+      throw error
+    }
     return { ok: true, cols, rows }
   })
 
@@ -350,6 +368,11 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
     const signal = requiredString(body.signal, 'signal').toUpperCase()
+    if (body.escalate === true) {
+      if (signal !== 'SIGTERM') throw new ValidationError('bounded stop escalation requires SIGTERM')
+      if (!options.runtime.stopProcess) throw new UnsupportedError('bounded process stop requires the PTY runtime')
+      return { ok: true, signal, escalated: true, process: await options.runtime.stopProcess(process.id) }
+    }
     await options.runtime.signalProcess(process.id, signal)
     return { ok: true, signal }
   })

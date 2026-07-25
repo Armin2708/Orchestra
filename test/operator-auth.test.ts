@@ -312,6 +312,10 @@ describe('operator and agent API principals', () => {
       writeProcessInput: async () => { calls.push('input') },
       resizeProcess: async () => { calls.push('resize') },
       signalProcess: async () => { calls.push('signal') },
+      stopProcess: async () => {
+        calls.push('stop')
+        return { ...processRecord, status: 'stopped', pid: null, ended_at: '2026-07-23T00:01:00Z' }
+      },
     }
     const server = buildServer(db, undefined, {
       token: OPERATOR_TOKEN,
@@ -370,8 +374,14 @@ describe('operator and agent API principals', () => {
         headers: agent,
         payload: { signal: 'SIGTERM' },
       }),
+      server.inject({
+        method: 'POST',
+        url: '/api/v1/os/processes/operator-pty-process/signal',
+        headers: agent,
+        payload: { signal: 'SIGTERM', escalate: true },
+      }),
     ])
-    expect(attempts.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403])
+    expect(attempts.map((response) => response.statusCode)).toEqual([403, 403, 403, 403, 403, 403])
     expect(calls).toEqual([])
 
     const missingResourceAttempts = await Promise.all([
@@ -456,7 +466,25 @@ describe('operator and agent API principals', () => {
       payload: { data: 'pwd\r' },
     })
     expect(operatorInput.statusCode).toBe(200)
-    expect(calls).toEqual(['input'])
+    const operatorSignal = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/operator-pty-process/signal',
+      headers: operator,
+      payload: { signal: 'SIGTERM' },
+    })
+    expect(operatorSignal.statusCode).toBe(200)
+    const operatorStop = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/operator-pty-process/signal',
+      headers: operator,
+      payload: { signal: 'SIGTERM', escalate: true },
+    })
+    expect(operatorStop.statusCode).toBe(200)
+    expect(operatorStop.json()).toMatchObject({
+      escalated: true,
+      process: { id: 'operator-pty-process', status: 'stopped', pid: null },
+    })
+    expect(calls).toEqual(['input', 'signal', 'stop'])
   })
 
   it('keeps normal agent reporting open but reserves acceptance and done for the operator', async () => {

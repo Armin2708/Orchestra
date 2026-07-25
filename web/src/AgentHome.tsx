@@ -577,7 +577,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
 
   const signalProcess = async (process: WorkspaceProcess, signal: string) => {
     try {
-      await osApi.signalProcess(process.id, signal)
+      if (signal === 'SIGTERM') await osApi.stopProcess(process.id)
+      else await osApi.signalProcess(process.id, signal)
       await loadRuntime(true)
     } catch (error) { setHeaderError(messageFor(error, 'The signal could not be delivered.')) }
   }

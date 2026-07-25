@@ -132,6 +132,17 @@ describe('Agent OS daemon runtime integration', () => {
     expect(page.output.map((chunk: any) => chunk.data).join('')).toContain('got:')
     expect(db.prepare('SELECT status, exit_code, cols, rows FROM processes WHERE id=?').get(processId))
       .toMatchObject({ status: 'exited', exit_code: 0, cols: 133, rows: 41 })
+    const ignoredResize = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/processes/${processId}/resize`,
+      payload: { cols: 160, rows: 50 },
+    })
+    expect(ignoredResize.statusCode).toBe(200)
+    expect(ignoredResize.json()).toMatchObject({
+      ok: true, skipped: true, status: 'exited', cols: 133, rows: 41,
+    })
+    expect(db.prepare('SELECT cols, rows FROM processes WHERE id=?').get(processId))
+      .toEqual({ cols: 133, rows: 41 })
     const inputEvents = db.prepare("SELECT payload FROM os_events WHERE process_id=? AND kind='process.input'").all(processId) as Array<{ payload: string }>
     expect(inputEvents).toHaveLength(1)
     expect(inputEvents.some((event) => JSON.parse(event.payload).bytes === Buffer.byteLength(exactInput))).toBe(true)
@@ -164,11 +175,15 @@ describe('Agent OS daemon runtime integration', () => {
 
     const recipe = JSON.parse((db.prepare('SELECT recipe_json FROM processes WHERE id=?').get(processId) as { recipe_json: string }).recipe_json)
     expect(recipe).toMatchObject({ shell: false, args: process.platform === 'win32' ? [] : ['-l'], restartable: true })
-    await server.inject({ method: 'POST', url: `/api/v1/os/processes/${processId}/input`, payload: { data: 'exit\r' } })
-    await until(() => {
-      const row = db.prepare('SELECT status FROM processes WHERE id=?').get(processId) as { status: string }
-      return ['exited', 'failed'].includes(row.status)
+    const stopped = await server.inject({
+      method: 'POST', url: `/api/v1/os/processes/${processId}/signal`,
+      payload: { signal: 'SIGTERM', escalate: true },
     })
+    expect(stopped.statusCode).toBe(200)
+    expect(stopped.json()).toMatchObject({ signal: 'SIGTERM', escalated: true })
+    expect(stopped.json().process).toMatchObject({ id: processId, status: 'stopped', pid: null })
+    expect(db.prepare('SELECT status, pid FROM processes WHERE id=?').get(processId))
+      .toEqual({ status: 'stopped', pid: null })
   }, 25_000)
 
   it('captures tracked and untracked changes, then forks and reapplies the checkpoint patch safely', async () => {
