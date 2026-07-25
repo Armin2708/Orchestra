@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { BoundedAsyncQueue, deferred, type Deferred } from '../../codex/async.js'
 import {
   CODEX_REQUEST_UNHANDLED,
@@ -10,6 +11,7 @@ import {
   type CodexServerNotification,
   type CodexServerRequest,
   type CodexThread,
+  type CodexThreadForkParams,
   type CodexThreadItem,
   type CodexThreadStartParams,
   type CodexThreadTokenUsage,
@@ -121,6 +123,20 @@ type CodexApprovalOutcomeSource = 'automatic' | 'operator' | 'timeout' | 'shutdo
 export type CodexSessionReconcileResult = {
   resumed: string[]
   failed: string[]
+}
+
+export type CodexSessionForkOptions = {
+  sourceExternalId: string
+  workspaceId: OsId
+  cwd: string
+} & Pick<CodexThreadForkParams, 'lastTurnId' | 'excludeTurns'>
+
+export type CodexSessionForkResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  metadata: Record<string, unknown>
 }
 
 type PendingApproval = {
@@ -356,6 +372,130 @@ export class CodexAgentDriver implements AgentDriver {
     this.registerState(state)
     if (!activeTurn) this.replayTerminalTurn(state, thread, 'daemon-attach')
     return state.session
+  }
+
+  async forkSession(
+    sessionId: string,
+    options: CodexSessionForkOptions,
+  ): Promise<CodexSessionForkResult> {
+    const source = this.required(sessionId)
+    if (source.stopped) throw new Error(`Codex session is stopped: ${sessionId}`)
+    if (source.session.externalId !== source.threadId) {
+      throw new Error(`Codex session ${sessionId} has inconsistent provider thread provenance`)
+    }
+    if (options.sourceExternalId !== source.session.externalId) {
+      throw new Error(`Codex fork source external id does not match session ${sessionId}`)
+    }
+    if (options.workspaceId !== source.session.workspaceId) {
+      throw new Error(`Codex fork workspace does not match session ${sessionId}`)
+    }
+    const sourceProviderSessionId = typeof source.session.metadata.codexSessionId === 'string'
+      ? source.session.metadata.codexSessionId.trim()
+      : ''
+    if (!sourceProviderSessionId) {
+      throw new Error(`Codex session ${sessionId} has no provider session identity`)
+    }
+    const sourceCwd = typeof source.session.metadata.cwd === 'string'
+      ? source.session.metadata.cwd
+      : ''
+    if (!sourceCwd) throw new Error(`Codex session ${sessionId} has no workspace cwd provenance`)
+    if (!options.cwd.trim() || resolve(options.cwd) !== resolve(sourceCwd)) {
+      throw new Error(`Codex fork cwd does not match session ${sessionId}`)
+    }
+    const lastTurnId = options.lastTurnId == null ? null : options.lastTurnId.trim()
+    if (options.lastTurnId != null && !lastTurnId) {
+      throw new Error('Codex fork last turn id is required when provided')
+    }
+    if (options.excludeTurns !== undefined && typeof options.excludeTurns !== 'boolean') {
+      throw new Error('Codex fork excludeTurns must be a boolean')
+    }
+
+    const forked = await this.options.service.forkThread(source.threadId, {
+      ...(lastTurnId ? { lastTurnId } : {}),
+      ...(options.excludeTurns !== undefined ? { excludeTurns: options.excludeTurns } : {}),
+    })
+    const child = forked.thread
+    const childId = typeof child?.id === 'string' ? child.id.trim() : ''
+    const childProviderSessionId = typeof child?.sessionId === 'string' ? child.sessionId.trim() : ''
+    const childCwd = typeof child?.cwd === 'string' ? child.cwd : ''
+    let provenanceError: Error | null = null
+    if (!childId) {
+      provenanceError = new Error(`Codex fork from ${source.threadId} returned no child thread id`)
+    } else if (childId === source.threadId) {
+      provenanceError = new Error(`Codex fork reused source thread id ${source.threadId}`)
+    } else if (child.forkedFromId !== source.threadId) {
+      provenanceError = new Error(
+        `Codex fork ${childId} did not attest source thread ${source.threadId}`,
+      )
+    } else if (!childProviderSessionId) {
+      provenanceError = new Error(
+        `Codex fork ${childId} returned no child provider session identity`,
+      )
+    } else if (childCwd !== sourceCwd || forked.cwd !== sourceCwd) {
+      provenanceError = new Error(
+        `Codex fork ${childId} did not preserve workspace cwd provenance`,
+      )
+    }
+    if (provenanceError) {
+      if (childId && childId !== source.threadId) {
+        await this.options.service.unsubscribeThread(childId).catch(() => undefined)
+      }
+      throw provenanceError
+    }
+
+    let readVerified = false
+    let reread: CodexThread | null = null
+    try {
+      reread = (await this.options.service.readThread(childId, false)).thread
+    } catch {
+      // The native mutation already succeeded. Keep the response identity so
+      // lifecycle persistence can reconcile it instead of creating a duplicate.
+    }
+    if (reread) {
+      const rereadSessionId = typeof reread.sessionId === 'string' ? reread.sessionId.trim() : ''
+      if (reread.id !== childId
+        || reread.forkedFromId !== source.threadId
+        || rereadSessionId !== childProviderSessionId
+        || reread.cwd !== sourceCwd) {
+        await this.options.service.unsubscribeThread(childId).catch(() => undefined)
+        throw new Error(`Codex fork ${childId} failed native lineage reread verification`)
+      }
+      readVerified = true
+    }
+
+    let subscriptionReleased = false
+    let subscriptionStatus: string | null = null
+    try {
+      const unsubscribed = await this.options.service.unsubscribeThread(childId)
+      subscriptionReleased = true
+      subscriptionStatus = unsubscribed.status
+    } catch {
+      // The native fork already succeeded. Return its identity so the durable
+      // lifecycle can persist/reconcile it instead of retrying a second fork.
+    }
+
+    return {
+      sourceExternalId: source.session.externalId,
+      externalId: childId,
+      providerThreadId: childId,
+      sourceProviderThreadId: source.threadId,
+      metadata: {
+        forkMethod: 'thread/fork',
+        forkedFromId: child.forkedFromId,
+        sourceProviderSessionId,
+        providerSessionId: childProviderSessionId,
+        lastTurnId,
+        excludeTurns: options.excludeTurns ?? false,
+        workspaceId: source.session.workspaceId,
+        sourceCwd,
+        childCwd,
+        cwdVerified: true,
+        workspaceVerified: true,
+        readVerified,
+        subscriptionReleased,
+        subscriptionStatus,
+      },
+    }
   }
 
   async send(sessionId: string, text: string): Promise<void> {
