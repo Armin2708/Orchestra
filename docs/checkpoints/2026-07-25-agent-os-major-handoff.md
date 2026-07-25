@@ -83,7 +83,8 @@ is observed.
   or local working artifacts, not checkpoint source.
 - Agentboard-local Codex configuration:
   `/Users/arminrad/Desktop/agentboard/.codex/config.toml`
-  sets `agents.max_concurrent_threads_per_session = 8`.
+  sets `features.multi_agent_v2.max_concurrent_threads_per_session = 8`, the schema supported by
+  the installed Codex CLI `0.144.6`.
 
 ## Remaining north-star critical path
 
@@ -111,7 +112,7 @@ From the Agentboard checkout:
 
 ```bash
 cd /Users/arminrad/Desktop/agentboard
-codex fork -c agents.max_concurrent_threads_per_session=8
+codex fork -c 'features.multi_agent_v2.max_concurrent_threads_per_session=8'
 ```
 
 Select the main Agentboard session, then send:
@@ -125,4 +126,3 @@ then continue the dependency-ordered master backlog with up to eight bounded par
 Always report Asked, Deliverables, Evidence plan before work and Delivered, Evidence, Remaining
 after work.
 ```
-
