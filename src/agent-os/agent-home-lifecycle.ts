@@ -22,6 +22,7 @@ import {
 import { parseJson, timestamp } from './json.js'
 import type { OrchestrationService } from './orchestration-service.js'
 import type { JobScheduler } from './scheduler.js'
+import { durableSessionEventScope } from './agent-home-event-scope.js'
 
 export const AGENT_HOME_SESSION_ACTIONS = [
   'resume',
@@ -499,12 +500,19 @@ export class AgentHomeLifecycleService {
   }
 
   private appendActionRequestAudit(row: ActionRow, input: ActionReservationInput): void {
+    const eventScope = durableSessionEventScope(
+      this.db,
+      input.session,
+      row.board_id,
+    )
     this.events.append({
       boardId: row.board_id,
       workspaceId: input.session.workspace_id,
+      cardId: eventScope.cardId,
       sessionId: row.session_id,
-      jobId: input.session.job_id,
-      correlationId: input.correlationId,
+      jobId: eventScope.jobId,
+      contractId: eventScope.contractId,
+      correlationId: eventScope.correlationId ?? input.correlationId,
       idempotencyKey: row.idempotency_key,
       kind: 'agent_session.action_requested',
       source: 'agent-home',
@@ -607,12 +615,19 @@ export class AgentHomeLifecycleService {
       const request = this.actionRequestAudit(current)
       const actor = this.db.prepare(`SELECT actor_type, actor_id FROM agent_session_actions
         WHERE id=?`).get(current.id) as { actor_type: string; actor_id: string | null }
+      const eventScope = durableSessionEventScope(
+        this.db,
+        target,
+        current.board_id,
+      )
       this.events.append({
         boardId: current.board_id,
         workspaceId: target.workspace_id,
+        cardId: eventScope.cardId,
         sessionId: target.id,
-        jobId: target.job_id,
-        correlationId: request?.correlation_id ?? current.id,
+        jobId: eventScope.jobId,
+        contractId: eventScope.contractId,
+        correlationId: eventScope.correlationId ?? request?.correlation_id ?? current.id,
         causationId: request?.id ?? null,
         idempotencyKey: completionKey,
         kind: `agent_session.${current.action}`,
@@ -729,10 +744,18 @@ export class AgentHomeLifecycleService {
           this.actionLeaseId,
         )
         if (updated.changes !== 1) continue
+        const session = this.conversations.getSession(action.session_id)
+        const eventScope = session
+          ? durableSessionEventScope(this.db, session, action.board_id)
+          : null
         this.events.append({
           boardId: action.board_id,
+          workspaceId: session?.workspace_id ?? null,
+          cardId: eventScope?.cardId ?? null,
           sessionId: action.session_id,
-          correlationId: action.id,
+          jobId: eventScope?.jobId ?? null,
+          contractId: eventScope?.contractId ?? null,
+          correlationId: eventScope?.correlationId ?? action.id,
           idempotencyKey: `agent-home-action-reconciled:${action.id}`,
           kind: 'agent_session.action_interrupted',
           source: 'agent-home',

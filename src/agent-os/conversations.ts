@@ -24,6 +24,10 @@ import {
   type AgentSessionRecoveryState,
 } from './agent-home-support.js'
 import { normalizeProjectedText } from './projected-text-redaction.js'
+import {
+  durableSessionEventScope,
+  type DurableSessionEventScope,
+} from './agent-home-event-scope.js'
 
 export const CONVERSATION_EVENT_KINDS = [
   'user',
@@ -560,12 +564,20 @@ export class ConversationService {
         at,
         latest.id,
       )
+      const eventScope = durableSessionEventScope(
+        this.db,
+        latest,
+        latestScope.board_id,
+        values.job_id,
+      )
       this.events.append({
         boardId: latestScope.board_id,
         workspaceId: latest.workspace_id,
+        cardId: eventScope.cardId,
         sessionId: latest.id,
-        jobId: values.job_id,
-        correlationId: input.correlationId ?? idempotencyKey,
+        jobId: eventScope.jobId,
+        contractId: eventScope.contractId,
+        correlationId: eventScope.correlationId ?? input.correlationId ?? idempotencyKey,
         idempotencyKey,
         kind: 'agent_session.linked',
         source: 'agent-home',
@@ -639,6 +651,7 @@ export class ConversationService {
         throw new ConflictError('agent session Agent Home scope changed during event append')
       }
       const latestConversation = this.requireConversation(conversation.id)
+      const eventScope = durableSessionEventScope(this.db, latest, profile.board_id)
       const existing = this.db.prepare(
         'SELECT * FROM conversation_events WHERE conversation_id=? AND dedupe_key=?',
       ).get(conversation.id, normalized.dedupe_key) as Record<string, unknown> | undefined
@@ -654,6 +667,7 @@ export class ConversationService {
               metadata: normalized.metadata,
               rawArtifactId: normalized.raw_artifact_id,
               actor,
+              eventScope,
             }),
           }
         }
@@ -673,9 +687,13 @@ export class ConversationService {
           this.events.append({
             boardId: profile.board_id,
             workspaceId: latest.workspace_id,
+            cardId: eventScope.cardId,
             sessionId: latest.id,
-            jobId: latest.job_id,
-            correlationId: normalized.correlation_id ?? `conversation-replay:${canonical.id}`,
+            jobId: eventScope.jobId,
+            contractId: eventScope.contractId,
+            correlationId: eventScope.correlationId
+              ?? normalized.correlation_id
+              ?? `conversation-replay:${canonical.id}`,
             causationId: normalized.causation_id,
             idempotencyKey,
             kind: 'conversation.event_replayed',
@@ -763,9 +781,13 @@ export class ConversationService {
       this.events.append({
         boardId: profile.board_id,
         workspaceId: latest.workspace_id,
+        cardId: eventScope.cardId,
         sessionId: latest.id,
-        jobId: latest.job_id,
-        correlationId: normalized.correlation_id ?? `conversation-event:${id}`,
+        jobId: eventScope.jobId,
+        contractId: eventScope.contractId,
+        correlationId: eventScope.correlationId
+          ?? normalized.correlation_id
+          ?? `conversation-event:${id}`,
         causationId: normalized.causation_id,
         idempotencyKey,
         kind: 'conversation.event_appended',
@@ -975,6 +997,7 @@ export class ConversationService {
     metadata: Record<string, unknown>
     rawArtifactId: string | null
     actor: ActorIdentity
+    eventScope: DurableSessionEventScope
   }): string {
     const existing = this.db.prepare(`SELECT id FROM conversation_event_conflicts
       WHERE canonical_event_id=? AND received_content_hash=?`)
@@ -1005,9 +1028,11 @@ export class ConversationService {
     this.events.append({
       boardId: input.canonical.board_id,
       workspaceId: input.session.workspace_id,
+      cardId: input.eventScope.cardId,
       sessionId: input.session.id,
-      jobId: input.session.job_id,
-      correlationId: `conversation-conflict:${conflictId}`,
+      jobId: input.eventScope.jobId,
+      contractId: input.eventScope.contractId,
+      correlationId: input.eventScope.correlationId ?? `conversation-conflict:${conflictId}`,
       idempotencyKey: `conversation-conflict:${conflictId}`,
       kind: 'conversation.event_conflict',
       source: 'agent-home',

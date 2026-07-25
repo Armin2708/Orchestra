@@ -2,6 +2,9 @@ import type Database from 'better-sqlite3'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
+import { AgentHomeLifecycleService } from '../src/agent-os/agent-home-lifecycle.js'
+import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from '../src/agent-os/scheduler.js'
@@ -376,6 +379,132 @@ describe('canonical card launch routes', () => {
     expect(corruptLifecycle.json().error).toMatch(/event scope is missing or inconsistent/)
     expect(executor.launches).toHaveLength(1)
     expect(lifecycleCounts(db, cardId)).toEqual({ contracts: 1, jobs: 1, workspaces: 1, sessions: 1 })
+  })
+
+  it('keeps Agent Home audits inside the exact canonical job scope', async () => {
+    const { db, boardId, cardId, server } = await fixture()
+    const launch = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/jobs`,
+      payload: { card_id: cardId, provider: 'codex' },
+    })
+    expect(launch.statusCode).toBe(201)
+    const created = launch.json()
+
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+    const profile = profiles.create({
+      boardId,
+      name: 'Canonical transcript',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:profile',
+    })
+    const conversation = conversations.listConversations(profile.id)[0]
+    conversations.linkSession(created.session.id, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      jobId: created.job.id,
+      mode: 'managed',
+      actor: { type: 'system', id: 'test-runtime' },
+      idempotencyKey: 'canonical-transcript:link',
+      correlationId: 'provider-link-correlation',
+    })
+
+    const initial = conversations.appendEvent(created.session.id, {
+      idempotencyKey: 'canonical-transcript:event',
+      dedupeKey: 'provider:event:canonical',
+      kind: 'assistant',
+      projectedText: 'One durable response',
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'provider-turn-correlation',
+    })
+    expect(conversations.appendEvent(created.session.id, {
+      idempotencyKey: 'canonical-transcript:event',
+      dedupeKey: 'provider:event:canonical',
+      kind: 'assistant',
+      projectedText: 'One durable response',
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'provider-turn-correlation',
+    })).toMatchObject({ replayed: true, event: { id: initial.event.id } })
+    expect(conversations.appendEvent(created.session.id, {
+      idempotencyKey: 'canonical-transcript:event-replay',
+      dedupeKey: 'provider:event:canonical',
+      kind: 'assistant',
+      projectedText: 'One durable response',
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'provider-turn-correlation',
+    })).toMatchObject({ replayed: true, event: { id: initial.event.id } })
+    expect(() => conversations.appendEvent(created.session.id, {
+      idempotencyKey: 'canonical-transcript:event-conflict',
+      dedupeKey: 'provider:event:canonical',
+      kind: 'assistant',
+      projectedText: 'A conflicting response',
+      actor: { type: 'agent', id: 'codex' },
+      correlationId: 'provider-conflict-correlation',
+    })).toThrow(/conflict/)
+
+    const lifecycle = new AgentHomeLifecycleService(db, {
+      actionLeaseId: 'canonical-scope-daemon-before-restart',
+    })
+    const renamed = await lifecycle.run(created.session.id, 'rename', {
+      actor: { type: 'operator', id: 'canonical-scope-test' },
+      idempotencyKey: 'canonical-transcript:rename',
+      correlationId: 'operator-action-correlation',
+      name: 'Durable canonical transcript',
+    })
+    expect(renamed.session.display_name).toBe('Durable canonical transcript')
+    expect((await lifecycle.run(created.session.id, 'rename', {
+      actor: { type: 'operator', id: 'canonical-scope-test' },
+      idempotencyKey: 'canonical-transcript:rename',
+      correlationId: 'operator-action-correlation',
+      name: 'Durable canonical transcript',
+    })).action.replayed).toBe(true)
+
+    db.prepare(`INSERT INTO agent_session_actions (
+      id, board_id, session_id, result_session_id, idempotency_key, action,
+      request_fingerprint, status, lease_id, actor_type, actor_id, created_at, updated_at
+    ) VALUES (
+      'canonical-interrupted-action', ?, ?, NULL, 'canonical-transcript:interrupted',
+      'rename', 'canonical-interrupted-fingerprint', 'pending',
+      'canonical-scope-daemon-before-restart', 'operator', 'canonical-scope-test',
+      datetime('now'), datetime('now')
+    )`).run(boardId, created.session.id)
+    new AgentHomeLifecycleService(db, {
+      actionLeaseId: 'canonical-scope-daemon-after-restart',
+    })
+    expect(db.prepare(`SELECT status, error_code FROM agent_session_actions
+      WHERE id='canonical-interrupted-action'`).get()).toEqual({
+      status: 'failed',
+      error_code: 'action_interrupted',
+    })
+
+    const snapshot = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/jobs/${created.job.id}`,
+    })
+    expect(snapshot.statusCode).toBe(200)
+    const agentHomeEvents = snapshot.json().events.filter(
+      (event: { source: string }) => event.source === 'agent-home',
+    )
+    expect(agentHomeEvents.map((event: { kind: string }) => event.kind)).toEqual([
+      'agent_session.action_interrupted',
+      'agent_session.rename',
+      'agent_session.action_requested',
+      'conversation.event_conflict',
+      'conversation.event_replayed',
+      'conversation.event_appended',
+      'agent_session.linked',
+    ])
+    for (const event of agentHomeEvents) {
+      expect(event).toMatchObject({
+        workspace_id: created.workspace.id,
+        card_id: cardId,
+        session_id: created.session.id,
+        job_id: created.job.id,
+        contract_id: created.orchestration.contract_id,
+        correlation_id: created.orchestration.correlation_id,
+      })
+    }
   })
 
   it('replays and reads the frozen contract after the editable contract advances', async () => {
