@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
+import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
@@ -45,7 +47,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
     first.close()
 
     const second = openDb(file)
@@ -58,10 +60,10 @@ describe('Agent OS migrations', () => {
       'job_market_contracts', 'job_market_criteria',
       'job_market_dependencies', 'agent_home_retention_policies',
       'agent_home_retention_runs', 'agent_home_raw_artifact_archives',
-      'agent_home_evidence_bundle_repairs']) {
+      'agent_home_evidence_bundle_repairs', 'agent_home_transcript_repairs']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -103,7 +105,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(12)
+    }).count).toBe(13)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -113,6 +115,494 @@ describe('Agent OS migrations', () => {
       expect((db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
         WHERE type='table' AND name=?`).get(table) as { count: number }).count).toBe(1)
     }
+    db.close()
+  })
+
+  it('repairs structured metadata, integrity aliases, conflicts, and transcript artifacts idempotently', () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare(
+      "INSERT INTO boards (project_path, name) VALUES ('/metadata-repair', 'metadata repair')",
+    ).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces
+      (id, board_id, name, kind, root_path, status)
+      VALUES ('metadata-repair-workspace', ?, 'metadata repair', 'shared',
+        '/metadata-repair', 'active')`).run(boardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, context_json)
+      VALUES ('metadata-repair-session', 'metadata-repair-workspace', 'codex', 'running', '{}')`)
+      .run()
+
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+    const profile = profiles.create({
+      boardId,
+      name: 'Metadata repair',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'metadata-repair:profile',
+    })
+    const conversation = conversations.listConversations(profile.id)[0]
+    conversations.linkSession('metadata-repair-session', {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      providerThreadId: 'thread-resolved-from-session',
+      actor: { type: 'operator', id: 'migration-test' },
+      idempotencyKey: 'metadata-repair:link',
+    })
+
+    const privateKey = [
+      '-----BEGIN PRIVATE KEY-----',
+      'migration-private-material-must-not-survive',
+      '-----END PRIVATE KEY-----',
+    ].join('\n')
+    const legacyMetadata = {
+      nested: {
+        authLine: 'Authorization: Basic Og==',
+        cookieLine: 'Cookie: sid=migration-cookie-must-not-survive',
+        keyMaterial: privateKey,
+        apiKey: 'migration-api-key-must-not-survive',
+        shortBasic: 'Authorization: Basic YTo',
+        providerTokens: ['migration-short-provider-token-xy15'],
+        apiKeys: ['migration-short-api-key-xy16'],
+      },
+      safe: {
+        status: 'completed',
+        token_usage: {
+          total_tokens: 12,
+          output_tokens: 4,
+        },
+      },
+    }
+    const first = conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:first',
+      dedupeKey: 'metadata-repair:event',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: legacyMetadata,
+      actor: { type: 'agent', id: 'codex' },
+    })
+    conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:alias',
+      dedupeKey: 'metadata-repair:event',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: legacyMetadata,
+      actor: { type: 'agent', id: 'codex' },
+    })
+    const collision = conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:collision',
+      dedupeKey: 'metadata-repair:event:collision',
+      providerThreadId: 'thread-collision-second',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: {
+        ...legacyMetadata,
+        safe: { ...legacyMetadata.safe, status: 'collision' },
+      },
+      actor: { type: 'agent', id: 'codex' },
+    })
+    expect(() => conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:conflict',
+      dedupeKey: 'metadata-repair:event',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: {
+        ...legacyMetadata,
+        safe: { ...legacyMetadata.safe, status: 'changed' },
+      },
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+
+    const conflictBefore = db.prepare(`SELECT id, received_content_hash
+      FROM conversation_event_conflicts`).get() as {
+      id: string
+      received_content_hash: string
+    }
+    const legacyHash = '1'.repeat(64)
+    db.prepare(`UPDATE conversation_events SET
+      projected_text=?, metadata_json=?, redaction_state='none',
+      content_hash=?, archived_at='2026-01-01T00:00:00.000Z'
+      WHERE id IN (?, ?)`).run(
+      'Authorization: Basic YTo',
+      JSON.stringify(legacyMetadata),
+      legacyHash,
+      first.event.id,
+      collision.event.id,
+    )
+    db.prepare(`UPDATE os_events SET payload=json_set(
+      payload, '$.content_hash', ?, '$.request_fingerprint', ?
+    ) WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+      AND json_extract(payload, '$.conversation_event_id') IN (?, ?)`)
+      .run(legacyHash, legacyHash, first.event.id, collision.event.id)
+    db.prepare(`UPDATE conversation_event_conflicts
+      SET received_projected_text=?, received_metadata_json=?
+      WHERE id=?`).run(
+      'Cookie: sid=migration-conflict-cookie-must-not-survive',
+      JSON.stringify({
+        nested: {
+          'set-cookie': 'migration-conflict-cookie-must-not-survive',
+          keyMaterial: privateKey,
+          tokens: ['migration-conflict-short-token-xy17'],
+        },
+      }),
+      conflictBefore.id,
+    )
+    db.prepare(`UPDATE os_events SET payload=json_set(
+      payload, '$.canonical_content_hash', ?
+    ) WHERE kind='conversation.event_conflict'
+      AND json_extract(payload, '$.canonical_event_id')=?`)
+      .run(legacyHash, first.event.id)
+
+    const artifacts = new ArtifactStore(db)
+    const events = new EventStore(db)
+    const digest = (value: string) => createHash('sha256').update(value).digest('hex')
+    const legacyJsonContent = `${JSON.stringify({
+      schema_version: 1,
+      redaction_policy: { redactions_applied: 0 },
+      events: [{
+        id: first.event.id,
+        content_hash: legacyHash,
+        metadata: {
+          authLine: 'Basic YTo',
+          keyMaterial: privateKey,
+        },
+      }, {
+        id: collision.event.id,
+        content_hash: legacyHash,
+        metadata: {
+          status: 'collision',
+        },
+      }],
+      provenance: {
+        event_ids: [first.event.id, collision.event.id],
+        source_content_hashes: [legacyHash, legacyHash],
+      },
+    }, null, 2)}\n`
+    const jsonArtifact = artifacts.create({
+      boardId,
+      kind: 'agent_home_transcript',
+      name: 'legacy.json',
+      mimeType: 'application/json',
+      content: legacyJsonContent,
+      metadata: {
+        content_hash: digest(legacyJsonContent),
+        format: 'json',
+        redactions_applied: 0,
+        pinned: true,
+        authorization: 'Basic Og',
+        nested: {
+          apiKey: 'artifact-row-api-key-must-not-survive',
+        },
+      },
+    })
+    const legacyHumanContent = [
+      '# Legacy transcript',
+      `event=${first.event.id} session=metadata-repair-session hash=${legacyHash}`,
+      'Authorization: Basic Og==',
+      privateKey,
+      '',
+    ].join('\n')
+    const humanArtifact = artifacts.create({
+      boardId,
+      kind: 'agent_home_transcript',
+      name: 'legacy.md',
+      mimeType: 'text/markdown',
+      content: legacyHumanContent,
+      metadata: {
+        content_hash: digest(legacyHumanContent),
+        format: 'human',
+        redactions_applied: 0,
+      },
+    })
+    const malformedContent = '{"authorization":"Basic Og==",'
+    const malformedArtifact = artifacts.create({
+      boardId,
+      kind: 'agent_home_transcript',
+      name: 'malformed.json',
+      mimeType: 'application/json',
+      content: malformedContent,
+      metadata: {
+        content_hash: digest(malformedContent),
+        format: 'json',
+        redactions_applied: 0,
+      },
+    })
+    const stableContent = `${JSON.stringify({ safe: true }, null, 2)}\n`
+    const stableArtifact = artifacts.create({
+      boardId,
+      kind: 'agent_home_transcript',
+      name: 'stable.json',
+      mimeType: 'application/json',
+      content: stableContent,
+      metadata: {
+        content_hash: digest(stableContent),
+        format: 'json',
+        redactions_applied: 0,
+      },
+    })
+    const unrelatedContent = 'Cookie: unrelated-artifact-must-remain-byte-identical'
+    const unrelatedArtifact = artifacts.create({
+      boardId,
+      kind: 'evidence_bundle',
+      name: 'unrelated.txt',
+      mimeType: 'text/plain',
+      content: unrelatedContent,
+      metadata: { safe: true },
+    })
+    for (const artifact of [jsonArtifact, humanArtifact, malformedArtifact, stableArtifact]) {
+      events.append({
+        boardId,
+        kind: 'agent_home.transcript_exported',
+        source: 'migration-test',
+        idempotencyKey: `metadata-repair:artifact:${artifact.id}`,
+        payload: {
+          artifact_id: artifact.id,
+          content_hash: artifact.id === stableArtifact.id
+            ? 'stale-safe-audit-hash'
+            : String(artifact.metadata.content_hash),
+          request_fingerprint: `command:${artifact.id}`,
+        },
+      })
+    }
+
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id='013-agent-home-structured-metadata-redaction'`).run()
+    applyAgentOsMigrations(db)
+
+    const repairedEvent = db.prepare(`SELECT projected_text, metadata_json, content_hash,
+        redaction_state, archived_at
+      FROM conversation_events WHERE id=?`).get(first.event.id) as {
+      projected_text: string
+      metadata_json: string
+      content_hash: string
+      redaction_state: string
+      archived_at: string
+    }
+    expect(repairedEvent).toMatchObject({
+      projected_text: 'Authorization: Basic [REDACTED]',
+      redaction_state: 'redacted',
+      archived_at: '2026-01-01T00:00:00.000Z',
+    })
+    expect(repairedEvent.content_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(repairedEvent.content_hash).not.toBe(legacyHash)
+    expect(JSON.parse(repairedEvent.metadata_json)).toMatchObject({
+      nested: {
+        authLine: 'Authorization: Basic [REDACTED]',
+        cookieLine: '[REDACTED]',
+        keyMaterial: '[REDACTED]',
+        apiKey: '[REDACTED]',
+        shortBasic: 'Authorization: Basic [REDACTED]',
+        providerTokens: '[REDACTED]',
+        apiKeys: '[REDACTED]',
+      },
+      safe: {
+        status: 'completed',
+        token_usage: {
+          total_tokens: 12,
+          output_tokens: 4,
+        },
+      },
+    })
+    const repairedCollision = db.prepare(`SELECT provider_thread_id, content_hash
+      FROM conversation_events WHERE id=?`).get(collision.event.id) as {
+      provider_thread_id: string
+      content_hash: string
+    }
+    expect(repairedCollision.provider_thread_id).toBe('thread-collision-second')
+    expect(repairedCollision.content_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(repairedCollision.content_hash).not.toBe(legacyHash)
+    expect(repairedCollision.content_hash).not.toBe(repairedEvent.content_hash)
+
+    const aliases = db.prepare(`SELECT payload FROM os_events
+      WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+        AND json_extract(payload, '$.conversation_event_id')=?
+      ORDER BY id`).all(first.event.id) as Array<{ payload: string }>
+    expect(aliases).toHaveLength(2)
+    for (const alias of aliases) {
+      expect(JSON.parse(alias.payload)).toMatchObject({
+        content_hash: repairedEvent.content_hash,
+        request_fingerprint: repairedEvent.content_hash,
+      })
+    }
+    const collisionAliases = db.prepare(`SELECT payload FROM os_events
+      WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+        AND json_extract(payload, '$.conversation_event_id')=?`).all(
+      collision.event.id,
+    ) as Array<{ payload: string }>
+    expect(collisionAliases).toHaveLength(1)
+    expect(JSON.parse(collisionAliases[0].payload)).toMatchObject({
+      content_hash: repairedCollision.content_hash,
+      request_fingerprint: repairedCollision.content_hash,
+    })
+    const conflictAfter = db.prepare(`SELECT received_content_hash, received_projected_text,
+        received_metadata_json
+      FROM conversation_event_conflicts WHERE id=?`).get(conflictBefore.id) as {
+      received_content_hash: string
+      received_projected_text: string
+      received_metadata_json: string
+    }
+    expect(conflictAfter.received_content_hash).toBe(conflictBefore.received_content_hash)
+    expect(conflictAfter.received_projected_text).toBe('Cookie: [REDACTED]')
+    expect(conflictAfter.received_metadata_json)
+      .not.toContain('migration-conflict-cookie-must-not-survive')
+    expect((db.prepare(`SELECT json_extract(payload, '$.canonical_content_hash') AS hash
+      FROM os_events WHERE kind='conversation.event_conflict'
+        AND json_extract(payload, '$.canonical_event_id')=?`).get(first.event.id) as {
+      hash: string
+    }).hash).toBe(repairedEvent.content_hash)
+
+    expect(conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:first',
+      dedupeKey: 'metadata-repair:event',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: legacyMetadata,
+      actor: { type: 'agent', id: 'codex' },
+    })).toMatchObject({
+      replayed: true,
+      event: { id: first.event.id, content_hash: repairedEvent.content_hash },
+    })
+    expect(conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:alias',
+      dedupeKey: 'metadata-repair:event',
+      providerThreadId: 'thread-resolved-from-session',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: legacyMetadata,
+      actor: { type: 'agent', id: 'codex' },
+    })).toMatchObject({
+      replayed: true,
+      event: { id: first.event.id, content_hash: repairedEvent.content_hash },
+    })
+    expect(() => conversations.appendEvent('metadata-repair-session', {
+      idempotencyKey: 'metadata-repair:event:changed-safe-value',
+      dedupeKey: 'metadata-repair:event',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og==',
+      metadata: {
+        ...legacyMetadata,
+        safe: { ...legacyMetadata.safe, status: 'different-safe-value' },
+      },
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+
+    const repairedArtifacts = new Map((db.prepare(`SELECT id, content, metadata
+      FROM artifacts WHERE kind='agent_home_transcript'`).all() as Array<{
+      id: string
+      content: string
+      metadata: string
+    }>).map((artifact) => [artifact.id, artifact]))
+    const repairedJson = repairedArtifacts.get(jsonArtifact.id)!
+    const repairedJsonDocument = JSON.parse(repairedJson.content)
+    expect(repairedJsonDocument.events[0]).toMatchObject({
+      id: first.event.id,
+      content_hash: repairedEvent.content_hash,
+      metadata: {
+        authLine: 'Basic [REDACTED]',
+        keyMaterial: '[REDACTED]',
+      },
+    })
+    expect(repairedJsonDocument.events[1]).toMatchObject({
+      id: collision.event.id,
+      content_hash: repairedCollision.content_hash,
+      metadata: { status: 'collision' },
+    })
+    expect(repairedJsonDocument.provenance.source_content_hashes)
+      .toEqual([repairedEvent.content_hash, repairedCollision.content_hash])
+    expect(repairedArtifacts.get(humanArtifact.id)!.content)
+      .toContain(`hash=${repairedEvent.content_hash}`)
+    expect(repairedArtifacts.get(humanArtifact.id)!.content)
+      .toContain('Authorization: Basic [REDACTED]')
+    expect(JSON.parse(repairedArtifacts.get(malformedArtifact.id)!.content)).toEqual({
+      redacted: true,
+      reason: 'malformed_legacy_transcript',
+    })
+    expect(repairedArtifacts.get(stableArtifact.id)!.content).toBe(stableContent)
+    expect((db.prepare('SELECT content, metadata FROM artifacts WHERE id=?')
+      .get(unrelatedArtifact.id) as { content: string; metadata: string })).toEqual({
+      content: unrelatedContent,
+      metadata: JSON.stringify({ safe: true }),
+    })
+
+    for (const artifact of [jsonArtifact, humanArtifact, malformedArtifact, stableArtifact]) {
+      const repaired = repairedArtifacts.get(artifact.id)!
+      const metadata = JSON.parse(repaired.metadata)
+      expect(metadata.content_hash).toBe(digest(repaired.content))
+      if (artifact.id === jsonArtifact.id) {
+        expect(metadata).toMatchObject({
+          authorization: '[REDACTED]',
+          nested: { apiKey: '[REDACTED]' },
+        })
+      }
+      const audit = db.prepare(`SELECT payload FROM os_events
+        WHERE kind='agent_home.transcript_exported'
+          AND json_extract(payload, '$.artifact_id')=?`).get(artifact.id) as {
+        payload: string
+      }
+      expect(JSON.parse(audit.payload)).toMatchObject({
+        content_hash: digest(repaired.content),
+        request_fingerprint: `command:${artifact.id}`,
+      })
+    }
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM agent_home_transcript_repairs`)
+      .get() as { count: number }).count).toBe(3)
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM agent_home_transcript_repairs
+      WHERE original_content_sha256!=repaired_content_sha256
+        AND original_metadata_sha256!=repaired_metadata_sha256`)
+      .get() as { count: number }).count).toBeGreaterThanOrEqual(1)
+
+    const sentinels = [
+      'Og==',
+      'migration-private-material-must-not-survive',
+      'migration-cookie-must-not-survive',
+      'migration-api-key-must-not-survive',
+      'migration-conflict-cookie-must-not-survive',
+      'artifact-row-api-key-must-not-survive',
+      'migration-short-provider-token-xy15',
+      'migration-short-api-key-xy16',
+      'migration-conflict-short-token-xy17',
+      'YTo',
+    ]
+    const protectedRows = [
+      ...(db.prepare('SELECT metadata_json AS value FROM conversation_events').all() as Array<{
+        value: string
+      }>),
+      ...(db.prepare(`SELECT received_metadata_json AS value
+        FROM conversation_event_conflicts`).all() as Array<{ value: string }>),
+      ...(db.prepare('SELECT payload AS value FROM os_events').all() as Array<{ value: string }>),
+      ...(db.prepare(`SELECT coalesce(content, '') || metadata AS value FROM artifacts
+        WHERE kind='agent_home_transcript'`).all() as Array<{ value: string }>),
+    ].map((row) => row.value).join('\n')
+    for (const sentinel of sentinels) expect(protectedRows).not.toContain(sentinel)
+
+    const snapshot = JSON.stringify({
+      events: db.prepare(`SELECT id, projected_text, metadata_json, content_hash,
+        redaction_state FROM conversation_events ORDER BY id`).all(),
+      conflicts: db.prepare(`SELECT id, received_content_hash, received_projected_text,
+        received_metadata_json FROM conversation_event_conflicts ORDER BY id`).all(),
+      artifacts: db.prepare(`SELECT id, content, metadata FROM artifacts
+        WHERE kind='agent_home_transcript' ORDER BY id`).all(),
+      audits: db.prepare(`SELECT id, payload FROM os_events ORDER BY id`).all(),
+      repairs: db.prepare(`SELECT * FROM agent_home_transcript_repairs ORDER BY artifact_id`).all(),
+    })
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id='013-agent-home-structured-metadata-redaction'`).run()
+    applyAgentOsMigrations(db)
+    const rerunSnapshot = JSON.stringify({
+      events: db.prepare(`SELECT id, projected_text, metadata_json, content_hash,
+        redaction_state FROM conversation_events ORDER BY id`).all(),
+      conflicts: db.prepare(`SELECT id, received_content_hash, received_projected_text,
+        received_metadata_json FROM conversation_event_conflicts ORDER BY id`).all(),
+      artifacts: db.prepare(`SELECT id, content, metadata FROM artifacts
+        WHERE kind='agent_home_transcript' ORDER BY id`).all(),
+      audits: db.prepare(`SELECT id, payload FROM os_events ORDER BY id`).all(),
+      repairs: db.prepare(`SELECT * FROM agent_home_transcript_repairs ORDER BY artifact_id`).all(),
+    })
+    expect(rerunSnapshot).toBe(snapshot)
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='013-agent-home-structured-metadata-redaction'`).get() as {
+      count: number
+    }).count).toBe(1)
     db.close()
   })
 
@@ -294,7 +784,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(12)
+      .toBe(13)
     db.close()
   })
 
@@ -446,7 +936,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(12)
+      .toBe(13)
     db.close()
   })
 
@@ -507,7 +997,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -600,7 +1090,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(13)
     db.close()
   })
 

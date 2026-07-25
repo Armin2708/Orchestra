@@ -393,6 +393,239 @@ describe('durable Agent Home domain', () => {
     db.close()
   })
 
+  it('redacts structured metadata at canonical ingress without weakening safe values or conflicts', () => {
+    const db = openDb(':memory:')
+    const { boardId, sessionId } = seedScope(db)
+    const profiles = new AgentProfileService(db)
+    const conversations = new ConversationService(db)
+    const profile = profiles.create({
+      boardId,
+      name: 'Metadata-safe builder',
+      actor,
+      idempotencyKey: 'profile:create:metadata-safe',
+    })
+    const conversation = conversations.listConversations(profile.id)[0]
+    conversations.linkSession(sessionId, {
+      profileId: profile.id,
+      conversationId: conversation.id,
+      mode: 'managed',
+      providerThreadId: 'thread-metadata-safe',
+      actor,
+      idempotencyKey: 'session:link:metadata-safe',
+    })
+
+    const privateKey = [
+      '-----BEGIN PRIVATE KEY-----',
+      'domain-private-material-must-not-survive',
+      '-----END PRIVATE KEY-----',
+    ].join('\n')
+    const sentinels = [
+      'dXNlcjpwYXNz',
+      'domain-cookie-must-not-survive',
+      'domain-private-material-must-not-survive',
+      'sk-abcdefghijklmnopqrstuvwxyz123456',
+      'ghp_abcdefghijklmnopqrstuvwxyz123456',
+      'xoxb-abcdefghijklmnopqrstuvwxyz123456',
+      'domain-camel-key-must-not-survive',
+      'domain-hyphen-token-must-not-survive',
+      'domain-short-provider-token-xy12',
+      'domain-short-api-key-xy13',
+      'domain-withheld-api-key-xy15',
+      'YTo',
+    ]
+    const metadata = {
+      note: 'Authorization: Basic dXNlcjpwYXNz',
+      shortBasic: 'Authorization: Basic YTo',
+      headers: {
+        cookie: 'sid=domain-cookie-must-not-survive',
+      },
+      nested: {
+        apiKey: 'domain-camel-key-must-not-survive',
+        'refresh-token': 'domain-hyphen-token-must-not-survive',
+        keyMaterial: privateKey,
+        providerTokens: [
+          'sk-abcdefghijklmnopqrstuvwxyz123456',
+          'ghp_abcdefghijklmnopqrstuvwxyz123456',
+          'xoxb-abcdefghijklmnopqrstuvwxyz123456',
+          'domain-short-provider-token-xy12',
+        ],
+        apiKeys: ['domain-short-api-key-xy13'],
+      },
+      usage: {
+        token_usage: {
+          total_tokens: 144,
+          input_tokens: 100,
+          output_tokens: 44,
+          cached_input_tokens: 30,
+        },
+        token_budget: 2_000,
+      },
+      safe: {
+        status: 'completed',
+        enabled: true,
+        count: 7,
+        empty: null,
+      },
+    }
+    const appended = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:first',
+      dedupeKey: 'provider:metadata-safe:first',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og',
+      metadata,
+      actor: { type: 'agent', id: 'codex' },
+    })
+    const replay = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:first',
+      dedupeKey: 'provider:metadata-safe:first',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og',
+      metadata,
+      actor: { type: 'agent', id: 'codex' },
+    })
+
+    expect(appended).toMatchObject({
+      replayed: false,
+      event: {
+        projected_text: 'Authorization: Basic [REDACTED]',
+        redaction_state: 'redacted',
+        metadata: {
+          note: 'Authorization: Basic [REDACTED]',
+          shortBasic: 'Authorization: Basic [REDACTED]',
+          headers: { cookie: '[REDACTED]' },
+          nested: {
+            apiKey: '[REDACTED]',
+            'refresh-token': '[REDACTED]',
+            keyMaterial: '[REDACTED]',
+            providerTokens: '[REDACTED]',
+            apiKeys: '[REDACTED]',
+          },
+          usage: {
+            token_usage: {
+              total_tokens: 144,
+              input_tokens: 100,
+              output_tokens: 44,
+              cached_input_tokens: 30,
+            },
+            token_budget: 2_000,
+          },
+          safe: {
+            status: 'completed',
+            enabled: true,
+            count: 7,
+            empty: null,
+          },
+        },
+      },
+    })
+    expect(replay).toMatchObject({
+      replayed: true,
+      event: { id: appended.event.id },
+    })
+
+    const stored = db.prepare(`SELECT metadata_json, content_hash
+      FROM conversation_events WHERE id=?`).get(appended.event.id) as {
+      metadata_json: string
+      content_hash: string
+    }
+    expect(stored.content_hash).toMatch(/^[a-f0-9]{64}$/)
+    for (const sentinel of sentinels) {
+      expect(JSON.stringify(appended)).not.toContain(sentinel)
+      expect(stored.metadata_json).not.toContain(sentinel)
+    }
+
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:conflict',
+      dedupeKey: 'provider:metadata-safe:first',
+      kind: 'assistant',
+      projectedText: 'Authorization: Basic Og',
+      metadata: {
+        ...metadata,
+        headers: { 'set-cookie': 'sid=conflict-cookie-must-not-survive' },
+        tokens: ['conflict-short-token-xy14'],
+        safe: { ...metadata.safe, status: 'failed' },
+      },
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+    const conflict = db.prepare(`SELECT received_content_hash, received_metadata_json
+      FROM conversation_event_conflicts`).get() as {
+      received_content_hash: string
+      received_metadata_json: string
+    }
+    expect(conflict.received_content_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(conflict.received_metadata_json).not.toContain('conflict-cookie-must-not-survive')
+    expect(conflict.received_metadata_json).not.toContain('conflict-short-token-xy14')
+    expect(JSON.parse(conflict.received_metadata_json)).toMatchObject({
+      headers: { 'set-cookie': '[REDACTED]' },
+      tokens: '[REDACTED]',
+      safe: { status: 'failed' },
+    })
+
+    const executableMetadata = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:to-json',
+      dedupeKey: 'provider:metadata-safe:to-json',
+      kind: 'status',
+      metadata: {
+        toJSON: () => ({
+          authentication: 'to-json-auth-must-not-survive',
+          safe: 'visible',
+        }),
+      },
+      actor: { type: 'agent', id: 'codex' },
+    })
+    expect(executableMetadata.event.metadata).toEqual({
+      authentication: '[REDACTED]',
+      safe: 'visible',
+    })
+    const withheld = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:withheld',
+      dedupeKey: 'provider:metadata-safe:withheld',
+      kind: 'status',
+      projectedText: 'Authorization: Basic Og',
+      metadata: {
+        apiKeys: ['domain-withheld-api-key-xy15'],
+      },
+      redactionState: 'withheld',
+      actor: { type: 'system', id: 'retention' },
+    })
+    expect(withheld.event).toMatchObject({
+      projected_text: null,
+      redaction_state: 'withheld',
+      metadata: { apiKeys: '[REDACTED]' },
+    })
+
+    const boundaryOverhead = Buffer.byteLength('{"note":""}', 'utf8')
+    const boundary = conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:boundary',
+      dedupeKey: 'provider:metadata-safe:boundary',
+      kind: 'status',
+      metadata: { note: 'x'.repeat(64_000 - boundaryOverhead) },
+      actor: { type: 'system', id: 'boundary-test' },
+    })
+    expect(Buffer.byteLength(JSON.stringify(boundary.event.metadata), 'utf8')).toBe(64_000)
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:metadata-safe:over-boundary',
+      dedupeKey: 'provider:metadata-safe:over-boundary',
+      kind: 'status',
+      metadata: { note: 'x'.repeat(64_001 - boundaryOverhead) },
+      actor: { type: 'system', id: 'boundary-test' },
+    })).toThrow(/metadata must be at most 64000 bytes/)
+
+    const durableEvents = db.prepare('SELECT payload FROM os_events').all() as Array<{
+      payload: string
+    }>
+    const durablePayloads = durableEvents.map((event) => event.payload).join('\n')
+    for (const sentinel of [
+      ...sentinels,
+      'conflict-cookie-must-not-survive',
+      'conflict-short-token-xy14',
+      'to-json-auth-must-not-survive',
+    ]) {
+      expect(durablePayloads).not.toContain(sentinel)
+    }
+    db.close()
+  })
+
   it('keeps event replay stable when provider thread metadata is discovered later', () => {
     const db = openDb(':memory:')
     const { boardId, sessionId } = seedScope(db)
@@ -421,6 +654,17 @@ describe('durable Agent Home domain', () => {
       projectedText: 'Recorded before the provider thread was known',
       actor: { type: 'agent', id: 'codex' },
     })
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:threadless:conflict-before-discovery',
+      dedupeKey: 'provider:threadless:first',
+      kind: 'assistant',
+      projectedText: 'Conflicting retry before provider discovery',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+    const conflictBeforeDiscovery = db.prepare(`SELECT received_content_hash
+      FROM conversation_event_conflicts WHERE canonical_event_id=?`).get(
+      beforeDiscovery.event.id,
+    ) as { received_content_hash: string }
     conversations.appendEvent(sessionId, {
       idempotencyKey: 'event:thread:discovered',
       dedupeKey: 'provider:thread:discovered',
@@ -443,9 +687,32 @@ describe('durable Agent Home domain', () => {
       replayed: true,
       event: { id: beforeDiscovery.event.id, sequence: beforeDiscovery.event.sequence },
     })
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:threadless:conflict-after-discovery',
+      dedupeKey: 'provider:threadless:first',
+      kind: 'assistant',
+      projectedText: 'Conflicting retry before provider discovery',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM conversation_event_conflicts',
-    ).get() as any).count).toBe(0)
+    ).get() as any).count).toBe(1)
+    expect((db.prepare(`SELECT received_content_hash
+      FROM conversation_event_conflicts WHERE canonical_event_id=?`).get(
+      beforeDiscovery.event.id,
+    ) as { received_content_hash: string }).received_content_hash)
+      .toBe(conflictBeforeDiscovery.received_content_hash)
+    expect(() => conversations.appendEvent(sessionId, {
+      idempotencyKey: 'event:threadless:explicit-mismatch',
+      dedupeKey: 'provider:threadless:first',
+      providerThreadId: 'thread-discovered-after-attach',
+      kind: 'assistant',
+      projectedText: 'Recorded before the provider thread was known',
+      actor: { type: 'agent', id: 'codex' },
+    })).toThrow(/conflict/)
+    expect((db.prepare(
+      'SELECT COUNT(*) AS count FROM conversation_event_conflicts',
+    ).get() as any).count).toBe(2)
     db.close()
   })
 
@@ -636,7 +903,7 @@ describe('durable Agent Home domain', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(12)
+      .toBe(13)
     expect(db.prepare(`SELECT id, legacy_agent_id, name, provenance_json
       FROM agent_profiles ORDER BY legacy_agent_id`).all()).toEqual([
       expect.objectContaining({

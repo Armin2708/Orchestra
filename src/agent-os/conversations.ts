@@ -4,6 +4,7 @@ import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
 import { AgentProfileService, type AgentProfile } from './agent-profiles.js'
+import { conversationEventContentHash } from './conversation-event-integrity.js'
 import {
   accessProfile,
   actorIdentity,
@@ -28,6 +29,7 @@ import {
   durableSessionEventScope,
   type DurableSessionEventScope,
 } from './agent-home-event-scope.js'
+import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
 
 export const CONVERSATION_EVENT_KINDS = [
   'user',
@@ -701,10 +703,21 @@ export class ConversationService {
       'provider thread id',
       512,
     )
-    const projectedText = normalizeProjectedText(
+    const requestedProjectedText = redactSensitiveText(
       optionalProjectedText(input.projectedText),
+    )
+    const projectedText = normalizeProjectedText(
+      requestedProjectedText.value,
       redactionState(input.redactionState),
     )
+    const requestedMetadata = JSON.parse(
+      stableJson(jsonRecord(input.metadata, 'metadata')),
+    ) as unknown
+    if (!requestedMetadata || typeof requestedMetadata !== 'object'
+      || Array.isArray(requestedMetadata)) {
+      throw new ValidationError('metadata must serialize to an object')
+    }
+    const metadata = redactStructuredValue(requestedMetadata as Record<string, unknown>)
     const normalized = {
       provider,
       provider_event_id: optionalBoundedString(input.providerEventId, 'provider event id', 512),
@@ -717,18 +730,19 @@ export class ConversationService {
       correlation_id: optionalBoundedString(input.correlationId, 'correlation id', 512),
       causation_id: optionalBoundedString(input.causationId, 'causation id', 512),
       projected_text: projectedText.value,
-      metadata: jsonRecord(input.metadata, 'metadata'),
+      metadata: metadata.value as Record<string, unknown>,
       raw_artifact_id: optionalBoundedString(input.rawArtifactId, 'raw artifact id', 200),
       dedupe_key: boundedString(input.dedupeKey, 'dedupe key', 512),
-      redaction_state: projectedText.redactionState,
+      redaction_state: projectedText.redactionState === 'withheld'
+        ? 'withheld' as const
+        : metadata.changed || requestedProjectedText.changed
+          ? 'redacted' as const
+          : projectedText.redactionState,
       retention_class: retentionClass(input.retentionClass),
       schema_version: positiveInteger(input.schemaVersion ?? 1, 'schema version'),
     }
     this.validateArtifactScope(normalized.raw_artifact_id, scope.board_id, session.workspace_id)
-    const contentHash = canonicalHash({
-      ...normalized,
-      provider_thread_id: requestedProviderThreadId,
-    })
+    const contentHash = conversationEventContentHash(normalized)
     const idempotencyKey = boundedString(input.idempotencyKey, 'idempotency key', 200)
 
     const append = this.db.transaction((): AppendConversationEventResult | { conflictId: string } => {
@@ -746,12 +760,18 @@ export class ConversationService {
       ).get(conversation.id, normalized.dedupe_key) as Record<string, unknown> | undefined
       if (existing) {
         const canonical = mapConversationEvent(existing)
-        if (canonical.content_hash !== contentHash) {
+        const replayContentHash = requestedProviderThreadId === null
+          ? conversationEventContentHash({
+              ...normalized,
+              provider_thread_id: canonical.provider_thread_id,
+            })
+          : contentHash
+        if (canonical.content_hash !== replayContentHash) {
           return {
             conflictId: this.retainEventConflict({
               canonical,
               session: latest,
-              contentHash,
+              contentHash: replayContentHash,
               projectedText: normalized.projected_text,
               metadata: normalized.metadata,
               rawArtifactId: normalized.raw_artifact_id,
@@ -763,7 +783,7 @@ export class ConversationService {
         const replay = this.replayEventCommand({
           eventScope,
           idempotencyKey,
-          contentHash,
+          contentHash: replayContentHash,
           sessionId: latest.id,
           dedupeKey: normalized.dedupe_key,
           correlationId: normalized.correlation_id,
@@ -797,8 +817,8 @@ export class ConversationService {
               replay_of_event_id: canonical.id,
               sequence: canonical.sequence,
               dedupe_key: normalized.dedupe_key,
-              content_hash: contentHash,
-              request_fingerprint: contentHash,
+              content_hash: replayContentHash,
+              request_fingerprint: replayContentHash,
             },
           })
         }
@@ -1230,6 +1250,11 @@ export function mapAgentSession(row: Record<string, unknown>): AgentSessionRecor
 }
 
 export function mapConversationEvent(row: Record<string, unknown>): ConversationEvent {
+  const metadata = redactStructuredValue(parseJson<Record<string, unknown>>(row.metadata_json, {}))
+  const storedRedactionState = String(row.redaction_state) as RedactionState
+  const projectedText = storedRedactionState === 'withheld'
+    ? { value: null, changed: false }
+    : redactSensitiveText(row.projected_text == null ? null : String(row.projected_text))
   return {
     id: String(row.id),
     board_id: Number(row.board_id),
@@ -1248,12 +1273,16 @@ export function mapConversationEvent(row: Record<string, unknown>): Conversation
     actor_id: row.actor_id == null ? null : String(row.actor_id),
     correlation_id: row.correlation_id == null ? null : String(row.correlation_id),
     causation_id: row.causation_id == null ? null : String(row.causation_id),
-    projected_text: row.projected_text == null ? null : String(row.projected_text),
-    metadata: parseJson<Record<string, unknown>>(row.metadata_json, {}),
+    projected_text: projectedText.value,
+    metadata: metadata.value as Record<string, unknown>,
     raw_artifact_id: row.raw_artifact_id == null ? null : String(row.raw_artifact_id),
     dedupe_key: String(row.dedupe_key),
     content_hash: String(row.content_hash),
-    redaction_state: String(row.redaction_state) as RedactionState,
+    redaction_state: storedRedactionState === 'withheld'
+      ? 'withheld'
+      : metadata.changed || projectedText.changed
+        ? 'redacted'
+        : storedRedactionState,
     retention_class: String(row.retention_class) as RetentionClass,
     schema_version: Number(row.schema_version),
     created_at: String(row.created_at),

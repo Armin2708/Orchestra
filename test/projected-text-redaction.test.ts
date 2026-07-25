@@ -7,6 +7,7 @@ describe('projected text redaction', () => {
     ['CUSTOM_AUTH_TOKEN=plainsecretvalue123', 'CUSTOM_AUTH_TOKEN=[REDACTED]'],
     ['COOKIE=sessionid123456789', 'COOKIE=[REDACTED]'],
     ['Authorization: Basic dXNlcjpwYXNz', 'Authorization: Basic [REDACTED]'],
+    ['Authorization: Basic dXNlcjpwYXNz.', 'Authorization: Basic [REDACTED].'],
     ['Authorization: Bearer top.secret.value', 'Authorization: Bearer [REDACTED]'],
     ['Authorization: Bearer [REDACTED].rawsecret123456', 'Authorization: Bearer [REDACTED]'],
     ['Authorization: Basic [REDACTED]rawsecret123456', 'Authorization: Basic [REDACTED]'],

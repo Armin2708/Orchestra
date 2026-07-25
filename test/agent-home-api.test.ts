@@ -311,6 +311,14 @@ describe('Agent Home API', () => {
     expect(linked.statusCode).toBe(200)
 
     const credential = 'sk-abcdefghijklmnopqrstuvwxyz123456'
+    const metadataCredential = 'dXNlcjpwYXNz'
+    const metadataCookie = 'api-cookie-must-not-survive'
+    const metadataPemBody = 'api-private-material-must-not-survive'
+    const metadataPrivateKey = [
+      '-----BEGIN PRIVATE KEY-----',
+      metadataPemBody,
+      '-----END PRIVATE KEY-----',
+    ].join('\n')
     const safeText = 'Usable API answer with [REDACTED]'
     const appended = await server.inject({
       method: 'POST',
@@ -320,20 +328,61 @@ describe('Agent Home API', () => {
         dedupe_key: 'api-redaction-event',
         kind: 'assistant',
         projected_text: `Usable API answer with ${credential}`,
+        metadata: {
+          nested: {
+            authLine: `Authorization: Basic ${metadataCredential}`,
+            'set-cookie': `sid=${metadataCookie}`,
+            keyMaterial: metadataPrivateKey,
+            apiKey: 'api-nested-key-must-not-survive',
+          },
+          usage: {
+            token_usage: {
+              total_tokens: 12,
+              output_tokens: 4,
+            },
+          },
+        },
       },
     })
     expect(appended.statusCode).toBe(201)
+    expect(appended.body).not.toContain(metadataCredential)
+    expect(appended.body).not.toContain(metadataCookie)
+    expect(appended.body).not.toContain(metadataPemBody)
+    expect(appended.body).not.toContain('api-nested-key-must-not-survive')
     expect(appended.json().event).toMatchObject({
       projected_text: safeText,
       redaction_state: 'redacted',
+      metadata: {
+        nested: {
+          authLine: 'Authorization: Basic [REDACTED]',
+          'set-cookie': '[REDACTED]',
+          keyMaterial: '[REDACTED]',
+          apiKey: '[REDACTED]',
+        },
+        usage: {
+          token_usage: {
+            total_tokens: 12,
+            output_tokens: 4,
+          },
+        },
+      },
     })
     const eventId = appended.json().event.id
-    expect((db.prepare('SELECT projected_text FROM conversation_events WHERE id=?')
-      .get(eventId) as { projected_text: string }).projected_text).toBe(safeText)
+    const stored = db.prepare(`SELECT projected_text, metadata_json
+      FROM conversation_events WHERE id=?`).get(eventId) as {
+      projected_text: string
+      metadata_json: string
+    }
+    expect(stored.projected_text).toBe(safeText)
 
     const list = await server.inject({
       method: 'GET',
       url: `/api/v1/os/conversations/${conversation.id}/events`,
+      headers: agent,
+    })
+    const sessionList = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/sessions/${sessionId}/events`,
       headers: agent,
     })
     const search = await server.inject({
@@ -356,11 +405,31 @@ describe('Agent Home API', () => {
       url: `/api/v1/os/conversations/${conversation.id}/export`,
       headers: agent,
     })
+    const artifact = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/sessions/${sessionId}/export`,
+      headers: { ...operator, 'idempotency-key': 'api:redaction:artifact' },
+      payload: { format: 'json' },
+    })
 
-    for (const response of [list, search, direct, exported]) {
-      expect(response.statusCode).toBe(200)
+    expect(artifact.statusCode).toBe(201)
+    for (const response of [list, sessionList, search, direct, exported, artifact]) {
+      expect([200, 201]).toContain(response.statusCode)
       expect(response.body).toContain(safeText)
       expect(response.body).not.toContain(credential)
+      expect(response.body).not.toContain(metadataCredential)
+      expect(response.body).not.toContain(metadataCookie)
+      expect(response.body).not.toContain(metadataPemBody)
+      expect(response.body).not.toContain('api-nested-key-must-not-survive')
+    }
+    for (const sentinel of [
+      credential,
+      metadataCredential,
+      metadataCookie,
+      metadataPemBody,
+      'api-nested-key-must-not-survive',
+    ]) {
+      expect(stored.metadata_json).not.toContain(sentinel)
     }
     expect(search.json().events).toEqual([
       expect.objectContaining({ id: eventId, redaction_state: 'redacted' }),
@@ -368,6 +437,22 @@ describe('Agent Home API', () => {
     expect(secretSearch.statusCode).toBe(200)
     expect(secretSearch.json().events).toEqual([])
     expect(secretSearch.body).not.toContain(credential)
+    const persistedArtifact = db.prepare(`SELECT content FROM artifacts
+      WHERE id=?`).get(artifact.json().artifact.id) as { content: string }
+    expect(persistedArtifact.content).toBe(artifact.json().artifact.content)
+    const durablePayloads = (db.prepare('SELECT payload FROM os_events').all() as Array<{
+      payload: string
+    }>).map((event) => event.payload).join('\n')
+    for (const sentinel of [
+      credential,
+      metadataCredential,
+      metadataCookie,
+      metadataPemBody,
+      'api-nested-key-must-not-survive',
+    ]) {
+      expect(persistedArtifact.content).not.toContain(sentinel)
+      expect(durablePayloads).not.toContain(sentinel)
+    }
   })
 })
 

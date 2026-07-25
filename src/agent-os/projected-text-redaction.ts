@@ -9,7 +9,12 @@ const SECRET_PATTERNS: Array<{
     pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   },
   {
-    pattern: /\b((?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+)(\[REDACTED\](?:[A-Za-z0-9._~+/=-]+)?|[A-Za-z0-9._~+/=-]{8,})/gi,
+    pattern: /\b((?:authorization\s*[:=]\s*)?basic\s+)(\[REDACTED\](?:[A-Za-z0-9+/=]+)?|[A-Za-z0-9+/=]{8,})(?![A-Za-z0-9+/=])/gi,
+    preservePrefix: true,
+    valueCapture: true,
+  },
+  {
+    pattern: /\b((?:authorization\s*[:=]\s*)?bearer\s+)(\[REDACTED\](?:[A-Za-z0-9._~+/=-]+)?|[A-Za-z0-9._~+/=-]{8,})/gi,
     preservePrefix: true,
     valueCapture: true,
   },

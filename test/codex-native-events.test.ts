@@ -376,6 +376,43 @@ describe('Agent Home Codex native event capture', () => {
       scope.db.close()
     }
   })
+
+  it('preserves nullable counters in partial native usage without marking the event redacted', () => {
+    const scope = createScope()
+    try {
+      scope.sink.append(capture(scope.binding, {
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-partial-usage',
+          tokenUsage: {
+            total: { totalTokens: 7 },
+          },
+        },
+        receivedAt: '2026-07-24T08:00:00.350Z',
+      }, 'orchestra-codex:partial-usage'))
+
+      const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        kind: 'usage',
+        redaction_state: 'none',
+        metadata: {
+          token_usage: {
+            total_tokens: 7,
+            input_tokens: null,
+            cached_input_tokens: null,
+            output_tokens: null,
+            reasoning_output_tokens: null,
+            last_total_tokens: null,
+            model_context_window: null,
+          },
+        },
+      })
+    } finally {
+      scope.db.close()
+    }
+  })
 })
 
 const nativeThread = (

@@ -21,6 +21,7 @@ import {
   type ActorIdentity,
 } from './agent-home-support.js'
 import { timestamp } from './json.js'
+import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
 
 export type AgentHomeExportFormat = 'human' | 'json'
 
@@ -325,56 +326,39 @@ export class AgentHomeTranscriptExporter {
   }
 }
 
-const SENSITIVE_KEY = /(?:^|_)(?:authorization|cookie|credential|password|passwd|secret|session_token|access_token|refresh_token|api_key|private_key|raw_response)(?:$|_)/i
-const SECRET_PATTERNS = [
-  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi,
-  /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[a-z]-[A-Za-z0-9-]{16,})\b/gi,
-  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|password|secret)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-]
-
 function redactValue(value: unknown, key = ''): { value: unknown; redactions: number } {
-  if (isSensitiveKey(key)) return { value: '[REDACTED]', redactions: 1 }
-  if (typeof value === 'string') return redactText(value)
-  if (Array.isArray(value)) {
-    let redactions = 0
-    const next = value.map((item) => {
-      const result = redactValue(item)
-      redactions += result.redactions
-      return result.value
-    })
-    return { value: next, redactions }
+  const result = key
+    ? redactStructuredValue({ [key]: value })
+    : redactStructuredValue(value)
+  const safeValue = key
+    ? (result.value as Record<string, unknown>)[key]
+    : result.value
+  return {
+    value: safeValue,
+    redactions: countRedactionMarkers(safeValue),
   }
-  if (value && typeof value === 'object') {
-    let redactions = 0
-    const next = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, item]) => {
-      const result = redactValue(item, name)
-      redactions += result.redactions
-      return [name, result.value]
-    }))
-    return { value: next, redactions }
-  }
-  return { value, redactions: 0 }
-}
-
-function isSensitiveKey(key: string): boolean {
-  const normalized = key
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/[^a-z0-9]+/gi, '_')
-    .toLowerCase()
-  return SENSITIVE_KEY.test(normalized)
 }
 
 function redactText(value: string | null): { value: string | null; redactions: number } {
-  if (value === null) return { value: null, redactions: 0 }
-  let redactions = 0
-  let next = value
-  for (const pattern of SECRET_PATTERNS) {
-    next = next.replace(pattern, (_match, prefix: string | number | undefined) => {
-      redactions += 1
-      return typeof prefix === 'string' ? `${prefix}[REDACTED]` : '[REDACTED]'
-    })
+  const result = redactSensitiveText(value)
+  return {
+    value: result.value,
+    redactions: countRedactionMarkers(result.value),
   }
-  return { value: next, redactions }
+}
+
+function countRedactionMarkers(value: unknown): number {
+  if (typeof value === 'string') {
+    return value.match(/\[REDACTED\]/g)?.length ?? 0
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + countRedactionMarkers(item), 0)
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>)
+      .reduce<number>((total, item) => total + countRedactionMarkers(item), 0)
+  }
+  return 0
 }
 
 function safeName(value: string): string {

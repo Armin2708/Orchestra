@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { canonicalHash } from './agent-home-support.js'
+import { canonicalHash, stableJson } from './agent-home-support.js'
+import { conversationEventContentHash } from './conversation-event-integrity.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
   isNativeProviderProjection,
@@ -8,6 +10,7 @@ import {
   redactProjectedText,
   type ProjectedTextRedactionState,
 } from './projected-text-redaction.js'
+import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
 
 interface Migration {
   id: string
@@ -22,6 +25,99 @@ const metadataRecord = (serialized: string): Record<string, unknown> => {
       : {}
   } catch {
     return {}
+  }
+}
+
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
+const MALFORMED_TRANSCRIPT_TOMBSTONE = `${JSON.stringify({
+  redacted: true,
+  reason: 'malformed_legacy_transcript',
+}, null, 2)}\n`
+
+const replaceEventHashes = (
+  value: unknown,
+  eventHashes: Map<string, string>,
+): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const document = value as Record<string, unknown>
+  let changed = false
+  if (Array.isArray(document.events)) {
+    for (const item of document.events) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const event = item as Record<string, unknown>
+      if (typeof event.id !== 'string') continue
+      const contentHash = eventHashes.get(event.id)
+      if (contentHash && event.content_hash !== contentHash) {
+        event.content_hash = contentHash
+        changed = true
+      }
+    }
+  }
+  if (document.provenance && typeof document.provenance === 'object'
+    && !Array.isArray(document.provenance)) {
+    const provenance = document.provenance as Record<string, unknown>
+    const eventIds = provenance.event_ids
+    const sourceContentHashes = provenance.source_content_hashes
+    if (Array.isArray(eventIds) && Array.isArray(sourceContentHashes)) {
+      const next = sourceContentHashes.map((hash, index) => {
+        const eventId = eventIds[index]
+        const contentHash = typeof eventId === 'string' ? eventHashes.get(eventId) : undefined
+        if (contentHash && hash !== contentHash) {
+          changed = true
+          return contentHash
+        }
+        return hash
+      })
+      provenance.source_content_hashes = next
+    }
+  }
+  return changed
+}
+
+const repairTranscriptContent = (
+  content: string,
+  format: string,
+  eventHashes: Map<string, string>,
+): { content: string; redactions: number } => {
+  if (format === 'json') {
+    try {
+      const parsed = JSON.parse(content) as unknown
+      const hashesChanged = replaceEventHashes(parsed, eventHashes)
+      const redacted = redactStructuredValue(parsed)
+      if (!hashesChanged && !redacted.changed) {
+        return { content, redactions: 0 }
+      }
+      if (redacted.value && typeof redacted.value === 'object'
+        && !Array.isArray(redacted.value)) {
+        const document = redacted.value as Record<string, unknown>
+        if (document.redaction_policy && typeof document.redaction_policy === 'object'
+          && !Array.isArray(document.redaction_policy)
+          && redacted.redactions > 0) {
+          const policy = document.redaction_policy as Record<string, unknown>
+          const prior = Number(policy.redactions_applied)
+          policy.redactions_applied = (Number.isSafeInteger(prior) && prior >= 0 ? prior : 0)
+            + redacted.redactions
+        }
+      }
+      return {
+        content: `${JSON.stringify(redacted.value, null, 2)}\n`,
+        redactions: redacted.redactions,
+      }
+    } catch {
+      return { content: MALFORMED_TRANSCRIPT_TOMBSTONE, redactions: 1 }
+    }
+  }
+  const withCurrentHashes = content.replace(
+    /^event=(\S+)([^\r\n]*\shash=)([a-f0-9]{64})(?=\s*$)/gim,
+    (line, eventId: string | undefined, suffix: string | undefined) => {
+      const contentHash = eventId ? eventHashes.get(eventId) : undefined
+      return contentHash ? `event=${eventId}${suffix ?? ' hash='}${contentHash}` : line
+    },
+  )
+  const redacted = redactSensitiveText(withCurrentHashes)
+  return {
+    content: redacted.value ?? '',
+    redactions: redacted.redactions,
   }
 }
 
@@ -1557,6 +1653,234 @@ const migrations: Migration[] = [
             ) THEN RAISE(ABORT, 'retention evidence bundle repair scope is inconsistent') END;
           END;
         `)
+      }
+    },
+  },
+  {
+    id: '013-agent-home-structured-metadata-redaction',
+    apply(db) {
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_home_transcript_repairs (
+          artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          original_content_sha256 TEXT NOT NULL CHECK(length(original_content_sha256)=64),
+          original_content_bytes INTEGER NOT NULL CHECK(original_content_bytes>=0),
+          repaired_content_sha256 TEXT NOT NULL CHECK(length(repaired_content_sha256)=64),
+          repaired_content_bytes INTEGER NOT NULL CHECK(repaired_content_bytes>=0),
+          original_metadata_sha256 TEXT NOT NULL CHECK(length(original_metadata_sha256)=64),
+          repaired_metadata_sha256 TEXT NOT NULL CHECK(length(repaired_metadata_sha256)=64),
+          redactions_applied INTEGER NOT NULL CHECK(redactions_applied>=0),
+          repaired_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_home_transcript_repairs_board
+          ON agent_home_transcript_repairs(board_id, repaired_at, artifact_id);
+      `)
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS agent_home_transcript_repairs_scope_insert
+          BEFORE INSERT ON agent_home_transcript_repairs
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts
+              WHERE artifacts.id=NEW.artifact_id
+                AND artifacts.board_id=NEW.board_id
+                AND artifacts.kind='agent_home_transcript'
+            ) THEN RAISE(ABORT, 'transcript repair artifact scope is inconsistent') END;
+          END;
+        `)
+      }
+
+      const eventRows = db.prepare(`SELECT
+          id, provider, provider_event_id, provider_thread_id, provider_turn_id,
+          provider_item_id, provider_cursor, kind, actor_type, actor_id,
+          correlation_id, causation_id, projected_text, metadata_json,
+          raw_artifact_id, dedupe_key, content_hash, redaction_state,
+          retention_class, schema_version
+        FROM conversation_events`).all() as Array<{
+          id: string
+          provider: string | null
+          provider_event_id: string | null
+          provider_thread_id: string | null
+          provider_turn_id: string | null
+          provider_item_id: string | null
+          provider_cursor: string | null
+          kind: string
+          actor_type: string
+          actor_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+          projected_text: string | null
+          metadata_json: string
+          raw_artifact_id: string | null
+          dedupe_key: string
+          content_hash: string
+          redaction_state: ProjectedTextRedactionState
+          retention_class: string
+          schema_version: number
+        }>
+      const eventHashes = new Map<string, string>()
+      const updateEvent = db.prepare(`UPDATE conversation_events
+        SET projected_text=?, metadata_json=?, redaction_state=?, content_hash=? WHERE id=?`)
+      const updateEventAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(
+          payload,
+          '$.content_hash', ?,
+          '$.request_fingerprint', ?
+        )
+        WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+          AND json_valid(payload)
+          AND json_extract(payload, '$.conversation_event_id')=?`)
+      const updateConflictAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.canonical_content_hash', ?)
+        WHERE kind='conversation.event_conflict'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.canonical_event_id')=?`)
+      for (const row of eventRows) {
+        const metadata = redactStructuredValue(metadataRecord(row.metadata_json))
+        const projectedText = row.redaction_state === 'withheld'
+          ? { value: null, changed: false }
+          : redactSensitiveText(row.projected_text)
+        const redactionState = row.redaction_state === 'withheld'
+          ? 'withheld'
+          : metadata.changed || projectedText.changed
+            ? 'redacted'
+            : row.redaction_state
+        const contentHash = conversationEventContentHash({
+          provider: row.provider,
+          provider_event_id: row.provider_event_id,
+          provider_thread_id: row.provider_thread_id,
+          provider_turn_id: row.provider_turn_id,
+          provider_item_id: row.provider_item_id,
+          provider_cursor: row.provider_cursor,
+          kind: row.kind,
+          actor: { type: row.actor_type, id: row.actor_id },
+          correlation_id: row.correlation_id,
+          causation_id: row.causation_id,
+          projected_text: projectedText.value,
+          metadata: metadata.value as Record<string, unknown>,
+          raw_artifact_id: row.raw_artifact_id,
+          dedupe_key: row.dedupe_key,
+          redaction_state: redactionState,
+          retention_class: row.retention_class,
+          schema_version: row.schema_version,
+        })
+        updateEvent.run(
+          projectedText.value,
+          stableJson(metadata.value),
+          redactionState,
+          contentHash,
+          row.id,
+        )
+        updateEventAudit.run(contentHash, contentHash, row.id)
+        updateConflictAudit.run(contentHash, row.id)
+        eventHashes.set(row.id, contentHash)
+      }
+
+      const conflictRows = db.prepare(`SELECT
+          conflict.id, conflict.received_projected_text,
+          conflict.received_metadata_json, canonical.provider
+        FROM conversation_event_conflicts conflict
+        JOIN conversation_events canonical ON canonical.id=conflict.canonical_event_id`)
+        .all() as Array<{
+          id: string
+          received_projected_text: string | null
+          received_metadata_json: string
+          provider: string | null
+        }>
+      const updateConflict = db.prepare(`UPDATE conversation_event_conflicts
+        SET received_projected_text=?, received_metadata_json=? WHERE id=?`)
+      for (const conflict of conflictRows) {
+        const metadata = redactStructuredValue(metadataRecord(conflict.received_metadata_json))
+        const projectedText = isWithheldProviderReasoning(
+          conflict.provider,
+          metadata.value as Record<string, unknown>,
+        )
+          ? null
+          : redactSensitiveText(conflict.received_projected_text).value
+        updateConflict.run(
+          projectedText,
+          stableJson(metadata.value),
+          conflict.id,
+        )
+      }
+
+      if (!hasArtifacts) return
+      const artifacts = db.prepare(`SELECT
+          id, board_id, mime_type, content, metadata
+        FROM artifacts WHERE kind='agent_home_transcript'`).all() as Array<{
+          id: string
+          board_id: number
+          mime_type: string
+          content: string | null
+          metadata: string
+        }>
+      const updateArtifact = db.prepare(
+        'UPDATE artifacts SET content=?, metadata=? WHERE id=?',
+      )
+      const updateArtifactAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.content_hash', ?)
+        WHERE kind='agent_home.transcript_exported'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.artifact_id')=?`)
+      const recordRepair = db.prepare(`INSERT OR IGNORE INTO agent_home_transcript_repairs (
+          artifact_id, board_id, original_content_sha256, original_content_bytes,
+          repaired_content_sha256, repaired_content_bytes,
+          original_metadata_sha256, repaired_metadata_sha256,
+          redactions_applied, repaired_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+      for (const artifact of artifacts) {
+        const originalContent = artifact.content ?? ''
+        const originalMetadata = metadataRecord(artifact.metadata)
+        const safeMetadata = redactStructuredValue(originalMetadata)
+        const format = originalMetadata.format === 'json'
+          || artifact.mime_type.toLowerCase().includes('json')
+          ? 'json'
+          : 'human'
+        const repairedContent = artifact.content === null
+          ? { content: '', redactions: 0 }
+          : repairTranscriptContent(
+              artifact.content,
+              format,
+              eventHashes,
+            )
+        const originalContentHash = sha256(originalContent)
+        const repairedContentHash = sha256(repairedContent.content)
+        const repairedMetadata: Record<string, unknown> = {
+          ...(safeMetadata.value as Record<string, unknown>),
+          content_hash: repairedContentHash,
+        }
+        const priorRedactions = Number(repairedMetadata.redactions_applied)
+        const additionalRedactions = repairedContent.redactions + safeMetadata.redactions
+        if (additionalRedactions > 0) {
+          repairedMetadata.redactions_applied = (
+            Number.isSafeInteger(priorRedactions) && priorRedactions >= 0
+              ? priorRedactions
+              : 0
+          ) + additionalRedactions
+        }
+        const repairedMetadataJson = stableJson(repairedMetadata)
+        const repairedMetadataHash = sha256(repairedMetadataJson)
+        const contentValue = artifact.content === null ? null : repairedContent.content
+        updateArtifactAudit.run(repairedContentHash, artifact.id)
+        if (contentValue === artifact.content
+          && repairedMetadataJson === artifact.metadata) continue
+
+        updateArtifact.run(contentValue, repairedMetadataJson, artifact.id)
+        recordRepair.run(
+          artifact.id,
+          artifact.board_id,
+          originalContentHash,
+          Buffer.byteLength(originalContent, 'utf8'),
+          repairedContentHash,
+          Buffer.byteLength(repairedContent.content, 'utf8'),
+          sha256(artifact.metadata),
+          repairedMetadataHash,
+          additionalRedactions,
+        )
       }
     },
   },
