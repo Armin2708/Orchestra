@@ -134,6 +134,52 @@ describe('Agent OS CLI', () => {
     ])
   })
 
+  it('configures and runs Agent Home retention through operator APIs', async () => {
+    const { calls, run } = setup({ policy: {}, run: {} })
+
+    await run('retention', 'show', '--board', '42')
+    await run(
+      'retention', 'set',
+      '--board', '42',
+      '--transcript-days', '120',
+      '--ephemeral-days', '14',
+      '--raw-artifact-days', '45',
+      '--idempotency', 'retention-set-1',
+    )
+    await run(
+      'retention', 'run',
+      '--board', '42',
+      '--as-of', '2026-07-25T12:00:00.000Z',
+      '--idempotency', 'retention-run-1',
+    )
+
+    expect(calls).toEqual([
+      {
+        method: 'GET',
+        path: '/os/boards/42/retention',
+        body: undefined,
+      },
+      {
+        method: 'PUT',
+        path: '/os/boards/42/retention',
+        body: {
+          transcript_days: 120,
+          ephemeral_days: 14,
+          raw_artifact_days: 45,
+          idempotency_key: 'retention-set-1',
+        },
+      },
+      {
+        method: 'POST',
+        path: '/os/boards/42/retention/run',
+        body: {
+          as_of: '2026-07-25T12:00:00.000Z',
+          idempotency_key: 'retention-run-1',
+        },
+      },
+    ])
+  })
+
   it('creates an isolated workspace on the resolved project board', async () => {
     const { calls, deps, run } = setup({ id: 9, name: 'fix-auth' })
 

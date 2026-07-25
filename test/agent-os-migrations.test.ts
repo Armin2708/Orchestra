@@ -45,7 +45,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
     first.close()
 
     const second = openDb(file)
@@ -56,10 +56,12 @@ describe('Agent OS migrations', () => {
       'agent_profiles', 'agent_conversations', 'conversation_events',
       'conversation_event_conflicts', 'agent_session_actions',
       'job_market_contracts', 'job_market_criteria',
-      'job_market_dependencies']) {
+      'job_market_dependencies', 'agent_home_retention_policies',
+      'agent_home_retention_runs', 'agent_home_raw_artifact_archives',
+      'agent_home_evidence_bundle_repairs']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('processes') WHERE name='recipe_json'").get() as any).dflt_value)
@@ -90,6 +92,28 @@ describe('Agent OS migrations', () => {
       (id, workspace_id, provider, external_id, status) VALUES ('s3', 'w2', 'codex', 'thread-1', 'stopped')`).run())
       .not.toThrow()
     second.close()
+  })
+
+  it('can safely rerun migration 012 after its marker is removed', () => {
+    const db = openDb(':memory:')
+    db.prepare("DELETE FROM os_schema_migrations WHERE id='012-agent-home-retention'").run()
+
+    expect(() => applyAgentOsMigrations(db)).not.toThrow()
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
+      count: number
+    }).count).toBe(12)
+    for (const table of [
+      'agent_home_retention_policies',
+      'agent_home_retention_runs',
+      'agent_home_raw_artifact_archives',
+      'agent_home_evidence_bundle_repairs',
+    ]) {
+      expect((db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type='table' AND name=?`).get(table) as { count: number }).count).toBe(1)
+    }
+    db.close()
   })
 
   it('repairs false-withheld native projections without restoring provider reasoning', () => {
@@ -270,7 +294,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(11)
+      .toBe(12)
     db.close()
   })
 
@@ -422,7 +446,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(11)
+      .toBe(12)
     db.close()
   })
 
@@ -483,7 +507,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -576,7 +600,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(11)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(12)
     db.close()
   })
 

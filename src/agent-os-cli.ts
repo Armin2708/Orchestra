@@ -318,6 +318,44 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       write(typeof result === 'string' ? result : String(result?.text ?? result))
     })
 
+  const retention = program.command('retention')
+    .description('configure and run Agent Home retention')
+  retention.command('show')
+    .option('--board <id>', 'board id', integer)
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      const id = await boardId(options.board)
+      print(await deps.api('GET', `/os/boards/${id}/retention`), options.json, ['policy'])
+    })
+  retention.command('set')
+    .option('--board <id>', 'board id', integer)
+    .option('--transcript-days <days>', 'days before transcript events are archived', integer)
+    .option('--ephemeral-days <days>', 'days before ephemeral events are archived', integer)
+    .option('--raw-artifact-days <days>', 'days before eligible inline raw payloads are compacted', integer)
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      const id = await boardId(options.board)
+      print(await deps.api('PUT', `/os/boards/${id}/retention`, compact({
+        transcript_days: options.transcriptDays,
+        ephemeral_days: options.ephemeralDays,
+        raw_artifact_days: options.rawArtifactDays,
+        idempotency_key: commandKey(`retention-set:${id}`, options.idempotency),
+      })), options.json, ['policy'])
+    })
+  retention.command('run')
+    .option('--board <id>', 'board id', integer)
+    .option('--as-of <timestamp>', 'deterministic ISO retention cutoff time')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      const id = await boardId(options.board)
+      print(await deps.api('POST', `/os/boards/${id}/retention/run`, compact({
+        as_of: options.asOf,
+        idempotency_key: commandKey(`retention-run:${id}`, options.idempotency),
+      })), options.json, ['run'])
+    })
+
   const workspace = program.command('workspace').description('manage isolated Agent OS workspaces')
   workspace.command('list')
     .option('--board <id>', 'board id', integer)

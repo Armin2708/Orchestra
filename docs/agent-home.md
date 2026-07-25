@@ -1,8 +1,9 @@
 # Durable Agent Home
 
 Status: the durable domain, provider-native capture, lifecycle/search/export/CLI controls, and
-responsive visual Agent Home are implemented. Retention/compaction, provenance-safe native fork,
-and the real daemon-to-browser restart E2E gate remain open.
+responsive visual Agent Home are implemented. Configurable retention, bounded compaction, and
+legacy evidence-bundle repair are implemented. Provenance-safe native fork and the real
+daemon-to-browser restart E2E gate remain open.
 
 Agent Home is the canonical visual and API surface for one durable agent identity and its provider
 sessions. It combines conversation, real terminal processes, assigned work, context, tools,
@@ -123,6 +124,41 @@ CLI parity is exposed as:
 - `orchestra session list|show|resume|pause|stop|retry|fork|rename|archive`;
 - `orchestra session search` with the API filters;
 - `orchestra session export` in human, JSON, or persisted-artifact mode.
+- `orchestra retention show|set|run` for operator policy and bounded sweeps.
+
+## Retention and compaction contract
+
+Migration `012-agent-home-retention` adds one board-scoped policy, immutable run records, raw
+artifact archive evidence, and legacy evidence-bundle repair provenance. The default policy
+soft-archives transcript events after 90 days and ephemeral events after 7 days. Audit and pinned
+canonical events remain forever. Strongly owned inline provider artifacts (`provider_event` and
+legacy `provider_raw_event`) compact after 30 days; compaction nulls only `artifacts.content`.
+External artifact paths, canonical event IDs/sequences/dedupe keys/hashes/provider cursors, safe
+projected text, and redaction state are unchanged.
+
+A raw artifact is not compacted while an owning session is active, paused, or attachable, when its
+artifact metadata is explicitly pinned, when an accepted delivery references it directly or as
+deliverable/criterion evidence, or when a checkpoint uses it as a patch artifact. Event
+`retention_class=audit|pinned` protects the canonical event, not an otherwise unpinned raw payload.
+An arbitrary artifact kind is never treated as provider-owned merely because a
+`raw_artifact_id` relationship exists. Orphan strong-kind provider artifacts remain eligible.
+
+Each run processes at most 500 candidates in each event, raw-artifact, and legacy-repair lane and
+returns `has_more` for another sweep. `as_of` controls policy cutoffs; the server-generated
+`created_at` records when archival/repair actually occurred. Runs are board/idempotency-key durable
+across restart, and the whole sweep is one SQLite transaction.
+
+Historical `evidence_bundle` artifacts that copied sensitive raw provider data are replaced once
+with a small tombstone. The original/repaired SHA-256, byte counts, implicated raw artifact IDs,
+run ID, and repair time are stored in `agent_home_evidence_bundle_repairs`; unrelated bundles stay
+byte-for-byte unchanged. Retention audit payloads contain identifiers, counts, and hashes only,
+never raw provider content or approval parameters.
+
+Operator endpoints are:
+
+- `GET /api/v1/os/boards/:id/retention`;
+- `PUT /api/v1/os/boards/:id/retention`;
+- `POST /api/v1/os/boards/:id/retention/run`.
 
 ## Terminal invariants
 
@@ -144,6 +180,8 @@ managers, Claude CLI, Codex CLI, MCP tools, plugins, and arbitrary installed com
 - Desktop, tablet, and phone layouts preserve selection, deep links, keyboard/focus behavior, and
   visible errors.
 - Transcript export proves provenance and secret redaction.
+- Retention replay survives database restart, rollback injection leaves no partial mutation, and
+  repeated sweeps do not rewrite repair tombstones.
 
 Observed Playwright acceptance on the integrated train passed at 1440×1000 and 390×844. Direct
 lookup loaded and focused/highlighted `event-5001` with its surrounding context, Pause changed the

@@ -33,6 +33,7 @@ import {
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
 import { agentHomePlugin } from './agent-home-routes.js'
+import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
 
 export interface ProcessRecord {
@@ -116,6 +117,11 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
       ?? (isAgentHomeRuntimeControl(options.jobExecutor) ? options.jobExecutor : undefined),
     orchestration: options.orchestration,
     scheduler: options.scheduler,
+    prefix: '/api/v1/os',
+  })
+  server.register(agentHomeRetentionPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
     prefix: '/api/v1/os',
   })
 }

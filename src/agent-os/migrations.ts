@@ -1442,6 +1442,124 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '012-agent-home-retention',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_home_retention_policies (
+          board_id INTEGER PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+          schema_version INTEGER NOT NULL DEFAULT 1 CHECK(schema_version=1),
+          transcript_days INTEGER NOT NULL CHECK(transcript_days BETWEEN 1 AND 36500),
+          ephemeral_days INTEGER NOT NULL CHECK(ephemeral_days BETWEEN 1 AND 36500),
+          raw_artifact_days INTEGER NOT NULL CHECK(raw_artifact_days BETWEEN 1 AND 36500),
+          updated_by_actor_type TEXT NOT NULL,
+          updated_by_actor_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_retention_runs (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          as_of TEXT NOT NULL,
+          policy_json TEXT NOT NULL CHECK(json_valid(policy_json)),
+          cutoffs_json TEXT NOT NULL CHECK(json_valid(cutoffs_json)),
+          transcript_events_archived INTEGER NOT NULL DEFAULT 0
+            CHECK(transcript_events_archived>=0),
+          ephemeral_events_archived INTEGER NOT NULL DEFAULT 0
+            CHECK(ephemeral_events_archived>=0),
+          raw_artifacts_compacted INTEGER NOT NULL DEFAULT 0
+            CHECK(raw_artifacts_compacted>=0),
+          inline_raw_bytes_removed INTEGER NOT NULL DEFAULT 0
+            CHECK(inline_raw_bytes_removed>=0),
+          legacy_evidence_bundles_sanitized INTEGER NOT NULL DEFAULT 0
+            CHECK(legacy_evidence_bundles_sanitized>=0),
+          batch_limit INTEGER NOT NULL CHECK(batch_limit BETWEEN 1 AND 1000),
+          has_more INTEGER NOT NULL DEFAULT 0 CHECK(has_more IN (0,1)),
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_raw_artifact_archives (
+          artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          retention_run_id TEXT NOT NULL REFERENCES agent_home_retention_runs(id)
+            ON DELETE RESTRICT,
+          content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64),
+          content_bytes INTEGER NOT NULL CHECK(content_bytes>=0),
+          archived_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_evidence_bundle_repairs (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          bundle_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+          retention_run_id TEXT NOT NULL REFERENCES agent_home_retention_runs(id)
+            ON DELETE RESTRICT,
+          original_sha256 TEXT NOT NULL CHECK(length(original_sha256)=64),
+          original_bytes INTEGER NOT NULL CHECK(original_bytes>=0),
+          repaired_sha256 TEXT NOT NULL CHECK(length(repaired_sha256)=64),
+          repaired_bytes INTEGER NOT NULL CHECK(repaired_bytes>=0),
+          raw_artifact_ids_json TEXT NOT NULL CHECK(json_valid(raw_artifact_ids_json)),
+          repaired_at TEXT NOT NULL,
+          UNIQUE(bundle_artifact_id, retention_run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_home_retention_runs_board
+          ON agent_home_retention_runs(board_id, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_raw_artifact_archives_board
+          ON agent_home_raw_artifact_archives(board_id, archived_at, artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_evidence_bundle_repairs_board
+          ON agent_home_evidence_bundle_repairs(board_id, repaired_at, bundle_artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_evidence_bundle_repairs_run
+          ON agent_home_evidence_bundle_repairs(retention_run_id, bundle_artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_events_retention
+          ON conversation_events(board_id, archived_at, retention_class, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_events_raw_artifact
+          ON conversation_events(raw_artifact_id) WHERE raw_artifact_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_conversation_event_conflicts_raw_artifact
+          ON conversation_event_conflicts(raw_artifact_id) WHERE raw_artifact_id IS NOT NULL;
+      `)
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_artifacts_agent_home_retention
+            ON artifacts(board_id, kind, created_at, id) WHERE content IS NOT NULL;
+
+          CREATE TRIGGER IF NOT EXISTS agent_home_raw_artifact_archives_scope_insert
+          BEFORE INSERT ON agent_home_raw_artifact_archives
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              JOIN agent_home_retention_runs run ON run.id=NEW.retention_run_id
+              WHERE artifact.id=NEW.artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND run.board_id=NEW.board_id
+            ) THEN RAISE(ABORT, 'retention artifact archive scope is inconsistent') END;
+          END;
+
+          CREATE TRIGGER IF NOT EXISTS agent_home_evidence_bundle_repairs_scope_insert
+          BEFORE INSERT ON agent_home_evidence_bundle_repairs
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts bundle
+              JOIN agent_home_retention_runs run ON run.id=NEW.retention_run_id
+              WHERE bundle.id=NEW.bundle_artifact_id
+                AND bundle.board_id=NEW.board_id
+                AND bundle.kind='evidence_bundle'
+                AND run.board_id=NEW.board_id
+            ) THEN RAISE(ABORT, 'retention evidence bundle repair scope is inconsistent') END;
+          END;
+        `)
+      }
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */

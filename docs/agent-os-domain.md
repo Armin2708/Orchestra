@@ -176,7 +176,8 @@ normalized request replays the original result; same key plus different request 
 | Record | Default |
 |---|---|
 | Contracts, deliveries, acceptance, shipped records, decisions and audit events | Retain until explicit project deletion |
-| Provider conversation events | Retain projected events; compact/archive raw payloads by configurable policy |
+| Provider conversation events | Soft-archive transcript after 90 days and ephemeral after 7 days; retain audit/pinned canonical events forever |
+| Inline provider raw artifacts | Compact strong-kind content after 30 days; preserve paths, hashes, references, and repair provenance |
 | PTY output | Bounded rolling storage plus pinned artifacts; do not persist secrets intentionally |
 | Artifacts | Content-addressed; retain accepted-delivery and pinned artifacts |
 | Context builds/uses and usage | Retain summaries and provenance; allow raw prompt expiry |
@@ -186,6 +187,20 @@ Exports, diagnostics, logs, knowledge ingestion, and transcript persistence reda
 tokens, excluded files, and configured secret patterns. Full-access same-user processes are trusted
 unless isolated by a separate OS/container identity; an API workflow credential is not an OS
 sandbox.
+
+Retention policy is board-scoped and operator-controlled. A sweep uses a caller-selected normalized
+`as_of` only for cutoffs and a server-generated application timestamp for archival/audit
+chronology. It is bounded to 500 candidates per event/raw/legacy-repair lane, transactional, and
+idempotent across restart. It never deletes canonical conversation rows or rewrites event
+fingerprints.
+
+Only strongly owned `provider_event`/`provider_raw_event` inline content is eligible. Generic
+artifact kinds do not become owned merely through `raw_artifact_id`. Active, paused, or attachable
+sessions; explicit artifact pins; accepted-delivery artifact/evidence references; and checkpoint
+patches block raw compaction. An audit/pinned event class protects the canonical projection but
+does not independently retain an unpinned raw payload after the owning session is detached.
+Historical evidence bundles containing raw copies are replaced with idempotent tombstones backed by
+original/repaired hashes, byte counts, raw artifact IDs, run identity, and repair time.
 
 ## Migration and rollback policy
 
