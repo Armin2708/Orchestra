@@ -1,6 +1,6 @@
 # Agent OS surface inventory
 
-Status: exact observed baseline at `18de61c764ca30fbc06a34f58348866222f438f5`.
+Status: exact observed baseline at `20b7a91a1182dd9f25066e9e2e2fde048c04d69e`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -11,9 +11,9 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 29 | 3 | 10 | 2 | 44 |
-| Registered HTTP routes | 83 | 29 | 25 | 9 | 146 |
-| CLI command families/subcommands | 77 | 5 | 18 | 8 | 108 |
+| SQLite application tables | 30 | 3 | 10 | 2 | 45 |
+| Registered HTTP routes | 84 | 29 | 25 | 9 | 147 |
+| CLI command families/subcommands | 78 | 5 | 18 | 8 | 109 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -34,13 +34,13 @@ The source contract is `docs/agent-os-domain.md:102`; route registration is root
 The exact live schema is obtained by opening a fresh database, applying every migration, and
 reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migrations start at
 `src/agent-os/migrations.ts:124`; the migration ledger is created at
-`src/agent-os/migrations.ts:1892`.
+`src/agent-os/migrations.ts:1975`.
 
 ### Canonical
 
 | Domain | Tables |
 |---|---|
-| Agent Home | `agent_profiles`, `agent_conversations`, `agent_sessions`, `agent_session_actions`, `conversation_events`, `conversation_event_conflicts` |
+| Agent Home | `agent_profiles`, `agent_conversations`, `agent_sessions`, `agent_session_actions`, `agent_session_action_reconciliations`, `conversation_events`, `conversation_event_conflicts` |
 | Retention and transcript integrity | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs`, `agent_home_transcript_repairs` |
 | Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
 | Contract/scheduling | `jobs`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
@@ -81,7 +81,7 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/server.ts`, `src/push.ts`, `src/agent-session-controls.ts`,
 `src/agent-os/routes.ts`, `src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`. The seven session action routes are expanded from
-`AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:26`.
+`AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
 
@@ -153,6 +153,7 @@ POST /api/v1/os/processes/:id/input
 POST /api/v1/os/processes/:id/resize
 POST /api/v1/os/processes/:id/restart
 POST /api/v1/os/processes/:id/signal
+POST /api/v1/os/session-actions/:id/reconcile
 POST /api/v1/os/sessions/:id/archive
 POST /api/v1/os/sessions/:id/events
 POST /api/v1/os/sessions/:id/export
@@ -263,12 +264,12 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 108 command paths are machine-checked from `src/cli.ts` and
+The exact 109 command paths are machine-checked from `src/cli.ts` and
 `src/agent-os-cli.ts`. The compact human map is:
 
 | Class | Command surface |
 |---|---|
-| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
+| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
 | Infrastructure | `serve`; `stop`; `restart`; `token`; `remote`; `hook`; `install`; `uninstall` |
@@ -286,7 +287,7 @@ those routes and CLI commands cannot drift silently.
 | `os_events` | canonical | append-only causal operational ledger; open namespaces are enumerated in the JSON inventory | `src/agent-os/event-store.ts:55` |
 | `card_events` | legacy | original card activity log and shipped/review compatibility evidence | `src/db.ts:36` |
 | `messages` + recipient receipts | legacy | closed message kinds: `ask`, `reply`, `task`, `notify`, `announce`, `swarm` | `src/server.ts:81` |
-| global/board SSE bus | mixed | 16 legacy event names plus `os:driver`, `os:runtime`, and `os:workspace`; it is live fan-out, not durable truth | `src/server.ts:112`, `src/agent-os/runtime-integration.ts:1596` |
+| global/board SSE bus | mixed | 16 legacy event names plus `os:driver`, `os:runtime`, and `os:workspace`; it is live fan-out, not durable truth | `src/server.ts:112`, `src/agent-os/runtime-integration.ts:338`, `src/agent-os/runtime-integration.ts:418`, `src/agent-os/runtime-integration.ts:2401` |
 | `LegacyEventProjection` | compatibility | projects `legacy.<bus-type>` into `os_events` and creates selected attention items | `src/agent-os/legacy-projection.ts:23` |
 
 Provider Driver events have the closed types `output`, `status`, `tool`, `error`, and `exit`
@@ -354,8 +355,8 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 146 signatures;
-3. extracts every Commander root/subcommand and exact-compares all 108 command paths;
+   actions, and exact-compares all 147 signatures;
+3. extracts every Commander root/subcommand and exact-compares all 109 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;

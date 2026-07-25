@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "18de61c764ca30fbc06a34f58348866222f438f5",
+  "observed_at_commit": "20b7a91a1182dd9f25066e9e2e2fde048c04d69e",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -20,6 +20,7 @@
       "agent_home_retention_runs",
       "agent_home_transcript_repairs",
       "agent_profiles",
+      "agent_session_action_reconciliations",
       "agent_session_actions",
       "agent_sessions",
       "artifacts",
@@ -160,6 +161,7 @@
       "POST /api/v1/os/processes/:id/resize",
       "POST /api/v1/os/processes/:id/restart",
       "POST /api/v1/os/processes/:id/signal",
+      "POST /api/v1/os/session-actions/:id/reconcile",
       "POST /api/v1/os/sessions/:id/archive",
       "POST /api/v1/os/sessions/:id/events",
       "POST /api/v1/os/sessions/:id/export",
@@ -318,6 +320,7 @@
       "session fork",
       "session list",
       "session pause",
+      "session reconcile-fork",
       "session rename",
       "session resume",
       "session retry",
