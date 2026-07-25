@@ -919,9 +919,13 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         recovered.push(job.id)
         continue
       }
+      let providerSessionLost = false
       try {
         const session = await driver.attach(sessionRow.external_id)
-        if (!session) throw new Error('provider session is no longer live')
+        if (!session) {
+          providerSessionLost = true
+          throw new Error('provider session is no longer live')
+        }
         if (sessionRow.provider === 'codex') {
           const update = (driver as AgentDriver & {
             updateSession?(sessionId: string, patch: {
@@ -953,9 +957,11 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         resumed.push(job.id)
       } catch (error) {
         this.pausedJobs.delete(job.id)
-        this.markSessionFailed(sessionRow.id)
+        if (providerSessionLost) this.markSessionLost(sessionRow.id)
+        else this.markSessionFailed(sessionRow.id)
         const reason = `daemon restart recovery failed: ${error instanceof Error ? error.message : String(error)}`
         const recoveredJob = this.scheduler.recover(job.id, reason)
+        if (providerSessionLost) this.markSessionLost(sessionRow.id)
         this.finalizeManagedAgent(job, sessionRow.id, reason, recoveredJob.status)
         recovered.push(job.id)
       }
@@ -1713,6 +1719,13 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   private markSessionFailed(id: string): void {
     this.db.prepare("UPDATE agent_sessions SET status='failed', updated_at=datetime('now') WHERE id=?").run(id)
+  }
+
+  private markSessionLost(id: string): void {
+    this.db.prepare(`UPDATE agent_sessions
+      SET status='lost', control_state='stopped', recovery_state='lost',
+        ended_at=coalesce(ended_at, datetime('now')), updated_at=datetime('now')
+      WHERE id=?`).run(id)
   }
 }
 
