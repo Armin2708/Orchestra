@@ -38,7 +38,9 @@ import type {
 import {
   CodexAgentDriver,
   CodexForkOutcomeUnknownError,
+  CodexForkVerificationError,
   type CodexSessionForkOptions,
+  type CodexSessionForkVerificationOptions,
 } from '../src/runtime/drivers/codex.js'
 
 const thread = (
@@ -146,26 +148,34 @@ class RecordingPort implements CodexAppServerPort {
 }
 
 class FakeRuntimeService implements CodexRuntimeService {
+  readonly mutations: string[] = []
   readonly forks: Array<{
     threadId: string
     overrides: Omit<CodexThreadForkParams, 'threadId'>
   }> = []
   readonly reads: Array<{ threadId: string; includeTurns: boolean | undefined }> = []
   readonly unsubscribes: string[] = []
-  forked = forkResponse(thread('thread-child', { forkedFromId: 'thread-source' }))
+  forked = forkResponse(thread('thread-child', {
+    forkedFromId: 'thread-source',
+    cwd: '/repo-child',
+  }))
   forkError: Error | null = null
   readThreadValue: CodexThread | null = null
   readError: Error | null = null
   unsubscribeError: Error | null = null
+  unsubscribeStatus = 'unsubscribed'
+  started = thread('thread-source')
 
   async startThread(_params: CodexThreadStartParams): Promise<CodexThreadStartResponse> {
-    return startResponse(thread('thread-source'))
+    this.mutations.push('thread/start')
+    return startResponse(this.started)
   }
 
   async resumeThread(
     _threadId: string,
     _overrides?: Omit<CodexThreadResumeParams, 'threadId'>,
   ): Promise<CodexThreadResumeResponse> {
+    this.mutations.push('thread/resume')
     throw new Error('not used')
   }
 
@@ -173,6 +183,7 @@ class FakeRuntimeService implements CodexRuntimeService {
     threadId: string,
     overrides: Omit<CodexThreadForkParams, 'threadId'> = {},
   ): Promise<CodexThreadForkResponse> {
+    this.mutations.push('thread/fork')
     this.forks.push({ threadId, overrides })
     if (this.forkError) throw this.forkError
     return this.forked
@@ -188,9 +199,10 @@ class FakeRuntimeService implements CodexRuntimeService {
   }
 
   async unsubscribeThread(threadId: string): Promise<{ status: string }> {
+    this.mutations.push('thread/unsubscribe')
     this.unsubscribes.push(threadId)
     if (this.unsubscribeError) throw this.unsubscribeError
-    return { status: 'unsubscribed' }
+    return { status: this.unsubscribeStatus }
   }
 
   async startTurn(
@@ -198,14 +210,17 @@ class FakeRuntimeService implements CodexRuntimeService {
     _input: string | CodexUserInput[],
     _overrides?: Omit<CodexTurnStartParams, 'threadId' | 'input'>,
   ): Promise<CodexTurnStartResponse> {
+    this.mutations.push('turn/start')
     throw new Error('not used')
   }
 
   async steerTurn(): Promise<CodexTurnSteerResponse> {
+    this.mutations.push('turn/steer')
     throw new Error('not used')
   }
 
   async interruptTurn(): Promise<void> {
+    this.mutations.push('turn/interrupt')
     throw new Error('not used')
   }
 
@@ -281,6 +296,7 @@ describe('Codex 0.144.6 thread/fork protocol', () => {
     const pending = client.request('thread/fork', {
       threadId: 'thread-source',
       lastTurnId: 'turn-boundary',
+      cwd: '/repo-child',
     })
     const request = JSON.parse(transport.writes[2]) as {
       id: number
@@ -293,6 +309,7 @@ describe('Codex 0.144.6 thread/fork protocol', () => {
       params: {
         threadId: 'thread-source',
         lastTurnId: 'turn-boundary',
+        cwd: '/repo-child',
       },
     })
     transport.server({ id: request.id, result: response })
@@ -313,6 +330,7 @@ describe('Codex 0.144.6 thread/fork protocol', () => {
     await expect(service.forkThread('thread-source', {
       threadId: 'forged-source',
       lastTurnId: 'turn-boundary',
+      cwd: '/repo-child',
       excludeTurns: true,
     } as Omit<CodexThreadForkParams, 'threadId'>, { timeoutMs: 9_000 })).resolves.toBe(response)
 
@@ -321,6 +339,7 @@ describe('Codex 0.144.6 thread/fork protocol', () => {
       params: {
         threadId: 'thread-source',
         lastTurnId: 'turn-boundary',
+        cwd: '/repo-child',
         excludeTurns: true,
       },
       options: { timeoutMs: 9_000 },
@@ -333,8 +352,10 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
     overrides: Partial<CodexSessionForkOptions> = {},
   ): CodexSessionForkOptions => ({
     sourceExternalId: 'thread-source',
-    workspaceId: 'workspace-1',
-    cwd: '/repo',
+    sourceWorkspaceId: 'workspace-1',
+    sourceCwd: '/repo',
+    targetWorkspaceId: 'workspace-child',
+    targetCwd: '/repo-child',
     lastTurnId: 'turn-boundary',
     ...overrides,
   })
@@ -353,11 +374,17 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
     const service = new FakeRuntimeService()
     const { driver, session } = await launch(service)
 
-    const result = await driver.forkSession(session.id, options({ cwd: '/repo/.' }))
+    const result = await driver.forkSession(session.id, options({
+      sourceCwd: '/repo/.',
+      targetCwd: '/repo-child/.',
+    }))
 
     expect(service.forks).toEqual([{
       threadId: 'thread-source',
-      overrides: { lastTurnId: 'turn-boundary' },
+      overrides: {
+        lastTurnId: 'turn-boundary',
+        cwd: '/repo-child',
+      },
     }])
     expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
     expect(service.unsubscribes).toEqual(['thread-child'])
@@ -372,14 +399,24 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
         sourceProviderSessionId: 'provider-session:thread-source',
         providerSessionId: 'provider-session:thread-child',
         lastTurnId: 'turn-boundary',
-        workspaceId: 'workspace-1',
+        sourceWorkspaceId: 'workspace-1',
         sourceCwd: '/repo',
-        childCwd: '/repo',
+        targetWorkspaceId: 'workspace-child',
+        targetWorkspaceAttestation: {
+          value: 'workspace-child',
+          authority: 'orchestrator',
+        },
+        targetCwd: '/repo-child',
+        childCwd: '/repo-child',
         cwdVerified: true,
         workspaceBindingVerified: true,
+        workspaceBindingAuthority: 'orchestrator',
         readVerified: true,
+        threadReadVerified: true,
         subscriptionReleased: true,
+        childUnsubscribeVerified: true,
         subscriptionStatus: 'unsubscribed',
+        verificationMethod: 'thread/fork+thread/read',
       },
     })
   })
@@ -392,23 +429,60 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
 
     expect(service.forks).toEqual([{
       threadId: 'thread-source',
-      overrides: {},
+      overrides: { cwd: '/repo-child' },
     }])
   })
 
-  it('returns the created identity when unsubscribe fails so retry cannot create a duplicate fork', async () => {
+  it.each(['notSubscribed', 'notLoaded'])(
+    'accepts the exact %s status as proof that no child subscription remains',
+    async (status) => {
+      const service = new FakeRuntimeService()
+      service.unsubscribeStatus = status
+      const { driver, session } = await launch(service)
+
+      await expect(driver.forkSession(session.id, options())).resolves.toMatchObject({
+        metadata: {
+          subscriptionStatus: status,
+          subscriptionReleased: true,
+          childUnsubscribeVerified: true,
+        },
+      })
+    },
+  )
+
+  it('quarantines the known child when unsubscribe proof is unavailable', async () => {
     const service = new FakeRuntimeService()
     service.unsubscribeError = new Error('connection closed after fork response')
     const { driver, session } = await launch(service)
 
-    await expect(driver.forkSession(session.id, options())).resolves.toMatchObject({
-      externalId: 'thread-child',
-      metadata: {
+    await expect(driver.forkSession(session.id, options())).rejects.toMatchObject({
+      outcomeUnknown: true,
+      knownChild: {
+        externalId: 'thread-child',
+        providerThreadId: 'thread-child',
+        forkedFromId: 'thread-source',
+        childProviderSessionId: 'provider-session:thread-child',
         subscriptionReleased: false,
-        subscriptionStatus: null,
       },
     })
     expect(service.forks).toHaveLength(1)
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
+    expect(service.unsubscribes).toEqual(['thread-child'])
+  })
+
+  it('rejects an unrecognized unsubscribe status as missing release proof', async () => {
+    const service = new FakeRuntimeService()
+    service.unsubscribeStatus = 'future-or-malformed-status'
+    const { driver, session } = await launch(service)
+
+    await expect(driver.forkSession(session.id, options())).rejects.toMatchObject({
+      outcomeUnknown: true,
+      knownChild: {
+        externalId: 'thread-child',
+        subscriptionReleased: false,
+      },
+    })
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
     expect(service.unsubscribes).toEqual(['thread-child'])
   })
 
@@ -465,15 +539,18 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
     expect(service.unsubscribes).toEqual([])
   })
 
-  it('returns the created identity with an explicit unverified reread when the post-fork read fails', async () => {
+  it('quarantines the known child when the mandatory post-fork reread fails', async () => {
     const service = new FakeRuntimeService()
     service.readError = new Error('connection closed after fork response')
     const { driver, session } = await launch(service)
 
-    await expect(driver.forkSession(session.id, options())).resolves.toMatchObject({
-      externalId: 'thread-child',
-      metadata: {
-        readVerified: false,
+    await expect(driver.forkSession(session.id, options())).rejects.toMatchObject({
+      outcomeUnknown: true,
+      knownChild: {
+        externalId: 'thread-child',
+        providerThreadId: 'thread-child',
+        forkedFromId: 'thread-source',
+        childProviderSessionId: 'provider-session:thread-child',
         subscriptionReleased: true,
       },
     })
@@ -484,8 +561,10 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
 
   it.each([
     ['source external id', { sourceExternalId: 'thread-other' }, /source external id/],
-    ['workspace', { workspaceId: 'workspace-other' }, /workspace/],
-    ['cwd', { cwd: '/other' }, /cwd/],
+    ['source workspace', { sourceWorkspaceId: 'workspace-other' }, /source workspace/],
+    ['source cwd', { sourceCwd: '/other' }, /source cwd/],
+    ['target workspace', { targetWorkspaceId: 'workspace-1' }, /target workspace/],
+    ['target cwd', { targetCwd: '/repo' }, /target cwd/],
   ])('rejects a mismatched %s before issuing thread/fork', async (_label, override, error) => {
     const service = new FakeRuntimeService()
     const { driver, session } = await launch(service)
@@ -572,9 +651,57 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
     expect(service.unsubscribes).toEqual([])
   })
 
-  it('fails closed when the child reread no longer attests the native source lineage', async () => {
+  it('never reads or unsubscribes another managed thread named by a malformed fork response', async () => {
     const service = new FakeRuntimeService()
-    service.readThreadValue = thread('thread-child', { forkedFromId: 'thread-other' })
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+    const sourceSession = await driver.launch({
+      workspaceId: 'workspace-1',
+      cwd: '/repo',
+    })
+    service.started = thread('thread-managed', { cwd: '/repo-child' })
+    await driver.launch({
+      workspaceId: 'workspace-managed',
+      cwd: '/repo-child',
+    })
+    service.forked = forkResponse(thread('thread-managed', {
+      forkedFromId: 'thread-source',
+      cwd: '/repo-child',
+    }))
+
+    await expect(driver.forkSession(sourceSession.id, options())).rejects.toMatchObject({
+      outcomeUnknown: true,
+      knownChild: null,
+    })
+    expect(service.forks).toHaveLength(1)
+    expect(service.reads).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+  })
+
+  it.each([
+    [
+      'child identity',
+      thread('thread-other', { forkedFromId: 'thread-source', cwd: '/repo-child' }),
+    ],
+    [
+      'source lineage',
+      thread('thread-child', { forkedFromId: 'thread-other', cwd: '/repo-child' }),
+    ],
+    [
+      'provider session identity',
+      thread('thread-child', {
+        forkedFromId: 'thread-source',
+        sessionId: 'provider-session:other',
+        cwd: '/repo-child',
+      }),
+    ],
+    [
+      'target cwd',
+      thread('thread-child', { forkedFromId: 'thread-source', cwd: '/other' }),
+    ],
+  ])('fails closed when the child reread mismatches %s', async (_label, reread) => {
+    const service = new FakeRuntimeService()
+    service.readThreadValue = reread
     const { driver, session } = await launch(service)
 
     let caught: unknown
@@ -600,5 +727,204 @@ describe('CodexAgentDriver provenance-safe native fork', () => {
     expect((caught as Error).message).toMatch(/failed native lineage reread verification/)
     expect(service.forks).toHaveLength(1)
     expect(service.unsubscribes).toEqual(['thread-child'])
+  })
+})
+
+describe('CodexAgentDriver read-only native fork verification', () => {
+  const verificationOptions = (
+    overrides: Partial<CodexSessionForkVerificationOptions> = {},
+  ): CodexSessionForkVerificationOptions => ({
+    sourceExternalId: 'thread-source',
+    sourceProviderThreadId: 'thread-source',
+    childExternalId: 'thread-child',
+    childProviderThreadId: 'thread-child',
+    childProviderSessionId: 'provider-session:thread-child',
+    sourceWorkspaceId: 'workspace-1',
+    sourceCwd: '/repo',
+    targetWorkspaceId: 'workspace-child',
+    targetCwd: '/repo-child',
+    ...overrides,
+  })
+
+  it('accepts the exact lifecycle shape, performs only thread/read, and returns typed proof', async () => {
+    const service = new FakeRuntimeService()
+    service.readThreadValue = thread('thread-child', {
+      forkedFromId: 'thread-source',
+      cwd: '/repo-child',
+    })
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+    const { sourceProviderThreadId: _derivedSourceThreadId, ...lifecycleOptions } =
+      verificationOptions()
+
+    const result = await driver.verifyForkSession(lifecycleOptions)
+
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
+    expect(service.forks).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+    expect(service.mutations).toEqual([])
+    expect(result).toEqual({
+      sourceExternalId: 'thread-source',
+      externalId: 'thread-child',
+      sourceProviderThreadId: 'thread-source',
+      providerThreadId: 'thread-child',
+      proof: {
+        status: 'verified',
+        sourceExternalId: 'thread-source',
+        sourceProviderThreadId: 'thread-source',
+        childExternalId: 'thread-child',
+        childProviderThreadId: 'thread-child',
+        childProviderSessionId: 'provider-session:thread-child',
+        targetCwd: '/repo-child',
+        targetWorkspaceAttestation: {
+          value: 'workspace-child',
+          authority: 'orchestrator',
+        },
+        read: {
+          method: 'thread/read',
+          includeTurns: false,
+          verified: true,
+        },
+      },
+      metadata: {
+        forkMethod: 'thread/fork',
+        verificationMethod: 'thread/read',
+        forkedFromId: 'thread-source',
+        providerSessionId: 'provider-session:thread-child',
+        lastTurnId: null,
+        sourceWorkspaceId: 'workspace-1',
+        sourceCwd: '/repo',
+        targetWorkspaceId: 'workspace-child',
+        targetWorkspaceAttestation: {
+          value: 'workspace-child',
+          authority: 'orchestrator',
+        },
+        targetCwd: '/repo-child',
+        childCwd: '/repo-child',
+        cwdVerified: true,
+        workspaceBindingVerified: true,
+        workspaceBindingAuthority: 'orchestrator',
+        readVerified: true,
+        threadReadVerified: true,
+      },
+    })
+    expect(result.metadata).not.toHaveProperty('subscriptionReleased')
+    expect(result.metadata).not.toHaveProperty('childUnsubscribeVerified')
+  })
+
+  it('also supports the explicit child-id overload without gaining mutation authority', async () => {
+    const service = new FakeRuntimeService()
+    service.readThreadValue = thread('thread-child', {
+      forkedFromId: 'thread-source',
+      cwd: '/repo-child',
+    })
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+    const { childExternalId, ...context } = verificationOptions()
+
+    await expect(driver.verifyForkSession(childExternalId, context)).resolves.toMatchObject({
+      externalId: 'thread-child',
+      proof: {
+        read: { method: 'thread/read', includeTurns: false, verified: true },
+      },
+    })
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
+    expect(service.forks).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+    expect(service.mutations).toEqual([])
+  })
+
+  it('returns a safe typed quarantine failure when thread/read fails', async () => {
+    const service = new FakeRuntimeService()
+    service.readError = new Error('raw credential and /private/target must not escape')
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+
+    let caught: unknown
+    try {
+      await driver.verifyForkSession(verificationOptions())
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CodexForkVerificationError)
+    expect(caught).toMatchObject({
+      quarantined: true,
+      code: 'read_failed',
+      sourceExternalId: 'thread-source',
+      sourceProviderThreadId: 'thread-source',
+      knownChild: {
+        externalId: 'thread-child',
+        providerThreadId: 'thread-child',
+        forkedFromId: null,
+        childProviderSessionId: null,
+      },
+    })
+    expect(caught).not.toHaveProperty('cause')
+    expect(JSON.stringify(caught)).not.toContain('raw credential')
+    expect(JSON.stringify(caught)).not.toContain('/private/target')
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
+    expect(service.forks).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+    expect(service.mutations).toEqual([])
+  })
+
+  it.each([
+    [
+      'child identity',
+      thread('thread-other', { forkedFromId: 'thread-source', cwd: '/repo-child' }),
+      'child_identity_mismatch',
+    ],
+    [
+      'source lineage',
+      thread('thread-child', { forkedFromId: 'thread-other', cwd: '/repo-child' }),
+      'lineage_mismatch',
+    ],
+    [
+      'provider session identity',
+      thread('thread-child', {
+        forkedFromId: 'thread-source',
+        sessionId: 'provider-session:other',
+        cwd: '/repo-child',
+      }),
+      'provider_session_mismatch',
+    ],
+    [
+      'target cwd',
+      thread('thread-child', { forkedFromId: 'thread-source', cwd: '/other' }),
+      'cwd_mismatch',
+    ],
+  ])('quarantines a mismatched %s without any mutation', async (_label, value, code) => {
+    const service = new FakeRuntimeService()
+    service.readThreadValue = value
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+
+    await expect(driver.verifyForkSession(verificationOptions())).rejects.toMatchObject({
+      quarantined: true,
+      code,
+    })
+    expect(service.reads).toEqual([{ threadId: 'thread-child', includeTurns: false }])
+    expect(service.forks).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+    expect(service.mutations).toEqual([])
+  })
+
+  it('rejects source-as-child before issuing even a read', async () => {
+    const service = new FakeRuntimeService()
+    const driver = new CodexAgentDriver({ service })
+    drivers.push(driver)
+
+    await expect(driver.verifyForkSession(verificationOptions({
+      childExternalId: 'thread-source',
+      childProviderThreadId: 'thread-source',
+    }))).rejects.toMatchObject({
+      quarantined: true,
+      code: 'invalid_request',
+    })
+    expect(service.reads).toEqual([])
+    expect(service.forks).toEqual([])
+    expect(service.unsubscribes).toEqual([])
+    expect(service.mutations).toEqual([])
   })
 })

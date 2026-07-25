@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { BoundedAsyncQueue, deferred, type Deferred } from '../../codex/async.js'
 import {
   CODEX_REQUEST_UNHANDLED,
@@ -128,16 +128,109 @@ export type CodexSessionReconcileResult = {
 
 export type CodexSessionForkOptions = {
   sourceExternalId: string
-  workspaceId: OsId
-  cwd: string
+  sourceWorkspaceId: OsId
+  sourceCwd: string
+  targetWorkspaceId: OsId
+  targetCwd: string
 } & Pick<CodexThreadForkParams, 'lastTurnId'>
+
+export type CodexTargetWorkspaceAttestation = {
+  value: OsId
+  authority: 'orchestrator'
+}
+
+export type CodexForkCreationProofMetadata = {
+  forkMethod: 'thread/fork'
+  verificationMethod: 'thread/fork+thread/read'
+  forkedFromId: string
+  sourceProviderSessionId: string
+  providerSessionId: string
+  lastTurnId: string | null
+  sourceWorkspaceId: OsId
+  sourceCwd: string
+  targetWorkspaceId: OsId
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  targetCwd: string
+  childCwd: string
+  cwdVerified: true
+  workspaceBindingVerified: true
+  workspaceBindingAuthority: 'orchestrator'
+  readVerified: true
+  threadReadVerified: true
+  subscriptionReleased: true
+  childUnsubscribeVerified: true
+  subscriptionStatus: 'notLoaded' | 'notSubscribed' | 'unsubscribed'
+  [key: string]: unknown
+}
 
 export type CodexSessionForkResult = {
   sourceExternalId: string
   externalId: string
   providerThreadId: string
   sourceProviderThreadId: string
-  metadata: Record<string, unknown>
+  metadata: CodexForkCreationProofMetadata
+}
+
+export type CodexSessionForkVerificationContext = {
+  sourceExternalId: string
+  sourceProviderThreadId?: string
+  targetWorkspaceId: OsId
+  targetCwd: string
+  sourceWorkspaceId?: OsId
+  sourceCwd?: string
+  childProviderThreadId?: string
+  childProviderSessionId?: string | null
+  lastTurnId?: string | null
+}
+
+export type CodexSessionForkVerificationOptions =
+  CodexSessionForkVerificationContext & {
+    childExternalId: string
+  }
+
+export type CodexForkVerificationProof = {
+  status: 'verified'
+  sourceExternalId: string
+  sourceProviderThreadId: string
+  childExternalId: string
+  childProviderThreadId: string
+  childProviderSessionId: string
+  targetCwd: string
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  read: {
+    method: 'thread/read'
+    includeTurns: false
+    verified: true
+  }
+}
+
+export type CodexForkReadProofMetadata = {
+  forkMethod: 'thread/fork'
+  verificationMethod: 'thread/read'
+  forkedFromId: string
+  providerSessionId: string
+  lastTurnId: string | null
+  sourceWorkspaceId?: OsId
+  sourceCwd?: string
+  targetWorkspaceId: OsId
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  targetCwd: string
+  childCwd: string
+  cwdVerified: true
+  workspaceBindingVerified: true
+  workspaceBindingAuthority: 'orchestrator'
+  readVerified: true
+  threadReadVerified: true
+  [key: string]: unknown
+}
+
+export type CodexSessionForkVerificationResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  proof: CodexForkVerificationProof
+  metadata: CodexForkReadProofMetadata
 }
 
 export type CodexForkKnownChild = {
@@ -159,6 +252,34 @@ export class CodexForkOutcomeUnknownError extends Error {
   ) {
     super(message)
     this.name = 'CodexForkOutcomeUnknownError'
+  }
+}
+
+export type CodexForkVerificationFailureCode =
+  | 'invalid_request'
+  | 'read_failed'
+  | 'malformed_read'
+  | 'child_identity_mismatch'
+  | 'lineage_mismatch'
+  | 'provider_session_mismatch'
+  | 'cwd_mismatch'
+
+export type CodexForkVerificationKnownChild = Omit<
+  CodexForkKnownChild,
+  'subscriptionReleased'
+>
+
+export class CodexForkVerificationError extends Error {
+  readonly quarantined = true
+
+  constructor(
+    readonly code: CodexForkVerificationFailureCode,
+    readonly sourceExternalId: string,
+    readonly sourceProviderThreadId: string,
+    readonly knownChild: CodexForkVerificationKnownChild | null,
+  ) {
+    super(`Codex fork verification quarantined: ${code}`)
+    this.name = 'CodexForkVerificationError'
   }
 }
 
@@ -196,6 +317,34 @@ const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
 }
 
 const COMPLETED_APPROVAL_CACHE_SIZE = 256
+const CODEX_UNSUBSCRIBE_RELEASE_STATUSES = new Set([
+  'notLoaded',
+  'notSubscribed',
+  'unsubscribed',
+] as const)
+type CodexUnsubscribeReleaseStatus =
+  'notLoaded'
+  | 'notSubscribed'
+  | 'unsubscribed'
+
+function normalizedAbsoluteCwd(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed && isAbsolute(trimmed) ? resolve(trimmed) : null
+}
+
+function sameCwd(value: unknown, expected: string): boolean {
+  return normalizedAbsoluteCwd(value) === expected
+}
+
+function unsubscribeReleaseStatus(value: unknown): CodexUnsubscribeReleaseStatus | null {
+  if (typeof value !== 'string') return null
+  return CODEX_UNSUBSCRIBE_RELEASE_STATUSES.has(
+    value as CodexUnsubscribeReleaseStatus,
+  )
+    ? value as CodexUnsubscribeReleaseStatus
+    : null
+}
 
 export class CodexAgentDriver implements AgentDriver {
   readonly id = 'codex'
@@ -409,8 +558,9 @@ export class CodexAgentDriver implements AgentDriver {
     if (options.sourceExternalId !== source.session.externalId) {
       throw new Error(`Codex fork source external id does not match session ${sessionId}`)
     }
-    if (options.workspaceId !== source.session.workspaceId) {
-      throw new Error(`Codex fork workspace does not match session ${sessionId}`)
+    if (!options.sourceWorkspaceId.trim()
+      || options.sourceWorkspaceId !== source.session.workspaceId) {
+      throw new Error(`Codex fork source workspace does not match session ${sessionId}`)
     }
     const sourceProviderSessionId = typeof source.session.metadata.codexSessionId === 'string'
       ? source.session.metadata.codexSessionId.trim()
@@ -418,12 +568,19 @@ export class CodexAgentDriver implements AgentDriver {
     if (!sourceProviderSessionId) {
       throw new Error(`Codex session ${sessionId} has no provider session identity`)
     }
-    const sourceCwd = typeof source.session.metadata.cwd === 'string'
-      ? source.session.metadata.cwd
-      : ''
-    if (!sourceCwd) throw new Error(`Codex session ${sessionId} has no workspace cwd provenance`)
-    if (!options.cwd.trim() || resolve(options.cwd) !== resolve(sourceCwd)) {
-      throw new Error(`Codex fork cwd does not match session ${sessionId}`)
+    const sourceCwd = normalizedAbsoluteCwd(source.session.metadata.cwd)
+    if (!sourceCwd) throw new Error(`Codex session ${sessionId} has no source cwd provenance`)
+    const requestedSourceCwd = normalizedAbsoluteCwd(options.sourceCwd)
+    if (!requestedSourceCwd || requestedSourceCwd !== sourceCwd) {
+      throw new Error(`Codex fork source cwd does not match session ${sessionId}`)
+    }
+    const targetWorkspaceId = options.targetWorkspaceId.trim()
+    if (!targetWorkspaceId || targetWorkspaceId === source.session.workspaceId) {
+      throw new Error(`Codex fork target workspace must be distinct from session ${sessionId}`)
+    }
+    const targetCwd = normalizedAbsoluteCwd(options.targetCwd)
+    if (!targetCwd || targetCwd === sourceCwd) {
+      throw new Error(`Codex fork target cwd must be distinct from session ${sessionId}`)
     }
     const lastTurnId = options.lastTurnId == null ? null : options.lastTurnId.trim()
     if (options.lastTurnId != null && !lastTurnId) {
@@ -434,6 +591,7 @@ export class CodexAgentDriver implements AgentDriver {
     try {
       const response = await this.options.service.forkThread(source.threadId, {
         ...(lastTurnId ? { lastTurnId } : {}),
+        cwd: targetCwd,
       })
       if (!response
         || typeof response !== 'object'
@@ -454,22 +612,29 @@ export class CodexAgentDriver implements AgentDriver {
     const child = forked.thread
     const childId = typeof child?.id === 'string' ? child.id.trim() : ''
     const childProviderSessionId = typeof child?.sessionId === 'string' ? child.sessionId.trim() : ''
-    const childCwd = typeof child?.cwd === 'string' ? child.cwd : ''
+    const childForkedFromId = typeof child?.forkedFromId === 'string'
+      ? child.forkedFromId.trim()
+      : null
     const releaseKnownChild = async (): Promise<CodexForkKnownChild | null> => {
-      if (!childId || childId === source.threadId) return null
-      let subscriptionReleased = false
+      if (!childId
+        || childId === source.threadId
+        || this.sessionsByThread.has(childId)) {
+        return null
+      }
+      let releaseStatus: CodexUnsubscribeReleaseStatus | null = null
       try {
-        await this.options.service.unsubscribeThread(childId)
-        subscriptionReleased = true
+        releaseStatus = unsubscribeReleaseStatus(
+          (await this.options.service.unsubscribeThread(childId)).status,
+        )
       } catch {
         // This diagnostic is safe to retain without exposing the transport error.
       }
       return {
         externalId: childId,
         providerThreadId: childId,
-        forkedFromId: typeof child?.forkedFromId === 'string' ? child.forkedFromId : null,
+        forkedFromId: childForkedFromId,
         childProviderSessionId: childProviderSessionId || null,
-        subscriptionReleased,
+        subscriptionReleased: releaseStatus !== null,
       }
     }
     let provenanceError: Error | null = null
@@ -477,7 +642,9 @@ export class CodexAgentDriver implements AgentDriver {
       provenanceError = new Error(`Codex fork from ${source.threadId} returned no child thread id`)
     } else if (childId === source.threadId) {
       provenanceError = new Error(`Codex fork reused source thread id ${source.threadId}`)
-    } else if (child.forkedFromId !== source.threadId) {
+    } else if (this.sessionsByThread.has(childId)) {
+      provenanceError = new Error(`Codex fork reused managed thread id ${childId}`)
+    } else if (childForkedFromId !== source.threadId) {
       provenanceError = new Error(
         `Codex fork ${childId} did not attest source thread ${source.threadId}`,
       )
@@ -485,7 +652,7 @@ export class CodexAgentDriver implements AgentDriver {
       provenanceError = new Error(
         `Codex fork ${childId} returned no child provider session identity`,
       )
-    } else if (childCwd !== sourceCwd || forked.cwd !== sourceCwd) {
+    } else if (!sameCwd(child.cwd, targetCwd) || !sameCwd(forked.cwd, targetCwd)) {
       provenanceError = new Error(
         `Codex fork ${childId} did not preserve workspace cwd provenance`,
       )
@@ -499,39 +666,70 @@ export class CodexAgentDriver implements AgentDriver {
       )
     }
 
-    let readVerified = false
-    let reread: CodexThread | null = null
+    let reread: CodexThread
     try {
-      reread = (await this.options.service.readThread(childId, false)).thread
-    } catch {
-      // The native mutation already succeeded. Keep the response identity so
-      // lifecycle persistence can reconcile it instead of creating a duplicate.
-    }
-    if (reread) {
-      const rereadSessionId = typeof reread.sessionId === 'string' ? reread.sessionId.trim() : ''
-      if (reread.id !== childId
-        || reread.forkedFromId !== source.threadId
-        || rereadSessionId !== childProviderSessionId
-        || reread.cwd !== sourceCwd) {
-        throw new CodexForkOutcomeUnknownError(
-          `Codex fork ${childId} failed native lineage reread verification`,
-          source.session.externalId,
-          source.threadId,
-          await releaseKnownChild(),
-        )
+      const response = await this.options.service.readThread(childId, false)
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new Error('Codex fork reread returned a malformed response')
       }
-      readVerified = true
+      reread = response.thread
+    } catch {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} could not complete mandatory native lineage reread verification`,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
+    }
+    const rereadId = typeof reread.id === 'string' ? reread.id.trim() : ''
+    const rereadForkedFromId = typeof reread.forkedFromId === 'string'
+      ? reread.forkedFromId.trim()
+      : null
+    const rereadSessionId = typeof reread.sessionId === 'string' ? reread.sessionId.trim() : ''
+    if (rereadId !== childId
+      || rereadForkedFromId !== source.threadId
+      || rereadSessionId !== childProviderSessionId
+      || !sameCwd(reread.cwd, targetCwd)) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} failed native lineage reread verification`,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
+    }
+    if (this.sessionsByThread.has(childId)) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork child ${childId} became managed before subscription release`,
+        source.session.externalId,
+        source.threadId,
+        null,
+      )
     }
 
-    let subscriptionReleased = false
-    let subscriptionStatus: string | null = null
+    let subscriptionStatus: CodexUnsubscribeReleaseStatus | null = null
     try {
       const unsubscribed = await this.options.service.unsubscribeThread(childId)
-      subscriptionReleased = true
-      subscriptionStatus = unsubscribed.status
+      subscriptionStatus = unsubscribeReleaseStatus(unsubscribed.status)
     } catch {
-      // The native fork already succeeded. Return its identity so the durable
-      // lifecycle can persist/reconcile it instead of retrying a second fork.
+      // The outcome is quarantined below without exposing transport details.
+    }
+    if (!subscriptionStatus) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} could not prove child subscription release`,
+        source.session.externalId,
+        source.threadId,
+        {
+          externalId: childId,
+          providerThreadId: childId,
+          forkedFromId: childForkedFromId,
+          childProviderSessionId,
+          subscriptionReleased: false,
+        },
+      )
     }
 
     return {
@@ -541,18 +739,206 @@ export class CodexAgentDriver implements AgentDriver {
       sourceProviderThreadId: source.threadId,
       metadata: {
         forkMethod: 'thread/fork',
-        forkedFromId: child.forkedFromId,
+        verificationMethod: 'thread/fork+thread/read',
+        forkedFromId: source.threadId,
         sourceProviderSessionId,
         providerSessionId: childProviderSessionId,
         lastTurnId,
-        workspaceId: source.session.workspaceId,
+        sourceWorkspaceId: source.session.workspaceId,
         sourceCwd,
-        childCwd,
+        targetWorkspaceId,
+        targetWorkspaceAttestation: {
+          value: targetWorkspaceId,
+          authority: 'orchestrator',
+        },
+        targetCwd,
+        childCwd: targetCwd,
         cwdVerified: true,
         workspaceBindingVerified: true,
-        readVerified,
-        subscriptionReleased,
+        workspaceBindingAuthority: 'orchestrator',
+        readVerified: true,
+        threadReadVerified: true,
+        subscriptionReleased: true,
+        childUnsubscribeVerified: true,
         subscriptionStatus,
+      },
+    }
+  }
+
+  verifyForkSession(
+    options: CodexSessionForkVerificationOptions,
+  ): Promise<CodexSessionForkVerificationResult>
+  verifyForkSession(
+    childExternalId: string,
+    options: CodexSessionForkVerificationContext,
+  ): Promise<CodexSessionForkVerificationResult>
+  async verifyForkSession(
+    childExternalIdOrOptions: string | CodexSessionForkVerificationOptions,
+    context?: CodexSessionForkVerificationContext,
+  ): Promise<CodexSessionForkVerificationResult> {
+    const options = typeof childExternalIdOrOptions === 'string'
+      ? { ...context, childExternalId: childExternalIdOrOptions }
+      : childExternalIdOrOptions
+    const sourceExternalId = typeof options?.sourceExternalId === 'string'
+      ? options.sourceExternalId.trim()
+      : ''
+    const explicitSourceProviderThreadId =
+      typeof options?.sourceProviderThreadId === 'string'
+        ? options.sourceProviderThreadId.trim()
+        : ''
+    const sourceProviderThreadId = options?.sourceProviderThreadId === undefined
+      ? sourceExternalId
+      : explicitSourceProviderThreadId
+    const childExternalId = typeof options?.childExternalId === 'string'
+      ? options.childExternalId.trim()
+      : ''
+    const childProviderThreadId = typeof options?.childProviderThreadId === 'string'
+      ? options.childProviderThreadId.trim()
+      : childExternalId
+    const expectedChildProviderSessionId =
+      typeof options?.childProviderSessionId === 'string'
+        ? options.childProviderSessionId.trim()
+        : null
+    const sourceWorkspaceId = typeof options?.sourceWorkspaceId === 'string'
+      ? options.sourceWorkspaceId.trim()
+      : undefined
+    const sourceCwd = options?.sourceCwd === undefined
+      ? undefined
+      : normalizedAbsoluteCwd(options.sourceCwd)
+    const targetWorkspaceId = typeof options?.targetWorkspaceId === 'string'
+      ? options.targetWorkspaceId.trim()
+      : ''
+    const targetCwd = normalizedAbsoluteCwd(options?.targetCwd)
+    const lastTurnId = options?.lastTurnId == null ? null : options.lastTurnId.trim()
+    const invalidRequest = !sourceExternalId
+      || !sourceProviderThreadId
+      || sourceExternalId !== sourceProviderThreadId
+      || (options?.sourceProviderThreadId !== undefined
+        && !explicitSourceProviderThreadId)
+      || !childExternalId
+      || childExternalId === sourceExternalId
+      || !childProviderThreadId
+      || childProviderThreadId !== childExternalId
+      || (options?.childProviderSessionId != null && !expectedChildProviderSessionId)
+      || !targetWorkspaceId
+      || !targetCwd
+      || (options?.sourceWorkspaceId !== undefined
+        && (!sourceWorkspaceId || sourceWorkspaceId === targetWorkspaceId))
+      || (options?.sourceCwd !== undefined
+        && (!sourceCwd || sourceCwd === targetCwd))
+      || (options?.lastTurnId != null && !lastTurnId)
+    if (invalidRequest) {
+      throw new CodexForkVerificationError(
+        'invalid_request',
+        sourceExternalId,
+        sourceProviderThreadId,
+        null,
+      )
+    }
+
+    const unresolvedKnownChild: CodexForkVerificationKnownChild = {
+      externalId: childExternalId,
+      providerThreadId: childProviderThreadId,
+      forkedFromId: null,
+      childProviderSessionId: null,
+    }
+    let reread: CodexThread
+    try {
+      const response = await this.options.service.readThread(childExternalId, false)
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new CodexForkVerificationError(
+          'malformed_read',
+          sourceExternalId,
+          sourceProviderThreadId,
+          unresolvedKnownChild,
+        )
+      }
+      reread = response.thread
+    } catch (error) {
+      if (error instanceof CodexForkVerificationError) throw error
+      throw new CodexForkVerificationError(
+        'read_failed',
+        sourceExternalId,
+        sourceProviderThreadId,
+        unresolvedKnownChild,
+      )
+    }
+
+    const rereadId = typeof reread.id === 'string' ? reread.id.trim() : ''
+    const rereadForkedFromId = typeof reread.forkedFromId === 'string'
+      ? reread.forkedFromId.trim()
+      : null
+    const rereadProviderSessionId = typeof reread.sessionId === 'string'
+      ? reread.sessionId.trim()
+      : ''
+    const knownChild: CodexForkVerificationKnownChild = {
+      externalId: rereadId || childExternalId,
+      providerThreadId: rereadId || childProviderThreadId,
+      forkedFromId: rereadForkedFromId,
+      childProviderSessionId: rereadProviderSessionId || null,
+    }
+    const fail = (code: CodexForkVerificationFailureCode): never => {
+      throw new CodexForkVerificationError(
+        code,
+        sourceExternalId,
+        sourceProviderThreadId,
+        knownChild,
+      )
+    }
+    if (rereadId !== childExternalId) fail('child_identity_mismatch')
+    if (rereadForkedFromId !== sourceProviderThreadId) fail('lineage_mismatch')
+    if (!rereadProviderSessionId
+      || (expectedChildProviderSessionId !== null
+        && rereadProviderSessionId !== expectedChildProviderSessionId)) {
+      fail('provider_session_mismatch')
+    }
+    if (!sameCwd(reread.cwd, targetCwd)) fail('cwd_mismatch')
+
+    const targetWorkspaceAttestation: CodexTargetWorkspaceAttestation = {
+      value: targetWorkspaceId,
+      authority: 'orchestrator',
+    }
+    return {
+      sourceExternalId,
+      externalId: childExternalId,
+      providerThreadId: childProviderThreadId,
+      sourceProviderThreadId,
+      proof: {
+        status: 'verified',
+        sourceExternalId,
+        sourceProviderThreadId,
+        childExternalId,
+        childProviderThreadId,
+        childProviderSessionId: rereadProviderSessionId,
+        targetCwd,
+        targetWorkspaceAttestation,
+        read: {
+          method: 'thread/read',
+          includeTurns: false,
+          verified: true,
+        },
+      },
+      metadata: {
+        forkMethod: 'thread/fork',
+        verificationMethod: 'thread/read',
+        forkedFromId: sourceProviderThreadId,
+        providerSessionId: rereadProviderSessionId,
+        lastTurnId,
+        ...(sourceWorkspaceId ? { sourceWorkspaceId } : {}),
+        ...(sourceCwd ? { sourceCwd } : {}),
+        targetWorkspaceId,
+        targetWorkspaceAttestation,
+        targetCwd,
+        childCwd: targetCwd,
+        cwdVerified: true,
+        workspaceBindingVerified: true,
+        workspaceBindingAuthority: 'orchestrator',
+        readVerified: true,
+        threadReadVerified: true,
       },
     }
   }
