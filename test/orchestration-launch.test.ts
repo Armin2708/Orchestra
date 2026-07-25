@@ -427,6 +427,17 @@ describe('canonical card launch routes', () => {
       FROM os_events
       WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
       .get(boardId) as Record<string, unknown>
+    const displacedBoardId = Number(db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/displaced-link-audit', 'Displaced link audit')
+    `).run().lastInsertRowid)
+    db.prepare(`UPDATE os_events SET board_id=?
+      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+      .run(displacedBoardId, boardId)
+    expect(replayCanonicalLink).toThrow(/replay scope is inconsistent/)
+    db.prepare(`UPDATE os_events SET board_id=?
+      WHERE board_id=? AND idempotency_key='canonical-transcript:link'`)
+      .run(boardId, displacedBoardId)
     const envelopeMutations = [
       ['source', 'hostile'],
       ['workspace_id', 'wrong-workspace'],

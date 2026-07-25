@@ -514,7 +514,15 @@ export class ConversationService {
         kind: 'agent_session.linked',
         requestFingerprint,
       })
-      if (!replay) return null
+      if (!replay) {
+        const displaced = this.db.prepare(`SELECT 1 FROM os_events
+          WHERE board_id!=? AND session_id=? AND idempotency_key=? LIMIT 1`)
+          .get(eventScope.boardId, current.id, idempotencyKey)
+        if (displaced) {
+          throw new ConflictError('agent session link replay scope is inconsistent')
+        }
+        return null
+      }
       const expectedPayload = {
         profile_id: profile.id,
         conversation_id: conversation.id,
