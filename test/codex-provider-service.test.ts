@@ -5,11 +5,13 @@ import type { CodexSupervisorLifecycleEvent, CodexSupervisorState } from '../src
 
 class FakeSupervisor {
   state: CodexSupervisorState = 'idle'
+  starts = 0
   private readonly listeners = new Set<(event: CodexSupervisorLifecycleEvent) => void>()
 
   constructor(private readonly failure?: Error) {}
 
   async start(): Promise<void> {
+    this.starts += 1
     if (this.failure) {
       this.state = 'failed'
       throw this.failure
@@ -73,7 +75,7 @@ describe('Codex provider service', () => {
       readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
       readRateLimits: async () => ({}) as any,
       readUsage: async () => ({}) as any,
-    }, new FakeSupervisor(), { version: 'codex-cli test' })
+    }, new FakeSupervisor(), { version: 'codex-cli 0.144.6' })
     expect(await unauthenticated.initialize()).toBe(false)
     expect(await unauthenticated.catalog()).toMatchObject({
       available: false,
@@ -85,9 +87,33 @@ describe('Codex provider service', () => {
     const missing = new CodexProviderService(db, {
       listModels: async () => [], readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
       readRateLimits: async () => ({}) as any, readUsage: async () => ({}) as any,
-    }, new FakeSupervisor(new Error('spawn codex ENOENT')), { version: 'unknown' })
+    }, new FakeSupervisor(new Error('spawn codex ENOENT')), { version: 'codex-cli 0.144.6' })
     expect(await missing.initialize()).toBe(false)
     expect(await missing.health()).toMatchObject({ available: false, detail: 'spawn codex ENOENT' })
     missing.dispose()
+  })
+
+  it.each([
+    ['too old', 'codex-cli 0.143.0'],
+    ['too new', 'codex-cli 0.145.0'],
+    ['missing', 'not found'],
+  ])('does not start app-server when the CLI is %s', async (_case, version) => {
+    const db = openDb(':memory:')
+    const supervisor = new FakeSupervisor()
+    const service = new CodexProviderService(db, {
+      listModels: async () => [],
+      readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
+      readRateLimits: async () => ({}) as any,
+      readUsage: async () => ({}) as any,
+    }, supervisor, { version })
+
+    expect(await service.initialize()).toBe(false)
+    expect(supervisor.starts).toBe(0)
+    expect(await service.health()).toMatchObject({
+      available: false,
+      status: 'unavailable',
+      detail: expect.stringContaining('Install @openai/codex@0.144.6'),
+    })
+    service.dispose()
   })
 })

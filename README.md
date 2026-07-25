@@ -41,6 +41,7 @@ Start a new Codex session in the project, then open `/hooks` once to review and 
 ```bash
 npm i -g orchestra-board
 orchestra install --provider both  # Claude + Codex hooks; global by default
+orchestra doctor --provider both
 orchestra serve &    # or let the hooks auto-start it
 open http://localhost:4750
 ```
@@ -58,6 +59,7 @@ Orchestra:
 npm i -g @openai/codex@0.144.6
 codex login
 codex login status
+orchestra doctor --provider codex
 orchestra restart
 orchestra hire --provider codex --access-profile workspace_write
 ```
@@ -65,7 +67,9 @@ orchestra hire --provider codex --access-profile workspace_write
 The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning
 effort, and a neutral access profile. Orchestra never substitutes Claude when Codex is missing,
 logged out, reconnecting, or unsupported; the provider remains visible with a diagnostic instead.
-See [Codex integration](docs/codex.md) for runtime, security, recovery, and troubleshooting details.
+See the [supported-environment matrix](docs/supported-environments.md) and
+[Codex integration](docs/codex.md) for exact versions, runtime security, recovery, and
+troubleshooting details.
 
 Use `--provider claude` or `--provider codex` for one provider, and add `--project` to write `./.claude/settings.json` and/or `./.codex/hooks.json` instead of the user-level files. Project-local Codex hooks run only after the project is trusted and the definitions are approved through `/hooks`.
 
@@ -113,6 +117,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra swarm [question] --confirm [--stdin]` | Deliberately wake the current live-agent snapshot |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
+| `orchestra doctor [--provider claude\|codex\|both] [--json\|--contract]` | Verify exact runtime/platform/provider compatibility without using credentials |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--provider claude\|codex] [--model M] [--effort LEVEL] [--access-profile PROFILE]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |

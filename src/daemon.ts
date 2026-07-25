@@ -20,6 +20,10 @@ import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
 import { CODEX_PROVIDER_ID } from './agent-providers.js'
 import {
+  assertManagedEnvironmentCompatibility,
+  runEnvironmentDoctor,
+} from './environment-compatibility.js'
+import {
   CodexAppServerService,
   CodexAppServerSupervisor,
   CodexProviderService,
@@ -154,6 +158,7 @@ export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.en
 }
 
 export async function serve(opts: ServeOptions = {}): Promise<void> {
+  assertManagedEnvironmentCompatibility(runEnvironmentDoctor('claude'))
   // an exposed daemon is remote code execution for anyone who can reach the port
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')

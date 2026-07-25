@@ -217,9 +217,11 @@ original/repaired hashes, byte counts, raw artifact IDs, run identity, and repai
 
 ## Supported first-release surface
 
-- Node 22.12 or newer within the tested Node 22 line;
+- exact validated and experimental Node/npm versions from the
+  [supported-environment matrix](supported-environments.md);
 - git worktrees;
-- Claude Code and Codex CLI versions declared in the release provider matrix;
-- macOS and Linux; Windows is unsupported until its clean-machine and PTY contracts pass;
+- Claude SDK/bundled CLI and Codex CLI versions declared in that matrix;
+- observed Darwin arm64 and Ubuntu Linux x64 gates; other macOS/Linux targets remain experimental,
+  and Windows remains unsupported until its clean-machine and PTY contracts pass;
 - local daemon and SQLite, with private Tailscale remote access preferred;
 - PWA/browser control before any native mobile application.

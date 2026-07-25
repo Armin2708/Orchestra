@@ -12,6 +12,7 @@ import {
   type AgentProviderUsageSnapshot,
 } from '../agent-providers.js'
 import { CODEX_CAPABILITIES } from '../provider-agent-manager.js'
+import { classifyCodexCliVersion } from '../environment-compatibility.js'
 import type { CodexRuntimeService } from './service.js'
 import type { CodexSupervisorLifecycleEvent, CodexSupervisorState } from './supervisor.js'
 import type { CodexUnsubscribe } from './transport.js'
@@ -127,6 +128,12 @@ export class CodexProviderService implements AgentProviderService {
 
   /** Start once at daemon boot. Authentication gained later is reported but enabled after restart. */
   async initialize(): Promise<boolean> {
+    const compatibility = classifyCodexCliVersion(this.version)
+    if (compatibility.status !== 'validated') {
+      this.runtimeEnabled = false
+      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.144.6, then restart Orchestra.`
+      return false
+    }
     try {
       await this.supervisor.start()
     } catch (error) {

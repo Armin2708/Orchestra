@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import readline from 'node:readline'
 
 if (process.argv.includes('--version')) {
-  process.stdout.write('codex-cli 0.144.6-fake\n')
+  process.stdout.write('codex-cli 0.144.6\n')
   process.exit(0)
 }
 

@@ -8,6 +8,7 @@ import { ensureToken } from './token.js'
 import { pairUrl, startRemote, stopRemote } from './remote.js'
 import { messageBody } from './msgsafe.js'
 import { registerAgentOsCommands } from './agent-os-cli.js'
+import { registerDoctorCommand } from './doctor-cli.js'
 import qrcode from 'qrcode-terminal'
 
 const program = new Command().name('orchestra').version(VERSION)
@@ -331,5 +332,6 @@ program.command('uninstall')
   .action((o) => uninstallHooks(o.project ? 'project' : 'global', { provider: o.provider }))
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
+registerDoctorCommand(program)
 
 program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
