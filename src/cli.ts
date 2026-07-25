@@ -64,12 +64,14 @@ program.command('token').description('print the API token (paste it into the web
     console.log(ensureToken())
   })
 
-program.command('remote').description('expose the board over a secure tunnel and pair your phone with a QR scan')
-  .option('--stop', 'tear the tunnel down')
+program.command('remote').description('start the legacy tunnel preview (QR contains the reusable operator token; not secure device pairing)')
+  .option('--stop', 'request a best-effort tunnel stop; verify the external URL is unreachable')
   .action(async (o) => {
     if (o.stop) {
       const s = stopRemote()
-      console.log(s ? `remote access stopped — ${s.provider} tunnel down` : 'remote access is not running')
+      console.log(s
+        ? `remote stop requested for ${s.provider}; verify ${s.url} is unreachable`
+        : 'no recorded remote access state was found')
       return
     }
     const { state, reused } = await startRemote()
@@ -78,7 +80,7 @@ program.command('remote').description('expose the board over a secure tunnel and
     console.log('scan to open the board on your phone, signed in — the QR embeds your token, treat it like a password:\n')
     qrcode.generate(url, { small: true })
     console.log(`\n${url}`)
-    console.log('stop with: orchestra remote --stop')
+    console.log('request a best-effort stop with: orchestra remote --stop; then verify the URL is unreachable')
   })
 
 program.command('join').description('register this agent session on the project board (agents only)')
