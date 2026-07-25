@@ -115,6 +115,8 @@ export type CodexSessionUpdate = {
 
 export type CodexApprovalDecision = 'allow' | 'allow_session' | 'deny' | 'cancel'
 export type CodexApprovalAnswers = Record<string, string[]>
+type CodexApprovalAuditDecision = CodexApprovalDecision | 'unhandled'
+type CodexApprovalOutcomeSource = 'automatic' | 'operator' | 'timeout' | 'shutdown'
 
 export type CodexSessionReconcileResult = {
   resumed: string[]
@@ -125,7 +127,7 @@ type PendingApproval = {
   kind: CodexDriverApprovalKind
   params: Record<string, unknown>
   deferred: Deferred<unknown>
-  timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | null
 }
 
 type CodexSessionState = {
@@ -140,6 +142,7 @@ type CodexSessionState = {
   droppedEvents: number
   pendingTurnOverrides: Omit<CodexTurnStartParams, 'threadId' | 'input'>
   pendingApprovals: Map<string, PendingApproval>
+  completedApprovals: Map<string, unknown>
   tokenBudget: number | null
   tokenBudgetInterrupted: boolean
   nativeEventSeq: number
@@ -152,6 +155,8 @@ const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
   'item/tool/requestUserInput': 'user-input',
   'mcpServer/elicitation/request': 'mcp-elicitation',
 }
+
+const COMPLETED_APPROVAL_CACHE_SIZE = 256
 
 export class CodexAgentDriver implements AgentDriver {
   readonly id = 'codex'
@@ -462,10 +467,16 @@ export class CodexAgentDriver implements AgentDriver {
     if (!state || !pending || state.stopped) return false
     const response = this.approvalResponse(pending, decision, message, answers)
     if (response === CODEX_REQUEST_UNHANDLED) return false
-    clearTimeout(pending.timer)
-    state.pendingApprovals.delete(requestId)
-    pending.deferred.resolve(response)
-    return true
+    if (!this.captureApprovalOutcome(
+      state,
+      requestId,
+      pending,
+      decision,
+      'operator',
+      message?.trim() ? 'operator-decision-with-message' : 'operator-decision',
+      true,
+    )) return false
+    return this.completeApproval(state, requestId, pending, response)
   }
 
   async reconcileSessions(): Promise<CodexSessionReconcileResult> {
@@ -535,6 +546,7 @@ export class CodexAgentDriver implements AgentDriver {
       droppedEvents: 0,
       pendingTurnOverrides: {},
       pendingApprovals: new Map(),
+      completedApprovals: new Map(),
       tokenBudget: this.tokenBudget(tokenBudget),
       tokenBudgetInterrupted: false,
       nativeEventSeq: 0,
@@ -943,6 +955,23 @@ export class CodexAgentDriver implements AgentDriver {
     }, threadId)) {
       return CODEX_REQUEST_UNHANDLED
     }
+    const requestId = String(request.id)
+    const replayKey = this.approvalReplayKey(requestId, {
+      kind,
+      params: request.params,
+    })
+    if (state.completedApprovals.has(replayKey)) {
+      const completed = state.completedApprovals.get(replayKey)
+      state.completedApprovals.delete(replayKey)
+      state.completedApprovals.set(replayKey, completed)
+      return completed
+    }
+    const existing = state.pendingApprovals.get(requestId)
+    if (existing) {
+      return this.approvalReplayKey(requestId, existing) === replayKey
+        ? existing.deferred.promise
+        : CODEX_REQUEST_UNHANDLED
+    }
     const elicitationQuestions = kind === 'mcp-elicitation'
       ? this.elicitationQuestions(request.params)
       : []
@@ -970,40 +999,117 @@ export class CodexAgentDriver implements AgentDriver {
         elicitationId: typeof request.params.elicitationId === 'string' ? request.params.elicitationId : null,
       } : {}),
     })
-    if (this.options.onApprovalRequest) {
-      const handled = await this.options.onApprovalRequest({
-        kind,
-        sessionId: state.session.id,
-        threadId,
-        turnId,
-        itemId,
-        requestId: request.id,
-        method: request.method,
-        params: request.params,
-      })
-      if (handled !== CODEX_REQUEST_UNHANDLED) return handled
-    }
-    const requestId = String(request.id)
-    const existing = state.pendingApprovals.get(requestId)
-    if (existing) {
-      clearTimeout(existing.timer)
-      existing.deferred.resolve(this.approvalResponse(existing, 'cancel'))
-    }
     const response = deferred<unknown>()
-    const timer = setTimeout(() => {
-      const pending = state.pendingApprovals.get(requestId)
-      if (!pending || pending.deferred !== response) return
-      state.pendingApprovals.delete(requestId)
-      pending.deferred.resolve(this.approvalResponse(pending, 'cancel'))
+    const pending: PendingApproval = {
+      kind,
+      params: request.params,
+      deferred: response,
+      timer: null,
+    }
+    state.pendingApprovals.set(requestId, pending)
+    pending.timer = setTimeout(() => {
+      if (state.pendingApprovals.get(requestId) !== pending) return
+      const cancellation = this.approvalResponse(pending, 'cancel')
+      const persisted = this.captureApprovalOutcome(
+        state,
+        requestId,
+        pending,
+        'cancel',
+        'timeout',
+        'approval-timeout',
+        true,
+      )
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        persisted ? cancellation : CODEX_REQUEST_UNHANDLED,
+      )
       this.emitEvent(state, 'error', `Codex approval ${requestId} timed out`, {
         method: 'orchestra/approvalTimeout',
         params: { threadId, turnId, itemId, requestId },
         receivedAt: this.now().toISOString(),
+      }, {
+        approvalAuditPersisted: persisted,
       })
     }, this.approvalTimeoutMs)
-    timer.unref?.()
-    state.pendingApprovals.set(requestId, { kind, params: request.params, deferred: response, timer })
-    return response.promise
+    pending.timer.unref?.()
+    if (this.options.onApprovalRequest) {
+      let handled: unknown
+      try {
+        handled = await this.options.onApprovalRequest({
+          kind,
+          sessionId: state.session.id,
+          threadId,
+          turnId,
+          itemId,
+          requestId: request.id,
+          method: request.method,
+          params: request.params,
+        })
+      } catch {
+        if (state.pendingApprovals.get(requestId) === pending) {
+          this.captureApprovalOutcome(
+            state,
+            requestId,
+            pending,
+            'unhandled',
+            'automatic',
+            'automatic-handler-failed',
+            true,
+          )
+          this.completeApproval(
+            state,
+            requestId,
+            pending,
+            CODEX_REQUEST_UNHANDLED,
+          )
+        }
+        return pending.deferred.promise
+      }
+      if (state.pendingApprovals.get(requestId) !== pending) {
+        return pending.deferred.promise
+      }
+      if (handled !== CODEX_REQUEST_UNHANDLED) {
+        const decision = this.approvalDecisionForResponse(handled)
+        const persisted = this.captureApprovalOutcome(
+          state,
+          requestId,
+          pending,
+          decision,
+          'automatic',
+          decision === 'unhandled'
+            ? 'automatic-handler-returned-an-unclassified-response'
+            : 'automatic-handler-decision',
+          true,
+        )
+        this.completeApproval(
+          state,
+          requestId,
+          pending,
+          persisted ? handled : CODEX_REQUEST_UNHANDLED,
+        )
+        return pending.deferred.promise
+      }
+    }
+    const routingPersisted = this.captureApprovalOutcome(
+      state,
+      requestId,
+      pending,
+      'unhandled',
+      'automatic',
+      this.options.onApprovalRequest ? 'automatic-handler-deferred' : 'no-automatic-handler',
+      false,
+    )
+    if (!routingPersisted) {
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        CODEX_REQUEST_UNHANDLED,
+      )
+    }
+    return pending.deferred.promise
   }
 
   private replayTerminalTurn(
@@ -1189,6 +1295,90 @@ export class CodexAgentDriver implements AgentDriver {
     return { approvalPolicy: 'on-request', sandboxPolicy: { type: 'dangerFullAccess' } }
   }
 
+  private approvalDecisionForResponse(response: unknown): CodexApprovalAuditDecision {
+    if (!isRecord(response)) return 'unhandled'
+    if (response.decision === 'accept') return 'allow'
+    if (response.decision === 'acceptForSession') return 'allow_session'
+    if (response.decision === 'decline') return 'deny'
+    if (response.decision === 'cancel') return 'cancel'
+    if (response.action === 'accept') return 'allow'
+    if (response.action === 'decline') return 'deny'
+    if (response.action === 'cancel') return 'cancel'
+    if (Object.hasOwn(response, 'permissions')) {
+      const permissions = isRecord(response.permissions) ? response.permissions : {}
+      if (Object.keys(permissions).length === 0) return 'deny'
+      return response.scope === 'session' ? 'allow_session' : 'allow'
+    }
+    if (Object.hasOwn(response, 'answers')) return 'allow'
+    return 'unhandled'
+  }
+
+  private captureApprovalOutcome(
+    state: CodexSessionState,
+    requestId: string,
+    pending: Pick<PendingApproval, 'kind' | 'params'>,
+    decision: CodexApprovalAuditDecision,
+    source: CodexApprovalOutcomeSource,
+    reason: string,
+    final: boolean,
+  ): boolean {
+    const stage = final ? source === 'automatic' ? 'automatic-response' : 'final-response' : 'routing'
+    return this.captureNativeEvent(state, {
+      method: 'orchestra/approvalResponse',
+      params: {
+        threadId: state.threadId,
+        turnId: this.turnId(pending.params),
+        itemId: this.itemId(pending.params),
+        eventId: `approval:${requestId}:${stage}`,
+        requestId,
+        approvalKind: pending.kind,
+        decision,
+        source,
+        reason,
+        final,
+        actorType: source === 'operator' ? 'operator' : 'system',
+        actorId: source === 'operator'
+          ? null
+          : source === 'automatic' ? 'codex-approval-policy' : 'codex-driver',
+      },
+      receivedAt: this.now().toISOString(),
+    }, state.threadId)
+  }
+
+  private completeApproval(
+    state: CodexSessionState,
+    requestId: string,
+    pending: PendingApproval,
+    response: unknown,
+  ): boolean {
+    if (state.pendingApprovals.get(requestId) !== pending) return false
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    pending.timer = null
+    state.pendingApprovals.delete(requestId)
+    state.completedApprovals.set(
+      this.approvalReplayKey(requestId, pending),
+      response,
+    )
+    if (state.completedApprovals.size > COMPLETED_APPROVAL_CACHE_SIZE) {
+      const oldest = state.completedApprovals.keys().next().value
+      if (oldest !== undefined) state.completedApprovals.delete(oldest)
+    }
+    pending.deferred.resolve(response)
+    return true
+  }
+
+  private approvalReplayKey(
+    requestId: string,
+    pending: Pick<PendingApproval, 'kind' | 'params'>,
+  ): string {
+    return JSON.stringify([
+      requestId,
+      pending.kind,
+      this.turnId(pending.params),
+      this.itemId(pending.params),
+    ])
+  }
+
   private approvalResponse(
     pending: Pick<PendingApproval, 'kind' | 'params'>,
     decision: CodexApprovalDecision,
@@ -1341,11 +1531,25 @@ export class CodexAgentDriver implements AgentDriver {
   }
 
   private cancelPendingApprovals(state: CodexSessionState): void {
-    for (const pending of state.pendingApprovals.values()) {
-      clearTimeout(pending.timer)
-      pending.deferred.resolve(this.approvalResponse(pending, 'cancel'))
+    const reason = state.session.status === 'failed' ? 'session-failed' : 'session-stopped'
+    for (const [requestId, pending] of [...state.pendingApprovals]) {
+      const cancellation = this.approvalResponse(pending, 'cancel')
+      const persisted = this.captureApprovalOutcome(
+        state,
+        requestId,
+        pending,
+        'cancel',
+        'shutdown',
+        reason,
+        true,
+      )
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        persisted ? cancellation : CODEX_REQUEST_UNHANDLED,
+      )
     }
-    state.pendingApprovals.clear()
   }
 
   private isMissingThread(error: unknown): boolean {

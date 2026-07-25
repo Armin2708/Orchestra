@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentHomeCodexNativeEventSink } from '../src/agent-os/codex-native-events.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
@@ -90,6 +90,19 @@ const createScope = (): NativeScope => {
     },
   }
 }
+
+const approvalOutcomeFailingSink = (scope: NativeScope): CodexNativeEventSink => ({
+  append: (event) => {
+    if (
+      event.method === 'orchestra/approvalResponse'
+      && (!isRecord(event.params) || event.params.final !== false)
+    ) {
+      throw new Error('approval response audit failed')
+    }
+    scope.sink.append(event)
+    return undefined
+  },
+})
 
 const capture = (
   binding: NativeScope['binding'],
@@ -751,14 +764,16 @@ describe('Codex driver durable notification boundary', () => {
     })
   })
 
-  it('persists provider approval requests before exposing their lossy driver projection', async () => {
+  it('persists automatic allow and deny outcomes before returning the app-server reply', async () => {
     const scope = createScope()
     try {
       const service = new NativeService()
       const driver = new CodexAgentDriver({
         service: service.asPort(),
         nativeEventSink: scope.sink,
-        onApprovalRequest: () => ({ decision: 'accept' }),
+        onApprovalRequest: ({ requestId }) => ({
+          decision: requestId === 'approval-native-deny' ? 'decline' : 'accept',
+        }),
       })
       drivers.push(driver)
       const session = await driver.launch({
@@ -779,9 +794,20 @@ describe('Codex driver durable notification boundary', () => {
         },
         receivedAt: '2026-07-24T10:00:00.000Z',
       })).resolves.toEqual({ decision: 'accept' })
+      await expect(service.request({
+        id: 'approval-native-deny',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-1',
+          itemId: 'file-native-approval',
+          path: '/codex-native/secret-file',
+        },
+        receivedAt: '2026-07-24T10:00:01.000Z',
+      })).resolves.toEqual({ decision: 'decline' })
 
       const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
-      expect(events).toHaveLength(1)
+      expect(events).toHaveLength(4)
       expect(events[0]).toMatchObject({
         kind: 'approval',
         provider_thread_id: 'thread-native-1',
@@ -790,14 +816,51 @@ describe('Codex driver durable notification boundary', () => {
         provider_cursor: 'eventId:approval-native-1',
         projected_text: 'Codex command approval requested',
         redaction_state: 'none',
+        retention_class: 'audit',
         metadata: {
           native_method: 'item/commandExecution/requestApproval',
           approval_kind: 'command',
+          approval_phase: 'request',
           provider_request_id: 'approval-native-1',
           raw_payload_state: 'withheld',
         },
       })
+      expect(events[1]).toMatchObject({
+        kind: 'approval',
+        actor_type: 'system',
+        actor_id: 'codex-approval-policy',
+        correlation_id: events[0].correlation_id,
+        causation_id: events[0].id,
+        projected_text: 'Codex command approval approved',
+        retention_class: 'audit',
+        metadata: {
+          native_method: 'orchestra/approvalResponse',
+          approval_kind: 'command',
+          approval_phase: 'response',
+          approval_decision: 'allow',
+          approval_source: 'automatic',
+          approval_reason: 'automatic-handler-decision',
+          approval_final: true,
+          provider_request_id: 'approval-native-1',
+          approval_request_event_id: events[0].id,
+        },
+      })
+      expect(events[3]).toMatchObject({
+        actor_type: 'system',
+        actor_id: 'codex-approval-policy',
+        correlation_id: events[2].correlation_id,
+        causation_id: events[2].id,
+        projected_text: 'Codex file-change approval denied',
+        metadata: {
+          approval_phase: 'response',
+          approval_decision: 'deny',
+          approval_source: 'automatic',
+          provider_request_id: 'approval-native-deny',
+          approval_request_event_id: events[2].id,
+        },
+      })
       expect(JSON.stringify(events)).not.toContain('secret command')
+      expect(JSON.stringify(events)).not.toContain('secret-file')
       expect(await nextDriverEvent(iterator)).toMatchObject({
         type: 'tool',
         metadata: {
@@ -805,6 +868,357 @@ describe('Codex driver durable notification boundary', () => {
           requestId: 'approval-native-1',
           approvalKind: 'command',
         },
+      })
+      expect(await nextDriverEvent(iterator)).toMatchObject({
+        type: 'tool',
+        metadata: {
+          requestId: 'approval-native-deny',
+          approvalKind: 'file-change',
+        },
+      })
+    } finally {
+      scope.db.close()
+    }
+  })
+
+  it('links deferred operator allow and deny outcomes without duplicating a replayed request', async () => {
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      let releaseAutomaticHandler!: () => void
+      const automaticHandlerGate = new Promise<void>((resolve) => {
+        releaseAutomaticHandler = resolve
+      })
+      const onApprovalRequest = vi.fn(async () => {
+        await automaticHandlerGate
+        return CODEX_REQUEST_UNHANDLED
+      })
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: scope.sink,
+        onApprovalRequest,
+      })
+      drivers.push(driver)
+      const session = await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      const allowRequest: CodexServerRequest = {
+        id: 'approval-operator-allow',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-operator',
+          itemId: 'command-native-operator',
+          command: 'command text must stay withheld',
+        },
+        receivedAt: '2026-07-24T10:10:00.000Z',
+      }
+      const allowResponse = service.request(allowRequest)
+      const replayedResponse = service.request(allowRequest)
+      await Promise.resolve()
+      expect(onApprovalRequest).toHaveBeenCalledTimes(1)
+      releaseAutomaticHandler()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await expect(driver.resolveApproval(
+        session.id,
+        'approval-operator-allow',
+        'allow',
+        'operator explanation must stay withheld',
+      )).resolves.toBe(true)
+      await expect(allowResponse).resolves.toEqual({ decision: 'accept' })
+      await expect(replayedResponse).resolves.toEqual({ decision: 'accept' })
+      await expect(service.request(allowRequest)).resolves.toEqual({ decision: 'accept' })
+      expect(onApprovalRequest).toHaveBeenCalledTimes(1)
+
+      const denyResponse = service.request({
+        id: 'approval-operator-deny',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-operator',
+          itemId: 'file-native-operator',
+          path: '/codex-native/private-file',
+        },
+        receivedAt: '2026-07-24T10:10:01.000Z',
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await expect(driver.resolveApproval(
+        session.id,
+        'approval-operator-deny',
+        'deny',
+      )).resolves.toBe(true)
+      await expect(denyResponse).resolves.toEqual({ decision: 'decline' })
+      await expect(driver.resolveApproval(
+        session.id,
+        'approval-operator-allow',
+        'deny',
+      )).resolves.toBe(false)
+
+      const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
+      expect(events).toHaveLength(6)
+      expect(new Set(events.map((event) => event.provider_event_id)).size).toBe(6)
+      const requests = events.filter((event) => event.metadata.approval_phase === 'request')
+      const routing = events.filter((event) => event.metadata.approval_phase === 'routing')
+      const responses = events.filter((event) => event.metadata.approval_phase === 'response')
+      expect(requests).toHaveLength(2)
+      expect(routing).toHaveLength(2)
+      expect(responses).toHaveLength(2)
+      expect(events.every((event) => event.retention_class === 'audit')).toBe(true)
+      expect(routing).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          actor_type: 'system',
+          actor_id: 'codex-approval-policy',
+          metadata: expect.objectContaining({
+            approval_decision: 'unhandled',
+            approval_source: 'automatic',
+            approval_reason: 'automatic-handler-deferred',
+            approval_final: false,
+          }),
+        }),
+      ]))
+      for (const response of responses) {
+        const request = requests.find((candidate) =>
+          candidate.metadata.provider_request_id === response.metadata.provider_request_id)
+        expect(request).toBeDefined()
+        expect(response).toMatchObject({
+          actor_type: 'operator',
+          actor_id: null,
+          correlation_id: request!.correlation_id,
+          causation_id: request!.id,
+          metadata: {
+            approval_phase: 'response',
+            approval_source: 'operator',
+            approval_request_event_id: request!.id,
+          },
+        })
+      }
+      expect(responses.map((event) => event.metadata.approval_decision)).toEqual(['allow', 'deny'])
+      expect(onApprovalRequest).toHaveBeenCalledTimes(2)
+      expect(JSON.stringify(events)).not.toContain('command text must stay withheld')
+      expect(JSON.stringify(events)).not.toContain('operator explanation must stay withheld')
+      expect(JSON.stringify(events)).not.toContain('private-file')
+    } finally {
+      scope.db.close()
+    }
+  })
+
+  it('persists a timeout cancellation before releasing the app-server request', async () => {
+    vi.useFakeTimers()
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: scope.sink,
+        onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+        approvalTimeoutMs: 1_000,
+      })
+      drivers.push(driver)
+      await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      const pendingResponse = service.request({
+        id: 'approval-timeout',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-timeout',
+          itemId: 'command-native-timeout',
+        },
+        receivedAt: '2026-07-24T10:20:00.000Z',
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(pendingResponse).resolves.toEqual({ decision: 'cancel' })
+
+      const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
+      const request = events.find((event) => event.metadata.approval_phase === 'request')!
+      const response = events.find((event) => event.metadata.approval_phase === 'response')!
+      expect(events).toHaveLength(3)
+      expect(response).toMatchObject({
+        actor_type: 'system',
+        actor_id: 'codex-driver',
+        causation_id: request.id,
+        metadata: {
+          approval_decision: 'cancel',
+          approval_source: 'timeout',
+          approval_reason: 'approval-timeout',
+          approval_request_event_id: request.id,
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+      scope.db.close()
+    }
+  })
+
+  it('fails closed when a timeout cancellation audit cannot be persisted', async () => {
+    vi.useFakeTimers()
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: approvalOutcomeFailingSink(scope),
+        onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+        approvalTimeoutMs: 1_000,
+      })
+      drivers.push(driver)
+      const session = await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      const request: CodexServerRequest = {
+        id: 'approval-timeout-audit-failure',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-timeout-failure',
+          itemId: 'command-native-timeout-failure',
+        },
+        receivedAt: '2026-07-24T10:25:00.000Z',
+      }
+      const pendingResponse = service.request(request)
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      await expect(pendingResponse).resolves.toBe(CODEX_REQUEST_UNHANDLED)
+      await expect(service.request(request)).resolves.toBe(CODEX_REQUEST_UNHANDLED)
+      expect(scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)).toHaveLength(2)
+      expect(session.metadata.nativeCaptureFailure).toMatchObject({
+        method: 'orchestra/approvalResponse',
+        detail: 'approval response audit failed',
+      })
+    } finally {
+      vi.useRealTimers()
+      scope.db.close()
+    }
+  })
+
+  it('persists shutdown cancellation before releasing pending approvals', async () => {
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: scope.sink,
+        onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+      })
+      drivers.push(driver)
+      await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      const pendingResponse = service.request({
+        id: 'approval-shutdown',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-shutdown',
+          itemId: 'file-native-shutdown',
+        },
+        receivedAt: '2026-07-24T10:30:00.000Z',
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      driver.dispose()
+      await expect(pendingResponse).resolves.toEqual({ decision: 'cancel' })
+
+      const events = scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)
+      const request = events.find((event) => event.metadata.approval_phase === 'request')!
+      const response = events.find((event) => event.metadata.approval_phase === 'response')!
+      expect(events).toHaveLength(3)
+      expect(response).toMatchObject({
+        actor_type: 'system',
+        actor_id: 'codex-driver',
+        causation_id: request.id,
+        metadata: {
+          approval_decision: 'cancel',
+          approval_source: 'shutdown',
+          approval_reason: 'session-stopped',
+          approval_request_event_id: request.id,
+        },
+      })
+    } finally {
+      scope.db.close()
+    }
+  })
+
+  it('fails closed when a shutdown cancellation audit cannot be persisted', async () => {
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: approvalOutcomeFailingSink(scope),
+        onApprovalRequest: () => CODEX_REQUEST_UNHANDLED,
+      })
+      drivers.push(driver)
+      const session = await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      const pendingResponse = service.request({
+        id: 'approval-shutdown-audit-failure',
+        method: 'item/fileChange/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-shutdown-failure',
+          itemId: 'file-native-shutdown-failure',
+        },
+        receivedAt: '2026-07-24T10:35:00.000Z',
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      driver.dispose()
+
+      await expect(pendingResponse).resolves.toBe(CODEX_REQUEST_UNHANDLED)
+      expect(scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)).toHaveLength(2)
+      expect(session.metadata.nativeCaptureFailure).toMatchObject({
+        method: 'orchestra/approvalResponse',
+        detail: 'approval response audit failed',
+      })
+    } finally {
+      scope.db.close()
+    }
+  })
+
+  it('does not return an automatic approval when its response audit cannot be persisted', async () => {
+    const scope = createScope()
+    try {
+      const service = new NativeService()
+      const driver = new CodexAgentDriver({
+        service: service.asPort(),
+        nativeEventSink: approvalOutcomeFailingSink(scope),
+        onApprovalRequest: () => ({ decision: 'accept' }),
+      })
+      drivers.push(driver)
+      const session = await driver.launch({
+        workspaceId: 'workspace-codex-native',
+        cwd: '/codex-native',
+        metadata: scope.binding,
+      })
+      await expect(service.request({
+        id: 'approval-audit-failure',
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread-native-1',
+          turnId: 'turn-native-failure',
+          itemId: 'command-native-failure',
+        },
+        receivedAt: '2026-07-24T10:40:00.000Z',
+      })).resolves.toBe(CODEX_REQUEST_UNHANDLED)
+      expect(scope.conversations.listSessionEvents(scope.binding.agentHomeSessionId)).toHaveLength(1)
+      expect(session.metadata.nativeCaptureFailure).toMatchObject({
+        method: 'orchestra/approvalResponse',
+        detail: 'approval response audit failed',
       })
     } finally {
       scope.db.close()

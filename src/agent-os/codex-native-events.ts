@@ -33,6 +33,15 @@ const APPROVAL_METHODS = new Set([
   'mcpServer/elicitation/request',
 ])
 
+const APPROVAL_RESPONSE_METHOD = 'orchestra/approvalResponse'
+const APPROVAL_DECISIONS = new Set([
+  'allow',
+  'allow_session',
+  'deny',
+  'cancel',
+  'unhandled',
+])
+
 const CURSOR_SENSITIVE_METHODS = new Set([
   'item/agentMessage/delta',
   ...TOOL_OUTPUT_METHODS,
@@ -43,6 +52,7 @@ const CURSOR_SENSITIVE_METHODS = new Set([
   'thread/status/changed',
   'error',
   'orchestra/captureGap',
+  APPROVAL_RESPONSE_METHOD,
   ...APPROVAL_METHODS,
 ])
 
@@ -63,6 +73,7 @@ const KNOWN_METHODS = new Set([
   'thread/closed',
   'thread/deleted',
   'orchestra/captureGap',
+  APPROVAL_RESPONSE_METHOD,
   ...APPROVAL_METHODS,
 ])
 
@@ -241,6 +252,40 @@ const projectNativeEvent = (
       },
     }
   }
+  if (method === APPROVAL_RESPONSE_METHOD) {
+    const approvalKind = safeScalar(params.approvalKind, 120) ?? 'tool'
+    const decision = safeScalar(params.decision, 64)
+    const normalizedDecision = decision && APPROVAL_DECISIONS.has(decision) ? decision : 'unhandled'
+    const source = safeScalar(params.source, 64) ?? 'system'
+    const reason = safeScalar(params.reason, 256) ?? 'approval-outcome'
+    const final = params.final !== false
+    const result = !final
+      ? 'requires operator review'
+      : normalizedDecision === 'allow'
+        ? 'approved'
+        : normalizedDecision === 'allow_session'
+          ? 'approved for this session'
+          : normalizedDecision === 'deny'
+            ? 'denied'
+            : normalizedDecision === 'cancel'
+              ? 'cancelled'
+              : 'answered without a classified decision'
+    return {
+      kind: 'approval',
+      projectedText: `Codex ${approvalKind} approval ${result}`,
+      metadata: {
+        approval_kind: approvalKind,
+        approval_phase: final ? 'response' : 'routing',
+        approval_decision: normalizedDecision,
+        approval_source: source,
+        approval_reason: reason,
+        approval_final: final,
+        provider_request_id: safeScalar(params.requestId, 512),
+        actor_type: safeScalar(params.actorType, 64) ?? 'system',
+        actor_id: safeScalar(params.actorId, 256),
+      },
+    }
+  }
   if (APPROVAL_METHODS.has(method)) {
     const kind = method === 'item/commandExecution/requestApproval'
       ? 'command'
@@ -256,6 +301,7 @@ const projectNativeEvent = (
       projectedText: `Codex ${kind} approval requested`,
       metadata: {
         approval_kind: kind,
+        approval_phase: 'request',
         provider_request_id: safeScalar(params.eventId, 512),
       },
     }
@@ -330,6 +376,34 @@ export class AgentHomeCodexNativeEventSink implements CodexNativeEventSink {
     const providerEventId = `codex:${identity}`
     const eventTime = nativeEventTime(params)
     const unknown = !KNOWN_METHODS.has(event.method)
+    const approvalRequestId = safeScalar(projection.metadata?.provider_request_id, 512)
+    const linkedRequest = event.method === APPROVAL_RESPONSE_METHOD && approvalRequestId
+      ? this.db.prepare(`SELECT id, correlation_id FROM conversation_events
+          WHERE session_id=? AND provider='codex' AND kind='approval'
+            AND json_extract(metadata_json, '$.approval_phase')='request'
+            AND json_extract(metadata_json, '$.provider_request_id')=?
+            AND provider_thread_id=?
+            AND provider_turn_id IS ?
+            AND provider_item_id IS ?
+          ORDER BY sequence DESC LIMIT 1`)
+        .get(sessionId, approvalRequestId, threadId, turnId, itemId) as
+          { id: string; correlation_id: string | null } | undefined
+      : undefined
+    if (event.method === APPROVAL_RESPONSE_METHOD && !linkedRequest) {
+      throw new ConflictError('Codex approval response has no matching durable request')
+    }
+    const approvalCorrelationId = approvalRequestId
+      ? `codex-approval:${canonicalHash({
+          session_id: sessionId,
+          provider_request_id: approvalRequestId,
+        })}`
+      : null
+    const outcomeActor = event.method === APPROVAL_RESPONSE_METHOD
+      ? {
+          type: safeScalar(params.actorType, 64) ?? 'system',
+          id: safeScalar(params.actorId, 256),
+        }
+      : { type: 'provider', id: 'codex' }
 
     if (event.method === 'orchestra/captureGap') {
       this.markCaptureGap(event, params)
@@ -359,18 +433,24 @@ export class AgentHomeCodexNativeEventSink implements CodexNativeEventSink {
         ...(providerCursor ? { native_cursor: providerCursor } : {}),
         ...(childThreadId ? { child_thread_id: childThreadId } : {}),
         ...projection.metadata,
+        ...(linkedRequest ? { approval_request_event_id: linkedRequest.id } : {}),
         ...(unknown ? {
           unknown_native_method: true,
         } : {}),
       },
-      actor: { type: 'provider', id: 'codex' },
-      correlationId: `codex:${canonicalHash({
-        session_id: sessionId,
-        thread_id: threadId,
-        turn_id: turnId,
-      })}`,
+      actor: outcomeActor,
+      correlationId: linkedRequest?.correlation_id
+        ?? approvalCorrelationId
+        ?? `codex:${canonicalHash({
+          session_id: sessionId,
+          thread_id: threadId,
+          turn_id: turnId,
+        })}`,
+      causationId: linkedRequest?.id,
       redactionState: projection.forceWithheld ? 'withheld' : 'none',
-      retentionClass: projection.kind === 'usage' ? 'audit' : 'transcript',
+      retentionClass: projection.kind === 'usage' || projection.kind === 'approval'
+        ? 'audit'
+        : 'transcript',
       schemaVersion: 1,
     })
   }
