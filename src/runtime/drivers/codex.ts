@@ -12,6 +12,7 @@ import {
   type CodexServerRequest,
   type CodexThread,
   type CodexThreadForkParams,
+  type CodexThreadForkResponse,
   type CodexThreadItem,
   type CodexThreadStartParams,
   type CodexThreadTokenUsage,
@@ -129,7 +130,7 @@ export type CodexSessionForkOptions = {
   sourceExternalId: string
   workspaceId: OsId
   cwd: string
-} & Pick<CodexThreadForkParams, 'lastTurnId' | 'excludeTurns'>
+} & Pick<CodexThreadForkParams, 'lastTurnId'>
 
 export type CodexSessionForkResult = {
   sourceExternalId: string
@@ -137,6 +138,28 @@ export type CodexSessionForkResult = {
   providerThreadId: string
   sourceProviderThreadId: string
   metadata: Record<string, unknown>
+}
+
+export type CodexForkKnownChild = {
+  externalId: string
+  providerThreadId: string
+  forkedFromId: string | null
+  childProviderSessionId: string | null
+  subscriptionReleased: boolean
+}
+
+export class CodexForkOutcomeUnknownError extends Error {
+  readonly outcomeUnknown = true
+
+  constructor(
+    message: string,
+    readonly sourceExternalId: string,
+    readonly sourceProviderThreadId: string,
+    readonly knownChild: CodexForkKnownChild | null,
+  ) {
+    super(message)
+    this.name = 'CodexForkOutcomeUnknownError'
+  }
 }
 
 type PendingApproval = {
@@ -406,18 +429,49 @@ export class CodexAgentDriver implements AgentDriver {
     if (options.lastTurnId != null && !lastTurnId) {
       throw new Error('Codex fork last turn id is required when provided')
     }
-    if (options.excludeTurns !== undefined && typeof options.excludeTurns !== 'boolean') {
-      throw new Error('Codex fork excludeTurns must be a boolean')
-    }
 
-    const forked = await this.options.service.forkThread(source.threadId, {
-      ...(lastTurnId ? { lastTurnId } : {}),
-      ...(options.excludeTurns !== undefined ? { excludeTurns: options.excludeTurns } : {}),
-    })
+    let forked: CodexThreadForkResponse
+    try {
+      const response = await this.options.service.forkThread(source.threadId, {
+        ...(lastTurnId ? { lastTurnId } : {}),
+      })
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new Error('Codex fork returned a malformed response')
+      }
+      forked = response
+    } catch {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork outcome is unknown for source thread ${source.threadId}`,
+        source.session.externalId,
+        source.threadId,
+        null,
+      )
+    }
     const child = forked.thread
     const childId = typeof child?.id === 'string' ? child.id.trim() : ''
     const childProviderSessionId = typeof child?.sessionId === 'string' ? child.sessionId.trim() : ''
     const childCwd = typeof child?.cwd === 'string' ? child.cwd : ''
+    const releaseKnownChild = async (): Promise<CodexForkKnownChild | null> => {
+      if (!childId || childId === source.threadId) return null
+      let subscriptionReleased = false
+      try {
+        await this.options.service.unsubscribeThread(childId)
+        subscriptionReleased = true
+      } catch {
+        // This diagnostic is safe to retain without exposing the transport error.
+      }
+      return {
+        externalId: childId,
+        providerThreadId: childId,
+        forkedFromId: typeof child?.forkedFromId === 'string' ? child.forkedFromId : null,
+        childProviderSessionId: childProviderSessionId || null,
+        subscriptionReleased,
+      }
+    }
     let provenanceError: Error | null = null
     if (!childId) {
       provenanceError = new Error(`Codex fork from ${source.threadId} returned no child thread id`)
@@ -437,10 +491,12 @@ export class CodexAgentDriver implements AgentDriver {
       )
     }
     if (provenanceError) {
-      if (childId && childId !== source.threadId) {
-        await this.options.service.unsubscribeThread(childId).catch(() => undefined)
-      }
-      throw provenanceError
+      throw new CodexForkOutcomeUnknownError(
+        provenanceError.message,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
     }
 
     let readVerified = false
@@ -457,8 +513,12 @@ export class CodexAgentDriver implements AgentDriver {
         || reread.forkedFromId !== source.threadId
         || rereadSessionId !== childProviderSessionId
         || reread.cwd !== sourceCwd) {
-        await this.options.service.unsubscribeThread(childId).catch(() => undefined)
-        throw new Error(`Codex fork ${childId} failed native lineage reread verification`)
+        throw new CodexForkOutcomeUnknownError(
+          `Codex fork ${childId} failed native lineage reread verification`,
+          source.session.externalId,
+          source.threadId,
+          await releaseKnownChild(),
+        )
       }
       readVerified = true
     }
@@ -485,12 +545,11 @@ export class CodexAgentDriver implements AgentDriver {
         sourceProviderSessionId,
         providerSessionId: childProviderSessionId,
         lastTurnId,
-        excludeTurns: options.excludeTurns ?? false,
         workspaceId: source.session.workspaceId,
         sourceCwd,
         childCwd,
         cwdVerified: true,
-        workspaceVerified: true,
+        workspaceBindingVerified: true,
         readVerified,
         subscriptionReleased,
         subscriptionStatus,

@@ -104,8 +104,8 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string
   /**
-   * Provider session identity. Codex 0.144.6 gives a native fork its own
-   * session id; use forkedFromId, not sessionId equality, for fork lineage.
+   * Provider session identity. Do not infer native fork lineage from
+   * sessionId equality; forkedFromId is the lineage authority.
    */
   sessionId?: string
   parentThreadId?: string | null
