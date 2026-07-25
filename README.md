@@ -50,6 +50,11 @@ node dist/cli.js restart
 node dist/cli.js hire --provider codex --access-profile workspace_write
 ```
 
+`orchestra doctor` runs full operator readiness by default: it verifies the supported environment,
+Git, selected provider CLIs, and selected-provider login state, then prints an Expected and Fix
+section for every problem. It never logs in or runs a model request. Automation that must remain
+credential-free can use `orchestra doctor --provider both --json --compatibility-only`.
+
 The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning
 effort, and a neutral access profile. Orchestra never substitutes Claude when Codex is missing,
 logged out, reconnecting, or unsupported; the provider remains visible with a diagnostic instead.
@@ -103,7 +108,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra swarm [question] --confirm [--stdin]` | Deliberately wake the current live-agent snapshot |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
-| `orchestra doctor [--provider claude\|codex\|both] [--json\|--contract]` | Verify exact runtime/platform/provider compatibility without using credentials |
+| `orchestra doctor [--provider claude\|codex\|both] [--json\|--contract] [--compatibility-only]` | Verify full operator readiness with actionable fixes, or select the credential-free compatibility gate |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--provider claude\|codex] [--model M] [--effort LEVEL] [--access-profile PROFILE]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |

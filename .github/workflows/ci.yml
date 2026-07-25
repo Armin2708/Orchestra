@@ -120,11 +120,11 @@ jobs:
         continue-on-error: true
         run: node scripts/exact-commit-evidence.mjs run e2e -- ./scripts/e2e.sh
 
-      - name: Run fail-closed environment doctor
+      - name: Run fail-closed credential-free compatibility doctor
         continue-on-error: true
         run: >-
           node scripts/exact-commit-evidence.mjs run doctor --
-          node dist/cli.js doctor --provider both --json
+          node dist/cli.js doctor --provider both --json --compatibility-only
 
       - name: Build, digest, and install-smoke the package artifact
         continue-on-error: true

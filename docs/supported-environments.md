@@ -18,6 +18,7 @@ Labels mean:
 |---|---|---|---|
 | Node.js | `22.12.0` in the Ubuntu 24.04 x64 compatibility gate; `22.20.0` on Darwin arm64 | other `>=22.12.0 <23` versions | `<22.12.0`, `>=23`, missing, or unparseable |
 | npm | `10.9.0` with the Ubuntu gate's Node release; `10.9.3` on the observed Darwin host | other `>=10.9.0 <11` versions | `<10.9.0`, `>=11`, missing, or unparseable |
+| Git | functional readiness range `>=2.30.0 <3.0.0`; host-observed with `2.50.1` on Darwin | none | `<2.30.0`, `>=3.0.0`, missing, or unparseable |
 
 Node's official `22.12.0` archive records npm `10.9.0`. The package engines admit the evaluation
 range, while the doctor remains fail-closed unless an exact observed platform + Node + npm tuple
@@ -59,23 +60,36 @@ Windows terminal, installation, browser, and recovery contracts.
 
 ## Enforcement and verification
 
-`environment-compatibility.json` is the canonical machine-readable contract. Inspect it or run a
-credential-free preflight:
+`environment-compatibility.json` is the canonical machine-readable contract. Run full operator
+readiness to check the environment, Git and selected-provider login state:
 
 ```sh
-orchestra doctor --contract
 orchestra doctor --provider both
 orchestra doctor --provider codex --json
 ```
 
-The preflight invokes only version commands and reads installed package metadata. It does not log in,
-read provider credentials, start a provider session, or make a model request. It exits non-zero
-unless every required check, including the whole observed toolchain tuple, is **Validated**.
+The readiness doctor invokes only bounded version and login-status commands with fixed argument
+arrays. It does not log in, print raw provider output, start a model session, or make a model request.
+Executable source is reported as a safe category and opaque path fingerprint rather than a raw local
+path. It exits non-zero unless every required compatibility, Git and selected-provider login check is
+**Validated**, and each failure includes machine-readable non-executing remediation.
+
+Use the explicit credential-free compatibility mode for CI, release evidence, or core-environment
+diagnosis:
+
+```sh
+orchestra doctor --contract
+orchestra doctor --provider both --json --compatibility-only
+```
+
+Compatibility-only mode invokes version commands and reads installed package metadata, but does not
+inspect provider login state. `--contract` performs no probes.
 
 Daemon startup applies the core platform/toolchain/Claude-native policy before opening state or
 registering managed runtimes. An unvalidated core environment stops startup with a doctor command.
 After that core gate, unsupported, missing, or unparseable Codex versions leave Codex visible but
 unavailable; no app-server process or authentication request is attempted.
 
-Provider authentication, clean-machine install/upgrade/uninstall, desktop/phone acceptance, and
-release provenance remain separate public-release gates.
+Login-state detection does not replace real credentialed Claude/Codex session acceptance.
+Clean-machine install/upgrade/uninstall, desktop/phone acceptance, credentialed provider journeys,
+and release provenance remain separate public-release gates.

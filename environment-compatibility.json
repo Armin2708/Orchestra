@@ -56,6 +56,14 @@
       ]
     }
   },
+  "tools": {
+    "git": {
+      "min_inclusive": "2.30.0",
+      "max_exclusive": "3.0.0",
+      "required": true,
+      "scope": "functional readiness range for repository discovery, worktree provisioning, diff, merge-base, and delivery evidence"
+    }
+  },
   "platforms": {
     "darwin": {
       "arm64": {

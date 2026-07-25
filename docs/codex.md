@@ -149,11 +149,15 @@ intentional local comparison with another CLI version, set
 To use a non-default binary, set `ORCHESTRA_CODEX_COMMAND` to its executable path before starting
 the daemon.
 
-Run the credential-free environment preflight before startup:
+Run full operator readiness before startup:
 
 ```sh
 orchestra doctor --provider codex
 ```
+
+This checks the exact Codex CLI version and `codex login status` without printing raw provider output.
+Use `orchestra doctor --provider codex --compatibility-only` when an automated gate must not inspect
+login state.
 
 The daemon first enforces the fail-closed core toolchain and native Claude runtime contract, then
 applies the exact Codex version check before app-server starts. See the
