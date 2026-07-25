@@ -143,17 +143,18 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   and independent P0–P2 review;
 - `0c1323780b5f776eb419c4dabbbe42b2bcf1c0ee` has the byte-identical reviewed tree and passed an
   exact-integration 9-file / 73-test gate plus root/web TypeScript;
-- in-app Browser inventory remained empty. The configured Playwright fallback passed desktop but
-  failed phone acceptance: mobile hid pause/resume/stop/retry, paused-idle state offered the wrong
-  controls, and a card deep link canonicalized to `/` so refresh lost the drawer. Console/page
-  errors were zero and all observed API responses were HTTP 200; browser/mobile gates stay open;
+- in-app Browser inventory remained empty. The configured Playwright fallback initially found
+  three phone defects; `30eb27e` restores capability-aware lifecycle controls, truthful paused
+  state, and board-scoped card-drawer refresh. Desktop and 390×844 phone fallback acceptance now
+  pass with zero console warnings/errors and observed API failures. Browser/mobile gates stay open
+  because fallback evidence does not prove the unavailable in-app Browser surface;
 - the public npm registry returned `E404` for `orchestra-board` on 2026-07-25.
 
 ### Remaining
 
 - a real daemon-mid-session to browser-continuation E2E gate;
-- the current phone control-state and deep-link defects, followed by combined desktop/phone
-  acceptance in the intended browser surface;
+- combined desktop/phone acceptance in the intended in-app Browser surface when that backend is
+  available;
 - JOB-010 phase-two binding from assignments through launch, job, session, executor,
   recovery/retry, and compatibility ownership; phase one alone does not close JOB-010;
 - Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
