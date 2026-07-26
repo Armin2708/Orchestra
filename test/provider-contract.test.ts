@@ -24,7 +24,9 @@ import {
   selectProviderExecutionV1,
   type ProviderCostConsentV1,
   type ProviderActionV1,
+  type ProviderAuthorizedLaunchContextV1,
   type ProviderEventV1,
+  type ProviderExecutionAdapterV1,
   type ProviderExecutionAdapterImplementationV1,
   type ProviderExecutionIntentV1,
   type ProviderExecutionSelectionV1,
@@ -80,16 +82,13 @@ const supportedManifest = (
   copy.adapter_id = `fixture-${manifest.provider_id}-adapter-${fixtureManifestIndex}`
   copy.release_state = 'candidate'
   copy.environment.audit_state = 'complete'
-  const existingEnvironmentRules = new Map(
-    copy.environment.conflict_rules.map((rule) => [rule.variable, rule]),
-  )
   copy.environment.conflict_rules = PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1
-    .map(([variable, category]) => existingEnvironmentRules.get(variable) ?? {
+    .map(([variable, category]) => ({
       variable,
       category,
       allowed_mode_ids: [],
       allowed_credential_kinds: [],
-    })
+    }))
   if (!copy.executable.validated_versions.length) copy.executable.validated_versions = ['test']
   if (!copy.executable.supported_platforms.length) {
     copy.executable.supported_platforms = ['test-platform']
@@ -209,9 +208,9 @@ const launchFixture = (
 const adapterImplementation = (
   manifest: ProviderManifestV1,
   fixture: ReturnType<typeof launchFixture>,
-  onLaunch: (context: unknown) => unknown = () => ({
+  onLaunch: (context: ProviderAuthorizedLaunchContextV1) => unknown = (context) => ({
     contract_version: 1,
-    session_id: 'session-1',
+    session_id: context.assigned_session_id,
     provider_session_id: 'provider-session-1',
     selection: fixture.plan.selection,
     status: 'running',
@@ -298,6 +297,29 @@ const sessionOutput = (
   },
   ...overrides,
 })
+
+const assignedSessionOutput = (
+  fixture: ReturnType<typeof launchFixture>,
+  context: ProviderAuthorizedLaunchContextV1,
+  overrides: Partial<ProviderSessionV1> = {},
+): ProviderSessionV1 => sessionOutput(fixture, {
+  ...overrides,
+  session_id: context.assigned_session_id,
+})
+
+const deferred = <T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+  readonly reject: (reason?: unknown) => void
+} => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
 
 const authorizeAction = (
   manifest: ProviderManifestV1,
@@ -598,6 +620,8 @@ describe('terminal-agent provider contract V1', () => {
 
   it('rejects environment rules that permit API credentials in subscription modes', () => {
     const copy = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
+    copy.provider_id = 'fixture-api-environment-substitution'
+    copy.adapter_id = 'fixture-api-environment-substitution-adapter'
     const rule = copy.environment.conflict_rules.find((candidate) =>
       candidate.variable === 'OPENAI_API_KEY')
     if (!rule) throw new Error('fixture requires OPENAI_API_KEY')
@@ -606,6 +630,55 @@ describe('terminal-agent provider contract V1', () => {
     expect(() => defineProviderManifestV1(copy)).toThrowError(expect.objectContaining({
       code: 'invalid_environment_credential',
     }))
+  })
+
+  it('rejects self-asserted subscription access to fixed API variables and categories', () => {
+    const billingSpoof = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
+    billingSpoof.provider_id = 'fixture-self-asserted-api-environment'
+    billingSpoof.adapter_id = 'fixture-self-asserted-api-environment-adapter'
+    const billingRule = billingSpoof.environment.conflict_rules.find((candidate) =>
+      candidate.variable === 'OPENAI_API_KEY')
+    if (!billingRule) throw new Error('fixture requires OPENAI_API_KEY')
+    billingRule.allowed_mode_ids = ['native_subscription']
+    billingRule.allowed_credential_kinds = ['provider_account_session']
+    expect(() => defineProviderManifestV1(billingSpoof)).toThrowError(expect.objectContaining({
+      code: 'environment_variable_owner_mismatch',
+    }))
+
+    const categorySpoof = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
+    categorySpoof.provider_id = 'fixture-self-asserted-api-category'
+    categorySpoof.adapter_id = 'fixture-self-asserted-api-category-adapter'
+    const categoryRule = categorySpoof.environment.conflict_rules.find((candidate) =>
+      candidate.variable === 'OPENAI_API_KEY')
+    if (!categoryRule) throw new Error('fixture requires OPENAI_API_KEY')
+    categoryRule.category = 'endpoint'
+    expect(() => defineProviderManifestV1(categorySpoof)).toThrowError(expect.objectContaining({
+      code: 'invalid_environment_category',
+    }))
+
+    const crossProviderSpoof = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
+    crossProviderSpoof.provider_id = 'fixture-cross-provider-oauth-owner'
+    crossProviderSpoof.adapter_id = 'fixture-cross-provider-oauth-owner-adapter'
+    for (const rule of crossProviderSpoof.environment.conflict_rules) {
+      rule.allowed_mode_ids = []
+      rule.allowed_credential_kinds = []
+    }
+    const subscriptionMode = crossProviderSpoof.modes.find((mode) =>
+      mode.id === 'native_subscription')
+    if (!subscriptionMode) throw new Error('fixture requires native_subscription')
+    subscriptionMode.credential_kinds = [
+      ...subscriptionMode.credential_kinds,
+      'subscription_access_token',
+    ]
+    const oauthRule = crossProviderSpoof.environment.conflict_rules.find((candidate) =>
+      candidate.variable === 'CLAUDE_CODE_OAUTH_TOKEN')
+    if (!oauthRule) throw new Error('fixture requires CLAUDE_CODE_OAUTH_TOKEN')
+    oauthRule.allowed_mode_ids = ['native_subscription']
+    oauthRule.allowed_credential_kinds = ['subscription_access_token']
+    expect(() => defineProviderManifestV1(crossProviderSpoof))
+      .toThrowError(expect.objectContaining({
+        code: 'environment_variable_owner_mismatch',
+      }))
   })
 
   it('rejects sparse arrays and hostile manifest reflection without leaking thrown text', () => {
@@ -1042,6 +1115,10 @@ describe('fail-closed launch decisions and authorizations', () => {
     copy.provider_id = `fixture-action-capability-${fixtureManifestIndex}`
     copy.adapter_id = `fixture-action-adapter-${fixtureManifestIndex}`
     copy.release_state = 'candidate'
+    for (const rule of copy.environment.conflict_rules) {
+      rule.allowed_mode_ids = []
+      rule.allowed_credential_kinds = []
+    }
     copy.modes[0]!.support = { state: 'supported' }
     copy.modes[0]!.capabilities.launch = {
       state: 'unknown',
@@ -1075,16 +1152,13 @@ describe('fail-closed launch decisions and authorizations', () => {
     expect(result.authorization.evidence.usage_priced_api_consent.state).toBe('not_required')
     expect(JSON.stringify(result.authorization)).not.toContain('/safe/bin')
     expect(JSON.stringify(result.authorization)).not.toContain('Implement the task')
-    let observedContext: {
-      action: ProviderActionV1
-      environment: Readonly<NodeJS.ProcessEnv>
-    } | undefined
+    let observedContext: ProviderAuthorizedLaunchContextV1 | undefined
     const adapter = defineProviderExecutionAdapterV1(
       adapterImplementation(manifest, fixture, (context) => {
         observedContext = context as typeof observedContext
         return {
           contract_version: 1,
-          session_id: 'session-1',
+          session_id: context.assigned_session_id,
           provider_session_id: 'provider-session-1',
           selection: fixture.plan.selection,
           status: 'running',
@@ -1103,6 +1177,7 @@ describe('fail-closed launch decisions and authorizations', () => {
     const session = await adapter.launch({ authorization: result.authorization })
     expect(session.session_id).toMatch(/^managed-[a-f0-9]{32}-1$/)
     expect(session.session_id).not.toBe('session-1')
+    expect(observedContext?.assigned_session_id).toBe(session.session_id)
     expect(observedContext?.environment.PATH).toBe('/safe/bin')
     expect(observedContext?.action).toEqual(fixture.action)
     expect(Object.isFrozen(observedContext?.environment)).toBe(true)
@@ -1215,7 +1290,7 @@ describe('validated provider adapter gateway', () => {
       expect((context as { action: ProviderActionV1 }).action.kind).toBe('launch')
       return {
         contract_version: 1,
-        session_id: 'session-1',
+        session_id: context.assigned_session_id,
         provider_session_id: 'provider-session-1',
         selection: fixture.plan.selection,
         status: 'running',
@@ -1279,9 +1354,9 @@ describe('validated provider adapter gateway', () => {
     const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
     const fixture = launchFixture(manifest)
     const adapter = defineProviderExecutionAdapterV1(
-      adapterImplementation(manifest, fixture, () => ({
+      adapterImplementation(manifest, fixture, (context) => ({
         contract_version: 1,
-        session_id: 'session-1',
+        session_id: context.assigned_session_id,
         provider_session_id: 'provider-session-1',
         selection: fixture.plan.selection,
         status: 'running',
@@ -1324,9 +1399,9 @@ describe('validated provider adapter gateway', () => {
     )
     if (!launchAuthorization.ready) throw new Error('fixture authorization failed')
     const missingEvidenceAdapter = defineProviderExecutionAdapterV1(
-      adapterImplementation(manifest, fixture, () => ({
+      adapterImplementation(manifest, fixture, (context) => ({
         contract_version: 1,
-        session_id: 'session-1',
+        session_id: context.assigned_session_id,
         provider_session_id: 'provider-session-1',
         selection: fixture.plan.selection,
         status: 'running',
@@ -1389,6 +1464,10 @@ describe('validated provider adapter gateway', () => {
     copy.provider_id = `fixture-control-capability-${fixtureManifestIndex}`
     copy.adapter_id = `fixture-control-adapter-${fixtureManifestIndex}`
     copy.release_state = 'candidate'
+    for (const rule of copy.environment.conflict_rules) {
+      rule.allowed_mode_ids = []
+      rule.allowed_credential_kinds = []
+    }
     copy.modes[0]!.support = { state: 'supported' }
     copy.modes[0]!.capabilities.cancel = {
       state: 'unsupported',
@@ -1639,7 +1718,10 @@ describe('validated provider adapter gateway', () => {
     const defaultManifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
     const defaultFixture = launchFixture(defaultManifest)
     const fabricatedDefault = defineProviderExecutionAdapterV1(
-      adapterImplementation(defaultManifest, defaultFixture, () => sessionOutput(defaultFixture, {
+      adapterImplementation(defaultManifest, defaultFixture, (context) => assignedSessionOutput(
+        defaultFixture,
+        context,
+        {
         model: {
           requested: 'caller-never-requested',
           effective: 'caller-never-requested',
@@ -1648,7 +1730,8 @@ describe('validated provider adapter gateway', () => {
           requested: 'ultra',
           effective: 'ultra',
         },
-      })),
+        },
+      )),
     )
     await expect(fabricatedDefault.launch({
       authorization: authorizeAction(defaultManifest, defaultFixture, defaultFixture.action),
@@ -1661,12 +1744,16 @@ describe('validated provider adapter gateway', () => {
       effort: 'high',
     }))
     const missingEffectiveEffort = defineProviderExecutionAdapterV1(
-      adapterImplementation(effortManifest, effortFixture, () => sessionOutput(effortFixture, {
+      adapterImplementation(effortManifest, effortFixture, (context) => assignedSessionOutput(
+        effortFixture,
+        context,
+        {
         effort: {
           requested: 'high',
           effective: null,
         },
-      })),
+        },
+      )),
     )
     await expect(missingEffectiveEffort.launch({
       authorization: authorizeAction(effortManifest, effortFixture, effortAction),
@@ -1678,7 +1765,11 @@ describe('validated provider adapter gateway', () => {
       adapterImplementation(
         missingDefaultManifest,
         missingDefaultFixture,
-        () => sessionOutput(missingDefaultFixture, { model: null }),
+        (context) => assignedSessionOutput(
+          missingDefaultFixture,
+          context,
+          { model: null },
+        ),
       ),
     )
     await expect(missingDefault.launch({
@@ -1696,8 +1787,8 @@ describe('validated provider adapter gateway', () => {
     let followUpCalls = 0
     let forkCalls = 0
     const implementation = adapterImplementation(manifest, fixture, (context) => {
-      if ((context as { action: ProviderActionV1 }).action.kind === 'fork') forkCalls += 1
-      return sessionOutput(fixture)
+      if (context.action.kind === 'fork') forkCalls += 1
+      return assignedSessionOutput(fixture, context)
     })
     implementation.followUp = async () => {
       followUpCalls += 1
@@ -1745,7 +1836,7 @@ describe('validated provider adapter gateway', () => {
     const implementation = adapterImplementation(
       manifest,
       fixture,
-      () => sessionOutput(fixture),
+      (context) => assignedSessionOutput(fixture, context),
     )
     implementation.cancel = async () => {
       cancelCalls += 1
@@ -1788,9 +1879,9 @@ describe('validated provider adapter gateway', () => {
     }))
     let forkCalls = 0
     const implementation = adapterImplementation(manifest, fixture, (context) => {
-      const action = (context as { action: ProviderActionV1 }).action
+      const action = context.action
       if (action.kind === 'launch') {
-        return sessionOutput(fixture, {
+        return assignedSessionOutput(fixture, context, {
           access_profile: {
             requested: 'read_only',
             effective: 'read_only',
@@ -1798,8 +1889,7 @@ describe('validated provider adapter gateway', () => {
         })
       }
       forkCalls += 1
-      return sessionOutput(fixture, {
-        session_id: 'fork-child-session',
+      return assignedSessionOutput(fixture, context, {
         provider_session_id: 'fork-child-provider-session',
         access_profile: {
           requested: 'read_only',
@@ -1843,6 +1933,861 @@ describe('validated provider adapter gateway', () => {
       authorization: authorizeAction(manifest, fixture, readOnlyAction),
     })).rejects.toMatchObject({ code: 'provider_session_access_mismatch' })
     expect(forkCalls).toBe(1)
+  })
+
+  it('assigns the raw session identity before launch and rejects adapter-selected IDs', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let observedContext: ProviderAuthorizedLaunchContextV1 | undefined
+    const rawStopTargets: string[] = []
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      observedContext = context
+      return sessionOutput(fixture, {
+        session_id: 'adapter-selected-session',
+      })
+    })
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+    }
+    const adapter = defineProviderExecutionAdapterV1(
+      implementation,
+    )
+
+    await expect(adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })).rejects.toMatchObject({
+      code: 'provider_session_assignment_mismatch',
+    })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(observedContext?.assigned_session_id)
+      .toMatch(/^managed-[a-f0-9]{32}-1$/)
+    expect(rawStopTargets).toEqual([observedContext?.assigned_session_id])
+    expect(Object.isFrozen(observedContext)).toBe(true)
+    expect(Object.isFrozen(observedContext?.action)).toBe(true)
+  })
+
+  it('compensates raw launch failures without exposing implementation errors', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const sentinel = 'credential-sentinel-launch-failure-cleanup'
+    const rawStopTargets: string[] = []
+    let assignedSessionId = ''
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.launch = async (context) => {
+      assignedSessionId = context.assigned_session_id
+      throw new Error(sentinel, {
+        cause: { api_key: sentinel },
+      })
+    }
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    let error: unknown
+    try {
+      await adapter.launch({
+        authorization: authorizeAction(manifest, fixture, fixture.action),
+      })
+    } catch (caught) {
+      error = caught
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(error).toMatchObject({
+      code: 'provider_adapter_implementation_failed',
+      variables: ['launch'],
+    })
+    expect(JSON.stringify(error)).not.toContain(sentinel)
+    expect(rawStopTargets).toEqual([assignedSessionId])
+  })
+
+  it('quarantines a safely readable provider ID from malformed raw session output', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const providerSessionId = 'provider-native-from-malformed-session'
+    const rawStopTargets: string[] = []
+    let launches = 0
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      launches += 1
+      const session = assignedSessionOutput(fixture, context, {
+        provider_session_id: providerSessionId,
+      })
+      return launches === 1
+        ? { ...session, unexpected_private_state: true }
+        : session
+    })
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+      await new Promise<void>(() => undefined)
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    await expect(adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })).rejects.toMatchObject({ code: 'invalid_provider_session' })
+
+    const replacementAction = defineProviderActionV1(launchAction({
+      action_id: 'replacement-after-malformed-session',
+    }))
+    await expect(adapter.launch({
+      authorization: authorizeAction(manifest, fixture, replacementAction),
+    })).rejects.toMatchObject({ code: 'provider_session_identity_conflict' })
+    expect(rawStopTargets).toHaveLength(2)
+  })
+
+  it('never mints a quarantined provider identity after compensating stop fails', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const sentinel = 'credential-sentinel-compensating-stop-failure'
+    const assignedIds: string[] = []
+    let launches = 0
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      launches += 1
+      assignedIds.push(context.assigned_session_id)
+      if (launches === 1) {
+        return sessionOutput(fixture, {
+          session_id: 'adapter-selected-quarantined-session',
+          provider_session_id: context.assigned_session_id.replace(/-1$/, '-2'),
+        })
+      }
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: 'provider-after-failed-cleanup',
+      })
+    })
+    implementation.stop = async () => {
+      throw new Error(sentinel, {
+        cause: { api_key: sentinel },
+      })
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    let firstError: unknown
+    try {
+      await adapter.launch({
+        authorization: authorizeAction(manifest, fixture, fixture.action),
+      })
+    } catch (caught) {
+      firstError = caught
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(firstError).toMatchObject({ code: 'provider_session_assignment_mismatch' })
+    expect(JSON.stringify(firstError)).not.toContain(sentinel)
+
+    const replacementAction = defineProviderActionV1(launchAction({
+      action_id: 'launch-after-failed-compensation',
+    }))
+    const replacement = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, replacementAction),
+    })
+    expect(assignedIds[0]).toMatch(/-1$/)
+    expect(assignedIds[1]).toMatch(/-3$/)
+    expect(replacement.session_id).toBe(assignedIds[1])
+  })
+
+  it('rejects the entire managed namespace and live managed IDs as provider identities', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const assignedIds: string[] = []
+    const rawCancelTargets: string[] = []
+    const rawStopTargets: string[] = []
+    let liveManagedId = ''
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      assignedIds.push(context.assigned_session_id)
+      if (assignedIds.length === 1) {
+        return assignedSessionOutput(fixture, context, {
+          provider_session_id: context.assigned_session_id.replace(/-1$/, '-2'),
+        })
+      }
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: assignedIds.length === 2
+          ? 'provider-native-second'
+          : liveManagedId,
+      })
+    })
+    implementation.cancel = async (sessionId) => {
+      rawCancelTargets.push(sessionId)
+    }
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    await expect(adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })).rejects.toMatchObject({ code: 'provider_session_identity_conflict' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawStopTargets).toEqual([assignedIds[0]])
+
+    const secondAction = defineProviderActionV1(launchAction({
+      action_id: 'cross-domain-second-session',
+    }))
+    const second = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, secondAction),
+    })
+    liveManagedId = second.session_id
+
+    expect(assignedIds[0]).toMatch(/-1$/)
+    expect(second.session_id).toMatch(/-2$/)
+
+    const conflictingAction = defineProviderActionV1(launchAction({
+      action_id: 'cross-domain-live-identity-conflict',
+    }))
+    await expect(adapter.launch({
+      authorization: authorizeAction(manifest, fixture, conflictingAction),
+    })).rejects.toMatchObject({ code: 'provider_session_identity_conflict' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawStopTargets).toEqual([assignedIds[0], assignedIds[2]])
+
+    await adapter.cancel(second.session_id)
+    expect(rawCancelTargets).toEqual([second.session_id])
+  })
+
+  it('keeps one gateway ID across raw controls and events while provider IDs repeat', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const launchContexts: ProviderAuthorizedLaunchContextV1[] = []
+    const rawCancelTargets: string[] = []
+    const rawStopTargets: string[] = []
+    const rawEventTargets: string[] = []
+    let rawEventCalls = 0
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      launchContexts.push(context)
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: 'reused-provider-native-session',
+      })
+    })
+    implementation.cancel = async (sessionId) => {
+      rawCancelTargets.push(sessionId)
+    }
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+    }
+    implementation.events = async function* (sessionId) {
+      rawEventCalls += 1
+      rawEventTargets.push(sessionId)
+      yield {
+        kind: 'status',
+        event_id: `event-assigned-${rawEventCalls}`,
+        turn_id: `turn-assigned-${rawEventCalls}`,
+        session_id: sessionId,
+        sequence: 1,
+        observed_at: new Date().toISOString(),
+        status: 'running',
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const original = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const capturedBeforeStop = adapter.events(original.session_id)
+
+    await adapter.stop(original.session_id)
+    expect(rawStopTargets).toEqual([original.session_id])
+    const replacementAction = defineProviderActionV1(launchAction({
+      action_id: 'replacement-with-reused-provider-id',
+    }))
+    const replacement = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, replacementAction),
+    })
+
+    expect(replacement.provider_session_id).toBe(original.provider_session_id)
+    expect(replacement.session_id).not.toBe(original.session_id)
+    expect(launchContexts.map((context) => context.assigned_session_id)).toEqual([
+      original.session_id,
+      replacement.session_id,
+    ])
+    await expect(
+      capturedBeforeStop[Symbol.asyncIterator]().next(),
+    ).rejects.toMatchObject({
+      code: 'provider_event_session_retired',
+    })
+    expect(rawEventCalls).toBe(0)
+
+    await expect(adapter.cancel(replacement.provider_session_id)).rejects.toMatchObject({
+      code: 'provider_session_authorization_required',
+    })
+    expect(rawCancelTargets).toEqual([])
+    const events: ProviderEventV1[] = []
+    for await (const event of adapter.events(replacement.session_id)) events.push(event)
+    expect(rawEventTargets).toEqual([replacement.session_id])
+    expect(events).toHaveLength(1)
+    expect(events[0]?.session_id).toBe(replacement.session_id)
+    await adapter.cancel(replacement.session_id)
+    expect(rawCancelTargets).toEqual([replacement.session_id])
+  })
+
+  it('seals follow-up and fork contexts with exact target and child assignments', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let launchContext: ProviderAuthorizedLaunchContextV1 | undefined
+    let followContext: ProviderAuthorizedLaunchContextV1 | undefined
+    let forkContext: ProviderAuthorizedLaunchContextV1 | undefined
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      if (context.action.kind === 'launch') launchContext = context
+      if (context.action.kind === 'fork') forkContext = context
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: context.action.kind === 'fork'
+          ? 'fork-provider-native-session'
+          : 'parent-provider-native-session',
+      })
+    })
+    implementation.followUp = async (context) => {
+      followContext = context
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const parent = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+
+    const followAction = defineProviderActionV1({
+      contract_version: 1,
+      kind: 'follow_up',
+      action_id: 'sealed-follow-up-context',
+      scope_id: fixture.action.scope_id,
+      session_id: parent.session_id,
+      prompt: 'Continue safely',
+      cost_limit: null,
+    })
+    await adapter.followUp({
+      authorization: authorizeAction(manifest, fixture, followAction),
+    })
+
+    const forkAction = defineProviderActionV1({
+      contract_version: 1,
+      kind: 'fork',
+      action_id: 'sealed-fork-context',
+      scope_id: fixture.action.scope_id,
+      session_id: parent.session_id,
+      model: null,
+      effort: null,
+      access_profile: 'workspace_write',
+      cost_limit: null,
+    })
+    const child = await adapter.fork({
+      authorization: authorizeAction(manifest, fixture, forkAction),
+    })
+
+    expect(launchContext?.assigned_session_id).toBe(parent.session_id)
+    expect(followContext?.assigned_session_id).toBe(parent.session_id)
+    expect(followContext?.action).toEqual(followAction)
+    expect(forkContext?.assigned_session_id).toBe(child.session_id)
+    expect(forkContext?.assigned_session_id).not.toBe(parent.session_id)
+    expect(forkContext?.action).toEqual(forkAction)
+    for (const context of [launchContext, followContext, forkContext]) {
+      expect(Object.isFrozen(context)).toBe(true)
+      expect(Object.isFrozen(context?.intent)).toBe(true)
+      expect(Object.isFrozen(context?.action)).toBe(true)
+      expect(Object.isFrozen(context?.readiness)).toBe(true)
+      expect(Object.isFrozen(context?.executable)).toBe(true)
+      expect(Object.isFrozen(context?.environment)).toBe(true)
+    }
+  })
+
+  it('rejects raw event identity substitution and only delivers the assigned ID', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let subscriptions = 0
+    const rawTargets: string[] = []
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = async function* (sessionId) {
+      subscriptions += 1
+      rawTargets.push(sessionId)
+      yield {
+        kind: 'status',
+        event_id: `event-identity-${subscriptions}`,
+        turn_id: `turn-identity-${subscriptions}`,
+        session_id: subscriptions === 1 ? 'substituted-raw-session' : sessionId,
+        sequence: 1,
+        observed_at: new Date().toISOString(),
+        status: 'running',
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+
+    await expect((async () => {
+      for await (const _event of adapter.events(session.session_id)) {
+        // The first raw event carries a substituted identity and must never escape.
+      }
+    })()).rejects.toMatchObject({
+      code: 'provider_event_session_mismatch',
+    })
+
+    const delivered: ProviderEventV1[] = []
+    for await (const event of adapter.events(session.session_id)) delivered.push(event)
+    expect(rawTargets).toEqual([session.session_id, session.session_id])
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]?.session_id).toBe(session.session_id)
+  })
+
+  it('cancels a queued second read before any later raw value can escape', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const secondReadStarted = deferred<void>()
+    const releaseSecondRead = deferred<void>()
+    let rawFinalizers = 0
+    let rawYields = 0
+    const staleText = 'stale-output-after-public-retirement'
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = async function* (sessionId) {
+      try {
+        rawYields += 1
+        yield {
+          kind: 'status',
+          event_id: 'event-before-pending-stop',
+          turn_id: 'turn-pending-stop',
+          session_id: sessionId,
+          sequence: 1,
+          observed_at: new Date().toISOString(),
+          status: 'running',
+        }
+        secondReadStarted.resolve(undefined)
+        await releaseSecondRead.promise
+        rawYields += 1
+        yield {
+          kind: 'message',
+          event_id: 'event-after-pending-stop',
+          turn_id: 'turn-pending-stop',
+          session_id: sessionId,
+          sequence: 2,
+          observed_at: new Date().toISOString(),
+          role: 'assistant',
+          text: staleText,
+        }
+      } finally {
+        rawFinalizers += 1
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { event_id: 'event-before-pending-stop' },
+    })
+
+    const secondRead = iterator.next()
+    const secondReadResult = secondRead.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await secondReadStarted.promise
+    await adapter.stop(session.session_id)
+    const publicError = await secondReadResult
+    expect(publicError).toMatchObject({ code: 'provider_event_session_retired' })
+    expect(JSON.stringify(publicError)).not.toContain(staleText)
+
+    releaseSecondRead.resolve(undefined)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawYields).toBe(2)
+    expect(rawFinalizers).toBe(1)
+  })
+
+  it('aborts aware raw iteration, runs its finalizer, and calls return exactly once', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const pendingReadStarted = deferred<void>()
+    const rawReturnFinished = deferred<void>()
+    let rawFinalizers = 0
+    let rawReturnCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = (sessionId, context) => {
+      const rawIterator = (async function* () {
+        try {
+          yield {
+            kind: 'status',
+            event_id: 'event-before-abort',
+            turn_id: 'turn-before-abort',
+            session_id: sessionId,
+            sequence: 1,
+            observed_at: new Date().toISOString(),
+            status: 'running',
+          }
+          pendingReadStarted.resolve(undefined)
+          await new Promise<void>((resolve) => {
+            if (context.signal.aborted) {
+              resolve()
+              return
+            }
+            context.signal.addEventListener('abort', () => resolve(), { once: true })
+          })
+        } finally {
+          rawFinalizers += 1
+        }
+      })()
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          return rawIterator.next()
+        },
+        return() {
+          rawReturnCalls += 1
+          const result = rawIterator.return()
+          void result.finally(() => rawReturnFinished.resolve(undefined))
+          return result
+        },
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    await iterator.next()
+    const pendingRead = iterator.next()
+    const pendingReadResult = pendingRead.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await pendingReadStarted.promise
+
+    await adapter.stop(session.session_id)
+    expect(await pendingReadResult).toMatchObject({
+      code: 'provider_event_session_retired',
+    })
+    await rawReturnFinished.promise
+    await iterator.return?.()
+    expect(rawFinalizers).toBe(1)
+    expect(rawReturnCalls).toBe(1)
+  })
+
+  it('preserves native AbortSignal listener identity and platform behavior', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const rawReturnFinished = deferred<void>()
+    let observedSignal: AbortSignal | undefined
+    let combinedSignal: AbortSignal | undefined
+    let listenerThis: unknown
+    let listenerCurrentTarget: EventTarget | null = null
+    let onAbortThis: unknown
+    let onAbortIdentity = false
+    let prototypeCallAccepted = false
+    let removedListenerCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = (sessionId, context) => {
+      observedSignal = context.signal
+      combinedSignal = AbortSignal.any([context.signal])
+      const listener = function (this: AbortSignal, event: Event): void {
+        listenerThis = this
+        listenerCurrentTarget = event.currentTarget
+      }
+      const removedListener = (): void => {
+        removedListenerCalls += 1
+      }
+      const onAbort = function (this: AbortSignal): void {
+        onAbortThis = this
+      }
+      context.signal.addEventListener('abort', listener)
+      context.signal.addEventListener('abort', removedListener)
+      context.signal.removeEventListener('abort', removedListener)
+      context.signal.onabort = onAbort
+      onAbortIdentity = context.signal.onabort === onAbort
+      AbortSignal.prototype.throwIfAborted.call(context.signal)
+      prototypeCallAccepted = true
+      let delivered = false
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          if (delivered) return new Promise<IteratorResult<unknown>>(() => undefined)
+          delivered = true
+          return Promise.resolve({
+            done: false,
+            value: {
+              kind: 'status',
+              event_id: 'event-before-native-abort-check',
+              turn_id: 'turn-before-native-abort-check',
+              session_id: sessionId,
+              sequence: 1,
+              observed_at: new Date().toISOString(),
+              status: 'running',
+            },
+          })
+        },
+        return() {
+          rawReturnFinished.resolve(undefined)
+          return Promise.resolve({ done: true, value: undefined })
+        },
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    await iterator.next()
+    await iterator.return?.()
+    await rawReturnFinished.promise
+
+    expect(observedSignal).toBeInstanceOf(AbortSignal)
+    expect(Object.getPrototypeOf(observedSignal)).toBe(AbortSignal.prototype)
+    expect(prototypeCallAccepted).toBe(true)
+    expect(onAbortIdentity).toBe(true)
+    expect(listenerThis).toBe(observedSignal)
+    expect(listenerCurrentTarget).toBe(observedSignal)
+    expect(onAbortThis).toBe(observedSignal)
+    expect(removedListenerCalls).toBe(0)
+    expect(observedSignal?.aborted).toBe(true)
+    expect(observedSignal?.reason).toBeInstanceOf(DOMException)
+    expect((observedSignal?.reason as DOMException | undefined)?.name).toBe('AbortError')
+    let thrownReason: unknown
+    try {
+      observedSignal?.throwIfAborted()
+    } catch (error) {
+      thrownReason = error
+    }
+    expect(thrownReason).toBe(observedSignal?.reason)
+    expect(combinedSignal?.aborted).toBe(true)
+    expect(combinedSignal?.reason).toBe(observedSignal?.reason)
+  })
+
+  it('contains throwing abort listeners inside an isolated subprocess', () => {
+    if (process.env.AGENTBOARD_ABORT_LISTENER_CHILD === '1') return
+    const sentinel = 'credential-sentinel-abort-listener'
+    let childError: unknown
+    let output = ''
+    try {
+      output = execFileSync(process.execPath, [
+        './node_modules/vitest/vitest.mjs',
+        'run',
+        'test/provider-contract.test.ts',
+        '--no-file-parallelism',
+        '-t',
+        'isolated abort-listener fixture',
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AGENTBOARD_ABORT_LISTENER_CHILD: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (caught) {
+      childError = caught
+      const streams = caught as { stdout?: string | Buffer; stderr?: string | Buffer }
+      output = `${String(streams.stdout ?? '')}\n${String(streams.stderr ?? '')}`
+    }
+    expect(output).not.toContain(sentinel)
+    expect(childError).toBeUndefined()
+  })
+
+  it('isolated abort-listener fixture', async () => {
+    if (process.env.AGENTBOARD_ABORT_LISTENER_CHILD !== '1') return
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const sentinel = 'credential-sentinel-abort-listener'
+    const rawReturnFinished = deferred<void>()
+    let observedSignal: AbortSignal | undefined
+    let rawReturnCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = (sessionId, context) => {
+      observedSignal = context.signal
+      context.signal.onabort = () => {
+        throw new Error(sentinel)
+      }
+      context.signal.addEventListener('abort', async () => {
+        throw new Error(sentinel, {
+          cause: { api_key: sentinel },
+        })
+      })
+      let delivered = false
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          if (delivered) return new Promise<IteratorResult<unknown>>(() => undefined)
+          delivered = true
+          return Promise.resolve({
+            done: false,
+            value: {
+              kind: 'status',
+              event_id: 'event-before-throwing-abort-listener',
+              turn_id: 'turn-before-throwing-abort-listener',
+              session_id: sessionId,
+              sequence: 1,
+              observed_at: new Date().toISOString(),
+              status: 'running',
+            },
+          })
+        },
+        return() {
+          rawReturnCalls += 1
+          rawReturnFinished.resolve(undefined)
+          return Promise.resolve({ done: true, value: undefined })
+        },
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    await iterator.next()
+    await iterator.return?.()
+    await rawReturnFinished.promise
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(observedSignal?.aborted).toBe(true)
+    expect(rawReturnCalls).toBe(1)
+  })
+
+  it('discards a non-cooperative late raw error without leaking its cause', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const rawRead = deferred<IteratorResult<unknown>>()
+    const rawReadStarted = deferred<void>()
+    let rawReturnCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = () => ({
+      [Symbol.asyncIterator](): AsyncIterator<unknown> {
+        return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+      },
+      next() {
+        rawReadStarted.resolve(undefined)
+        return rawRead.promise
+      },
+      return() {
+        rawReturnCalls += 1
+        return Promise.resolve({ done: true, value: undefined })
+      },
+    })
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    const publicRead = iterator.next().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await rawReadStarted.promise
+    await adapter.stop(session.session_id)
+    const publicError = await publicRead
+    const sentinel = 'credential-sentinel-late-raw-error'
+    rawRead.reject(new Error(sentinel, {
+      cause: { api_key: sentinel },
+    }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(publicError).toMatchObject({ code: 'provider_event_session_retired' })
+    expect([
+      String(publicError),
+      publicError instanceof Error ? publicError.stack ?? '' : '',
+      JSON.stringify(publicError),
+    ].join('\n')).not.toContain(sentinel)
+    expect(rawReturnCalls).toBe(1)
+  })
+
+  it('settles consumer return during a pending read while aborting raw cleanup once', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const rawRead = deferred<IteratorResult<unknown>>()
+    const rawReadStarted = deferred<void>()
+    let observedSignal: AbortSignal | undefined
+    let rawReturnCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.events = (_sessionId, context) => {
+      observedSignal = context.signal
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          rawReadStarted.resolve(undefined)
+          return rawRead.promise
+        },
+        return() {
+          rawReturnCalls += 1
+          return new Promise<IteratorResult<unknown>>(() => undefined)
+        },
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    const pendingRead = iterator.next()
+    await rawReadStarted.promise
+
+    const consumerReturn = iterator.return?.()
+    if (!consumerReturn) throw new Error('managed iterator return is required')
+    const returnOutcome = await Promise.race([
+      consumerReturn.then(() => 'closed' as const),
+      new Promise<'timeout'>((resolve) => setImmediate(() => resolve('timeout'))),
+    ])
+    expect(returnOutcome).toBe('closed')
+    await expect(pendingRead).resolves.toEqual({ done: true, value: undefined })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(observedSignal?.aborted).toBe(true)
+    expect(rawReturnCalls).toBe(1)
+
+    const sentinel = 'credential-sentinel-consumer-late-error'
+    rawRead.reject(new Error(sentinel, {
+      cause: { api_key: sentinel },
+    }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawReturnCalls).toBe(1)
+  })
+
+  it('settles natural completion and raw errors even when raw return hangs', async () => {
+    for (const behavior of ['done', 'raw_error'] as const) {
+      const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+      const fixture = launchFixture(manifest)
+      const sentinel = `credential-sentinel-${behavior}-hung-return`
+      let rawReturnCalls = 0
+      const implementation = adapterImplementation(manifest, fixture)
+      implementation.events = () => ({
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          if (behavior === 'done') {
+            return Promise.resolve({ done: true, value: undefined })
+          }
+          return Promise.reject(new Error(sentinel, {
+            cause: { api_key: sentinel },
+          }))
+        },
+        return() {
+          rawReturnCalls += 1
+          return new Promise<IteratorResult<unknown>>(() => undefined)
+        },
+      })
+      const adapter = defineProviderExecutionAdapterV1(implementation)
+      const session = await adapter.launch({
+        authorization: authorizeAction(manifest, fixture, fixture.action),
+      })
+      const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+      const settled = await Promise.race([
+        iterator.next().then(
+          (value) => ({ state: 'resolved' as const, value }),
+          (error: unknown) => ({ state: 'rejected' as const, error }),
+        ),
+        new Promise<{ state: 'timeout' }>((resolve) =>
+          setImmediate(() => resolve({ state: 'timeout' }))),
+      ])
+      expect(settled.state).not.toBe('timeout')
+      if (behavior === 'done') {
+        expect(settled).toMatchObject({
+          state: 'resolved',
+          value: { done: true, value: undefined },
+        })
+      } else {
+        expect(settled).toMatchObject({
+          state: 'rejected',
+          error: { code: 'provider_adapter_implementation_failed' },
+        })
+        expect(JSON.stringify(settled)).not.toContain(sentinel)
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(rawReturnCalls).toBe(1)
+    }
   })
 
   it('persists event ordering across subscriptions and retires terminal sessions', async () => {
@@ -1893,11 +2838,13 @@ describe('validated provider adapter gateway', () => {
     for await (const _event of adapter.events(session.session_id)) {
       // First subscription establishes the persistent sequence high-water mark.
     }
+    await new Promise<void>((resolve) => setImmediate(resolve))
     await expect((async () => {
       for await (const _event of adapter.events(session.session_id)) {
         // The repeated sequence is rejected across subscriptions.
       }
     })()).rejects.toMatchObject({ code: 'invalid_provider_event_order' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
     for await (const _event of adapter.events(session.session_id)) {
       // Terminal status retires the session after delivery.
     }
@@ -1952,7 +2899,7 @@ describe('validated provider adapter gateway', () => {
     const implementation = adapterImplementation(
       manifest,
       fixture,
-      () => sessionOutput(fixture),
+      (context) => assignedSessionOutput(fixture, context),
     )
     implementation.cancel = async () => {
       cancelCalls += 1
@@ -1991,7 +2938,6 @@ describe('validated provider adapter gateway', () => {
     })
 
     await adapter.stop(original.session_id)
-    await new Promise<void>((resolve) => setImmediate(resolve))
     const replacementAction = defineProviderActionV1(launchAction({
       action_id: 'replacement-session-action',
       scope_id: 'scope-2',
@@ -2014,14 +2960,354 @@ describe('validated provider adapter gateway', () => {
     expect(cancelCalls).toBe(1)
   })
 
+  it('keeps provider identity quarantined when raw return fails or is malformed', async () => {
+    for (const behavior of [
+      'sync_throw',
+      'async_reject',
+      'malformed_undefined',
+      'not_done',
+      'hang',
+    ] as const) {
+      const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+      const fixture = launchFixture(manifest)
+      const sentinel = `credential-sentinel-return-${behavior}`
+      let rawReturnCalls = 0
+      const implementation = adapterImplementation(manifest, fixture, (context) =>
+        assignedSessionOutput(fixture, context, {
+          provider_session_id: `provider-return-${behavior}`,
+        }))
+      implementation.events = (sessionId) => {
+        let delivered = false
+        return {
+          [Symbol.asyncIterator](): AsyncIterator<unknown> {
+            return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+          },
+          next() {
+            if (delivered) return Promise.resolve({ done: true, value: undefined })
+            delivered = true
+            return Promise.resolve({
+              done: false,
+              value: {
+                kind: 'status',
+                event_id: `event-return-${behavior}`,
+                turn_id: `turn-return-${behavior}`,
+                session_id: sessionId,
+                sequence: 1,
+                observed_at: new Date().toISOString(),
+                status: 'running',
+              },
+            })
+          },
+          return(): Promise<IteratorResult<unknown>> {
+            rawReturnCalls += 1
+            const failure = new Error(sentinel, {
+              cause: { credential: sentinel },
+            })
+            if (behavior === 'sync_throw') throw failure
+            if (behavior === 'async_reject') return Promise.reject(failure)
+            if (behavior === 'malformed_undefined') {
+              return Promise.resolve(undefined as unknown as IteratorResult<unknown>)
+            }
+            if (behavior === 'not_done') {
+              return Promise.resolve({ done: false, value: undefined })
+            }
+            return new Promise<IteratorResult<unknown>>(() => undefined)
+          },
+        }
+      }
+      const adapter = defineProviderExecutionAdapterV1(implementation)
+      const session = await adapter.launch({
+        authorization: authorizeAction(manifest, fixture, fixture.action),
+      })
+      const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+      await iterator.next()
+      await adapter.stop(session.session_id)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      const replacementAction = defineProviderActionV1(launchAction({
+        action_id: `replacement-after-${behavior}`,
+      }))
+      let replacementError: unknown
+      try {
+        await adapter.launch({
+          authorization: authorizeAction(manifest, fixture, replacementAction),
+        })
+      } catch (caught) {
+        replacementError = caught
+      }
+      expect(replacementError).toMatchObject({
+        code: 'provider_session_identity_conflict',
+      })
+      expect([
+        String(replacementError),
+        replacementError instanceof Error ? replacementError.stack ?? '' : '',
+        JSON.stringify(replacementError),
+      ].join('\n')).not.toContain(sentinel)
+      expect(rawReturnCalls).toBe(1)
+    }
+  })
+
+  it('compensates rejected forks without retiring their authorized parent', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const rawStopTargets: string[] = []
+    const rawCancelTargets: string[] = []
+    let parentProviderSessionId = ''
+    let childAssignedSessionId = ''
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      if (context.action.kind === 'launch') {
+        parentProviderSessionId = 'provider-parent-for-cleanup'
+        return assignedSessionOutput(fixture, context, {
+          provider_session_id: parentProviderSessionId,
+        })
+      }
+      childAssignedSessionId = context.assigned_session_id
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: parentProviderSessionId,
+      })
+    })
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+    }
+    implementation.cancel = async (sessionId) => {
+      rawCancelTargets.push(sessionId)
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const parent = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const forkAction = defineProviderActionV1({
+      contract_version: 1,
+      kind: 'fork',
+      action_id: 'rejected-fork-cleanup',
+      scope_id: fixture.action.scope_id,
+      session_id: parent.session_id,
+      model: null,
+      effort: null,
+      access_profile: 'workspace_write',
+      cost_limit: null,
+    })
+
+    await expect(adapter.fork({
+      authorization: authorizeAction(manifest, fixture, forkAction),
+    })).rejects.toMatchObject({ code: 'provider_session_fork_identity_mismatch' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawStopTargets).toEqual([childAssignedSessionId])
+
+    await adapter.cancel(parent.session_id)
+    expect(rawCancelTargets).toEqual([parent.session_id])
+  })
+
+  it('counts every hung rejected-launch cleanup against session capacity', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let launchCalls = 0
+    let rawStopCalls = 0
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      launchCalls += 1
+      return sessionOutput(fixture, {
+        session_id: `adapter-selected-rejected-${launchCalls}`,
+        provider_session_id: `provider-rejected-${launchCalls}`,
+      })
+    })
+    implementation.stop = async () => {
+      rawStopCalls += 1
+      await new Promise<void>(() => undefined)
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+
+    for (let index = 0; index < PROVIDER_SESSION_REGISTRY_LIMIT; index += 1) {
+      const action = defineProviderActionV1(launchAction({
+        action_id: `rejected-capacity-action-${index}`,
+      }))
+      await expect(adapter.launch({
+        authorization: authorizeAction(manifest, fixture, action),
+      })).rejects.toMatchObject({ code: 'provider_session_assignment_mismatch' })
+    }
+    await expect(adapter.launch({
+      authorization: {} as never,
+    })).rejects.toMatchObject({ code: 'provider_session_capacity_exceeded' })
+    expect(launchCalls).toBe(PROVIDER_SESSION_REGISTRY_LIMIT)
+    expect(rawStopCalls).toBe(PROVIDER_SESSION_REGISTRY_LIMIT)
+  })
+
+  it('counts hung cleanup quarantine against the bounded session capacity', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let launchCalls = 0
+    let rawReturnCalls = 0
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
+      launchCalls += 1
+      return assignedSessionOutput(fixture, context, {
+        provider_session_id: launchCalls === 1
+          ? 'hung-capacity-provider'
+          : `active-capacity-provider-${launchCalls}`,
+      })
+    })
+    implementation.events = (sessionId) => {
+      let delivered = false
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+          return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+        },
+        next() {
+          if (delivered) return Promise.resolve({ done: true, value: undefined })
+          delivered = true
+          return Promise.resolve({
+            done: false,
+            value: {
+              kind: 'status',
+              event_id: 'event-hung-capacity',
+              turn_id: 'turn-hung-capacity',
+              session_id: sessionId,
+              sequence: 1,
+              observed_at: new Date().toISOString(),
+              status: 'running',
+            },
+          })
+        },
+        return() {
+          rawReturnCalls += 1
+          return new Promise<IteratorResult<unknown>>(() => undefined)
+        },
+      }
+    }
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const quarantined = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    await adapter.events(quarantined.session_id)[Symbol.asyncIterator]().next()
+    await adapter.stop(quarantined.session_id)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(rawReturnCalls).toBe(1)
+
+    for (let index = 0; index < PROVIDER_SESSION_REGISTRY_LIMIT - 1; index += 1) {
+      const action = defineProviderActionV1(launchAction({
+        action_id: `active-capacity-action-${index}`,
+      }))
+      await adapter.launch({
+        authorization: authorizeAction(manifest, fixture, action),
+      })
+    }
+    await expect(adapter.launch({
+      authorization: {} as never,
+    })).rejects.toMatchObject({
+      code: 'provider_session_capacity_exceeded',
+    })
+    expect(launchCalls).toBe(PROVIDER_SESSION_REGISTRY_LIMIT)
+  })
+
+  it('makes terminal delivery, concurrent stop, and consumer cleanup idempotent', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    const rawReadStarted = deferred<void>()
+    const terminalRead = deferred<IteratorResult<unknown>>()
+    const stopStarted = deferred<void>()
+    const allowStop = deferred<void>()
+    const rawReturnFinished = deferred<void>()
+    let rawReturnCalls = 0
+    let rawStopCalls = 0
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.stop = async () => {
+      rawStopCalls += 1
+      stopStarted.resolve(undefined)
+      await allowStop.promise
+    }
+    implementation.events = () => ({
+      [Symbol.asyncIterator](): AsyncIterator<unknown> {
+        return this as AsyncIterable<unknown> & AsyncIterator<unknown>
+      },
+      next() {
+        rawReadStarted.resolve(undefined)
+        return terminalRead.promise
+      },
+      return() {
+        rawReturnCalls += 1
+        rawReturnFinished.resolve(undefined)
+        return Promise.resolve({ done: true, value: undefined })
+      },
+    })
+    const adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    const iterator = adapter.events(session.session_id)[Symbol.asyncIterator]()
+    const terminalEventPromise = iterator.next()
+    await rawReadStarted.promise
+    const stopPromise = adapter.stop(session.session_id)
+    const duplicateStopPromise = adapter.stop(session.session_id)
+    await stopStarted.promise
+
+    terminalRead.resolve({
+      done: false,
+      value: {
+        kind: 'status',
+        event_id: 'event-concurrent-terminal',
+        turn_id: 'turn-concurrent-terminal',
+        session_id: session.session_id,
+        sequence: 1,
+        observed_at: new Date().toISOString(),
+        status: 'stopped',
+      },
+    })
+    await expect(terminalEventPromise).resolves.toMatchObject({
+      value: {
+        status: 'stopped',
+        session_id: session.session_id,
+      },
+    })
+    await rawReturnFinished.promise
+    expect(rawReturnCalls).toBe(1)
+    expect(() => adapter.events(session.session_id)).toThrowError(
+      expect.objectContaining({ code: 'provider_session_authorization_required' }),
+    )
+
+    const consumerCleanup = iterator.return?.()
+    allowStop.resolve(undefined)
+    await Promise.all([stopPromise, duplicateStopPromise])
+    await consumerCleanup
+    expect(rawStopCalls).toBe(1)
+    expect(rawReturnCalls).toBe(1)
+    await expect(adapter.cancel(session.session_id)).rejects.toMatchObject({
+      code: 'provider_session_authorization_required',
+    })
+  })
+
+  it('latches stop before a raw implementation can reenter it', async () => {
+    const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
+    const fixture = launchFixture(manifest)
+    let adapter: ProviderExecutionAdapterV1
+    let managedSessionId = ''
+    const rawStopTargets: string[] = []
+    const implementation = adapterImplementation(manifest, fixture)
+    implementation.stop = async (sessionId) => {
+      rawStopTargets.push(sessionId)
+      await adapter.stop(managedSessionId)
+    }
+    adapter = defineProviderExecutionAdapterV1(implementation)
+    const session = await adapter.launch({
+      authorization: authorizeAction(manifest, fixture, fixture.action),
+    })
+    managedSessionId = session.session_id
+
+    const outcome = await Promise.race([
+      adapter.stop(session.session_id).then(() => 'stopped' as const),
+      new Promise<'timeout'>((resolve) => setImmediate(() => resolve('timeout'))),
+    ])
+    expect(outcome).toBe('stopped')
+    expect(rawStopTargets).toEqual([session.session_id])
+    await expect(adapter.cancel(session.session_id)).rejects.toMatchObject({
+      code: 'provider_session_authorization_required',
+    })
+  })
+
   it('bounds live session state and releases capacity after a successful stop', async () => {
     const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
     const fixture = launchFixture(manifest)
     let launchCalls = 0
-    const implementation = adapterImplementation(manifest, fixture, () => {
+    const implementation = adapterImplementation(manifest, fixture, (context) => {
       launchCalls += 1
-      return sessionOutput(fixture, {
-        session_id: `capacity-session-${launchCalls}`,
+      return assignedSessionOutput(fixture, context, {
         provider_session_id: `capacity-provider-session-${launchCalls}`,
       })
     })
@@ -2041,6 +3327,7 @@ describe('validated provider adapter gateway', () => {
     })).rejects.toMatchObject({ code: 'provider_session_capacity_exceeded' })
     expect(launchCalls).toBe(PROVIDER_SESSION_REGISTRY_LIMIT)
 
+    await adapter.events(firstManagedSessionId)[Symbol.asyncIterator]().next()
     await adapter.stop(firstManagedSessionId)
     const replacementAction = defineProviderActionV1(launchAction({
       action_id: 'capacity-replacement',
@@ -2420,6 +3707,19 @@ describe('runtime-safe provider outputs', () => {
       resolved_path: '/safe/bin/codex',
       executable_fingerprint: FINGERPRINT,
     }))).not.toContain(credential)
+    expect(() => defineProviderExecutableDiscoveryV1({
+      contract_version: 1,
+      provider_id: 'codex',
+      adapter_id: 'codex-app-server',
+      status: 'validated',
+      source: 'path',
+      version: '0.144.6',
+      platform: 'darwin-arm64',
+      resolved_path: `/safe/${credential}/codex`,
+      executable_fingerprint: FINGERPRINT,
+    })).toThrowError(expect.objectContaining({
+      code: 'invalid_executable_path',
+    }))
     expect(() => defineProviderModelsV1([{
       id: credential,
       display_name: 'Credential-shaped model',

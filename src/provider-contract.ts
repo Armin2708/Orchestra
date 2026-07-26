@@ -53,6 +53,38 @@ export const PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1 = [
 for (const conflict of PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1) Object.freeze(conflict)
 Object.freeze(PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1)
 
+const PROVIDER_MANAGED_ENVIRONMENT_CATEGORY_BY_VARIABLE_V1: ReadonlyMap<string, string> = new Map(
+  PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1,
+)
+
+const CODEX_MANAGED_ENVIRONMENT_VARIABLES_V1 = new Set([
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_ORGANIZATION',
+  'OPENAI_ORG_ID',
+  'OPENAI_PROJECT',
+  'CODEX_API_KEY',
+  'CODEX_ACCESS_TOKEN',
+])
+
+const PROVIDER_MANAGED_ENVIRONMENT_OWNER_BY_VARIABLE_V1: ReadonlyMap<
+  string,
+  readonly [provider_id: string, adapter_id: string]
+> = new Map(PROVIDER_MANAGED_ENVIRONMENT_CONFLICTS_V1.map(([variable]) => [
+  variable,
+  CODEX_MANAGED_ENVIRONMENT_VARIABLES_V1.has(variable)
+    ? ['codex', 'codex-app-server']
+    : ['claude', 'claude-agent-sdk'],
+]))
+
+const PROVIDER_SUBSCRIPTION_ENVIRONMENT_CREDENTIALS_V1: ReadonlyMap<
+  string,
+  readonly string[]
+> = new Map([
+  ['CLAUDE_CODE_OAUTH_TOKEN', ['subscription_access_token']],
+  ['CODEX_ACCESS_TOKEN', ['subscription_access_token']],
+] as const)
+
 export const PROVIDER_CAPABILITY_IDS = [
   'launch',
   'follow_up',
@@ -90,6 +122,28 @@ export type ProviderCredentialKind =
   | 'subscription_access_token'
   | 'usage_priced_api_key'
   | 'unknown'
+
+const managedEnvironmentVariableAllowsSelection = (
+  variable: string,
+  providerId: string,
+  adapterId: string,
+  billingMode: Exclude<ProviderBillingMode, 'unknown'>,
+  credentialKind: Exclude<ProviderCredentialKind, 'unknown'>,
+): boolean => {
+  const category = PROVIDER_MANAGED_ENVIRONMENT_CATEGORY_BY_VARIABLE_V1.get(variable)
+  if (category === undefined) return true
+  const owner = PROVIDER_MANAGED_ENVIRONMENT_OWNER_BY_VARIABLE_V1.get(variable)
+  if (owner === undefined || owner[0] !== providerId || owner[1] !== adapterId) return false
+  if (billingMode === 'usage_priced_api') {
+    return category !== 'provisioning'
+      && !PROVIDER_SUBSCRIPTION_ENVIRONMENT_CREDENTIALS_V1.has(variable)
+      && credentialKind === 'usage_priced_api_key'
+  }
+  return PROVIDER_SUBSCRIPTION_ENVIRONMENT_CREDENTIALS_V1
+    .get(variable)
+    ?.includes(credentialKind as 'subscription_access_token') === true
+}
+
 export type ProviderReleaseState = 'validated' | 'candidate' | 'unsupported'
 export type ProviderSupportState = 'supported' | 'unsupported' | 'policy_blocked' | 'unknown'
 export type ProviderAutomationPolicy = 'allowed' | 'interactive_only' | 'blocked' | 'unknown'
@@ -605,6 +659,7 @@ export interface AuthorizedProviderLaunchV1 {
 export type AuthorizedProviderActionV1 = AuthorizedProviderLaunchV1
 
 export type ProviderAuthorizedLaunchContextV1 = {
+  readonly assigned_session_id: string
   readonly intent: Readonly<ProviderExecutionIntentV1>
   readonly action: Readonly<ProviderActionV1>
   readonly readiness: Readonly<ProviderReadinessV1>
@@ -1007,10 +1062,6 @@ function validateEnvironment(
       if (!allowedCredentials.some((kind) => mode.credential_kinds.includes(
         kind as Exclude<ProviderCredentialKind, 'unknown'>,
       ))) reject('invalid_environment_credential')
-      if (allowedCredentials.includes('usage_priced_api_key')
-        && mode.billing_mode !== 'usage_priced_api') {
-        reject('api_environment_in_subscription_mode')
-      }
     }
     if (!allowed.length && allowedCredentials.length) reject('invalid_environment_credential')
     if (allowed.length && !allowedCredentials.length) reject('invalid_environment_credential')
@@ -1022,6 +1073,38 @@ function validateEnvironment(
       .map(([variable]) => variable)
     if (requiredVariables.some((variable) => !variables.includes(variable))) {
       reject('environment_audit_incomplete')
+    }
+  }
+}
+
+function validateManagedEnvironmentSemantics(manifest: ProviderManifestV1): void {
+  for (const rule of manifest.environment.conflict_rules) {
+    const managedCategory = PROVIDER_MANAGED_ENVIRONMENT_CATEGORY_BY_VARIABLE_V1.get(rule.variable)
+    if (managedCategory === undefined) continue
+    if (rule.category !== managedCategory) reject('invalid_environment_category')
+    const owner = PROVIDER_MANAGED_ENVIRONMENT_OWNER_BY_VARIABLE_V1.get(rule.variable)
+    if (rule.allowed_mode_ids.length > 0
+      && (owner === undefined
+        || owner[0] !== manifest.provider_id
+        || owner[1] !== manifest.adapter_id)) {
+      reject('environment_variable_owner_mismatch')
+    }
+    for (const modeId of rule.allowed_mode_ids) {
+      const mode = manifest.modes.find((candidate) => candidate.id === modeId)
+      if (!mode) continue
+      if (rule.allowed_credential_kinds.some((kind) =>
+        !managedEnvironmentVariableAllowsSelection(
+          rule.variable,
+          manifest.provider_id,
+          manifest.adapter_id,
+          mode.billing_mode,
+          kind,
+        ))) {
+        if (mode.billing_mode === 'personal_subscription') {
+          reject('api_environment_in_subscription_mode')
+        }
+        reject('invalid_environment_credential')
+      }
     }
   }
 }
@@ -1113,6 +1196,7 @@ export function defineProviderManifestV1(manifest: ProviderManifestV1): Readonly
   if (reservedProviderId !== undefined && reservedProviderId !== snapshot.provider_id) {
     reject('reserved_provider_adapter_mismatch')
   }
+  validateManagedEnvironmentSemantics(snapshot)
   const fingerprint = manifestFingerprint(snapshot)
   const existing = manifestRegistry.get(snapshot.provider_id)
   if (existing) {
@@ -1436,6 +1520,21 @@ const safeOpaqueIdentifier = (
   return value
 }
 
+const providerSessionIdForCleanup = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'provider_session_id')
+    if (!descriptor || !('value' in descriptor)) return null
+    return safeOpaqueIdentifier(
+      descriptor.value,
+      'invalid_provider_session',
+      4096,
+    )
+  } catch {
+    return null
+  }
+}
+
 const privateText = (
   value: unknown,
   code: string,
@@ -1483,7 +1582,7 @@ export function defineProviderExecutableDiscoveryV1(
     : safeText(snapshot.platform, 'invalid_executable_platform', 128)
   const resolvedPath = snapshot.resolved_path === null
     ? null
-    : privateText(snapshot.resolved_path, 'invalid_executable_path', 4096)
+    : safeOpaqueIdentifier(snapshot.resolved_path, 'invalid_executable_path', 4096)
   if (snapshot.status === 'validated'
     && (snapshot.source === 'unknown' || version === null || platform === null)) {
     reject('invalid_validated_executable')
@@ -2504,6 +2603,13 @@ export function prepareProviderEnvironmentV1(
       && (!rule.allowed_mode_ids.includes(mode.id)
         || !rule.allowed_credential_kinds.includes(
           selection.credential_kind as Exclude<ProviderCredentialKind, 'unknown'>,
+        )
+        || !managedEnvironmentVariableAllowsSelection(
+          rule.variable,
+          defined.provider_id,
+          defined.adapter_id,
+          mode.billing_mode,
+          selection.credential_kind as Exclude<ProviderCredentialKind, 'unknown'>,
         )))
     .map((rule) => rule.variable)
     .sort()
@@ -2644,12 +2750,17 @@ export function authorizeProviderLaunchV1(
 
 export const authorizeProviderActionV1 = authorizeProviderLaunchV1
 
+type ProviderConsumedLaunchContextV1 = Omit<
+  ProviderAuthorizedLaunchContextV1,
+  'assigned_session_id'
+>
+
 function consumeProviderLaunchAuthorization(
   authorization: AuthorizedProviderLaunchV1,
   manifest: ProviderManifestV1,
   expectedAction: ProviderActionV1['kind'],
   currentDiscovery: ProviderExecutableDiscoveryV1,
-): ProviderAuthorizedLaunchContextV1 {
+): ProviderConsumedLaunchContextV1 {
   const state = launchAuthorizationState(authorization)
   const defined = defineProviderManifestV1(manifest)
   const currentExecutable = defineProviderExecutableDiscoveryV1(currentDiscovery)
@@ -2800,6 +2911,119 @@ type ManagedProviderSessionV1 = {
   readonly event_id_order: string[]
   event_id_cursor: number
   event_stream: ManagedProviderEventStreamV1 | null
+  stop_promise: Promise<void> | null
+}
+
+type FailedProviderSessionCleanupV1 = {
+  readonly adapter_session_id: string
+  readonly identities: readonly string[]
+}
+
+type SafeProviderAbortControllerV1 = {
+  readonly signal: AbortSignal
+  abort(): void
+}
+
+const createSafeProviderAbortController = (): SafeProviderAbortControllerV1 => {
+  const controller = new AbortController()
+  const safeSignal = controller.signal
+  const nativeAddEventListener = safeSignal.addEventListener
+  const nativeRemoveEventListener = safeSignal.removeEventListener
+  const nativeOnAbort = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'onabort')
+  if (typeof nativeOnAbort?.get !== 'function' || typeof nativeOnAbort.set !== 'function') {
+    throw new TypeError('AbortSignal.onabort is unavailable')
+  }
+  const listenerWrappers = new WeakMap<object, (event: Event) => void>()
+
+  const wrappedListener = (listener: unknown): unknown => {
+    if (listener === null
+      || (typeof listener !== 'function' && typeof listener !== 'object')) {
+      return listener
+    }
+    const key = listener as object
+    const existing = listenerWrappers.get(key)
+    if (existing) return existing
+    const wrapped = (event: Event): void => {
+      let result: unknown
+      try {
+        if (typeof listener === 'function') {
+          result = Reflect.apply(listener, safeSignal, [event])
+        } else {
+          const handleEvent = Reflect.get(listener, 'handleEvent')
+          if (typeof handleEvent !== 'function') return
+          result = Reflect.apply(handleEvent, listener, [event])
+        }
+      } catch {
+        return
+      }
+      try {
+        void Promise.resolve(result).catch(() => undefined)
+      } catch {
+        // Listener thenable failures are contained like synchronous listener failures.
+      }
+    }
+    listenerWrappers.set(key, wrapped)
+    return wrapped
+  }
+
+  let onAbortValue = Reflect.apply(nativeOnAbort.get, safeSignal, [])
+  Object.defineProperties(safeSignal, {
+    addEventListener: {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: function addEventListener(
+        this: AbortSignal,
+        type: string,
+        listener: unknown,
+        options?: unknown,
+      ): void {
+        Reflect.apply(nativeAddEventListener, this, [
+          type,
+          this === safeSignal ? wrappedListener(listener) : listener,
+          options,
+        ])
+      },
+    },
+    removeEventListener: {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: function removeEventListener(
+        this: AbortSignal,
+        type: string,
+        listener: unknown,
+        options?: unknown,
+      ): void {
+        const wrapped = this === safeSignal
+          && listener !== null
+          && (typeof listener === 'function' || typeof listener === 'object')
+          ? listenerWrappers.get(listener as object) ?? listener
+          : listener
+        Reflect.apply(nativeRemoveEventListener, this, [type, wrapped, options])
+      },
+    },
+    onabort: {
+      configurable: nativeOnAbort.configurable,
+      enumerable: nativeOnAbort.enumerable,
+      get(): unknown {
+        return onAbortValue
+      },
+      set(value: unknown): void {
+        Reflect.apply(nativeOnAbort.set as (value: unknown) => void, safeSignal, [
+          typeof value === 'function' ? wrappedListener(value) : value,
+        ])
+        onAbortValue = value
+      },
+    },
+  })
+
+  return Object.freeze({
+    signal: safeSignal,
+    abort(): void {
+      controller.abort()
+    },
+  })
 }
 
 const PROVIDER_ACCESS_RANK = Object.freeze({
@@ -2817,6 +3041,8 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   readonly #adapterSessionIds = new Map<string, string>()
   readonly #providerSessionIds = new Map<string, string>()
   readonly #retiringSessions = new Set<ManagedProviderSessionV1>()
+  readonly #failedSessionCleanups = new Set<FailedProviderSessionCleanupV1>()
+  readonly #failedSessionIdentities = new Map<string, number>()
   readonly #sessionNamespace: string
   #sessionCounter = 0
   #pendingRegistrations = 0
@@ -2840,7 +3066,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   }
 
   #createRawEventStream(adapterSessionId: string): ManagedProviderEventStreamV1 {
-    const controller = new AbortController()
+    const controller = createSafeProviderAbortController()
     let resolveRetirement: (() => void) | undefined
     const retirement = new Promise<void>((resolve) => {
       resolveRetirement = resolve
@@ -2886,10 +3112,18 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
 
     const close = (): Promise<boolean> => {
       if (closePromise !== null) return closePromise
+      try {
+        controller.abort()
+      } catch {
+        // Stream cleanup must not expose abort implementation failures.
+      }
       closePromise = (async () => {
         if (iterator === null || returnMethod === null) return true
         try {
-          await Reflect.apply(returnMethod, iterator, [])
+          const result = await Reflect.apply(returnMethod, iterator, [])
+          if (!result || typeof result !== 'object' || Reflect.get(result, 'done') !== true) {
+            return false
+          }
           await Promise.allSettled([...pendingNexts])
           return true
         } catch {
@@ -3063,7 +3297,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   async #consume(
     authorization: AuthorizedProviderLaunchV1,
     kind: ProviderActionV1['kind'],
-  ): Promise<ProviderAuthorizedLaunchContextV1> {
+  ): Promise<ProviderConsumedLaunchContextV1> {
     const executable = await this.discoverExecutable()
     return consumeProviderLaunchAuthorization(
       authorization,
@@ -3073,11 +3307,26 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     )
   }
 
+  #implementationContext(
+    context: ProviderConsumedLaunchContextV1,
+    assignedSessionId: string,
+  ): ProviderAuthorizedLaunchContextV1 {
+    return Object.freeze({
+      ...context,
+      assigned_session_id: assignedSessionId,
+    })
+  }
+
   #validateSession(
     value: unknown,
     context: ProviderAuthorizedLaunchContextV1,
+    captureProviderSessionId: (providerSessionId: string) => void,
   ): Readonly<ProviderSessionV1> {
     const session = defineProviderSessionV1(value as ProviderSessionV1)
+    captureProviderSessionId(session.provider_session_id)
+    if (session.session_id !== context.assigned_session_id) {
+      reject('provider_session_assignment_mismatch')
+    }
     if (!sameSelection(session.selection, context.intent.selection)) {
       reject('provider_session_selection_mismatch')
     }
@@ -3110,6 +3359,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   #reserveSessionRegistration(): void {
     if (this.#sessions.size
       + this.#retiringSessions.size
+      + this.#failedSessionCleanups.size
       + this.#pendingRegistrations >= PROVIDER_SESSION_REGISTRY_LIMIT) {
       reject('provider_session_capacity_exceeded')
     }
@@ -3118,6 +3368,64 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
 
   #releaseSessionRegistration(): void {
     this.#pendingRegistrations -= 1
+  }
+
+  #mintAssignedSessionId(): string {
+    while (this.#sessionCounter < Number.MAX_SAFE_INTEGER) {
+      this.#sessionCounter += 1
+      const candidate = [
+        'managed',
+        this.#sessionNamespace,
+        this.#sessionCounter.toString(36),
+      ].join('-')
+      if (!this.#sessionIdentityInUse(candidate)) return candidate
+    }
+    return reject('provider_session_capacity_exceeded')
+  }
+
+  #sessionIdentityInUse(identity: string): boolean {
+    return this.#sessions.has(identity)
+      || this.#adapterSessionIds.has(identity)
+      || this.#providerSessionIds.has(identity)
+      || this.#failedSessionIdentities.has(identity)
+  }
+
+  #cleanupFailedRawSession(
+    adapterSessionId: string,
+    providerSessionIds: ReadonlySet<string>,
+  ): void {
+    const identities = Object.freeze([
+      ...new Set([
+        adapterSessionId,
+        ...providerSessionIds,
+      ]),
+    ])
+    const cleanup = Object.freeze({
+      adapter_session_id: adapterSessionId,
+      identities,
+    })
+    this.#failedSessionCleanups.add(cleanup)
+    for (const identity of identities) {
+      this.#failedSessionIdentities.set(
+        identity,
+        (this.#failedSessionIdentities.get(identity) ?? 0) + 1,
+      )
+    }
+    void this.#invoke('stop', () => Reflect.apply(
+      this.#implementation.stop,
+      this.#implementation.receiver,
+      [adapterSessionId],
+    )).then(() => {
+      if (!this.#failedSessionCleanups.delete(cleanup)) return
+      for (const identity of identities) {
+        const references = this.#failedSessionIdentities.get(identity)
+        if (references === undefined || references <= 1) {
+          this.#failedSessionIdentities.delete(identity)
+        } else {
+          this.#failedSessionIdentities.set(identity, references - 1)
+        }
+      }
+    }).catch(() => undefined)
   }
 
   #registerSession(
@@ -3130,20 +3438,14 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     if (!['starting', 'running', 'idle'].includes(session.status)) {
       reject('provider_session_not_operable')
     }
-    if (this.#adapterSessionIds.has(session.session_id)
-      || this.#providerSessionIds.has(session.provider_session_id)) {
+    if (session.provider_session_id.startsWith(`managed-${this.#sessionNamespace}-`)
+      || session.session_id === session.provider_session_id
+      || this.#sessionIdentityInUse(session.session_id)
+      || this.#sessionIdentityInUse(session.provider_session_id)) {
       reject('provider_session_identity_conflict')
     }
     if (session.access_profile === null) reject('provider_session_access_mismatch')
-    if (this.#sessionCounter >= Number.MAX_SAFE_INTEGER) {
-      reject('provider_session_capacity_exceeded')
-    }
-    this.#sessionCounter += 1
-    const managedSessionId = [
-      'managed',
-      this.#sessionNamespace,
-      this.#sessionCounter.toString(36),
-    ].join('-')
+    const managedSessionId = session.session_id
     const authorizationState = launchAuthorizationState(authorization)
     const record: ManagedProviderSessionV1 = {
       authorization,
@@ -3159,6 +3461,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
       event_id_order: [],
       event_id_cursor: 0,
       event_stream: null,
+      stop_promise: null,
     }
     this.#sessions.set(managedSessionId, record)
     this.#adapterSessionIds.set(session.session_id, managedSessionId)
@@ -3182,9 +3485,14 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     this.#retiringSessions.delete(record)
   }
 
-  #unregisterSession(sessionId: string, expected?: ManagedProviderSessionV1): void {
+  #unregisterSession(
+    sessionId: string,
+    expected?: ManagedProviderSessionV1,
+  ): Promise<void> {
     const record = this.#sessions.get(sessionId)
-    if (!record || (expected !== undefined && record !== expected)) return
+    if (!record || (expected !== undefined && record !== expected)) {
+      return Promise.resolve()
+    }
     this.#sessions.delete(sessionId)
     record.recent_event_ids.clear()
     record.event_id_order.length = 0
@@ -3192,13 +3500,13 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     const stream = record.event_stream
     if (stream === null) {
       this.#releaseRawSessionIdentities(record)
-      return
+      return Promise.resolve()
     }
     this.#retiringSessions.add(record)
     stream.retire()
-    void stream.close().then((closed) => {
+    return stream.close().then((closed) => {
       if (closed) this.#releaseRawSessionIdentities(record)
-    })
+    }).catch(() => undefined)
   }
 
   #requireSessionCapability(
@@ -3218,7 +3526,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
 
   #requireTargetSession(
     sessionId: string,
-    context: ProviderAuthorizedLaunchContextV1,
+    context: ProviderConsumedLaunchContextV1,
     capability: ProviderCapabilityId,
   ): ManagedProviderSessionV1 {
     const record = this.#requireSessionCapability(sessionId, capability)
@@ -3232,35 +3540,55 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   }
 
   #implementationContextForSession(
-    context: ProviderAuthorizedLaunchContextV1,
+    context: ProviderConsumedLaunchContextV1,
     record: ManagedProviderSessionV1,
+    assignedSessionId: string,
   ): ProviderAuthorizedLaunchContextV1 {
     if (context.action.kind !== 'follow_up' && context.action.kind !== 'fork') {
       reject('launch_authorization_action_mismatch')
     }
-    return Object.freeze({
-      ...context,
-      action: Object.freeze({
-        ...context.action,
-        session_id: record.adapter_session_id,
-      }),
-    })
+    if (context.action.session_id !== record.session_id) {
+      reject('provider_session_authorization_required')
+    }
+    return this.#implementationContext(context, assignedSessionId)
   }
 
   async launch(request: ProviderLaunchRequestV1): Promise<ProviderSessionV1> {
     this.#reserveSessionRegistration()
+    let assignedSessionId: string | null = null
+    const providerSessionIds = new Set<string>()
+    let rawSessionStarted = false
     try {
       const authorization = authorizationFromRequest(request, 'invalid_launch_request')
-      const context = await this.#consume(authorization, 'launch')
+      const consumedContext = await this.#consume(authorization, 'launch')
+      assignedSessionId = this.#mintAssignedSessionId()
+      const context = this.#implementationContext(
+        consumedContext,
+        assignedSessionId,
+      )
+      rawSessionStarted = true
+      const rawSession = await this.#invoke('launch', () => Reflect.apply(
+        this.#implementation.launch,
+        this.#implementation.receiver,
+        [context],
+      ))
+      const cleanupProviderSessionId = providerSessionIdForCleanup(rawSession)
+      if (cleanupProviderSessionId !== null) {
+        providerSessionIds.add(cleanupProviderSessionId)
+      }
       const session = this.#validateSession(
-        await this.#invoke('launch', () => Reflect.apply(
-          this.#implementation.launch,
-          this.#implementation.receiver,
-          [context],
-        )),
+        rawSession,
         context,
+        (definedProviderSessionId) => {
+          providerSessionIds.add(definedProviderSessionId)
+        },
       )
       return this.#registerSession(session, authorization).session
+    } catch (error) {
+      if (rawSessionStarted && assignedSessionId !== null) {
+        this.#cleanupFailedRawSession(assignedSessionId, providerSessionIds)
+      }
+      throw error
     } finally {
       this.#releaseSessionRegistration()
     }
@@ -3278,7 +3606,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     await this.#invoke('follow_up', () => Reflect.apply(
       this.#implementation.followUp,
       this.#implementation.receiver,
-      [this.#implementationContextForSession(context, record)],
+      [this.#implementationContextForSession(context, record, record.session_id)],
     ))
     record.authorization = authorization
   }
@@ -3293,6 +3621,9 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
 
   async fork(request: ProviderForkRequestV1): Promise<ProviderSessionV1> {
     this.#reserveSessionRegistration()
+    let assignedSessionId: string | null = null
+    const providerSessionIds = new Set<string>()
+    let rawSessionStarted = false
     try {
       const authorization = authorizationFromRequest(request, 'invalid_fork_request')
       const context = await this.#consume(authorization, 'fork')
@@ -3302,19 +3633,39 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
         > PROVIDER_ACCESS_RANK[parent.access_profile.effective]) {
         reject('provider_session_access_mismatch')
       }
-      const session = this.#validateSession(
-        await this.#invoke('fork', () => Reflect.apply(
-          this.#implementation.fork,
-          this.#implementation.receiver,
-          [this.#implementationContextForSession(context, parent)],
-        )),
+      assignedSessionId = this.#mintAssignedSessionId()
+      const implementationContext = this.#implementationContextForSession(
         context,
+        parent,
+        assignedSessionId,
+      )
+      rawSessionStarted = true
+      const rawSession = await this.#invoke('fork', () => Reflect.apply(
+        this.#implementation.fork,
+        this.#implementation.receiver,
+        [implementationContext],
+      ))
+      const cleanupProviderSessionId = providerSessionIdForCleanup(rawSession)
+      if (cleanupProviderSessionId !== null) {
+        providerSessionIds.add(cleanupProviderSessionId)
+      }
+      const session = this.#validateSession(
+        rawSession,
+        implementationContext,
+        (definedProviderSessionId) => {
+          providerSessionIds.add(definedProviderSessionId)
+        },
       )
       if (session.session_id === parent.adapter_session_id
         || session.provider_session_id === parent.provider_session_id) {
         reject('provider_session_fork_identity_mismatch')
       }
       return this.#registerSession(session, authorization).session
+    } catch (error) {
+      if (rawSessionStarted && assignedSessionId !== null) {
+        this.#cleanupFailedRawSession(assignedSessionId, providerSessionIds)
+      }
+      throw error
     } finally {
       this.#releaseSessionRegistration()
     }
@@ -3340,15 +3691,27 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     ))
   }
 
-  async stop(session_id: string): Promise<void> {
+  stop(session_id: string): Promise<void> {
     const sessionId = safeOpaqueIdentifier(session_id, 'invalid_provider_session')
     const record = this.#requireSessionCapability(sessionId, 'stop')
-    await this.#invoke('stop', () => Reflect.apply(
+    if (record.stop_promise !== null) return record.stop_promise
+    record.stop_promise = Promise.resolve()
+    const stopPromise = this.#invoke('stop', () => Reflect.apply(
       this.#implementation.stop,
       this.#implementation.receiver,
       [record.adapter_session_id],
-    ))
-    this.#unregisterSession(sessionId, record)
+    )).then(async () => {
+      const cleanup = this.#unregisterSession(sessionId, record)
+      await Promise.race([
+        cleanup,
+        new Promise<void>((resolve) => setImmediate(resolve)),
+      ])
+    }).catch((error: unknown) => {
+      if (record.stop_promise === stopPromise) record.stop_promise = null
+      throw error
+    })
+    record.stop_promise = stopPromise
+    return stopPromise
   }
 
   async submitApproval(
@@ -3368,6 +3731,7 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
   async *#eventsForRecord(
     sessionId: string,
     record: ManagedProviderSessionV1,
+    consumerRetirement: Promise<void>,
   ): AsyncIterable<ProviderEventV1> {
     if (this.#sessions.get(sessionId) !== record) {
       reject('provider_event_session_retired')
@@ -3375,7 +3739,6 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     if (record.event_stream !== null) reject('provider_event_stream_already_open')
     const stream = this.#createRawEventStream(record.adapter_session_id)
     record.event_stream = stream
-    let retiredWithPendingRead = false
     let terminal = false
     try {
       while (true) {
@@ -3391,11 +3754,17 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
           stream.retirement.then(
             () => Object.freeze({ kind: 'retired' as const }),
           ),
+          consumerRetirement.then(
+            () => Object.freeze({ kind: 'consumer_retired' as const }),
+          ),
         ])
+        if (outcome.kind === 'consumer_retired') {
+          void rawOutcome.then(() => undefined)
+          return
+        }
         if (outcome.kind === 'retired'
           || stream.isRetired()
           || this.#sessions.get(sessionId) !== record) {
-          retiredWithPendingRead = outcome.kind === 'retired'
           void rawOutcome.then(() => undefined)
           reject('provider_event_session_retired')
         }
@@ -3434,32 +3803,50 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
           record.status = event.status
           terminal = ['stopped', 'failed', 'lost'].includes(event.status)
           if (terminal) {
-            this.#unregisterSession(sessionId, record)
+            void this.#unregisterSession(sessionId, record)
           }
         }
         yield event
         if (terminal) return
       }
     } finally {
-      if (retiredWithPendingRead || terminal) {
-        void stream.close().then((closed) => {
-          if (closed && record.event_stream === stream) record.event_stream = null
-        })
-      } else {
-        const closed = await stream.close()
+      void stream.close().then((closed) => {
         if (closed) {
           if (record.event_stream === stream) record.event_stream = null
         } else {
-          this.#unregisterSession(sessionId, record)
+          void this.#unregisterSession(sessionId, record)
         }
-      }
+      }).catch(() => undefined)
     }
   }
 
   events(session_id: string): AsyncIterable<ProviderEventV1> {
     const sessionId = safeOpaqueIdentifier(session_id, 'invalid_provider_session')
     const record = this.#requireSessionCapability(sessionId, 'structured_events')
-    return this.#eventsForRecord(sessionId, record)
+    let closed = false
+    let resolveConsumerRetirement: (() => void) | undefined
+    const consumerRetirement = new Promise<void>((resolve) => {
+      resolveConsumerRetirement = resolve
+    })
+    const generator = this.#eventsForRecord(sessionId, record, consumerRetirement)
+      [Symbol.asyncIterator]()
+    const iterator: AsyncIterableIterator<ProviderEventV1> = {
+      [Symbol.asyncIterator]() {
+        return this
+      },
+      next: () => closed
+        ? Promise.resolve({ done: true, value: undefined })
+        : generator.next(),
+      return: () => {
+        if (!closed) {
+          closed = true
+          resolveConsumerRetirement?.()
+          void generator.return?.(undefined).catch(() => undefined)
+        }
+        return Promise.resolve({ done: true, value: undefined })
+      },
+    }
+    return iterator
   }
 
   async usage(session_id: string): Promise<ProviderUsageV1> {
