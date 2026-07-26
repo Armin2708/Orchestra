@@ -9,6 +9,8 @@ an explicit assignment lifecycle bound through jobs, sessions, execution, retry,
 control projections, the durable Knowledge Compiler persistence foundation, and bounded
 repository-document ingestion; Open Work, matching, the complete Job Market gate, and Knowledge
 retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
+The versioned subscription-first terminal-agent contract is delivered; capability-aware adapter
+implementation and the exact declared-provider compatibility matrix remain open.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -109,6 +111,8 @@ unfinished browser, remote, packaging, and release gates visible. Deliver KNO-00
 board-scoped knowledge-source, chunk, context-build, and context-use persistence without claiming
 the retrieval, injection, or operator surfaces that depend on it; then deliver KNO-002's bounded
 repository-document ingestion without claiming the remaining Knowledge Compiler.
+Then deliver TOOL-013's versioned subscription-first terminal-agent boundary without claiming
+TOOL-014 adapter integration or reopening any unsupported provider state.
 
 ### Delivered
 
@@ -174,6 +178,16 @@ repository-document ingestion without claiming the remaining Knowledge Compiler.
   symlink/hardlink/file-descriptor checks, nested-repository/gitlink exclusions, index/HEAD/DB
   stability checks, and dependency/generated/credential exclusions fail closed against traversal,
   substitution, and time-of-check/time-of-use attacks.
+- provider contract version 1 defines executable/version provenance, safe provider-owned
+  environment rules, readiness, runtime/billing/credential modes, explicit cost/overage consent,
+  models, capabilities, approvals, lifecycle controls, normalized events, usage, and explicit
+  unsupported states for the four first-release manifests;
+- the gateway assigns each managed session ID before launch/fork, seals authorization evidence,
+  rejects cross-domain identity reuse, translates controls/events through the assigned identity,
+  and compensates malformed launch/fork output without exposing raw caught errors;
+- cancellation settles public pending reads, validates raw iterator completion, contains ordinary
+  abort-listener failures, and retains failed or hung cleanup identities inside the 1,024-session
+  capacity bound; cooperative cleanup releases identity/capacity before awaited stop returns.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -233,6 +247,13 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - two independent KNO-002 security and provenance/portability reviews reported zero P0, P1, or P2
   findings. GitNexus reported LOW risk and no mapped affected process for the four-file new-code
   slice; browser acceptance is N/A because no UI, route, or runtime-control path changed.
+- exact TOOL-013 code head `38d1d2f` passed 105 focused contract tests, the complete 139-file /
+  1,161-test serial suite, root and standalone strict test TypeScript, web TypeScript, root/web
+  production builds, four Gitleaks scans, and `git diff --check` on Node 22.20.0;
+- three independent exact-hash contract, lifecycle, and identity reviews reported zero in-scope
+  P0, P1, or P2 findings. GitNexus could not map the new TOOL-013 symbols and returned `UNKNOWN`;
+  that stale result was treated as a critical review boundary rather than evidence of low risk.
+  Browser acceptance is N/A because TOOL-013 changes no route, UI, or existing runtime wiring.
 
 ### Remaining
 
@@ -243,8 +264,9 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
 - `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
   retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
-- the subscription-first adapter contract, Qwen Code and Kimi Code managed adapters, and an
-  exact supported-provider/version matrix; current managed behavior remains Claude/Codex-only;
+- capability-aware managed adapters under `TOOL-014`, Qwen Code and Kimi Code managed support, and
+  an exact supported-provider/version matrix under reopened `BASE-010`; current managed behavior
+  remains Claude/Codex-only and their prior support/policy labels are unchanged;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
@@ -254,10 +276,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - public package publication and clean-machine plugin/npm installation; the successful hosted
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 
-The strict master reconciliation is **127 / 375 checklist boxes delivered; 248 remain open**.
+The strict master reconciliation is **128 / 375 checklist boxes delivered; 247 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this exact-head
-program state closes `KNO-002`, adds `TOOL-013` and `TOOL-014`, and reopens `BASE-010` because the
-expanded provider target does not yet have an exact compatibility matrix.
+program state closes `KNO-002` and `TOOL-013`, keeps `TOOL-014` open, and keeps `BASE-010`
+reopened because the expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
@@ -273,7 +295,7 @@ plug-and-play release.
 | Phase 7 — Knowledge Compiler | 2 / 28 | 26 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
-| Phase 10 — Tools/permissions | 2 / 15 | 13 |
+| Phase 10 — Tools/permissions | 3 / 15 | 12 |
 | Phase 11 — Visual command center | 1 / 18 | 17 |
 | Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
 | Phase 13 — Secure remote/mobile | 1 / 21 | 20 |
@@ -285,7 +307,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[KNO-002 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno002-exact-head-2a9acff.md).
+[TOOL-013 exact-head checkpoint](./checkpoints/2026-07-27-agent-os-tool013-exact-head-38d1d2f.md).
+The
+[KNO-002 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno002-exact-head-2a9acff.md)
+is retained as the preceding Knowledge ingestion checkpoint.
 The
 [KNO-001 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno001-exact-head-72f97b4.md)
 is retained as the preceding Knowledge foundation.

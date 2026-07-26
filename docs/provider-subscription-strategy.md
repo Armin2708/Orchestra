@@ -63,6 +63,20 @@ Terminal scraping alone cannot establish managed resume, approval, usage, or mod
 Prefer a provider's documented structured protocol—such as Codex app-server or Kimi ACP—while
 keeping the raw native terminal as a separate first-class surface.
 
+TOOL-013 delivers the provider-neutral version-1 contract and canonical first-release manifests.
+The gateway assigns every managed session ID before invoking an adapter, seals the authorized
+selection and effective access evidence, translates controls and events through that assigned ID,
+and quarantines adapter/provider identities until stream cleanup is proven complete. Environment
+rules bind each managed credential, endpoint, selector, and provisioning variable to its owning
+provider/adapter and billing mode. Failed, malformed, or hung cleanup remains bounded by the live
+session-capacity limit instead of being evicted by age.
+
+This is a contract boundary, not an adapter-support claim. Adapter implementations are trusted
+in-process Orchestra code; the boundary validates and redacts their returned data and contains
+ordinary callback failures through the supplied signal API, but it is not a sandbox for deliberate
+arbitrary code running in the daemon. TOOL-014, BASE-010, and the provider acceptance matrix remain
+open, so the support states above do not change.
+
 ## Release acceptance
 
 For every claimed provider and operating-system tuple:

@@ -43,6 +43,13 @@ whose protocol may change without notice. Orchestra therefore accepts only CLI `
 generated schema digest is recorded in `scripts/codex-protocol-contract.json`. A nearby version such
 as the host-observed `0.145.0` is not assumed compatible.
 
+The provider-neutral contract version 1 has source-level and test validation on the observed
+Darwin/Node 22.20.0 host. It covers gateway-assigned session identity, sealed launch/fork evidence,
+provider-owned environment rules, explicit billing and credential modes, lifecycle controls,
+normalized events and usage, bounded cancellation, and cleanup quarantine. This validates the
+contract itself only. It does not wire a new managed runtime, promote Codex beyond candidate state,
+remove Claude's policy block, or add Qwen Code/Kimi Code managed support.
+
 ## First-release provider candidates not yet supported
 
 These providers are in the product target, but no exact Orchestra adapter/version/platform tuple
