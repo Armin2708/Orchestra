@@ -6,8 +6,9 @@ search/export, retention, native fork reconciliation, CLI parity, the responsive
 and the integrated privacy/audit blocker closure; its daemon-to-browser restart and current mobile
 acceptance gates remain open. Milestone C has typed Job Market contracts, built-in templates, and
 an explicit assignment lifecycle bound through jobs, sessions, execution, retry, recovery, and
-control projections; Open Work, matching, the complete Job Market gate, and the Knowledge Compiler
-remain open. The product is not yet public plug-and-play.
+control projections and the first durable Knowledge Compiler persistence foundation; Open Work,
+matching, the complete Job Market gate, and Knowledge ingestion, retrieval, compilation, and
+injection remain open. The product is not yet public plug-and-play.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -91,7 +92,9 @@ installation, dogfood, rollback, diagnostics, release notes, and staged beta pro
 Close the known Agent Home durability, fork, privacy, and test-reliability blockers without
 weakening the real terminal; add deterministic contract templates; bind the explicit assignment
 lifecycle into the managed runtime; and add actionable local readiness diagnostics while keeping
-unfinished browser, remote, packaging, and release gates visible.
+unfinished browser, remote, packaging, and release gates visible. Deliver KNO-001's durable,
+board-scoped knowledge-source, chunk, context-build, and context-use persistence without claiming
+the ingestion, retrieval, injection, or operator surfaces that depend on it.
 
 ### Delivered
 
@@ -141,6 +144,12 @@ unfinished browser, remote, packaging, and release gates visible.
 - the default parallel test suite is deterministic, verified delivery summaries are available for
   later knowledge ingestion, and the release workflow retains and verifies the tested package
   artifact instead of rebuilding it before publication.
+- migration `018-knowledge-persistence`, strict contracts, and the standalone `KnowledgeStore`
+  persist six board-scoped source, chunk, build, build-evidence, and context-use entities behind
+  eight named indexes and 20 integrity triggers;
+- migration replay, canonical JSON/hashes, ordering, lifecycle, target coherence, Unicode
+  accounting, cross-board isolation, and redacted fail-closed reads/writes are enforced without
+  changing terminal, provider, route, or UI behavior.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -180,6 +189,19 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   with zero high or critical findings. This remains a release blocker, not a zero-vulnerability
   claim;
 - the public npm registry recheck in the exact-head gate returned `E404` for `orchestra-board`.
+- exact KNO-001 code head `72f97b46fc120c4fe82c805c48f765df65b9e62a` passed the
+  99-test focused KNO gate, 10-test assignment-replay gate, 15-test store gate, 63-test
+  adversarial gate, 136-file / 1,015-test complete serial suite, 6-test documentation drift gate,
+  root/web TypeScript, and root/web production builds on Node 22.20.0;
+- two independent exact-head reviews reported zero P0, P1, or P2 findings. GitNexus re-indexed
+  7,919 symbols, 23,463 relationships, 515 clusters, and 300 flows, then reported LOW change risk
+  and zero affected flows against `main`;
+- desktop/phone browser acceptance is N/A for KNO-001 because the exact diff contains no UI,
+  route, or runtime-control changes;
+- the Graphify update for `72f97b4` passed independent review with zero P0, P1, or P2 findings:
+  4,692 nodes, 10,970 links, 190 communities, 5 valid hyperedges, 365 manifest entries, zero
+  dangling endpoints, exact JSON/HTML/report equivalence, a valid two-run zero-token cost ledger,
+  and passing credential, excluded-source, and source-location checks.
 
 ### Remaining
 
@@ -188,8 +210,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   available;
 - Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
-- every `KNO-*` item, including durable source/chunk/context schemas, ingestion, retrieval,
-  provenance, budgeted injection, freshness, review controls, UI, and benchmarks;
+- `KNO-002` through `KNO-027` and `KNO-GATE`, including ingestion, retrieval, budgeted injection,
+  freshness, review controls, UI, and benchmarks;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
@@ -199,8 +221,9 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - public package publication and clean-machine plugin/npm installation; the successful hosted
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 
-The strict master reconciliation is **126 / 373 checklist boxes delivered; 247 remain open**.
-This exact-head batch newly closes only `JOB-010`, `PKG-002`, and `PKG-005`.
+The strict master reconciliation is **127 / 373 checklist boxes delivered; 246 remain open**.
+The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this exact-head
+batch newly closes only `KNO-001`.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
@@ -213,7 +236,7 @@ plug-and-play release.
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
 | Phase 5 — Contracts/job market | 12 / 18 | 6 |
 | Phase 6 — Delivery Trackbook | 14 / 21 | 7 |
-| Phase 7 — Knowledge Compiler | 0 / 28 | 28 |
+| Phase 7 — Knowledge Compiler | 1 / 28 | 27 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
 | Phase 10 — Tools/permissions | 2 / 13 | 11 |
@@ -228,7 +251,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[exact-head functional checkpoint](./checkpoints/2026-07-26-agent-os-exact-head-95d11d5.md).
+[KNO-001 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno001-exact-head-72f97b4.md).
+The preceding
+[exact-head functional checkpoint](./checkpoints/2026-07-26-agent-os-exact-head-95d11d5.md)
+is retained as the prior functional baseline.
 The
 [hosted QA-019 checkpoint](./checkpoints/2026-07-25-agent-os-hosted-qa019.md)
 is retained as the preceding exact-hosted checkpoint.
@@ -254,6 +280,11 @@ superseded history.
 - Current exact local head `95d11d5892523b0f742eb098563ba92b13e65ba4`: serial and
   default-parallel suites each passed 134 files / 979 tests; the focused combined gate passed
   31 files / 288 tests; root/web TypeScript, production builds, and credential-free E2E passed.
+- KNO-001 exact code head `72f97b46fc120c4fe82c805c48f765df65b9e62a`: 99 / 99
+  focused KNO tests, 10 / 10 assignment-replay tests, 15 / 15 store tests, 63 / 63 adversarial
+  tests, 136 files / 1,015 tests serially, 6 / 6 baseline-documentation tests, root/web
+  TypeScript and production builds, two zero-P0–P2 reviews, and LOW/zero-flow GitNexus change
+  detection passed.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;
