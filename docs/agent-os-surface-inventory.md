@@ -1,7 +1,7 @@
 # Agent OS surface inventory
 
-Status: exact JOB-010 phase-one inventory observed at
-`1382c77f02bcb7195fdaaf0c0efb2137a4263ca3`.
+Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
+observed at exact code head `2a9acffe3021e7906712a8522ebf6080d2a14563`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -343,14 +343,15 @@ markers are listed in the JSON inventory and fail the drift test if removed or r
 ## Planned domains without complete current surfaces
 
 The canonical domain document names the target. Some rows have no current canonical foundation;
-Knowledge now has durable persistence but not the surrounding product surfaces:
+Knowledge now has durable persistence and a standalone repository-document ingestor, but not the
+surrounding retrieval or product surfaces:
 
 | Planned domain | Current nearest surface | Missing canonical boundary |
 |---|---|---|
 | Discussion / DiscussionPost | `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
 | Team / PlanningSession | explicit `swarm` transport | bounded participants/roles/budgets/rounds/proposals/synthesis |
 | Conflict | computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
-| Knowledge ingestion, retrieval, compilation, and operator surfaces | durable `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, and `context_uses` persistence plus the current `context_items` manifest | ingestion adapters, FTS/retrieval, managed injection, freshness automation, review controls, API/UI, benchmarks |
+| Knowledge ingestion, retrieval, compilation, and operator surfaces | durable `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, and `context_uses` persistence; bounded `RepositoryDocumentIngestor` for AGENTS/README/docs/convention/architecture files; current `context_items` manifest | code/history/discussion/delivery/graph adapters, FTS/retrieval, managed injection, freshness automation, review controls, API/UI, benchmarks |
 | DeviceSession | `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
 
 These rows identify incomplete product boundaries, not necessarily total absence. Existing

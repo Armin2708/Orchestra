@@ -43,6 +43,22 @@ whose protocol may change without notice. Orchestra therefore accepts only CLI `
 generated schema digest is recorded in `scripts/codex-protocol-contract.json`. A nearby version such
 as the host-observed `0.145.0` is not assumed compatible.
 
+## First-release provider candidates not yet supported
+
+These providers are in the product target, but no exact Orchestra adapter/version/platform tuple
+has passed. They remain **Unsupported** for managed launch until the reopened BASE-010 matrix and
+the provider acceptance gates close.
+
+| Provider target | Verified upstream account path | Current Orchestra status |
+|---|---|---|
+| Qwen Code | Alibaba Cloud Coding Plan is a fixed-fee personal subscription configured through Qwen Code's `/auth`; it uses a subscription-scoped key. Retired Qwen OAuth and usage-priced provider API keys are not equivalent subscription paths. | Manual interactive use is possible inside the raw terminal when independently installed and authenticated. Current Coding Plan terms restrict non-interactive/backend use, so autonomous personal-plan orchestration is blocked pending provider confirmation. No managed compatibility claim. |
+| Kimi Code | Kimi membership can authorize the native CLI through the `/login` OAuth device flow. Kimi Open Platform API-key billing is a distinct optional path. | Manual use is possible inside the raw terminal when independently installed and authenticated. A future adapter must also surface optional metered Extra Usage instead of representing OAuth alone as proof of zero overage. No managed compatibility claim. |
+
+Candidate versions will be frozen only after install, login, native-CLI lifecycle, approval,
+structured-event, usage, resume, cancellation, and PTY gates pass on every claimed operating
+system. Upstream feature documentation is discovery evidence, not Orchestra compatibility
+evidence.
+
 ## Operating systems
 
 | Platform | Label | Observed scope |
@@ -67,6 +83,9 @@ readiness to check the environment, Git and selected-provider login state:
 orchestra doctor --provider both
 orchestra doctor --provider codex --json
 ```
+
+The current doctor accepts only `claude`, `codex`, or `both`. Qwen Code and Kimi Code must not be
+presented as selectable or ready until their adapters and compatibility contracts are implemented.
 
 The readiness doctor invokes only bounded version and login-status commands with fixed argument
 arrays. It does not log in, print raw provider output, start a model session, or make a model request.

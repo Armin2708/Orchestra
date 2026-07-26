@@ -7,6 +7,14 @@ context, policy, evidence, checkpoints, and an append-only event history.
 The original board, hooks, messaging, review gates, verification, and auto-ship workflows remain
 available. Agent OS is an additional project view and API surface.
 
+Managed provider support currently covers Claude Code and Codex CLI. The release target also
+includes Qwen Code and Kimi Code through versioned, capability-aware adapters. Personal
+subscription entitlement through each provider's native CLI is the default commercial path;
+direct provider-API execution is optional, separately selected, and may never replace a failed or
+unavailable subscription session silently.
+See [Subscription-first terminal-agent strategy](provider-subscription-strategy.md) for the
+current/target provider matrix and acceptance rules.
+
 ## Open the cockpit
 
 Start Orchestra normally and open the local UI:

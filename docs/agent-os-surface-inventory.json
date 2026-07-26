@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "1382c77f02bcb7195fdaaf0c0efb2137a4263ca3",
+  "observed_at_commit": "2a9acffe3021e7906712a8522ebf6080d2a14563",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -697,7 +697,7 @@
     },
     {
       "noun": "Knowledge ingestion, retrieval, compilation, and operator surfaces",
-      "reason": "Durable KnowledgeSource, KnowledgeChunk, ContextBuild, and ContextUse persistence exists, but ingestion, retrieval, managed injection, freshness automation, review controls, API, and UI do not."
+      "reason": "Durable KnowledgeSource, KnowledgeChunk, ContextBuild, and ContextUse persistence plus bounded repository-document ingestion exist, but code/history/discussion/delivery/graph adapters, retrieval, managed injection, freshness automation, review controls, API, and UI do not."
     },
     {
       "noun": "DeviceSession",

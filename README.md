@@ -17,6 +17,16 @@ raw-terminal capability. Its [Delivery Trackbook](docs/delivery-trackbook.md) ke
 Asked contract, reported result, observed evidence, human overrides, and acceptance visibly
 separate.
 
+The provider strategy is **personal subscription through the vendor's native terminal CLI first**.
+Direct provider-API execution and usage-priced API credentials are optional, explicit secondary
+modes and must never be selected as a silent fallback. The currently implemented managed adapters
+remain Claude Code and Codex CLI; Qwen Code and Kimi Code are first-release targets but are not yet
+supported managed providers. Every claimed provider must pass the same install, authentication,
+lifecycle, capability, approval, event, usage, and real-terminal acceptance matrix before it is
+advertised as compatible.
+See the [subscription-first provider contract](docs/provider-subscription-strategy.md) for the
+current/target matrix, billing semantics, known provider-policy limits, and release gates.
+
 ## Installation status
 
 **Public installation is not available yet.** On 2026-07-25 the public npm registry returned

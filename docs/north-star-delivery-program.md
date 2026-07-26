@@ -6,13 +6,24 @@ search/export, retention, native fork reconciliation, CLI parity, the responsive
 and the integrated privacy/audit blocker closure; its daemon-to-browser restart and current mobile
 acceptance gates remain open. Milestone C has typed Job Market contracts, built-in templates, and
 an explicit assignment lifecycle bound through jobs, sessions, execution, retry, recovery, and
-control projections and the first durable Knowledge Compiler persistence foundation; Open Work,
-matching, the complete Job Market gate, and Knowledge ingestion, retrieval, compilation, and
-injection remain open. The product is not yet public plug-and-play.
+control projections, the durable Knowledge Compiler persistence foundation, and bounded
+repository-document ingestion; Open Work, matching, the complete Job Market gate, and Knowledge
+retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
 attention, and observed evidence remain product invariants throughout the program.
+
+Personal subscription entitlement through a provider's native terminal CLI is the primary managed
+execution path. Direct provider-API execution and usage-priced API credentials are optional,
+explicit secondary modes and never silent fallback. Claude Code and Codex CLI are the current
+managed adapters; Qwen Code and Kimi Code are first-release targets whose support remains open
+until the same versioned provider matrix and real acceptance gates pass.
+Provider terms and provider-managed overage are part of that gate: an interactive-only
+subscription cannot power background orchestration without permission, and metered overage must
+be explicitly visible and consented.
+The source-controlled acceptance contract is
+[Subscription-first terminal-agent strategy](./provider-subscription-strategy.md).
 
 ## Handoff contract
 
@@ -55,8 +66,9 @@ override. Source branches are integrated only after GitNexus change review and t
 history.
 
 **Acceptance:** normalized provider events and coordination chat survive daemon/browser restart;
-the same Agent Home resumes Claude and Codex sessions, exposes real PTY state, and supports pause,
-stop, retry, fork, rename, archive, search, and provenance-preserving export.
+the same Agent Home resumes every declared provider session subject to explicit capability
+differences, exposes real PTY state, and supports pause, stop, retry, fork, rename, archive, search,
+and provenance-preserving export.
 
 ### Milestone C — Collaborative intelligence
 
@@ -78,12 +90,13 @@ offline mode is visibly read-only; every remote mutation carries device attribut
 
 ### Milestone E — Public plug-and-play
 
-**Asked:** a Claude or Codex subscriber can install Orchestra and complete the entire North Star
-journey without repository-maintainer knowledge.
+**Asked:** a personal subscriber to any declared provider can install Orchestra and complete the
+entire North Star journey without repository-maintainer knowledge or usage-priced API fallback.
 
 **Acceptance:** clean macOS and Linux install/upgrade/uninstall, provider doctor and onboarding,
-exact-commit CI, migration/backup/recovery, security review, package provenance, public plugin
-installation, dogfood, rollback, diagnostics, release notes, and staged beta promotion all pass.
+native subscription readiness for every declared provider, exact-commit CI,
+migration/backup/recovery, security review, package provenance, public plugin installation where
+supported, dogfood, rollback, diagnostics, release notes, and staged beta promotion all pass.
 
 ## Current delivery slice
 
@@ -94,7 +107,8 @@ weakening the real terminal; add deterministic contract templates; bind the expl
 lifecycle into the managed runtime; and add actionable local readiness diagnostics while keeping
 unfinished browser, remote, packaging, and release gates visible. Deliver KNO-001's durable,
 board-scoped knowledge-source, chunk, context-build, and context-use persistence without claiming
-the ingestion, retrieval, injection, or operator surfaces that depend on it.
+the retrieval, injection, or operator surfaces that depend on it; then deliver KNO-002's bounded
+repository-document ingestion without claiming the remaining Knowledge Compiler.
 
 ### Delivered
 
@@ -150,6 +164,16 @@ the ingestion, retrieval, injection, or operator surfaces that depend on it.
 - migration replay, canonical JSON/hashes, ordering, lifecycle, target coherence, Unicode
   accounting, cross-board isolation, and redacted fail-closed reads/writes are enforced without
   changing terminal, provider, route, or UI behavior.
+- the standalone `RepositoryDocumentIngestor` discovers AGENTS, README, documentation,
+  convention, and architecture files—including ignored AGENTS files—inside a verified board,
+  repository, workspace, revision, and database scope;
+- deterministic source/chunk identities distinguish exact committed blobs from scoped working-tree
+  content, redact credentials before hashing or persistence, and atomically replay or reject
+  conflicts without exposing raw paths, content, or caught errors;
+- bounded file/count/byte/depth/entry limits, fixed Git invocation, fsmonitor suppression,
+  symlink/hardlink/file-descriptor checks, nested-repository/gitlink exclusions, index/HEAD/DB
+  stability checks, and dependency/generated/credential exclusions fail closed against traversal,
+  substitution, and time-of-check/time-of-use attacks.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -202,6 +226,13 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   4,692 nodes, 10,970 links, 190 communities, 5 valid hyperedges, 365 manifest entries, zero
   dangling endpoints, exact JSON/HTML/report equivalence, a valid two-run zero-token cost ledger,
   and passing credential, excluded-source, and source-location checks.
+- KNO-002 exact code head `2a9acffe3021e7906712a8522ebf6080d2a14563` passed 41 focused
+  ingestion tests, 111 Knowledge tests, the complete 138-file / 1,056-test serial suite, root/web
+  TypeScript, root/web production builds, per-file Gitleaks, and `git diff --check` on Node
+  22.20.0;
+- two independent KNO-002 security and provenance/portability reviews reported zero P0, P1, or P2
+  findings. GitNexus reported LOW risk and no mapped affected process for the four-file new-code
+  slice; browser acceptance is N/A because no UI, route, or runtime-control path changed.
 
 ### Remaining
 
@@ -210,8 +241,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   available;
 - Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
-- `KNO-002` through `KNO-027` and `KNO-GATE`, including ingestion, retrieval, budgeted injection,
-  freshness, review controls, UI, and benchmarks;
+- `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
+  retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
+- the subscription-first adapter contract, Qwen Code and Kimi Code managed adapters, and an
+  exact supported-provider/version matrix; current managed behavior remains Claude/Codex-only;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
@@ -221,25 +254,26 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - public package publication and clean-machine plugin/npm installation; the successful hosted
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 
-The strict master reconciliation is **127 / 373 checklist boxes delivered; 246 remain open**.
+The strict master reconciliation is **127 / 375 checklist boxes delivered; 248 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this exact-head
-batch newly closes only `KNO-001`.
+program state closes `KNO-002`, adds `TOOL-013` and `TOOL-014`, and reopens `BASE-010` because the
+expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
-| Phase 0 — Product contract/baseline | 10 / 13 | 3 |
+| Phase 0 — Product contract/baseline | 9 / 13 | 4 |
 | Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
 | Phase 5 — Contracts/job market | 12 / 18 | 6 |
 | Phase 6 — Delivery Trackbook | 14 / 21 | 7 |
-| Phase 7 — Knowledge Compiler | 1 / 28 | 27 |
+| Phase 7 — Knowledge Compiler | 2 / 28 | 26 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
-| Phase 10 — Tools/permissions | 2 / 13 | 11 |
+| Phase 10 — Tools/permissions | 2 / 15 | 13 |
 | Phase 11 — Visual command center | 1 / 18 | 17 |
 | Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
 | Phase 13 — Secure remote/mobile | 1 / 21 | 20 |
@@ -251,7 +285,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[KNO-001 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno001-exact-head-72f97b4.md).
+[KNO-002 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno002-exact-head-2a9acff.md).
+The
+[KNO-001 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno001-exact-head-72f97b4.md)
+is retained as the preceding Knowledge foundation.
 The preceding
 [exact-head functional checkpoint](./checkpoints/2026-07-26-agent-os-exact-head-95d11d5.md)
 is retained as the prior functional baseline.
@@ -285,6 +322,10 @@ superseded history.
   tests, 136 files / 1,015 tests serially, 6 / 6 baseline-documentation tests, root/web
   TypeScript and production builds, two zero-P0–P2 reviews, and LOW/zero-flow GitNexus change
   detection passed.
+- KNO-002 exact code head `2a9acffe3021e7906712a8522ebf6080d2a14563`: 41 / 41 focused
+  ingestion tests, 111 / 111 Knowledge tests, 138 files / 1,056 tests serially, root/web
+  TypeScript and production builds, per-file Gitleaks, two zero-P0–P2 reviews, and LOW/zero-flow
+  GitNexus change detection passed.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

@@ -7,7 +7,8 @@ Status: implemented on `codex/agent-os`.
 1. Existing board, hook, CLI, review, verification, and auto-ship behavior remains compatible.
 2. The terminal is never hidden: every managed workspace can expose a raw PTY, exact output,
    exit status, signals, and command history.
-3. Core state is provider-neutral. Claude, a generic shell, and future providers are drivers.
+3. Core state is provider-neutral. Claude Code, Codex CLI, Qwen Code, Kimi Code, a generic shell,
+   and future terminal agents are capability-declared drivers.
 4. New state is reconstructable from durable records; in-memory projections are caches only.
 5. Every UI mutation has a documented HTTP endpoint and can be driven from the CLI.
 6. Hooks remain fail-soft. Policies default to advisory unless explicitly configured otherwise.
@@ -113,6 +114,14 @@ interface AgentDriver {
 Ship a `claude` adapter around the existing `Conductor` semantics and a `shell` adapter backed by
 `RuntimeSupervisor`. Server/UI code must consume driver-neutral types.
 
+The versioned adapter contract must also expose executable/version discovery, authentication
+readiness, credential kind, billing mode, model catalog, resumability, cancellation, approvals,
+normalized events, usage, and unsupported capabilities. Native CLI plus personal-subscription
+entitlement is the default. Direct provider-API execution is a separately selected secondary mode;
+the runtime must not infer it from ambient API-key variables or use it as fallback. The current
+implementation has Claude Code, Codex CLI, and shell drivers; Qwen Code and Kimi Code remain
+release-target adapters, not current functionality.
+
 ## Service/API contract
 
 All new routes live under `/api/v1/os`:
@@ -197,8 +206,9 @@ without changing their current behavior.
 The durable scheduler runs queued jobs by priority while respecting `ORCHESTRA_MAX_LAUNCHED`,
 dependencies, retry count, cancellation, and budgets. Job claims and global capacity checks share
 one immediate transaction, duplicate active card jobs are rejected durably, and usage is recorded
-before retry decisions. It records every transition. The first provider set is `claude` and `shell`;
-unsupported providers remain queued with an actionable error rather than silently falling back.
+before retry decisions. It records every transition. The current registered provider set is
+`claude`, `codex`, and `shell`; unsupported providers remain queued with an actionable error rather
+than silently falling back.
 
 ## Policy engine
 

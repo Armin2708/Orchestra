@@ -8,10 +8,12 @@ until their canonical replacement passes the release gates.
 
 ## Product statement
 
-Orchestra is a local-first operating system for Claude and Codex work. It preserves unrestricted
-real terminals, installed CLIs and tools, provider-native semantics, git/worktree truth, and
-observed evidence while adding a visual control plane for durable agents, contracts, delivery,
-knowledge, collaboration, attention, and secure remote control.
+Orchestra is a local-first operating system for terminal coding agents. Its first-release target
+set is Claude Code, Codex CLI, Qwen Code, and Kimi Code, with the same adapter contract available
+to future terminal agents. It preserves unrestricted real terminals, installed CLIs and tools,
+provider-native semantics, git/worktree truth, and observed evidence while adding a visual control
+plane for durable agents, contracts, delivery, knowledge, collaboration, attention, and secure
+remote control.
 
 ## Canonical nouns
 
@@ -94,6 +96,28 @@ was injected, why, its provenance, estimated/actual tokens, cache identity, and 
 Provider-neutral description of an installed CLI, provider-native tool, MCP server, plugin, skill,
 or policy-controlled operation. It reports availability and effective permissions without hiding
 provider-specific behavior or proxying arbitrary terminal commands.
+
+### Provider execution and billing modes
+
+Managed provider selection records three separate facts:
+
+- `runtime_mode`: the vendor's native terminal CLI by default; direct provider-API execution is an
+  optional secondary mode;
+- `billing_mode`: personal subscription, usage-priced provider API, or unknown;
+- `credential_kind`: provider-account OAuth/session, subscription-scoped key, usage-priced API
+  key, or another explicitly declared provider mechanism.
+
+A subscription-scoped key may be the vendor's technical credential without turning the session
+into usage-priced API billing. Native-launch adapters reuse CLI-owned authentication and must not
+copy raw provider credentials into Agent OS state, logs, events, exports, or child environments
+beyond the provider's documented need. Any provider-specific credential reader used only for
+account/usage metadata must be isolated, read-only, explicitly declared, and never persist the raw
+value. Orchestra never changes billing mode because another credential happens to be present and
+never substitutes a different provider or direct API path when a native subscription launch
+fails. Provider-managed overage behavior must be surfaced as provider policy rather than
+represented as an Orchestra fallback. A subscription mode that the provider restricts to
+interactive use must not be used for autonomous/background orchestration without verified
+permission.
 
 ### DeviceSession
 
@@ -239,7 +263,8 @@ original/repaired hashes, byte counts, raw artifact IDs, run identity, and repai
 - exact validated and experimental Node/npm versions from the
   [supported-environment matrix](supported-environments.md);
 - git worktrees;
-- Claude SDK/bundled CLI and Codex CLI versions declared in that matrix;
+- the currently validated Claude Code and Codex CLI adapters plus release-target Qwen Code and Kimi
+  Code adapters only after their exact versions and capability matrices pass;
 - observed Darwin arm64 and Ubuntu Linux x64 gates; other macOS/Linux targets remain experimental,
   and Windows remains unsupported until its clean-machine and PTY contracts pass;
 - local daemon and SQLite, with private Tailscale remote access preferred;
