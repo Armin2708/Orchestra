@@ -11,6 +11,7 @@ gate, or a shippability claim.
 | Shared checkout | `/Users/arminrad/Desktop/agentboard`, `main` at `9d3b2474323a17ee91c7d655ff944392f6db9d71` |
 | Isolated worktree | `/Users/arminrad/.codex/worktrees/agentboard/tool013-provider-contract` |
 | Branch | `codex/tool013-provider-contract` |
+| Durable WIP implementation commit | `4bbb9a8` |
 | Required Node | `/Users/arminrad/.nvm/versions/node/v22.20.0/bin/node` (`v22.20.0`) |
 | Backlog truth | **127 / 375 delivered; 248 open**; TOOL-013 remains open |
 | Focused evidence | 1 file / 82 tests PASS |
@@ -162,7 +163,7 @@ Preserve `.codex/`, the retained screenshots, `graphify-out/`, and all unrelated
 
 ```text
 Resume the Agentboard Agent OS program from:
-/Users/arminrad/Desktop/agentboard/docs/checkpoints/2026-07-26-agent-os-tool013-wip-restart.md
+/Users/arminrad/.codex/worktrees/agentboard/tool013-provider-contract/docs/checkpoints/2026-07-26-agent-os-tool013-wip-restart.md
 
 Read AGENTS.md and the checkpoint first. Preserve the dirty shared main checkout. Resume TOOL-013
 in the isolated codex/tool013-provider-contract worktree from its WIP checkpoint commit. Complete
