@@ -193,7 +193,20 @@ function releaseAssignment(
   })
 }
 
+function removeMigration018Schema(db: Database.Database): void {
+  db.exec(`
+    DROP TABLE IF EXISTS context_uses;
+    DROP TABLE IF EXISTS context_build_entries;
+    DROP TABLE IF EXISTS context_build_sources;
+    DROP TABLE IF EXISTS context_builds;
+    DROP TABLE IF EXISTS knowledge_chunks;
+    DROP TABLE IF EXISTS knowledge_sources;
+    DELETE FROM os_schema_migrations WHERE id='018-knowledge-persistence';
+  `)
+}
+
 function removeMigration016Schema(db: Database.Database): void {
+  removeMigration018Schema(db)
   db.exec(`
     DROP TRIGGER IF EXISTS job_market_assignment_insert_scope;
     DROP TRIGGER IF EXISTS job_market_assignment_insert_market_cas;
@@ -240,6 +253,65 @@ function removeMigration016Schema(db: Database.Database): void {
 }
 
 describe('job assignment migration 016', () => {
+  it('backlevels dependent knowledge schema before replaying assignment migrations', () => {
+    const db = openDb(':memory:')
+    const profileTriggerNames = [
+      'context_builds_scope_insert',
+      'context_uses_insert',
+      'knowledge_sources_scope_insert',
+    ]
+    const profileTriggersBefore = db.prepare(`
+      SELECT name, sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (?, ?, ?)
+      ORDER BY name
+    `).all(...profileTriggerNames) as Array<{ name: string; sql: string }>
+
+    expect(profileTriggersBefore).toHaveLength(3)
+    expect(profileTriggersBefore.every(
+      ({ sql }) => sql.includes('assigned_profile_id'),
+    )).toBe(true)
+
+    removeMigration016Schema(db)
+
+    expect(db.prepare(`
+      SELECT id FROM os_schema_migrations
+      WHERE id IN (
+        '016-job-market-assignment-lifecycle',
+        '017-job-assignment-runtime-binding',
+        '018-knowledge-persistence'
+      )
+    `).all()).toEqual([])
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='table' AND name IN (
+        'knowledge_sources', 'knowledge_chunks', 'context_builds',
+        'context_build_sources', 'context_build_entries', 'context_uses'
+      )
+    `).get()).toEqual({ count: 0 })
+
+    applyAgentOsMigrations(db)
+
+    expect(db.prepare(`
+      SELECT id FROM os_schema_migrations
+      WHERE id IN (
+        '016-job-market-assignment-lifecycle',
+        '017-job-assignment-runtime-binding',
+        '018-knowledge-persistence'
+      )
+      ORDER BY id
+    `).all()).toEqual([
+      { id: '016-job-market-assignment-lifecycle' },
+      { id: '017-job-assignment-runtime-binding' },
+      { id: '018-knowledge-persistence' },
+    ])
+    expect(db.prepare(`
+      SELECT name, sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (?, ?, ?)
+      ORDER BY name
+    `).all(...profileTriggerNames)).toEqual(profileTriggersBefore)
+    db.close()
+  })
+
   it('fails atomically when its required prior schema is missing', () => {
     const db = new SqliteDatabase(':memory:')
     db.exec(`
