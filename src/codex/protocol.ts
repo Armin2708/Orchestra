@@ -103,6 +103,10 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string
+  /**
+   * Provider session identity. Do not infer native fork lineage from
+   * sessionId equality; forkedFromId is the lineage authority.
+   */
   sessionId?: string
   parentThreadId?: string | null
   forkedFromId?: string | null
@@ -169,6 +173,50 @@ export type CodexThreadResumeParams = CodexThreadStartParams & {
 }
 
 export type CodexThreadResumeResponse = CodexThreadStartResponse
+
+/**
+ * Exact `thread/fork` request surface supported by Codex CLI 0.144.6.
+ *
+ * The runtime driver deliberately exposes a narrower fork primitive so Agent
+ * Home cannot replace source provenance through the unstable path override.
+ */
+export type CodexThreadForkParams = {
+  threadId: string
+  lastTurnId?: string | null
+  path?: string | null
+  model?: string | null
+  modelProvider?: string | null
+  serviceTier?: string | null
+  cwd?: string | null
+  runtimeWorkspaceRoots?: string[] | null
+  approvalPolicy?: CodexApprovalPolicy | null
+  approvalsReviewer?: unknown
+  sandbox?: CodexSandboxMode | null
+  permissions?: string | null
+  config?: Record<string, unknown> | null
+  baseInstructions?: string | null
+  developerInstructions?: string | null
+  ephemeral?: boolean
+  threadSource?: unknown
+  excludeTurns?: boolean
+}
+
+export type CodexThreadForkResponse = {
+  thread: CodexThread
+  model: string
+  modelProvider: string
+  serviceTier: string | null
+  cwd: string
+  runtimeWorkspaceRoots: string[]
+  instructionSources: string[]
+  approvalPolicy: CodexApprovalPolicy
+  approvalsReviewer: unknown
+  sandbox: unknown
+  activePermissionProfile: unknown | null
+  reasoningEffort: string | null
+  multiAgentMode: unknown
+  [key: string]: unknown
+}
 
 export type CodexThreadReadParams = {
   threadId: string
@@ -300,6 +348,7 @@ export type CodexAppServerMethodMap = {
   initialize: { params: CodexInitializeParams; result: CodexInitializeResponse }
   'thread/start': { params: CodexThreadStartParams; result: CodexThreadStartResponse }
   'thread/resume': { params: CodexThreadResumeParams; result: CodexThreadResumeResponse }
+  'thread/fork': { params: CodexThreadForkParams; result: CodexThreadForkResponse }
   'thread/read': { params: CodexThreadReadParams; result: CodexThreadReadResponse }
   'thread/unsubscribe': { params: { threadId: string }; result: CodexThreadUnsubscribeResponse }
   'turn/start': { params: CodexTurnStartParams; result: CodexTurnStartResponse }

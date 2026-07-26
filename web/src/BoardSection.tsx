@@ -8,6 +8,7 @@ import { BOARD_TABS, BoardTab } from './boardNavigation'
 import './boardSection.css'
 
 const WorkspaceCockpit = React.lazy(() => import('./WorkspaceCockpit').then((module) => ({ default: module.WorkspaceCockpit })))
+const AgentHome = React.lazy(() => import('./AgentHome').then((module) => ({ default: module.AgentHome })))
 
 type Props = {
   tab: BoardTab
@@ -37,6 +38,10 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
         aria-labelledby={`board-tab-${tab}`}>
         {tab === 'overview'
           ? <ProjectGrid snaps={snaps} focused={focused} onChange={onChange} />
+          : tab === 'agents'
+            ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Agent Home"><span /><span /><span /></div>}>
+                <AgentHome snaps={snaps} onChange={onChange} />
+              </React.Suspense>
           : tab === 'messages'
             ? <MessagesView snaps={snaps} focused={focused} onChange={onChange} />
             : tab === 'workspace'

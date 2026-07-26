@@ -1,8 +1,124 @@
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import { canonicalHash, stableJson } from './agent-home-support.js'
+import { conversationEventContentHash } from './conversation-event-integrity.js'
+import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
+import {
+  isNativeProviderProjection,
+  isWithheldProviderReasoning,
+  normalizeProjectedText,
+  redactProjectedText,
+  type ProjectedTextRedactionState,
+} from './projected-text-redaction.js'
+import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
 
 interface Migration {
   id: string
   apply(db: Database.Database): void
+}
+
+const metadataRecord = (serialized: string): Record<string, unknown> => {
+  try {
+    const value = JSON.parse(serialized) as unknown
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
+const MALFORMED_TRANSCRIPT_TOMBSTONE = `${JSON.stringify({
+  redacted: true,
+  reason: 'malformed_legacy_transcript',
+}, null, 2)}\n`
+
+const replaceEventHashes = (
+  value: unknown,
+  eventHashes: Map<string, string>,
+): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const document = value as Record<string, unknown>
+  let changed = false
+  if (Array.isArray(document.events)) {
+    for (const item of document.events) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const event = item as Record<string, unknown>
+      if (typeof event.id !== 'string') continue
+      const contentHash = eventHashes.get(event.id)
+      if (contentHash && event.content_hash !== contentHash) {
+        event.content_hash = contentHash
+        changed = true
+      }
+    }
+  }
+  if (document.provenance && typeof document.provenance === 'object'
+    && !Array.isArray(document.provenance)) {
+    const provenance = document.provenance as Record<string, unknown>
+    const eventIds = provenance.event_ids
+    const sourceContentHashes = provenance.source_content_hashes
+    if (Array.isArray(eventIds) && Array.isArray(sourceContentHashes)) {
+      const next = sourceContentHashes.map((hash, index) => {
+        const eventId = eventIds[index]
+        const contentHash = typeof eventId === 'string' ? eventHashes.get(eventId) : undefined
+        if (contentHash && hash !== contentHash) {
+          changed = true
+          return contentHash
+        }
+        return hash
+      })
+      provenance.source_content_hashes = next
+    }
+  }
+  return changed
+}
+
+const repairTranscriptContent = (
+  content: string,
+  format: string,
+  eventHashes: Map<string, string>,
+): { content: string; redactions: number } => {
+  if (format === 'json') {
+    try {
+      const parsed = JSON.parse(content) as unknown
+      const hashesChanged = replaceEventHashes(parsed, eventHashes)
+      const redacted = redactStructuredValue(parsed)
+      if (!hashesChanged && !redacted.changed) {
+        return { content, redactions: 0 }
+      }
+      if (redacted.value && typeof redacted.value === 'object'
+        && !Array.isArray(redacted.value)) {
+        const document = redacted.value as Record<string, unknown>
+        if (document.redaction_policy && typeof document.redaction_policy === 'object'
+          && !Array.isArray(document.redaction_policy)
+          && redacted.redactions > 0) {
+          const policy = document.redaction_policy as Record<string, unknown>
+          const prior = Number(policy.redactions_applied)
+          policy.redactions_applied = (Number.isSafeInteger(prior) && prior >= 0 ? prior : 0)
+            + redacted.redactions
+        }
+      }
+      return {
+        content: `${JSON.stringify(redacted.value, null, 2)}\n`,
+        redactions: redacted.redactions,
+      }
+    } catch {
+      return { content: MALFORMED_TRANSCRIPT_TOMBSTONE, redactions: 1 }
+    }
+  }
+  const withCurrentHashes = content.replace(
+    /^event=(\S+)([^\r\n]*\shash=)([a-f0-9]{64})(?=\s*$)/gim,
+    (line, eventId: string | undefined, suffix: string | undefined) => {
+      const contentHash = eventId ? eventHashes.get(eventId) : undefined
+      return contentHash ? `event=${eventId}${suffix ?? ' hash='}${contentHash}` : line
+    },
+  )
+  const redacted = redactSensitiveText(withCurrentHashes)
+  return {
+    content: redacted.value ?? '',
+    redactions: redacted.redactions,
+  }
 }
 
 const migrations: Migration[] = [
@@ -557,6 +673,3162 @@ const migrations: Migration[] = [
           SELECT RAISE(ABORT, 'invalid delivery status transition');
         END;
       `)
+    },
+  },
+  {
+    id: '006-canonical-launch-reservations',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE jobs ADD COLUMN driver_id TEXT;
+        ALTER TABLE jobs ADD COLUMN effort TEXT;
+        ALTER TABLE jobs ADD COLUMN access_profile TEXT NOT NULL DEFAULT 'workspace_write';
+        ALTER TABLE jobs ADD COLUMN policy_id TEXT REFERENCES policies(id) ON DELETE SET NULL;
+        ALTER TABLE jobs ADD COLUMN contract_version INTEGER;
+        ALTER TABLE jobs ADD COLUMN idempotency_key TEXT;
+        ALTER TABLE jobs ADD COLUMN request_fingerprint TEXT;
+
+        UPDATE jobs SET driver_id=provider WHERE driver_id IS NULL;
+
+        CREATE UNIQUE INDEX idx_jobs_board_idempotency
+          ON jobs(board_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+        CREATE TABLE workspace_assignments (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          card_id INTEGER REFERENCES cards(id) ON DELETE SET NULL,
+          job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'reserved'
+            CHECK(status IN ('reserved','active','released','failed')),
+          isolation_mode TEXT NOT NULL
+            CHECK(isolation_mode IN ('managed_worktree','explicit_worktree','explicit_shared')),
+          access_profile TEXT NOT NULL
+            CHECK(access_profile IN ('read_only','workspace_write','full_access')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          released_at TEXT
+        );
+
+        CREATE INDEX idx_workspace_assignments_workspace
+          ON workspace_assignments(workspace_id, status, created_at);
+        CREATE INDEX idx_workspace_assignments_board
+          ON workspace_assignments(board_id, status, created_at);
+
+        ALTER TABLE os_events ADD COLUMN job_id TEXT;
+        ALTER TABLE os_events ADD COLUMN contract_id TEXT;
+        ALTER TABLE os_events ADD COLUMN correlation_id TEXT;
+        ALTER TABLE os_events ADD COLUMN causation_id TEXT;
+        ALTER TABLE os_events ADD COLUMN idempotency_key TEXT;
+        ALTER TABLE os_events ADD COLUMN event_version INTEGER NOT NULL DEFAULT 1;
+
+        CREATE UNIQUE INDEX idx_os_events_board_idempotency
+          ON os_events(board_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX idx_os_events_job ON os_events(job_id, created_at, id);
+        CREATE INDEX idx_os_events_correlation ON os_events(correlation_id, created_at, id);
+      `)
+    },
+  },
+  {
+    id: '007-agent-home-domain',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE agent_profiles (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          legacy_agent_id INTEGER UNIQUE REFERENCES agents(id) ON DELETE SET NULL,
+          name TEXT NOT NULL,
+          role TEXT,
+          default_provider TEXT,
+          default_model TEXT,
+          default_effort TEXT,
+          default_access_profile TEXT
+            CHECK(default_access_profile IS NULL
+              OR default_access_profile IN ('read_only','workspace_write','full_access')),
+          capabilities_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(capabilities_json)),
+          owner_actor_type TEXT NOT NULL,
+          owner_actor_id TEXT,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active','archived')),
+          provenance_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(provenance_json)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT,
+          UNIQUE(board_id, name)
+        );
+
+        CREATE TABLE agent_conversations (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active','archived')),
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+          next_sequence INTEGER NOT NULL DEFAULT 1 CHECK(next_sequence > 0),
+          created_by_actor_type TEXT NOT NULL,
+          created_by_actor_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT
+        );
+
+        CREATE UNIQUE INDEX idx_agent_conversations_default
+          ON agent_conversations(profile_id)
+          WHERE is_default=1 AND status='active';
+        CREATE INDEX idx_agent_profiles_board
+          ON agent_profiles(board_id, status, name);
+        CREATE INDEX idx_agent_conversations_profile
+          ON agent_conversations(profile_id, status, updated_at);
+
+        ALTER TABLE agent_sessions
+          ADD COLUMN profile_id TEXT REFERENCES agent_profiles(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN conversation_id TEXT REFERENCES agent_conversations(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions
+          ADD COLUMN mode TEXT NOT NULL DEFAULT 'compatibility'
+            CHECK(mode IN ('managed','ambient','compatibility'));
+        ALTER TABLE agent_sessions ADD COLUMN driver_id TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN effort TEXT;
+        ALTER TABLE agent_sessions
+          ADD COLUMN access_profile TEXT
+            CHECK(access_profile IS NULL
+              OR access_profile IN ('read_only','workspace_write','full_access'));
+        ALTER TABLE agent_sessions ADD COLUMN provider_thread_id TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN provider_cursor TEXT;
+        ALTER TABLE agent_sessions
+          ADD COLUMN recovery_state TEXT NOT NULL DEFAULT 'unknown'
+            CHECK(recovery_state IN ('unknown','attachable','detached','lost','unsupported'));
+        ALTER TABLE agent_sessions
+          ADD COLUMN recovery_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(recovery_json));
+        ALTER TABLE agent_sessions
+          ADD COLUMN history_state TEXT NOT NULL DEFAULT 'unavailable'
+            CHECK(history_state IN ('complete','partial','unavailable'));
+        ALTER TABLE agent_sessions ADD COLUMN started_at TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN ended_at TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN archived_at TEXT;
+
+        CREATE INDEX idx_agent_sessions_profile ON agent_sessions(profile_id);
+        CREATE INDEX idx_agent_sessions_conversation ON agent_sessions(conversation_id);
+        CREATE INDEX idx_agent_sessions_job ON agent_sessions(job_id);
+
+        CREATE TABLE conversation_events (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+          session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          sequence INTEGER NOT NULL CHECK(sequence > 0),
+          provider TEXT,
+          provider_event_id TEXT,
+          provider_thread_id TEXT,
+          provider_turn_id TEXT,
+          provider_item_id TEXT,
+          provider_cursor TEXT,
+          kind TEXT NOT NULL
+            CHECK(kind IN ('user','assistant','system','tool','tool_result',
+              'approval','usage','status','error')),
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          correlation_id TEXT,
+          causation_id TEXT,
+          projected_text TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadata_json)),
+          raw_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+          dedupe_key TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          redaction_state TEXT NOT NULL DEFAULT 'none'
+            CHECK(redaction_state IN ('none','redacted','withheld')),
+          retention_class TEXT NOT NULL DEFAULT 'transcript'
+            CHECK(retention_class IN ('transcript','audit','ephemeral','pinned')),
+          schema_version INTEGER NOT NULL DEFAULT 1 CHECK(schema_version > 0),
+          created_at TEXT NOT NULL,
+          archived_at TEXT,
+          UNIQUE(conversation_id, sequence),
+          UNIQUE(conversation_id, dedupe_key)
+        );
+
+        CREATE TABLE conversation_event_conflicts (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+          session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          canonical_event_id TEXT NOT NULL REFERENCES conversation_events(id) ON DELETE CASCADE,
+          dedupe_key TEXT NOT NULL,
+          received_content_hash TEXT NOT NULL,
+          received_projected_text TEXT,
+          received_metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(received_metadata_json)),
+          raw_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(canonical_event_id, received_content_hash)
+        );
+
+        CREATE INDEX idx_conversation_events_conversation
+          ON conversation_events(conversation_id, sequence);
+        CREATE INDEX idx_conversation_events_session
+          ON conversation_events(session_id, sequence);
+        CREATE INDEX idx_conversation_events_profile
+          ON conversation_events(profile_id, created_at);
+        CREATE INDEX idx_conversation_events_provider
+          ON conversation_events(session_id, provider, provider_event_id)
+          WHERE provider_event_id IS NOT NULL;
+        CREATE INDEX idx_conversation_event_conflicts_event
+          ON conversation_event_conflicts(canonical_event_id, created_at);
+
+        CREATE TRIGGER agent_conversations_profile_scope_insert
+        BEFORE INSERT ON agent_conversations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            WHERE profile.id=NEW.profile_id AND profile.board_id=NEW.board_id
+          ) THEN RAISE(ABORT, 'conversation profile belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER agent_conversations_profile_scope_update
+        BEFORE UPDATE OF board_id, profile_id ON agent_conversations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            WHERE profile.id=NEW.profile_id AND profile.board_id=NEW.board_id
+          ) THEN RAISE(ABORT, 'conversation profile belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_home_scope_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.profile_id IS NOT NULL OR NEW.conversation_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NEW.profile_id IS NULL OR NEW.conversation_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM agent_conversations conversation
+              JOIN agent_profiles profile ON profile.id=conversation.profile_id
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE conversation.id=NEW.conversation_id
+                AND profile.id=NEW.profile_id
+                AND profile.board_id=workspace.board_id
+            )
+          THEN RAISE(ABORT, 'session Agent Home scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_home_scope_update
+        BEFORE UPDATE OF workspace_id, profile_id, conversation_id ON agent_sessions
+        WHEN NEW.profile_id IS NOT NULL OR NEW.conversation_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NEW.profile_id IS NULL OR NEW.conversation_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM agent_conversations conversation
+              JOIN agent_profiles profile ON profile.id=conversation.profile_id
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE conversation.id=NEW.conversation_id
+                AND profile.id=NEW.profile_id
+                AND profile.board_id=workspace.board_id
+            )
+          THEN RAISE(ABORT, 'session Agent Home scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_scope_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE job.id=NEW.job_id
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=NEW.workspace_id)
+          ) THEN RAISE(ABORT, 'session job belongs to a different board or workspace') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_scope_update
+        BEFORE UPDATE OF workspace_id, job_id ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE job.id=NEW.job_id
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=NEW.workspace_id)
+          ) THEN RAISE(ABORT, 'session job belongs to a different board or workspace') END;
+        END;
+
+        CREATE TRIGGER conversation_events_scope_insert
+        BEFORE INSERT ON conversation_events
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_conversations conversation
+            JOIN agent_profiles profile ON profile.id=conversation.profile_id
+            WHERE conversation.id=NEW.conversation_id
+              AND conversation.board_id=NEW.board_id
+              AND profile.id=NEW.profile_id
+          ) THEN RAISE(ABORT, 'conversation event scope is inconsistent') END;
+          SELECT CASE WHEN NEW.session_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions session
+            WHERE session.id=NEW.session_id
+              AND session.profile_id=NEW.profile_id
+              AND session.conversation_id=NEW.conversation_id
+          ) THEN RAISE(ABORT, 'conversation event session scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER conversation_event_conflicts_scope_insert
+        BEFORE INSERT ON conversation_event_conflicts
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM conversation_events canonical
+            WHERE canonical.id=NEW.canonical_event_id
+              AND canonical.board_id=NEW.board_id
+              AND canonical.profile_id=NEW.profile_id
+              AND canonical.conversation_id=NEW.conversation_id
+              AND canonical.dedupe_key=NEW.dedupe_key
+          ) THEN RAISE(ABORT, 'conversation event conflict scope is inconsistent') END;
+          SELECT CASE WHEN NEW.session_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions session
+            WHERE session.id=NEW.session_id
+              AND session.profile_id=NEW.profile_id
+              AND session.conversation_id=NEW.conversation_id
+          ) THEN RAISE(ABORT, 'conversation event conflict session scope is inconsistent') END;
+        END;
+      `)
+
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE TRIGGER conversation_events_artifact_scope_insert
+          BEFORE INSERT ON conversation_events
+          WHEN NEW.raw_artifact_id IS NOT NULL
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              WHERE artifact.id=NEW.raw_artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND (
+                  artifact.workspace_id IS NULL
+                  OR EXISTS (
+                    SELECT 1 FROM agent_sessions session
+                    WHERE session.id=NEW.session_id
+                      AND session.workspace_id=artifact.workspace_id
+                  )
+                )
+            ) THEN RAISE(ABORT, 'conversation event artifact scope is inconsistent') END;
+          END;
+
+          CREATE TRIGGER conversation_event_conflicts_artifact_scope_insert
+          BEFORE INSERT ON conversation_event_conflicts
+          WHEN NEW.raw_artifact_id IS NOT NULL
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              WHERE artifact.id=NEW.raw_artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND (
+                  artifact.workspace_id IS NULL
+                  OR EXISTS (
+                    SELECT 1 FROM agent_sessions session
+                    WHERE session.id=NEW.session_id
+                      AND session.workspace_id=artifact.workspace_id
+                  )
+                )
+            ) THEN RAISE(ABORT, 'conversation event conflict artifact scope is inconsistent') END;
+          END;
+        `)
+      }
+
+      const hasLegacyAgents = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agents'",
+      ).get()
+      const sessionColumns = new Set(
+        (db.prepare("PRAGMA table_info('agent_sessions')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!hasLegacyAgents || !sessionColumns.has('agent_id')) return
+
+      db.exec(`
+        INSERT OR IGNORE INTO agent_profiles (
+          id, board_id, legacy_agent_id, name, role, default_provider, default_model,
+          default_effort, default_access_profile, capabilities_json, owner_actor_type,
+          owner_actor_id, status, provenance_json, created_at, updated_at, archived_at
+        )
+        SELECT
+          'legacy-agent:' || agent.id,
+          agent.board_id,
+          agent.id,
+          agent.name,
+          agent.role,
+          CASE WHEN trim(coalesce(agent.provider, ''))='' THEN NULL ELSE agent.provider END,
+          agent.model,
+          agent.effort,
+          CASE WHEN agent.access_profile IN ('read_only','workspace_write','full_access')
+            THEN agent.access_profile ELSE NULL END,
+          '[]',
+          'operator',
+          NULL,
+          'active',
+          json_object(
+            'source', 'legacy_agents',
+            'legacy_kind', coalesce(agent.kind, 'session'),
+            'legacy_status', coalesce(agent.status, 'unknown')
+          ),
+          agent.created_at,
+          agent.last_seen,
+          NULL
+        FROM agents agent;
+
+        INSERT OR IGNORE INTO agent_conversations (
+          id, board_id, profile_id, title, status, is_default, next_sequence,
+          created_by_actor_type, created_by_actor_id, created_at, updated_at, archived_at
+        )
+        SELECT
+          'legacy-conversation:' || agent.id,
+          agent.board_id,
+          'legacy-agent:' || agent.id,
+          agent.name || ' conversation',
+          'active',
+          1,
+          1,
+          'migration',
+          '007-agent-home-domain',
+          agent.created_at,
+          agent.last_seen,
+          NULL
+        FROM agents agent
+        JOIN agent_profiles profile ON profile.id='legacy-agent:' || agent.id;
+
+        UPDATE agent_sessions
+        SET profile_id='legacy-agent:' || agent_id,
+            conversation_id='legacy-conversation:' || agent_id
+        WHERE agent_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM agent_profiles profile
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
+            WHERE profile.id='legacy-agent:' || agent_sessions.agent_id
+              AND profile.board_id=workspace.board_id
+          );
+
+        UPDATE agent_sessions
+        SET status='lost',
+            mode='compatibility',
+            driver_id=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.driver_id')='text'
+              THEN json_extract(context_json, '$.driver_id')
+              ELSE coalesce(driver_id, provider)
+            END,
+            effort=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.effort')='text'
+              THEN json_extract(context_json, '$.effort')
+              ELSE effort
+            END,
+            access_profile=CASE
+              WHEN json_valid(context_json)
+                AND json_extract(context_json, '$.access_profile')
+                  IN ('read_only','workspace_write','full_access')
+              THEN json_extract(context_json, '$.access_profile')
+              ELSE access_profile
+            END,
+            provider_thread_id=coalesce(provider_thread_id, external_id),
+            provider_cursor=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.last_event_seq') IN ('integer','text')
+              THEN CAST(json_extract(context_json, '$.last_event_seq') AS TEXT)
+              ELSE provider_cursor
+            END,
+            recovery_state='lost',
+            recovery_json=json_object(
+              'source', 'legacy_backfill',
+              'reason', 'agent_workspace_board_mismatch'
+            ),
+            history_state='unavailable',
+            started_at=coalesce(started_at, created_at),
+            ended_at=coalesce(ended_at, updated_at)
+        WHERE agent_id IS NOT NULL
+          AND profile_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM agents agent
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
+            WHERE agent.id=agent_sessions.agent_id
+              AND agent.board_id!=workspace.board_id
+          );
+
+        UPDATE agent_sessions
+        SET job_id=json_extract(context_json, '$.job_id')
+        WHERE json_valid(context_json)
+          AND json_type(context_json, '$.job_id')='text'
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            JOIN workspaces workspace ON workspace.id=agent_sessions.workspace_id
+            WHERE job.id=json_extract(agent_sessions.context_json, '$.job_id')
+              AND job.board_id=workspace.board_id
+              AND (job.workspace_id IS NULL OR job.workspace_id=agent_sessions.workspace_id)
+          );
+
+        UPDATE agent_sessions
+        SET driver_id=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.driver_id')='text'
+              THEN json_extract(context_json, '$.driver_id')
+              ELSE provider
+            END,
+            effort=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.effort')='text'
+              THEN json_extract(context_json, '$.effort')
+              ELSE effort
+            END,
+            access_profile=CASE
+              WHEN json_valid(context_json)
+                AND json_extract(context_json, '$.access_profile')
+                  IN ('read_only','workspace_write','full_access')
+              THEN json_extract(context_json, '$.access_profile')
+              ELSE access_profile
+            END,
+            provider_thread_id=external_id,
+            provider_cursor=CASE
+              WHEN json_valid(context_json)
+                AND json_type(context_json, '$.last_event_seq') IN ('integer','text')
+              THEN CAST(json_extract(context_json, '$.last_event_seq') AS TEXT)
+              ELSE NULL
+            END,
+            mode=CASE
+              WHEN job_id IS NOT NULL THEN 'managed'
+              WHEN EXISTS (
+                SELECT 1 FROM agents agent
+                WHERE agent.id=agent_sessions.agent_id AND agent.kind='session'
+              ) THEN 'ambient'
+              ELSE 'compatibility'
+            END,
+            recovery_state=CASE
+              WHEN status='lost' THEN 'lost'
+              WHEN external_id IS NOT NULL THEN 'attachable'
+              ELSE 'unknown'
+            END,
+            recovery_json=json_object('source', 'legacy_backfill'),
+            history_state=CASE WHEN EXISTS (
+              SELECT 1 FROM os_events event
+              WHERE event.session_id=agent_sessions.id AND event.kind LIKE 'driver.%'
+            ) THEN 'partial' ELSE 'unavailable' END,
+            started_at=created_at,
+            ended_at=CASE WHEN status IN ('stopped','failed','lost') THEN updated_at ELSE NULL END
+        WHERE profile_id IS NOT NULL AND conversation_id IS NOT NULL;
+      `)
+    },
+  },
+  {
+    id: '008-agent-home-controls',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_sessions ADD COLUMN display_name TEXT;
+        ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT
+          REFERENCES agent_sessions(id) ON DELETE SET NULL;
+        ALTER TABLE agent_sessions ADD COLUMN lineage_type TEXT
+          CHECK(lineage_type IS NULL OR lineage_type IN ('resume','retry','fork'));
+        ALTER TABLE agent_sessions ADD COLUMN control_state TEXT NOT NULL DEFAULT 'active'
+          CHECK(control_state IN ('active','paused','stopped','archived'));
+      `)
+
+      const sessionColumns = new Set(
+        (db.prepare("PRAGMA table_info('agent_sessions')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (sessionColumns.has('archived_at') && sessionColumns.has('status')) {
+        db.exec(`
+        UPDATE agent_sessions
+        SET control_state=CASE
+          WHEN archived_at IS NOT NULL THEN 'archived'
+          WHEN status IN ('stopped','failed','lost','exited') THEN 'stopped'
+          ELSE 'active'
+        END;
+        `)
+      } else if (sessionColumns.has('archived_at')) {
+        db.exec(`UPDATE agent_sessions SET control_state=CASE
+          WHEN archived_at IS NOT NULL THEN 'archived' ELSE 'active' END;`)
+      } else if (sessionColumns.has('status')) {
+        db.exec(`UPDATE agent_sessions SET control_state=CASE
+          WHEN status IN ('stopped','failed','lost','exited') THEN 'stopped' ELSE 'active' END;`)
+      }
+
+      db.exec(`
+        CREATE INDEX idx_agent_sessions_parent
+          ON agent_sessions(parent_session_id);
+        CREATE INDEX idx_agent_sessions_control
+          ON agent_sessions(profile_id, control_state);
+
+        CREATE TABLE agent_session_actions (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+          result_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          idempotency_key TEXT NOT NULL,
+          action TEXT NOT NULL
+            CHECK(action IN ('resume','pause','stop','retry','fork','rename','archive')),
+          request_fingerprint TEXT NOT NULL,
+          status TEXT NOT NULL
+            CHECK(status IN ('pending','succeeded','failed')),
+          lease_id TEXT NOT NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE INDEX idx_agent_session_actions_session
+          ON agent_session_actions(session_id, created_at, id);
+        CREATE UNIQUE INDEX idx_agent_session_actions_pending
+          ON agent_session_actions(session_id) WHERE status='pending';
+      `)
+
+      if (sessionColumns.has('status')) {
+        db.exec(`
+          CREATE TRIGGER agent_sessions_control_state_insert
+          AFTER INSERT ON agent_sessions
+          WHEN NEW.status IN ('stopped','failed','lost','exited','archived')
+          BEGIN
+            UPDATE agent_sessions
+            SET control_state=CASE WHEN NEW.status='archived' THEN 'archived' ELSE 'stopped' END
+            WHERE id=NEW.id;
+          END;
+
+          CREATE TRIGGER agent_sessions_control_state_update
+          AFTER UPDATE OF status ON agent_sessions
+          WHEN NEW.control_state!='archived'
+            AND NEW.status IN (
+              'reserved','starting','running','stopping',
+              'stopped','failed','lost','exited','archived'
+            )
+          BEGIN
+            UPDATE agent_sessions
+            SET control_state=CASE
+              WHEN NEW.status='archived' THEN 'archived'
+              WHEN NEW.status IN ('stopped','failed','lost','exited') THEN 'stopped'
+              ELSE 'active'
+            END
+            WHERE id=NEW.id;
+          END;
+        `)
+      }
+    },
+  },
+  {
+    // 008 is intentionally reserved for Agent Home controls in the integration train.
+    id: '009-job-market-domain',
+    apply(db) {
+      const prerequisites = (db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type='table' AND name IN ('cards','task_contracts')`).get() as { count: number }).count
+      if (prerequisites !== 2) {
+        throw new Error('migration 009-job-market-domain requires cards and task_contracts tables')
+      }
+      db.exec(`
+        CREATE TABLE job_market_contracts (
+          card_id INTEGER PRIMARY KEY REFERENCES task_contracts(card_id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'open'
+            CHECK(status IN ('draft','open','assigned','running','submitted',
+              'accepted','rejected','cancelled','archived')),
+          required_capabilities_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(required_capabilities_json)),
+          provider_constraints_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(provider_constraints_json)),
+          model_constraints_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(model_constraints_json)),
+          access_needs_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(access_needs_json)),
+          budget_time_seconds INTEGER CHECK(budget_time_seconds IS NULL OR budget_time_seconds > 0),
+          budget_retries INTEGER CHECK(budget_retries IS NULL OR budget_retries >= 0),
+          budget_coordination_tokens INTEGER
+            CHECK(budget_coordination_tokens IS NULL OR budget_coordination_tokens > 0),
+          budget_coordination_messages INTEGER
+            CHECK(budget_coordination_messages IS NULL OR budget_coordination_messages > 0),
+          version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+          published_at TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE job_market_criteria (
+          card_id INTEGER NOT NULL REFERENCES job_market_contracts(card_id) ON DELETE CASCADE,
+          criterion_id TEXT NOT NULL,
+          description TEXT NOT NULL,
+          verifier_json TEXT NOT NULL CHECK(json_valid(verifier_json)),
+          required_artifacts_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(required_artifacts_json)),
+          priority INTEGER NOT NULL DEFAULT 0,
+          owner TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(card_id, criterion_id)
+        );
+
+        CREATE TABLE job_market_dependencies (
+          card_id INTEGER NOT NULL REFERENCES job_market_contracts(card_id) ON DELETE CASCADE,
+          dependency_card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+          blocking_reason TEXT NOT NULL,
+          completion_condition TEXT NOT NULL DEFAULT 'card_done'
+            CHECK(completion_condition IN ('card_done')),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(card_id, dependency_card_id),
+          CHECK(card_id != dependency_card_id)
+        );
+
+        CREATE INDEX idx_job_market_contracts_status
+          ON job_market_contracts(status, updated_at, card_id);
+        CREATE INDEX idx_job_market_dependencies_target
+          ON job_market_dependencies(dependency_card_id, card_id);
+        CREATE INDEX idx_job_market_criteria_owner
+          ON job_market_criteria(owner, card_id) WHERE owner IS NOT NULL;
+
+        CREATE TRIGGER job_market_dependency_scope_insert
+        BEFORE INSERT ON job_market_dependencies
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM cards source
+            JOIN cards dependency ON dependency.id=NEW.dependency_card_id
+            WHERE source.id=NEW.card_id AND source.board_id=dependency.board_id
+          ) THEN RAISE(ABORT, 'job market dependency belongs to a different board') END;
+        END;
+
+        CREATE TRIGGER job_market_dependency_scope_update
+        BEFORE UPDATE OF card_id, dependency_card_id ON job_market_dependencies
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM cards source
+            JOIN cards dependency ON dependency.id=NEW.dependency_card_id
+            WHERE source.id=NEW.card_id AND source.board_id=dependency.board_id
+          ) THEN RAISE(ABORT, 'job market dependency belongs to a different board') END;
+        END;
+
+        INSERT INTO job_market_contracts (
+          card_id, status, required_capabilities_json, provider_constraints_json,
+          model_constraints_json, access_needs_json, budget_time_seconds, budget_retries,
+          budget_coordination_tokens, budget_coordination_messages, version,
+          published_at, archived_at, created_at, updated_at
+        )
+        SELECT card_id, 'open', '[]', '[]', '[]', '[]', NULL, NULL, NULL, NULL, 1,
+          updated_at, NULL, updated_at, updated_at
+        FROM task_contracts;
+      `)
+    },
+  },
+  {
+    id: '010-agent-home-projected-text-redaction',
+    apply(db) {
+      const rows = db.prepare(`SELECT
+          id, provider, provider_event_id, provider_thread_id, provider_turn_id,
+          provider_item_id, provider_cursor, kind, actor_type, actor_id,
+          correlation_id, causation_id, projected_text, metadata_json,
+          raw_artifact_id, dedupe_key, redaction_state, retention_class, schema_version
+        FROM conversation_events`).all() as Array<{
+          id: string
+          provider: string | null
+          provider_event_id: string | null
+          provider_thread_id: string | null
+          provider_turn_id: string | null
+          provider_item_id: string | null
+          provider_cursor: string | null
+          kind: string
+          actor_type: string
+          actor_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+          projected_text: string | null
+          metadata_json: string
+          raw_artifact_id: string | null
+          dedupe_key: string
+          redaction_state: ProjectedTextRedactionState
+          retention_class: string
+          schema_version: number
+        }>
+      const update = db.prepare(`UPDATE conversation_events
+        SET projected_text=?, redaction_state=?, content_hash=? WHERE id=?`)
+      const updateAuditHash = db.prepare(`UPDATE os_events
+        SET payload=json_set(
+          payload,
+          '$.content_hash', ?,
+          '$.request_fingerprint', ?
+        )
+        WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+          AND json_valid(payload)
+          AND json_extract(payload, '$.conversation_event_id')=?`)
+      const updateConflictAuditHash = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.canonical_content_hash', ?)
+        WHERE kind='conversation.event_conflict'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.canonical_event_id')=?`)
+      for (const row of rows) {
+        const metadata = metadataRecord(row.metadata_json)
+        const nativeProjection = isNativeProviderProjection(row.provider, metadata)
+        const requestedState = isWithheldProviderReasoning(row.provider, metadata)
+          ? 'withheld'
+          : nativeProjection && row.redaction_state === 'withheld'
+            ? 'none'
+            : row.redaction_state
+        const projected = normalizeProjectedText(row.projected_text, requestedState)
+        if (projected.value === row.projected_text
+          && projected.redactionState === row.redaction_state) continue
+        const contentHash = canonicalHash({
+          provider: row.provider,
+          provider_event_id: row.provider_event_id,
+          provider_thread_id: row.provider_thread_id,
+          provider_turn_id: row.provider_turn_id,
+          provider_item_id: row.provider_item_id,
+          provider_cursor: row.provider_cursor,
+          kind: row.kind,
+          actor: { type: row.actor_type, id: row.actor_id },
+          correlation_id: row.correlation_id,
+          causation_id: row.causation_id,
+          projected_text: projected.value,
+          metadata,
+          raw_artifact_id: row.raw_artifact_id,
+          dedupe_key: row.dedupe_key,
+          redaction_state: projected.redactionState,
+          retention_class: row.retention_class,
+          schema_version: row.schema_version,
+        })
+        update.run(projected.value, projected.redactionState, contentHash, row.id)
+        updateAuditHash.run(contentHash, contentHash, row.id)
+        updateConflictAuditHash.run(contentHash, row.id)
+      }
+
+      const conflicts = db.prepare(`SELECT conflict.id, conflict.received_projected_text,
+          conflict.received_metadata_json, canonical.provider
+        FROM conversation_event_conflicts conflict
+        JOIN conversation_events canonical ON canonical.id=conflict.canonical_event_id`)
+        .all() as Array<{
+          id: string
+          received_projected_text: string | null
+          received_metadata_json: string
+          provider: string | null
+        }>
+      const updateConflict = db.prepare(`UPDATE conversation_event_conflicts
+        SET received_projected_text=? WHERE id=?`)
+      for (const conflict of conflicts) {
+        const metadata = metadataRecord(conflict.received_metadata_json)
+        const projected = isWithheldProviderReasoning(conflict.provider, metadata)
+          ? null
+          : redactProjectedText(conflict.received_projected_text).value
+        if (projected !== conflict.received_projected_text) {
+          updateConflict.run(projected, conflict.id)
+        }
+      }
+    },
+  },
+  {
+    id: '011-managed-driver-event-redaction',
+    apply(db) {
+      const rows = db.prepare(`SELECT id, source, payload FROM os_events
+        WHERE kind GLOB 'driver.*'`).all() as Array<{ id: string; source: string; payload: string }>
+      const update = db.prepare('UPDATE os_events SET payload=? WHERE id=?')
+      for (const row of rows) {
+        const payload = metadataRecord(row.payload)
+        const metadata = payload.metadata && typeof payload.metadata === 'object'
+          && !Array.isArray(payload.metadata)
+          ? payload.metadata as Record<string, unknown>
+          : {}
+        const projection = projectManagedDriverEvent({
+          seq: Number(payload.seq),
+          data: typeof payload.data === 'string' ? payload.data : '',
+          metadata,
+        }, row.source)
+        update.run(JSON.stringify({
+          data: projection.payload.data,
+          metadata: projection.payload.metadata,
+          seq: projection.payload.seq,
+        }), row.id)
+      }
+    },
+  },
+  {
+    id: '012-agent-home-retention',
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_home_retention_policies (
+          board_id INTEGER PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+          schema_version INTEGER NOT NULL DEFAULT 1 CHECK(schema_version=1),
+          transcript_days INTEGER NOT NULL CHECK(transcript_days BETWEEN 1 AND 36500),
+          ephemeral_days INTEGER NOT NULL CHECK(ephemeral_days BETWEEN 1 AND 36500),
+          raw_artifact_days INTEGER NOT NULL CHECK(raw_artifact_days BETWEEN 1 AND 36500),
+          updated_by_actor_type TEXT NOT NULL,
+          updated_by_actor_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_retention_runs (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          as_of TEXT NOT NULL,
+          policy_json TEXT NOT NULL CHECK(json_valid(policy_json)),
+          cutoffs_json TEXT NOT NULL CHECK(json_valid(cutoffs_json)),
+          transcript_events_archived INTEGER NOT NULL DEFAULT 0
+            CHECK(transcript_events_archived>=0),
+          ephemeral_events_archived INTEGER NOT NULL DEFAULT 0
+            CHECK(ephemeral_events_archived>=0),
+          raw_artifacts_compacted INTEGER NOT NULL DEFAULT 0
+            CHECK(raw_artifacts_compacted>=0),
+          inline_raw_bytes_removed INTEGER NOT NULL DEFAULT 0
+            CHECK(inline_raw_bytes_removed>=0),
+          legacy_evidence_bundles_sanitized INTEGER NOT NULL DEFAULT 0
+            CHECK(legacy_evidence_bundles_sanitized>=0),
+          batch_limit INTEGER NOT NULL CHECK(batch_limit BETWEEN 1 AND 1000),
+          has_more INTEGER NOT NULL DEFAULT 0 CHECK(has_more IN (0,1)),
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_raw_artifact_archives (
+          artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          retention_run_id TEXT NOT NULL REFERENCES agent_home_retention_runs(id)
+            ON DELETE RESTRICT,
+          content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64),
+          content_bytes INTEGER NOT NULL CHECK(content_bytes>=0),
+          archived_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_home_evidence_bundle_repairs (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          bundle_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+          retention_run_id TEXT NOT NULL REFERENCES agent_home_retention_runs(id)
+            ON DELETE RESTRICT,
+          original_sha256 TEXT NOT NULL CHECK(length(original_sha256)=64),
+          original_bytes INTEGER NOT NULL CHECK(original_bytes>=0),
+          repaired_sha256 TEXT NOT NULL CHECK(length(repaired_sha256)=64),
+          repaired_bytes INTEGER NOT NULL CHECK(repaired_bytes>=0),
+          raw_artifact_ids_json TEXT NOT NULL CHECK(json_valid(raw_artifact_ids_json)),
+          repaired_at TEXT NOT NULL,
+          UNIQUE(bundle_artifact_id, retention_run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_home_retention_runs_board
+          ON agent_home_retention_runs(board_id, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_raw_artifact_archives_board
+          ON agent_home_raw_artifact_archives(board_id, archived_at, artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_evidence_bundle_repairs_board
+          ON agent_home_evidence_bundle_repairs(board_id, repaired_at, bundle_artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_home_evidence_bundle_repairs_run
+          ON agent_home_evidence_bundle_repairs(retention_run_id, bundle_artifact_id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_events_retention
+          ON conversation_events(board_id, archived_at, retention_class, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_events_raw_artifact
+          ON conversation_events(raw_artifact_id) WHERE raw_artifact_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_conversation_event_conflicts_raw_artifact
+          ON conversation_event_conflicts(raw_artifact_id) WHERE raw_artifact_id IS NOT NULL;
+      `)
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_artifacts_agent_home_retention
+            ON artifacts(board_id, kind, created_at, id) WHERE content IS NOT NULL;
+
+          CREATE TRIGGER IF NOT EXISTS agent_home_raw_artifact_archives_scope_insert
+          BEFORE INSERT ON agent_home_raw_artifact_archives
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts artifact
+              JOIN agent_home_retention_runs run ON run.id=NEW.retention_run_id
+              WHERE artifact.id=NEW.artifact_id
+                AND artifact.board_id=NEW.board_id
+                AND run.board_id=NEW.board_id
+            ) THEN RAISE(ABORT, 'retention artifact archive scope is inconsistent') END;
+          END;
+
+          CREATE TRIGGER IF NOT EXISTS agent_home_evidence_bundle_repairs_scope_insert
+          BEFORE INSERT ON agent_home_evidence_bundle_repairs
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts bundle
+              JOIN agent_home_retention_runs run ON run.id=NEW.retention_run_id
+              WHERE bundle.id=NEW.bundle_artifact_id
+                AND bundle.board_id=NEW.board_id
+                AND bundle.kind='evidence_bundle'
+                AND run.board_id=NEW.board_id
+            ) THEN RAISE(ABORT, 'retention evidence bundle repair scope is inconsistent') END;
+          END;
+        `)
+      }
+    },
+  },
+  {
+    id: '013-agent-home-structured-metadata-redaction',
+    apply(db) {
+      const hasArtifacts = !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'",
+      ).get()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_home_transcript_repairs (
+          artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          original_content_sha256 TEXT NOT NULL CHECK(length(original_content_sha256)=64),
+          original_content_bytes INTEGER NOT NULL CHECK(original_content_bytes>=0),
+          repaired_content_sha256 TEXT NOT NULL CHECK(length(repaired_content_sha256)=64),
+          repaired_content_bytes INTEGER NOT NULL CHECK(repaired_content_bytes>=0),
+          original_metadata_sha256 TEXT NOT NULL CHECK(length(original_metadata_sha256)=64),
+          repaired_metadata_sha256 TEXT NOT NULL CHECK(length(repaired_metadata_sha256)=64),
+          redactions_applied INTEGER NOT NULL CHECK(redactions_applied>=0),
+          repaired_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_home_transcript_repairs_board
+          ON agent_home_transcript_repairs(board_id, repaired_at, artifact_id);
+      `)
+      if (hasArtifacts) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS agent_home_transcript_repairs_scope_insert
+          BEFORE INSERT ON agent_home_transcript_repairs
+          BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+              SELECT 1 FROM artifacts
+              WHERE artifacts.id=NEW.artifact_id
+                AND artifacts.board_id=NEW.board_id
+                AND artifacts.kind='agent_home_transcript'
+            ) THEN RAISE(ABORT, 'transcript repair artifact scope is inconsistent') END;
+          END;
+        `)
+      }
+
+      const eventRows = db.prepare(`SELECT
+          id, provider, provider_event_id, provider_thread_id, provider_turn_id,
+          provider_item_id, provider_cursor, kind, actor_type, actor_id,
+          correlation_id, causation_id, projected_text, metadata_json,
+          raw_artifact_id, dedupe_key, content_hash, redaction_state,
+          retention_class, schema_version
+        FROM conversation_events`).all() as Array<{
+          id: string
+          provider: string | null
+          provider_event_id: string | null
+          provider_thread_id: string | null
+          provider_turn_id: string | null
+          provider_item_id: string | null
+          provider_cursor: string | null
+          kind: string
+          actor_type: string
+          actor_id: string | null
+          correlation_id: string | null
+          causation_id: string | null
+          projected_text: string | null
+          metadata_json: string
+          raw_artifact_id: string | null
+          dedupe_key: string
+          content_hash: string
+          redaction_state: ProjectedTextRedactionState
+          retention_class: string
+          schema_version: number
+        }>
+      const eventHashes = new Map<string, string>()
+      const updateEvent = db.prepare(`UPDATE conversation_events
+        SET projected_text=?, metadata_json=?, redaction_state=?, content_hash=? WHERE id=?`)
+      const updateEventAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(
+          payload,
+          '$.content_hash', ?,
+          '$.request_fingerprint', ?
+        )
+        WHERE kind IN ('conversation.event_appended', 'conversation.event_replayed')
+          AND json_valid(payload)
+          AND json_extract(payload, '$.conversation_event_id')=?`)
+      const updateConflictAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.canonical_content_hash', ?)
+        WHERE kind='conversation.event_conflict'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.canonical_event_id')=?`)
+      for (const row of eventRows) {
+        const metadata = redactStructuredValue(metadataRecord(row.metadata_json))
+        const projectedText = row.redaction_state === 'withheld'
+          ? { value: null, changed: false }
+          : redactSensitiveText(row.projected_text)
+        const redactionState = row.redaction_state === 'withheld'
+          ? 'withheld'
+          : metadata.changed || projectedText.changed
+            ? 'redacted'
+            : row.redaction_state
+        const contentHash = conversationEventContentHash({
+          provider: row.provider,
+          provider_event_id: row.provider_event_id,
+          provider_thread_id: row.provider_thread_id,
+          provider_turn_id: row.provider_turn_id,
+          provider_item_id: row.provider_item_id,
+          provider_cursor: row.provider_cursor,
+          kind: row.kind,
+          actor: { type: row.actor_type, id: row.actor_id },
+          correlation_id: row.correlation_id,
+          causation_id: row.causation_id,
+          projected_text: projectedText.value,
+          metadata: metadata.value as Record<string, unknown>,
+          raw_artifact_id: row.raw_artifact_id,
+          dedupe_key: row.dedupe_key,
+          redaction_state: redactionState,
+          retention_class: row.retention_class,
+          schema_version: row.schema_version,
+        })
+        updateEvent.run(
+          projectedText.value,
+          stableJson(metadata.value),
+          redactionState,
+          contentHash,
+          row.id,
+        )
+        updateEventAudit.run(contentHash, contentHash, row.id)
+        updateConflictAudit.run(contentHash, row.id)
+        eventHashes.set(row.id, contentHash)
+      }
+
+      const conflictRows = db.prepare(`SELECT
+          conflict.id, conflict.received_projected_text,
+          conflict.received_metadata_json, canonical.provider
+        FROM conversation_event_conflicts conflict
+        JOIN conversation_events canonical ON canonical.id=conflict.canonical_event_id`)
+        .all() as Array<{
+          id: string
+          received_projected_text: string | null
+          received_metadata_json: string
+          provider: string | null
+        }>
+      const updateConflict = db.prepare(`UPDATE conversation_event_conflicts
+        SET received_projected_text=?, received_metadata_json=? WHERE id=?`)
+      for (const conflict of conflictRows) {
+        const metadata = redactStructuredValue(metadataRecord(conflict.received_metadata_json))
+        const projectedText = isWithheldProviderReasoning(
+          conflict.provider,
+          metadata.value as Record<string, unknown>,
+        )
+          ? null
+          : redactSensitiveText(conflict.received_projected_text).value
+        updateConflict.run(
+          projectedText,
+          stableJson(metadata.value),
+          conflict.id,
+        )
+      }
+
+      if (!hasArtifacts) return
+      const artifacts = db.prepare(`SELECT
+          id, board_id, mime_type, content, metadata
+        FROM artifacts WHERE kind='agent_home_transcript'`).all() as Array<{
+          id: string
+          board_id: number
+          mime_type: string
+          content: string | null
+          metadata: string
+        }>
+      const updateArtifact = db.prepare(
+        'UPDATE artifacts SET content=?, metadata=? WHERE id=?',
+      )
+      const updateArtifactAudit = db.prepare(`UPDATE os_events
+        SET payload=json_set(payload, '$.content_hash', ?)
+        WHERE kind='agent_home.transcript_exported'
+          AND json_valid(payload)
+          AND json_extract(payload, '$.artifact_id')=?`)
+      const recordRepair = db.prepare(`INSERT OR IGNORE INTO agent_home_transcript_repairs (
+          artifact_id, board_id, original_content_sha256, original_content_bytes,
+          repaired_content_sha256, repaired_content_bytes,
+          original_metadata_sha256, repaired_metadata_sha256,
+          redactions_applied, repaired_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+      for (const artifact of artifacts) {
+        const originalContent = artifact.content ?? ''
+        const originalMetadata = metadataRecord(artifact.metadata)
+        const safeMetadata = redactStructuredValue(originalMetadata)
+        const format = originalMetadata.format === 'json'
+          || artifact.mime_type.toLowerCase().includes('json')
+          ? 'json'
+          : 'human'
+        const repairedContent = artifact.content === null
+          ? { content: '', redactions: 0 }
+          : repairTranscriptContent(
+              artifact.content,
+              format,
+              eventHashes,
+            )
+        const originalContentHash = sha256(originalContent)
+        const repairedContentHash = sha256(repairedContent.content)
+        const repairedMetadata: Record<string, unknown> = {
+          ...(safeMetadata.value as Record<string, unknown>),
+          content_hash: repairedContentHash,
+        }
+        const priorRedactions = Number(repairedMetadata.redactions_applied)
+        const additionalRedactions = repairedContent.redactions + safeMetadata.redactions
+        if (additionalRedactions > 0) {
+          repairedMetadata.redactions_applied = (
+            Number.isSafeInteger(priorRedactions) && priorRedactions >= 0
+              ? priorRedactions
+              : 0
+          ) + additionalRedactions
+        }
+        const repairedMetadataJson = stableJson(repairedMetadata)
+        const repairedMetadataHash = sha256(repairedMetadataJson)
+        const contentValue = artifact.content === null ? null : repairedContent.content
+        updateArtifactAudit.run(repairedContentHash, artifact.id)
+        if (contentValue === artifact.content
+          && repairedMetadataJson === artifact.metadata) continue
+
+        updateArtifact.run(contentValue, repairedMetadataJson, artifact.id)
+        recordRepair.run(
+          artifact.id,
+          artifact.board_id,
+          originalContentHash,
+          Buffer.byteLength(originalContent, 'utf8'),
+          repairedContentHash,
+          Buffer.byteLength(repairedContent.content, 'utf8'),
+          sha256(artifact.metadata),
+          repairedMetadataHash,
+          additionalRedactions,
+        )
+      }
+    },
+  },
+  {
+    // 012 (retention) and 013 (structured transcript metadata) are supplied by the
+    // integration train. This lifecycle ledger must remain ordered after both.
+    id: '014-agent-home-native-fork-lifecycle',
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_session_actions ADD COLUMN reserved_session_id TEXT;
+        ALTER TABLE agent_session_actions
+          ADD COLUMN effect_state TEXT NOT NULL DEFAULT 'reserved'
+            CHECK(effect_state IN (
+              'reserved','invoking','applied','completed','outcome_unknown'
+            ));
+        ALTER TABLE agent_session_actions
+          ADD COLUMN effect_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(effect_json));
+
+        UPDATE agent_session_actions
+        SET effect_state=CASE
+          WHEN status='succeeded' THEN 'completed'
+          WHEN result_session_id IS NOT NULL THEN 'applied'
+          WHEN status='failed' THEN 'completed'
+          ELSE 'reserved'
+        END,
+        reserved_session_id=CASE
+          WHEN action='fork' AND result_session_id IS NOT NULL THEN result_session_id
+          ELSE reserved_session_id
+        END;
+
+        CREATE INDEX idx_agent_session_actions_fork_outcome
+          ON agent_session_actions(session_id, action, effect_state, updated_at);
+
+        CREATE TABLE agent_session_action_reconciliations (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          action_id TEXT NOT NULL REFERENCES agent_session_actions(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          resolution TEXT NOT NULL
+            CHECK(resolution IN ('verify_adopt','confirm_absent')),
+          status TEXT NOT NULL CHECK(status IN ('pending','succeeded','failed')),
+          result_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT,
+          note TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(board_id, idempotency_key)
+        );
+
+        CREATE INDEX idx_agent_session_action_reconciliations_board
+          ON agent_session_action_reconciliations(board_id, updated_at, id);
+        CREATE UNIQUE INDEX idx_agent_session_action_reconciliations_pending
+          ON agent_session_action_reconciliations(action_id)
+          WHERE status='pending';
+        CREATE UNIQUE INDEX idx_agent_session_action_reconciliations_succeeded
+          ON agent_session_action_reconciliations(action_id)
+          WHERE status='succeeded';
+
+        CREATE TRIGGER agent_session_action_reconciliation_scope_insert
+        BEFORE INSERT ON agent_session_action_reconciliations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_session_actions action
+            WHERE action.id=NEW.action_id
+              AND action.board_id=NEW.board_id
+              AND action.action='fork'
+          ) THEN RAISE(ABORT, 'fork reconciliation action scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_session_action_reconciliation_scope_update
+        BEFORE UPDATE OF board_id, action_id ON agent_session_action_reconciliations
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM agent_session_actions action
+            WHERE action.id=NEW.action_id
+              AND action.board_id=NEW.board_id
+              AND action.action='fork'
+          ) THEN RAISE(ABORT, 'fork reconciliation action scope is inconsistent') END;
+        END;
+      `)
+    },
+  },
+  {
+    // 014 is already deployed, so command identity and board-scope hardening must
+    // remain a forward migration for existing databases as well as fresh installs.
+    id: '015-agent-home-action-command-scope',
+    apply(db) {
+      const ambiguousAction = db.prepare(`SELECT session_id, action, idempotency_key
+        FROM agent_session_actions
+        GROUP BY session_id, action, idempotency_key
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAction) {
+        throw new Error(
+          'agent session action command identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousActionRequestIdentity = db.prepare(`SELECT
+          idempotency_key, request_fingerprint
+        FROM agent_session_actions
+        GROUP BY idempotency_key, request_fingerprint
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousActionRequestIdentity) {
+        throw new Error(
+          'agent session action request identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousAudit = db.prepare(`SELECT
+          json_extract(payload, '$.session_id') AS session_id,
+          json_extract(payload, '$.action') AS action,
+          idempotency_key
+        FROM os_events
+        WHERE kind='agent_session.action_requested'
+          AND idempotency_key IS NOT NULL
+          AND json_valid(payload)
+          AND json_type(payload, '$.session_id')='text'
+          AND json_type(payload, '$.action')='text'
+        GROUP BY
+          json_extract(payload, '$.session_id'),
+          json_extract(payload, '$.action'),
+          idempotency_key
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAudit) {
+        throw new Error(
+          'agent session action request audit identity is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const ambiguousAuditRequestIdentity = db.prepare(`SELECT
+          idempotency_key,
+          json_extract(payload, '$.request_fingerprint') AS request_fingerprint
+        FROM os_events
+        WHERE kind='agent_session.action_requested'
+          AND idempotency_key IS NOT NULL
+          AND json_valid(payload)
+          AND json_type(payload, '$.request_fingerprint')='text'
+        GROUP BY
+          idempotency_key,
+          json_extract(payload, '$.request_fingerprint')
+        HAVING COUNT(*) > 1
+        LIMIT 1`).get()
+      if (ambiguousAuditRequestIdentity) {
+        throw new Error(
+          'agent session action request audit fingerprint is ambiguous; migration 015 cannot continue',
+        )
+      }
+
+      const displacedAudit = db.prepare(`SELECT event.id
+        FROM os_events event
+        JOIN agent_session_actions action
+          ON action.id=CASE WHEN json_valid(event.payload)
+            THEN json_extract(event.payload, '$.action_id') END
+        WHERE event.kind='agent_session.action_requested'
+          AND (
+            event.board_id IS NOT action.board_id
+            OR event.idempotency_key IS NOT action.idempotency_key
+            OR event.session_id IS NOT action.session_id
+            OR json_extract(event.payload, '$.session_id') IS NOT action.session_id
+            OR json_extract(event.payload, '$.action') IS NOT action.action
+            OR json_extract(event.payload, '$.request_fingerprint')
+              IS NOT action.request_fingerprint
+          )
+        LIMIT 1`).get()
+      if (displacedAudit) {
+        throw new Error(
+          'agent session action request audit scope is inconsistent; migration 015 cannot continue',
+        )
+      }
+
+      const auditNames = new Map<string, string>()
+      const auditedActionIds = new Set<string>()
+      const requestAudits = db.prepare(`SELECT id, idempotency_key, payload
+        FROM os_events
+        WHERE kind='agent_session.action_requested'`).all() as Array<{
+          id: string
+          idempotency_key: string | null
+          payload: string
+        }>
+      for (const audit of requestAudits) {
+        const payload = metadataRecord(audit.payload)
+        const actionId = payload.action_id
+        const sessionId = payload.session_id
+        const action = payload.action
+        const requestFingerprint = payload.request_fingerprint
+        const name = action === 'rename' ? payload.name : undefined
+        if (audit.idempotency_key === null
+          || typeof actionId !== 'string'
+          || typeof sessionId !== 'string'
+          || typeof action !== 'string'
+          || typeof requestFingerprint !== 'string'
+          || (action === 'rename'
+            && (typeof name !== 'string'
+              || name !== name.trim()
+              || name.length === 0
+              || name.length > 200))) {
+          throw new Error(
+            'agent session action request audit fingerprint cannot be verified; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        const expectedFingerprint = canonicalHash({
+          command: `agent_session.${action}`,
+          sessionId,
+          ...(typeof name === 'string' ? { name } : {}),
+        })
+        if (requestFingerprint !== expectedFingerprint) {
+          throw new Error(
+            'agent session action request audit fingerprint is inconsistent; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        if (auditedActionIds.has(actionId)) {
+          throw new Error(
+            'agent session action request audit identity is ambiguous; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        auditedActionIds.add(actionId)
+        if (typeof name === 'string') auditNames.set(actionId, name)
+      }
+
+      const actions = db.prepare(`SELECT id, session_id, action, request_fingerprint
+        FROM agent_session_actions`).all() as Array<{
+          id: string
+          session_id: string
+          action: string
+          request_fingerprint: string
+        }>
+      for (const action of actions) {
+        const name = action.action === 'rename' ? auditNames.get(action.id) : undefined
+        if (action.action === 'rename' && name === undefined) {
+          throw new Error(
+            'agent session action request fingerprint cannot be verified; '
+              + 'migration 015 cannot continue',
+          )
+        }
+        const expectedFingerprint = canonicalHash({
+          command: `agent_session.${action.action}`,
+          sessionId: action.session_id,
+          ...(name === undefined ? {} : { name }),
+        })
+        if (action.request_fingerprint !== expectedFingerprint) {
+          throw new Error(
+            'agent session action request fingerprint is inconsistent; '
+              + 'migration 015 cannot continue',
+          )
+        }
+      }
+
+      db.exec(`
+        CREATE INDEX idx_os_events_idempotency_key_global
+          ON os_events(idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+        CREATE UNIQUE INDEX idx_agent_session_actions_command_identity
+          ON agent_session_actions(session_id, action, idempotency_key);
+        CREATE UNIQUE INDEX idx_agent_session_actions_request_identity
+          ON agent_session_actions(idempotency_key, request_fingerprint);
+        CREATE UNIQUE INDEX idx_os_events_action_request_command_identity
+          ON os_events(
+            json_extract(payload, '$.session_id'),
+            json_extract(payload, '$.action'),
+            idempotency_key
+          )
+          WHERE kind='agent_session.action_requested'
+            AND idempotency_key IS NOT NULL
+            AND json_valid(payload)
+            AND json_type(payload, '$.session_id')='text'
+            AND json_type(payload, '$.action')='text';
+        CREATE UNIQUE INDEX idx_os_events_action_request_fingerprint_identity
+          ON os_events(
+            idempotency_key,
+            json_extract(payload, '$.request_fingerprint')
+          )
+          WHERE kind='agent_session.action_requested'
+            AND idempotency_key IS NOT NULL
+            AND json_valid(payload)
+            AND json_type(payload, '$.request_fingerprint')='text';
+
+        CREATE TRIGGER agent_session_actions_command_identity_update
+        BEFORE UPDATE OF
+          id, board_id, session_id, action, idempotency_key, request_fingerprint
+        ON agent_session_actions
+        WHEN NEW.id IS NOT OLD.id
+          OR NEW.board_id IS NOT OLD.board_id
+          OR NEW.session_id IS NOT OLD.session_id
+          OR NEW.action IS NOT OLD.action
+          OR NEW.idempotency_key IS NOT OLD.idempotency_key
+          OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session action command identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER os_events_action_request_identity_update
+        BEFORE UPDATE OF
+          id, board_id, session_id, idempotency_key, kind, source, payload
+        ON os_events
+        WHEN OLD.kind='agent_session.action_requested'
+          AND (
+            NEW.id IS NOT OLD.id
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.session_id IS NOT OLD.session_id
+            OR NEW.idempotency_key IS NOT OLD.idempotency_key
+            OR NEW.kind IS NOT OLD.kind
+            OR NEW.source IS NOT OLD.source
+            OR NOT json_valid(NEW.payload)
+            OR json_extract(NEW.payload, '$.action_id')
+              IS NOT json_extract(OLD.payload, '$.action_id')
+            OR json_extract(NEW.payload, '$.session_id')
+              IS NOT json_extract(OLD.payload, '$.session_id')
+            OR json_extract(NEW.payload, '$.action')
+              IS NOT json_extract(OLD.payload, '$.action')
+            OR json_extract(NEW.payload, '$.request_fingerprint')
+              IS NOT json_extract(OLD.payload, '$.request_fingerprint')
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session action request audit identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER agent_session_actions_home_scope_insert
+        BEFORE INSERT ON agent_session_actions
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN workspaces workspace ON workspace.id=session.workspace_id
+            JOIN agent_profiles profile ON profile.id=session.profile_id
+            JOIN agent_conversations conversation
+              ON conversation.id=session.conversation_id
+            WHERE session.id=NEW.session_id
+              AND workspace.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND conversation.board_id=NEW.board_id
+              AND conversation.profile_id=profile.id
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER agent_session_actions_home_scope_update
+        BEFORE UPDATE OF board_id, session_id ON agent_session_actions
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN workspaces workspace ON workspace.id=session.workspace_id
+            JOIN agent_profiles profile ON profile.id=session.profile_id
+            JOIN agent_conversations conversation
+              ON conversation.id=session.conversation_id
+            WHERE session.id=NEW.session_id
+              AND workspace.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND conversation.board_id=NEW.board_id
+              AND conversation.profile_id=profile.id
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER agent_sessions_action_scope_update
+        BEFORE UPDATE OF workspace_id, profile_id, conversation_id ON agent_sessions
+        WHEN EXISTS (
+          SELECT 1 FROM agent_session_actions action
+          WHERE action.session_id=OLD.id
+        )
+        BEGIN
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM agent_session_actions action
+            WHERE action.session_id=OLD.id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM workspaces workspace
+                JOIN agent_profiles profile ON profile.id=NEW.profile_id
+                JOIN agent_conversations conversation
+                  ON conversation.id=NEW.conversation_id
+                WHERE workspace.id=NEW.workspace_id
+                  AND workspace.board_id=action.board_id
+                  AND profile.board_id=action.board_id
+                  AND conversation.board_id=action.board_id
+                  AND conversation.profile_id=profile.id
+              )
+          ) THEN RAISE(
+            ABORT,
+            'agent session action board scope is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER workspaces_session_action_scope_update
+        BEFORE UPDATE OF board_id ON workspaces
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.workspace_id=OLD.id
+            AND action.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace board change would displace an agent session action'
+          );
+        END;
+
+        CREATE TRIGGER agent_profiles_session_action_scope_update
+        BEFORE UPDATE OF board_id ON agent_profiles
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.profile_id=OLD.id
+            AND action.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'profile board change would displace an agent session action'
+          );
+        END;
+
+        CREATE TRIGGER agent_conversations_session_action_scope_update
+        BEFORE UPDATE OF board_id, profile_id ON agent_conversations
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_sessions session
+          JOIN agent_session_actions action ON action.session_id=session.id
+          WHERE session.conversation_id=OLD.id
+            AND (
+              action.board_id!=NEW.board_id
+              OR session.profile_id!=NEW.profile_id
+            )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversation scope change would displace an agent session action'
+          );
+        END;
+
+        UPDATE agent_session_actions
+        SET board_id=board_id, session_id=session_id;
+
+        UPDATE agent_session_action_reconciliations
+        SET board_id=board_id, action_id=action_id;
+      `)
+    },
+  },
+  {
+    id: '016-job-market-assignment-lifecycle',
+    apply(db) {
+      const hasMigration015 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='015-agent-home-action-command-scope'`).get()
+      if (!hasMigration015) {
+        throw new Error(
+          'migration 016-job-market-assignment-lifecycle requires 015-agent-home-action-command-scope',
+        )
+      }
+      const prerequisites = (db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+        WHERE type='table' AND name IN (
+          'boards','cards','jobs','workspaces','agent_sessions','agent_profiles',
+          'task_contracts','job_market_contracts','job_market_dependencies','os_events'
+        )`).get() as { count: number }).count
+      if (prerequisites !== 10) {
+        throw new Error(
+          'migration 016-job-market-assignment-lifecycle requires Agent Home, Job Market, and runtime tables',
+        )
+      }
+      const cardColumns = new Set(
+        (db.prepare(`PRAGMA table_info('cards')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!cardColumns.has('column_name')) {
+        db.exec("ALTER TABLE cards ADD COLUMN column_name TEXT NOT NULL DEFAULT 'backlog'")
+      }
+      if (!cardColumns.has('owner_agent_id')) {
+        db.exec('ALTER TABLE cards ADD COLUMN owner_agent_id INTEGER')
+        cardColumns.add('owner_agent_id')
+      }
+      const jobColumns = new Set(
+        (db.prepare(`PRAGMA table_info('jobs')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!jobColumns.has('status')) {
+        db.exec("ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'")
+      }
+      const sessionColumns = new Set(
+        (db.prepare(`PRAGMA table_info('agent_sessions')`).all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      if (!sessionColumns.has('status')) {
+        db.exec("ALTER TABLE agent_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'starting'")
+      }
+
+      const legacyMarketStates = db.prepare(`
+        SELECT market.card_id, card.board_id, market.status, market.version,
+          CASE WHEN card.owner_agent_id IS NULL THEN 0 ELSE 1 END AS has_legacy_owner,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.card_id=market.card_id
+              AND job.status IN ('queued','running','cancelling')
+          ) OR EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=market.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN 1 ELSE 0 END AS has_active_execution
+        FROM job_market_contracts market
+        JOIN cards card ON card.id=market.card_id
+        WHERE market.status IN ('assigned','running','submitted')
+        ORDER BY market.card_id
+      `).all() as Array<{
+        card_id: number
+        board_id: number
+        status: 'assigned' | 'running' | 'submitted'
+        version: number
+        has_legacy_owner: 0 | 1
+        has_active_execution: 0 | 1
+      }>
+      const normalizeLegacyAssigned = db.prepare(`
+        UPDATE job_market_contracts
+        SET status='open', version=version+1, updated_at=datetime('now')
+        WHERE card_id=? AND status='assigned' AND version=?
+      `)
+      const recordLegacyState = db.prepare(`
+        INSERT INTO os_events (
+          id, board_id, card_id, kind, source, payload, idempotency_key, created_at
+        ) VALUES (?, ?, ?, ?, 'migration-016', ?, ?, datetime('now'))
+      `)
+      for (const legacy of legacyMarketStates) {
+        const retainedForLegacyOwner = legacy.status === 'assigned'
+          && legacy.has_active_execution === 0
+          && legacy.has_legacy_owner === 1
+        const normalized = legacy.status === 'assigned'
+          && legacy.has_active_execution === 0
+          && legacy.has_legacy_owner === 0
+        if (normalized) {
+          const result = normalizeLegacyAssigned.run(legacy.card_id, legacy.version)
+          if (result.changes !== 1) {
+            throw new Error('migration 016 could not normalize a legacy assigned contract')
+          }
+        }
+        const eventKey = `migration:016:legacy-market-state:${legacy.card_id}`
+        recordLegacyState.run(
+          eventKey,
+          legacy.board_id,
+          legacy.card_id,
+          normalized
+            ? 'job_market.legacy_assignment_state_normalized'
+            : 'job_market.legacy_assignment_state_retained',
+          JSON.stringify({
+            card_id: legacy.card_id,
+            previous_status: legacy.status,
+            legacy_owner_present: legacy.has_legacy_owner === 1,
+            disposition: normalized
+              ? 'normalized_to_open'
+              : retainedForLegacyOwner
+                ? 'retained_for_legacy_owner'
+                : 'retained_for_legacy_lifecycle',
+            remediation: normalized
+              ? 'use a canonical claim or assign command'
+              : retainedForLegacyOwner
+                ? 'finish or clear the legacy owner and return the contract to open before creating a canonical assignment'
+                : 'finish the legacy lifecycle before creating a canonical assignment',
+          }),
+          eventKey,
+        )
+      }
+
+      db.exec(`
+        CREATE TABLE job_market_assignments (
+          id TEXT PRIMARY KEY,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
+          card_id INTEGER NOT NULL
+            REFERENCES job_market_contracts(card_id) ON DELETE RESTRICT,
+          profile_id TEXT NOT NULL REFERENCES agent_profiles(id) ON DELETE RESTRICT,
+          workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+          ownership_mode TEXT NOT NULL DEFAULT 'exclusive'
+            CHECK(ownership_mode='exclusive'),
+          origin TEXT NOT NULL
+            CHECK(origin IN ('claim','assign','reassign')),
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('pending','active','released','superseded')),
+          assigned_market_version INTEGER NOT NULL CHECK(assigned_market_version > 0),
+          version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+          predecessor_assignment_id TEXT UNIQUE
+            REFERENCES job_market_assignments(id) ON DELETE RESTRICT,
+          predecessor_version INTEGER
+            CHECK(predecessor_version IS NULL OR predecessor_version > 0),
+          created_actor_type TEXT NOT NULL,
+          created_actor_id TEXT,
+          idempotency_key TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          reason TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          ended_at TEXT,
+          ended_actor_type TEXT,
+          ended_actor_id TEXT,
+          end_reason TEXT,
+          end_idempotency_key TEXT,
+          end_request_fingerprint TEXT,
+          ended_market_version INTEGER
+            CHECK(ended_market_version IS NULL OR ended_market_version > 0),
+          UNIQUE(board_id, idempotency_key),
+          CHECK(
+            (origin='reassign'
+              AND predecessor_assignment_id IS NOT NULL
+              AND predecessor_version IS NOT NULL)
+            OR
+            (origin IN ('claim','assign')
+              AND predecessor_assignment_id IS NULL
+              AND predecessor_version IS NULL)
+          ),
+          CHECK(
+            (status IN ('pending','active')
+              AND ended_at IS NULL
+              AND ended_actor_type IS NULL
+              AND ended_actor_id IS NULL
+              AND end_reason IS NULL
+              AND end_idempotency_key IS NULL
+              AND end_request_fingerprint IS NULL
+              AND ended_market_version IS NULL)
+            OR
+            (status IN ('released','superseded')
+              AND ended_at IS NOT NULL
+              AND ended_actor_type IS NOT NULL
+              AND end_idempotency_key IS NOT NULL
+              AND end_request_fingerprint IS NOT NULL
+              AND ended_market_version IS NOT NULL)
+          )
+        );
+
+        CREATE UNIQUE INDEX idx_job_market_assignments_active_exclusive
+          ON job_market_assignments(card_id)
+          WHERE status='active' AND ownership_mode='exclusive';
+        CREATE INDEX idx_job_market_assignments_board
+          ON job_market_assignments(board_id, status, updated_at, id);
+        CREATE INDEX idx_job_market_assignments_profile
+          ON job_market_assignments(profile_id, status, updated_at, id);
+        CREATE INDEX idx_job_market_assignments_workspace
+          ON job_market_assignments(workspace_id, status, updated_at, id)
+          WHERE workspace_id IS NOT NULL;
+        CREATE INDEX idx_job_market_assignments_history
+          ON job_market_assignments(card_id, created_at, id);
+
+        ALTER TABLE jobs ADD COLUMN job_assignment_id TEXT
+          REFERENCES job_market_assignments(id) ON DELETE RESTRICT;
+        ALTER TABLE jobs ADD COLUMN assigned_profile_id TEXT
+          REFERENCES agent_profiles(id) ON DELETE RESTRICT;
+        ALTER TABLE jobs ADD COLUMN assignment_market_version INTEGER
+          CHECK(assignment_market_version IS NULL OR assignment_market_version > 0);
+
+        ALTER TABLE agent_sessions ADD COLUMN job_assignment_id TEXT
+          REFERENCES job_market_assignments(id) ON DELETE RESTRICT;
+        ALTER TABLE agent_sessions ADD COLUMN assigned_profile_id TEXT
+          REFERENCES agent_profiles(id) ON DELETE RESTRICT;
+        ALTER TABLE agent_sessions ADD COLUMN assignment_market_version INTEGER
+          CHECK(assignment_market_version IS NULL OR assignment_market_version > 0);
+
+        CREATE INDEX idx_jobs_job_assignment
+          ON jobs(job_assignment_id) WHERE job_assignment_id IS NOT NULL;
+        CREATE INDEX idx_agent_sessions_job_assignment
+          ON agent_sessions(job_assignment_id) WHERE job_assignment_id IS NOT NULL;
+
+        CREATE TRIGGER job_market_assignment_insert_scope
+        BEFORE INSERT ON job_market_assignments
+        BEGIN
+          SELECT CASE WHEN NEW.version!=1 OR NOT (
+            (NEW.origin IN ('claim','assign') AND NEW.status='active')
+            OR (NEW.origin='reassign' AND NEW.status='pending')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment must begin at its canonical status and version'
+          ) END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM cards card
+            JOIN job_market_contracts market ON market.card_id=card.id
+            JOIN agent_profiles profile ON profile.id=NEW.profile_id
+            WHERE card.id=NEW.card_id
+              AND card.board_id=NEW.board_id
+              AND profile.board_id=NEW.board_id
+              AND profile.status='active'
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment card, board, and active profile scope is inconsistent'
+          ) END;
+
+          SELECT CASE WHEN NEW.workspace_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM workspaces workspace
+            WHERE workspace.id=NEW.workspace_id
+              AND workspace.board_id=NEW.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL OR workspace.card_id=NEW.card_id)
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment workspace scope is inconsistent'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM task_contracts contract
+            WHERE contract.card_id=NEW.card_id
+              AND contract.workspace_id IS NOT NULL
+              AND contract.workspace_id IS NOT NEW.workspace_id
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment must use the contract workspace'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            JOIN agent_profiles profile ON profile.id=NEW.profile_id
+            JOIN json_each(market.required_capabilities_json) required
+            WHERE market.card_id=NEW.card_id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM json_each(profile.capabilities_json) capability
+                WHERE capability.value=required.value
+              )
+          ) THEN RAISE(
+            ABORT,
+            'agent profile does not satisfy required job capabilities'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM job_market_dependencies dependency
+            LEFT JOIN cards target ON target.id=dependency.dependency_card_id
+            WHERE dependency.card_id=NEW.card_id
+              AND (target.id IS NULL OR target.column_name!='done')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment dependencies are not complete'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id=NEW.card_id
+              AND status IN ('queued','running','cancelling')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot change while the card has an active job'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=NEW.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot change while the card has an active agent session'
+          ) END;
+
+          SELECT CASE WHEN NEW.origin IN ('claim','assign') AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            WHERE market.card_id=NEW.card_id
+              AND market.status='open'
+              AND market.version=NEW.assigned_market_version-1
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment requires the expected open market version'
+          ) END;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_contracts market
+            JOIN job_market_assignments predecessor
+              ON predecessor.id=NEW.predecessor_assignment_id
+            WHERE market.card_id=NEW.card_id
+              AND market.status IN ('assigned','rejected')
+              AND market.version=NEW.assigned_market_version-1
+              AND predecessor.board_id=NEW.board_id
+              AND predecessor.card_id=NEW.card_id
+              AND predecessor.status='active'
+              AND predecessor.version=NEW.predecessor_version
+              AND (
+                predecessor.profile_id!=NEW.profile_id
+                OR (
+                  NEW.reason IS NOT NULL
+                  AND trim(NEW.reason)!=''
+                  AND predecessor.assigned_market_version<market.version
+                )
+              )
+          ) THEN RAISE(
+            ABORT,
+            'job market reassignment predecessor or market version is stale'
+          ) END;
+
+        END;
+
+        CREATE TRIGGER job_market_assignment_insert_market_cas
+        AFTER INSERT ON job_market_assignments
+        BEGIN
+          UPDATE job_market_assignments
+          SET status='superseded',
+              version=version+1,
+              updated_at=NEW.created_at,
+              ended_at=NEW.created_at,
+              ended_actor_type=NEW.created_actor_type,
+              ended_actor_id=NEW.created_actor_id,
+              end_reason=NEW.reason,
+              end_idempotency_key=NEW.idempotency_key,
+              end_request_fingerprint=NEW.request_fingerprint,
+              ended_market_version=NEW.assigned_market_version
+          WHERE NEW.origin='reassign'
+            AND id=NEW.predecessor_assignment_id
+            AND status='active'
+            AND version=NEW.predecessor_version;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND changes()!=1
+            THEN RAISE(ABORT, 'job market reassignment lost its predecessor race') END;
+
+          UPDATE job_market_assignments
+          SET status='active'
+          WHERE NEW.origin='reassign'
+            AND id=NEW.id
+            AND status='pending'
+            AND version=1;
+
+          SELECT CASE WHEN NEW.origin='reassign' AND changes()!=1
+            THEN RAISE(ABORT, 'job market reassignment successor activation failed') END;
+
+          UPDATE job_market_contracts
+          SET status='assigned',
+              version=version+1,
+              updated_at=NEW.created_at,
+              published_at=COALESCE(published_at, NEW.created_at),
+              archived_at=NULL
+          WHERE card_id=NEW.card_id
+            AND version=NEW.assigned_market_version-1
+            AND (
+              (NEW.origin IN ('claim','assign') AND status='open')
+              OR
+              (NEW.origin='reassign' AND status IN ('assigned','rejected'))
+            );
+
+          SELECT CASE WHEN changes()!=1
+            THEN RAISE(ABORT, 'job market assignment version changed concurrently') END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_update
+        BEFORE UPDATE ON job_market_assignments
+        BEGIN
+          SELECT CASE WHEN
+            NEW.id IS NOT OLD.id
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+            OR NEW.profile_id IS NOT OLD.profile_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+            OR NEW.ownership_mode IS NOT OLD.ownership_mode
+            OR NEW.origin IS NOT OLD.origin
+            OR NEW.assigned_market_version IS NOT OLD.assigned_market_version
+            OR NEW.predecessor_assignment_id IS NOT OLD.predecessor_assignment_id
+            OR NEW.predecessor_version IS NOT OLD.predecessor_version
+            OR NEW.created_actor_type IS NOT OLD.created_actor_type
+            OR NEW.created_actor_id IS NOT OLD.created_actor_id
+            OR NEW.idempotency_key IS NOT OLD.idempotency_key
+            OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+            OR NEW.reason IS NOT OLD.reason
+            OR NEW.created_at IS NOT OLD.created_at
+          THEN RAISE(
+            ABORT,
+            'job market assignment identity is immutable'
+          ) END;
+
+          SELECT CASE WHEN OLD.status NOT IN ('pending','active')
+            THEN RAISE(ABORT, 'terminal job market assignments are immutable') END;
+          SELECT CASE WHEN OLD.status='pending' AND (
+            NEW.status!='active'
+            OR NEW.version!=OLD.version
+            OR NEW.ended_at IS NOT NULL
+            OR NEW.ended_actor_type IS NOT NULL
+            OR NEW.ended_actor_id IS NOT NULL
+            OR NEW.end_reason IS NOT NULL
+            OR NEW.end_idempotency_key IS NOT NULL
+            OR NEW.end_request_fingerprint IS NOT NULL
+            OR NEW.ended_market_version IS NOT NULL
+          ) THEN RAISE(
+            ABORT,
+            'invalid job market reassignment successor activation'
+          ) END;
+          SELECT CASE WHEN OLD.status='active'
+            AND NEW.status NOT IN ('released','superseded')
+            THEN RAISE(ABORT, 'invalid job market assignment status transition') END;
+          SELECT CASE WHEN OLD.status='active' AND NEW.version!=OLD.version+1
+            THEN RAISE(ABORT, 'job market assignment version must increment exactly once') END;
+          SELECT CASE WHEN OLD.status='active' AND (
+            NEW.ended_at IS NULL
+            OR NEW.ended_actor_type IS NULL
+            OR NEW.end_idempotency_key IS NULL
+            OR NEW.end_request_fingerprint IS NULL
+            OR NEW.ended_market_version IS NULL
+          ) THEN RAISE(ABORT, 'terminal job market assignment evidence is required') END;
+
+          SELECT CASE WHEN OLD.status='active'
+            AND NEW.status='superseded'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments successor
+              WHERE successor.status='pending'
+                AND successor.origin='reassign'
+                AND successor.predecessor_assignment_id=OLD.id
+                AND successor.predecessor_version=OLD.version
+                AND successor.idempotency_key=NEW.end_idempotency_key
+                AND successor.request_fingerprint=NEW.end_request_fingerprint
+                AND successor.assigned_market_version=NEW.ended_market_version
+                AND successor.created_actor_type=NEW.ended_actor_type
+                AND successor.created_actor_id IS NEW.ended_actor_id
+                AND successor.reason IS NEW.end_reason
+            )
+          THEN RAISE(
+            ABORT,
+            'job market assignment can only be superseded by its pending successor'
+          ) END;
+
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM jobs
+            WHERE card_id=OLD.card_id
+              AND status IN ('queued','running','cancelling')
+          ) OR EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            JOIN jobs job ON job.id=session.job_id
+            WHERE job.card_id=OLD.card_id
+              AND session.status IN ('reserved','starting','running','idle','stopping')
+          ) THEN RAISE(
+            ABORT,
+            'job market assignment cannot end while the card has active execution'
+          ) END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_delete
+        BEFORE DELETE ON job_market_assignments
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment history is immutable'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_release_market_cas
+        AFTER UPDATE OF status ON job_market_assignments
+        WHEN OLD.status='active' AND NEW.status='released'
+        BEGIN
+          UPDATE job_market_contracts
+          SET status=CASE
+                WHEN status IN ('assigned','rejected','cancelled') THEN 'open'
+                ELSE status
+              END,
+              version=version+1,
+              updated_at=NEW.ended_at,
+              archived_at=CASE WHEN status='archived' THEN archived_at ELSE NULL END
+          WHERE card_id=NEW.card_id
+            AND version=NEW.ended_market_version-1
+            AND status IN ('assigned','rejected','cancelled','accepted','archived');
+
+          SELECT CASE WHEN changes()!=1
+            THEN RAISE(ABORT, 'job market assignment release version changed concurrently') END;
+        END;
+
+        CREATE TRIGGER job_market_contract_assignment_transition
+        BEFORE UPDATE OF status ON job_market_contracts
+        WHEN NEW.status!=OLD.status
+        BEGIN
+          SELECT CASE WHEN NEW.status='assigned' AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+              AND assignment.assigned_market_version=NEW.version
+          ) THEN RAISE(
+            ABORT,
+            'job market assigned status requires an active canonical assignment'
+          ) END;
+
+          SELECT CASE WHEN NEW.status IN ('open','draft') AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          ) THEN RAISE(
+            ABORT,
+            'release the active job market assignment before reopening or drafting the contract'
+          ) END;
+        END;
+
+        CREATE TRIGGER job_market_assignment_profile_archive
+        BEFORE UPDATE OF status ON agent_profiles
+        WHEN OLD.status='active' AND NEW.status='archived'
+          AND EXISTS (
+            SELECT 1 FROM job_market_assignments assignment
+            WHERE assignment.profile_id=OLD.id AND assignment.status='active'
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent profile has an active job market assignment'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_card_scope_update
+        BEFORE UPDATE OF board_id ON cards
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.card_id=OLD.id AND assignment.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'card board change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_profile_scope_update
+        BEFORE UPDATE OF board_id ON agent_profiles
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.profile_id=OLD.id AND assignment.board_id!=NEW.board_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'profile board change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER job_market_assignment_workspace_scope_update
+        BEFORE UPDATE OF board_id, card_id ON workspaces
+        WHEN EXISTS (
+          SELECT 1 FROM job_market_assignments assignment
+          WHERE assignment.workspace_id=OLD.id
+            AND (
+              assignment.board_id!=NEW.board_id
+              OR (NEW.card_id IS NOT NULL AND assignment.card_id!=NEW.card_id)
+            )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace scope change would displace job market assignment history'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.job_assignment_id IS NOT NULL
+          OR NEW.assigned_profile_id IS NOT NULL
+          OR NEW.assignment_market_version IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN
+            NEW.job_assignment_id IS NULL
+            OR NEW.assigned_profile_id IS NULL
+            OR NEW.assignment_market_version IS NULL
+          THEN RAISE(ABORT, 'job assignment identity must be complete') END;
+
+          SELECT CASE WHEN NEW.status!='queued' OR NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND workspace.board_id=assignment.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL
+                OR workspace.card_id=assignment.card_id)
+              AND (assignment.workspace_id IS NULL
+                OR assignment.workspace_id=workspace.id)
+          ) THEN RAISE(ABORT, 'job assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_update
+        BEFORE UPDATE OF
+          job_assignment_id, assigned_profile_id, assignment_market_version,
+          board_id, card_id, workspace_id
+        ON jobs
+        BEGIN
+          SELECT CASE WHEN
+            (NEW.job_assignment_id IS NULL)
+              != (NEW.assigned_profile_id IS NULL)
+            OR (NEW.job_assignment_id IS NULL)
+              != (NEW.assignment_market_version IS NULL)
+          THEN RAISE(ABORT, 'job assignment identity must be complete') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL AND (
+            NEW.job_assignment_id IS NOT OLD.job_assignment_id
+            OR NEW.assigned_profile_id IS NOT OLD.assigned_profile_id
+            OR NEW.assignment_market_version IS NOT OLD.assignment_market_version
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+          ) THEN RAISE(ABORT, 'job assignment identity is immutable') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND (NEW.status!='queued' OR NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+              WHERE assignment.id=NEW.job_assignment_id
+                AND assignment.board_id=NEW.board_id
+                AND assignment.card_id=NEW.card_id
+                AND assignment.profile_id=NEW.assigned_profile_id
+                AND assignment.assigned_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND workspace.board_id=assignment.board_id
+                AND workspace.status='active'
+                AND (workspace.card_id IS NULL
+                  OR workspace.card_id=assignment.card_id)
+                AND (assignment.workspace_id IS NULL
+                  OR assignment.workspace_id=workspace.id)
+            ))
+          THEN RAISE(ABORT, 'job assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_status
+        BEFORE UPDATE OF status ON jobs
+        WHEN NEW.job_assignment_id IS NOT NULL
+          AND NEW.status IN ('queued','running','cancelling')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN workspaces workspace ON workspace.id=NEW.workspace_id
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND workspace.board_id=assignment.board_id
+              AND workspace.status='active'
+              AND (workspace.card_id IS NULL
+                OR workspace.card_id=assignment.card_id)
+              AND (assignment.workspace_id IS NULL
+                OR assignment.workspace_id=workspace.id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active job status requires an active canonical assignment'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_assignment_id IS NOT NULL
+          OR NEW.assigned_profile_id IS NOT NULL
+          OR NEW.assignment_market_version IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN
+            NEW.job_assignment_id IS NULL
+            OR NEW.assigned_profile_id IS NULL
+            OR NEW.assignment_market_version IS NULL
+          THEN RAISE(ABORT, 'agent session assignment identity must be complete') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status='queued'
+              AND job.workspace_id=NEW.workspace_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+          ) THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_update
+        BEFORE UPDATE OF
+          job_assignment_id, assigned_profile_id, assignment_market_version,
+          job_id, workspace_id, profile_id
+        ON agent_sessions
+        BEGIN
+          SELECT CASE WHEN
+            (NEW.job_assignment_id IS NULL)
+              != (NEW.assigned_profile_id IS NULL)
+            OR (NEW.job_assignment_id IS NULL)
+              != (NEW.assignment_market_version IS NULL)
+          THEN RAISE(ABORT, 'agent session assignment identity must be complete') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL AND (
+            NEW.job_assignment_id IS NOT OLD.job_assignment_id
+            OR NEW.assigned_profile_id IS NOT OLD.assigned_profile_id
+            OR NEW.assignment_market_version IS NOT OLD.assignment_market_version
+            OR NEW.job_id IS NOT OLD.job_id
+            OR NEW.workspace_id IS NOT OLD.workspace_id
+          ) THEN RAISE(ABORT, 'agent session assignment identity is immutable') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jobs job
+              JOIN job_market_assignments assignment
+                ON assignment.id=job.job_assignment_id
+              WHERE job.id=NEW.job_id
+                AND job.status='queued'
+                AND job.workspace_id=NEW.workspace_id
+                AND job.job_assignment_id=NEW.job_assignment_id
+                AND job.assigned_profile_id=NEW.assigned_profile_id
+                AND job.assignment_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+            )
+          THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+
+          SELECT CASE WHEN OLD.job_assignment_id IS NOT NULL
+            AND NEW.job_assignment_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jobs job
+              JOIN job_market_assignments assignment
+                ON assignment.id=job.job_assignment_id
+              WHERE job.id=NEW.job_id
+                AND job.status IN ('queued','running','cancelling')
+                AND job.workspace_id=NEW.workspace_id
+                AND job.job_assignment_id=NEW.job_assignment_id
+                AND job.assigned_profile_id=NEW.assigned_profile_id
+                AND job.assignment_market_version=NEW.assignment_market_version
+                AND assignment.status='active'
+                AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+            )
+          THEN RAISE(ABORT, 'agent session assignment identity or scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_status
+        BEFORE UPDATE OF status ON agent_sessions
+        WHEN NEW.job_assignment_id IS NOT NULL
+          AND NEW.status IN ('reserved','starting','running','idle','stopping')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status IN ('queued','running','cancelling')
+              AND job.workspace_id=NEW.workspace_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL OR NEW.profile_id=NEW.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active agent session status requires an active canonical assignment'
+          );
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_insert
+        BEFORE INSERT ON os_events
+        WHEN NEW.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT CASE WHEN
+            NEW.source!='job-market'
+            OR NEW.idempotency_key IS NULL
+            OR NEW.card_id IS NULL
+            OR NOT json_valid(NEW.payload)
+            OR NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.id=json_extract(NEW.payload, '$.assignment_id')
+                AND assignment.board_id=NEW.board_id
+                AND assignment.card_id=NEW.card_id
+                AND assignment.workspace_id IS NEW.workspace_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.id'
+                )=assignment.id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.board_id'
+                )=assignment.board_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.card_id'
+                )=assignment.card_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.profile_id'
+                )=assignment.profile_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.workspace_id'
+                ) IS assignment.workspace_id
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.origin'
+                )=assignment.origin
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.status'
+                )=assignment.status
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.assigned_market_version'
+                )=assignment.assigned_market_version
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.version'
+                )=assignment.version
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.idempotency_key'
+                )=assignment.idempotency_key
+                AND json_extract(
+                  NEW.payload,
+                  '$.result.assignment.request_fingerprint'
+                )=assignment.request_fingerprint
+                AND (
+                  (
+                    (
+                      (NEW.kind='job_market.assignment_claimed'
+                        AND assignment.origin='claim')
+                      OR (NEW.kind='job_market.assignment_assigned'
+                        AND assignment.origin='assign')
+                      OR (NEW.kind='job_market.assignment_reassigned'
+                        AND assignment.origin='reassign')
+                    )
+                    AND assignment.status='active'
+                    AND assignment.idempotency_key=NEW.idempotency_key
+                    AND assignment.request_fingerprint=
+                      json_extract(NEW.payload, '$.request_fingerprint')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.status'
+                    )='assigned'
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.market_version'
+                    )=assignment.assigned_market_version
+                  )
+                  OR
+                  (
+                    NEW.kind='job_market.assignment_released'
+                    AND assignment.status='released'
+                    AND assignment.end_idempotency_key=NEW.idempotency_key
+                    AND assignment.end_request_fingerprint=
+                      json_extract(NEW.payload, '$.request_fingerprint')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_idempotency_key'
+                    )=assignment.end_idempotency_key
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_request_fingerprint'
+                    )=assignment.end_request_fingerprint
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.updated_at'
+                    )=assignment.updated_at
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_at'
+                    )=assignment.ended_at
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_actor_type'
+                    )=assignment.ended_actor_type
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_actor_id'
+                    ) IS assignment.ended_actor_id
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.end_reason'
+                    ) IS assignment.end_reason
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.assignment.ended_market_version'
+                    )=assignment.ended_market_version
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.status'
+                    ) IN ('open','accepted','archived')
+                    AND json_extract(
+                      NEW.payload,
+                      '$.result.market.market_version'
+                    )=assignment.ended_market_version
+                  )
+                )
+            )
+          THEN RAISE(
+            ABORT,
+            'job market assignment audit scope or command identity is inconsistent'
+          ) END;
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_identity_update
+        BEFORE UPDATE ON os_events
+        WHEN OLD.kind GLOB 'job_market.assignment_*'
+          OR NEW.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment audit identity is immutable'
+          );
+        END;
+
+        CREATE TRIGGER os_events_job_assignment_delete
+        BEFORE DELETE ON os_events
+        WHEN OLD.kind GLOB 'job_market.assignment_*'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job market assignment audit history is immutable'
+          );
+        END;
+      `)
+      if (cardColumns.has('owner_agent_id')) {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_insert
+          BEFORE INSERT ON job_market_assignments
+          WHEN EXISTS (
+            SELECT 1 FROM cards
+            WHERE id=NEW.card_id AND owner_agent_id IS NOT NULL
+          )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has a legacy owner; clear it before canonical assignment'
+            );
+          END;
+
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id AND assignment.status='active'
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment'
+            );
+          END;
+        `)
+      }
+    },
+  },
+  {
+    id: '017-job-assignment-runtime-binding',
+    apply(db) {
+      const hasMigration016 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='016-job-market-assignment-lifecycle'`).get()
+      if (!hasMigration016) {
+        throw new Error(
+          'migration 017-job-assignment-runtime-binding requires 016-job-market-assignment-lifecycle',
+        )
+      }
+      const requiredColumns: Record<string, string[]> = {
+        cards: ['id', 'board_id', 'owner_agent_id'],
+        jobs: [
+          'id',
+          'board_id',
+          'card_id',
+          'workspace_id',
+          'status',
+          'job_assignment_id',
+          'assigned_profile_id',
+          'assignment_market_version',
+        ],
+        agent_sessions: [
+          'id',
+          'job_id',
+          'workspace_id',
+          'profile_id',
+          'status',
+          'job_assignment_id',
+          'assigned_profile_id',
+          'assignment_market_version',
+        ],
+        job_market_assignments: [
+          'id',
+          'board_id',
+          'card_id',
+          'profile_id',
+          'workspace_id',
+          'status',
+          'assigned_market_version',
+          'version',
+        ],
+        job_market_contracts: [
+          'card_id',
+          'version',
+        ],
+        workspaces: [
+          'id',
+          'board_id',
+          'status',
+        ],
+      }
+      const columnsByTable = new Map<string, Set<string>>()
+      for (const [table, columns] of Object.entries(requiredColumns)) {
+        const available = new Set(
+          (db.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>)
+            .map((column) => column.name),
+        )
+        columnsByTable.set(table, available)
+        if (columns.some((column) => !available.has(column))) {
+          throw new Error(
+            'migration 017-job-assignment-runtime-binding requires complete assignment runtime columns',
+          )
+        }
+      }
+      const workspaceHasCardId = columnsByTable.get('workspaces')?.has('card_id') === true
+      const workspaceRuntimeUpdateColumns = workspaceHasCardId
+        ? 'status, board_id, card_id'
+        : 'status, board_id'
+      const workspaceRuntimeScopeChange = workspaceHasCardId
+        ? 'OR NEW.card_id IS NOT OLD.card_id'
+        : ''
+
+      db.exec(`
+        CREATE TRIGGER jobs_job_assignment_required_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.card_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job assignment identity must be complete: active job assignment requires exact frozen job identity'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_required_activation
+        BEFORE UPDATE OF status, board_id, card_id ON jobs
+        WHEN NEW.card_id IS NOT NULL
+          AND (
+            NEW.status IN ('running','cancelling')
+            OR NEW.board_id IS NOT OLD.board_id
+            OR NEW.card_id IS NOT OLD.card_id
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.card_id=NEW.card_id
+              AND assignment.status='active'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active job assignment requires exact frozen job identity before execution'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_binding_current_guard
+        BEFORE UPDATE OF
+          workspace_id, job_assignment_id, assigned_profile_id, assignment_market_version
+        ON jobs
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM job_market_assignments assignment
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE assignment.id=NEW.job_assignment_id
+              AND assignment.board_id=NEW.board_id
+              AND assignment.card_id=NEW.card_id
+              AND assignment.profile_id=NEW.assigned_profile_id
+              AND assignment.assigned_market_version=NEW.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'new job assignment binding requires the current active market assignment'
+          );
+        END;
+
+        CREATE TRIGGER jobs_job_assignment_session_binding_guard
+        BEFORE UPDATE OF
+          workspace_id, job_assignment_id, assigned_profile_id, assignment_market_version
+        ON jobs
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM agent_sessions session
+            WHERE session.job_id=NEW.id
+              AND (
+                session.job_assignment_id IS NOT NEW.job_assignment_id
+                OR session.assigned_profile_id IS NOT NEW.assigned_profile_id
+                OR session.assignment_market_version IS NOT NEW.assignment_market_version
+                OR session.workspace_id IS NOT NEW.workspace_id
+                OR (
+                  session.profile_id IS NOT NULL
+                  AND session.profile_id IS NOT NEW.assigned_profile_id
+                )
+              )
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'job assignment binding would strand an unbound agent session'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_insert
+        BEFORE INSERT ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR (
+                  NEW.status IN ('reserved','starting','running','idle','stopping')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_market_assignments assignment
+                    WHERE assignment.card_id=job.card_id
+                      AND assignment.status='active'
+                  )
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session assignment identity or scope is inconsistent; agent session assignment identity must be complete: bound job requires exact frozen agent session assignment identity'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_binding_current_guard
+        BEFORE UPDATE OF
+          job_id, workspace_id, job_assignment_id,
+          assigned_profile_id, assignment_market_version
+        ON agent_sessions
+        WHEN OLD.job_assignment_id IS NULL
+          AND NEW.job_assignment_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            JOIN job_market_contracts market
+              ON market.card_id=assignment.card_id
+              AND market.version=assignment.assigned_market_version
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND assignment.version=1
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'new agent session assignment binding requires the current active market assignment'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_update
+        BEFORE UPDATE OF
+          job_id, workspace_id, profile_id,
+          job_assignment_id, assigned_profile_id, assignment_market_version
+        ON agent_sessions
+        WHEN NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR (
+                  NEW.status IN ('reserved','starting','running','idle','stopping')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM job_market_assignments assignment
+                    WHERE assignment.card_id=job.card_id
+                      AND assignment.status='active'
+                  )
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'agent session assignment identity is immutable and its scope is inconsistent: bound job requires exact frozen agent session assignment identity'
+          );
+        END;
+
+        CREATE TRIGGER agent_sessions_job_assignment_required_status
+        BEFORE UPDATE OF status ON agent_sessions
+        WHEN NEW.status IN ('reserved','starting','running','idle','stopping')
+          AND NEW.job_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jobs job
+            WHERE job.id=NEW.job_id
+              AND (
+                job.job_assignment_id IS NOT NULL
+                OR EXISTS (
+                  SELECT 1
+                  FROM job_market_assignments assignment
+                  WHERE assignment.card_id=job.card_id
+                    AND assignment.status='active'
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+            WHERE job.id=NEW.job_id
+              AND job.status IN ('queued','running','cancelling')
+              AND job.job_assignment_id=NEW.job_assignment_id
+              AND job.assigned_profile_id=NEW.assigned_profile_id
+              AND job.assignment_market_version=NEW.assignment_market_version
+              AND job.workspace_id=NEW.workspace_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+              AND assignment.status='active'
+              AND (NEW.profile_id IS NULL
+                OR NEW.profile_id=job.assigned_profile_id)
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'active agent session status requires an active canonical assignment with exact frozen identity'
+          );
+        END;
+
+        CREATE TRIGGER job_assignment_workspace_runtime_guard
+        BEFORE UPDATE OF ${workspaceRuntimeUpdateColumns} ON workspaces
+        WHEN (
+            (OLD.status='active' AND NEW.status!='active')
+            OR NEW.board_id IS NOT OLD.board_id
+            ${workspaceRuntimeScopeChange}
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN job_market_assignments assignment
+              ON assignment.id=job.job_assignment_id
+              AND assignment.board_id=job.board_id
+              AND assignment.card_id=job.card_id
+              AND assignment.profile_id=job.assigned_profile_id
+              AND assignment.assigned_market_version=job.assignment_market_version
+            WHERE job.workspace_id=OLD.id
+              AND job.board_id=OLD.board_id
+              AND job.status IN ('running','cancelling')
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'workspace has an active assignment runtime and cannot change status or scope'
+          );
+        END;
+      `)
+
+      db.exec('DROP TRIGGER IF EXISTS job_market_assignment_legacy_owner_update')
+      const legacyAgentColumns = new Set(
+        (db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>)
+          .map((column) => column.name),
+      )
+      const canProjectLegacyOwner = (
+        columnsByTable.get('agent_sessions')?.has('agent_id') === true
+        && columnsByTable.get('agent_sessions')?.has('conversation_id') === true
+        && columnsByTable.get('agent_sessions')?.has('external_id') === true
+        && legacyAgentColumns.has('id')
+        && legacyAgentColumns.has('board_id')
+        && legacyAgentColumns.has('session_id')
+      )
+      if (canProjectLegacyOwner) {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id
+                AND assignment.status='active'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              JOIN jobs job
+                ON job.job_assignment_id=assignment.id
+                AND job.board_id=assignment.board_id
+                AND job.card_id=assignment.card_id
+                AND job.assigned_profile_id=assignment.profile_id
+                AND job.assignment_market_version=assignment.assigned_market_version
+              JOIN agent_sessions session
+                ON session.job_id=job.id
+                AND session.job_assignment_id=job.job_assignment_id
+                AND session.assigned_profile_id=job.assigned_profile_id
+                AND session.assignment_market_version=job.assignment_market_version
+                AND session.workspace_id=job.workspace_id
+                AND session.agent_id=NEW.owner_agent_id
+                AND session.profile_id=assignment.profile_id
+                AND session.conversation_id IS NOT NULL
+                AND session.external_id IS NOT NULL
+              JOIN agent_conversations conversation
+                ON conversation.id=session.conversation_id
+                AND conversation.board_id=assignment.board_id
+                AND conversation.profile_id=assignment.profile_id
+                AND conversation.status='active'
+              JOIN agents owner
+                ON owner.id=NEW.owner_agent_id
+                AND owner.board_id=assignment.board_id
+                AND owner.session_id=('agent-os:' || job.id)
+              WHERE assignment.card_id=NEW.id
+                AND assignment.board_id=NEW.board_id
+                AND assignment.status='active'
+                AND job.status IN ('running','cancelling')
+                AND session.status IN ('running','idle','stopping')
+                AND (assignment.workspace_id IS NULL
+                  OR assignment.workspace_id=job.workspace_id)
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment without a matching active assignment runtime'
+            );
+          END;
+        `)
+      } else {
+        db.exec(`
+          CREATE TRIGGER job_market_assignment_legacy_owner_update
+          BEFORE UPDATE OF owner_agent_id ON cards
+          WHEN NEW.owner_agent_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM job_market_assignments assignment
+              WHERE assignment.card_id=NEW.id
+                AND assignment.status='active'
+            )
+          BEGIN
+            SELECT RAISE(
+              ABORT,
+              'card has an active canonical job market assignment'
+            );
+          END;
+        `)
+      }
     },
   },
 ]

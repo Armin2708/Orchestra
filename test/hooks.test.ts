@@ -1,12 +1,14 @@
-import { afterAll, beforeAll, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
+import { preserveProcessEnv, runHookToCompletion } from './helpers/scoped-hook-state.js'
 
 let server: any, port: number, home: string, db: any
 const projectRoot = process.cwd()
+const restoreEnv = preserveProcessEnv(['ORCHESTRA_HOME', 'ORCHESTRA_NAME', 'ORCHESTRA_PORT'])
 const backdateCard = (id: number, minutes: number) =>
   db.prepare(`UPDATE cards SET updated_at = datetime('now', ?) WHERE id = ?`).run(`-${minutes} minutes`, id)
 beforeAll(async () => {
@@ -19,7 +21,15 @@ beforeAll(async () => {
   port = server.server.address().port
   process.env.ORCHESTRA_PORT = String(port)
 })
-afterAll(async () => { await server.close(); delete process.env.ORCHESTRA_HOME; delete process.env.ORCHESTRA_PORT })
+afterEach(() => { vi.restoreAllMocks() })
+afterAll(async () => {
+  try {
+    await server.close()
+  } finally {
+    if (home) fs.rmSync(home, { recursive: true, force: true })
+    restoreEnv()
+  }
+})
 
 it('session-start registers and prints rules; post-tool-use delivers pings', async () => {
   const hooks = await import('../src/hooks.js')
@@ -27,7 +37,7 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   expect(out.join('\n')).toContain('orchestra rules')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess1.json'), 'utf8'))
   expect(sess.agent_id).toBeGreaterThan(0)
@@ -38,7 +48,7 @@ it('session-start registers and prints rules; post-tool-use delivers pings', asy
     body: JSON.stringify({ board_id: sess.board_id, to: sess.agent_name, body: 'status?' }),
   })
   out.length = 0
-  await hooks.runHook('post-tool-use')
+  await runHookToCompletion(hooks, 'post-tool-use')
   const payload = JSON.parse(out.join('\n'))
   expect(payload.hookSpecificOutput.additionalContext).toContain('status?')
 })
@@ -55,7 +65,7 @@ it('upgrades legacy hook session files to owner-only permissions before storing 
   }))
   vi.spyOn(console, 'log').mockImplementation(() => {})
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
 
   expect(fs.statSync(sessionPath).mode & 0o777).toBe(0o600)
   expect(JSON.parse(fs.readFileSync(sessionPath, 'utf8')).session_token).toEqual(expect.any(String))
@@ -67,7 +77,7 @@ it('queued notifications arrive on a natural hook turn without requesting a repl
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess-notify.json'), 'utf8'))
   await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -75,7 +85,7 @@ it('queued notifications arrive on a natural hook turn without requesting a repl
   })
 
   out.length = 0
-  await hooks.runHook('user-prompt-submit')
+  await runHookToCompletion(hooks, 'user-prompt-submit')
   const payload = JSON.parse(out.join('\n'))
   expect(payload.hookSpecificOutput.additionalContext).toContain('orchestra notification')
   expect(payload.hookSpecificOutput.additionalContext).toContain('no reply required')
@@ -88,7 +98,7 @@ it('stop does not consume messages; user-prompt-submit delivers them', async () 
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess2.json'), 'utf8'))
   await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -96,11 +106,11 @@ it('stop does not consume messages; user-prompt-submit delivers them', async () 
   })
 
   out.length = 0
-  await hooks.runHook('stop') // turn ends — must NOT swallow the pending question
+  await runHookToCompletion(hooks, 'stop') // turn ends — must NOT swallow the pending question
   expect(out.join('\n')).toBe('')
 
   out.length = 0
-  await hooks.runHook('user-prompt-submit') // next turn starts — question arrives
+  await runHookToCompletion(hooks, 'user-prompt-submit') // next turn starts — question arrives
   const payload = JSON.parse(out.join('\n'))
   expect(payload.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit')
   expect(payload.hookSpecificOutput.additionalContext).toContain('are you blocked?')
@@ -112,7 +122,7 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess3.json'), 'utf8'))
   const { card } = await (await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -121,13 +131,13 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
 
   // freshly created card — the agent just touched the board, don't burn a turn
   out.length = 0
-  await hooks.runHook('stop')
+  await runHookToCompletion(hooks, 'stop')
   expect(out.join('\n')).toBe('')
 
   // stale card — now the block fires, with a one-line reason
   backdateCard(card.id, 20)
   out.length = 0
-  await hooks.runHook('stop')
+  await runHookToCompletion(hooks, 'stop')
   const payload = JSON.parse(out.join('\n'))
   expect(payload.decision).toBe('block')
   expect(payload.reason).toContain('Fix parser')
@@ -140,14 +150,14 @@ it('stop blocks once to demand a status update on in_progress cards', async () =
     body: JSON.stringify({ description: 'halfway through', agent: sess.agent_name }),
   })
   out.length = 0
-  await hooks.runHook('stop')
+  await runHookToCompletion(hooks, 'stop')
   expect(out.join('\n')).toBe('')
 
   // second stop (continuation) must not loop
   backdateCard(card.id, 20)
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue(JSON.stringify({ session_id: 'sess3', cwd: projectRoot, stop_hook_active: true }))
   out.length = 0
-  await hooks.runHook('stop')
+  await runHookToCompletion(hooks, 'stop')
   expect(out.join('\n')).toBe('')
 })
 
@@ -157,12 +167,12 @@ it('nudges are one-liners: syntax only on first reminder, stale nudge once per w
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess5.json'), 'utf8'))
 
   // first check, no card — one line, full create syntax allowed exactly here
   out.length = 0
-  await hooks.runHook('user-prompt-submit')
+  await runHookToCompletion(hooks, 'user-prompt-submit')
   const first = JSON.parse(out.join('\n')).hookSpecificOutput.additionalContext
   expect(first).toContain('orchestra card create')
   expect(first).not.toMatch(/"</) // shell-safe: injected syntax models single quotes (#53)
@@ -177,7 +187,7 @@ it('nudges are one-liners: syntax only on first reminder, stale nudge once per w
   const past = new Date(Date.now() - 700_000)
   fs.utimesSync(path.join(home, 'sessions', 'sess5.json.stale'), past, past)
   out.length = 0
-  await hooks.runHook('user-prompt-submit')
+  await runHookToCompletion(hooks, 'user-prompt-submit')
   const staleNudge = JSON.parse(out.join('\n')).hookSpecificOutput.additionalContext
   expect(staleNudge).toContain(`#${card.id}`)
   expect(staleNudge).not.toContain('orchestra card')
@@ -185,7 +195,7 @@ it('nudges are one-liners: syntax only on first reminder, stale nudge once per w
 
   // same window again — silence
   out.length = 0
-  await hooks.runHook('user-prompt-submit')
+  await runHookToCompletion(hooks, 'user-prompt-submit')
   expect(out.join('\n')).toBe('')
 })
 
@@ -195,7 +205,7 @@ it('self-heals a lost session file and keeps the same agent identity', async () 
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start')
+  await runHookToCompletion(hooks, 'session-start')
   const sessPath = path.join(home, 'sessions', 'sess4.json')
   const orig = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
 
@@ -208,7 +218,7 @@ it('self-heals a lost session file and keeps the same agent identity', async () 
   fs.rmSync(sessPath + '.throttle', { force: true })
 
   out.length = 0
-  await hooks.runHook('post-tool-use')
+  await runHookToCompletion(hooks, 'post-tool-use')
   const payload = JSON.parse(out.join('\n'))
   expect(payload.hookSpecificOutput.additionalContext).toContain('still there?')
   const healed = JSON.parse(fs.readFileSync(sessPath, 'utf8'))
@@ -221,7 +231,7 @@ it('spools injected-context telemetry and flushes it on the next daemon call', a
   const out: string[] = []
   vi.spyOn(console, 'log').mockImplementation((s: string) => { out.push(String(s)) })
 
-  await hooks.runHook('session-start') // emits rules+board dump, spooled locally
+  await runHookToCompletion(hooks, 'session-start') // emits rules+board dump, spooled locally
   const sess = JSON.parse(fs.readFileSync(path.join(home, 'sessions', 'sess6.json'), 'utf8'))
   const sessionStartChars = out.join('\n').length
   expect(fs.existsSync(path.join(home, 'sessions', 'sess6.json.tel'))).toBe(true)
@@ -235,8 +245,8 @@ it('spools injected-context telemetry and flushes it on the next daemon call', a
     return { total: t.total, byEvent: Object.fromEntries(t.by_event.map((e: any) => [e.hook_event, e])) }
   }
   const before = await read() // earlier sessions in this file share the board — diff, don't assert absolutes
-  await hooks.runHook('post-tool-use')  // pulse flushes session_start; its own emission spools
-  await hooks.runHook('user-prompt-submit') // next pulse flushes post_tool_use
+  await runHookToCompletion(hooks, 'post-tool-use')  // pulse flushes session_start; its own emission spools
+  await runHookToCompletion(hooks, 'user-prompt-submit') // next pulse flushes post_tool_use
   const after = await read()
 
   const delta = (ev: string, field: string) => (after.byEvent[ev]?.[field] ?? 0) - (before.byEvent[ev]?.[field] ?? 0)
@@ -250,7 +260,7 @@ it('never throws when daemon is down', async () => {
   const hooks = await import('../src/hooks.js')
   process.env.ORCHESTRA_PORT = '1' // nothing listening
   vi.spyOn(hooks._internals, 'readStdin').mockResolvedValue('{"session_id":"sessX","cwd":"/tmp"}')
-  await expect(hooks.runHook('post-tool-use')).resolves.toBeUndefined()
+  await expect(runHookToCompletion(hooks, 'post-tool-use')).resolves.toBeUndefined()
   process.env.ORCHESTRA_PORT = String(port)
 })
 
@@ -277,9 +287,9 @@ it('namespaces local state by provider and carries provider through registration
   const sessionId = 'provider-shared'
 
   stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
-  await hooks.runHook('session-start', 'claude')
+  await runHookToCompletion(hooks, 'session-start', 'claude')
   stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot, provider: 'codex' }))
-  await hooks.runHook('session-start') // provider detected from hook input
+  await runHookToCompletion(hooks, 'session-start') // provider detected from hook input
 
   const claudePath = hooks._internals.sessionFile('claude', sessionId)
   const codexPath = hooks._internals.sessionFile('codex', sessionId)
@@ -289,15 +299,15 @@ it('namespaces local state by provider and carries provider through registration
   expect(JSON.parse(fs.readFileSync(codexPath + '.tel', 'utf8').trim()).provider).toBe('codex')
 
   stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
-  await hooks.runHook('permission-request', 'codex')
+  await runHookToCompletion(hooks, 'permission-request', 'codex')
   stdin.mockResolvedValueOnce(JSON.stringify({
     session_id: sessionId, cwd: projectRoot, agent_id: 'reviewer-1',
   }))
-  await hooks.runHook('subagent-start', 'codex')
+  await runHookToCompletion(hooks, 'subagent-start', 'codex')
   stdin.mockResolvedValueOnce(JSON.stringify({
     session_id: sessionId, cwd: projectRoot, agent_id: 'reviewer-1',
   }))
-  await hooks.runHook('subagent-stop', 'codex')
+  await runHookToCompletion(hooks, 'subagent-stop', 'codex')
 
   expect(requests.filter((r) => r.path.endsWith('/agents/register')).map((r) => r.body.provider))
     .toEqual(expect.arrayContaining(['claude', 'codex']))
@@ -318,7 +328,7 @@ it('emits the Codex continuation contract while keeping Claude Stop output uncha
   vi.spyOn(console, 'log').mockImplementation((line: string) => { out.push(String(line)) })
   const sessionId = 'codex-stop'
   stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
-  await hooks.runHook('session-start', 'codex')
+  await runHookToCompletion(hooks, 'session-start', 'codex')
   const sess = JSON.parse(fs.readFileSync(hooks._internals.sessionFile('codex', sessionId), 'utf8'))
   const { card } = await (await fetch(`http://127.0.0.1:${port}/api/v1/cards`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -328,7 +338,7 @@ it('emits the Codex continuation contract while keeping Claude Stop output uncha
 
   out.length = 0
   stdin.mockResolvedValueOnce(JSON.stringify({ session_id: sessionId, cwd: projectRoot }))
-  await hooks.runHook('stop', 'codex')
+  await runHookToCompletion(hooks, 'stop', 'codex')
   const payload = JSON.parse(out.join('\n'))
   expect(payload).toMatchObject({ continue: false })
   expect(payload.stopReason).toContain('Codex stale card')

@@ -6,6 +6,7 @@ import { NetworkView } from './NetworkView'
 import { ProviderBadge } from './ProviderBadge'
 import { ProviderLaunchControl } from './ProviderLaunchControl'
 import { AgentProviderCatalog, osApi } from './osApi'
+import { boardIdFromSearch, cardDrawerDeepLink, cardIdFromSearch } from './boardDeepLink'
 import {
   CanvasPoint,
   CanvasViewport,
@@ -478,18 +479,39 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   const askable = snaps.flatMap((s) =>
     s.agents.filter((a) => a.status !== 'gone').map((a) => ({ ...a, boardId: s.board.id, project: s.board.name })))
 
-  // a push-notification tap lands on /?card=<id> — open that card's drawer once
+  const syncCardUrl = (boardId: number, cardId: number | null) => {
+    const next = cardDrawerDeepLink(location.search, { boardId, cardId }, {
+      pathname: location.pathname,
+      hash: location.hash,
+    })
+    if (`${location.pathname}${location.search}${location.hash}` !== next) {
+      history.replaceState(null, '', next)
+    }
+  }
+
+  const openCardDrawer = (card: Card, boardId: number) => {
+    setOpen({ card, boardId })
+    syncCardUrl(boardId, card.id)
+  }
+
+  const closeCardDrawer = () => {
+    if (open) syncCardUrl(open.boardId, null)
+    setOpen(null)
+  }
+
+  // Keep a push/deep-linked card in the URL while its drawer is open so refresh restores it.
   const deepLinked = React.useRef(false)
   React.useEffect(() => {
     if (deepLinked.current) return
-    const id = Number(new URLSearchParams(location.search).get('card'))
+    const id = cardIdFromSearch(location.search)
+    const boardId = boardIdFromSearch(location.search)
     if (!id) { deepLinked.current = true; return }
     for (const s of snaps) {
+      if (boardId !== null && s.board.id !== boardId) continue
       const c = s.cards.find((x) => x.id === id)
       if (c) {
         setOpen({ card: c, boardId: s.board.id })
         deepLinked.current = true
-        history.replaceState(null, '', location.pathname) // a refresh shouldn't re-open it
         break
       }
     }
@@ -544,9 +566,9 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
               </header>
 
               <div className="net-wrap">
-                <TicketRail snap={s} providers={providers} onOpen={(c) => setOpen({ card: c, boardId: s.board.id })} onChange={onChange} />
+                <TicketRail snap={s} providers={providers} onOpen={(c) => openCardDrawer(c, s.board.id)} onChange={onChange} />
                 <NetworkView snap={s} viewport={viewport}
-                  onOpenCard={(c) => setOpen({ card: c, boardId: s.board.id })}
+                  onOpenCard={(c) => openCardDrawer(c, s.board.id)}
                   onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}
                   onChange={onChange} />
               </div>
@@ -583,7 +605,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
         providers={providers}
         agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-'))}
-        onClose={() => setOpen(null)} onChange={onChange} />}
+        onClose={closeCardDrawer} onChange={onChange} />}
       {terminal && <AgentTerminal
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}
         boardId={terminal.boardId}

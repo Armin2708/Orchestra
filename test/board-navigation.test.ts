@@ -6,6 +6,7 @@ describe('board-local navigation', () => {
   it('keeps operational and history views together under Board', () => {
     expect(BOARD_TABS).toEqual([
       { id: 'overview', label: 'Overview' },
+      { id: 'agents', label: 'Agents' },
       { id: 'messages', label: 'Messages' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'timeline', label: 'Timeline' },
@@ -14,11 +15,13 @@ describe('board-local navigation', () => {
   })
 
   it('migrates the old global routes into their Board tabs', () => {
+    expect(resolveStoredNavigation('agents', null)).toEqual({ view: 'board', boardTab: 'agents' })
     expect(resolveStoredNavigation('messages', null)).toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveStoredNavigation('workspaces', null)).toEqual({ view: 'board', boardTab: 'workspace' })
     expect(resolveStoredNavigation('timeline', null)).toEqual({ view: 'board', boardTab: 'timeline' })
     expect(resolveStoredNavigation('shipped', null)).toEqual({ view: 'board', boardTab: 'shipped' })
     expect(resolveStoredNavigation('board', 'messages')).toEqual({ view: 'board', boardTab: 'messages' })
+    expect(resolveStoredNavigation('board', 'agents')).toEqual({ view: 'board', boardTab: 'agents' })
     expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'timeline' })
     expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'shipped' })
     expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'roadmap', boardTab: 'workspace' })
@@ -37,6 +40,7 @@ describe('board-local navigation', () => {
     expect(app).toContain('<BoardSection')
     expect(boardSection).toContain('<TimelineView')
     expect(boardSection).toContain('<ShippedView')
+    expect(boardSection).toContain('<AgentHome')
   })
 
   it('reveals circular kill controls only from agent hover or focus', () => {

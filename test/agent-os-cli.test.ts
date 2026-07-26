@@ -26,6 +26,199 @@ const setup = (response: any = { id: 1 }) => {
 }
 
 describe('Agent OS CLI', () => {
+  it('manages Agent Home identities through authenticated profile APIs', async () => {
+    const { calls, run } = setup({ profile: { id: 'agent/a', name: 'Builder' } })
+
+    await run(
+      'agent', 'create', 'Builder',
+      '--board', '42',
+      '--role', 'implementation',
+      '--provider', 'codex',
+      '--model', 'gpt-codex',
+      '--effort', 'high',
+      '--access', 'workspace_write',
+      '--capabilities', 'code,review',
+      '--idempotency', 'agent-create-1',
+    )
+    await run('agent', 'show', 'agent/a')
+    await run('agent', 'home', 'agent/a')
+    await run('agent', 'rename', 'agent/a', 'Senior Builder', '--idempotency', 'agent-rename-1')
+    await run('agent', 'archive', 'agent/a', '--idempotency', 'agent-archive-1')
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/boards/42/agent-profiles',
+        body: {
+          name: 'Builder',
+          role: 'implementation',
+          default_provider: 'codex',
+          default_model: 'gpt-codex',
+          default_effort: 'high',
+          default_access_profile: 'workspace_write',
+          capabilities: ['code', 'review'],
+          idempotency_key: 'agent-create-1',
+        },
+      },
+      { method: 'GET', path: '/os/agent-profiles/agent%2Fa', body: undefined },
+      { method: 'GET', path: '/os/agent-profiles/agent%2Fa/home', body: undefined },
+      {
+        method: 'PATCH',
+        path: '/os/agent-profiles/agent%2Fa',
+        body: { name: 'Senior Builder', idempotency_key: 'agent-rename-1' },
+      },
+      {
+        method: 'POST',
+        path: '/os/agent-profiles/agent%2Fa/archive',
+        body: { idempotency_key: 'agent-archive-1' },
+      },
+    ])
+  })
+
+  it('controls, searches, and exports sessions through the same Agent Home APIs', async () => {
+    const { calls, run } = setup({ events: [] })
+
+    await run('session', 'pause', 'session/a', '--idempotency', 'session-pause-1')
+    await run('session', 'rename', 'session/a', 'Review session', '--idempotency', 'session-rename-1')
+    await run(
+      'session', 'search', 'session/a',
+      '--query', 'compile',
+      '--after', '7',
+      '--limit', '25',
+      '--kind', 'tool,status',
+      '--actor-type', 'agent',
+      '--actor-id', 'codex',
+      '--tool', 'terminal',
+      '--status', 'succeeded',
+      '--from', '2026-07-24T10:00:00.000Z',
+      '--to', '2026-07-24T12:00:00.000Z',
+      '--archived',
+    )
+    await run(
+      'session', 'export', 'session/a',
+      '--artifact',
+      '--idempotency', 'session-export-1',
+    )
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/pause',
+        body: { idempotency_key: 'session-pause-1' },
+      },
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/rename',
+        body: {
+          name: 'Review session',
+          idempotency_key: 'session-rename-1',
+        },
+      },
+      {
+        method: 'GET',
+        path: '/os/sessions/session%2Fa/search'
+          + '?limit=25&query=compile&after=7&kind=tool%2Cstatus&actor_type=agent'
+          + '&actor_id=codex&tool=terminal&status=succeeded'
+          + '&from=2026-07-24T10%3A00%3A00.000Z'
+          + '&to=2026-07-24T12%3A00%3A00.000Z&archived=true',
+        body: undefined,
+      },
+      {
+        method: 'POST',
+        path: '/os/sessions/session%2Fa/export',
+        body: {
+          format: 'human',
+          idempotency_key: 'session-export-1',
+        },
+      },
+    ])
+  })
+
+  it('configures and runs Agent Home retention through operator APIs', async () => {
+    const { calls, run } = setup({ policy: {}, run: {} })
+
+    await run('retention', 'show', '--board', '42')
+    await run(
+      'retention', 'set',
+      '--board', '42',
+      '--transcript-days', '120',
+      '--ephemeral-days', '14',
+      '--raw-artifact-days', '45',
+      '--idempotency', 'retention-set-1',
+    )
+    await run(
+      'retention', 'run',
+      '--board', '42',
+      '--as-of', '2026-07-25T12:00:00.000Z',
+      '--idempotency', 'retention-run-1',
+    )
+
+    expect(calls).toEqual([
+      {
+        method: 'GET',
+        path: '/os/boards/42/retention',
+        body: undefined,
+      },
+      {
+        method: 'PUT',
+        path: '/os/boards/42/retention',
+        body: {
+          transcript_days: 120,
+          ephemeral_days: 14,
+          raw_artifact_days: 45,
+          idempotency_key: 'retention-set-1',
+        },
+      },
+      {
+        method: 'POST',
+        path: '/os/boards/42/retention/run',
+        body: {
+          as_of: '2026-07-25T12:00:00.000Z',
+          idempotency_key: 'retention-run-1',
+        },
+      },
+    ])
+  })
+
+  it('reconciles an outcome-unknown fork through an explicit operator decision', async () => {
+    const { calls, run } = setup({ reconciliation: { id: 'reconciliation/1' } })
+
+    await run(
+      'session',
+      'reconcile-fork',
+      'action/a',
+      '--resolution',
+      'verify_adopt',
+      '--note',
+      'Verified through the provider read API',
+      '--idempotency',
+      'fork-reconciliation-1',
+    )
+
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/os/session-actions/action%2Fa/reconcile',
+      body: {
+        resolution: 'verify_adopt',
+        note: 'Verified through the provider read API',
+        idempotency_key: 'fork-reconciliation-1',
+      },
+    }])
+  })
+
+  it('rejects ambiguous fork reconciliation choices before making an API request', async () => {
+    const { calls, run } = setup()
+
+    await expect(run(
+      'session',
+      'reconcile-fork',
+      'action/a',
+      '--resolution',
+      'retry',
+    )).rejects.toThrow('resolution must be verify_adopt or confirm_absent')
+    expect(calls).toEqual([])
+  })
+
   it('creates an isolated workspace on the resolved project board', async () => {
     const { calls, deps, run } = setup({ id: 9, name: 'fix-auth' })
 
@@ -156,6 +349,41 @@ describe('Agent OS CLI', () => {
     await run('drivers', '--json')
 
     expect(calls).toEqual([{ method: 'GET', path: '/os/drivers', body: undefined }])
+  })
+
+  it('creates card work through the canonical jobs API with a replay key', async () => {
+    const { calls, output, run } = setup({
+      mode: 'canonical',
+      job: { id: 'job-1', status: 'queued', workspace_id: 'workspace-1' },
+      orchestration: {
+        lifecycle: 'canonical', contract_attached: true, job_id: 'job-1',
+        workspace_id: 'workspace-1', session_id: 'session-1',
+      },
+    })
+
+    await run(
+      'job', 'create', '7',
+      '--board', '42',
+      '--provider', 'codex',
+      '--model', 'gpt-route',
+      '--attempts', '3',
+      '--idempotency-key', 'cli-request-1',
+    )
+
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/os/boards/42/jobs',
+      body: {
+        card_id: 7,
+        provider: 'codex',
+        model: 'gpt-route',
+        max_attempts: 3,
+        idempotency_key: 'cli-request-1',
+      },
+    }])
+    expect(output).toEqual([
+      'mode=canonical job_id="job-1" status="queued" workspace_id="workspace-1" session_id="session-1"',
+    ])
   })
 
   it('submits structured delivery items, criterion outcomes, and evidence for a job', async () => {

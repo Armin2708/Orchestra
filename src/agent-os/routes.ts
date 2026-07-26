@@ -1,7 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import type Database from 'better-sqlite3'
 import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions, FastifyRequest } from 'fastify'
-import { AgentOsError, ForbiddenError, NotFoundError, UnsupportedError, ValidationError } from './errors.js'
+import {
+  AgentOsError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  UnsupportedError,
+  ValidationError,
+} from './errors.js'
 import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import { Checkpoint, CheckpointForker, CheckpointService } from './checkpoints.js'
@@ -10,11 +17,13 @@ import { DeliveryReportService } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
+import { resolveIdempotencyKey } from './idempotency.js'
 import { LegacyBusEvent, LegacyEventProjection } from './legacy-projection.js'
+import { orchestrationIdentity } from './orchestration-envelope.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
-import { TaskContractService } from './task-contracts.js'
+import { JobMarketService, type ContractAccessNeed, type JobMarketStatus } from './job-market.js'
 import { CreateWorkspace, Workspace, WorkspaceStore } from './workspace-store.js'
 import {
   AGENT_DEFAULT_EFFORT_LEVELS,
@@ -23,6 +32,11 @@ import {
   writeAgentDefaults,
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
+import { agentHomePlugin } from './agent-home-routes.js'
+import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
+import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
+import { registerTaskContractTemplateRoutes } from './contract-template-routes.js'
+import { jobAssignmentPlugin } from './job-assignment-routes.js'
 
 export interface ProcessRecord {
   id: string
@@ -58,6 +72,7 @@ export interface AgentOsRuntimeAdapter {
   writeProcessInput(processId: string, data: string): Promise<void>
   resizeProcess(processId: string, cols: number, rows: number): Promise<void>
   signalProcess(processId: string, signal: string): Promise<void>
+  stopProcess?(processId: string): Promise<ProcessRecord>
   restartProcess?(processId: string): Promise<ProcessRecord>
   listProcessPorts?(workspaceId: string): Promise<Array<{ processId: string; port: number }>>
   forkCheckpoint?: CheckpointForker
@@ -89,6 +104,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   jobExecutor?: JobExecutor
   scheduler?: JobScheduler
   orchestration?: OrchestrationService
+  agentHomeLifecycle?: AgentHomeRuntimeControl
   drivers?: DriverDescriptor[] | (() => DriverDescriptor[])
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
@@ -97,6 +113,34 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
   server.register(agentOsPlugin, { ...options, prefix: '/api/v1/os' })
+  server.register(agentHomePlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    lifecycleRuntime: options.agentHomeLifecycle
+      ?? (isAgentHomeRuntimeControl(options.jobExecutor) ? options.jobExecutor : undefined),
+    orchestration: options.orchestration,
+    scheduler: options.scheduler,
+    prefix: '/api/v1/os',
+  })
+  server.register(agentHomeRetentionPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(jobAssignmentPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+}
+
+function isAgentHomeRuntimeControl(value: unknown): value is AgentHomeRuntimeControl {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<AgentHomeRuntimeControl>
+  return typeof candidate.agentHomeSessionCapabilities === 'function'
+    && typeof candidate.pauseAgentHomeSession === 'function'
+    && typeof candidate.resumeAgentHomeSession === 'function'
+    && typeof candidate.stopAgentHomeSession === 'function'
 }
 
 export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app, options) => {
@@ -108,7 +152,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const events = new EventStore(db)
   const deliveries = new DeliveryReportService(db, events)
   const artifacts = new ArtifactStore(db)
-  const contracts = new TaskContractService(db, events)
+  const jobMarket = new JobMarketService(db, events)
   const attention = new AttentionService(db)
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
@@ -116,7 +160,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
   const isOperator = options.isOperator ?? (() => true)
   const requireOperator = (request: FastifyRequest) => {
-    if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this delivery action')
+    if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')
   }
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
@@ -133,6 +177,8 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }
     return reply.send(error)
   })
+
+  registerTaskContractTemplateRoutes(app, { db, events, requireOperator })
 
   app.get('/providers', async () => ({ providers: await asyncDescriptors(options.providers, [
     claudeProviderCatalog({
@@ -233,6 +279,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/processes', async (request, reply) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process spawning requires the PTY runtime')
     const workspace = requireWorkspace(workspaces, request.params.id)
     const body = objectBody(request.body)
@@ -255,6 +302,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.get<{ Params: { id: string } }>('/processes/:id', (request) => ({ process: requireProcess(db, request.params.id) }))
 
   app.post<{ Params: { id: string } }>('/processes/:id/restart', async (request, reply) => {
+    requireOperator(request)
     if (!options.runtime?.restartProcess) throw new UnsupportedError('process restart requires the PTY runtime')
     const current = requireProcess(db, request.params.id)
     if (!current.restartable) throw new ValidationError('process does not have a restart recipe')
@@ -275,6 +323,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/input', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process input requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
@@ -286,30 +335,62 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/resize', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process resize requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
     const cols = boundedInteger(body.cols, process.cols, 20, 500, 'cols')
     const rows = boundedInteger(body.rows, process.rows, 5, 300, 'rows')
-    await options.runtime.resizeProcess(process.id, cols, rows)
+    if (!['starting', 'running'].includes(process.status)) {
+      return { ok: true, skipped: true, status: process.status, cols: process.cols, rows: process.rows }
+    }
+    try {
+      await options.runtime.resizeProcess(process.id, cols, rows)
+    } catch (error) {
+      const refreshed = requireProcess(db, process.id)
+      if (!['starting', 'running'].includes(refreshed.status)) {
+        return {
+          ok: true,
+          skipped: true,
+          status: refreshed.status,
+          cols: refreshed.cols,
+          rows: refreshed.rows,
+        }
+      }
+      throw error
+    }
     return { ok: true, cols, rows }
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/signal', async (request) => {
+    requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process signals require the PTY runtime')
     const process = requireProcess(db, request.params.id)
     const body = objectBody(request.body)
     const signal = requiredString(body.signal, 'signal').toUpperCase()
+    if (body.escalate === true) {
+      if (signal !== 'SIGTERM') throw new ValidationError('bounded stop escalation requires SIGTERM')
+      if (!options.runtime.stopProcess) throw new UnsupportedError('bounded process stop requires the PTY runtime')
+      return { ok: true, signal, escalated: true, process: await options.runtime.stopProcess(process.id) }
+    }
     await options.runtime.signalProcess(process.id, signal)
     return { ok: true, signal }
   })
 
-  app.get<{ Params: { id: string }; Querystring: { workspace?: string; card?: string; kind?: string; after?: string; limit?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: {
+    workspace?: string
+    card?: string
+    job?: string
+    kind?: string
+    after?: string
+    limit?: string
+  } }>(
     '/boards/:id/events', (request) => {
       const boardId = board(db, request.params.id)
       const page = events.listBoard(boardId, { workspaceId: request.query.workspace,
         cardId: request.query.card ? positiveId(request.query.card, 'card') : undefined,
-        kind: request.query.kind, after: request.query.after, limit: Number(request.query.limit) || undefined })
+        jobId: request.query.job, kind: request.query.kind,
+        after: request.query.after, limit: Number(request.query.limit) || undefined })
       const cursorEvent = request.query.after ? page.at(-1) : page[0]
       return { events: page, next_cursor: cursorEvent?.id ?? request.query.after ?? null }
     })
@@ -330,9 +411,58 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { attention: item }
   })
 
-  app.get<{ Params: { id: string } }>('/cards/:id/contract', (request) => ({ contract: contracts.getOrCreate(positiveId(request.params.id)) }))
-  app.put<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract', (request) =>
-    ({ contract: contracts.put(positiveId(request.params.id), objectBody(request.body)) }))
+  app.get<{ Params: { id: string } }>('/cards/:id/contract', (request) => {
+    const cardId = positiveId(request.params.id)
+    const market = jobMarket.get(cardId)
+    return { contract: market.contract, job_market: market }
+  })
+  app.put<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract', (request) => {
+    const body = objectBody(request.body)
+    const market = jobMarket.update(
+      positiveId(request.params.id),
+      body,
+      stringValue(body.actor) ?? 'human',
+    )
+    return { contract: market.contract, job_market: market }
+  })
+  app.get<{
+    Params: { id: string }
+    Querystring: { mode?: string; provider?: string; model?: string; access_profile?: string }
+  }>('/cards/:id/contract/validate', (request) => {
+    const mode = request.query.mode ?? 'publish'
+    if (!['publish', 'launch'].includes(mode)) throw new ValidationError('mode must be publish or launch')
+    const launch = mode === 'launch'
+      ? {
+          provider: requiredString(request.query.provider, 'provider'),
+          model: request.query.model?.trim() || null,
+          accessProfile: requiredString(request.query.access_profile, 'access_profile') as ContractAccessNeed,
+        }
+      : undefined
+    return {
+      validation: jobMarket.validate(
+        positiveId(request.params.id),
+        mode as 'publish' | 'launch',
+        launch,
+      ),
+    }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/publish', (request) => {
+    requireOperator(request)
+    const body = request.body == null ? {} : objectBody(request.body)
+    const market = jobMarket.publish(positiveId(request.params.id), stringValue(body.actor) ?? 'human')
+    return { contract: market.contract, job_market: market }
+  })
+  app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/transition', (request) => {
+    requireOperator(request)
+    const body = objectBody(request.body)
+    const market = jobMarket.transition(
+      positiveId(request.params.id),
+      requiredString(body.status, 'status') as JobMarketStatus,
+      stringValue(body.actor) ?? 'human',
+      stringValue(body.reason),
+    )
+    return { contract: market.contract, job_market: market }
+  })
 
   app.get<{ Params: { id: string } }>('/cards/:id/evidence', (request) => {
     const bundle = evidence.assemble(positiveId(request.params.id))
@@ -507,6 +637,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { jobs: scheduler.listBoard(boardId, request.query.status) }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/jobs', async (request, reply) => {
+    requireOperator(request)
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
     const cardId = optionalPositiveId(body.card_id ?? body.cardId, 'card_id')
@@ -531,11 +662,25 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const scopedCard = db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
       if (!scopedCard) throw new NotFoundError('card not found')
       if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
-      const launched = await orchestration.launchCard({ cardId, expectedBoardId: boardId, workspaceId,
-        provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt })
+      const idempotencyKey = resolveIdempotencyKey({
+        header: request.headers['idempotency-key'],
+        rawHeaders: request.raw.rawHeaders,
+        snake: body.idempotency_key,
+        camel: body.idempotencyKey,
+      })
+      const launchInput = { cardId, expectedBoardId: boardId, workspaceId,
+        provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt,
+        idempotencyKey }
+      const launched = await orchestration.launchCard(launchInput)
+      const identity = orchestrationIdentity('canonical', launched)
       return reply.code(201).send({
+        mode: 'canonical',
+        orchestration: identity,
+        contract: launched.contract,
         job: launched.job,
-        delivery: launched.delivery,
+        delivery: { ...launched.delivery, contract_id: identity.contract_id },
+        workspace: launched.workspace,
+        session: launched.session,
         dispatch: launched.dispatch,
         dispatch_error: launched.dispatch_error,
       })
@@ -545,7 +690,34 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     await scheduler.tick()
     return reply.code(201).send({ job: scheduler.get(created.id) })
   })
-  app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => ({ job: await scheduler.cancel(request.params.id) }))
+  app.get<{ Params: { id: string } }>('/jobs/:id', (request) => {
+    const snapshot = orchestration.getJobSnapshot(request.params.id)
+    const identity = orchestrationIdentity('canonical', snapshot)
+    const jobEvents = events.listBoard(snapshot.job.board_id, { jobId: snapshot.job.id, limit: 500 })
+    if (!identity.contract_id || !identity.correlation_id || !jobEvents.length
+      || jobEvents.some((event) =>
+        event.workspace_id !== snapshot.workspace?.id
+        || event.card_id !== snapshot.job.card_id
+        || event.contract_id !== identity.contract_id
+        || event.correlation_id !== identity.correlation_id
+        || (event.session_id !== null && event.session_id !== snapshot.session?.id))) {
+      throw new ConflictError('canonical job event scope is missing or inconsistent')
+    }
+    return {
+      mode: 'canonical',
+      orchestration: identity,
+      contract: snapshot.contract,
+      delivery: { ...snapshot.delivery, contract_id: identity.contract_id },
+      job: snapshot.job,
+      workspace: snapshot.workspace,
+      session: snapshot.session,
+      events: jobEvents,
+    }
+  })
+  app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => {
+    requireOperator(request)
+    return { job: await scheduler.cancel(request.params.id) }
+  })
 
   app.get<{ Params: { id: string } }>('/boards/:id/conflicts', (request) => {
     const boardId = board(db, request.params.id)
@@ -557,7 +729,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     { id: 'shell', available: !!options.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'], detail: options.runtime ? undefined : 'requires the PTY runtime' },
   ]) }))
   app.get('/plugins', () => ({ plugins: descriptors(options.plugins, [
-    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
+    { id: 'agent-os-core', name: 'Agent OS Core', version: '1', capabilities: ['events', 'artifacts', 'contracts', 'contract-templates', 'job-market', 'attention', 'policies', 'checkpoints', 'jobs', 'evidence', 'deliveries'] },
   ]) }))
 
   // Keep the store referenced: artifacts are deliberately durable and never receive a delete route.

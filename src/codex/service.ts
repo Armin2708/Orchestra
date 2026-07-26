@@ -11,6 +11,8 @@ import {
   type CodexModelListResponse,
   type CodexRateLimitsResponse,
   type CodexServerNotification,
+  type CodexThreadForkParams,
+  type CodexThreadForkResponse,
   type CodexThreadReadResponse,
   type CodexThreadResumeParams,
   type CodexThreadResumeResponse,
@@ -38,6 +40,11 @@ export interface CodexRuntimeService {
     overrides?: Omit<CodexThreadResumeParams, 'threadId'>,
     options?: CodexRequestOptions,
   ): Promise<CodexThreadResumeResponse>
+  forkThread(
+    threadId: string,
+    overrides?: Omit<CodexThreadForkParams, 'threadId'>,
+    options?: CodexRequestOptions,
+  ): Promise<CodexThreadForkResponse>
   readThread(threadId: string, includeTurns?: boolean, options?: CodexRequestOptions): Promise<CodexThreadReadResponse>
   unsubscribeThread(threadId: string, options?: CodexRequestOptions): Promise<CodexThreadUnsubscribeResponse>
   startTurn(
@@ -79,6 +86,14 @@ export class CodexAppServerService implements CodexRuntimeService {
     options?: CodexRequestOptions,
   ): Promise<CodexThreadResumeResponse> {
     return this.rpc.request('thread/resume', { ...overrides, threadId }, options)
+  }
+
+  forkThread(
+    threadId: string,
+    overrides: Omit<CodexThreadForkParams, 'threadId'> = {},
+    options?: CodexRequestOptions,
+  ): Promise<CodexThreadForkResponse> {
+    return this.rpc.request('thread/fork', { ...overrides, threadId }, options)
   }
 
   readThread(

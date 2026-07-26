@@ -1,0 +1,2215 @@
+{
+  "schema_version": 1,
+  "observed_at_commit": "2e4783bd4de499cacf8ee72117eb21b36a0b8b11",
+  "backlog_item": "REM-001",
+  "classification": "threat_model_only",
+  "posture": "functional_beta_not_safe_remote_beta",
+  "summary": "The current remote path exposes the loopback daemon through a private Tailscale serve endpoint when available or an automatic public Cloudflare quick tunnel otherwise, then pairs a browser with the reusable master operator bearer. Broad reads and direct message delivery into tool-capable agents also mean that future observe and message defaults need explicit data and confused-deputy boundaries, not only mutation scopes. This matrix records the observed controls and gaps; it does not claim DeviceSession, scoped authorization, step-up authentication, per-device revocation, or a remote release gate.",
+  "risk_model": {
+    "likelihood": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "impact": [
+      "low",
+      "moderate",
+      "high",
+      "critical"
+    ],
+    "risk": [
+      "low",
+      "medium",
+      "high",
+      "critical"
+    ],
+    "interpretation": {
+      "critical": "Could directly produce arbitrary terminal control, durable source or credential compromise, or unsafe high-impact approval with weak recovery.",
+      "high": "Could expose sensitive project data or privileged control, or materially weaken detection and recovery.",
+      "medium": "Requires meaningful preconditions or has bounded impact, but needs a planned control before remote beta.",
+      "low": "Limited direct impact or strong prerequisites; retain as defense-in-depth."
+    }
+  },
+  "standards": [
+    {
+      "id": "STD-001",
+      "title": "OAuth 2.0 Bearer Token Usage",
+      "url": "https://www.rfc-editor.org/info/rfc6750",
+      "relevance": "A bearer token is usable by any holder, so storage, transport, logging, and replay exposure are security boundaries."
+    },
+    {
+      "id": "STD-002",
+      "title": "OAuth 2.0 Security Best Current Practice",
+      "url": "https://www.rfc-editor.org/info/rfc9700",
+      "relevance": "Access tokens should not be transported in URI query parameters."
+    },
+    {
+      "id": "STD-003",
+      "title": "OAuth 2.0 Demonstrating Proof of Possession",
+      "url": "https://www.rfc-editor.org/info/rfc9449",
+      "relevance": "Sender-constrained credentials are a reference design for reducing replay of a stolen browser credential."
+    },
+    {
+      "id": "STD-004",
+      "title": "Fetch Metadata Request Headers",
+      "url": "https://www.w3.org/TR/fetch-metadata/",
+      "relevance": "Fetch Metadata can contribute to a fail-closed cross-site request policy alongside Host and Origin validation."
+    },
+    {
+      "id": "STD-005",
+      "title": "Web Authentication Level 3",
+      "url": "https://www.w3.org/TR/webauthn-3/",
+      "relevance": "Platform authenticators and user verification are reference mechanisms for high-risk step-up."
+    }
+  ],
+  "assets": [
+    {
+      "id": "AST-001",
+      "name": "Master operator bearer",
+      "sensitivity": "critical"
+    },
+    {
+      "id": "AST-002",
+      "name": "Agent-scoped bearer",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-003",
+      "name": "PTY processes, input, output, and signals",
+      "sensitivity": "critical"
+    },
+    {
+      "id": "AST-004",
+      "name": "Source trees, worktrees, environment, and developer credentials reachable from a terminal",
+      "sensitivity": "critical"
+    },
+    {
+      "id": "AST-005",
+      "name": "Approval and permission requests and outcomes",
+      "sensitivity": "critical"
+    },
+    {
+      "id": "AST-006",
+      "name": "Agent conversations, transcripts, context, evidence, and process output",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-007",
+      "name": "Agent, job, delivery, workspace, and settings control plane",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-008",
+      "name": "Device identity, session state, scope grants, and revocation state",
+      "sensitivity": "critical"
+    },
+    {
+      "id": "AST-009",
+      "name": "Audit attribution and forensic history",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-010",
+      "name": "Tunnel state, public origin, and service availability",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-011",
+      "name": "Push subscriptions and lock-screen notification content",
+      "sensitivity": "high"
+    },
+    {
+      "id": "AST-012",
+      "name": "Browser storage and service-worker caches",
+      "sensitivity": "high"
+    }
+  ],
+  "actors": [
+    {
+      "id": "ACT-001",
+      "name": "Local owner/operator",
+      "trust": "trusted"
+    },
+    {
+      "id": "ACT-002",
+      "name": "Authorized remote device user",
+      "trust": "conditionally_trusted"
+    },
+    {
+      "id": "ACT-003",
+      "name": "Managed agent process",
+      "trust": "limited"
+    },
+    {
+      "id": "ACT-004",
+      "name": "Unauthenticated remote attacker or tunnel scanner",
+      "trust": "untrusted"
+    },
+    {
+      "id": "ACT-005",
+      "name": "Lost-device holder",
+      "trust": "untrusted"
+    },
+    {
+      "id": "ACT-006",
+      "name": "Malicious page, browser extension, injected script, or same-device malware",
+      "trust": "untrusted"
+    },
+    {
+      "id": "ACT-007",
+      "name": "Tunnel, proxy, log, analytics, or referrer observer",
+      "trust": "external"
+    },
+    {
+      "id": "ACT-008",
+      "name": "Push provider or lock-screen observer",
+      "trust": "external"
+    },
+    {
+      "id": "ACT-009",
+      "name": "Compromised or confused authorized device",
+      "trust": "adversarial_authenticated"
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "id": "TB-001",
+      "name": "QR display and camera pairing channel",
+      "from": "local owner terminal",
+      "to": "remote browser"
+    },
+    {
+      "id": "TB-002",
+      "name": "Browser URL, JavaScript runtime, localStorage, history, and service-worker cache",
+      "from": "remote browser",
+      "to": "persistent device state"
+    },
+    {
+      "id": "TB-003",
+      "name": "Tailnet or public tunnel",
+      "from": "remote network",
+      "to": "loopback daemon"
+    },
+    {
+      "id": "TB-004",
+      "name": "Daemon authentication hook",
+      "from": "HTTP or SSE request",
+      "to": "operator or agent principal"
+    },
+    {
+      "id": "TB-005",
+      "name": "Principal-to-route authorization",
+      "from": "authenticated principal",
+      "to": "read or mutation handler"
+    },
+    {
+      "id": "TB-006",
+      "name": "Web terminal control",
+      "from": "browser keyboard or control action",
+      "to": "host PTY and operating system"
+    },
+    {
+      "id": "TB-007",
+      "name": "Provider approval workflow",
+      "from": "provider request and operator answer",
+      "to": "driver response and durable event"
+    },
+    {
+      "id": "TB-008",
+      "name": "Push delivery and notification click",
+      "from": "daemon and push provider",
+      "to": "lock screen and browser navigation"
+    },
+    {
+      "id": "TB-009",
+      "name": "Online-to-offline transition",
+      "from": "authenticated live response",
+      "to": "stale cached device view"
+    },
+    {
+      "id": "TB-010",
+      "name": "Device management and recovery",
+      "from": "owner revocation action",
+      "to": "active streams, credentials, caches, and push subscriptions"
+    },
+    {
+      "id": "TB-011",
+      "name": "Remote message to tool-capable agent session",
+      "from": "device-authored ask, reply, notification, or task-like text",
+      "to": "live agent prompt, reasoning, tools, workspace, and downstream replies"
+    }
+  ],
+  "required_topics": [
+    {
+      "id": "TOP-001",
+      "name": "tunnel_discovery",
+      "threat_ids": [
+        "REM-T01",
+        "REM-T14",
+        "REM-T18"
+      ]
+    },
+    {
+      "id": "TOP-002",
+      "name": "token_theft",
+      "threat_ids": [
+        "REM-T02",
+        "REM-T03",
+        "REM-T04",
+        "REM-T05",
+        "REM-T15"
+      ]
+    },
+    {
+      "id": "TOP-003",
+      "name": "csrf_origin_host",
+      "threat_ids": [
+        "REM-T06",
+        "REM-T19",
+        "REM-T22"
+      ]
+    },
+    {
+      "id": "TOP-004",
+      "name": "terminal_control_escalation",
+      "threat_ids": [
+        "REM-T07",
+        "REM-T09"
+      ]
+    },
+    {
+      "id": "TOP-005",
+      "name": "offline_mutation",
+      "threat_ids": [
+        "REM-T11",
+        "REM-T12",
+        "REM-T16"
+      ]
+    },
+    {
+      "id": "TOP-006",
+      "name": "lost_device_and_revocation",
+      "threat_ids": [
+        "REM-T05",
+        "REM-T13",
+        "REM-T16"
+      ]
+    },
+    {
+      "id": "TOP-007",
+      "name": "approvals",
+      "threat_ids": [
+        "REM-T08",
+        "REM-T17"
+      ]
+    },
+    {
+      "id": "TOP-008",
+      "name": "audit_attribution",
+      "threat_ids": [
+        "REM-T10",
+        "REM-T19"
+      ]
+    },
+    {
+      "id": "TOP-009",
+      "name": "message_confused_deputy",
+      "threat_ids": [
+        "REM-T20"
+      ]
+    },
+    {
+      "id": "TOP-010",
+      "name": "read_authorization_and_data_minimization",
+      "threat_ids": [
+        "REM-T11",
+        "REM-T16",
+        "REM-T21"
+      ]
+    }
+  ],
+  "current_controls": [
+    {
+      "id": "CUR-001",
+      "status": "implemented",
+      "description": "The remote command refuses to open a tunnel when daemon token authentication is disabled.",
+      "evidence": [
+        {
+          "file": "src/remote.ts",
+          "contains": "if (authDisabled()) throw new Error('remote requires token auth — unset ORCHESTRA_NO_AUTH first')"
+        }
+      ]
+    },
+    {
+      "id": "CUR-002",
+      "status": "partial",
+      "description": "Remote prefers Tailscale and otherwise uses a TLS Cloudflare quick tunnel to the loopback daemon; the public fallback is automatic rather than explicitly confirmed.",
+      "evidence": [
+        {
+          "file": "src/remote.ts",
+          "contains": "if (hasBin('tailscale')) return { state: startTailscale(), reused: false }"
+        },
+        {
+          "file": "src/remote.ts",
+          "contains": "if (hasBin('cloudflared')) return { state: await startCloudflared(), reused: false }"
+        }
+      ]
+    },
+    {
+      "id": "CUR-003",
+      "status": "implemented",
+      "description": "The master token has 256 bits of randomness, is written with owner-only mode, and comparisons hash both values before timing-safe comparison.",
+      "evidence": [
+        {
+          "file": "src/token.ts",
+          "contains": "const token = crypto.randomBytes(32).toString('hex')"
+        },
+        {
+          "file": "src/token.ts",
+          "contains": "fs.writeFileSync(tokenPath(), token + '\\n', { mode: 0o600 })"
+        },
+        {
+          "file": "src/token.ts",
+          "contains": "return crypto.timingSafeEqual(a, b)"
+        }
+      ]
+    },
+    {
+      "id": "CUR-004",
+      "status": "partial",
+      "description": "Pairing initially places the bearer in a URL fragment, which is not sent in the initial HTTP request, and the app removes the fragment after importing it; the reusable secret is then persisted in localStorage.",
+      "evidence": [
+        {
+          "file": "src/remote.ts",
+          "contains": "export const pairUrl = (s: RemoteState) => `${s.url}/#token=${ensureToken()}`"
+        },
+        {
+          "file": "web/src/main.tsx",
+          "contains": "history.replaceState(null, '', location.pathname + location.search)"
+        },
+        {
+          "file": "web/src/api.ts",
+          "contains": "export const setToken = (t: string) => localStorage.setItem('orchestra-token', t)"
+        }
+      ]
+    },
+    {
+      "id": "CUR-005",
+      "status": "partial",
+      "description": "API requests require a matching bearer or query token, but query-token acceptance applies to every API route and the master bearer maps directly to the broad operator principal.",
+      "evidence": [
+        {
+          "file": "src/server.ts",
+          "contains": "const given = bearer ?? query.token"
+        },
+        {
+          "file": "src/server.ts",
+          "contains": "req.orchestraPrincipal = 'operator'"
+        }
+      ]
+    },
+    {
+      "id": "CUR-006",
+      "status": "partial",
+      "description": "The daemon distinguishes operator and managed-agent principals, and multiple high-risk compatibility and PTY handlers explicitly require the operator principal; this is not a per-device, scope-based policy.",
+      "evidence": [
+        {
+          "file": "src/server.ts",
+          "contains": "reply.code(403).send({ error: 'operator authorization is required for this action' })"
+        },
+        {
+          "file": "src/agent-os/routes.ts",
+          "contains": "if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')"
+        }
+      ]
+    },
+    {
+      "id": "CUR-007",
+      "status": "implemented",
+      "description": "PTY input size, resize dimensions, process existence, process status, and signal names are bounded or validated.",
+      "evidence": [
+        {
+          "file": "src/agent-os/routes.ts",
+          "contains": "if (Buffer.byteLength(data) > 1024 * 1024) throw new ValidationError('process input exceeds the 1 MiB limit')"
+        },
+        {
+          "file": "src/runtime/supervisor.ts",
+          "contains": "if (!signalNames.has(signal)) throw new Error(`unsupported signal: ${signal}`)"
+        }
+      ]
+    },
+    {
+      "id": "CUR-008",
+      "status": "implemented",
+      "description": "The current service worker only intercepts same-origin GET requests and excludes SSE, so it does not queue or replay mutations today.",
+      "evidence": [
+        {
+          "file": "web/public/sw.js",
+          "contains": "if (url.origin !== location.origin || e.request.method !== 'GET') return"
+        },
+        {
+          "file": "web/public/sw.js",
+          "contains": "if (url.pathname.endsWith('/events')) return // SSE — never intercept"
+        }
+      ]
+    },
+    {
+      "id": "CUR-009",
+      "status": "implemented",
+      "description": "Approval routes validate closed decisions and bounded answer arrays, and the Codex driver only resolves a live pending request.",
+      "evidence": [
+        {
+          "file": "src/server.ts",
+          "contains": "const decisions = ['allow', 'allow_session', 'deny', 'cancel'] as const"
+        },
+        {
+          "file": "src/runtime/drivers/codex.ts",
+          "contains": "if (!state || !pending || state.stopped) return false"
+        }
+      ]
+    },
+    {
+      "id": "CUR-010",
+      "status": "implemented",
+      "description": "Durable Codex approval outcomes are synthesized with safe fields, raw native parameters are withheld, and unmatched outcomes fail closed.",
+      "evidence": [
+        {
+          "file": "src/agent-os/codex-native-events.ts",
+          "contains": "raw_payload_state: 'withheld'"
+        },
+        {
+          "file": "src/agent-os/codex-native-events.ts",
+          "contains": "throw new ConflictError('Codex approval response has no matching durable request')"
+        }
+      ]
+    },
+    {
+      "id": "CUR-011",
+      "status": "partial",
+      "description": "Process-input audit events retain source and byte count without raw keystrokes, but they do not identify a remote device or operator session.",
+      "evidence": [
+        {
+          "file": "src/runtime/supervisor.ts",
+          "contains": "await this.emitFor(state, 'process.input', { source, bytes: Buffer.byteLength(data) })"
+        }
+      ]
+    },
+    {
+      "id": "CUR-012",
+      "status": "partial",
+      "description": "Push notification delivery has per-item cooldown and a global rate cap, and currently generated deep links are relative; subscriptions are not device-bound and click handling does not validate payload destinations.",
+      "evidence": [
+        {
+          "file": "src/push.ts",
+          "contains": "if (windowCount >= globalPerMinute) return false"
+        },
+        {
+          "file": "src/push.ts",
+          "contains": "url: `/?board=${card.board_id}&card=${card.id}`"
+        }
+      ]
+    },
+    {
+      "id": "CUR-013",
+      "status": "partial",
+      "description": "Tunnel state is owner-only and stop removes the tunnel state and asks the selected tunnel provider to stop; stopping remote access does not rotate the reusable master token.",
+      "evidence": [
+        {
+          "file": "src/remote.ts",
+          "contains": "fs.writeFileSync(remoteStatePath(), JSON.stringify(s, null, 2) + '\\n', { mode: 0o600 })"
+        },
+        {
+          "file": "src/remote.ts",
+          "contains": "fs.rmSync(remoteStatePath(), { force: true })"
+        },
+        {
+          "file": "src/remote.ts",
+          "contains": "else if (alive(s.pid)) { try { process.kill(s.pid!, 'SIGTERM') } catch { /* raced its exit */ } }"
+        }
+      ]
+    },
+    {
+      "id": "CUR-014",
+      "status": "implemented",
+      "description": "The normal daemon binds loopback, and direct network exposure refuses auth-disabled mode.",
+      "evidence": [
+        {
+          "file": "src/daemon.ts",
+          "contains": "await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })"
+        },
+        {
+          "file": "src/daemon.ts",
+          "contains": "throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')"
+        }
+      ]
+    },
+    {
+      "id": "CUR-015",
+      "status": "partial",
+      "description": "Managed agents receive a separate token instead of the operator credential, but some non-GET infrastructure and canonical routes do not yet have a centralized device-scope policy.",
+      "evidence": [
+        {
+          "file": "src/token.ts",
+          "contains": "if (process.env.ORCHESTRA_MANAGED_AGENT === '1') return scoped"
+        },
+        {
+          "file": "src/daemon.ts",
+          "contains": "codexEnvironment.ORCHESTRA_AGENT_TOKEN = agentToken"
+        }
+      ]
+    },
+    {
+      "id": "CUR-016",
+      "status": "partial",
+      "description": "The PWA uses network-first API caching for availability, but authenticated GET responses can survive offline and are not partitioned or purged by device session.",
+      "evidence": [
+        {
+          "file": "web/public/sw.js",
+          "contains": "caches.open(API_CACHE).then((c) => c.put(e.request, copy))"
+        },
+        {
+          "file": "web/public/sw.js",
+          "contains": "fetch(e.request).then((res) => {"
+        }
+      ]
+    },
+    {
+      "id": "CUR-017",
+      "status": "partial",
+      "description": "Messages have a closed kind vocabulary and recipient validation, but ask, reply, and task-like content for a hired agent is delivered directly into its live tool-capable session.",
+      "evidence": [
+        {
+          "file": "src/server.ts",
+          "contains": "if (requestedKind && !MESSAGE_KINDS.has(requestedKind))"
+        },
+        {
+          "file": "src/server.ts",
+          "contains": "if ((kind === 'ask' || kind === 'reply' || kind === 'task') && toId && maestro?.isHired(toId)) targets.add(toId)"
+        },
+        {
+          "file": "src/conductor.ts",
+          "contains": "h.push(text, msg.id)"
+        }
+      ]
+    },
+    {
+      "id": "CUR-018",
+      "status": "partial",
+      "description": "Several sensitive reads validate object existence, bound pagination, or require the current operator, but there is no exhaustive device read policy, field classification, or resource grant.",
+      "evidence": [
+        {
+          "file": "src/agent-os/routes.ts",
+          "contains": "const limit = Math.min(2000, Math.max(1, Number(request.query.limit) || 500))"
+        },
+        {
+          "file": "src/server.ts",
+          "contains": "server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {"
+        },
+        {
+          "file": "src/server.ts",
+          "contains": "if (!requireOperator(req, reply)) return"
+        }
+      ]
+    }
+  ],
+  "target_controls": [
+    {
+      "id": "TGT-001",
+      "backlog_items": [
+        "REM-002",
+        "REM-003"
+      ],
+      "description": "Replace the master-token QR with a single-use, short-lived, audience-bound PairingTicket whose secret is redeemed exactly once over the intended tunnel origin.",
+      "verification_ids": [
+        "AC-01",
+        "AC-03"
+      ]
+    },
+    {
+      "id": "TGT-002",
+      "backlog_items": [
+        "REM-003",
+        "REM-008",
+        "REM-018",
+        "REM-GATE"
+      ],
+      "description": "Create named DeviceSession records with owner-visible creation, last-seen, expiry, state, public-key binding, and explicit revocation.",
+      "verification_ids": [
+        "AC-04",
+        "AC-13",
+        "AC-15"
+      ]
+    },
+    {
+      "id": "TGT-003",
+      "backlog_items": [
+        "REM-002",
+        "REM-003",
+        "REM-004"
+      ],
+      "description": "Issue short-lived, rotating, hashed-at-rest per-device credentials and bind them to a non-exportable device key where supported; never persist the master operator credential in browser storage.",
+      "verification_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-04",
+        "AC-13"
+      ]
+    },
+    {
+      "id": "TGT-004",
+      "backlog_items": [
+        "REM-005",
+        "REM-006",
+        "REM-020"
+      ],
+      "description": "Enforce a centralized default-deny device policy for observe, message, approve, agent-control, terminal-write, and admin scopes across canonical, compatibility, legacy, and infrastructure routes.",
+      "verification_ids": [
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-16"
+      ]
+    },
+    {
+      "id": "TGT-005",
+      "backlog_items": [
+        "REM-007",
+        "REM-020"
+      ],
+      "description": "Require short-lived user-verifying step-up grants bound to device, action, resource, request digest, and nonce for PTY input, process launch or signal, admin changes, destructive actions, and risky approval allow decisions.",
+      "verification_ids": [
+        "AC-06",
+        "AC-07",
+        "AC-14"
+      ]
+    },
+    {
+      "id": "TGT-006",
+      "backlog_items": [
+        "REM-009"
+      ],
+      "description": "Attribute every remote mutation and approval outcome to device session, authenticated user, scope, step-up grant, request correlation, and tunnel origin without persisting raw PTY input or secret approval parameters.",
+      "verification_ids": [
+        "AC-06",
+        "AC-07",
+        "AC-15"
+      ]
+    },
+    {
+      "id": "TGT-007",
+      "backlog_items": [
+        "REM-010",
+        "OPS-022"
+      ],
+      "description": "Validate Host and trusted forwarded-host data, enforce an explicit Origin and Fetch Metadata policy on state-changing device requests, and add restrictive CSP including frame-ancestors plus compatible anti-framing and security headers.",
+      "verification_ids": [
+        "AC-05",
+        "AC-20"
+      ]
+    },
+    {
+      "id": "TGT-008",
+      "backlog_items": [
+        "REM-010",
+        "REM-018",
+        "OPS-012"
+      ],
+      "description": "Rate-limit pairing, authentication failures, stream creation, approvals, PTY writes, and administrative actions per origin, device, and account; emit privacy-safe alerts.",
+      "verification_ids": [
+        "AC-03",
+        "AC-12"
+      ]
+    },
+    {
+      "id": "TGT-009",
+      "backlog_items": [
+        "REM-011"
+      ],
+      "description": "Default to private tunnel exposure, require explicit informed confirmation for public fallback, verify reused tunnel ownership and health, pin the expected public origin, and stop the tunnel on auth uncertainty.",
+      "verification_ids": [
+        "AC-05",
+        "AC-12"
+      ]
+    },
+    {
+      "id": "TGT-010",
+      "backlog_items": [
+        "REM-015",
+        "REM-016",
+        "REM-017"
+      ],
+      "description": "Make offline state explicit and read-only, do not cache sensitive authenticated API data by default, never queue mutations, and purge session-partitioned caches on logout, revoke, credential failure, or worker upgrade.",
+      "verification_ids": [
+        "AC-09",
+        "AC-10"
+      ]
+    },
+    {
+      "id": "TGT-011",
+      "backlog_items": [
+        "REM-004",
+        "REM-008",
+        "REM-018",
+        "REM-GATE"
+      ],
+      "description": "Provide lost-device response that atomically revokes the device, expires its credentials and step-up grants, closes streams, removes its push subscription, and forces cache purge at the next contact without disrupting other devices.",
+      "verification_ids": [
+        "AC-04",
+        "AC-09",
+        "AC-13"
+      ]
+    },
+    {
+      "id": "TGT-012",
+      "backlog_items": [
+        "REM-007",
+        "REM-009",
+        "QA-012"
+      ],
+      "description": "Show redacted, risk-classified approval summaries and bind each answer to the exact pending request and digest; allow deny or cancel with the approve scope but require step-up for command, file, permission, MCP, acceptance-override, and allow-session decisions.",
+      "verification_ids": [
+        "AC-07",
+        "AC-14",
+        "AC-15"
+      ]
+    },
+    {
+      "id": "TGT-013",
+      "backlog_items": [
+        "REM-008",
+        "REM-012",
+        "REM-013",
+        "REM-014",
+        "REM-018"
+      ],
+      "description": "Bind push subscriptions to a DeviceSession, minimize lock-screen content by default, validate notification-click URLs as same-origin allowlisted paths, and remove subscriptions on revocation.",
+      "verification_ids": [
+        "AC-11",
+        "AC-17"
+      ]
+    },
+    {
+      "id": "TGT-014",
+      "backlog_items": [
+        "REM-004",
+        "REM-010"
+      ],
+      "description": "Use header- or proof-bound credentials for normal APIs and replace broad query-token authentication with a one-purpose, short-lived, single-use stream ticket or authenticated fetch-based stream.",
+      "verification_ids": [
+        "AC-03",
+        "AC-05"
+      ]
+    },
+    {
+      "id": "TGT-015",
+      "backlog_items": [
+        "BASE-007",
+        "REM-018"
+      ],
+      "description": "Roll out behind independent pairing, device-auth, scoped-mutation, public-tunnel, terminal-write, and push flags with privacy-safe telemetry and a remote kill switch.",
+      "verification_ids": [
+        "AC-12",
+        "AC-13",
+        "AC-16"
+      ]
+    },
+    {
+      "id": "TGT-016",
+      "backlog_items": [
+        "REM-017",
+        "REM-018",
+        "REM-019",
+        "REM-020",
+        "REM-GATE",
+        "QA-012",
+        "QA-013"
+      ],
+      "description": "Require automated desktop and phone abuse cases, iOS and Android acceptance, revocation propagation, offline semantics, accessibility, audit attribution, and independent security review before safe remote beta.",
+      "verification_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-13",
+        "AC-14",
+        "AC-15",
+        "AC-16",
+        "AC-17",
+        "AC-18",
+        "AC-19",
+        "AC-20"
+      ]
+    },
+    {
+      "id": "TGT-017",
+      "backlog_items": [
+        "REM-005",
+        "REM-006",
+        "REM-020",
+        "OPS-009",
+        "OPS-011"
+      ],
+      "description": "Apply a centralized default-deny read policy by route, device scope, board, workspace, agent, process, field, and data class; observe only exposes explicitly allowlisted redacted views, while raw PTY output, transcripts, context, exports, system details, secrets, and cross-resource identifiers require stricter grants or remain unavailable remotely.",
+      "verification_ids": [
+        "AC-09",
+        "AC-19"
+      ]
+    },
+    {
+      "id": "TGT-018",
+      "backlog_items": [
+        "REM-005",
+        "REM-006",
+        "OPS-011",
+        "QA-011"
+      ],
+      "description": "Treat device-authored messages as untrusted provenance, keep default message scope in a no-tool discussion or Q&A path, and require agent-control policy plus step-up before any remote-origin text can become an instruction to a tool-capable live agent.",
+      "verification_ids": [
+        "AC-18"
+      ]
+    }
+  ],
+  "scope_matrix": [
+    {
+      "scope": "observe",
+      "default_phone": true,
+      "target_allows": [
+        "Read explicitly allowlisted, resource-bound, field-minimized, redacted board, agent, delivery, conversation, and process-status views.",
+        "Open authenticated event streams through a stream-specific credential."
+      ],
+      "target_denies": [
+        "New or unclassified GET routes, cross-board or cross-workspace identifiers, raw PTY output, raw transcripts, context, exports, system details, secrets, raw approval parameters, device administration, sensitive environment values, and any mutation.",
+        "Unpartitioned offline caching of authenticated API responses."
+      ],
+      "step_up": "never for ordinary allowlisted redacted reads; explicit resource grants and reauthentication are required for any separately approved sensitive view"
+    },
+    {
+      "scope": "message",
+      "default_phone": true,
+      "target_allows": [
+        "Send bounded ask, reply, and notify messages with device attribution into a no-tool discussion or Q&A path.",
+        "Promote a discussion result to work only through an explicit agent-control decision."
+      ],
+      "target_denies": [
+        "Direct prompt injection into a tool-capable live agent, instruction laundering through ask or reply, task assignment, agent launch, swarm control, policy changes, and terminal input."
+      ],
+      "step_up": "not normally for no-tool Q&A; agent-control scope and its risk policy apply before remote text can direct a live tool-capable agent"
+    },
+    {
+      "scope": "approve",
+      "default_phone": true,
+      "target_allows": [
+        "View a redacted approval summary and deny or cancel the exact live request.",
+        "Approve low-risk, policy-classified requests when explicitly permitted."
+      ],
+      "target_denies": [
+        "Blind or stale answers, unknown request digests, and unscoped allow-session decisions.",
+        "Using approval scope as terminal-write, agent-control, or admin scope."
+      ],
+      "step_up": "required for command, file, permission, MCP, acceptance-override, and allow-session decisions"
+    },
+    {
+      "scope": "agent-control",
+      "default_phone": false,
+      "target_allows": [
+        "Explicitly granted pause and stop operations with attribution.",
+        "Start, resume, retry, interrupt, model, effort, and access-profile actions only under their risk policy."
+      ],
+      "target_denies": [
+        "Workspace, provider, plugin, MCP, policy, and device administration unless admin is also granted."
+      ],
+      "step_up": "required for start, resume, retry, access expansion, model or permission changes, and destructive lifecycle actions"
+    },
+    {
+      "scope": "terminal-write",
+      "default_phone": false,
+      "target_allows": [
+        "Input, resize, spawn, restart, and approved signals for explicitly selected processes."
+      ],
+      "target_denies": [
+        "Background or offline input, wildcard process access, and commands after grant expiry or process identity change."
+      ],
+      "step_up": "required and bound to device, workspace, process, action, expiry, and request nonce"
+    },
+    {
+      "scope": "admin",
+      "default_phone": false,
+      "target_allows": [
+        "Device, tunnel, access-profile, provider, plugin, MCP, retention, policy, and settings administration when explicitly granted."
+      ],
+      "target_denies": [
+        "Implicit inheritance from observe, message, approve, agent-control, or terminal-write."
+      ],
+      "step_up": "always required for mutations"
+    }
+  ],
+  "remote_request_policy": {
+    "default": "deny",
+    "read_rules": [
+      {
+        "data_class": "public_bootstrap",
+        "examples": [
+          "health",
+          "static application shell"
+        ],
+        "required_scope": "none",
+        "requirements": "Explicit allowlist, minimal fields, no project or credential state, abuse limits, and anti-framing headers."
+      },
+      {
+        "data_class": "redacted_observe",
+        "examples": [
+          "allowlisted board summary",
+          "agent status",
+          "delivery status",
+          "redacted conversation view",
+          "process status"
+        ],
+        "required_scope": "observe",
+        "requirements": "Explicit route and field policy, board/workspace/agent/process resource grant, server-side redaction, bounded pagination, no shared sensitive cache, and device attribution."
+      },
+      {
+        "data_class": "sensitive_content",
+        "examples": [
+          "raw process output",
+          "raw transcript",
+          "workspace context",
+          "search or export",
+          "live approval detail",
+          "system or settings detail"
+        ],
+        "required_scope": "observe_plus_explicit_resource_grant_or_more_specific_scope",
+        "requirements": "Unavailable remotely by default; separately approved views require purpose binding, stricter field minimization, recent reauthentication where risk warrants, no offline cache, and exact object authorization."
+      },
+      {
+        "data_class": "secret_or_withheld",
+        "examples": [
+          "credentials",
+          "raw environment",
+          "raw approval parameters",
+          "withheld reasoning"
+        ],
+        "required_scope": "none",
+        "requirements": "Never returned to a remote DeviceSession."
+      }
+    ],
+    "mutation_rules": [
+      {
+        "family": "messages",
+        "required_scope": "message",
+        "step_up": "no_tool_q_and_a_only; agent_control_policy_required_before_live_tool_capable_prompt"
+      },
+      {
+        "family": "approvals_and_permissions",
+        "required_scope": "approve",
+        "step_up": "required_for_allow_high_risk_or_session"
+      },
+      {
+        "family": "agent_and_session_controls",
+        "required_scope": "agent-control",
+        "step_up": "required_for_start_resume_retry_access_expansion_or_destructive"
+      },
+      {
+        "family": "process_input_resize_spawn_restart_signal",
+        "required_scope": "terminal-write",
+        "step_up": "required"
+      },
+      {
+        "family": "device_tunnel_settings_policy_retention_provider_plugin_mcp_access",
+        "required_scope": "admin",
+        "step_up": "required"
+      }
+    ],
+    "invariants": [
+      "A newly added route of any method is unavailable to a DeviceSession until its scope, resource boundary, data class, field policy, cache policy, step-up, attribution, and abuse behavior are explicit.",
+      "Remote-origin message text cannot gain terminal, agent-control, approval, or admin authority by being relayed through a tool-capable agent."
+    ]
+  },
+  "observed_read_surface": {
+    "inventory_file": "docs/agent-os-surface-inventory.json",
+    "total_get_routes": 58,
+    "by_classification": {
+      "canonical": 41,
+      "compatibility": 3,
+      "legacy": 9,
+      "infrastructure": 5
+    },
+    "interpretation": "The count includes authenticated and intentionally public GET routes and is not an observe grant list. Any read-surface change requires explicit data/resource classification and REM-001 review."
+  },
+  "observed_mutation_surface": {
+    "inventory_file": "docs/agent-os-surface-inventory.json",
+    "total_non_get_routes": 99,
+    "by_classification": {
+      "canonical": 53,
+      "compatibility": 26,
+      "legacy": 16,
+      "infrastructure": 4
+    },
+    "interpretation": "These routes are not individually granted to future devices. The count is a drift tripwire: any mutation surface change requires REM-001 and the centralized default-deny policy to be reconsidered."
+  },
+  "threats": [
+    {
+      "id": "REM-T01",
+      "title": "Tunnel discovery and daemon fingerprinting",
+      "topic_ids": [
+        "TOP-001"
+      ],
+      "likelihood": "medium",
+      "impact": "moderate",
+      "risk": "medium",
+      "assets": [
+        "AST-010"
+      ],
+      "actors": [
+        "ACT-004",
+        "ACT-007"
+      ],
+      "boundaries": [
+        "TB-003"
+      ],
+      "current_control_ids": [
+        "CUR-001",
+        "CUR-002",
+        "CUR-014"
+      ],
+      "gap": "A public quick-tunnel hostname can be scanned or shared, health and static surfaces remain open, and there is no request-abuse signal or verified origin binding.",
+      "target_control_ids": [
+        "TGT-007",
+        "TGT-008",
+        "TGT-009"
+      ],
+      "abuse_case_ids": [
+        "AC-05",
+        "AC-12"
+      ]
+    },
+    {
+      "id": "REM-T02",
+      "title": "Master-token QR observation and replay",
+      "topic_ids": [
+        "TOP-002"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-003",
+        "AST-004",
+        "AST-005",
+        "AST-007"
+      ],
+      "actors": [
+        "ACT-004",
+        "ACT-005",
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-001",
+        "TB-004",
+        "TB-005"
+      ],
+      "current_control_ids": [
+        "CUR-003",
+        "CUR-004",
+        "CUR-005"
+      ],
+      "gap": "The QR contains the stable master operator bearer rather than a one-time pairing ticket; any observer can replay it for broad operator authority until the global token changes.",
+      "target_control_ids": [
+        "TGT-001",
+        "TGT-002",
+        "TGT-003"
+      ],
+      "abuse_case_ids": [
+        "AC-01",
+        "AC-13"
+      ]
+    },
+    {
+      "id": "REM-T03",
+      "title": "Browser credential extraction",
+      "topic_ids": [
+        "TOP-002"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-012"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-002"
+      ],
+      "current_control_ids": [
+        "CUR-003",
+        "CUR-004"
+      ],
+      "gap": "The reusable operator bearer is readable JavaScript state in localStorage and remains available to a lost-device holder, injected script, extension, or same-device malware.",
+      "target_control_ids": [
+        "TGT-002",
+        "TGT-003",
+        "TGT-007",
+        "TGT-011"
+      ],
+      "abuse_case_ids": [
+        "AC-02",
+        "AC-04"
+      ]
+    },
+    {
+      "id": "REM-T04",
+      "title": "Query-token disclosure through SSE URLs",
+      "topic_ids": [
+        "TOP-002"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-006"
+      ],
+      "actors": [
+        "ACT-004",
+        "ACT-007"
+      ],
+      "boundaries": [
+        "TB-002",
+        "TB-003",
+        "TB-004"
+      ],
+      "current_control_ids": [
+        "CUR-005",
+        "CUR-008"
+      ],
+      "gap": "The global master bearer is placed in SSE query strings and the server accepts query tokens on every API route, exposing it to URL-oriented logs, diagnostics, browser tooling, and accidental sharing.",
+      "target_control_ids": [
+        "TGT-001",
+        "TGT-003",
+        "TGT-008",
+        "TGT-014"
+      ],
+      "abuse_case_ids": [
+        "AC-03"
+      ]
+    },
+    {
+      "id": "REM-T05",
+      "title": "Lost device with a non-expiring global bearer",
+      "topic_ids": [
+        "TOP-002",
+        "TOP-006"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-008",
+        "AST-012"
+      ],
+      "actors": [
+        "ACT-005"
+      ],
+      "boundaries": [
+        "TB-002",
+        "TB-010"
+      ],
+      "current_control_ids": [
+        "CUR-003",
+        "CUR-013"
+      ],
+      "gap": "There is no named DeviceSession, expiry, per-device rotation, selective revocation, session inventory, or stream disconnect. Stopping a tunnel does not invalidate the copied master bearer.",
+      "target_control_ids": [
+        "TGT-002",
+        "TGT-003",
+        "TGT-011"
+      ],
+      "abuse_case_ids": [
+        "AC-04",
+        "AC-13"
+      ]
+    },
+    {
+      "id": "REM-T06",
+      "title": "Untrusted Host, Origin, or cross-site request context",
+      "topic_ids": [
+        "TOP-003"
+      ],
+      "likelihood": "medium",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-001",
+        "AST-003",
+        "AST-007",
+        "AST-010"
+      ],
+      "actors": [
+        "ACT-004",
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-003",
+        "TB-004",
+        "TB-005"
+      ],
+      "current_control_ids": [
+        "CUR-005",
+        "CUR-014"
+      ],
+      "gap": "Authorization headers and absent permissive CORS reduce classic form-CSRF exposure, but there is no explicit Host, trusted proxy, Origin, or Fetch Metadata validation, and query-token auth broadens the request surface.",
+      "target_control_ids": [
+        "TGT-007",
+        "TGT-009",
+        "TGT-014"
+      ],
+      "abuse_case_ids": [
+        "AC-05"
+      ]
+    },
+    {
+      "id": "REM-T07",
+      "title": "Stolen credential becomes host terminal control",
+      "topic_ids": [
+        "TOP-004"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-003",
+        "AST-004"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-005",
+        "TB-006"
+      ],
+      "current_control_ids": [
+        "CUR-006",
+        "CUR-007",
+        "CUR-011"
+      ],
+      "gap": "The web terminal sends keystrokes immediately and a master bearer can spawn, input, resize, restart, and signal processes without device scope or user-verifying step-up.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-005",
+        "TGT-006"
+      ],
+      "abuse_case_ids": [
+        "AC-06",
+        "AC-14"
+      ]
+    },
+    {
+      "id": "REM-T08",
+      "title": "Approval hijack or over-broad allow-session decision",
+      "topic_ids": [
+        "TOP-007"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-001",
+        "AST-004",
+        "AST-005"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-005",
+        "TB-007"
+      ],
+      "current_control_ids": [
+        "CUR-006",
+        "CUR-009",
+        "CUR-010"
+      ],
+      "gap": "The current operator bearer can answer command, file, permission, and user-input approvals, including allow_session, without device identity, risk classification, request digest display, or high-risk step-up.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-005",
+        "TGT-006",
+        "TGT-012"
+      ],
+      "abuse_case_ids": [
+        "AC-07",
+        "AC-14",
+        "AC-15"
+      ]
+    },
+    {
+      "id": "REM-T09",
+      "title": "Agent-control or administration escalation",
+      "topic_ids": [
+        "TOP-004"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-004",
+        "AST-007"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-005"
+      ],
+      "current_control_ids": [
+        "CUR-006",
+        "CUR-015"
+      ],
+      "gap": "A remote master bearer is not limited to the intended phone defaults. It can reach agent lifecycle, jobs, workspace mutations, access profiles, models, MCP, plugins, settings, retention, and other broad operator actions.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-005",
+        "TGT-006",
+        "TGT-015"
+      ],
+      "abuse_case_ids": [
+        "AC-08",
+        "AC-16"
+      ]
+    },
+    {
+      "id": "REM-T10",
+      "title": "Generic operator audit attribution",
+      "topic_ids": [
+        "TOP-008"
+      ],
+      "likelihood": "high",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-008",
+        "AST-009"
+      ],
+      "actors": [
+        "ACT-001",
+        "ACT-002",
+        "ACT-005",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-005",
+        "TB-007"
+      ],
+      "current_control_ids": [
+        "CUR-010",
+        "CUR-011"
+      ],
+      "gap": "Durable approval outcomes use generic operator attribution with a null actor id, and process input records human versus driver plus byte count but no device session, authenticated user, scope, or step-up grant.",
+      "target_control_ids": [
+        "TGT-002",
+        "TGT-006",
+        "TGT-012"
+      ],
+      "abuse_case_ids": [
+        "AC-15"
+      ]
+    },
+    {
+      "id": "REM-T11",
+      "title": "Sensitive authenticated GET responses remain available offline",
+      "topic_ids": [
+        "TOP-005"
+      ],
+      "likelihood": "high",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-006",
+        "AST-012"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-002",
+        "TB-009"
+      ],
+      "current_control_ids": [
+        "CUR-008",
+        "CUR-016"
+      ],
+      "gap": "The service worker caches successful API GET responses in a shared cache and returns them after network failure without an explicit stale or revoked-device state.",
+      "target_control_ids": [
+        "TGT-010",
+        "TGT-011"
+      ],
+      "abuse_case_ids": [
+        "AC-09"
+      ]
+    },
+    {
+      "id": "REM-T12",
+      "title": "Future offline mutation queue replays stale authority",
+      "topic_ids": [
+        "TOP-005"
+      ],
+      "likelihood": "low",
+      "impact": "critical",
+      "risk": "medium",
+      "assets": [
+        "AST-003",
+        "AST-005",
+        "AST-007",
+        "AST-008"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-009",
+        "TB-010"
+      ],
+      "current_control_ids": [
+        "CUR-008"
+      ],
+      "gap": "Mutations are not queued today. Adding Background Sync or an offline mutation queue later could replay expired approvals, PTY input, or agent-control operations unless the current no-queue invariant is explicit and tested.",
+      "target_control_ids": [
+        "TGT-005",
+        "TGT-010",
+        "TGT-016"
+      ],
+      "abuse_case_ids": [
+        "AC-10",
+        "AC-14"
+      ]
+    },
+    {
+      "id": "REM-T13",
+      "title": "Unbound push subscription, unsafe deep link, or lock-screen disclosure",
+      "topic_ids": [
+        "TOP-006"
+      ],
+      "likelihood": "medium",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-006",
+        "AST-008",
+        "AST-011"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-008"
+      ],
+      "boundaries": [
+        "TB-008",
+        "TB-010"
+      ],
+      "current_control_ids": [
+        "CUR-012",
+        "CUR-015"
+      ],
+      "gap": "Push subscriptions are global rather than device-bound, notification bodies can reveal project data on a lock screen, infrastructure mutation routes are not operator-only, and the worker trusts payload URLs when navigating.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-011",
+        "TGT-013"
+      ],
+      "abuse_case_ids": [
+        "AC-11",
+        "AC-17"
+      ]
+    },
+    {
+      "id": "REM-T14",
+      "title": "Unconfirmed public fallback or stale tunnel reuse",
+      "topic_ids": [
+        "TOP-001"
+      ],
+      "likelihood": "medium",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-010"
+      ],
+      "actors": [
+        "ACT-004",
+        "ACT-007"
+      ],
+      "boundaries": [
+        "TB-003"
+      ],
+      "current_control_ids": [
+        "CUR-002",
+        "CUR-013"
+      ],
+      "gap": "Cloudflare public fallback starts automatically when Tailscale is unavailable. Reuse checks binary presence or PID liveness, not tunnel ownership, configuration, origin, or end-to-end health; a recycled recorded PID can also make stopRemote signal an unrelated local process.",
+      "target_control_ids": [
+        "TGT-008",
+        "TGT-009",
+        "TGT-015"
+      ],
+      "abuse_case_ids": [
+        "AC-12"
+      ]
+    },
+    {
+      "id": "REM-T15",
+      "title": "Authentication and stream abuse without rate limits",
+      "topic_ids": [
+        "TOP-002"
+      ],
+      "likelihood": "low",
+      "impact": "high",
+      "risk": "medium",
+      "assets": [
+        "AST-001",
+        "AST-010"
+      ],
+      "actors": [
+        "ACT-004"
+      ],
+      "boundaries": [
+        "TB-003",
+        "TB-004"
+      ],
+      "current_control_ids": [
+        "CUR-003",
+        "CUR-005"
+      ],
+      "gap": "The random token makes online guessing impractical, but pairing, failed authentication, SSE connections, and privileged requests have no per-origin or per-device abuse controls or alerts.",
+      "target_control_ids": [
+        "TGT-008",
+        "TGT-014",
+        "TGT-015"
+      ],
+      "abuse_case_ids": [
+        "AC-03",
+        "AC-12"
+      ]
+    },
+    {
+      "id": "REM-T16",
+      "title": "Revocation does not purge browser caches",
+      "topic_ids": [
+        "TOP-005",
+        "TOP-006"
+      ],
+      "likelihood": "medium",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-006",
+        "AST-008",
+        "AST-012"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-002",
+        "TB-009",
+        "TB-010"
+      ],
+      "current_control_ids": [
+        "CUR-013",
+        "CUR-016"
+      ],
+      "gap": "There is no device revocation event for the worker to consume, no per-session cache partition, and no cache purge on token replacement, tunnel stop, logout, or authentication failure.",
+      "target_control_ids": [
+        "TGT-010",
+        "TGT-011",
+        "TGT-013"
+      ],
+      "abuse_case_ids": [
+        "AC-04",
+        "AC-09",
+        "AC-13"
+      ]
+    },
+    {
+      "id": "REM-T17",
+      "title": "Live approval details exposed to every operator client",
+      "topic_ids": [
+        "TOP-007"
+      ],
+      "likelihood": "medium",
+      "impact": "high",
+      "risk": "high",
+      "assets": [
+        "AST-005",
+        "AST-006"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-007"
+      ],
+      "current_control_ids": [
+        "CUR-009",
+        "CUR-010"
+      ],
+      "gap": "Durable managed projections correctly withhold raw approval parameters, but live operator channels must expose enough detail to answer requests and are protected only by the broad operator bearer.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-005",
+        "TGT-012",
+        "TGT-014"
+      ],
+      "abuse_case_ids": [
+        "AC-07",
+        "AC-15"
+      ]
+    },
+    {
+      "id": "REM-T18",
+      "title": "Unauthenticated health and static surface disclosure",
+      "topic_ids": [
+        "TOP-001"
+      ],
+      "likelihood": "high",
+      "impact": "low",
+      "risk": "low",
+      "assets": [
+        "AST-010"
+      ],
+      "actors": [
+        "ACT-004"
+      ],
+      "boundaries": [
+        "TB-003"
+      ],
+      "current_control_ids": [
+        "CUR-001",
+        "CUR-014"
+      ],
+      "gap": "Health and the web shell intentionally remain open so a user can enter a token. They reveal product presence and version and can support fingerprinting even though API data remains authenticated.",
+      "target_control_ids": [
+        "TGT-007",
+        "TGT-008",
+        "TGT-009"
+      ],
+      "abuse_case_ids": [
+        "AC-12"
+      ]
+    },
+    {
+      "id": "REM-T19",
+      "title": "Route-local authorization misses a new or overlooked mutation",
+      "topic_ids": [
+        "TOP-003",
+        "TOP-008"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-007",
+        "AST-008",
+        "AST-009"
+      ],
+      "actors": [
+        "ACT-003",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-005"
+      ],
+      "current_control_ids": [
+        "CUR-006",
+        "CUR-015"
+      ],
+      "gap": "Authorization is expressed in individual handlers and a generic operator predicate. There is no centralized, exhaustive device policy that denies every new mutation until its scope, step-up, and audit requirements are classified.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-006",
+        "TGT-007",
+        "TGT-016"
+      ],
+      "abuse_case_ids": [
+        "AC-08",
+        "AC-16"
+      ]
+    },
+    {
+      "id": "REM-T20",
+      "title": "Default message scope launders privileged instructions through a tool-capable agent",
+      "topic_ids": [
+        "TOP-009"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-003",
+        "AST-004",
+        "AST-007",
+        "AST-009"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-005",
+        "TB-011"
+      ],
+      "current_control_ids": [
+        "CUR-006",
+        "CUR-017"
+      ],
+      "gap": "The default phone vision includes message scope, while current ask, reply, and task-like text for a hired agent is formatted as a prompt and pushed directly into its live session. A compromised low-scope device can ask the agent to use tools or change work, laundering authority that the device lacks.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-005",
+        "TGT-006",
+        "TGT-018"
+      ],
+      "abuse_case_ids": [
+        "AC-18"
+      ]
+    },
+    {
+      "id": "REM-T21",
+      "title": "Broad observe scope exposes raw or cross-resource sensitive reads",
+      "topic_ids": [
+        "TOP-010"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "critical",
+      "assets": [
+        "AST-004",
+        "AST-006",
+        "AST-007",
+        "AST-012"
+      ],
+      "actors": [
+        "ACT-005",
+        "ACT-006",
+        "ACT-009"
+      ],
+      "boundaries": [
+        "TB-004",
+        "TB-005",
+        "TB-009"
+      ],
+      "current_control_ids": [
+        "CUR-005",
+        "CUR-006",
+        "CUR-016",
+        "CUR-018"
+      ],
+      "gap": "The current master operator can read raw process output, transcripts, context, exports, settings, system details, and other project data. A future observe scope that only classifies mutations would still permit IDOR-style cross-board or cross-workspace reads, raw secret-bearing output, and newly added GET routes.",
+      "target_control_ids": [
+        "TGT-004",
+        "TGT-010",
+        "TGT-016",
+        "TGT-017"
+      ],
+      "abuse_case_ids": [
+        "AC-09",
+        "AC-19"
+      ]
+    },
+    {
+      "id": "REM-T22",
+      "title": "Framed paired UI enables clickjacking and action confusion",
+      "topic_ids": [
+        "TOP-003"
+      ],
+      "likelihood": "medium",
+      "impact": "critical",
+      "risk": "high",
+      "assets": [
+        "AST-001",
+        "AST-003",
+        "AST-005",
+        "AST-007"
+      ],
+      "actors": [
+        "ACT-006"
+      ],
+      "boundaries": [
+        "TB-002",
+        "TB-003",
+        "TB-005",
+        "TB-006"
+      ],
+      "current_control_ids": [
+        "CUR-004",
+        "CUR-005",
+        "CUR-014"
+      ],
+      "gap": "The web surface has no explicit frame-ancestors or equivalent anti-framing policy. Where the paired origin's browser storage remains available in a frame, a malicious parent can visually reframe or overlay terminal, approval, pause, stop, or administration controls and induce an authenticated action.",
+      "target_control_ids": [
+        "TGT-005",
+        "TGT-007",
+        "TGT-016"
+      ],
+      "abuse_case_ids": [
+        "AC-20"
+      ]
+    }
+  ],
+  "abuse_cases": [
+    {
+      "id": "AC-01",
+      "threat_ids": [
+        "REM-T02"
+      ],
+      "preconditions": "An attacker photographs, screenshots, or otherwise captures a displayed pairing QR.",
+      "action": "Redeem the captured value twice, from another device, and after the intended pairing completes.",
+      "current_expected": "Both replays authenticate as the same broad operator while the global token is unchanged.",
+      "target_expected": "Only the first valid redemption at the pinned origin creates a named DeviceSession; later or wrong-origin redemption fails without revealing a reusable credential."
+    },
+    {
+      "id": "AC-02",
+      "threat_ids": [
+        "REM-T03"
+      ],
+      "preconditions": "A script or local actor can read the paired browser's localStorage.",
+      "action": "Extract orchestra-token and replay it from a separate client.",
+      "current_expected": "The extracted master bearer authenticates as operator.",
+      "target_expected": "No master credential exists in browser storage; a stolen session token is short-lived, revocable, scoped, and sender-constrained where supported."
+    },
+    {
+      "id": "AC-03",
+      "threat_ids": [
+        "REM-T04",
+        "REM-T15"
+      ],
+      "preconditions": "A proxy, diagnostic, browser tool, or log captures a stream URL.",
+      "action": "Replay its query credential against SSE and a non-SSE API route and create many streams.",
+      "current_expected": "The master query token is accepted broadly and no stream-specific rate limit applies.",
+      "target_expected": "The stream credential is single-purpose, short-lived, single-use or tightly bounded, rejected on all other routes, and rate-limited."
+    },
+    {
+      "id": "AC-04",
+      "threat_ids": [
+        "REM-T03",
+        "REM-T05",
+        "REM-T16"
+      ],
+      "preconditions": "A paired phone is lost while its browser data remains intact and may already be offline.",
+      "action": "Use any retained offline data, have the owner revoke that specific device, and later reconnect.",
+      "current_expected": "There is no selective device revoke; the master token and cached data remain usable until global recovery steps are taken.",
+      "target_expected": "Only that DeviceSession loses API, stream, step-up, and push access; sensitive data was not cached by default, any deliberately offline-safe data has a short local lease or device lock, and server-triggered purge occurs at next contact. Revocation does not falsely claim it can erase an unreachable offline device."
+    },
+    {
+      "id": "AC-05",
+      "threat_ids": [
+        "REM-T01",
+        "REM-T06"
+      ],
+      "preconditions": "A request arrives with an untrusted Host, forwarded host, Origin, or cross-site Fetch Metadata context.",
+      "action": "Attempt authenticated and unauthenticated reads, mutations, and pairing redemption through the unexpected origin.",
+      "current_expected": "Bearer authentication still applies, but there is no explicit host/origin/fetch policy and query-token behavior must be evaluated route by route.",
+      "target_expected": "The daemon rejects unexpected origins and cross-site mutation contexts before credentials or route handlers are evaluated and records a privacy-safe security event."
+    },
+    {
+      "id": "AC-06",
+      "threat_ids": [
+        "REM-T07"
+      ],
+      "preconditions": "A device has observe, message, and approve scopes but no terminal-write scope or live step-up.",
+      "action": "Attempt PTY input, resize, spawn, restart, and signal requests, including replay after a valid grant expires.",
+      "current_expected": "A master-token browser can perform the requests; the existing agent principal is denied.",
+      "target_expected": "Every request fails closed without terminal-write and a resource-bound step-up; successful input is attributed by device without raw keystrokes."
+    },
+    {
+      "id": "AC-07",
+      "threat_ids": [
+        "REM-T08",
+        "REM-T17"
+      ],
+      "preconditions": "A device has approve scope but no high-risk step-up.",
+      "action": "Deny, allow, and allow_session for command, file, permission, MCP, and user-input requests; alter or replay the request id or digest.",
+      "current_expected": "A master bearer can issue valid decisions for live pending requests.",
+      "target_expected": "Deny or cancel remains available for the exact request; risky allow and allow_session require fresh user verification and exact request-digest binding."
+    },
+    {
+      "id": "AC-08",
+      "threat_ids": [
+        "REM-T09",
+        "REM-T19"
+      ],
+      "preconditions": "A managed agent or observe-only DeviceSession calls high-risk compatibility, infrastructure, and canonical mutations.",
+      "action": "Attempt launch, control, approval, PTY, push configuration, settings, retention, provider, plugin, MCP, and access-profile changes.",
+      "current_expected": "Existing explicit operator gates deny covered agent calls, while route-local gaps remain possible and no device scopes exist.",
+      "target_expected": "The centralized default-deny policy rejects every mutation lacking its explicit scope, step-up, and audit classification."
+    },
+    {
+      "id": "AC-09",
+      "threat_ids": [
+        "REM-T11",
+        "REM-T16",
+        "REM-T21"
+      ],
+      "preconditions": "A paired device has cached transcripts or process output, disconnects before learning about a revoke, and then is revoked.",
+      "action": "Remain offline beyond the permitted local lease, revisit authenticated views, and later reconnect.",
+      "current_expected": "A cached API response may be returned without a clear revoked or stale state.",
+      "target_expected": "Sensitive API content is absent by default; any explicitly offline-safe content is session-partitioned, locally time-bounded and locked, then purged at next contact. The UI never treats server revocation as an instantaneous remote erase of an unreachable device."
+    },
+    {
+      "id": "AC-10",
+      "threat_ids": [
+        "REM-T12"
+      ],
+      "preconditions": "The device is offline or the request fails after leaving the browser.",
+      "action": "Attempt message, approval, agent-control, terminal, and admin mutations, then reconnect.",
+      "current_expected": "The current worker does not intercept or queue non-GET requests, so mutations fail rather than replay.",
+      "target_expected": "The no-mutation-queue invariant remains true; reconnect never replays stale authority and the user must intentionally retry against current state."
+    },
+    {
+      "id": "AC-11",
+      "threat_ids": [
+        "REM-T13"
+      ],
+      "preconditions": "A push payload contains an absolute external URL, a scheme-relative URL, or a non-allowlisted same-origin path.",
+      "action": "Tap the notification with and without an existing app window.",
+      "current_expected": "The service worker passes payload URL to navigate or openWindow without its own allowlist check.",
+      "target_expected": "Only normalized same-origin allowlisted paths open; all other values fall back to the app home and emit a bounded security event."
+    },
+    {
+      "id": "AC-12",
+      "threat_ids": [
+        "REM-T01",
+        "REM-T14",
+        "REM-T15",
+        "REM-T18"
+      ],
+      "preconditions": "Tailscale is unavailable and Cloudflare quick tunnel is installed, or stored tunnel state points to a live but unrelated process.",
+      "action": "Start remote, decline public exposure, reuse stale state, stop a recycled unrelated PID, scan health/static, and flood auth failures.",
+      "current_expected": "Public fallback starts automatically; reuse is based on binary presence or PID liveness and stop can signal that recorded PID; health/static answer and auth failures are not rate-limited.",
+      "target_expected": "Public exposure requires confirmation, tunnel ownership and origin are verified before reuse or stop, stale state fails closed without signaling unrelated processes, and abuse is rate-limited and observable."
+    },
+    {
+      "id": "AC-13",
+      "threat_ids": [
+        "REM-T02",
+        "REM-T05",
+        "REM-T16"
+      ],
+      "preconditions": "Two named devices are paired and one is lost.",
+      "action": "Revoke device A while device B keeps an active stream, then retry with A's old token and pairing artifact.",
+      "current_expected": "Only global token replacement can invalidate the shared bearer, with no per-device guarantees.",
+      "target_expected": "A is denied everywhere and purged at next contact, B stays active, and neither an old token nor pairing ticket can become a master operator credential."
+    },
+    {
+      "id": "AC-14",
+      "threat_ids": [
+        "REM-T07",
+        "REM-T08",
+        "REM-T12"
+      ],
+      "preconditions": "A valid step-up was issued for one high-risk action.",
+      "action": "Replay it for another process, workspace, approval digest, action, device, or after expiry.",
+      "current_expected": "No step-up primitive exists.",
+      "target_expected": "Every mismatched or replayed grant fails; successful use is nonce-bound, single-use where practical, and durably attributed."
+    },
+    {
+      "id": "AC-15",
+      "threat_ids": [
+        "REM-T08",
+        "REM-T10",
+        "REM-T17"
+      ],
+      "preconditions": "Two remote devices view and race to answer the same live approval.",
+      "action": "Submit conflicting decisions and inspect durable events, user-visible transcript, and raw managed event storage.",
+      "current_expected": "Only a live pending request can complete and raw durable parameters are withheld, but the winning actor is only generic operator with null id.",
+      "target_expected": "Exactly one digest-bound decision wins; the durable outcome identifies device and step-up grant without storing raw approval parameters or withheld reasoning."
+    },
+    {
+      "id": "AC-16",
+      "threat_ids": [
+        "REM-T09",
+        "REM-T19"
+      ],
+      "preconditions": "A new non-GET route is added after the device authorization layer exists.",
+      "action": "Call it from each device scope before adding an explicit policy classification.",
+      "current_expected": "Current authorization depends on the handler author adding the appropriate local check.",
+      "target_expected": "The route is denied to DeviceSession principals and the release test fails until scope, step-up, attribution, and abuse behavior are declared."
+    },
+    {
+      "id": "AC-17",
+      "threat_ids": [
+        "REM-T13"
+      ],
+      "preconditions": "The phone is locked and notification previews are visible.",
+      "action": "Generate review, message, and blocked-work notifications containing sensitive card or agent content.",
+      "current_expected": "Titles and bodies can reveal card title, agent name, board state, or message context.",
+      "target_expected": "The default lock-screen payload is generic and content reveal is an explicit per-device choice; revocation removes the subscription."
+    },
+    {
+      "id": "AC-18",
+      "threat_ids": [
+        "REM-T20"
+      ],
+      "preconditions": "A compromised device has only the default message scope and a hired agent is live with workspace tools.",
+      "action": "Send ask and reply text instructing the agent to run commands, change files, reveal data, approve work, or perform an administrative action that the device itself cannot call.",
+      "current_expected": "The server formats the message and pushes it directly into the hired agent session, where it can be interpreted as an instruction under the agent's existing tool authority.",
+      "target_expected": "Remote message provenance is untrusted and structurally confined to a no-tool discussion or Q&A path. Converting text into tool-capable work requires an explicit agent-control action, applicable step-up, policy evaluation, and device-attributed audit; wording tricks cannot promote it."
+    },
+    {
+      "id": "AC-19",
+      "threat_ids": [
+        "REM-T21"
+      ],
+      "preconditions": "A device has observe scope for one board or workspace and knows or guesses identifiers for another resource, or a new GET route is added without a device policy.",
+      "action": "Request raw process output, transcripts, conversation events, context, search/export data, settings/system details, approval details, and cross-board or cross-workspace objects, including through the new GET route.",
+      "current_expected": "The master operator bearer has broad reads; individual handlers apply inconsistent existence/operator checks, and there is no DeviceSession data class, field allowlist, or resource-bound read decision.",
+      "target_expected": "Every GET is denied until route, resource, field, data class, cache, and scope policy are explicit. Observe returns only allowlisted redacted fields for granted resources; raw or secret-bearing views remain unavailable or require a separately approved, reauthenticated purpose."
+    },
+    {
+      "id": "AC-20",
+      "threat_ids": [
+        "REM-T22"
+      ],
+      "preconditions": "A browser has paired with the remote origin and an attacker controls a different page the user visits.",
+      "action": "Frame the paired origin, obscure or overlay its UI, and induce clicks or focus on terminal, approval, pause, stop, agent-control, or administrative controls.",
+      "current_expected": "No explicit frame-ancestors or equivalent anti-framing policy is present, so behavior depends on browser storage partitioning and framing behavior rather than an application control.",
+      "target_expected": "Browser acceptance proves the response cannot be embedded by an untrusted origin using CSP frame-ancestors 'none' plus a compatible fallback; high-risk actions also retain clear user-verifying step-up and cannot be completed through UI redress."
+    }
+  ],
+  "rollout": [
+    {
+      "phase": "R0",
+      "name": "Evidence baseline",
+      "entry": "REM-001 artifacts and drift test pass.",
+      "exit": "No production behavior changes; current remote remains labeled functional beta, not safe remote beta."
+    },
+    {
+      "phase": "R1",
+      "name": "Policy skeleton and telemetry",
+      "entry": "Threat model accepted.",
+      "exit": "Central device-principal classification, default-deny decision points, Host/Origin observations, abuse counters, and kill switches exist in shadow mode without widening access."
+    },
+    {
+      "phase": "R2",
+      "name": "PairingTicket and DeviceSession foundation",
+      "entry": "Schema and rollback review pass.",
+      "exit": "Single-use pairing and short-lived device credentials work behind flags; the master token remains local-loopback recovery only."
+    },
+    {
+      "phase": "R3",
+      "name": "Observe-only device beta",
+      "entry": "Private-tunnel origin verification and device revocation tests pass.",
+      "exit": "Named devices can read only explicitly classified, resource-bound, field-minimized redacted state; IDOR, raw-output, new-GET, online/offline, and sensitive-cache abuse tests pass."
+    },
+    {
+      "phase": "R4",
+      "name": "Message and approval",
+      "entry": "Observe-only monitoring is clean.",
+      "exit": "Default messaging terminates in a no-tool path and cannot launder live-agent authority; device-attributed messages and risk-bound approvals pass confused-deputy, race, replay, digest, privacy, and step-up abuse cases."
+    },
+    {
+      "phase": "R5",
+      "name": "Opt-in agent, terminal, and admin control",
+      "entry": "Per-device scope editor, user verification, and audit UI are complete.",
+      "exit": "Each privileged family passes resource-bound step-up, expiry, revocation, default-deny, and audit tests."
+    },
+    {
+      "phase": "R6",
+      "name": "Retire unsafe compatibility",
+      "entry": "All supported clients use DeviceSession credentials.",
+      "exit": "Master-token QR and broad query-token auth are removed; public fallback requires consent and verified ownership."
+    },
+    {
+      "phase": "R7",
+      "name": "Safe remote beta gate",
+      "entry": "Desktop, phone, iOS, Android, offline, accessibility, security, and recovery suites are green.",
+      "exit": "Independent review signs off REM-GATE with rollback drill evidence."
+    }
+  ],
+  "rollback_invariants": [
+    {
+      "id": "RB-001",
+      "statement": "A remote kill switch stops public and private tunnel access without disabling the local loopback CLI or local owner recovery."
+    },
+    {
+      "id": "RB-002",
+      "statement": "Rollback never restores a master-token QR or treats a DeviceSession credential as the operator master bearer."
+    },
+    {
+      "id": "RB-003",
+      "statement": "Disabling a rollout phase revokes its device credentials, pairing tickets, stream tickets, and step-up grants and closes affected streams."
+    },
+    {
+      "id": "RB-004",
+      "statement": "Device schema changes are additive until migration and recovery drills prove downgrade behavior; dormant rows grant no authority."
+    },
+    {
+      "id": "RB-005",
+      "statement": "Service-worker rollback changes the cache version and purges device-scoped authenticated content."
+    },
+    {
+      "id": "RB-006",
+      "statement": "Rollback stops any public tunnel and clears only verified Orchestra-owned tunnel state."
+    },
+    {
+      "id": "RB-007",
+      "statement": "Other explicitly valid DeviceSessions remain usable when one device or one capability is revoked."
+    },
+    {
+      "id": "RB-008",
+      "statement": "Audit records remain append-only and retain device attribution while secrets, raw PTY input, raw approval parameters, and withheld reasoning remain absent."
+    }
+  ],
+  "release_gate": {
+    "name": "REM-GATE",
+    "this_artifact_satisfies_release_gate": false,
+    "required_before_safe_remote_beta": [
+      "PairingTicket and named DeviceSession implementation",
+      "Per-device expiry, rotation, selective revocation, and sender constraint where supported",
+      "Central default-deny read and mutation scopes, resource and data classification, and resource-bound step-up",
+      "A no-tool default message path that cannot launder low-scope text through a tool-capable agent",
+      "Device-attributed mutation and approval audit",
+      "Host, trusted-proxy, Origin, Fetch Metadata, anti-framing CSP, security-header, rate-limit, and tunnel-origin controls",
+      "Explicit offline read-only semantics and cache purge",
+      "Device-bound, privacy-preserving push with safe deep links",
+      "Automated abuse cases AC-01 through AC-20",
+      "Desktop and phone browser acceptance plus iOS and Android acceptance",
+      "Independent regression and security review with rollback drill"
+    ],
+    "forbidden_claims_until_gate_passes": [
+      "plug-and-play",
+      "shippable",
+      "safe remote beta",
+      "production-ready remote access"
+    ]
+  }
+}

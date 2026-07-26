@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { query } from '@anthropic-ai/claude-agent-sdk'
@@ -19,6 +20,11 @@ import {
   writeProviderModelCache,
   type AgentProviderCatalog,
 } from './agent-providers.js'
+import type {
+  ClaudeAgentHomeBinding,
+  ClaudeNativeEvent,
+  ClaudeNativeEventSink,
+} from './runtime/drivers/claude.js'
 
 type TranscriptLine = { at: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -138,6 +144,10 @@ type LaunchRequest = {
   accessProfile?: string
 }
 
+export type ConductorOptions = {
+  nativeEventSink?: ClaudeNativeEventSink
+}
+
 const MODEL_CATALOG_TIMEOUT_MS = 2_500
 
 async function supportedModelsWithTimeout(queryHandle: any): Promise<unknown> {
@@ -225,6 +235,7 @@ export class Conductor {
     private db: Database.Database,
     private bus: EventEmitter,
     private readonly agentToken?: string,
+    private readonly options: ConductorOptions = {},
   ) {}
 
   private emit(boardId: number, type: string, data: unknown) {
@@ -474,7 +485,7 @@ export class Conductor {
     return { woke, queued, skipped }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number }): any {
+  hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number; agentHome?: ClaudeAgentHomeBinding }): any {
     if (opts.provider && opts.provider !== DEFAULT_AGENT_PROVIDER)
       throw new Error(`provider ${opts.provider} must be routed through ProviderAgentManager`)
     // re-hiring an already-live name returns the existing session instead of leaking a new one
@@ -517,6 +528,37 @@ export class Conductor {
     )
     const agent = this.db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name) as any
 
+    const capture = (
+      event: Omit<ClaudeNativeEvent, 'agentId' | 'agentName' | 'agentHome' | 'resumed'>,
+    ): void => {
+      this.options.nativeEventSink?.append({
+        ...event,
+        agentId: Number(agent.id),
+        agentName: String(name),
+        ...(opts.agentHome ? { agentHome: opts.agentHome } : {}),
+        resumed: !!opts.resumeSession,
+      })
+    }
+    try {
+      capture({
+        captureId: randomUUID(),
+        kind: 'session_start',
+        direction: 'lifecycle',
+        at: new Date().toISOString(),
+        providerSessionId: opts.resumeSession ?? null,
+        payload: {
+          resume_requested: !!opts.resumeSession,
+          model: model ?? null,
+          effort,
+          permission_mode: permissionMode,
+          access_profile: opts.accessProfile ?? null,
+        },
+      })
+    } catch (error) {
+      this.db.prepare("UPDATE agents SET status='gone', last_seen=datetime('now') WHERE id=?").run(agent.id)
+      throw error
+    }
+
     const input = createInput()
     const transcript: TranscriptLine[] = []
     const log = (kind: TranscriptLine['kind'], text: string) => {
@@ -535,14 +577,63 @@ export class Conductor {
     const canUseTool = (toolName: string, toolInput: Record<string, unknown>, o: any): Promise<any> => {
       const id = String(o?.toolUseID ?? o?.requestId ?? `${Date.now()}-${pending.size}`)
       const summary = toolSummary(toolName, toolInput)
+      const requestId = typeof o?.requestId === 'string' ? o.requestId : id
+      const toolUseId = typeof o?.toolUseID === 'string' ? o.toolUseID : null
+      const providerSessionId = (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
+        .get(agent.id) as { sdk_session: string | null } | undefined)?.sdk_session ?? opts.resumeSession ?? null
+      capture({
+        captureId: `approval:${requestId}:request`,
+        kind: 'approval_request',
+        direction: 'inbound',
+        at: new Date().toISOString(),
+        providerSessionId,
+        payload: {
+          request_id: requestId,
+          tool_use_id: toolUseId,
+          tool_name: toolName,
+          input: toolInput,
+          title: o?.title ?? null,
+          display_name: o?.displayName ?? null,
+          description: o?.description ?? null,
+          blocked_path: o?.blockedPath ?? null,
+          decision_reason: o?.decisionReason ?? null,
+          agent_id: o?.agentID ?? null,
+        },
+      })
+      const captureDecision = (allow: boolean, source: string, message?: string): void => {
+        capture({
+          captureId: `approval:${requestId}:response`,
+          kind: 'approval_response',
+          direction: 'outbound',
+          at: new Date().toISOString(),
+          providerSessionId,
+          payload: {
+            request_id: requestId,
+            tool_use_id: toolUseId,
+            tool_name: toolName,
+            behavior: allow ? 'allow' : 'deny',
+            source,
+            message: message ?? null,
+          },
+        })
+      }
       const linkedCardId = opts.cardId ?? (this.db.prepare(`SELECT id FROM cards
         WHERE owner_agent_id=? AND column_name IN ('in_progress','blocked','review') ORDER BY updated_at DESC, id DESC LIMIT 1`)
         .get(agent.id) as { id: number } | undefined)?.id
-      const contract = linkedCardId ? this.db.prepare('SELECT policy_id FROM task_contracts WHERE card_id=?')
-        .get(linkedCardId) as { policy_id: string | null } | undefined : undefined
-      if (contract?.policy_id) {
+      const policy = linkedCardId ? this.db.prepare(`SELECT j.policy_id AS job_policy_id,
+          j.contract_version, tc.policy_id AS contract_policy_id
+        FROM task_contracts tc LEFT JOIN jobs j ON j.id=(
+          SELECT id FROM jobs WHERE card_id=tc.card_id AND status IN ('running','cancelling')
+          ORDER BY started_at DESC, rowid DESC LIMIT 1
+        ) WHERE tc.card_id=?`).get(linkedCardId) as {
+          job_policy_id: string | null
+          contract_version: number | null
+          contract_policy_id: string | null
+        } | undefined : undefined
+      const policyId = policy?.contract_version == null ? policy?.contract_policy_id : policy.job_policy_id
+      if (policyId) {
         try {
-          const evaluation = evaluatePolicy(this.db, contract.policy_id, policyOperationForTool(toolName, toolInput, opts.cwd))
+          const evaluation = evaluatePolicy(this.db, policyId, policyOperationForTool(toolName, toolInput, opts.cwd))
           log('status', `policy ${evaluation.decision}: ${summary} — ${evaluation.reason}`)
           this.emit(opts.boardId, 'policy', {
             agent_id: agent.id,
@@ -551,8 +642,14 @@ export class Conductor {
             tool: toolName,
             ...evaluation,
           })
-          if (evaluation.decision === 'allow') return Promise.resolve({ behavior: 'allow', updatedInput: toolInput })
-          if (evaluation.decision === 'deny') return Promise.resolve({ behavior: 'deny', message: evaluation.reason })
+          if (evaluation.decision === 'allow') {
+            captureDecision(true, 'policy', evaluation.reason)
+            return Promise.resolve({ behavior: 'allow', updatedInput: toolInput })
+          }
+          if (evaluation.decision === 'deny') {
+            captureDecision(false, 'policy', evaluation.reason)
+            return Promise.resolve({ behavior: 'deny', message: evaluation.reason })
+          }
         } catch (error) {
           // A malformed or missing policy never silently opens access; the ordinary human ask is the fallback.
           log('status', `policy evaluation needs review: ${error instanceof Error ? error.message : String(error)}`)
@@ -564,15 +661,32 @@ export class Conductor {
         pending.set(id, {
           id, tool: toolName, summary, title: o?.title ?? null, at: new Date().toISOString(),
           finish: (allow, message) => {
+            let effectiveAllow = allow
+            let effectiveMessage = message
+            try {
+              captureDecision(allow, 'operator', message)
+            } catch (error) {
+              effectiveAllow = false
+              effectiveMessage = `permission denied because durable capture failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            }
             pending.delete(id)
-            log('status', `permission ${allow ? 'allowed' : 'denied'}: ${summary}`)
-            this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, status: allow ? 'allowed' : 'denied' })
-            resolve(allow ? { behavior: 'allow', updatedInput: toolInput } : { behavior: 'deny', message: message || 'denied from the board' })
+            log('status', `permission ${effectiveAllow ? 'allowed' : 'denied'}: ${summary}`)
+            this.emit(opts.boardId, 'permission', {
+              agent_id: agent.id,
+              request_id: id,
+              status: effectiveAllow ? 'allowed' : 'denied',
+            })
+            resolve(effectiveAllow
+              ? { behavior: 'allow', updatedInput: toolInput }
+              : { behavior: 'deny', message: effectiveMessage || 'denied from the board' })
           },
         })
         // an interrupted turn withdraws its asks — fail closed, leave no orphan buttons
         o?.signal?.addEventListener?.('abort', () => {
           if (!pending.delete(id)) return
+          try { captureDecision(false, 'abort', 'permission request aborted') } catch { /* capture sink marked the gap */ }
           this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, status: 'withdrawn' })
           resolve({ behavior: 'deny', message: 'permission request aborted' })
         })
@@ -618,6 +732,20 @@ export class Conductor {
         const noticeText = notifications.map((m) =>
           `orchestra notification #${m.id} from ${m.from_name ?? 'human'}: "${m.body}" — no reply required.`).join('\n')
         const payload = noticeText ? `${noticeText}\n\n${text}` : text
+        const providerSessionId = (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
+          .get(agent.id) as { sdk_session: string | null } | undefined)?.sdk_session ?? opts.resumeSession ?? null
+        capture({
+          captureId: randomUUID(),
+          kind: 'outbound_user',
+          direction: 'outbound',
+          at: new Date().toISOString(),
+          providerSessionId,
+          payload: {
+            text: payload,
+            source: 'orchestra',
+            notification_ids: notifications.map((message) => Number(message.id)),
+          },
+        })
         log('user', payload)
         if (hired.turnStart === null) { hired.turnStart = Date.now(); hired.turnTokens = 0 }
         input.push(payload)
@@ -644,6 +772,20 @@ export class Conductor {
     void (async () => {
       try {
         for await (const m of q as AsyncIterable<any>) {
+          const providerSessionId = typeof m?.session_id === 'string'
+            ? m.session_id
+            : (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
+                .get(agent.id) as { sdk_session: string | null } | undefined)?.sdk_session
+              ?? opts.resumeSession
+              ?? null
+          capture({
+            captureId: typeof m?.uuid === 'string' && m.uuid ? m.uuid : randomUUID(),
+            kind: 'provider_message',
+            direction: 'inbound',
+            at: new Date().toISOString(),
+            providerSessionId,
+            payload: m,
+          })
           if (m.type === 'system' && m.subtype === 'init') {
             hired.model = m.model ?? null
             // remember the sdk session so a daemon restart can resume this agent with its memory intact
@@ -729,6 +871,20 @@ export class Conductor {
           }
         }
       } catch (e: any) {
+        try {
+          capture({
+            captureId: randomUUID(),
+            kind: 'error',
+            direction: 'inbound',
+            at: new Date().toISOString(),
+            providerSessionId: (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
+              .get(agent.id) as { sdk_session: string | null } | undefined)?.sdk_session ?? opts.resumeSession ?? null,
+            payload: {
+              name: typeof e?.name === 'string' ? e.name : 'Error',
+              message: String(e?.message ?? e),
+            },
+          })
+        } catch { /* the native sink already marked the durable capture gap */ }
         log('error', String(e?.message ?? e))
         if (isUsageLimitError(String(e?.message ?? e))) hired.limitHit = true
         if (hired.cardId !== null && hired.outcome === null) {
@@ -736,6 +892,22 @@ export class Conductor {
           hired.reason = String(e?.message ?? e)
         }
       } finally {
+        try {
+          capture({
+            captureId: randomUUID(),
+            kind: 'session_end',
+            direction: 'lifecycle',
+            at: new Date().toISOString(),
+            providerSessionId: (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
+              .get(agent.id) as { sdk_session: string | null } | undefined)?.sdk_session ?? opts.resumeSession ?? null,
+            payload: {
+              handoff: hired.handoff,
+              limit_hit: hired.limitHit,
+              outcome: hired.outcome,
+              reason: hired.reason || null,
+            },
+          })
+        } catch { /* the native sink already marked the durable capture gap */ }
         // a session that dies mid-turn (error, fire, effort handoff) still consumed real
         // tokens — flush the in-flight accrual so the daily rollup never undercounts
         if (hasUsage(hired.turnUsage)) {

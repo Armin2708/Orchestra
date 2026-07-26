@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path'
 import { BoundedAsyncQueue, deferred, type Deferred } from '../../codex/async.js'
 import {
   CODEX_REQUEST_UNHANDLED,
@@ -10,6 +11,8 @@ import {
   type CodexServerNotification,
   type CodexServerRequest,
   type CodexThread,
+  type CodexThreadForkParams,
+  type CodexThreadForkResponse,
   type CodexThreadItem,
   type CodexThreadStartParams,
   type CodexThreadTokenUsage,
@@ -52,12 +55,53 @@ export type CodexDriverApprovalHandler = (
   request: CodexDriverApprovalRequest,
 ) => MaybePromise<unknown>
 
+export type CodexNativeEvent = {
+  agentHomeSessionId: string
+  agentProfileId: string
+  agentConversationId: string
+  captureCursor: string
+  threadId: string
+  turnId: string | null
+  itemId: string | null
+  method: string
+  params: unknown
+  receivedAt: string
+}
+
+export type CodexNativeEventSink = {
+  /** Must return synchronously so persistence completes before driver projection. */
+  append(event: CodexNativeEvent): undefined
+}
+
+export type CodexAgentHomeBinding = {
+  agentHomeSessionId: string
+  agentProfileId: string
+  agentConversationId: string
+  workspaceId?: OsId
+  providerCursor?: string | null
+  captureCursor?: string | null
+}
+
+export type CodexAgentHomeBindContext = {
+  mode: 'launch' | 'attach'
+  boardId?: number
+  workspaceId?: OsId
+  metadata: Record<string, unknown>
+  expectedBinding?: CodexAgentHomeBinding
+}
+
 export type CodexAgentDriverOptions = {
   service: CodexRuntimeService
   workspaceForThread?: (threadId: string, thread: CodexThread) => MaybePromise<OsId | undefined>
   tokenBudgetForThread?: (threadId: string) => MaybePromise<number | null | undefined>
+  agentHomeForThread?: (
+    threadId: string,
+    thread: CodexThread,
+    context: CodexAgentHomeBindContext,
+  ) => MaybePromise<CodexAgentHomeBinding | undefined>
   resolveLaunchPolicy?: (request: DriverLaunchRequest) => MaybePromise<CodexLaunchPolicy>
   onApprovalRequest?: CodexDriverApprovalHandler
+  nativeEventSink?: CodexNativeEventSink
   isMissingThreadError?: (error: unknown) => boolean
   approvalTimeoutMs?: number
   eventBufferSize?: number
@@ -74,17 +118,176 @@ export type CodexSessionUpdate = {
 
 export type CodexApprovalDecision = 'allow' | 'allow_session' | 'deny' | 'cancel'
 export type CodexApprovalAnswers = Record<string, string[]>
+type CodexApprovalAuditDecision = CodexApprovalDecision | 'unhandled'
+type CodexApprovalOutcomeSource = 'automatic' | 'operator' | 'timeout' | 'shutdown'
 
 export type CodexSessionReconcileResult = {
   resumed: string[]
   failed: string[]
 }
 
+export type CodexSessionForkOptions = {
+  sourceExternalId: string
+  sourceWorkspaceId: OsId
+  sourceCwd: string
+  targetWorkspaceId: OsId
+  targetCwd: string
+} & Pick<CodexThreadForkParams, 'lastTurnId'>
+
+export type CodexTargetWorkspaceAttestation = {
+  value: OsId
+  authority: 'orchestrator'
+}
+
+export type CodexForkCreationProofMetadata = {
+  forkMethod: 'thread/fork'
+  verificationMethod: 'thread/fork+thread/read'
+  forkedFromId: string
+  sourceProviderSessionId: string
+  providerSessionId: string
+  lastTurnId: string | null
+  sourceWorkspaceId: OsId
+  sourceCwd: string
+  targetWorkspaceId: OsId
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  targetCwd: string
+  childCwd: string
+  cwdVerified: true
+  workspaceBindingVerified: true
+  workspaceBindingAuthority: 'orchestrator'
+  readVerified: true
+  threadReadVerified: true
+  subscriptionReleased: true
+  childUnsubscribeVerified: true
+  subscriptionStatus: 'notLoaded' | 'notSubscribed' | 'unsubscribed'
+  [key: string]: unknown
+}
+
+export type CodexSessionForkResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  metadata: CodexForkCreationProofMetadata
+}
+
+export type CodexSessionForkVerificationContext = {
+  sourceExternalId: string
+  sourceProviderThreadId?: string
+  targetWorkspaceId: OsId
+  targetCwd: string
+  sourceWorkspaceId?: OsId
+  sourceCwd?: string
+  childProviderThreadId?: string
+  childProviderSessionId?: string | null
+  lastTurnId?: string | null
+}
+
+export type CodexSessionForkVerificationOptions =
+  CodexSessionForkVerificationContext & {
+    childExternalId: string
+  }
+
+export type CodexForkVerificationProof = {
+  status: 'verified'
+  sourceExternalId: string
+  sourceProviderThreadId: string
+  childExternalId: string
+  childProviderThreadId: string
+  childProviderSessionId: string
+  targetCwd: string
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  read: {
+    method: 'thread/read'
+    includeTurns: false
+    verified: true
+  }
+}
+
+export type CodexForkReadProofMetadata = {
+  forkMethod: 'thread/fork'
+  verificationMethod: 'thread/read'
+  forkedFromId: string
+  providerSessionId: string
+  lastTurnId: string | null
+  sourceWorkspaceId?: OsId
+  sourceCwd?: string
+  targetWorkspaceId: OsId
+  targetWorkspaceAttestation: CodexTargetWorkspaceAttestation
+  targetCwd: string
+  childCwd: string
+  cwdVerified: true
+  workspaceBindingVerified: true
+  workspaceBindingAuthority: 'orchestrator'
+  readVerified: true
+  threadReadVerified: true
+  [key: string]: unknown
+}
+
+export type CodexSessionForkVerificationResult = {
+  sourceExternalId: string
+  externalId: string
+  providerThreadId: string
+  sourceProviderThreadId: string
+  proof: CodexForkVerificationProof
+  metadata: CodexForkReadProofMetadata
+}
+
+export type CodexForkKnownChild = {
+  externalId: string
+  providerThreadId: string
+  forkedFromId: string | null
+  childProviderSessionId: string | null
+  subscriptionReleased: boolean
+}
+
+export class CodexForkOutcomeUnknownError extends Error {
+  readonly outcomeUnknown = true
+
+  constructor(
+    message: string,
+    readonly sourceExternalId: string,
+    readonly sourceProviderThreadId: string,
+    readonly knownChild: CodexForkKnownChild | null,
+  ) {
+    super(message)
+    this.name = 'CodexForkOutcomeUnknownError'
+  }
+}
+
+export type CodexForkVerificationFailureCode =
+  | 'invalid_request'
+  | 'read_failed'
+  | 'malformed_read'
+  | 'child_identity_mismatch'
+  | 'lineage_mismatch'
+  | 'provider_session_mismatch'
+  | 'cwd_mismatch'
+
+export type CodexForkVerificationKnownChild = Omit<
+  CodexForkKnownChild,
+  'subscriptionReleased'
+>
+
+export class CodexForkVerificationError extends Error {
+  readonly quarantined = true
+
+  constructor(
+    readonly code: CodexForkVerificationFailureCode,
+    readonly sourceExternalId: string,
+    readonly sourceProviderThreadId: string,
+    readonly knownChild: CodexForkVerificationKnownChild | null,
+  ) {
+    super(`Codex fork verification quarantined: ${code}`)
+    this.name = 'CodexForkVerificationError'
+  }
+}
+
 type PendingApproval = {
   kind: CodexDriverApprovalKind
   params: Record<string, unknown>
   deferred: Deferred<unknown>
-  timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | null
 }
 
 type CodexSessionState = {
@@ -99,8 +302,10 @@ type CodexSessionState = {
   droppedEvents: number
   pendingTurnOverrides: Omit<CodexTurnStartParams, 'threadId' | 'input'>
   pendingApprovals: Map<string, PendingApproval>
+  completedApprovals: Map<string, unknown>
   tokenBudget: number | null
   tokenBudgetInterrupted: boolean
+  nativeEventSeq: number
 }
 
 const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
@@ -109,6 +314,36 @@ const APPROVAL_METHODS: Record<string, CodexDriverApprovalKind> = {
   'item/permissions/requestApproval': 'permissions',
   'item/tool/requestUserInput': 'user-input',
   'mcpServer/elicitation/request': 'mcp-elicitation',
+}
+
+const COMPLETED_APPROVAL_CACHE_SIZE = 256
+const CODEX_UNSUBSCRIBE_RELEASE_STATUSES = new Set([
+  'notLoaded',
+  'notSubscribed',
+  'unsubscribed',
+] as const)
+type CodexUnsubscribeReleaseStatus =
+  'notLoaded'
+  | 'notSubscribed'
+  | 'unsubscribed'
+
+function normalizedAbsoluteCwd(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed && isAbsolute(trimmed) ? resolve(trimmed) : null
+}
+
+function sameCwd(value: unknown, expected: string): boolean {
+  return normalizedAbsoluteCwd(value) === expected
+}
+
+function unsubscribeReleaseStatus(value: unknown): CodexUnsubscribeReleaseStatus | null {
+  if (typeof value !== 'string') return null
+  return CODEX_UNSUBSCRIBE_RELEASE_STATUSES.has(
+    value as CodexUnsubscribeReleaseStatus,
+  )
+    ? value as CodexUnsubscribeReleaseStatus
+    : null
 }
 
 export class CodexAgentDriver implements AgentDriver {
@@ -187,6 +422,18 @@ export class CodexAgentDriver implements AgentDriver {
       ...(typeof metadata.ephemeral === 'boolean' ? { ephemeral: metadata.ephemeral } : {}),
     }
     const started = await this.options.service.startThread(threadParams)
+    let agentHome: CodexAgentHomeBinding | undefined
+    try {
+      agentHome = await this.resolveAgentHomeBinding(started.thread, {
+        mode: 'launch',
+        boardId: request.boardId,
+        workspaceId: request.workspaceId,
+        metadata,
+      })
+    } catch (error) {
+      await this.options.service.unsubscribeThread(started.thread.id).catch(() => {})
+      throw error
+    }
     const state = this.createState(started.thread, request.workspaceId, started, request.taskBudgetTokens)
     Object.assign(state.session.metadata, {
       ...(request.model ? { model: request.model } : {}),
@@ -194,6 +441,7 @@ export class CodexAgentDriver implements AgentDriver {
       ...(accessProfile ? { accessProfile } : {}),
       ...(request.externalId ? { replacesExternalId: request.externalId } : {}),
     })
+    if (agentHome) this.applyAgentHomeBinding(state, agentHome)
     this.registerState(state)
     if (request.prompt?.length) {
       try {
@@ -225,23 +473,474 @@ export class CodexAgentDriver implements AgentDriver {
       if (this.isMissingThread(error)) return null
       throw error
     }
-    const read = await this.options.service.readThread(externalId, true)
+    const read = await this.options.service.readThread(externalId, true).catch(async (error) => {
+      await this.options.service.unsubscribeThread(externalId).catch(() => {})
+      throw error
+    })
     const thread = read.thread ?? resumed.thread
-    const workspaceId = await this.options.workspaceForThread?.(externalId, thread)
+    if (thread.id !== externalId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex resume returned thread ${thread.id} for requested thread ${externalId}`)
+    }
+    let agentHome: CodexAgentHomeBinding | undefined
+    try {
+      agentHome = await this.resolveAgentHomeBinding(thread, {
+        mode: 'attach',
+        metadata: {},
+      })
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    let resolvedWorkspaceId: OsId | undefined
+    try {
+      resolvedWorkspaceId = await this.options.workspaceForThread?.(externalId, thread)
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    if (agentHome?.workspaceId && resolvedWorkspaceId
+      && agentHome.workspaceId !== resolvedWorkspaceId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex thread ${externalId} has conflicting durable workspace identities`)
+    }
+    const workspaceId = agentHome?.workspaceId ?? resolvedWorkspaceId
     if (!workspaceId) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
       throw new Error(`workspace for Codex thread ${externalId} is unknown`)
     }
-    const state = this.createState(
-      thread,
-      workspaceId,
-      resumed,
-      await this.options.tokenBudgetForThread?.(externalId),
-    )
+    let tokenBudget: number | null | undefined
+    try {
+      tokenBudget = await this.options.tokenBudgetForThread?.(externalId)
+    } catch (error) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw error
+    }
+    const state = this.createState(thread, workspaceId, resumed, tokenBudget)
+    if (agentHome) this.applyAgentHomeBinding(state, agentHome)
     const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
     if (activeTurn) this.setActiveTurn(state, activeTurn.id)
+    const attachedAt = this.now().toISOString()
+    const captureGap = {
+      method: 'orchestra/captureGap',
+      params: {
+        threadId: state.threadId,
+        turnId: activeTurn?.id ?? null,
+        reason: 'daemon-attach',
+        requestedThreadId: externalId,
+      },
+      receivedAt: attachedAt,
+    }
+    if (!this.captureNativeEvent(state, captureGap, state.threadId)) {
+      await this.options.service.unsubscribeThread(thread.id).catch(() => {})
+      throw new Error(`Codex thread ${externalId} could not persist its daemon-attach capture boundary`)
+    }
+    state.session.metadata.nativeCaptureResume = {
+      reason: 'daemon-attach',
+      at: attachedAt,
+      priorProviderCursor: agentHome?.providerCursor ?? null,
+      priorCaptureCursor: agentHome?.captureCursor ?? null,
+    }
     this.registerState(state)
     if (!activeTurn) this.replayTerminalTurn(state, thread, 'daemon-attach')
     return state.session
+  }
+
+  async forkSession(
+    sessionId: string,
+    options: CodexSessionForkOptions,
+  ): Promise<CodexSessionForkResult> {
+    const source = this.required(sessionId)
+    if (source.stopped) throw new Error(`Codex session is stopped: ${sessionId}`)
+    if (source.session.externalId !== source.threadId) {
+      throw new Error(`Codex session ${sessionId} has inconsistent provider thread provenance`)
+    }
+    if (options.sourceExternalId !== source.session.externalId) {
+      throw new Error(`Codex fork source external id does not match session ${sessionId}`)
+    }
+    if (!options.sourceWorkspaceId.trim()
+      || options.sourceWorkspaceId !== source.session.workspaceId) {
+      throw new Error(`Codex fork source workspace does not match session ${sessionId}`)
+    }
+    const sourceProviderSessionId = typeof source.session.metadata.codexSessionId === 'string'
+      ? source.session.metadata.codexSessionId.trim()
+      : ''
+    if (!sourceProviderSessionId) {
+      throw new Error(`Codex session ${sessionId} has no provider session identity`)
+    }
+    const sourceCwd = normalizedAbsoluteCwd(source.session.metadata.cwd)
+    if (!sourceCwd) throw new Error(`Codex session ${sessionId} has no source cwd provenance`)
+    const requestedSourceCwd = normalizedAbsoluteCwd(options.sourceCwd)
+    if (!requestedSourceCwd || requestedSourceCwd !== sourceCwd) {
+      throw new Error(`Codex fork source cwd does not match session ${sessionId}`)
+    }
+    const targetWorkspaceId = options.targetWorkspaceId.trim()
+    if (!targetWorkspaceId || targetWorkspaceId === source.session.workspaceId) {
+      throw new Error(`Codex fork target workspace must be distinct from session ${sessionId}`)
+    }
+    const targetCwd = normalizedAbsoluteCwd(options.targetCwd)
+    if (!targetCwd || targetCwd === sourceCwd) {
+      throw new Error(`Codex fork target cwd must be distinct from session ${sessionId}`)
+    }
+    const lastTurnId = options.lastTurnId == null ? null : options.lastTurnId.trim()
+    if (options.lastTurnId != null && !lastTurnId) {
+      throw new Error('Codex fork last turn id is required when provided')
+    }
+
+    let forked: CodexThreadForkResponse
+    try {
+      const response = await this.options.service.forkThread(source.threadId, {
+        ...(lastTurnId ? { lastTurnId } : {}),
+        cwd: targetCwd,
+      })
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new Error('Codex fork returned a malformed response')
+      }
+      forked = response
+    } catch {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork outcome is unknown for source thread ${source.threadId}`,
+        source.session.externalId,
+        source.threadId,
+        null,
+      )
+    }
+    const child = forked.thread
+    const childId = typeof child?.id === 'string' ? child.id.trim() : ''
+    const childProviderSessionId = typeof child?.sessionId === 'string' ? child.sessionId.trim() : ''
+    const childForkedFromId = typeof child?.forkedFromId === 'string'
+      ? child.forkedFromId.trim()
+      : null
+    const releaseKnownChild = async (): Promise<CodexForkKnownChild | null> => {
+      if (!childId
+        || childId === source.threadId
+        || this.sessionsByThread.has(childId)) {
+        return null
+      }
+      let releaseStatus: CodexUnsubscribeReleaseStatus | null = null
+      try {
+        releaseStatus = unsubscribeReleaseStatus(
+          (await this.options.service.unsubscribeThread(childId)).status,
+        )
+      } catch {
+        // This diagnostic is safe to retain without exposing the transport error.
+      }
+      return {
+        externalId: childId,
+        providerThreadId: childId,
+        forkedFromId: childForkedFromId,
+        childProviderSessionId: childProviderSessionId || null,
+        subscriptionReleased: releaseStatus !== null,
+      }
+    }
+    let provenanceError: Error | null = null
+    if (!childId) {
+      provenanceError = new Error(`Codex fork from ${source.threadId} returned no child thread id`)
+    } else if (childId === source.threadId) {
+      provenanceError = new Error(`Codex fork reused source thread id ${source.threadId}`)
+    } else if (this.sessionsByThread.has(childId)) {
+      provenanceError = new Error(`Codex fork reused managed thread id ${childId}`)
+    } else if (childForkedFromId !== source.threadId) {
+      provenanceError = new Error(
+        `Codex fork ${childId} did not attest source thread ${source.threadId}`,
+      )
+    } else if (!childProviderSessionId) {
+      provenanceError = new Error(
+        `Codex fork ${childId} returned no child provider session identity`,
+      )
+    } else if (!sameCwd(child.cwd, targetCwd) || !sameCwd(forked.cwd, targetCwd)) {
+      provenanceError = new Error(
+        `Codex fork ${childId} did not preserve workspace cwd provenance`,
+      )
+    }
+    if (provenanceError) {
+      throw new CodexForkOutcomeUnknownError(
+        provenanceError.message,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
+    }
+
+    let reread: CodexThread
+    try {
+      const response = await this.options.service.readThread(childId, false)
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new Error('Codex fork reread returned a malformed response')
+      }
+      reread = response.thread
+    } catch {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} could not complete mandatory native lineage reread verification`,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
+    }
+    const rereadId = typeof reread.id === 'string' ? reread.id.trim() : ''
+    const rereadForkedFromId = typeof reread.forkedFromId === 'string'
+      ? reread.forkedFromId.trim()
+      : null
+    const rereadSessionId = typeof reread.sessionId === 'string' ? reread.sessionId.trim() : ''
+    if (rereadId !== childId
+      || rereadForkedFromId !== source.threadId
+      || rereadSessionId !== childProviderSessionId
+      || !sameCwd(reread.cwd, targetCwd)) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} failed native lineage reread verification`,
+        source.session.externalId,
+        source.threadId,
+        await releaseKnownChild(),
+      )
+    }
+    if (this.sessionsByThread.has(childId)) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork child ${childId} became managed before subscription release`,
+        source.session.externalId,
+        source.threadId,
+        null,
+      )
+    }
+
+    let subscriptionStatus: CodexUnsubscribeReleaseStatus | null = null
+    try {
+      const unsubscribed = await this.options.service.unsubscribeThread(childId)
+      subscriptionStatus = unsubscribeReleaseStatus(unsubscribed.status)
+    } catch {
+      // The outcome is quarantined below without exposing transport details.
+    }
+    if (!subscriptionStatus) {
+      throw new CodexForkOutcomeUnknownError(
+        `Codex fork ${childId} could not prove child subscription release`,
+        source.session.externalId,
+        source.threadId,
+        {
+          externalId: childId,
+          providerThreadId: childId,
+          forkedFromId: childForkedFromId,
+          childProviderSessionId,
+          subscriptionReleased: false,
+        },
+      )
+    }
+
+    return {
+      sourceExternalId: source.session.externalId,
+      externalId: childId,
+      providerThreadId: childId,
+      sourceProviderThreadId: source.threadId,
+      metadata: {
+        forkMethod: 'thread/fork',
+        verificationMethod: 'thread/fork+thread/read',
+        forkedFromId: source.threadId,
+        sourceProviderSessionId,
+        providerSessionId: childProviderSessionId,
+        lastTurnId,
+        sourceWorkspaceId: source.session.workspaceId,
+        sourceCwd,
+        targetWorkspaceId,
+        targetWorkspaceAttestation: {
+          value: targetWorkspaceId,
+          authority: 'orchestrator',
+        },
+        targetCwd,
+        childCwd: targetCwd,
+        cwdVerified: true,
+        workspaceBindingVerified: true,
+        workspaceBindingAuthority: 'orchestrator',
+        readVerified: true,
+        threadReadVerified: true,
+        subscriptionReleased: true,
+        childUnsubscribeVerified: true,
+        subscriptionStatus,
+      },
+    }
+  }
+
+  verifyForkSession(
+    options: CodexSessionForkVerificationOptions,
+  ): Promise<CodexSessionForkVerificationResult>
+  verifyForkSession(
+    childExternalId: string,
+    options: CodexSessionForkVerificationContext,
+  ): Promise<CodexSessionForkVerificationResult>
+  async verifyForkSession(
+    childExternalIdOrOptions: string | CodexSessionForkVerificationOptions,
+    context?: CodexSessionForkVerificationContext,
+  ): Promise<CodexSessionForkVerificationResult> {
+    const options = typeof childExternalIdOrOptions === 'string'
+      ? { ...context, childExternalId: childExternalIdOrOptions }
+      : childExternalIdOrOptions
+    const sourceExternalId = typeof options?.sourceExternalId === 'string'
+      ? options.sourceExternalId.trim()
+      : ''
+    const explicitSourceProviderThreadId =
+      typeof options?.sourceProviderThreadId === 'string'
+        ? options.sourceProviderThreadId.trim()
+        : ''
+    const sourceProviderThreadId = options?.sourceProviderThreadId === undefined
+      ? sourceExternalId
+      : explicitSourceProviderThreadId
+    const childExternalId = typeof options?.childExternalId === 'string'
+      ? options.childExternalId.trim()
+      : ''
+    const childProviderThreadId = typeof options?.childProviderThreadId === 'string'
+      ? options.childProviderThreadId.trim()
+      : childExternalId
+    const expectedChildProviderSessionId =
+      typeof options?.childProviderSessionId === 'string'
+        ? options.childProviderSessionId.trim()
+        : null
+    const sourceWorkspaceId = typeof options?.sourceWorkspaceId === 'string'
+      ? options.sourceWorkspaceId.trim()
+      : undefined
+    const sourceCwd = options?.sourceCwd === undefined
+      ? undefined
+      : normalizedAbsoluteCwd(options.sourceCwd)
+    const targetWorkspaceId = typeof options?.targetWorkspaceId === 'string'
+      ? options.targetWorkspaceId.trim()
+      : ''
+    const targetCwd = normalizedAbsoluteCwd(options?.targetCwd)
+    const lastTurnId = options?.lastTurnId == null ? null : options.lastTurnId.trim()
+    const invalidRequest = !sourceExternalId
+      || !sourceProviderThreadId
+      || sourceExternalId !== sourceProviderThreadId
+      || (options?.sourceProviderThreadId !== undefined
+        && !explicitSourceProviderThreadId)
+      || !childExternalId
+      || childExternalId === sourceExternalId
+      || !childProviderThreadId
+      || childProviderThreadId !== childExternalId
+      || (options?.childProviderSessionId != null && !expectedChildProviderSessionId)
+      || !targetWorkspaceId
+      || !targetCwd
+      || (options?.sourceWorkspaceId !== undefined
+        && (!sourceWorkspaceId || sourceWorkspaceId === targetWorkspaceId))
+      || (options?.sourceCwd !== undefined
+        && (!sourceCwd || sourceCwd === targetCwd))
+      || (options?.lastTurnId != null && !lastTurnId)
+    if (invalidRequest) {
+      throw new CodexForkVerificationError(
+        'invalid_request',
+        sourceExternalId,
+        sourceProviderThreadId,
+        null,
+      )
+    }
+
+    const unresolvedKnownChild: CodexForkVerificationKnownChild = {
+      externalId: childExternalId,
+      providerThreadId: childProviderThreadId,
+      forkedFromId: null,
+      childProviderSessionId: null,
+    }
+    let reread: CodexThread
+    try {
+      const response = await this.options.service.readThread(childExternalId, false)
+      if (!response
+        || typeof response !== 'object'
+        || !('thread' in response)
+        || !response.thread
+        || typeof response.thread !== 'object') {
+        throw new CodexForkVerificationError(
+          'malformed_read',
+          sourceExternalId,
+          sourceProviderThreadId,
+          unresolvedKnownChild,
+        )
+      }
+      reread = response.thread
+    } catch (error) {
+      if (error instanceof CodexForkVerificationError) throw error
+      throw new CodexForkVerificationError(
+        'read_failed',
+        sourceExternalId,
+        sourceProviderThreadId,
+        unresolvedKnownChild,
+      )
+    }
+
+    const rereadId = typeof reread.id === 'string' ? reread.id.trim() : ''
+    const rereadForkedFromId = typeof reread.forkedFromId === 'string'
+      ? reread.forkedFromId.trim()
+      : null
+    const rereadProviderSessionId = typeof reread.sessionId === 'string'
+      ? reread.sessionId.trim()
+      : ''
+    const knownChild: CodexForkVerificationKnownChild = {
+      externalId: rereadId || childExternalId,
+      providerThreadId: rereadId || childProviderThreadId,
+      forkedFromId: rereadForkedFromId,
+      childProviderSessionId: rereadProviderSessionId || null,
+    }
+    const fail = (code: CodexForkVerificationFailureCode): never => {
+      throw new CodexForkVerificationError(
+        code,
+        sourceExternalId,
+        sourceProviderThreadId,
+        knownChild,
+      )
+    }
+    if (rereadId !== childExternalId) fail('child_identity_mismatch')
+    if (rereadForkedFromId !== sourceProviderThreadId) fail('lineage_mismatch')
+    if (!rereadProviderSessionId
+      || (expectedChildProviderSessionId !== null
+        && rereadProviderSessionId !== expectedChildProviderSessionId)) {
+      fail('provider_session_mismatch')
+    }
+    if (!sameCwd(reread.cwd, targetCwd)) fail('cwd_mismatch')
+
+    const targetWorkspaceAttestation: CodexTargetWorkspaceAttestation = {
+      value: targetWorkspaceId,
+      authority: 'orchestrator',
+    }
+    return {
+      sourceExternalId,
+      externalId: childExternalId,
+      providerThreadId: childProviderThreadId,
+      sourceProviderThreadId,
+      proof: {
+        status: 'verified',
+        sourceExternalId,
+        sourceProviderThreadId,
+        childExternalId,
+        childProviderThreadId,
+        childProviderSessionId: rereadProviderSessionId,
+        targetCwd,
+        targetWorkspaceAttestation,
+        read: {
+          method: 'thread/read',
+          includeTurns: false,
+          verified: true,
+        },
+      },
+      metadata: {
+        forkMethod: 'thread/fork',
+        verificationMethod: 'thread/read',
+        forkedFromId: sourceProviderThreadId,
+        providerSessionId: rereadProviderSessionId,
+        lastTurnId,
+        ...(sourceWorkspaceId ? { sourceWorkspaceId } : {}),
+        ...(sourceCwd ? { sourceCwd } : {}),
+        targetWorkspaceId,
+        targetWorkspaceAttestation,
+        targetCwd,
+        childCwd: targetCwd,
+        cwdVerified: true,
+        workspaceBindingVerified: true,
+        workspaceBindingAuthority: 'orchestrator',
+        readVerified: true,
+        threadReadVerified: true,
+      },
+    }
   }
 
   async send(sessionId: string, text: string): Promise<void> {
@@ -353,10 +1052,16 @@ export class CodexAgentDriver implements AgentDriver {
     if (!state || !pending || state.stopped) return false
     const response = this.approvalResponse(pending, decision, message, answers)
     if (response === CODEX_REQUEST_UNHANDLED) return false
-    clearTimeout(pending.timer)
-    state.pendingApprovals.delete(requestId)
-    pending.deferred.resolve(response)
-    return true
+    if (!this.captureApprovalOutcome(
+      state,
+      requestId,
+      pending,
+      decision,
+      'operator',
+      message?.trim() ? 'operator-decision-with-message' : 'operator-decision',
+      true,
+    )) return false
+    return this.completeApproval(state, requestId, pending, response)
   }
 
   async reconcileSessions(): Promise<CodexSessionReconcileResult> {
@@ -426,8 +1131,10 @@ export class CodexAgentDriver implements AgentDriver {
       droppedEvents: 0,
       pendingTurnOverrides: {},
       pendingApprovals: new Map(),
+      completedApprovals: new Map(),
       tokenBudget: this.tokenBudget(tokenBudget),
       tokenBudgetInterrupted: false,
+      nativeEventSeq: 0,
     }
   }
 
@@ -436,16 +1143,135 @@ export class CodexAgentDriver implements AgentDriver {
     this.sessionsByThread.set(state.threadId, state)
   }
 
+  private async resolveAgentHomeBinding(
+    thread: CodexThread,
+    context: Omit<CodexAgentHomeBindContext, 'expectedBinding'>,
+  ): Promise<CodexAgentHomeBinding | undefined> {
+    const expectedBinding = this.agentHomeBindingFromMetadata(
+      context.metadata,
+      context.workspaceId,
+    )
+    const resolved = await this.options.agentHomeForThread?.(
+      thread.id,
+      thread,
+      {
+        ...context,
+        ...(expectedBinding ? { expectedBinding } : {}),
+      },
+    )
+    if (this.options.agentHomeForThread && !resolved) {
+      throw new Error(`Codex thread ${thread.id} Agent Home binding could not be validated`)
+    }
+    if (expectedBinding && resolved) this.assertSameAgentHomeBinding(expectedBinding, resolved)
+    const binding = resolved ?? expectedBinding
+    if (this.options.nativeEventSink && !binding) {
+      throw new Error(`Codex thread ${thread.id} has no durable Agent Home binding`)
+    }
+    if (binding) this.validateAgentHomeBinding(binding, context.workspaceId)
+    return binding
+  }
+
+  private agentHomeBindingFromMetadata(
+    metadata: Record<string, unknown>,
+    workspaceId?: OsId,
+  ): CodexAgentHomeBinding | undefined {
+    const agentHomeSessionId = metadata.agentHomeSessionId
+    const agentProfileId = metadata.agentProfileId
+    const agentConversationId = metadata.agentConversationId
+    const values = [agentHomeSessionId, agentProfileId, agentConversationId]
+    const present = values.filter((value) => typeof value === 'string' && value.length > 0).length
+    if (present === 0) return undefined
+    if (present !== values.length) {
+      throw new Error('Agent Home binding metadata is incomplete')
+    }
+    return {
+      agentHomeSessionId: agentHomeSessionId as string,
+      agentProfileId: agentProfileId as string,
+      agentConversationId: agentConversationId as string,
+      ...(workspaceId ? { workspaceId } : {}),
+    }
+  }
+
+  private assertSameAgentHomeBinding(
+    expected: CodexAgentHomeBinding,
+    resolved: CodexAgentHomeBinding,
+  ): void {
+    if (expected.agentHomeSessionId !== resolved.agentHomeSessionId
+      || expected.agentProfileId !== resolved.agentProfileId
+      || expected.agentConversationId !== resolved.agentConversationId
+      || (expected.workspaceId && resolved.workspaceId
+        && expected.workspaceId !== resolved.workspaceId)) {
+      throw new Error('resolved Agent Home binding does not match the supplied canonical identity')
+    }
+  }
+
+  private validateAgentHomeBinding(
+    binding: CodexAgentHomeBinding,
+    expectedWorkspaceId?: OsId,
+  ): void {
+    const values = [
+      binding.agentHomeSessionId,
+      binding.agentProfileId,
+      binding.agentConversationId,
+    ]
+    if (values.some((value) => typeof value !== 'string' || value.length === 0)) {
+      throw new Error('resolved Agent Home binding is incomplete')
+    }
+    if (expectedWorkspaceId && binding.workspaceId
+      && expectedWorkspaceId !== binding.workspaceId) {
+      throw new Error('resolved Agent Home binding belongs to another workspace')
+    }
+  }
+
+  private applyAgentHomeBinding(
+    state: CodexSessionState,
+    binding: CodexAgentHomeBinding,
+  ): void {
+    Object.assign(state.session.metadata, {
+      agentHomeSessionId: binding.agentHomeSessionId,
+      agentProfileId: binding.agentProfileId,
+      agentConversationId: binding.agentConversationId,
+    })
+    state.nativeEventSeq = this.captureCursorSequence(
+      binding.captureCursor ?? binding.providerCursor,
+    )
+  }
+
   private async reconcileSessionsNow(): Promise<CodexSessionReconcileResult> {
     const result: CodexSessionReconcileResult = { resumed: [], failed: [] }
     const states = [...this.sessionsByThread.values()].filter((state) => !state.stopped)
     await Promise.all(states.map(async (state) => {
       try {
         const priorActiveTurnId = state.activeTurnId
+        const reconnectAt = this.now().toISOString()
+        if (!this.captureNativeEvent(state, {
+          method: 'orchestra/captureGap',
+          params: {
+            threadId: state.threadId,
+            turnId: priorActiveTurnId,
+            reason: 'app-server-reconnect',
+          },
+          receivedAt: reconnectAt,
+        }, state.threadId)) {
+          throw new Error(`Codex thread ${state.threadId} could not persist its reconnect capture boundary`)
+        }
+        state.session.metadata.nativeCaptureResume = {
+          reason: 'app-server-reconnect',
+          at: reconnectAt,
+        }
         const resumed = await this.options.service.resumeThread(state.threadId)
         const read = await this.options.service.readThread(state.threadId, true)
         if (state.stopped) return
         const thread = read.thread ?? resumed.thread
+        if (thread.id !== state.threadId) {
+          throw new Error(
+            `Codex reconnect returned thread ${thread.id} for bound thread ${state.threadId}`,
+          )
+        }
+        if (typeof state.session.metadata.cwd === 'string'
+          && state.session.metadata.cwd !== thread.cwd) {
+          throw new Error(`Codex reconnect changed cwd for bound thread ${state.threadId}`)
+        }
         const activeTurn = [...thread.turns].reverse().find((turn) => turn.status === 'inProgress')
         this.setActiveTurn(state, activeTurn?.id ?? null)
         const resolvedModel = typeof resumed.model === 'string' && resumed.model.trim()
@@ -495,10 +1321,12 @@ export class CodexAgentDriver implements AgentDriver {
 
   private acceptNotification(notification: CodexServerNotification): void {
     const params = isRecord(notification.params) ? notification.params : {}
+    const threadId = this.threadId(params)
     if (notification.method === 'thread/started' && isRecord(params.thread)) {
       const parentThreadId = typeof params.thread.parentThreadId === 'string' ? params.thread.parentThreadId : null
       const parent = parentThreadId ? this.sessionsByThread.get(parentThreadId) : undefined
-      if (parent) {
+      if (parent && !parent.stopped) {
+        if (!this.captureNativeEvent(parent, notification, parent.threadId)) return
         this.emitEvent(parent, 'tool', 'Codex subagent started', notification, {
           subagentId: typeof params.thread.id === 'string' ? params.thread.id : null,
           subagentStatus: 'started',
@@ -514,10 +1342,10 @@ export class CodexAgentDriver implements AgentDriver {
         })
       }
     }
-    const threadId = this.threadId(params)
     if (!threadId) return
     const state = this.sessionsByThread.get(threadId)
     if (!state || state.stopped) return
+    if (!this.captureNativeEvent(state, notification, threadId)) return
     switch (notification.method) {
       case 'turn/started': {
         const turn = isRecord(params.turn) ? params.turn : null
@@ -611,6 +1439,85 @@ export class CodexAgentDriver implements AgentDriver {
     }
   }
 
+  private captureNativeEvent(
+    state: CodexSessionState,
+    notification: CodexServerNotification,
+    threadId: string,
+  ): boolean {
+    const sink = this.options.nativeEventSink
+    if (!sink) return true
+    const agentHomeSessionId = state.session.metadata.agentHomeSessionId
+    const agentProfileId = state.session.metadata.agentProfileId
+    const agentConversationId = state.session.metadata.agentConversationId
+    const present = [agentHomeSessionId, agentProfileId, agentConversationId]
+      .filter((value) => typeof value === 'string').length
+    if (present !== 3) {
+      this.emitNativeCaptureFailure(
+        state,
+        notification.method,
+        present === 0
+          ? 'Agent Home binding metadata is missing'
+          : 'Agent Home binding metadata is incomplete',
+      )
+      return false
+    }
+    const params = isRecord(notification.params) ? notification.params : {}
+    const captureCursor = `orchestra-codex:${++state.nativeEventSeq}`
+    try {
+      sink.append({
+        agentHomeSessionId: agentHomeSessionId as string,
+        agentProfileId: agentProfileId as string,
+        agentConversationId: agentConversationId as string,
+        captureCursor,
+        threadId,
+        turnId: this.turnId(params),
+        itemId: this.itemId(params),
+        method: notification.method,
+        params: notification.params,
+        receivedAt: notification.receivedAt,
+      })
+      return true
+    } catch (error) {
+      this.emitNativeCaptureFailure(
+        state,
+        notification.method,
+        error instanceof Error ? error.message : String(error),
+        captureCursor,
+      )
+      return false
+    }
+  }
+
+  private emitNativeCaptureFailure(
+    state: CodexSessionState,
+    nativeMethod: string,
+    detail: string,
+    captureCursor?: string,
+  ): void {
+    const message = detail.length > 1_000 ? `${detail.slice(0, 997)}...` : detail
+    state.session.metadata.nativeCaptureFailure = {
+      method: nativeMethod,
+      detail: message,
+      ...(captureCursor ? { captureCursor } : {}),
+    }
+    this.emitEvent(state, 'error', `Codex native event was not persisted: ${message}`, {
+      method: 'orchestra/nativeCaptureFailed',
+      params: { threadId: state.threadId },
+      receivedAt: this.now().toISOString(),
+    }, {
+      nativeCaptureFailed: true,
+      failedNativeMethod: nativeMethod,
+      ...(captureCursor ? { captureCursor } : {}),
+    })
+  }
+
+  private captureCursorSequence(providerCursor: string | null | undefined): number {
+    const match = /^orchestra-codex:(\d+)$/.exec(providerCursor ?? '')
+    if (!match) return 0
+    const value = Number(match[1])
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0
+  }
+
   private async acceptServerRequest(request: CodexServerRequest): Promise<CodexServerRequestHandlerResult> {
     if (request.method === 'currentTime/read') {
       return { currentTimeAt: Math.floor(this.now().getTime() / 1_000) }
@@ -623,6 +1530,33 @@ export class CodexAgentDriver implements AgentDriver {
     if (!state || state.stopped) return CODEX_REQUEST_UNHANDLED
     const turnId = typeof request.params.turnId === 'string' ? request.params.turnId : null
     const itemId = typeof request.params.itemId === 'string' ? request.params.itemId : null
+    if (!this.captureNativeEvent(state, {
+      method: request.method,
+      params: {
+        ...request.params,
+        eventId: String(request.id),
+      },
+      receivedAt: request.receivedAt,
+    }, threadId)) {
+      return CODEX_REQUEST_UNHANDLED
+    }
+    const requestId = String(request.id)
+    const replayKey = this.approvalReplayKey(requestId, {
+      kind,
+      params: request.params,
+    })
+    if (state.completedApprovals.has(replayKey)) {
+      const completed = state.completedApprovals.get(replayKey)
+      state.completedApprovals.delete(replayKey)
+      state.completedApprovals.set(replayKey, completed)
+      return completed
+    }
+    const existing = state.pendingApprovals.get(requestId)
+    if (existing) {
+      return this.approvalReplayKey(requestId, existing) === replayKey
+        ? existing.deferred.promise
+        : CODEX_REQUEST_UNHANDLED
+    }
     const elicitationQuestions = kind === 'mcp-elicitation'
       ? this.elicitationQuestions(request.params)
       : []
@@ -650,40 +1584,117 @@ export class CodexAgentDriver implements AgentDriver {
         elicitationId: typeof request.params.elicitationId === 'string' ? request.params.elicitationId : null,
       } : {}),
     })
-    if (this.options.onApprovalRequest) {
-      const handled = await this.options.onApprovalRequest({
-        kind,
-        sessionId: state.session.id,
-        threadId,
-        turnId,
-        itemId,
-        requestId: request.id,
-        method: request.method,
-        params: request.params,
-      })
-      if (handled !== CODEX_REQUEST_UNHANDLED) return handled
-    }
-    const requestId = String(request.id)
-    const existing = state.pendingApprovals.get(requestId)
-    if (existing) {
-      clearTimeout(existing.timer)
-      existing.deferred.resolve(this.approvalResponse(existing, 'cancel'))
-    }
     const response = deferred<unknown>()
-    const timer = setTimeout(() => {
-      const pending = state.pendingApprovals.get(requestId)
-      if (!pending || pending.deferred !== response) return
-      state.pendingApprovals.delete(requestId)
-      pending.deferred.resolve(this.approvalResponse(pending, 'cancel'))
+    const pending: PendingApproval = {
+      kind,
+      params: request.params,
+      deferred: response,
+      timer: null,
+    }
+    state.pendingApprovals.set(requestId, pending)
+    pending.timer = setTimeout(() => {
+      if (state.pendingApprovals.get(requestId) !== pending) return
+      const cancellation = this.approvalResponse(pending, 'cancel')
+      const persisted = this.captureApprovalOutcome(
+        state,
+        requestId,
+        pending,
+        'cancel',
+        'timeout',
+        'approval-timeout',
+        true,
+      )
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        persisted ? cancellation : CODEX_REQUEST_UNHANDLED,
+      )
       this.emitEvent(state, 'error', `Codex approval ${requestId} timed out`, {
         method: 'orchestra/approvalTimeout',
         params: { threadId, turnId, itemId, requestId },
         receivedAt: this.now().toISOString(),
+      }, {
+        approvalAuditPersisted: persisted,
       })
     }, this.approvalTimeoutMs)
-    timer.unref?.()
-    state.pendingApprovals.set(requestId, { kind, params: request.params, deferred: response, timer })
-    return response.promise
+    pending.timer.unref?.()
+    if (this.options.onApprovalRequest) {
+      let handled: unknown
+      try {
+        handled = await this.options.onApprovalRequest({
+          kind,
+          sessionId: state.session.id,
+          threadId,
+          turnId,
+          itemId,
+          requestId: request.id,
+          method: request.method,
+          params: request.params,
+        })
+      } catch {
+        if (state.pendingApprovals.get(requestId) === pending) {
+          this.captureApprovalOutcome(
+            state,
+            requestId,
+            pending,
+            'unhandled',
+            'automatic',
+            'automatic-handler-failed',
+            true,
+          )
+          this.completeApproval(
+            state,
+            requestId,
+            pending,
+            CODEX_REQUEST_UNHANDLED,
+          )
+        }
+        return pending.deferred.promise
+      }
+      if (state.pendingApprovals.get(requestId) !== pending) {
+        return pending.deferred.promise
+      }
+      if (handled !== CODEX_REQUEST_UNHANDLED) {
+        const decision = this.approvalDecisionForResponse(handled)
+        const persisted = this.captureApprovalOutcome(
+          state,
+          requestId,
+          pending,
+          decision,
+          'automatic',
+          decision === 'unhandled'
+            ? 'automatic-handler-returned-an-unclassified-response'
+            : 'automatic-handler-decision',
+          true,
+        )
+        this.completeApproval(
+          state,
+          requestId,
+          pending,
+          persisted ? handled : CODEX_REQUEST_UNHANDLED,
+        )
+        return pending.deferred.promise
+      }
+    }
+    const routingPersisted = this.captureApprovalOutcome(
+      state,
+      requestId,
+      pending,
+      'unhandled',
+      'automatic',
+      this.options.onApprovalRequest ? 'automatic-handler-deferred' : 'no-automatic-handler',
+      false,
+    )
+    if (!routingPersisted) {
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        CODEX_REQUEST_UNHANDLED,
+      )
+    }
+    return pending.deferred.promise
   }
 
   private replayTerminalTurn(
@@ -694,17 +1705,19 @@ export class CodexAgentDriver implements AgentDriver {
     const turn = thread.turns.at(-1)
     if (!turn || !['completed', 'failed', 'interrupted'].includes(turn.status)) return
     const failed = turn.status === 'failed' || turn.status === 'interrupted'
+    const native = {
+      method: 'turn/completed',
+      params: { threadId: state.threadId, turnId: turn.id, turn },
+      receivedAt: this.now().toISOString(),
+    }
+    if (!this.captureNativeEvent(state, native, state.threadId)) return
     this.emitEvent(
       state,
       failed ? 'error' : 'status',
       turn.status === 'interrupted'
         ? 'Codex turn interrupted'
         : failed ? this.turnError(turn) : `Codex turn ${turn.status}`,
-      {
-        method: 'turn/completed',
-        params: { threadId: state.threadId, turnId: turn.id, turn },
-        receivedAt: this.now().toISOString(),
-      },
+      native,
       {
         turnCompleted: true,
         turnActive: false,
@@ -867,6 +1880,90 @@ export class CodexAgentDriver implements AgentDriver {
     return { approvalPolicy: 'on-request', sandboxPolicy: { type: 'dangerFullAccess' } }
   }
 
+  private approvalDecisionForResponse(response: unknown): CodexApprovalAuditDecision {
+    if (!isRecord(response)) return 'unhandled'
+    if (response.decision === 'accept') return 'allow'
+    if (response.decision === 'acceptForSession') return 'allow_session'
+    if (response.decision === 'decline') return 'deny'
+    if (response.decision === 'cancel') return 'cancel'
+    if (response.action === 'accept') return 'allow'
+    if (response.action === 'decline') return 'deny'
+    if (response.action === 'cancel') return 'cancel'
+    if (Object.hasOwn(response, 'permissions')) {
+      const permissions = isRecord(response.permissions) ? response.permissions : {}
+      if (Object.keys(permissions).length === 0) return 'deny'
+      return response.scope === 'session' ? 'allow_session' : 'allow'
+    }
+    if (Object.hasOwn(response, 'answers')) return 'allow'
+    return 'unhandled'
+  }
+
+  private captureApprovalOutcome(
+    state: CodexSessionState,
+    requestId: string,
+    pending: Pick<PendingApproval, 'kind' | 'params'>,
+    decision: CodexApprovalAuditDecision,
+    source: CodexApprovalOutcomeSource,
+    reason: string,
+    final: boolean,
+  ): boolean {
+    const stage = final ? source === 'automatic' ? 'automatic-response' : 'final-response' : 'routing'
+    return this.captureNativeEvent(state, {
+      method: 'orchestra/approvalResponse',
+      params: {
+        threadId: state.threadId,
+        turnId: this.turnId(pending.params),
+        itemId: this.itemId(pending.params),
+        eventId: `approval:${requestId}:${stage}`,
+        requestId,
+        approvalKind: pending.kind,
+        decision,
+        source,
+        reason,
+        final,
+        actorType: source === 'operator' ? 'operator' : 'system',
+        actorId: source === 'operator'
+          ? null
+          : source === 'automatic' ? 'codex-approval-policy' : 'codex-driver',
+      },
+      receivedAt: this.now().toISOString(),
+    }, state.threadId)
+  }
+
+  private completeApproval(
+    state: CodexSessionState,
+    requestId: string,
+    pending: PendingApproval,
+    response: unknown,
+  ): boolean {
+    if (state.pendingApprovals.get(requestId) !== pending) return false
+    if (pending.timer !== null) clearTimeout(pending.timer)
+    pending.timer = null
+    state.pendingApprovals.delete(requestId)
+    state.completedApprovals.set(
+      this.approvalReplayKey(requestId, pending),
+      response,
+    )
+    if (state.completedApprovals.size > COMPLETED_APPROVAL_CACHE_SIZE) {
+      const oldest = state.completedApprovals.keys().next().value
+      if (oldest !== undefined) state.completedApprovals.delete(oldest)
+    }
+    pending.deferred.resolve(response)
+    return true
+  }
+
+  private approvalReplayKey(
+    requestId: string,
+    pending: Pick<PendingApproval, 'kind' | 'params'>,
+  ): string {
+    return JSON.stringify([
+      requestId,
+      pending.kind,
+      this.turnId(pending.params),
+      this.itemId(pending.params),
+    ])
+  }
+
   private approvalResponse(
     pending: Pick<PendingApproval, 'kind' | 'params'>,
     decision: CodexApprovalDecision,
@@ -1019,11 +2116,25 @@ export class CodexAgentDriver implements AgentDriver {
   }
 
   private cancelPendingApprovals(state: CodexSessionState): void {
-    for (const pending of state.pendingApprovals.values()) {
-      clearTimeout(pending.timer)
-      pending.deferred.resolve(this.approvalResponse(pending, 'cancel'))
+    const reason = state.session.status === 'failed' ? 'session-failed' : 'session-stopped'
+    for (const [requestId, pending] of [...state.pendingApprovals]) {
+      const cancellation = this.approvalResponse(pending, 'cancel')
+      const persisted = this.captureApprovalOutcome(
+        state,
+        requestId,
+        pending,
+        'cancel',
+        'shutdown',
+        reason,
+        true,
+      )
+      this.completeApproval(
+        state,
+        requestId,
+        pending,
+        persisted ? cancellation : CODEX_REQUEST_UNHANDLED,
+      )
     }
-    state.pendingApprovals.clear()
   }
 
   private isMissingThread(error: unknown): boolean {

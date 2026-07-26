@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "evidence_as_of": "2026-07-25",
+  "fail_closed": true,
+  "validated_toolchains": [
+    {
+      "id": "darwin-arm64-2026-07-25",
+      "platform": "darwin",
+      "arch": "arm64",
+      "platform_release": "25.5.0",
+      "platform_variant": "darwin-25.5.0",
+      "libc": null,
+      "evidence_profile": null,
+      "node": "22.20.0",
+      "npm": "10.9.3"
+    },
+    {
+      "id": "ubuntu-24.04-x64-node-22.12",
+      "platform": "linux",
+      "arch": "x64",
+      "platform_release": null,
+      "platform_variant": "ubuntu-24.04",
+      "libc": "glibc",
+      "evidence_profile": null,
+      "node": "22.12.0",
+      "npm": "10.9.0"
+    }
+  ],
+  "runtime": {
+    "node": {
+      "validated_versions": [
+        "22.12.0",
+        "22.20.0"
+      ],
+      "experimental_range": {
+        "min_inclusive": "22.12.0",
+        "max_exclusive": "23.0.0"
+      },
+      "evidence": [
+        "2026-07-25 compatibility-container verification: Node 22.12.0 on Ubuntu 24.04 x64/glibc",
+        "2026-07-25 host verification: Node 22.20.0 on macOS 26.5.1 (Darwin 25.5.0) arm64"
+      ]
+    },
+    "npm": {
+      "validated_versions": [
+        "10.9.0",
+        "10.9.3"
+      ],
+      "experimental_range": {
+        "min_inclusive": "10.9.0",
+        "max_exclusive": "11.0.0"
+      },
+      "evidence": [
+        "https://nodejs.org/en/download/archive/v22.12.0: Node 22.12.0 bundles npm 10.9.0",
+        "2026-07-25 host verification: npm 10.9.3 with Node 22.20.0 on macOS 26.5.1"
+      ]
+    }
+  },
+  "tools": {
+    "git": {
+      "min_inclusive": "2.30.0",
+      "max_exclusive": "3.0.0",
+      "required": true,
+      "scope": "functional readiness range for repository discovery, worktree provisioning, diff, merge-base, and delivery evidence"
+    }
+  },
+  "platforms": {
+    "darwin": {
+      "arm64": {
+        "status": "experimental",
+        "scope": "validated only for the exact Darwin release/toolchain tuple recorded above"
+      },
+      "x64": {
+        "status": "experimental",
+        "scope": "package dependency coverage only; no observed Orchestra host gate"
+      },
+      "default": {
+        "status": "experimental",
+        "scope": "no observed Orchestra host gate"
+      }
+    },
+    "linux": {
+      "x64-glibc": {
+        "status": "experimental",
+        "scope": "validated only for the exact Ubuntu 24.04 toolchain tuple recorded above"
+      },
+      "x64-musl": {
+        "status": "experimental",
+        "scope": "native dependency artifact exists; no observed Orchestra host gate"
+      },
+      "x64": {
+        "status": "experimental",
+        "scope": "libc could not be identified; no observed Orchestra host gate"
+      },
+      "arm64-glibc": {
+        "status": "experimental",
+        "scope": "package dependency coverage only; no observed Orchestra host gate"
+      },
+      "arm64-musl": {
+        "status": "experimental",
+        "scope": "package dependency coverage only; no observed Orchestra host gate"
+      },
+      "arm64": {
+        "status": "experimental",
+        "scope": "libc could not be identified; no observed Orchestra host gate"
+      },
+      "default": {
+        "status": "experimental",
+        "scope": "no observed Orchestra host gate"
+      }
+    },
+    "win32": {
+      "default": {
+        "status": "unsupported",
+        "scope": "no clean-machine, native PTY, browser, or provider acceptance gate"
+      }
+    },
+    "default": {
+      "default": {
+        "status": "unsupported",
+        "scope": "not in the first-release platform surface"
+      }
+    }
+  },
+  "providers": {
+    "codex": {
+      "managed": {
+        "command": "codex",
+        "command_env": "ORCHESTRA_CODEX_COMMAND",
+        "validated_versions": [
+          "0.144.6"
+        ],
+        "experimental_versions": [],
+        "other_versions": "unsupported",
+        "protocol": {
+          "surface": "codex app-server",
+          "upstream_maturity": "experimental",
+          "transport": "stdio JSONL",
+          "snapshot": "scripts/codex-protocol-contract.json",
+          "file_count": 671,
+          "sha256": "d64c8fbadf596041d29fc39a9ed6fb41c2e6eb0ecd70f03c9b544f7f99cb8b2b"
+        }
+      }
+    },
+    "claude": {
+      "managed": {
+        "package": "@anthropic-ai/claude-agent-sdk",
+        "validated_sdk_versions": [
+          "0.3.212"
+        ],
+        "validated_native_package_versions": [
+          "0.3.212"
+        ],
+        "bundled_cli_by_sdk": {
+          "0.3.212": "2.1.212"
+        },
+        "external_cli_required": false
+      },
+      "ambient": {
+        "command": "claude",
+        "required_for_managed": false,
+        "observed_versions": [
+          "2.1.170",
+          "2.1.217"
+        ],
+        "status": "experimental",
+        "scope": "PATH-resolved 2.1.170 and alternate-install 2.1.217 version commands observed on the 2026-07-25 Darwin arm64 host; no credentialed release gate"
+      }
+    }
+  }
+}

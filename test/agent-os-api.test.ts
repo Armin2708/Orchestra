@@ -218,6 +218,93 @@ describe('Agent OS API', () => {
     expect(written).toEqual(inputs)
   })
 
+  it('does not forward resize requests for a completed PTY to the runtime', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/resize', 'resize')").run().lastInsertRowid)
+    const workspaceId = 'resize-workspace'
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES (?, ?, 'resize', 'shared', '/resize', 'active')`).run(workspaceId, boardId)
+    db.prepare(`INSERT INTO processes (id, workspace_id, name, command, cwd, status, cols, rows)
+      VALUES ('completed-process', ?, 'done', 'pwd', '/resize', 'exited', 100, 30)`).run(workspaceId)
+    const resizes: Array<{ id: string; cols: number; rows: number }> = []
+    const runtime: AgentOsRuntimeAdapter = {
+      spawnProcess: async () => { throw new Error('not used') },
+      writeProcessInput: async () => {},
+      resizeProcess: async (id, cols, rows) => { resizes.push({ id, cols, rows }) },
+      signalProcess: async () => {},
+    }
+    const server = Fastify()
+    server.decorate('bus', new EventEmitter())
+    registerAgentOsRoutes(server, { db, runtime })
+    servers.push(server)
+    await server.ready()
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/completed-process/resize',
+      payload: { cols: 160, rows: 50 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({
+      ok: true, skipped: true, status: 'exited', cols: 100, rows: 30,
+    })
+    expect(resizes).toEqual([])
+  })
+
+  it('only suppresses a resize failure when the durable PTY concurrently becomes terminal', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/resize-race', 'resize race')")
+      .run().lastInsertRowid)
+    const workspaceId = 'resize-race-workspace'
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES (?, ?, 'resize race', 'shared', '/resize-race', 'active')`).run(workspaceId, boardId)
+    const insert = db.prepare(`INSERT INTO processes (
+      id, workspace_id, name, command, cwd, status, pid, cols, rows
+    ) VALUES (?, ?, 'shell', 'zsh', '/resize-race', 'running', 123, 100, 30)`)
+    insert.run('concurrent-exit', workspaceId)
+    insert.run('active-failure', workspaceId)
+    const runtime: AgentOsRuntimeAdapter = {
+      spawnProcess: async () => { throw new Error('not used') },
+      writeProcessInput: async () => {},
+      resizeProcess: async (id) => {
+        if (id === 'concurrent-exit') {
+          db.prepare(`UPDATE processes
+            SET status='exited', pid=NULL, exit_code=0, cols=101, rows=31, ended_at='2026-07-25T22:00:00Z'
+            WHERE id=?`).run(id)
+          throw new Error('process concurrently exited before resize')
+        }
+        throw new Error('active PTY resize failed')
+      },
+      signalProcess: async () => {},
+    }
+    const server = Fastify()
+    server.decorate('bus', new EventEmitter())
+    registerAgentOsRoutes(server, { db, runtime })
+    servers.push(server)
+    await server.ready()
+
+    const raced = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/concurrent-exit/resize',
+      payload: { cols: 160, rows: 50 },
+    })
+    expect(raced.statusCode).toBe(200)
+    expect(raced.json()).toEqual({
+      ok: true, skipped: true, status: 'exited', cols: 101, rows: 31,
+    })
+
+    const activeFailure = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/active-failure/resize',
+      payload: { cols: 160, rows: 50 },
+    })
+    expect(activeFailure.statusCode).toBe(500)
+    expect(activeFailure.json().message).toBe('active PTY resize failed')
+    expect(db.prepare('SELECT status, cols, rows FROM processes WHERE id=?').get('active-failure'))
+      .toEqual({ status: 'running', cols: 100, rows: 30 })
+  })
+
   it('launches an interactive shell without requiring a client-selected command', async () => {
     const db = openDb(':memory:')
     const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/shell', 'shell')").run().lastInsertRowid)

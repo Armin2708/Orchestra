@@ -34,8 +34,9 @@ describe('Codex Agent OS approval policy bridge', () => {
     })
     new TaskContractService(db).put(1, { policy_id: policy.id })
     db.prepare(`INSERT INTO jobs
-      (id, board_id, card_id, workspace_id, provider, status)
-      VALUES ('job-policy', 1, 1, 'workspace-policy', 'codex', 'running')`).run()
+      (id, board_id, card_id, workspace_id, provider, policy_id, contract_version, status)
+      VALUES ('job-policy', 1, 1, 'workspace-policy', 'codex', ?, 2, 'running')`).run(policy.id)
+    new TaskContractService(db).put(1, { policy_id: null })
     db.prepare(`INSERT INTO agent_sessions
       (id, workspace_id, provider, external_id, status, context_json)
       VALUES ('session-policy', 'workspace-policy', 'codex', 'thread-policy', 'running', '{"job_id":"job-policy"}')`).run()

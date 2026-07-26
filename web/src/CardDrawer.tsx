@@ -127,7 +127,7 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
             </button>
           ))}
         </div>
-        <p className="drawer-owner">
+        <div className="drawer-owner">
           {card.owner
             ? <><i className="avatar mini" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>{initials(card.owner)}</i> {card.owner}</>
             : 'unassigned'} · updated {timeAgo(card.updated_at)}
@@ -147,7 +147,7 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
               title="Spawn a fresh autonomous agent on this ticket"
               onLaunch={async (body) => { await api('POST', `/cards/${card.id}/launch`, body); onChange() }} />
           )}
-        </p>
+        </div>
 
         {card.column === 'review' && (
           <section className="review-panel">

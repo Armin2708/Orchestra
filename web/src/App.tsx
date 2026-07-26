@@ -48,7 +48,9 @@ export function App() {
     const params = new URLSearchParams(location.search)
     const b = Number(params.get('board'))
     if (b) { setFocus(b); localStorage.setItem('orchestra-focus', String(b)) }
-    if (params.has('card')) setNavigation({ view: 'board', boardTab: 'overview' })
+    if (['agent', 'session', 'conversation'].some((key) => params.has(key))) {
+      setNavigation({ view: 'board', boardTab: 'agents' })
+    } else if (params.has('card')) setNavigation({ view: 'board', boardTab: 'overview' })
   }, [])
 
   // default to the first project (network view) rather than the all-projects grid

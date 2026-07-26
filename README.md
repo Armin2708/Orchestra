@@ -4,10 +4,11 @@
 
 [![CI](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml)
 
-The v0.1 release also includes milestone review gates, independent delivery
-verification, a test-gated auto-ship queue, shipped-commit history, remote phone
-access, push notifications, per-agent token accounting, and manual/automatic wake
-for agents paused by Claude usage limits.
+The current engineering train also includes milestone review gates, independent delivery
+verification, a test-gated auto-ship queue, shipped-commit history, a legacy phone/tunnel
+preview, push notifications, per-agent token accounting, and manual/automatic wake for agents
+paused by Claude usage limits. The remote path is not a safe remote beta or secure device-pairing
+system.
 
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
@@ -16,40 +17,31 @@ raw-terminal capability. Its [Delivery Trackbook](docs/delivery-trackbook.md) ke
 Asked contract, reported result, observed evidence, human overrides, and acceptance visibly
 separate.
 
-## Quickstart
+## Installation status
 
-**Claude Code plugin:** inside Claude Code, run
+**Public installation is not available yet.** On 2026-07-25 the public npm registry returned
+`E404` for `orchestra-board`. Both plugin hook manifests currently invoke
+`npx -y orchestra-board@0.1.0`, so the Claude/Codex plugin commands and the npm/npx commands
+previously shown here are not working plug-and-play paths. This repository is an engineering
+preview, not a public release.
 
-```
-/plugin marketplace add Armin2708/Orchestra
-/plugin install orchestra@orchestra
-```
+Read the [operator preview](docs/operator-preview.md) before running the source checkout. The
+[remote preview](docs/remote-preview.md) and [support preview](docs/support-preview.md) describe
+the current security boundary and the evidence that is safe to share.
 
-That's it. Hooks come bundled with the plugin, the CLI auto-downloads from npm on first use, and the daemon auto-starts with your next session. Open http://localhost:4750 to watch the board.
-
-**Codex plugin:** from a terminal, run
-
-```bash
-codex plugin marketplace add Armin2708/Orchestra
-codex plugin add orchestra@orchestra
-```
-
-Start a new Codex session in the project, then open `/hooks` once to review and trust Orchestra's project/plugin hooks. Codex hook trust is tied to the exact hook definition, so review is requested again when the manifest changes.
-
-**Manual install (npm):**
+For contributor evaluation from an already verified source checkout, use a supported Node 22/npm
+10 environment and build both packages locally:
 
 ```bash
-npm i -g orchestra-board
-orchestra install --provider both  # Claude + Codex hooks; global by default
-orchestra serve &    # or let the hooks auto-start it
-open http://localhost:4750
+npm ci
+npm --prefix web ci
+npm run build
+npm --prefix web run build
+node dist/cli.js serve
 ```
 
-For a zero-install run, invoke the package's `orchestra` binary explicitly:
-
-```bash
-npx --yes --package orchestra-board orchestra serve
-```
+Then open http://localhost:4750. This starts the local daemon and UI; it does not turn the
+unpublished package/plugin flow into a supported installation.
 
 For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
 Orchestra:
@@ -58,14 +50,22 @@ Orchestra:
 npm i -g @openai/codex@0.144.6
 codex login
 codex login status
-orchestra restart
-orchestra hire --provider codex --access-profile workspace_write
+node dist/cli.js doctor --provider codex
+node dist/cli.js restart
+node dist/cli.js hire --provider codex --access-profile workspace_write
 ```
+
+`orchestra doctor` runs full operator readiness by default: it verifies the supported environment,
+Git, selected provider CLIs, and selected-provider login state, then prints an Expected and Fix
+section for every problem. It never logs in or runs a model request. Automation that must remain
+credential-free can use `orchestra doctor --provider both --json --compatibility-only`.
 
 The web **Hire** and card **Launch** controls also offer Claude/Codex selection, model, reasoning
 effort, and a neutral access profile. Orchestra never substitutes Claude when Codex is missing,
 logged out, reconnecting, or unsupported; the provider remains visible with a diagnostic instead.
-See [Codex integration](docs/codex.md) for runtime, security, recovery, and troubleshooting details.
+See the [supported-environment matrix](docs/supported-environments.md) and
+[Codex integration](docs/codex.md) for exact versions, runtime security, recovery, and
+troubleshooting details.
 
 Use `--provider claude` or `--provider codex` for one provider, and add `--project` to write `./.claude/settings.json` and/or `./.codex/hooks.json` instead of the user-level files. Project-local Codex hooks run only after the project is trusted and the definitions are approved through `/hooks`.
 
@@ -83,7 +83,10 @@ Claude session A      Codex session B         You (browser)
           SQLite (~/.orchestra/)
 ```
 
-- A tiny local daemon holds board state per project (keyed by git root) in SQLite. Fully local — no accounts, no cloud, no telemetry.
+- A tiny loopback daemon holds board state per project (keyed by git root) in SQLite. Core state
+  and injected-context usage telemetry remain on this machine; Orchestra has no hosted account or
+  product-analytics service. Provider CLIs and opt-in tunnel/push integrations can contact their
+  own external services.
 - Claude Code and Codex hooks make every session a board citizen:
   - **SessionStart** registers the agent (auto-named like `amber-fox`) and injects the board rules + current snapshot into its context.
   - **PostToolUse** (every few seconds while the agent works) heartbeats and delivers any messages addressed to the agent straight into its context.
@@ -113,6 +116,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra swarm [question] --confirm [--stdin]` | Deliberately wake the current live-agent snapshot |
 | `orchestra pulse` | Heartbeat + print undelivered messages (used by hooks) |
 | `orchestra snapshot` | Dump the board state as JSON |
+| `orchestra doctor [--provider claude\|codex\|both] [--json\|--contract] [--compatibility-only]` | Verify full operator readiness with actionable fixes, or select the credential-free compatibility gate |
 | `orchestra milestone <title>` / `orchestra step <id> <title>` | Plan an ordered milestone with approval gates |
 | `orchestra hire [--provider claude\|codex] [--model M] [--effort LEVEL] [--access-profile PROFILE]` / `orchestra task <agent> <text>` | Hire and direct autonomous agents from the daemon |
 | `orchestra wake` | Resume agents paused by a Claude usage limit |
@@ -124,7 +128,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project] [--provider claude\|codex\|both]` | Add provider hooks idempotently (default: `claude`) |
 | `orchestra uninstall [--project] [--provider claude\|codex\|both]` | Remove only Orchestra's selected provider hooks |
-| `orchestra remote [--stop]` | Expose the board over a secure tunnel + QR pairing (see Remote Access) |
+| `orchestra remote [--stop]` | Start/stop the legacy tunnel preview; its QR contains the reusable master operator token and is not secure device pairing |
 
 ### Safe message composition
 
@@ -154,42 +158,35 @@ Rules of thumb:
 - The CLI warns (without blocking) when a body looks like leaked command output —
   credential dumps, unmatched backticks, an unclosed `$(`.
 
-## Remote Access
+## Remote preview — not secure device pairing
 
-`orchestra remote` puts the board on your phone:
+`orchestra remote` is a legacy functional preview, not a supported remote-control or pairing
+system:
 
 ```
 orchestra remote
 ```
 
-It starts (or attaches to) the daemon with token auth enforced, opens a tunnel
-with tooling you already have — `tailscale serve` if Tailscale is installed
-(preferred: private to your tailnet), otherwise a `cloudflared` quick tunnel —
-and prints the public URL plus a QR code. The QR embeds the URL *and* your API
-token (`https://…/#token=…`), so one scan opens the board on your phone already
-signed in; the web app stores the token and strips it from the address bar.
-Install the board as an app from your phone browser's share menu — it's a PWA.
-
-Notes:
-
-- The daemon keeps listening only on `127.0.0.1`; the tunnel terminates TLS and
-  forwards to localhost. It is never exposed without token auth (`orchestra
-  remote` refuses to run with `ORCHESTRA_NO_AUTH=1`).
-- Treat the QR/URL like a password — anyone who scans it has your token. Quick
-  tunnel URLs are random and die with `--stop`.
-- The current tunnel is recorded in `~/.orchestra/remote.json` (`provider`,
-  `url`, `pid`) for other features that need the public base URL.
+It keeps the daemon on loopback and asks either `tailscale serve` or `cloudflared` to forward to
+it. The printed QR is only a browser bootstrap: it contains the same reusable master operator
+token used by the local web client. There are no named, scoped, expiring, individually revocable
+device sessions or high-risk step-up controls. Stopping the tunnel does not rotate that token,
+revoke a phone, clear browser storage, or erase cached content.
 
 ```
-orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tailscale serve)
+orchestra remote --stop   # request a best-effort stop, then verify the external URL is unreachable
 ```
+
+Do not use this preview for real remote access to sensitive work. See the
+[remote-preview boundary](docs/remote-preview.md) and the
+[remote/mobile threat model](docs/remote-mobile-threat-model.md).
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `ORCHESTRA_PORT` | `4750` | Daemon port |
-| `ORCHESTRA_HOME` | `~/.orchestra` | Data directory (SQLite db, pidfile, session files) |
+| `ORCHESTRA_HOME` | `~/.orchestra` | State root; includes credentials and more than the database—see the [complete inventory](docs/operator-preview.md#state-inventory) |
 | `ORCHESTRA_NAME` | auto-generated | Fix an agent name for a terminal (`export ORCHESTRA_NAME=lead-otter`) |
 | `ORCHESTRA_CODEX_COMMAND` | `codex` | Codex CLI executable used for the supervised app-server |
 | `ORCHESTRA_CODEX_FORWARD_ENV` | empty | Comma-separated extra environment-variable names to pass to app-server deliberately |
@@ -197,14 +194,49 @@ orchestra remote --stop   # tear the tunnel down (kills cloudflared / resets tai
 
 ## Uninstall
 
+If you intend to move or retire state, record the daemon PID from the configured
+`ORCHESTRA_HOME/daemon.pid` before running `orchestra stop`; the command returns after signaling
+and does not wait for shutdown.
+
 ```bash
-orchestra uninstall --provider both && rm -rf ~/.orchestra
+orchestra remote --stop  # only if the legacy remote preview was used
+orchestra uninstall --provider both
+orchestra uninstall --project --provider both  # repeat in each project where project hooks were installed
+# close every remaining Claude/Codex session that can invoke Orchestra hooks
+orchestra stop
 npm rm -g orchestra-board
 ```
 
+These commands remove the selected hooks and package but intentionally retain state. Do not
+recursively delete `~/.orchestra`: it contains the database, credentials, session bindings, and
+optional push/remote state. Hooks can auto-start the daemon, and `orchestra stop` returns after
+signaling rather than waiting for shutdown. Close or quiesce every hook-producing session, remove
+the applicable global/project hooks, wait for the recorded daemon process to exit, and then verify
+the configured `/health` endpoint remains unreachable before moving state. Then, after confirming
+that the default state root is really in use, retire it recoverably:
+
+```bash
+test -d "$HOME/.orchestra" &&
+  test ! -e "$HOME/.orchestra.backup" &&
+  mv "$HOME/.orchestra" "$HOME/.orchestra.backup"
+```
+
+If `ORCHESTRA_HOME` was customized, inspect the exact configured path and choose an explicit backup
+destination instead of copying this default-path example. Orchestra worktrees live outside this
+directory; inspect `git worktree list` and preserve unmerged work. See
+[backup, restore, and retirement](docs/operator-preview.md#backup-restore-and-retirement).
+
 ## FAQ
 
-**Does it phone home?** No. Everything is local: the daemon binds `127.0.0.1`, state lives in `~/.orchestra`, and there is no telemetry of any kind.
+**Does it phone home?** Orchestra has no hosted account or product-analytics backend. The daemon
+does record local injected-context telemetry—event type plus character/token estimate and count by
+agent/day—in `orchestra.db`; it does not send that telemetry to an Orchestra service. Separately,
+the Usage view (on load and at most once per 60-second cache window) and Claude limit auto-wake read
+the Claude Code OAuth credential from the macOS keychain or `~/.claude/.credentials.json` and make
+an authenticated request to `https://api.anthropic.com/api/oauth/usage`. The last successful usage
+payload, but not the OAuth credential, is cached in SQLite. Provider runtimes make their normal
+network calls, while opt-in remote and notification features can contact Tailscale, Cloudflare,
+Web Push endpoints, or `ntfy`.
 
 **Does it slow Claude Code or Codex down?** No. Hooks are throttled (pulses throttled to every few seconds), have a hard 2-second internal deadline, and always exit 0 — if the daemon is down or anything fails, your session continues untouched.
 

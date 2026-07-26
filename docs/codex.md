@@ -149,11 +149,26 @@ intentional local comparison with another CLI version, set
 To use a non-default binary, set `ORCHESTRA_CODEX_COMMAND` to its executable path before starting
 the daemon.
 
+Run full operator readiness before startup:
+
+```sh
+orchestra doctor --provider codex
+```
+
+This checks the exact Codex CLI version and `codex login status` without printing raw provider output.
+Use `orchestra doctor --provider codex --compatibility-only` when an automated gate must not inspect
+login state.
+
+The daemon first enforces the fail-closed core toolchain and native Claude runtime contract, then
+applies the exact Codex version check before app-server starts. See the
+[supported-environment matrix](supported-environments.md) for the complete Node, npm, provider,
+platform, and whole-toolchain evidence.
+
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| Codex is unavailable | Run `codex --version`, `codex login status`, then `orchestra restart`. |
+| Codex is unavailable | Run `orchestra doctor --provider codex`, then `codex login status` and `orchestra restart`. |
 | Authenticated after daemon startup | Restart Orchestra so the runtime/driver registry is enabled safely. |
 | Provider says reconnecting | Inspect provider health and wait for bounded app-server restart; launches fail `503` meanwhile. |
 | No models | Start with a supported CLI/account and inspect `/api/v1/os/providers`; cached models remain visible if discovery fails. |

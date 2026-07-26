@@ -21,6 +21,8 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
+import { resolveIdempotencyKey } from './agent-os/idempotency.js'
+import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
 import {
@@ -865,8 +867,16 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
-  server.post<{ Params: { id: string }; Body: { provider?: string; model?: string; effort?: string; access_profile?: AccessProfile } | null }>(
+  server.post<{ Params: { id: string }; Body: {
+    provider?: string
+    model?: string
+    effort?: string
+    access_profile?: AccessProfile
+    idempotency_key?: string
+    idempotencyKey?: string
+  } | null }>(
     '/api/v1/cards/:id/launch', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
     const card = getCard(Number(req.params.id))
     if (!card) return reply.code(404).send({ error: 'not found' })
@@ -896,7 +906,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         if (!jobExecutor.supportedProviders().includes(provider)) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
         }
-        const launched = await orchestration.launchCard({
+        const idempotencyKey = resolveIdempotencyKey({
+          header: req.headers['idempotency-key'],
+          rawHeaders: req.raw.rawHeaders,
+          snake: req.body?.idempotency_key,
+          camel: req.body?.idempotencyKey,
+        })
+        const launchInput = {
           cardId: card.id,
           expectedBoardId: card.board_id,
           requireLaunchable: true,
@@ -904,19 +920,24 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           model: req.body?.model,
           effort: req.body?.effort,
           accessProfile: req.body?.access_profile,
-        })
+          idempotencyKey,
+        }
+        const launched = await orchestration.launchCard(launchInput)
         const agent = launched.session?.agent_id == null ? undefined
           : db.prepare('SELECT * FROM agents WHERE id=?').get(launched.session.agent_id)
+        const orchestrationEnvelope = orchestrationIdentity('canonical', launched)
         return reply.code(200).send({
           ...launched,
+          delivery: { ...launched.delivery, contract_id: orchestrationEnvelope.contract_id },
           mode: 'canonical',
+          orchestration: orchestrationEnvelope,
           ...(agent ? { agent } : {}),
           card: getCard(card.id),
           queued: launched.job.status === 'queued',
           provider: launched.job.provider,
         })
       }
-      return maestro.launch({
+      const launched = maestro.launch({
         boardId: card.board_id,
         cardId: card.id,
         cwd: board.project_path,
@@ -926,6 +947,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         effort: req.body?.effort,
         accessProfile: req.body?.access_profile,
       })
+      return {
+        ...launched,
+        mode: 'legacy',
+        orchestration: orchestrationIdentity('legacy'),
+      }
     } catch (error) {
       if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
       if (error instanceof AgentOsError) return reply.code(error.statusCode).send({ error: error.message, code: error.code })
@@ -1028,6 +1054,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { name?: string; cwd?: string; provider?: string; model?: string; effort?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; access_profile?: AccessProfile } }>(
     '/api/v1/boards/:id/hire', (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
       if (!board) return reply.code(404).send({ error: 'not found' })
@@ -1051,7 +1078,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           accessProfile: req.body?.access_profile,
         })
         emit(board.id, 'agent', agent)
-        return agent
+        return {
+          ...agent,
+          mode: 'ambient',
+          orchestration: orchestrationIdentity('ambient'),
+        }
       } catch (error) {
         if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
         throw error
@@ -1068,18 +1099,79 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
-      const ok = maestro.task(Number(req.params.id), req.body.text)
-      return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
+      const agentId = Number(req.params.id)
+      const ok = maestro.task(agentId, req.body.text)
+      const managed = ok ? db.prepare(`SELECT j.id AS job_id,
+          COALESCE(s.workspace_id, j.workspace_id) AS workspace_id, s.id AS session_id,
+          j.job_assignment_id, j.assigned_profile_id, j.assignment_market_version
+        FROM agents a JOIN jobs j ON a.session_id=('agent-os:' || j.id)
+        JOIN agent_sessions s ON s.agent_id=a.id
+          AND j.id=coalesce(
+            s.job_id,
+            CASE WHEN json_valid(s.context_json) THEN json_extract(s.context_json, '$.job_id') END
+          )
+          AND (j.workspace_id IS NULL OR s.workspace_id=j.workspace_id)
+          AND (
+            (
+              j.job_assignment_id IS NULL
+              AND j.assigned_profile_id IS NULL
+              AND j.assignment_market_version IS NULL
+              AND s.job_assignment_id IS NULL
+              AND s.assigned_profile_id IS NULL
+              AND s.assignment_market_version IS NULL
+            )
+            OR
+            (
+              j.job_assignment_id IS NOT NULL
+              AND s.job_id=j.id
+              AND s.job_assignment_id=j.job_assignment_id
+              AND s.assigned_profile_id=j.assigned_profile_id
+              AND s.assignment_market_version=j.assignment_market_version
+              AND s.workspace_id=j.workspace_id
+              AND s.profile_id=j.assigned_profile_id
+              AND s.conversation_id IS NOT NULL
+              AND s.external_id IS NOT NULL
+            )
+          )
+        WHERE a.id=? ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`).get(agentId) as {
+          job_id: string
+          workspace_id: string | null
+          session_id: string | null
+          job_assignment_id: string | null
+          assigned_profile_id: string | null
+          assignment_market_version: number | null
+        } | undefined : undefined
+      const legacy = ok && !managed && db.prepare(`SELECT 1 FROM cards c
+        JOIN card_events e ON e.card_id=c.id AND e.agent_id=? AND e.type='launched'
+        WHERE c.owner_agent_id=? AND c.column_name='in_progress' LIMIT 1`).get(agentId, agentId)
+      const mode = managed ? 'canonical' : legacy ? 'legacy' : 'ambient'
+      return ok ? {
+        ok: true,
+        mode,
+        orchestration: orchestrationIdentity(mode, managed ? {
+          job: {
+            id: managed.job_id,
+            workspace_id: managed.workspace_id,
+            job_assignment_id: managed.job_assignment_id,
+            assigned_profile_id: managed.assigned_profile_id,
+            assignment_market_version: managed.assignment_market_version,
+          },
+          session: managed.session_id ? { id: managed.session_id } : null,
+        } : {}),
+      } : reply.code(404).send({ error: 'not a hired agent' })
     })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/interrupt', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     const ok = await maestro.interruptAgent(Number(req.params.id))
     return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
   })
 
   server.post<{ Params: { id: string } }>('/api/v1/agents/:id/fire', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     const ok = await maestro.fire(Number(req.params.id))
     return ok ? { ok: true } : reply.code(404).send({ error: 'not a hired agent' })
@@ -1089,6 +1181,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const PERMISSION_MODES = ['default', 'bypassPermissions', 'acceptEdits', 'plan']
   server.post<{ Params: { id: string }; Body: { mode?: string } | null }>(
     '/api/v1/agents/:id/permission-mode', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const mode = req.body?.mode ?? ''
       if (!PERMISSION_MODES.includes(mode)) return reply.code(400).send({ error: `mode must be one of: ${PERMISSION_MODES.join(', ')}` })
@@ -1098,6 +1191,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string }; Body: { profile?: AccessProfile } | null }>(
     '/api/v1/agents/:id/access-profile', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const profile = req.body?.profile
       if (!profile || !ACCESS_PROFILES.includes(profile))
@@ -1109,6 +1203,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // answer a pending canUseTool ask surfaced in the terminal
   server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string } | null }>(
     '/api/v1/agents/:id/permissions/:requestId', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const behavior = req.body?.behavior
       if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
@@ -1118,6 +1213,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Params: { id: string; requestId: string }; Body: { decision?: string; message?: string; answers?: Record<string, unknown> } | null }>(
     '/api/v1/agents/:id/approvals/:requestId', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const decision = req.body?.decision
       const decisions = ['allow', 'allow_session', 'deny', 'cancel'] as const
@@ -1144,6 +1240,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)
   server.post<{ Params: { id: string }; Body: { model?: string } | null }>(
     '/api/v1/agents/:id/model', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const model = req.body?.model
       if (!model || typeof model !== 'string') return reply.code(400).send({ error: 'model is required' })
@@ -1155,6 +1252,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // 409 while a turn is running, mirroring the launch gate
   server.post<{ Params: { id: string }; Body: { level?: string } | null }>(
     '/api/v1/agents/:id/effort', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const level = req.body?.level ?? ''
       if (!/^[a-zA-Z0-9_-]{1,40}$/.test(level)) return reply.code(400).send({ error: 'level must be a provider effort identifier' })
@@ -1167,6 +1265,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     return maestro.transcript(Number(req.params.id))
   })
@@ -1293,6 +1392,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // one global stream — browsers cap per-host connections, so per-board streams starve the app
   server.get('/api/v1/events', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache', connection: 'keep-alive',
@@ -1304,6 +1404,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/events', (req, reply) => {
+    if (!requireOperator(req, reply)) return
     const boardId = Number(req.params.id)
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',

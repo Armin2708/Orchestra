@@ -10,6 +10,7 @@ import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 import { OUTPUT_DISCIPLINE } from '../src/rules.js'
+import { preserveProcessEnv, runHookToCompletion } from './helpers/scoped-hook-state.js'
 
 type EventCount = { chars: number; tokens: number; count: number }
 type Compliance = {
@@ -29,15 +30,32 @@ type ArmResult = { by_event: Record<string, EventCount>; total: EventCount; comp
 
 const tok = (chars: number) => Math.ceil(chars / 4)
 const TEN_MIN_AGO = () => new Date(Date.now() - 11 * 60_000)
+// Board names are derived from project_path and are part of both injected arms.
+// Keep that shared fixture identity representative and independent of the checkout
+// path, otherwise a long worktree name dilutes the measured rules reduction.
+const SCENARIO_PROJECT_ROOT = path.join(path.parse(process.cwd()).root, 'orchestra-fixtures', 'agentboard')
 
 const cleanups: (() => Promise<void> | void)[] = []
-afterAll(async () => { for (const fn of cleanups.reverse()) await fn() })
+const restoreEnv = preserveProcessEnv([
+  'ORCHESTRA_HOME',
+  'ORCHESTRA_NAME',
+  'ORCHESTRA_PORT',
+  'ORCHESTRA_VERBOSE_RULES',
+])
+afterAll(async () => {
+  try {
+    for (const fn of cleanups.reverse()) await fn()
+  } finally {
+    restoreEnv()
+  }
+})
 
 async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
   if (mode === 'verbose') process.env.ORCHESTRA_VERBOSE_RULES = '1'
   else delete process.env.ORCHESTRA_VERBOSE_RULES
 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `ab-${mode}-`))
+  cleanups.push(() => { fs.rmSync(home, { recursive: true, force: true }) })
   process.env.ORCHESTRA_HOME = home
   const db = openDb(':memory:')
   const server = buildServer(db)
@@ -57,7 +75,7 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
   }
 
   const hooks = await import('../src/hooks.js')
-  const projectRoot = process.cwd()
+  const projectRoot = SCENARIO_PROJECT_ROOT
   const out: string[] = []
   const logSpy = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { out.push(String(s)) })
   cleanups.push(() => logSpy.mockRestore())
@@ -66,7 +84,7 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
   const run = async (event: string, input: Record<string, unknown> = {}) => {
     stdin.mockResolvedValue(JSON.stringify({ session_id: sid, cwd: projectRoot, ...input }))
     out.length = 0
-    await hooks.runHook(event)
+    await runHookToCompletion(hooks, event)
     return out.join('\n')
   }
   // injected text is what lands in the agent's context: raw stdout for session-start,
