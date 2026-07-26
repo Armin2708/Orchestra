@@ -418,7 +418,7 @@ const migrations: Migration[] = [
           lineage_id TEXT NOT NULL,
           parent_report_id TEXT REFERENCES delivery_reports(id) ON DELETE RESTRICT,
           sequence INTEGER NOT NULL CHECK(sequence > 0),
-          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
           card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
           job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
           session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
@@ -3828,6 +3828,916 @@ const migrations: Migration[] = [
             );
           END;
         `)
+      }
+    },
+  },
+  {
+    id: '018-knowledge-persistence',
+    apply(db) {
+      const hasMigration017 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='017-job-assignment-runtime-binding'`).get()
+      if (!hasMigration017) {
+        throw new Error(
+          'migration 018-knowledge-persistence requires 017-job-assignment-runtime-binding',
+        )
+      }
+      const prerequisites = (db.prepare(`SELECT COUNT(*) AS count
+        FROM sqlite_master
+        WHERE type='table' AND name IN (
+          'boards', 'cards', 'workspaces', 'jobs', 'agent_sessions',
+          'agent_profiles', 'task_contracts', 'delivery_reports'
+        )`).get() as { count: number }).count
+      if (prerequisites !== 8) {
+        throw new Error(
+          'migration 018-knowledge-persistence requires complete Agent OS scope tables',
+        )
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_sources (
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          id TEXT NOT NULL
+            CHECK(length(id)=67
+              AND substr(id, 1, 3)='ks_'
+              AND substr(id, 4) NOT GLOB '*[^0-9a-f]*'),
+          source_kind TEXT NOT NULL
+            CHECK(source_kind IN (
+              'agents', 'readme', 'documentation', 'convention', 'architecture',
+              'code_symbol', 'git_history', 'git_blame', 'discussion_answer',
+              'decision', 'verified_delivery', 'gotcha', 'graphify', 'gitnexus',
+              'manual'
+            )),
+          trust_class TEXT NOT NULL
+            CHECK(trust_class IN ('instruction', 'reference', 'evidence', 'untrusted')),
+          title TEXT NOT NULL CHECK(length(title)>0),
+          locator TEXT NOT NULL CHECK(length(locator)>0),
+          normalized_locator TEXT NOT NULL CHECK(length(normalized_locator)>0),
+          source_revision TEXT NOT NULL CHECK(length(source_revision)>0),
+          content_sha256 TEXT NOT NULL
+            CHECK(length(content_sha256)=64
+              AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+          freshness_policy TEXT NOT NULL
+            CHECK(freshness_policy IN (
+              'commit_exact', 'path_hash', 'external_revision', 'manual_until_superseded'
+            )),
+          freshness_state TEXT NOT NULL
+            CHECK(freshness_state IN ('fresh', 'stale', 'unknown', 'contradicted')),
+          redaction_state TEXT NOT NULL
+            CHECK(redaction_state IN ('none', 'redacted', 'withheld')),
+          content_state TEXT NOT NULL
+            CHECK(content_state IN ('present', 'purged', 'withheld')),
+          ingest_state TEXT NOT NULL
+            CHECK(ingest_state IN ('active', 'excluded', 'failed', 'superseded', 'forgotten')),
+          access_scope_json TEXT NOT NULL
+            CHECK(json_valid(access_scope_json)
+              AND json(access_scope_json)=access_scope_json
+              AND json_type(access_scope_json)='object'),
+          targets_json TEXT NOT NULL
+            CHECK(json_valid(targets_json)
+              AND json(targets_json)=targets_json
+              AND json_type(targets_json)='object'),
+          provenance_json TEXT NOT NULL
+            CHECK(json_valid(provenance_json)
+              AND json(provenance_json)=provenance_json
+              AND json_type(provenance_json)='object'),
+          created_at TEXT NOT NULL CHECK(length(created_at)>0),
+          updated_at TEXT NOT NULL CHECK(length(updated_at)>0),
+          PRIMARY KEY(board_id, id),
+          CHECK(ingest_state!='forgotten' OR content_state='purged'),
+          CHECK(
+            (redaction_state='withheld' AND content_state='withheld')
+            OR (redaction_state!='withheld' AND content_state!='withheld')
+          )
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
+          id TEXT NOT NULL
+            CHECK(length(id)=67
+              AND substr(id, 1, 3)='kc_'
+              AND substr(id, 4) NOT GLOB '*[^0-9a-f]*'),
+          source_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+          content TEXT NOT NULL,
+          content_sha256 TEXT NOT NULL
+            CHECK(length(content_sha256)=64
+              AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+          character_count INTEGER NOT NULL CHECK(character_count>=0),
+          byte_count INTEGER NOT NULL
+            CHECK(byte_count>=0 AND byte_count=length(CAST(content AS BLOB))),
+          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
+          source_range_json TEXT NOT NULL
+            CHECK(json_valid(source_range_json)
+              AND json(source_range_json)=source_range_json
+              AND json_type(source_range_json)='object'),
+          symbol_json TEXT
+            CHECK(symbol_json IS NULL OR (
+              json_valid(symbol_json)
+              AND json(symbol_json)=symbol_json
+              AND json_type(symbol_json)='object'
+            )),
+          created_at TEXT NOT NULL CHECK(length(created_at)>0),
+          PRIMARY KEY(board_id, id),
+          UNIQUE(board_id, source_id, ordinal),
+          UNIQUE(board_id, source_id, id),
+          FOREIGN KEY(board_id, source_id)
+            REFERENCES knowledge_sources(board_id, id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE IF NOT EXISTS context_builds (
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
+          id TEXT NOT NULL
+            CHECK(length(id)=67
+              AND substr(id, 1, 3)='cb_'
+              AND substr(id, 4) NOT GLOB '*[^0-9a-f]*'),
+          request_json TEXT NOT NULL
+            CHECK(json_valid(request_json)
+              AND json(request_json)=request_json
+              AND json_type(request_json)='object'),
+          request_fingerprint TEXT NOT NULL
+            CHECK(length(request_fingerprint)=64
+              AND request_fingerprint NOT GLOB '*[^0-9a-f]*'),
+          source_set_json TEXT NOT NULL
+            CHECK(json_valid(source_set_json)
+              AND json(source_set_json)=source_set_json
+              AND json_type(source_set_json)='array'),
+          source_set_fingerprint TEXT NOT NULL
+            CHECK(length(source_set_fingerprint)=64
+              AND source_set_fingerprint NOT GLOB '*[^0-9a-f]*'),
+          manifest_fingerprint TEXT NOT NULL
+            CHECK(length(manifest_fingerprint)=64
+              AND manifest_fingerprint NOT GLOB '*[^0-9a-f]*'),
+          usage_json TEXT NOT NULL
+            CHECK(json_valid(usage_json)
+              AND json(usage_json)=usage_json
+              AND json_type(usage_json)='object'),
+          source_count INTEGER NOT NULL CHECK(source_count>=0),
+          entry_count INTEGER NOT NULL CHECK(entry_count>=0),
+          status TEXT NOT NULL
+            CHECK(status IN ('built', 'used', 'invalidated', 'failed')),
+          created_at TEXT NOT NULL CHECK(length(created_at)>0),
+          invalidated_at TEXT,
+          PRIMARY KEY(board_id, id),
+          CHECK(source_count=json_array_length(source_set_json)),
+          CHECK(
+            (status='invalidated' AND invalidated_at IS NOT NULL)
+            OR (status!='invalidated' AND invalidated_at IS NULL)
+          )
+        );
+
+        CREATE TABLE IF NOT EXISTS context_build_sources (
+          board_id INTEGER NOT NULL,
+          context_build_id TEXT NOT NULL,
+          source_ordinal INTEGER NOT NULL CHECK(source_ordinal>=0),
+          source_id TEXT NOT NULL
+            CHECK(length(source_id)=67
+              AND substr(source_id, 1, 3)='ks_'
+              AND substr(source_id, 4) NOT GLOB '*[^0-9a-f]*'),
+          source_revision TEXT NOT NULL CHECK(length(source_revision)>0),
+          content_sha256 TEXT NOT NULL
+            CHECK(length(content_sha256)=64
+              AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+          freshness_state TEXT NOT NULL
+            CHECK(freshness_state IN ('fresh', 'stale', 'unknown', 'contradicted')),
+          redaction_state TEXT NOT NULL
+            CHECK(redaction_state IN ('none', 'redacted', 'withheld')),
+          PRIMARY KEY(board_id, context_build_id, source_ordinal),
+          UNIQUE(board_id, context_build_id, source_id),
+          FOREIGN KEY(board_id, context_build_id)
+            REFERENCES context_builds(board_id, id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE IF NOT EXISTS context_build_entries (
+          board_id INTEGER NOT NULL,
+          context_build_id TEXT NOT NULL,
+          candidate_ordinal INTEGER NOT NULL CHECK(candidate_ordinal>=0),
+          source_id TEXT NOT NULL
+            CHECK(length(source_id)=67
+              AND substr(source_id, 1, 3)='ks_'
+              AND substr(source_id, 4) NOT GLOB '*[^0-9a-f]*'),
+          chunk_id TEXT NOT NULL
+            CHECK(length(chunk_id)=67
+              AND substr(chunk_id, 1, 3)='kc_'
+              AND substr(chunk_id, 4) NOT GLOB '*[^0-9a-f]*'),
+          section TEXT NOT NULL
+            CHECK(section IN (
+              'project_brief', 'task_contract', 'repository_instructions',
+              'relevant_code', 'recent_changes', 'accepted_decisions',
+              'verified_deliveries', 'working_memory_delta'
+            )),
+          selected_ordinal INTEGER CHECK(selected_ordinal IS NULL OR selected_ordinal>=0),
+          decision TEXT NOT NULL CHECK(decision IN ('selected', 'omitted')),
+          reason TEXT NOT NULL
+            CHECK(reason IN (
+              'within_budget', 'pinned', 'budget_exhausted',
+              'section_budget_exhausted', 'stale', 'untrusted', 'superseded',
+              'duplicate', 'policy_excluded', 'redacted', 'withheld', 'lower_rank'
+            )),
+          score_components_json TEXT NOT NULL
+            CHECK(json_valid(score_components_json)
+              AND json(score_components_json)=score_components_json
+              AND json_type(score_components_json)='object'),
+          score_micros INTEGER NOT NULL,
+          rendering TEXT NOT NULL
+            CHECK(rendering IN ('full', 'truncated', 'summary', 'none')),
+          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
+          character_count INTEGER NOT NULL CHECK(character_count>=0),
+          source_kind TEXT NOT NULL
+            CHECK(source_kind IN (
+              'agents', 'readme', 'documentation', 'convention', 'architecture',
+              'code_symbol', 'git_history', 'git_blame', 'discussion_answer',
+              'decision', 'verified_delivery', 'gotcha', 'graphify', 'gitnexus',
+              'manual'
+            )),
+          trust_class TEXT NOT NULL
+            CHECK(trust_class IN ('instruction', 'reference', 'evidence', 'untrusted')),
+          freshness_state TEXT NOT NULL
+            CHECK(freshness_state IN ('fresh', 'stale', 'unknown', 'contradicted')),
+          redaction_state TEXT NOT NULL
+            CHECK(redaction_state IN ('none', 'redacted', 'withheld')),
+          normalized_locator TEXT NOT NULL CHECK(length(normalized_locator)>0),
+          source_range_json TEXT NOT NULL
+            CHECK(json_valid(source_range_json)
+              AND json(source_range_json)=source_range_json
+              AND json_type(source_range_json)='object'),
+          content_sha256 TEXT NOT NULL
+            CHECK(length(content_sha256)=64
+              AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+          PRIMARY KEY(board_id, context_build_id, candidate_ordinal),
+          FOREIGN KEY(board_id, context_build_id)
+            REFERENCES context_builds(board_id, id) ON DELETE RESTRICT,
+          CHECK(
+            (
+              decision='selected'
+              AND selected_ordinal IS NOT NULL
+              AND rendering!='none'
+              AND estimated_tokens>0
+              AND character_count>0
+              AND reason IN ('within_budget', 'pinned')
+            )
+            OR (
+              decision='omitted'
+              AND selected_ordinal IS NULL
+              AND rendering='none'
+              AND estimated_tokens=0
+              AND character_count=0
+              AND reason NOT IN ('within_budget', 'pinned')
+            )
+          ),
+          CHECK(
+            (redaction_state='withheld' AND decision='omitted' AND reason='withheld')
+            OR (redaction_state!='withheld' AND reason!='withheld')
+          ),
+          CHECK(
+            score_micros BETWEEN -1000000000000 AND 1000000000000
+            AND json_type(score_components_json, '$.authority_micros')='integer'
+            AND json_type(score_components_json, '$.relevance_micros')='integer'
+            AND json_type(score_components_json, '$.freshness_micros')='integer'
+            AND json_type(score_components_json, '$.recency_micros')='integer'
+            AND json_type(score_components_json, '$.contract_micros')='integer'
+            AND json_type(score_components_json, '$.pin_micros')='integer'
+            AND json_extract(score_components_json, '$.authority_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND json_extract(score_components_json, '$.relevance_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND json_extract(score_components_json, '$.freshness_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND json_extract(score_components_json, '$.recency_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND json_extract(score_components_json, '$.contract_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND json_extract(score_components_json, '$.pin_micros')
+              BETWEEN -1000000000000 AND 1000000000000
+            AND score_micros=(
+              json_extract(score_components_json, '$.authority_micros')
+              + json_extract(score_components_json, '$.relevance_micros')
+              + json_extract(score_components_json, '$.freshness_micros')
+              + json_extract(score_components_json, '$.recency_micros')
+              + json_extract(score_components_json, '$.contract_micros')
+              + json_extract(score_components_json, '$.pin_micros')
+            )
+          )
+        );
+
+        CREATE TABLE IF NOT EXISTS context_uses (
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
+          id TEXT NOT NULL
+            CHECK(length(id)=67
+              AND substr(id, 1, 3)='cu_'
+              AND substr(id, 4) NOT GLOB '*[^0-9a-f]*'),
+          context_build_id TEXT NOT NULL,
+          job_id TEXT NOT NULL REFERENCES jobs(id),
+          session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+          injection_ordinal INTEGER NOT NULL CHECK(injection_ordinal>=0),
+          manifest_fingerprint TEXT NOT NULL
+            CHECK(length(manifest_fingerprint)=64
+              AND manifest_fingerprint NOT GLOB '*[^0-9a-f]*'),
+          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
+          actual_tokens INTEGER CHECK(actual_tokens IS NULL OR actual_tokens>=0),
+          cache_identity TEXT NOT NULL CHECK(length(cache_identity)>0),
+          outcome TEXT NOT NULL
+            CHECK(outcome IN ('running', 'completed', 'failed', 'cancelled')),
+          injected_at TEXT NOT NULL CHECK(length(injected_at)>0),
+          completed_at TEXT,
+          PRIMARY KEY(board_id, id),
+          UNIQUE(board_id, session_id, injection_ordinal),
+          FOREIGN KEY(board_id, context_build_id)
+            REFERENCES context_builds(board_id, id),
+          CHECK(
+            (outcome='running' AND actual_tokens IS NULL AND completed_at IS NULL)
+            OR (outcome!='running' AND completed_at IS NOT NULL)
+          )
+        );
+
+        DROP INDEX IF EXISTS idx_knowledge_sources_locator;
+        DROP INDEX IF EXISTS idx_knowledge_sources_state;
+        DROP INDEX IF EXISTS idx_knowledge_chunks_source;
+        DROP INDEX IF EXISTS idx_context_builds_status;
+        DROP INDEX IF EXISTS idx_context_build_sources_source;
+        DROP INDEX IF EXISTS idx_context_build_entries_selected;
+        DROP INDEX IF EXISTS idx_context_uses_build;
+        DROP INDEX IF EXISTS idx_context_uses_job;
+
+        CREATE INDEX idx_knowledge_sources_locator
+          ON knowledge_sources(board_id, normalized_locator, source_revision);
+        CREATE INDEX idx_knowledge_sources_state
+          ON knowledge_sources(board_id, ingest_state, freshness_state, updated_at);
+        CREATE INDEX idx_knowledge_chunks_source
+          ON knowledge_chunks(board_id, source_id, ordinal);
+        CREATE INDEX idx_context_builds_status
+          ON context_builds(board_id, status, created_at, id);
+        CREATE INDEX idx_context_build_sources_source
+          ON context_build_sources(board_id, source_id, context_build_id);
+        CREATE UNIQUE INDEX idx_context_build_entries_selected
+          ON context_build_entries(board_id, context_build_id, selected_ordinal)
+          WHERE selected_ordinal IS NOT NULL;
+        CREATE INDEX idx_context_uses_build
+          ON context_uses(board_id, context_build_id, injected_at, id);
+        CREATE INDEX idx_context_uses_job
+          ON context_uses(board_id, job_id, session_id, injection_ordinal);
+
+        DROP TRIGGER IF EXISTS knowledge_sources_scope_insert;
+        DROP TRIGGER IF EXISTS knowledge_sources_immutable;
+        DROP TRIGGER IF EXISTS knowledge_sources_delete;
+        DROP TRIGGER IF EXISTS knowledge_chunks_immutable;
+        DROP TRIGGER IF EXISTS knowledge_chunks_delete;
+        DROP TRIGGER IF EXISTS context_builds_scope_insert;
+        DROP TRIGGER IF EXISTS context_builds_identity_immutable;
+        DROP TRIGGER IF EXISTS context_builds_status_transition;
+        DROP TRIGGER IF EXISTS context_builds_delete;
+        DROP TRIGGER IF EXISTS context_build_sources_insert;
+        DROP TRIGGER IF EXISTS context_build_sources_immutable;
+        DROP TRIGGER IF EXISTS context_build_sources_delete;
+        DROP TRIGGER IF EXISTS context_build_entries_insert;
+        DROP TRIGGER IF EXISTS context_build_entries_immutable;
+        DROP TRIGGER IF EXISTS context_build_entries_delete;
+        DROP TRIGGER IF EXISTS context_uses_insert;
+        DROP TRIGGER IF EXISTS context_uses_mark_build_used;
+        DROP TRIGGER IF EXISTS context_uses_finish;
+        DROP TRIGGER IF EXISTS context_uses_delete;
+
+        CREATE TRIGGER knowledge_sources_scope_insert
+        BEFORE INSERT ON knowledge_sources
+        BEGIN
+          SELECT CASE
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='board' THEN NULL
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='workspace'
+              AND json_type(NEW.access_scope_json, '$.workspace_id')='text'
+              AND json_extract(NEW.access_scope_json, '$.workspace_id')
+                IS json_extract(NEW.targets_json, '$.workspace_id')
+              AND EXISTS (
+                SELECT 1 FROM workspaces
+                WHERE id=json_extract(NEW.access_scope_json, '$.workspace_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='contract'
+              AND json_type(NEW.access_scope_json, '$.card_id')='integer'
+              AND json_type(NEW.access_scope_json, '$.contract_version')='integer'
+              AND json_extract(NEW.access_scope_json, '$.card_id')
+                IS json_extract(NEW.targets_json, '$.card_id')
+              AND json_extract(NEW.access_scope_json, '$.contract_version')
+                IS json_extract(NEW.targets_json, '$.contract_version')
+              AND EXISTS (
+                SELECT 1 FROM task_contracts contract
+                JOIN cards card ON card.id=contract.card_id
+                WHERE contract.card_id=json_extract(NEW.access_scope_json, '$.card_id')
+                  AND contract.version=json_extract(
+                    NEW.access_scope_json, '$.contract_version'
+                  )
+                  AND card.board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='job'
+              AND json_type(NEW.access_scope_json, '$.job_id')='text'
+              AND json_extract(NEW.access_scope_json, '$.job_id')
+                IS json_extract(NEW.targets_json, '$.job_id')
+              AND EXISTS (
+                SELECT 1 FROM jobs
+                WHERE id=json_extract(NEW.access_scope_json, '$.job_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='profile'
+              AND json_type(NEW.access_scope_json, '$.profile_id')='text'
+              AND json_extract(NEW.access_scope_json, '$.profile_id')
+                IS json_extract(NEW.targets_json, '$.profile_id')
+              AND EXISTS (
+                SELECT 1 FROM agent_profiles
+                WHERE id=json_extract(NEW.access_scope_json, '$.profile_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.access_scope_json, '$.kind')='session'
+              AND json_type(NEW.access_scope_json, '$.session_id')='text'
+              AND json_extract(NEW.access_scope_json, '$.session_id')
+                IS json_extract(NEW.targets_json, '$.session_id')
+              AND EXISTS (
+                SELECT 1 FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                WHERE session.id=json_extract(NEW.access_scope_json, '$.session_id')
+                  AND workspace.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source access scope is inconsistent')
+          END;
+
+          SELECT CASE WHEN
+            json_type(NEW.targets_json, '$.board_id')!='integer'
+            OR json_extract(NEW.targets_json, '$.board_id')!=NEW.board_id
+          THEN RAISE(ABORT, 'knowledge source target board is inconsistent') END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.workspace_id') IS NULL
+              OR json_type(NEW.targets_json, '$.workspace_id')='null' THEN NULL
+            WHEN json_type(NEW.targets_json, '$.workspace_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM workspaces
+                WHERE id=json_extract(NEW.targets_json, '$.workspace_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source workspace target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.card_id') IS NULL
+              OR json_type(NEW.targets_json, '$.card_id')='null' THEN NULL
+            WHEN json_type(NEW.targets_json, '$.card_id')='integer'
+              AND EXISTS (
+                SELECT 1 FROM cards
+                WHERE id=json_extract(NEW.targets_json, '$.card_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source card target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.job_id') IS NULL
+              OR json_type(NEW.targets_json, '$.job_id')='null' THEN NULL
+            WHEN json_type(NEW.targets_json, '$.job_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM jobs
+                WHERE id=json_extract(NEW.targets_json, '$.job_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source job target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.profile_id') IS NULL
+              OR json_type(NEW.targets_json, '$.profile_id')='null' THEN NULL
+            WHEN json_type(NEW.targets_json, '$.profile_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM agent_profiles
+                WHERE id=json_extract(NEW.targets_json, '$.profile_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source profile target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.session_id') IS NULL
+              OR json_type(NEW.targets_json, '$.session_id')='null' THEN NULL
+            WHEN json_type(NEW.targets_json, '$.session_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                WHERE session.id=json_extract(NEW.targets_json, '$.session_id')
+                  AND workspace.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source session target is inconsistent')
+          END;
+
+        END;
+
+        CREATE TRIGGER knowledge_sources_immutable
+        BEFORE UPDATE ON knowledge_sources
+        BEGIN
+          SELECT RAISE(ABORT, 'knowledge source evidence is immutable');
+        END;
+
+        CREATE TRIGGER knowledge_sources_delete
+        BEFORE DELETE ON knowledge_sources
+        BEGIN
+          SELECT RAISE(ABORT, 'knowledge source evidence is immutable');
+        END;
+
+        CREATE TRIGGER knowledge_chunks_immutable
+        BEFORE UPDATE ON knowledge_chunks
+        BEGIN
+          SELECT RAISE(ABORT, 'knowledge chunk evidence is immutable');
+        END;
+
+        CREATE TRIGGER knowledge_chunks_delete
+        BEFORE DELETE ON knowledge_chunks
+        BEGIN
+          SELECT RAISE(ABORT, 'knowledge chunk evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_builds_scope_insert
+        BEFORE INSERT ON context_builds
+        BEGIN
+          SELECT CASE WHEN
+            NEW.status NOT IN ('built', 'failed')
+            OR
+            json_type(NEW.request_json, '$.board_id')!='integer'
+            OR json_extract(NEW.request_json, '$.board_id')!=NEW.board_id
+            OR json_type(NEW.request_json, '$.access_scope')!='object'
+            OR json_type(NEW.request_json, '$.targets')!='object'
+            OR json_type(NEW.request_json, '$.targets.board_id')!='integer'
+            OR json_extract(NEW.request_json, '$.targets.board_id')!=NEW.board_id
+          THEN RAISE(ABORT, 'context build request scope is inconsistent') END;
+
+          SELECT CASE
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='board' THEN NULL
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='workspace'
+              AND json_extract(NEW.request_json, '$.access_scope.workspace_id')
+                IS json_extract(NEW.request_json, '$.targets.workspace_id')
+              AND EXISTS (
+                SELECT 1 FROM workspaces
+                WHERE id=json_extract(
+                    NEW.request_json, '$.access_scope.workspace_id'
+                  )
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='contract'
+              AND json_extract(NEW.request_json, '$.access_scope.card_id')
+                IS json_extract(NEW.request_json, '$.targets.card_id')
+              AND json_extract(NEW.request_json, '$.access_scope.contract_version')
+                IS json_extract(NEW.request_json, '$.targets.contract_version')
+              AND EXISTS (
+                SELECT 1 FROM task_contracts contract
+                JOIN cards card ON card.id=contract.card_id
+                WHERE contract.card_id=json_extract(
+                    NEW.request_json, '$.access_scope.card_id'
+                  )
+                  AND contract.version=json_extract(
+                    NEW.request_json, '$.access_scope.contract_version'
+                  )
+                  AND card.board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='job'
+              AND json_extract(NEW.request_json, '$.access_scope.job_id')
+                IS json_extract(NEW.request_json, '$.targets.job_id')
+              AND EXISTS (
+                SELECT 1 FROM jobs
+                WHERE id=json_extract(NEW.request_json, '$.access_scope.job_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='profile'
+              AND json_extract(NEW.request_json, '$.access_scope.profile_id')
+                IS json_extract(NEW.request_json, '$.targets.profile_id')
+              AND EXISTS (
+                SELECT 1 FROM agent_profiles
+                WHERE id=json_extract(NEW.request_json, '$.access_scope.profile_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            WHEN json_extract(NEW.request_json, '$.access_scope.kind')='session'
+              AND json_extract(NEW.request_json, '$.access_scope.session_id')
+                IS json_extract(NEW.request_json, '$.targets.session_id')
+              AND EXISTS (
+                SELECT 1 FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.access_scope.session_id'
+                  )
+                  AND workspace.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build access scope is inconsistent')
+          END;
+        END;
+
+        CREATE TRIGGER context_builds_identity_immutable
+        BEFORE UPDATE ON context_builds
+        WHEN NEW.board_id IS NOT OLD.board_id
+          OR NEW.id IS NOT OLD.id
+          OR NEW.request_json IS NOT OLD.request_json
+          OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+          OR NEW.source_set_json IS NOT OLD.source_set_json
+          OR NEW.source_set_fingerprint IS NOT OLD.source_set_fingerprint
+          OR NEW.manifest_fingerprint IS NOT OLD.manifest_fingerprint
+          OR NEW.usage_json IS NOT OLD.usage_json
+          OR NEW.source_count IS NOT OLD.source_count
+          OR NEW.entry_count IS NOT OLD.entry_count
+          OR NEW.created_at IS NOT OLD.created_at
+        BEGIN
+          SELECT RAISE(ABORT, 'context build identity and evidence are immutable');
+        END;
+
+        CREATE TRIGGER context_builds_status_transition
+        BEFORE UPDATE OF status, invalidated_at ON context_builds
+        WHEN NEW.status IS NOT OLD.status
+          AND NOT (
+            (OLD.status='built' AND NEW.status IN ('used', 'invalidated', 'failed'))
+            OR (OLD.status='used' AND NEW.status='invalidated')
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'invalid context build status transition');
+        END;
+
+        CREATE TRIGGER context_builds_delete
+        BEFORE DELETE ON context_builds
+        BEGIN
+          SELECT RAISE(ABORT, 'context build evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_build_sources_insert
+        BEFORE INSERT ON context_build_sources
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM context_builds build
+            WHERE build.board_id=NEW.board_id
+              AND build.id=NEW.context_build_id
+              AND build.status='built'
+              AND NEW.source_ordinal<build.source_count
+              AND NEW.source_ordinal=(
+                SELECT COUNT(*) FROM context_build_sources prior
+                WHERE prior.board_id=NEW.board_id
+                  AND prior.context_build_id=NEW.context_build_id
+              )
+              AND json_extract(
+                build.source_set_json,
+                '$[' || NEW.source_ordinal || '].source_id'
+              )=NEW.source_id
+              AND json_extract(
+                build.source_set_json,
+                '$[' || NEW.source_ordinal || '].source_revision'
+              )=NEW.source_revision
+              AND json_extract(
+                build.source_set_json,
+                '$[' || NEW.source_ordinal || '].content_sha256'
+              )=NEW.content_sha256
+              AND json_extract(
+                build.source_set_json,
+                '$[' || NEW.source_ordinal || '].freshness_state'
+              )=NEW.freshness_state
+              AND json_extract(
+                build.source_set_json,
+                '$[' || NEW.source_ordinal || '].redaction_state'
+              )=NEW.redaction_state
+          ) THEN RAISE(ABORT, 'context build source order or evidence is inconsistent') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM knowledge_sources source
+            WHERE source.board_id=NEW.board_id
+              AND source.id=NEW.source_id
+              AND source.source_revision=NEW.source_revision
+              AND source.content_sha256=NEW.content_sha256
+              AND source.freshness_state=NEW.freshness_state
+              AND source.redaction_state=NEW.redaction_state
+          ) THEN RAISE(ABORT, 'context build source snapshot is inconsistent') END;
+        END;
+
+        CREATE TRIGGER context_build_sources_immutable
+        BEFORE UPDATE ON context_build_sources
+        BEGIN
+          SELECT RAISE(ABORT, 'context build source evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_build_sources_delete
+        BEFORE DELETE ON context_build_sources
+        BEGIN
+          SELECT RAISE(ABORT, 'context build source evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_build_entries_insert
+        BEFORE INSERT ON context_build_entries
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM context_builds build
+            WHERE build.board_id=NEW.board_id
+              AND build.id=NEW.context_build_id
+              AND build.status='built'
+              AND NEW.candidate_ordinal<build.entry_count
+              AND NEW.candidate_ordinal=(
+                SELECT COUNT(*) FROM context_build_entries prior
+                WHERE prior.board_id=NEW.board_id
+                  AND prior.context_build_id=NEW.context_build_id
+              )
+              AND (
+                NEW.selected_ordinal IS NULL
+                OR NEW.selected_ordinal=(
+                  SELECT COUNT(*) FROM context_build_entries prior
+                  WHERE prior.board_id=NEW.board_id
+                    AND prior.context_build_id=NEW.context_build_id
+                    AND prior.selected_ordinal IS NOT NULL
+                )
+              )
+          ) THEN RAISE(ABORT, 'context build entry order is inconsistent') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM context_build_sources source
+            WHERE source.board_id=NEW.board_id
+              AND source.context_build_id=NEW.context_build_id
+              AND source.source_id=NEW.source_id
+          ) THEN RAISE(ABORT, 'context build entry source set is inconsistent') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM knowledge_sources source
+            WHERE source.board_id=NEW.board_id
+              AND source.id=NEW.source_id
+              AND source.source_kind=NEW.source_kind
+              AND source.trust_class=NEW.trust_class
+              AND source.freshness_state=NEW.freshness_state
+              AND source.redaction_state=NEW.redaction_state
+              AND source.normalized_locator=NEW.normalized_locator
+          ) THEN RAISE(ABORT, 'context build entry source snapshot is inconsistent') END;
+
+          SELECT CASE WHEN NOT (
+            (
+              NEW.redaction_state='withheld'
+              AND NEW.decision='omitted'
+              AND NOT EXISTS (
+                SELECT 1 FROM knowledge_chunks
+                WHERE board_id=NEW.board_id AND id=NEW.chunk_id
+              )
+            )
+            OR EXISTS (
+              SELECT 1 FROM knowledge_chunks chunk
+              WHERE chunk.board_id=NEW.board_id
+                AND chunk.id=NEW.chunk_id
+                AND chunk.source_id=NEW.source_id
+                AND chunk.content_sha256=NEW.content_sha256
+                AND chunk.source_range_json=NEW.source_range_json
+            )
+          ) THEN RAISE(ABORT, 'context build entry chunk snapshot is inconsistent') END;
+        END;
+
+        CREATE TRIGGER context_build_entries_immutable
+        BEFORE UPDATE ON context_build_entries
+        BEGIN
+          SELECT RAISE(ABORT, 'context build entry evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_build_entries_delete
+        BEFORE DELETE ON context_build_entries
+        BEGIN
+          SELECT RAISE(ABORT, 'context build entry evidence is immutable');
+        END;
+
+        CREATE TRIGGER context_uses_insert
+        BEFORE INSERT ON context_uses
+        BEGIN
+          SELECT CASE WHEN NEW.outcome!='running'
+          THEN RAISE(ABORT, 'context use must begin running') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM context_builds build
+            WHERE build.board_id=NEW.board_id
+              AND build.id=NEW.context_build_id
+              AND build.status IN ('built', 'used')
+              AND build.manifest_fingerprint=NEW.manifest_fingerprint
+              AND json_type(build.usage_json, '$.used_tokens')='integer'
+              AND json_extract(build.usage_json, '$.used_tokens')=NEW.estimated_tokens
+              AND build.source_count=(
+                SELECT COUNT(*) FROM context_build_sources source
+                WHERE source.board_id=build.board_id
+                  AND source.context_build_id=build.id
+              )
+              AND build.entry_count=(
+                SELECT COUNT(*) FROM context_build_entries entry
+                WHERE entry.board_id=build.board_id
+                  AND entry.context_build_id=build.id
+              )
+          ) THEN RAISE(ABORT, 'context use build evidence is inconsistent') END;
+
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM jobs job
+            JOIN agent_sessions session ON session.id=NEW.session_id
+            JOIN workspaces workspace ON workspace.id=session.workspace_id
+            JOIN context_builds build
+              ON build.board_id=NEW.board_id
+              AND build.id=NEW.context_build_id
+            WHERE job.id=NEW.job_id
+              AND job.board_id=NEW.board_id
+              AND workspace.board_id=NEW.board_id
+              AND session.job_id=job.id
+              AND (
+                json_extract(build.request_json, '$.targets.workspace_id') IS NULL
+                OR (
+                  json_extract(build.request_json, '$.targets.workspace_id')=workspace.id
+                  AND job.workspace_id=workspace.id
+                )
+              )
+              AND (
+                json_extract(build.request_json, '$.targets.card_id') IS NULL
+                OR json_extract(build.request_json, '$.targets.card_id')=job.card_id
+              )
+              AND (
+                json_extract(build.request_json, '$.targets.contract_version') IS NULL
+                OR json_extract(
+                  build.request_json, '$.targets.contract_version'
+                )=job.contract_version
+              )
+              AND (
+                json_extract(build.request_json, '$.targets.job_id') IS NULL
+                OR json_extract(build.request_json, '$.targets.job_id')=job.id
+              )
+              AND (
+                json_extract(build.request_json, '$.targets.profile_id') IS NULL
+                OR json_extract(build.request_json, '$.targets.profile_id')=session.profile_id
+              )
+              AND (
+                json_extract(build.request_json, '$.targets.session_id') IS NULL
+                OR json_extract(build.request_json, '$.targets.session_id')=session.id
+              )
+          ) THEN RAISE(ABORT, 'context use runtime scope is inconsistent') END;
+        END;
+
+        CREATE TRIGGER context_uses_mark_build_used
+        AFTER INSERT ON context_uses
+        WHEN EXISTS (
+          SELECT 1 FROM context_builds
+          WHERE board_id=NEW.board_id
+            AND id=NEW.context_build_id
+            AND status='built'
+        )
+        BEGIN
+          UPDATE context_builds
+          SET status='used'
+          WHERE board_id=NEW.board_id AND id=NEW.context_build_id;
+        END;
+
+        CREATE TRIGGER context_uses_finish
+        BEFORE UPDATE ON context_uses
+        WHEN NEW.board_id IS NOT OLD.board_id
+          OR NEW.id IS NOT OLD.id
+          OR NEW.context_build_id IS NOT OLD.context_build_id
+          OR NEW.job_id IS NOT OLD.job_id
+          OR NEW.session_id IS NOT OLD.session_id
+          OR NEW.injection_ordinal IS NOT OLD.injection_ordinal
+          OR NEW.manifest_fingerprint IS NOT OLD.manifest_fingerprint
+          OR NEW.estimated_tokens IS NOT OLD.estimated_tokens
+          OR NEW.cache_identity IS NOT OLD.cache_identity
+          OR NEW.injected_at IS NOT OLD.injected_at
+          OR OLD.outcome!='running'
+          OR NEW.outcome NOT IN ('completed', 'failed', 'cancelled')
+          OR NEW.completed_at IS NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'context use identity or lifecycle is immutable');
+        END;
+
+        CREATE TRIGGER context_uses_delete
+        BEFORE DELETE ON context_uses
+        BEGIN
+          SELECT RAISE(ABORT, 'context use evidence is immutable');
+        END;
+      `)
+
+      const requiredColumns: Record<string, string[]> = {
+        knowledge_sources: [
+          'board_id', 'id', 'source_kind', 'trust_class', 'content_sha256',
+          'access_scope_json', 'targets_json', 'provenance_json',
+        ],
+        knowledge_chunks: [
+          'board_id', 'id', 'source_id', 'ordinal', 'content', 'content_sha256',
+          'character_count', 'byte_count', 'source_range_json',
+        ],
+        context_builds: [
+          'board_id', 'id', 'request_fingerprint', 'source_set_fingerprint',
+          'manifest_fingerprint', 'request_json', 'source_set_json',
+          'source_count', 'entry_count', 'usage_json', 'status',
+        ],
+        context_build_sources: [
+          'board_id', 'context_build_id', 'source_ordinal', 'source_id',
+          'source_revision', 'content_sha256',
+        ],
+        context_build_entries: [
+          'board_id', 'context_build_id', 'candidate_ordinal', 'source_id',
+          'chunk_id', 'section', 'selected_ordinal', 'decision', 'reason',
+          'score_components_json', 'content_sha256',
+        ],
+        context_uses: [
+          'board_id', 'id', 'context_build_id', 'job_id', 'session_id',
+          'injection_ordinal', 'manifest_fingerprint', 'outcome',
+        ],
+      }
+      for (const [table, columns] of Object.entries(requiredColumns)) {
+        const available = new Set(
+          (db.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>)
+            .map((column) => column.name),
+        )
+        if (columns.some((column) => !available.has(column))) {
+          throw new Error(
+            'migration 018-knowledge-persistence found an incompatible knowledge schema',
+          )
+        }
       }
     },
   },

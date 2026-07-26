@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import {
   CONTEXT_SECTIONS,
   CONTEXT_SELECTION_REASONS,
+  KNOWLEDGE_CONTENT_STATES,
   KNOWLEDGE_FRESHNESS_STATES,
+  KNOWLEDGE_FRESHNESS_POLICIES,
+  KNOWLEDGE_INGEST_STATES,
   KNOWLEDGE_REDACTION_STATES,
   KNOWLEDGE_SOURCE_KINDS,
   KNOWLEDGE_TRUST_CLASSES,
@@ -13,21 +16,26 @@ import type {
   ContextBudgetUsage,
   ContextBudgetUsageSection,
   ContextBuildAccounting,
+  ContextBuild,
   ContextBuildEntry,
   ContextBuildIdentityInput,
   ContextOrderingCandidate,
   ContextRequestIdentityInput,
   ContextScoreComponents,
   ContextSection,
+  ContextUse,
   ContextUseIdentityInput,
   KnowledgeAccessScope,
+  KnowledgeChunk,
   KnowledgeChunkIdentityInput,
   KnowledgeFreshnessState,
   KnowledgeRedactionState,
+  KnowledgeSource,
   KnowledgeSourceIdentityInput,
   KnowledgeSourceKind,
   KnowledgeSourceRange,
   KnowledgeSourceSetEntry,
+  KnowledgeSymbolReference,
   KnowledgeTargetLinks,
   KnowledgeTrustClass,
   RepositoryProvenance,
@@ -149,7 +157,10 @@ const URL_LOCATOR_SCHEMES = new Set([
 const SOURCE_KIND_SET = new Set<string>(KNOWLEDGE_SOURCE_KINDS)
 const TRUST_CLASS_SET = new Set<string>(KNOWLEDGE_TRUST_CLASSES)
 const FRESHNESS_STATE_SET = new Set<string>(KNOWLEDGE_FRESHNESS_STATES)
+const FRESHNESS_POLICY_SET = new Set<string>(KNOWLEDGE_FRESHNESS_POLICIES)
 const REDACTION_STATE_SET = new Set<string>(KNOWLEDGE_REDACTION_STATES)
+const CONTENT_STATE_SET = new Set<string>(KNOWLEDGE_CONTENT_STATES)
+const INGEST_STATE_SET = new Set<string>(KNOWLEDGE_INGEST_STATES)
 const CONTEXT_SECTION_SET = new Set<string>(CONTEXT_SECTIONS)
 const SELECTION_REASON_SET = new Set<string>(CONTEXT_SELECTION_REASONS)
 const HASH_DOMAIN_SET = new Set<string>(KNOWLEDGE_HASH_DOMAINS)
@@ -1715,4 +1726,505 @@ function validateContextUseIdentity(value: unknown): ContextUseIdentityInput {
 
 export function contextUseId(value: ContextUseIdentityInput): string {
   return `cu_${canonicalKnowledgeHash('context-use', validateContextUseIdentity(value))}`
+}
+
+const USE_ID = /^cu_[a-f0-9]{64}$/u
+const CONTEXT_BUILD_STATUS_SET = new Set<string>([
+  'built',
+  'used',
+  'invalidated',
+  'failed',
+])
+const CONTEXT_USE_OUTCOME_SET = new Set<string>([
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+])
+
+function assertScopeTargets(
+  boardId: number,
+  accessScope: KnowledgeAccessScope,
+  targets: KnowledgeTargetLinks,
+): void {
+  if (targets.board_id !== boardId) contractError('invalid_contract', 'scope_targets')
+  if (
+    (accessScope.kind === 'workspace' && targets.workspace_id !== accessScope.workspace_id)
+    || (
+      accessScope.kind === 'contract'
+      && (
+        targets.card_id !== accessScope.card_id
+        || targets.contract_version !== accessScope.contract_version
+      )
+    )
+    || (accessScope.kind === 'job' && targets.job_id !== accessScope.job_id)
+    || (accessScope.kind === 'profile' && targets.profile_id !== accessScope.profile_id)
+    || (accessScope.kind === 'session' && targets.session_id !== accessScope.session_id)
+  ) {
+    contractError('invalid_contract', 'scope_targets')
+  }
+}
+
+/**
+ * Strict runtime validation for a fully-materialized durable knowledge source.
+ * Supplied locators are always normalized again so an unsafe raw locator cannot
+ * hide behind a separately supplied normalized value.
+ */
+export function validateKnowledgeSource(value: unknown): KnowledgeSource {
+  const record = safeRecord(value, 'invalid_contract', 'knowledge_source')
+  exactKeys(
+    record,
+    [
+      'id',
+      'source_kind',
+      'trust_class',
+      'title',
+      'locator',
+      'normalized_locator',
+      'source_revision',
+      'content_sha256',
+      'freshness_policy',
+      'freshness_state',
+      'redaction_state',
+      'content_state',
+      'ingest_state',
+      'access_scope',
+      'targets',
+      'provenance',
+      'created_at',
+      'updated_at',
+    ],
+    [],
+    'invalid_contract',
+    'knowledge_source',
+  )
+  const sourceKind = enumValue<KnowledgeSourceKind>(
+    record.source_kind,
+    SOURCE_KIND_SET,
+    'invalid_contract',
+    'source_kind',
+  )
+  const locator = safeText(
+    record.locator,
+    'invalid_contract',
+    'locator',
+    MAX_LOCATOR_CHARACTERS,
+  )
+  const normalizedLocator = normalizeKnowledgeLocator(locator)
+  if (record.normalized_locator !== normalizedLocator) {
+    contractError('invalid_contract', 'normalized_locator')
+  }
+  const contentSha256 = sha256(
+    record.content_sha256,
+    'invalid_contract',
+    'content_sha256',
+  )
+  const accessScope = validateKnowledgeAccessScope(record.access_scope)
+  const targets = validateKnowledgeTargetLinks(record.targets)
+  const provenance = validateRepositoryProvenance(record.provenance)
+  assertScopeTargets(targets.board_id, accessScope, targets)
+  const redactionState = enumValue<KnowledgeRedactionState>(
+    record.redaction_state,
+    REDACTION_STATE_SET,
+    'invalid_contract',
+    'redaction_state',
+  )
+  const contentState = enumValue<KnowledgeSource['content_state']>(
+    record.content_state,
+    CONTENT_STATE_SET,
+    'invalid_contract',
+    'content_state',
+  )
+  if (
+    (redactionState === 'withheld' && contentState === 'present')
+    || (contentState === 'withheld' && redactionState !== 'withheld')
+  ) {
+    contractError('invalid_contract', 'redaction_content_state')
+  }
+  const ingestState = enumValue<KnowledgeSource['ingest_state']>(
+    record.ingest_state,
+    INGEST_STATE_SET,
+    'invalid_contract',
+    'ingest_state',
+  )
+  if (ingestState === 'forgotten' && contentState !== 'purged') {
+    contractError('invalid_contract', 'ingest_content_state')
+  }
+  const createdAt = isoTimestamp(record.created_at, 'invalid_contract', 'created_at')
+  const updatedAt = isoTimestamp(record.updated_at, 'invalid_contract', 'updated_at')
+  if (updatedAt < createdAt) contractError('invalid_contract', 'updated_at')
+
+  const source: KnowledgeSource = {
+    id: prefixedHash(record.id, SOURCE_ID, 'invalid_contract', 'source_id'),
+    source_kind: sourceKind,
+    trust_class: enumValue<KnowledgeTrustClass>(
+      record.trust_class,
+      TRUST_CLASS_SET,
+      'invalid_contract',
+      'trust_class',
+    ),
+    title: safeText(
+      record.title,
+      'invalid_contract',
+      'title',
+      MAX_LOCATOR_CHARACTERS,
+    ),
+    locator,
+    normalized_locator: normalizedLocator,
+    source_revision: safeText(
+      record.source_revision,
+      'invalid_contract',
+      'source_revision',
+      MAX_REVISION_CHARACTERS,
+    ),
+    content_sha256: contentSha256,
+    freshness_policy: enumValue<KnowledgeSource['freshness_policy']>(
+      record.freshness_policy,
+      FRESHNESS_POLICY_SET,
+      'invalid_contract',
+      'freshness_policy',
+    ),
+    freshness_state: enumValue<KnowledgeFreshnessState>(
+      record.freshness_state,
+      FRESHNESS_STATE_SET,
+      'invalid_contract',
+      'freshness_state',
+    ),
+    redaction_state: redactionState,
+    content_state: contentState,
+    ingest_state: ingestState,
+    access_scope: accessScope,
+    targets,
+    provenance,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  }
+  const expectedId = knowledgeSourceId({
+    repository_key: provenance.repository_key,
+    source_kind: sourceKind,
+    normalized_locator: normalizedLocator,
+    source_revision: source.source_revision,
+    content_sha256: contentSha256,
+  })
+  if (source.id !== expectedId) contractError('invalid_contract', 'source_id')
+  return source
+}
+
+function validateKnowledgeSymbolReference(value: unknown): KnowledgeSymbolReference {
+  const record = safeRecord(value, 'invalid_contract', 'symbol')
+  exactKeys(
+    record,
+    ['language', 'qualified_name', 'symbol_kind', 'signature_sha256'],
+    [],
+    'invalid_contract',
+    'symbol',
+  )
+  return {
+    language: safeText(record.language, 'invalid_contract', 'symbol'),
+    qualified_name: safeText(
+      record.qualified_name,
+      'invalid_contract',
+      'symbol',
+      MAX_LOCATOR_CHARACTERS,
+    ),
+    symbol_kind: safeText(record.symbol_kind, 'invalid_contract', 'symbol'),
+    signature_sha256: nullableSha256(
+      record.signature_sha256,
+      'invalid_contract',
+      'signature_sha256',
+    ),
+  }
+}
+
+/** Strict runtime validation for a fully-materialized durable knowledge chunk. */
+export function validateKnowledgeChunk(value: unknown): KnowledgeChunk {
+  const record = safeRecord(value, 'invalid_contract', 'knowledge_chunk')
+  exactKeys(
+    record,
+    [
+      'id',
+      'source_id',
+      'ordinal',
+      'content',
+      'content_sha256',
+      'character_count',
+      'byte_count',
+      'estimated_tokens',
+      'source_range',
+      'symbol',
+      'created_at',
+    ],
+    [],
+    'invalid_contract',
+    'knowledge_chunk',
+  )
+  if (
+    typeof record.content !== 'string'
+    || record.content.length === 0
+    || record.content.length > MAX_CANONICAL_JSON_LIMITS.max_string_characters
+    || Buffer.byteLength(record.content, 'utf8') > MAX_CANONICAL_JSON_LIMITS.max_serialized_bytes
+  ) {
+    contractError('invalid_contract', 'content')
+  }
+  const sourceId = prefixedHash(
+    record.source_id,
+    SOURCE_ID,
+    'invalid_contract',
+    'source_id',
+  )
+  const ordinal = integer(record.ordinal, 'invalid_contract', 'ordinal', 0)
+  const sourceRange = validateKnowledgeSourceRange(record.source_range)
+  const contentSha256 = sha256(
+    record.content_sha256,
+    'invalid_contract',
+    'content_sha256',
+  )
+  const calculatedHash = createHash('sha256').update(record.content, 'utf8').digest('hex')
+  if (contentSha256 !== calculatedHash) contractError('invalid_contract', 'content_sha256')
+  if (
+    integer(
+      record.character_count,
+      'invalid_contract',
+      'character_count',
+      0,
+      MAX_CONTEXT_BUDGET_CHARACTERS,
+    ) !== record.content.length
+    || integer(record.byte_count, 'invalid_contract', 'byte_count', 0)
+      !== Buffer.byteLength(record.content, 'utf8')
+  ) {
+    contractError('invalid_contract', 'content_count')
+  }
+  const chunk: KnowledgeChunk = {
+    id: prefixedHash(record.id, CHUNK_ID, 'invalid_contract', 'chunk_id'),
+    source_id: sourceId,
+    ordinal,
+    content: record.content,
+    content_sha256: contentSha256,
+    character_count: record.content.length,
+    byte_count: Buffer.byteLength(record.content, 'utf8'),
+    estimated_tokens: integer(
+      record.estimated_tokens,
+      'invalid_contract',
+      'estimated_tokens',
+      0,
+      MAX_CONTEXT_BUDGET_TOKENS,
+    ),
+    source_range: sourceRange,
+    symbol: record.symbol === null ? null : validateKnowledgeSymbolReference(record.symbol),
+    created_at: isoTimestamp(record.created_at, 'invalid_contract', 'created_at'),
+  }
+  const expectedId = knowledgeChunkId({
+    source_id: sourceId,
+    ordinal,
+    content_sha256: contentSha256,
+    source_range: sourceRange,
+  })
+  if (chunk.id !== expectedId) contractError('invalid_contract', 'chunk_id')
+  return chunk
+}
+
+/** Return the canonical, dense manifest representation used for storage. */
+export function normalizeContextBuildEntries(
+  values: readonly ContextBuildEntry[],
+): ContextBuildEntry[] {
+  return normalizedContextManifest(values)
+}
+
+/** Return the canonical source-set order used for hashing and durable snapshots. */
+export function normalizeKnowledgeSourceSet(
+  values: readonly KnowledgeSourceSetEntry[],
+): KnowledgeSourceSetEntry[] {
+  const entries = denseContractArray(values, 'invalid_contract', 'source_set')
+    .map(validateSourceSetEntry)
+    .sort((left, right) => compareCodeUnits(left.source_id, right.source_id))
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1].source_id === entries[index].source_id) {
+      contractError('duplicate_identity', 'source_set')
+    }
+  }
+  return entries
+}
+
+/** Strict runtime validation for the public ContextBuild projection. */
+export function validateContextBuild(value: unknown): ContextBuild {
+  const record = safeRecord(value, 'invalid_contract', 'context_build')
+  exactKeys(
+    record,
+    [
+      'id',
+      'board_id',
+      'access_scope',
+      'targets',
+      'request_fingerprint',
+      'source_set_fingerprint',
+      'manifest_fingerprint',
+      'budget',
+      'usage',
+      'entries',
+      'status',
+      'created_at',
+      'invalidated_at',
+    ],
+    [],
+    'invalid_contract',
+    'context_build',
+  )
+  const boardId = integer(record.board_id, 'invalid_contract', 'board_id', 1)
+  const accessScope = validateKnowledgeAccessScope(record.access_scope)
+  const targets = validateKnowledgeTargetLinks(record.targets)
+  assertScopeTargets(boardId, accessScope, targets)
+  const accounting = validateContextBuildAccounting(
+    denseContractArray(record.entries, 'invalid_manifest', 'manifest') as ContextBuildEntry[],
+    record.usage,
+    record.budget,
+  )
+  const manifestFingerprint = sha256(
+    record.manifest_fingerprint,
+    'invalid_contract',
+    'manifest_fingerprint',
+  )
+  if (manifestFingerprint !== accounting.manifest_fingerprint) {
+    contractError('invalid_contract', 'manifest_fingerprint')
+  }
+  const status = enumValue<ContextBuild['status']>(
+    record.status,
+    CONTEXT_BUILD_STATUS_SET,
+    'invalid_contract',
+    'status',
+  )
+  const invalidatedAt = record.invalidated_at === null
+    ? null
+    : isoTimestamp(record.invalidated_at, 'invalid_contract', 'invalidated_at')
+  if ((status === 'invalidated') !== (invalidatedAt !== null)) {
+    contractError('invalid_contract', 'invalidated_at')
+  }
+  const createdAt = isoTimestamp(record.created_at, 'invalid_contract', 'created_at')
+  if (invalidatedAt !== null && invalidatedAt < createdAt) {
+    contractError('invalid_contract', 'invalidated_at')
+  }
+  return {
+    id: prefixedHash(record.id, CONTEXT_BUILD_ID, 'invalid_contract', 'context_build_id'),
+    board_id: boardId,
+    access_scope: accessScope,
+    targets,
+    request_fingerprint: sha256(
+      record.request_fingerprint,
+      'invalid_contract',
+      'request_fingerprint',
+    ),
+    source_set_fingerprint: sha256(
+      record.source_set_fingerprint,
+      'invalid_contract',
+      'source_set_fingerprint',
+    ),
+    manifest_fingerprint: manifestFingerprint,
+    budget: accounting.budget,
+    usage: accounting.usage,
+    entries: accounting.entries,
+    status,
+    created_at: createdAt,
+    invalidated_at: invalidatedAt,
+  }
+}
+
+/** Strict runtime validation for a durable ContextUse lifecycle record. */
+export function validateContextUse(value: unknown): ContextUse {
+  const record = safeRecord(value, 'invalid_contract', 'context_use')
+  exactKeys(
+    record,
+    [
+      'id',
+      'context_build_id',
+      'board_id',
+      'job_id',
+      'session_id',
+      'injection_ordinal',
+      'manifest_fingerprint',
+      'estimated_tokens',
+      'actual_tokens',
+      'cache_identity',
+      'outcome',
+      'injected_at',
+      'completed_at',
+    ],
+    [],
+    'invalid_contract',
+    'context_use',
+  )
+  const contextBuildIdValue = prefixedHash(
+    record.context_build_id,
+    CONTEXT_BUILD_ID,
+    'invalid_contract',
+    'context_build_id',
+  )
+  const jobId = safeText(record.job_id, 'invalid_contract', 'job_id')
+  const sessionId = safeText(record.session_id, 'invalid_contract', 'session_id')
+  const injectionOrdinal = integer(
+    record.injection_ordinal,
+    'invalid_contract',
+    'injection_ordinal',
+    0,
+  )
+  const outcome = enumValue<ContextUse['outcome']>(
+    record.outcome,
+    CONTEXT_USE_OUTCOME_SET,
+    'invalid_contract',
+    'outcome',
+  )
+  const actualTokens = nullableInteger(
+    record.actual_tokens,
+    'invalid_contract',
+    'actual_tokens',
+    0,
+    MAX_CONTEXT_BUDGET_TOKENS,
+  )
+  const injectedAt = isoTimestamp(record.injected_at, 'invalid_contract', 'injected_at')
+  const completedAt = record.completed_at === null
+    ? null
+    : isoTimestamp(record.completed_at, 'invalid_contract', 'completed_at')
+  if (
+    (outcome === 'running' && (actualTokens !== null || completedAt !== null))
+    || (outcome !== 'running' && completedAt === null)
+    || (completedAt !== null && completedAt < injectedAt)
+  ) {
+    contractError('invalid_contract', 'use_lifecycle')
+  }
+  const use: ContextUse = {
+    id: prefixedHash(record.id, USE_ID, 'invalid_contract', 'context_use_id'),
+    context_build_id: contextBuildIdValue,
+    board_id: integer(record.board_id, 'invalid_contract', 'board_id', 1),
+    job_id: jobId,
+    session_id: sessionId,
+    injection_ordinal: injectionOrdinal,
+    manifest_fingerprint: sha256(
+      record.manifest_fingerprint,
+      'invalid_contract',
+      'manifest_fingerprint',
+    ),
+    estimated_tokens: integer(
+      record.estimated_tokens,
+      'invalid_contract',
+      'estimated_tokens',
+      0,
+      MAX_CONTEXT_BUDGET_TOKENS,
+    ),
+    actual_tokens: actualTokens,
+    cache_identity: safeText(
+      record.cache_identity,
+      'invalid_contract',
+      'cache_identity',
+      MAX_LOCATOR_CHARACTERS,
+    ),
+    outcome,
+    injected_at: injectedAt,
+    completed_at: completedAt,
+  }
+  const expectedId = contextUseId({
+    context_build_id: contextBuildIdValue,
+    job_id: jobId,
+    session_id: sessionId,
+    injection_ordinal: injectionOrdinal,
+  })
+  if (use.id !== expectedId) contractError('invalid_contract', 'context_use_id')
+  return use
 }
