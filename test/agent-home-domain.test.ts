@@ -848,6 +848,43 @@ describe('durable Agent Home domain', () => {
         card_id INTEGER, kind TEXT, name TEXT, mime_type TEXT, path TEXT,
         content TEXT, metadata TEXT, created_at TEXT
       );
+      CREATE TABLE delivery_reports (
+        id TEXT PRIMARY KEY,
+        lineage_id TEXT NOT NULL,
+        parent_report_id TEXT
+          REFERENCES delivery_reports(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+        sequence INTEGER NOT NULL CHECK(sequence > 0),
+        board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+        card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+        workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'draft'
+          CHECK(status IN ('draft','submitted','verified','accepted','rejected')),
+        asked_snapshot TEXT NOT NULL CHECK(json_valid(asked_snapshot)),
+        summary TEXT NOT NULL DEFAULT '',
+        delivered_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(delivered_items)),
+        claims_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(claims_json)),
+        changed_files TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_files)),
+        commits TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(commits)),
+        artifact_ids TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(artifact_ids)),
+        gaps TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(gaps)),
+        created_by TEXT NOT NULL,
+        submitted_by TEXT,
+        verified_by TEXT,
+        accepted_by TEXT,
+        rejected_by TEXT,
+        acceptance_note TEXT,
+        rejection_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        submitted_at TEXT,
+        verified_at TEXT,
+        accepted_at TEXT,
+        rejected_at TEXT,
+        CHECK((parent_report_id IS NULL AND sequence=1)
+          OR (parent_report_id IS NOT NULL AND sequence>1))
+      );
       CREATE TABLE os_schema_migrations (
         id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
