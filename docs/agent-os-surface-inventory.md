@@ -1,7 +1,7 @@
 # Agent OS surface inventory
 
 Status: exact JOB-010 phase-one inventory observed at
-`2e4783bd4de499cacf8ee72117eb21b36a0b8b11`.
+`1382c77f02bcb7195fdaaf0c0efb2137a4263ca3`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -12,7 +12,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 31 | 3 | 10 | 2 | 46 |
+| SQLite application tables | 37 | 3 | 10 | 2 | 52 |
 | Registered HTTP routes | 94 | 29 | 25 | 9 | 157 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -47,6 +47,7 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migr
 | Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
 | Control plane | `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
+| Knowledge persistence | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses` |
 
 ### Compatibility
 
@@ -339,21 +340,22 @@ in `web/src/BoardSection.tsx`.
 There is one responsive web application, not a separate phone product. The exact UI evidence
 markers are listed in the JSON inventory and fail the drift test if removed or renamed.
 
-## Planned nouns that do not have current surfaces
+## Planned domains without complete current surfaces
 
-The canonical domain document names the target, but the schema/routes/UI above prove these are not
-implemented yet:
+The canonical domain document names the target. Some rows have no current canonical foundation;
+Knowledge now has durable persistence but not the surrounding product surfaces:
 
 | Planned domain | Current nearest surface | Missing canonical boundary |
 |---|---|---|
 | Discussion / DiscussionPost | `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
 | Team / PlanningSession | explicit `swarm` transport | bounded participants/roles/budgets/rounds/proposals/synthesis |
 | Conflict | computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
-| KnowledgeItem / ContextBuild / ContextUse | `context_items` manifest | cited freshness-aware compiler, deterministic build/use and outcome record |
+| Knowledge ingestion, retrieval, compilation, and operator surfaces | durable `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, and `context_uses` persistence plus the current `context_items` manifest | ingestion adapters, FTS/retrieval, managed injection, freshness automation, review controls, API/UI, benchmarks |
 | DeviceSession | `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
 
-Absence is a product fact, not a migration failure. These nouns must not be shown as delivered
-until their own tables/services/APIs/UI and acceptance evidence exist.
+These rows identify incomplete product boundaries, not necessarily total absence. Existing
+foundations must be named precisely, while the remaining services/APIs/UI and acceptance evidence
+must not be shown as delivered.
 
 ## Drift-check contract
 

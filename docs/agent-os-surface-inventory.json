@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "2e4783bd4de499cacf8ee72117eb21b36a0b8b11",
+  "observed_at_commit": "1382c77f02bcb7195fdaaf0c0efb2137a4263ca3",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -26,7 +26,11 @@
       "artifacts",
       "attention_items",
       "checkpoints",
+      "context_build_entries",
+      "context_build_sources",
+      "context_builds",
       "context_items",
+      "context_uses",
       "conversation_event_conflicts",
       "conversation_events",
       "daemon_leases",
@@ -38,6 +42,8 @@
       "job_market_criteria",
       "job_market_dependencies",
       "jobs",
+      "knowledge_chunks",
+      "knowledge_sources",
       "os_events",
       "policies",
       "process_output",
@@ -690,8 +696,8 @@
       "reason": "Current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
     },
     {
-      "noun": "KnowledgeItem, ContextBuild, and ContextUse",
-      "reason": "Context items exist, but the cited freshness-aware Knowledge Compiler does not."
+      "noun": "Knowledge ingestion, retrieval, compilation, and operator surfaces",
+      "reason": "Durable KnowledgeSource, KnowledgeChunk, ContextBuild, and ContextUse persistence exists, but ingestion, retrieval, managed injection, freshness automation, review controls, API, and UI do not."
     },
     {
       "noun": "DeviceSession",
