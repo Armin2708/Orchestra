@@ -70,11 +70,11 @@ const KNOWLEDGE_SCHEMA_TRIGGERS = Object.freeze([
   'knowledge_sources_scope_insert',
 ])
 const KNOWLEDGE_TABLE_SCHEMA_HASHES: Readonly<Record<string, string>> = Object.freeze({
-  knowledge_sources: '9038096de8679e4fd831520a99919c82f740a270c76c38b7ddf739d2eb47eb75',
-  knowledge_chunks: '289d0fa4dede520fd9ac85998a73b7f41ced4155ad82d738b055146fd502fb75',
-  context_builds: 'd5264b5443d3d4afde9a9242a6349c9c36716c351beb68fcd8f50662ee636b9c',
+  knowledge_sources: '369e581e96f74fd5003882f42c779e6c2fdaf8db70d39a9df6de6628466da6e7',
+  knowledge_chunks: '3853ae9a56e4927d39cd661e62ed7fd52fc50b5f72aae781c12e77d7563dac02',
+  context_builds: 'aa784e69c1c871046449163bced5a4df47954d8768b6ffba10343b1a588b031e',
   context_build_sources: '87b7e413a8fcc3f3621643e1a0c931b5da6f1d0518647282d538cf78102454e0',
-  context_build_entries: '81ba4902d42da7e33c24133a6ca00074cfb9eebb6ecbd583076ec759caf9329b',
+  context_build_entries: 'cf17f6b347193090a160a481e115730032b053b5bd2d1cc3014851aac92f7f4a',
   context_uses: '4539beb67a5e99e444fe5a6ff9c72d8f65457c875e968de8fdb45b14b9810563',
 })
 
@@ -3984,17 +3984,371 @@ const migrations: Migration[] = [
             CHECK(json_valid(access_scope_json)
               AND json(access_scope_json)=access_scope_json
               AND json_type(access_scope_json)='object'
-              AND length(CAST(access_scope_json AS BLOB))<=8000000),
+              AND length(CAST(access_scope_json AS BLOB))<=8000000
+              AND (
+                (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='board'
+                  AND json_remove(access_scope_json, '$.kind')='{}'
+                )
+                OR (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='workspace'
+                  AND json_type(access_scope_json, '$.workspace_id') IS 'text'
+                  AND json_remove(
+                    access_scope_json, '$.kind', '$.workspace_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='contract'
+                  AND json_type(access_scope_json, '$.card_id') IS 'integer'
+                  AND json_type(
+                    access_scope_json, '$.contract_version'
+                  ) IS 'integer'
+                  AND json_remove(
+                    access_scope_json,
+                    '$.kind',
+                    '$.card_id',
+                    '$.contract_version'
+                  )='{}'
+                )
+                OR (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='job'
+                  AND json_type(access_scope_json, '$.job_id') IS 'text'
+                  AND json_remove(
+                    access_scope_json, '$.kind', '$.job_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='profile'
+                  AND json_type(access_scope_json, '$.profile_id') IS 'text'
+                  AND json_remove(
+                    access_scope_json, '$.kind', '$.profile_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(access_scope_json, '$.kind') IS 'text'
+                  AND json_extract(access_scope_json, '$.kind')='session'
+                  AND json_type(access_scope_json, '$.session_id') IS 'text'
+                  AND json_remove(
+                    access_scope_json, '$.kind', '$.session_id'
+                  )='{}'
+                )
+              )),
           targets_json TEXT NOT NULL
             CHECK(json_valid(targets_json)
               AND json(targets_json)=targets_json
               AND json_type(targets_json)='object'
-              AND length(CAST(targets_json AS BLOB))<=8000000),
+              AND length(CAST(targets_json AS BLOB))<=8000000
+              AND json_remove(
+                targets_json,
+                '$.board_id',
+                '$.workspace_id',
+                '$.card_id',
+                '$.contract_ref',
+                '$.contract_version',
+                '$.contract_snapshot_sha256',
+                '$.job_id',
+                '$.profile_id',
+                '$.session_id',
+                '$.delivery_report_id'
+              )='{}'
+              AND json_type(targets_json, '$.board_id') IS 'integer'
+              AND (
+                json_type(targets_json, '$.workspace_id') IS 'text'
+                OR json_type(targets_json, '$.workspace_id') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.card_id') IS 'integer'
+                OR json_type(targets_json, '$.card_id') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.contract_ref') IS 'text'
+                OR json_type(targets_json, '$.contract_ref') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.contract_version') IS 'integer'
+                OR json_type(targets_json, '$.contract_version') IS 'null'
+              )
+              AND (
+                json_type(
+                  targets_json, '$.contract_snapshot_sha256'
+                ) IS 'text'
+                OR json_type(
+                  targets_json, '$.contract_snapshot_sha256'
+                ) IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.job_id') IS 'text'
+                OR json_type(targets_json, '$.job_id') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.profile_id') IS 'text'
+                OR json_type(targets_json, '$.profile_id') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.session_id') IS 'text'
+                OR json_type(targets_json, '$.session_id') IS 'null'
+              )
+              AND (
+                json_type(targets_json, '$.delivery_report_id') IS 'null'
+                OR (
+                  json_type(
+                    targets_json, '$.delivery_report_id'
+                  ) IS 'text'
+                  AND length(json_extract(
+                    targets_json, '$.delivery_report_id'
+                  )) BETWEEN 1 AND 256
+                  AND trim(json_extract(
+                    targets_json, '$.delivery_report_id'
+                  ))=json_extract(targets_json, '$.delivery_report_id')
+                )
+              )),
           provenance_json TEXT NOT NULL
             CHECK(json_valid(provenance_json)
               AND json(provenance_json)=provenance_json
               AND json_type(provenance_json)='object'
-              AND length(CAST(provenance_json AS BLOB))<=8000000),
+              AND length(CAST(provenance_json AS BLOB))<=8000000
+              AND json_remove(
+                provenance_json,
+                '$.repository_key',
+                '$.base_commit_sha',
+                '$.worktree_state_hash',
+                '$.relative_root',
+                '$.adapter_id',
+                '$.adapter_version',
+                '$.adapter_index_commit_sha',
+                '$.observed_at'
+              )='{}'
+              AND json_type(
+                provenance_json, '$.repository_key'
+              ) IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.repository_key'
+              )) BETWEEN 1 AND 256
+              AND trim(json_extract(
+                provenance_json, '$.repository_key'
+              ))=json_extract(provenance_json, '$.repository_key')
+              AND trim(
+                json_extract(provenance_json, '$.repository_key'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(provenance_json, '$.repository_key')
+              AND instr(json_extract(
+                provenance_json, '$.repository_key'
+              ), char(0))=0
+              AND json_extract(
+                provenance_json, '$.repository_key'
+              ) NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND json_type(
+                provenance_json, '$.base_commit_sha'
+              ) IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.base_commit_sha'
+              )) IN (40, 64)
+              AND json_extract(
+                provenance_json, '$.base_commit_sha'
+              ) NOT GLOB '*[^0-9a-f]*'
+              AND (
+                json_type(
+                  provenance_json, '$.worktree_state_hash'
+                ) IS 'null'
+                OR (
+                  json_type(
+                    provenance_json, '$.worktree_state_hash'
+                  ) IS 'text'
+                  AND length(json_extract(
+                    provenance_json, '$.worktree_state_hash'
+                  ))=64
+                  AND json_extract(
+                    provenance_json, '$.worktree_state_hash'
+                  ) NOT GLOB '*[^0-9a-f]*'
+                )
+              )
+              AND json_type(
+                provenance_json, '$.relative_root'
+              ) IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.relative_root'
+              )) BETWEEN 1 AND 4096
+              AND trim(json_extract(
+                provenance_json, '$.relative_root'
+              ))=json_extract(provenance_json, '$.relative_root')
+              AND trim(
+                json_extract(provenance_json, '$.relative_root'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(provenance_json, '$.relative_root')
+              AND instr(json_extract(
+                provenance_json, '$.relative_root'
+              ), char(0))=0
+              AND json_extract(
+                provenance_json, '$.relative_root'
+              ) NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND substr(json_extract(
+                provenance_json, '$.relative_root'
+              ), 1, 1)!='/'
+              AND instr(json_extract(
+                provenance_json, '$.relative_root'
+              ), char(92))=0
+              AND json_extract(
+                provenance_json, '$.relative_root'
+              ) NOT GLOB '[A-Za-z]:*'
+              AND (
+                json_extract(provenance_json, '$.relative_root')='.'
+                OR (
+                  json_extract(provenance_json, '$.relative_root')!='..'
+                  AND instr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), '//')=0
+                  AND substr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), -1, 1)!='/'
+                  AND substr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), 1, 2)!='./'
+                  AND substr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), 1, 3)!='../'
+                  AND json_extract(
+                    provenance_json, '$.relative_root'
+                  ) NOT LIKE '%/.'
+                  AND json_extract(
+                    provenance_json, '$.relative_root'
+                  ) NOT LIKE '%/..'
+                  AND instr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), '/./')=0
+                  AND instr(json_extract(
+                    provenance_json, '$.relative_root'
+                  ), '/../')=0
+                )
+              )
+              AND json_type(provenance_json, '$.adapter_id') IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.adapter_id'
+              )) BETWEEN 1 AND 256
+              AND trim(json_extract(
+                provenance_json, '$.adapter_id'
+              ))=json_extract(provenance_json, '$.adapter_id')
+              AND trim(
+                json_extract(provenance_json, '$.adapter_id'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(provenance_json, '$.adapter_id')
+              AND instr(json_extract(
+                provenance_json, '$.adapter_id'
+              ), char(0))=0
+              AND json_extract(
+                provenance_json, '$.adapter_id'
+              ) NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND json_type(
+                provenance_json, '$.adapter_version'
+              ) IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.adapter_version'
+              )) BETWEEN 1 AND 256
+              AND trim(json_extract(
+                provenance_json, '$.adapter_version'
+              ))=json_extract(provenance_json, '$.adapter_version')
+              AND trim(
+                json_extract(provenance_json, '$.adapter_version'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(provenance_json, '$.adapter_version')
+              AND instr(json_extract(
+                provenance_json, '$.adapter_version'
+              ), char(0))=0
+              AND json_extract(
+                provenance_json, '$.adapter_version'
+              ) NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND (
+                json_type(
+                  provenance_json, '$.adapter_index_commit_sha'
+                ) IS 'null'
+                OR (
+                  json_type(
+                    provenance_json, '$.adapter_index_commit_sha'
+                  ) IS 'text'
+                  AND length(json_extract(
+                    provenance_json, '$.adapter_index_commit_sha'
+                  )) IN (40, 64)
+                  AND json_extract(
+                    provenance_json, '$.adapter_index_commit_sha'
+                  ) NOT GLOB '*[^0-9a-f]*'
+                )
+              )
+              AND json_type(
+                provenance_json, '$.observed_at'
+              ) IS 'text'
+              AND length(json_extract(
+                provenance_json, '$.observed_at'
+              ))=24
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 5, 1)='-'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 8, 1)='-'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 11, 1)='T'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 14, 1)=':'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 17, 1)=':'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 20, 1)='.'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 24, 1)='Z'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 12, 2) BETWEEN '00' AND '23'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 15, 2) BETWEEN '00' AND '59'
+              AND substr(json_extract(
+                provenance_json, '$.observed_at'
+              ), 18, 2) BETWEEN '00' AND '59'
+              AND strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                json_extract(provenance_json, '$.observed_at')
+              )=json_extract(provenance_json, '$.observed_at')),
           created_at TEXT NOT NULL CHECK(length(created_at)>0),
           updated_at TEXT NOT NULL CHECK(length(updated_at)>0),
           PRIMARY KEY(board_id, id),
@@ -4028,13 +4382,151 @@ const migrations: Migration[] = [
             CHECK(json_valid(source_range_json)
               AND json(source_range_json)=source_range_json
               AND json_type(source_range_json)='object'
-              AND length(CAST(source_range_json AS BLOB))<=8000000),
+              AND length(CAST(source_range_json AS BLOB))<=8000000
+              AND json_remove(
+                source_range_json,
+                '$.start_line',
+                '$.end_line',
+                '$.start_byte',
+                '$.end_byte'
+              )='{}'
+              AND (
+                (
+                  json_type(source_range_json, '$.start_line') IS 'null'
+                  AND json_type(source_range_json, '$.end_line') IS 'null'
+                )
+                OR (
+                  json_type(
+                    source_range_json, '$.start_line'
+                  ) IS 'integer'
+                  AND json_type(
+                    source_range_json, '$.end_line'
+                  ) IS 'integer'
+                  AND json_extract(source_range_json, '$.start_line')
+                    BETWEEN 1 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_line')
+                    BETWEEN json_extract(source_range_json, '$.start_line')
+                      AND 9007199254740991
+                )
+              )
+              AND (
+                (
+                  json_type(source_range_json, '$.start_byte') IS 'null'
+                  AND json_type(source_range_json, '$.end_byte') IS 'null'
+                )
+                OR (
+                  json_type(
+                    source_range_json, '$.start_byte'
+                  ) IS 'integer'
+                  AND json_type(
+                    source_range_json, '$.end_byte'
+                  ) IS 'integer'
+                  AND json_extract(source_range_json, '$.start_byte')
+                    BETWEEN 0 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_byte')
+                    BETWEEN 1 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_byte')
+                    > json_extract(source_range_json, '$.start_byte')
+                )
+              )),
           symbol_json TEXT
             CHECK(symbol_json IS NULL OR (
               json_valid(symbol_json)
               AND json(symbol_json)=symbol_json
               AND json_type(symbol_json)='object'
               AND length(CAST(symbol_json AS BLOB))<=8000000
+              AND json_remove(
+                symbol_json,
+                '$.language',
+                '$.qualified_name',
+                '$.symbol_kind',
+                '$.signature_sha256'
+              )='{}'
+              AND json_type(symbol_json, '$.language') IS 'text'
+              AND length(json_extract(
+                symbol_json, '$.language'
+              )) BETWEEN 1 AND 256
+              AND trim(json_extract(
+                symbol_json, '$.language'
+              ))=json_extract(symbol_json, '$.language')
+              AND trim(
+                json_extract(symbol_json, '$.language'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(symbol_json, '$.language')
+              AND instr(json_extract(
+                symbol_json, '$.language'
+              ), char(0))=0
+              AND json_extract(symbol_json, '$.language') NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND json_type(symbol_json, '$.qualified_name') IS 'text'
+              AND length(json_extract(
+                symbol_json, '$.qualified_name'
+              )) BETWEEN 1 AND 4096
+              AND trim(json_extract(
+                symbol_json, '$.qualified_name'
+              ))=json_extract(symbol_json, '$.qualified_name')
+              AND trim(
+                json_extract(symbol_json, '$.qualified_name'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(symbol_json, '$.qualified_name')
+              AND instr(json_extract(
+                symbol_json, '$.qualified_name'
+              ), char(0))=0
+              AND json_extract(
+                symbol_json, '$.qualified_name'
+              ) NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND json_type(symbol_json, '$.symbol_kind') IS 'text'
+              AND length(json_extract(
+                symbol_json, '$.symbol_kind'
+              )) BETWEEN 1 AND 256
+              AND trim(json_extract(
+                symbol_json, '$.symbol_kind'
+              ))=json_extract(symbol_json, '$.symbol_kind')
+              AND trim(
+                json_extract(symbol_json, '$.symbol_kind'),
+                ' ' || char(160) || char(5760)
+                  || char(8192) || char(8193) || char(8194) || char(8195)
+                  || char(8196) || char(8197) || char(8198) || char(8199)
+                  || char(8200) || char(8201) || char(8202)
+                  || char(8232) || char(8233) || char(8239) || char(8287)
+                  || char(12288) || char(65279)
+              )=json_extract(symbol_json, '$.symbol_kind')
+              AND instr(json_extract(
+                symbol_json, '$.symbol_kind'
+              ), char(0))=0
+              AND json_extract(symbol_json, '$.symbol_kind') NOT GLOB (
+                '*[' || char(1) || '-' || char(31)
+                || char(127) || '-' || char(159) || ']*'
+              )
+              AND (
+                json_type(symbol_json, '$.signature_sha256') IS 'null'
+                OR (
+                  json_type(
+                    symbol_json, '$.signature_sha256'
+                  ) IS 'text'
+                  AND length(json_extract(
+                    symbol_json, '$.signature_sha256'
+                  ))=64
+                  AND json_extract(
+                    symbol_json, '$.signature_sha256'
+                  ) NOT GLOB '*[^0-9a-f]*'
+                )
+              )
             )),
           created_at TEXT NOT NULL CHECK(length(created_at)>0),
           PRIMARY KEY(board_id, id),
@@ -4054,7 +4546,242 @@ const migrations: Migration[] = [
             CHECK(json_valid(request_json)
               AND json(request_json)=request_json
               AND json_type(request_json)='object'
-              AND length(CAST(request_json AS BLOB))<=8000000),
+              AND length(CAST(request_json AS BLOB))<=8000000
+              AND json_remove(
+                request_json,
+                '$.board_id',
+                '$.access_scope',
+                '$.targets',
+                '$.budget',
+                '$.selection_request_sha256'
+              )='{}'
+              AND json_type(request_json, '$.board_id') IS 'integer'
+              AND json_type(request_json, '$.access_scope') IS 'object'
+              AND json_type(request_json, '$.targets') IS 'object'
+              AND json_type(request_json, '$.budget') IS 'object'
+              AND json_type(
+                request_json, '$.selection_request_sha256'
+              ) IS 'text'
+              AND length(json_extract(
+                request_json, '$.selection_request_sha256'
+              ))=64
+              AND json_extract(
+                request_json, '$.selection_request_sha256'
+              ) NOT GLOB '*[^0-9a-f]*'
+              AND (
+                (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='board'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind'
+                  )='{}'
+                )
+                OR (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='workspace'
+                  AND json_type(
+                    request_json, '$.access_scope.workspace_id'
+                  ) IS 'text'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind',
+                    '$.workspace_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='contract'
+                  AND json_type(
+                    request_json, '$.access_scope.card_id'
+                  ) IS 'integer'
+                  AND json_type(
+                    request_json, '$.access_scope.contract_version'
+                  ) IS 'integer'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind',
+                    '$.card_id',
+                    '$.contract_version'
+                  )='{}'
+                )
+                OR (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='job'
+                  AND json_type(
+                    request_json, '$.access_scope.job_id'
+                  ) IS 'text'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind',
+                    '$.job_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='profile'
+                  AND json_type(
+                    request_json, '$.access_scope.profile_id'
+                  ) IS 'text'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind',
+                    '$.profile_id'
+                  )='{}'
+                )
+                OR (
+                  json_type(
+                    request_json, '$.access_scope.kind'
+                  ) IS 'text'
+                  AND json_extract(
+                    request_json, '$.access_scope.kind'
+                  )='session'
+                  AND json_type(
+                    request_json, '$.access_scope.session_id'
+                  ) IS 'text'
+                  AND json_remove(
+                    json_extract(request_json, '$.access_scope'),
+                    '$.kind',
+                    '$.session_id'
+                  )='{}'
+                )
+              )
+              AND json_remove(
+                json_extract(request_json, '$.targets'),
+                '$.board_id',
+                '$.workspace_id',
+                '$.card_id',
+                '$.contract_ref',
+                '$.contract_version',
+                '$.contract_snapshot_sha256',
+                '$.job_id',
+                '$.profile_id',
+                '$.session_id',
+                '$.delivery_report_id'
+              )='{}'
+              AND json_type(
+                request_json, '$.targets.board_id'
+              ) IS 'integer'
+              AND (
+                json_type(
+                  request_json, '$.targets.workspace_id'
+                ) IS 'text'
+                OR json_type(
+                  request_json, '$.targets.workspace_id'
+                ) IS 'null'
+              )
+              AND (
+                json_type(request_json, '$.targets.card_id') IS 'integer'
+                OR json_type(request_json, '$.targets.card_id') IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.contract_ref'
+                ) IS 'text'
+                OR json_type(
+                  request_json, '$.targets.contract_ref'
+                ) IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.contract_version'
+                ) IS 'integer'
+                OR json_type(
+                  request_json, '$.targets.contract_version'
+                ) IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.contract_snapshot_sha256'
+                ) IS 'text'
+                OR json_type(
+                  request_json, '$.targets.contract_snapshot_sha256'
+                ) IS 'null'
+              )
+              AND (
+                json_type(request_json, '$.targets.job_id') IS 'text'
+                OR json_type(request_json, '$.targets.job_id') IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.profile_id'
+                ) IS 'text'
+                OR json_type(
+                  request_json, '$.targets.profile_id'
+                ) IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.session_id'
+                ) IS 'text'
+                OR json_type(
+                  request_json, '$.targets.session_id'
+                ) IS 'null'
+              )
+              AND (
+                json_type(
+                  request_json, '$.targets.delivery_report_id'
+                ) IS 'null'
+                OR (
+                  json_type(
+                    request_json, '$.targets.delivery_report_id'
+                  ) IS 'text'
+                  AND length(json_extract(
+                    request_json, '$.targets.delivery_report_id'
+                  )) BETWEEN 1 AND 256
+                  AND trim(json_extract(
+                    request_json, '$.targets.delivery_report_id'
+                  ))=json_extract(
+                    request_json, '$.targets.delivery_report_id'
+                  )
+                )
+              )
+              AND json_remove(
+                json_extract(request_json, '$.budget'),
+                '$.max_tokens',
+                '$.max_characters',
+                '$.sections'
+              )='{}'
+              AND json_type(
+                request_json, '$.budget.max_tokens'
+              ) IS 'integer'
+              AND json_type(
+                request_json, '$.budget.max_characters'
+              ) IS 'integer'
+              AND json_type(
+                request_json, '$.budget.sections'
+              ) IS 'object'
+              AND json_remove(
+                json_extract(request_json, '$.budget.sections'),
+                '$.project_brief',
+                '$.task_contract',
+                '$.repository_instructions',
+                '$.relevant_code',
+                '$.recent_changes',
+                '$.accepted_decisions',
+                '$.verified_deliveries',
+                '$.working_memory_delta'
+              )='{}'),
           request_fingerprint TEXT NOT NULL
             CHECK(length(request_fingerprint)=64
               AND request_fingerprint NOT GLOB '*[^0-9a-f]*'),
@@ -4073,9 +4800,31 @@ const migrations: Migration[] = [
             CHECK(json_valid(usage_json)
               AND json(usage_json)=usage_json
               AND json_type(usage_json)='object'
-              AND length(CAST(usage_json AS BLOB))<=8000000),
-          source_count INTEGER NOT NULL CHECK(source_count>=0),
-          entry_count INTEGER NOT NULL CHECK(entry_count>=0),
+              AND length(CAST(usage_json AS BLOB))<=8000000
+              AND json_remove(
+                usage_json,
+                '$.used_tokens',
+                '$.used_characters',
+                '$.sections'
+              )='{}'
+              AND json_type(usage_json, '$.used_tokens') IS 'integer'
+              AND json_type(
+                usage_json, '$.used_characters'
+              ) IS 'integer'
+              AND json_type(usage_json, '$.sections') IS 'object'
+              AND json_remove(
+                json_extract(usage_json, '$.sections'),
+                '$.project_brief',
+                '$.task_contract',
+                '$.repository_instructions',
+                '$.relevant_code',
+                '$.recent_changes',
+                '$.accepted_decisions',
+                '$.verified_deliveries',
+                '$.working_memory_delta'
+              )='{}'),
+          source_count INTEGER NOT NULL CHECK(source_count BETWEEN 0 AND 512),
+          entry_count INTEGER NOT NULL CHECK(entry_count BETWEEN 0 AND 512),
           status TEXT NOT NULL
             CHECK(status IN ('built', 'used', 'invalidated', 'failed')),
           created_at TEXT NOT NULL CHECK(length(created_at)>0),
@@ -4113,7 +4862,8 @@ const migrations: Migration[] = [
         CREATE TABLE IF NOT EXISTS context_build_entries (
           board_id INTEGER NOT NULL,
           context_build_id TEXT NOT NULL,
-          candidate_ordinal INTEGER NOT NULL CHECK(candidate_ordinal>=0),
+          candidate_ordinal INTEGER NOT NULL
+            CHECK(candidate_ordinal BETWEEN 0 AND 511),
           source_id TEXT NOT NULL
             CHECK(length(source_id)=67
               AND substr(source_id, 1, 3)='ks_'
@@ -4128,7 +4878,8 @@ const migrations: Migration[] = [
               'relevant_code', 'recent_changes', 'accepted_decisions',
               'verified_deliveries', 'working_memory_delta'
             )),
-          selected_ordinal INTEGER CHECK(selected_ordinal IS NULL OR selected_ordinal>=0),
+          selected_ordinal INTEGER
+            CHECK(selected_ordinal IS NULL OR selected_ordinal BETWEEN 0 AND 511),
           decision TEXT NOT NULL CHECK(decision IN ('selected', 'omitted')),
           reason TEXT NOT NULL
             CHECK(reason IN (
@@ -4140,7 +4891,16 @@ const migrations: Migration[] = [
             CHECK(json_valid(score_components_json)
               AND json(score_components_json)=score_components_json
               AND json_type(score_components_json)='object'
-              AND length(CAST(score_components_json AS BLOB))<=8000000),
+              AND length(CAST(score_components_json AS BLOB))<=8000000
+              AND json_remove(
+                score_components_json,
+                '$.authority_micros',
+                '$.relevance_micros',
+                '$.freshness_micros',
+                '$.recency_micros',
+                '$.contract_micros',
+                '$.pin_micros'
+              )='{}'),
           score_micros INTEGER NOT NULL,
           rendering TEXT NOT NULL
             CHECK(rendering IN ('full', 'truncated', 'summary', 'none')),
@@ -4165,7 +4925,53 @@ const migrations: Migration[] = [
             CHECK(json_valid(source_range_json)
               AND json(source_range_json)=source_range_json
               AND json_type(source_range_json)='object'
-              AND length(CAST(source_range_json AS BLOB))<=8000000),
+              AND length(CAST(source_range_json AS BLOB))<=8000000
+              AND json_remove(
+                source_range_json,
+                '$.start_line',
+                '$.end_line',
+                '$.start_byte',
+                '$.end_byte'
+              )='{}'
+              AND (
+                (
+                  json_type(source_range_json, '$.start_line') IS 'null'
+                  AND json_type(source_range_json, '$.end_line') IS 'null'
+                )
+                OR (
+                  json_type(
+                    source_range_json, '$.start_line'
+                  ) IS 'integer'
+                  AND json_type(
+                    source_range_json, '$.end_line'
+                  ) IS 'integer'
+                  AND json_extract(source_range_json, '$.start_line')
+                    BETWEEN 1 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_line')
+                    BETWEEN json_extract(source_range_json, '$.start_line')
+                      AND 9007199254740991
+                )
+              )
+              AND (
+                (
+                  json_type(source_range_json, '$.start_byte') IS 'null'
+                  AND json_type(source_range_json, '$.end_byte') IS 'null'
+                )
+                OR (
+                  json_type(
+                    source_range_json, '$.start_byte'
+                  ) IS 'integer'
+                  AND json_type(
+                    source_range_json, '$.end_byte'
+                  ) IS 'integer'
+                  AND json_extract(source_range_json, '$.start_byte')
+                    BETWEEN 0 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_byte')
+                    BETWEEN 1 AND 9007199254740991
+                  AND json_extract(source_range_json, '$.end_byte')
+                    > json_extract(source_range_json, '$.start_byte')
+                )
+              )),
           content_sha256 TEXT NOT NULL
             CHECK(length(content_sha256)=64
               AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
@@ -4314,6 +5120,85 @@ const migrations: Migration[] = [
         CREATE TRIGGER knowledge_sources_scope_insert
         BEFORE INSERT ON knowledge_sources
         BEGIN
+          SELECT CASE WHEN
+            NEW.board_id NOT BETWEEN 1 AND 9007199254740991
+            OR json_extract(NEW.targets_json, '$.board_id')
+              NOT BETWEEN 1 AND 9007199254740991
+            OR (
+              json_extract(NEW.access_scope_json, '$.kind')='contract'
+              AND (
+                json_extract(NEW.access_scope_json, '$.card_id')
+                  NOT BETWEEN 1 AND 9007199254740991
+                OR json_extract(
+                  NEW.access_scope_json, '$.contract_version'
+                ) NOT BETWEEN 1 AND 9007199254740991
+              )
+            )
+            OR (
+              json_type(NEW.targets_json, '$.card_id') IS 'integer'
+              AND json_extract(NEW.targets_json, '$.card_id')
+                NOT BETWEEN 1 AND 9007199254740991
+            )
+            OR (
+              json_type(
+                NEW.targets_json, '$.contract_version'
+              ) IS 'integer'
+              AND json_extract(
+                NEW.targets_json, '$.contract_version'
+              ) NOT BETWEEN 1 AND 9007199254740991
+            )
+            OR EXISTS (
+              SELECT 1 FROM json_each(NEW.access_scope_json) scope_field
+              WHERE scope_field.key IN (
+                'workspace_id', 'job_id', 'profile_id', 'session_id'
+              )
+                AND (
+                  length(scope_field.value) NOT BETWEEN 1 AND 256
+                  OR trim(scope_field.value)!=scope_field.value
+                  OR trim(
+                    scope_field.value,
+                    ' ' || char(160) || char(5760)
+                      || char(8192) || char(8193) || char(8194) || char(8195)
+                      || char(8196) || char(8197) || char(8198) || char(8199)
+                      || char(8200) || char(8201) || char(8202)
+                      || char(8232) || char(8233) || char(8239) || char(8287)
+                      || char(12288) || char(65279)
+                  )!=scope_field.value
+                  OR instr(scope_field.value, char(0))!=0
+                  OR scope_field.value GLOB (
+                    '*[' || char(1) || '-' || char(31)
+                    || char(127) || '-' || char(159) || ']*'
+                  )
+                )
+            )
+            OR EXISTS (
+              SELECT 1 FROM json_each(NEW.targets_json) target_field
+              WHERE target_field.key IN (
+                'workspace_id', 'contract_ref', 'job_id', 'profile_id',
+                'session_id', 'delivery_report_id'
+              )
+                AND target_field.type='text'
+                AND (
+                  length(target_field.value) NOT BETWEEN 1 AND 256
+                  OR trim(target_field.value)!=target_field.value
+                  OR trim(
+                    target_field.value,
+                    ' ' || char(160) || char(5760)
+                      || char(8192) || char(8193) || char(8194) || char(8195)
+                      || char(8196) || char(8197) || char(8198) || char(8199)
+                      || char(8200) || char(8201) || char(8202)
+                      || char(8232) || char(8233) || char(8239) || char(8287)
+                      || char(12288) || char(65279)
+                  )!=target_field.value
+                  OR instr(target_field.value, char(0))!=0
+                  OR target_field.value GLOB (
+                    '*[' || char(1) || '-' || char(31)
+                    || char(127) || '-' || char(159) || ']*'
+                  )
+                )
+            )
+          THEN RAISE(ABORT, 'knowledge source target scalar is inconsistent') END;
+
           SELECT CASE
             WHEN json_extract(NEW.access_scope_json, '$.kind')='board' THEN NULL
             WHEN json_extract(NEW.access_scope_json, '$.kind')='workspace'
@@ -4673,6 +5558,176 @@ const migrations: Migration[] = [
             OR json_type(NEW.request_json, '$.targets.board_id') IS NOT 'integer'
             OR json_extract(NEW.request_json, '$.targets.board_id')!=NEW.board_id
           THEN RAISE(ABORT, 'context build request scope is inconsistent') END;
+
+          SELECT CASE WHEN
+            NEW.board_id NOT BETWEEN 1 AND 9007199254740991
+            OR json_extract(NEW.request_json, '$.board_id')
+              NOT BETWEEN 1 AND 9007199254740991
+            OR json_extract(NEW.request_json, '$.targets.board_id')
+              NOT BETWEEN 1 AND 9007199254740991
+            OR (
+              json_extract(
+                NEW.request_json, '$.access_scope.kind'
+              )='contract'
+              AND (
+                json_extract(
+                  NEW.request_json, '$.access_scope.card_id'
+                ) NOT BETWEEN 1 AND 9007199254740991
+                OR json_extract(
+                  NEW.request_json, '$.access_scope.contract_version'
+                ) NOT BETWEEN 1 AND 9007199254740991
+              )
+            )
+            OR (
+              json_type(
+                NEW.request_json, '$.targets.card_id'
+              ) IS 'integer'
+              AND json_extract(
+                NEW.request_json, '$.targets.card_id'
+              ) NOT BETWEEN 1 AND 9007199254740991
+            )
+            OR (
+              json_type(
+                NEW.request_json, '$.targets.contract_version'
+              ) IS 'integer'
+              AND json_extract(
+                NEW.request_json, '$.targets.contract_version'
+              ) NOT BETWEEN 1 AND 9007199254740991
+            )
+            OR EXISTS (
+              SELECT 1 FROM json_each(
+                NEW.request_json, '$.access_scope'
+              ) scope_field
+              WHERE scope_field.key IN (
+                'workspace_id', 'job_id', 'profile_id', 'session_id'
+              )
+                AND (
+                  length(scope_field.value) NOT BETWEEN 1 AND 256
+                  OR trim(scope_field.value)!=scope_field.value
+                  OR trim(
+                    scope_field.value,
+                    ' ' || char(160) || char(5760)
+                      || char(8192) || char(8193) || char(8194) || char(8195)
+                      || char(8196) || char(8197) || char(8198) || char(8199)
+                      || char(8200) || char(8201) || char(8202)
+                      || char(8232) || char(8233) || char(8239) || char(8287)
+                      || char(12288) || char(65279)
+                  )!=scope_field.value
+                  OR instr(scope_field.value, char(0))!=0
+                  OR scope_field.value GLOB (
+                    '*[' || char(1) || '-' || char(31)
+                    || char(127) || '-' || char(159) || ']*'
+                  )
+                )
+            )
+            OR EXISTS (
+              SELECT 1 FROM json_each(
+                NEW.request_json, '$.targets'
+              ) target_field
+              WHERE target_field.key IN (
+                'workspace_id', 'contract_ref', 'job_id', 'profile_id',
+                'session_id', 'delivery_report_id'
+              )
+                AND target_field.type='text'
+                AND (
+                  length(target_field.value) NOT BETWEEN 1 AND 256
+                  OR trim(target_field.value)!=target_field.value
+                  OR trim(
+                    target_field.value,
+                    ' ' || char(160) || char(5760)
+                      || char(8192) || char(8193) || char(8194) || char(8195)
+                      || char(8196) || char(8197) || char(8198) || char(8199)
+                      || char(8200) || char(8201) || char(8202)
+                      || char(8232) || char(8233) || char(8239) || char(8287)
+                      || char(12288) || char(65279)
+                  )!=target_field.value
+                  OR instr(target_field.value, char(0))!=0
+                  OR target_field.value GLOB (
+                    '*[' || char(1) || '-' || char(31)
+                    || char(127) || '-' || char(159) || ']*'
+                  )
+                )
+            )
+          THEN RAISE(ABORT, 'context build target scalar is inconsistent') END;
+
+          SELECT CASE WHEN
+            EXISTS (
+              SELECT 1 FROM json_each(NEW.source_set_json) source
+              WHERE json_type(source.value) IS NOT 'object'
+                OR json_remove(
+                  source.value,
+                  '$.source_id',
+                  '$.source_revision',
+                  '$.content_sha256',
+                  '$.freshness_state',
+                  '$.redaction_state'
+                )!='{}'
+                OR json_type(source.value, '$.source_id') IS NOT 'text'
+                OR length(json_extract(source.value, '$.source_id'))!=67
+                OR substr(
+                  json_extract(source.value, '$.source_id'), 1, 3
+                )!='ks_'
+                OR substr(
+                  json_extract(source.value, '$.source_id'), 4
+                ) GLOB '*[^0-9a-f]*'
+                OR json_type(
+                  source.value, '$.source_revision'
+                ) IS NOT 'text'
+                OR length(json_extract(
+                  source.value, '$.source_revision'
+                )) NOT BETWEEN 1 AND 512
+                OR trim(json_extract(
+                  source.value, '$.source_revision'
+                ))!=json_extract(source.value, '$.source_revision')
+                OR trim(
+                  json_extract(source.value, '$.source_revision'),
+                  ' ' || char(160) || char(5760)
+                    || char(8192) || char(8193) || char(8194) || char(8195)
+                    || char(8196) || char(8197) || char(8198) || char(8199)
+                    || char(8200) || char(8201) || char(8202)
+                    || char(8232) || char(8233) || char(8239) || char(8287)
+                    || char(12288) || char(65279)
+                )!=json_extract(source.value, '$.source_revision')
+                OR instr(json_extract(
+                  source.value, '$.source_revision'
+                ), char(0))!=0
+                OR json_extract(
+                  source.value, '$.source_revision'
+                ) GLOB (
+                  '*[' || char(1) || '-' || char(31)
+                  || char(127) || '-' || char(159) || ']*'
+                )
+                OR json_type(
+                  source.value, '$.content_sha256'
+                ) IS NOT 'text'
+                OR length(json_extract(
+                  source.value, '$.content_sha256'
+                ))!=64
+                OR json_extract(
+                  source.value, '$.content_sha256'
+                ) GLOB '*[^0-9a-f]*'
+                OR json_type(
+                  source.value, '$.freshness_state'
+                ) IS NOT 'text'
+                OR json_extract(
+                  source.value, '$.freshness_state'
+                ) NOT IN ('fresh', 'stale', 'unknown', 'contradicted')
+                OR json_type(
+                  source.value, '$.redaction_state'
+                ) IS NOT 'text'
+                OR json_extract(
+                  source.value, '$.redaction_state'
+                ) NOT IN ('none', 'redacted', 'withheld')
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM json_each(NEW.source_set_json) source
+              JOIN json_each(NEW.source_set_json) prior
+                ON CAST(prior.key AS INTEGER)=CAST(source.key AS INTEGER)-1
+              WHERE json_extract(prior.value, '$.source_id')
+                >= json_extract(source.value, '$.source_id')
+            )
+          THEN RAISE(ABORT, 'context build source set is inconsistent') END;
 
           SELECT CASE WHEN
             json_type(NEW.request_json, '$.budget.max_tokens') IS NOT 'integer'

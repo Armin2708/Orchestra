@@ -112,7 +112,24 @@ interface EntryOverrides {
   estimatedTokens?: number
   characterCount?: number
   redactionState?: string
+  sourceRangeJson?: string
   contentSha256?: string
+}
+
+function repositoryProvenanceJson(
+  overrides: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    repository_key: 'agentboard',
+    base_commit_sha: digest('a').slice(0, 40),
+    worktree_state_hash: null,
+    relative_root: '.',
+    adapter_id: 'migration-test',
+    adapter_version: '1.0.0',
+    adapter_index_commit_sha: null,
+    observed_at: at,
+    ...overrides,
+  })
 }
 
 function targets(boardId: number, overrides: Record<string, unknown> = {}): string {
@@ -167,7 +184,7 @@ function insertSource(
     ingestState: overrides.ingestState ?? 'active',
     accessScopeJson: overrides.accessScopeJson ?? JSON.stringify({ kind: 'board' }),
     targetsJson: overrides.targetsJson ?? targets(boardId),
-    provenanceJson: overrides.provenanceJson ?? '{}',
+    provenanceJson: overrides.provenanceJson ?? repositoryProvenanceJson(),
     at,
   })
 }
@@ -183,6 +200,8 @@ function insertChunk(
     contentSha256?: string
     characterCount?: number
     byteCount?: number
+    sourceRangeJson?: string
+    symbolJson?: string
   } = {},
 ): void {
   const value = overrides.content ?? content
@@ -191,7 +210,7 @@ function insertChunk(
       board_id, id, source_id, ordinal, content, content_sha256,
       character_count, byte_count, estimated_tokens, source_range_json,
       symbol_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
   `).run(
     boardId,
     overrides.id ?? chunkId,
@@ -201,7 +220,8 @@ function insertChunk(
     overrides.contentSha256 ?? contentHash,
     overrides.characterCount ?? value.length,
     overrides.byteCount ?? Buffer.byteLength(value, 'utf8'),
-    sourceRangeJson,
+    overrides.sourceRangeJson ?? sourceRangeJson,
+    overrides.symbolJson ?? null,
     at,
   )
 }
@@ -331,7 +351,7 @@ function insertEntry(
     overrides.estimatedTokens ?? 1,
     overrides.characterCount ?? content.length,
     overrides.redactionState ?? 'none',
-    sourceRangeJson,
+    overrides.sourceRangeJson ?? sourceRangeJson,
     overrides.contentSha256 ?? contentHash,
   )
 }
@@ -875,6 +895,447 @@ describe('knowledge persistence migration 018', () => {
     db.close()
   })
 
+  it('rejects non-exact direct-SQL source and build request shapes atomically', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'exact-json-shapes')
+    const unsafeWorkspaceId = ' unsafe-workspace '
+    const nonAsciiWhitespaceWorkspaceId = '\u00a0unsafe-workspace\u00a0'
+    const insertUnsafeWorkspace = db.prepare(`
+      INSERT INTO workspaces (
+        id, board_id, name, kind, root_path, status
+      ) VALUES (?, ?, 'unsafe workspace', 'shared', '/tmp/unsafe', 'active')
+    `)
+    insertUnsafeWorkspace.run(unsafeWorkspaceId, boardId)
+    insertUnsafeWorkspace.run(nonAsciiWhitespaceWorkspaceId, boardId)
+    const completeProvenance = repositoryProvenanceJson()
+    const completeTargets = JSON.parse(targets(boardId)) as Record<string, unknown>
+    const sourceAttempts: SourceOverrides[] = [
+      {
+        accessScopeJson: JSON.stringify({ kind: 'board', extra: null }),
+      },
+      {
+        accessScopeJson: '{"kind":"board","kind":"board"}',
+      },
+      {
+        accessScopeJson: JSON.stringify({
+          kind: 'workspace',
+          workspace_id: unsafeWorkspaceId,
+        }),
+        targetsJson: targets(boardId, {
+          workspace_id: unsafeWorkspaceId,
+        }),
+      },
+      {
+        accessScopeJson: JSON.stringify({
+          kind: 'workspace',
+          workspace_id: nonAsciiWhitespaceWorkspaceId,
+        }),
+        targetsJson: targets(boardId, {
+          workspace_id: nonAsciiWhitespaceWorkspaceId,
+        }),
+      },
+      {
+        targetsJson: JSON.stringify({ board_id: boardId }),
+      },
+      {
+        targetsJson: JSON.stringify({ ...completeTargets, extra: null }),
+      },
+      {
+        targetsJson: targets(boardId).replace(
+          `"board_id":${boardId}`,
+          `"board_id":${boardId},"board_id":${boardId}`,
+        ),
+      },
+      {
+        targetsJson: targets(boardId, { delivery_report_id: 1 }),
+      },
+      {
+        targetsJson: targets(boardId, { delivery_report_id: '' }),
+      },
+      {
+        provenanceJson: '{}',
+      },
+      {
+        provenanceJson: JSON.stringify({
+          ...JSON.parse(completeProvenance),
+          extra: null,
+        }),
+      },
+      {
+        provenanceJson: completeProvenance.replace(
+          '"repository_key":"agentboard"',
+          '"repository_key":"agentboard","repository_key":"agentboard"',
+        ),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({ repository_key: 1 }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          repository_key: 'bad\u0001key',
+        }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          repository_key: '\u00a0bad-key\u00a0',
+        }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          base_commit_sha: digest('A').slice(0, 40),
+        }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          worktree_state_hash: 'abc',
+        }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({ relative_root: '..' }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({ adapter_id: ' bad ' }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          adapter_index_commit_sha: digest('A').slice(0, 40),
+        }),
+      },
+      {
+        provenanceJson: repositoryProvenanceJson({
+          observed_at: '2026-07-26T24:00:00.000Z',
+        }),
+      },
+    ]
+
+    for (const attempt of sourceAttempts) {
+      expect(() => insertSource(db, boardId, attempt)).toThrow()
+    }
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM knowledge_sources WHERE board_id=?
+    `).get(boardId)).toEqual({ count: 0 })
+
+    const completeRequestJson = requestJson(boardId)
+    const completeRequest = JSON.parse(completeRequestJson) as Record<string, unknown>
+    const withoutSelectionHash = { ...completeRequest }
+    delete withoutSelectionHash.selection_request_sha256
+    const requestWithSection = JSON.stringify({
+      ...completeRequest,
+      budget: {
+        max_tokens: 10,
+        max_characters: 100,
+        sections: {
+          relevant_code: { max_tokens: 1, max_characters: 1 },
+        },
+      },
+    })
+    const requestAttempts = [
+      JSON.stringify(withoutSelectionHash),
+      JSON.stringify({ ...completeRequest, extra: null }),
+      completeRequestJson.replace(
+        `"board_id":${boardId}`,
+        `"board_id":${boardId},"board_id":${boardId}`,
+      ),
+      JSON.stringify({
+        ...completeRequest,
+        access_scope: { kind: 'board', extra: null },
+      }),
+      requestJson(
+        boardId,
+        { workspace_id: unsafeWorkspaceId },
+        { kind: 'workspace', workspace_id: unsafeWorkspaceId },
+      ),
+      requestJson(
+        boardId,
+        { workspace_id: nonAsciiWhitespaceWorkspaceId },
+        {
+          kind: 'workspace',
+          workspace_id: nonAsciiWhitespaceWorkspaceId,
+        },
+      ),
+      completeRequestJson.replace(
+        '"access_scope":{"kind":"board"}',
+        '"access_scope":{"kind":"board","kind":"board"}',
+      ),
+      JSON.stringify({
+        ...completeRequest,
+        targets: { board_id: boardId },
+      }),
+      JSON.stringify({
+        ...completeRequest,
+        targets: { ...completeTargets, extra: null },
+      }),
+      completeRequestJson.replace(
+        `"targets":{"board_id":${boardId}`,
+        `"targets":{"board_id":${boardId},"board_id":${boardId}`,
+      ),
+      JSON.stringify({
+        ...completeRequest,
+        targets: {
+          ...completeTargets,
+          delivery_report_id: 1,
+        },
+      }),
+      JSON.stringify({
+        ...completeRequest,
+        targets: {
+          ...completeTargets,
+          delivery_report_id: '',
+        },
+      }),
+      JSON.stringify({
+        ...completeRequest,
+        budget: {
+          ...completeRequest.budget as Record<string, unknown>,
+          extra: null,
+        },
+      }),
+      completeRequestJson.replace(
+        '"budget":{"max_tokens":10',
+        '"budget":{"max_tokens":10,"max_tokens":10',
+      ),
+      JSON.stringify({
+        ...completeRequest,
+        budget: {
+          max_tokens: 10,
+          max_characters: 100,
+          sections: {
+            unknown: { max_tokens: 1, max_characters: 1 },
+          },
+        },
+      }),
+      requestWithSection.replace(
+        '"sections":{"relevant_code":{"max_tokens":1,"max_characters":1}}',
+        '"sections":{"relevant_code":{"max_tokens":1,"max_characters":1},'
+          + '"relevant_code":{"max_tokens":1,"max_characters":1}}',
+      ),
+      JSON.stringify({
+        ...completeRequest,
+        budget: {
+          max_tokens: 10,
+          max_characters: 100,
+          sections: {
+            relevant_code: { max_tokens: 1 },
+          },
+        },
+      }),
+      JSON.stringify({
+        ...completeRequest,
+        selection_request_sha256: digest('A'),
+      }),
+      JSON.stringify({
+        ...completeRequest,
+        selection_request_sha256: 'abc',
+      }),
+    ]
+    const emptyUsage = JSON.stringify({
+      used_tokens: 0,
+      used_characters: 0,
+      sections: {},
+    })
+
+    for (const [index, request] of requestAttempts.entries()) {
+      const identity = String((index % 9) + 1)
+      expect(() => insertBuild(db, boardId, {
+        id: `cb_${identity.repeat(64)}`,
+        requestJson: request,
+        requestFingerprint: identity.repeat(64),
+        sourceSetJson: '[]',
+        sourceSetFingerprint: identity.repeat(64),
+        manifestFingerprint: identity.repeat(64),
+        usageJson: emptyUsage,
+        sourceCount: 0,
+        entryCount: 0,
+        status: 'failed',
+      })).toThrow()
+    }
+
+    const completeSourceSet = JSON.parse(sourceSetJson()) as Array<Record<string, unknown>>
+    const sourceSetEntry = completeSourceSet[0]
+    const completeUsage = JSON.stringify({
+      used_tokens: 1,
+      used_characters: content.length,
+      sections: {
+        relevant_code: {
+          used_tokens: 1,
+          used_characters: content.length,
+        },
+      },
+    })
+    const duplicateUsageSection = `{"used_tokens":2,`
+      + `"used_characters":${content.length * 2},"sections":{`
+      + `"relevant_code":{"used_tokens":1,"used_characters":${content.length}},`
+      + `"relevant_code":{"used_tokens":1,"used_characters":${content.length}}}}`
+    const oversizedSourceSet = Array.from({ length: 513 }, (_, index) => ({
+      ...sourceSetEntry,
+      source_id: `ks_${index.toString(16).padStart(64, '0')}`,
+    }))
+    const evidenceAttempts: BuildOverrides[] = [
+      {
+        usageJson: JSON.stringify({
+          ...JSON.parse(completeUsage),
+          extra: null,
+        }),
+      },
+      {
+        usageJson: completeUsage.replace(
+          '"used_tokens":1',
+          '"used_tokens":1,"used_tokens":1',
+        ),
+      },
+      {
+        usageJson: duplicateUsageSection,
+      },
+      {
+        sourceSetJson: JSON.stringify([{
+          ...sourceSetEntry,
+          extra: null,
+        }]),
+      },
+      {
+        sourceSetJson: sourceSetJson().replace(
+          `"source_id":"${sourceId}"`,
+          `"source_id":"${sourceId}","source_id":"${sourceId}"`,
+        ),
+      },
+      {
+        sourceSetJson: JSON.stringify([
+          { ...sourceSetEntry, source_id: `ks_${digest('2')}` },
+          { ...sourceSetEntry, source_id: `ks_${digest('1')}` },
+        ]),
+        sourceCount: 2,
+      },
+      {
+        sourceSetJson: JSON.stringify(oversizedSourceSet),
+        sourceCount: oversizedSourceSet.length,
+      },
+      {
+        entryCount: 513,
+      },
+    ]
+    for (const attempt of evidenceAttempts) {
+      expect(() => insertBuild(db, boardId, attempt)).toThrow()
+    }
+
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM context_builds WHERE board_id=?
+    `).get(boardId)).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects non-exact chunk and manifest JSON evidence atomically', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'exact-evidence-json')
+    insertSource(db, boardId)
+    const completeRange = JSON.parse(sourceRangeJson) as Record<string, unknown>
+    const completeSymbol = {
+      language: 'typescript',
+      qualified_name: 'agentboard.knowledge',
+      symbol_kind: 'module',
+      signature_sha256: null,
+    }
+    const chunkAttempts: Array<{
+      sourceRangeJson?: string
+      symbolJson?: string
+    }> = [
+      {
+        sourceRangeJson: JSON.stringify({
+          start_line: 1,
+          end_line: 1,
+          start_byte: 0,
+        }),
+      },
+      {
+        sourceRangeJson: JSON.stringify({ ...completeRange, extra: null }),
+      },
+      {
+        sourceRangeJson: sourceRangeJson.replace(
+          '"start_line":1',
+          '"start_line":1,"start_line":1',
+        ),
+      },
+      {
+        sourceRangeJson: JSON.stringify({
+          ...completeRange,
+          end_byte: 0,
+        }),
+      },
+      {
+        symbolJson: JSON.stringify({
+          language: completeSymbol.language,
+          qualified_name: completeSymbol.qualified_name,
+          symbol_kind: completeSymbol.symbol_kind,
+        }),
+      },
+      {
+        symbolJson: JSON.stringify({ ...completeSymbol, extra: null }),
+      },
+      {
+        symbolJson: JSON.stringify(completeSymbol).replace(
+          '"language":"typescript"',
+          '"language":"typescript","language":"typescript"',
+        ),
+      },
+    ]
+    for (const attempt of chunkAttempts) {
+      expect(() => insertChunk(db, boardId, attempt)).toThrow()
+    }
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM knowledge_chunks WHERE board_id=?
+    `).get(boardId)).toEqual({ count: 0 })
+
+    insertChunk(db, boardId)
+    insertBuild(db, boardId)
+    insertBuildSource(db, boardId)
+    const completeScore = JSON.parse(scoreComponentsJson) as Record<string, unknown>
+    const scoreAttempts = [
+      JSON.stringify({ ...completeScore, extra: 0 }),
+      scoreComponentsJson.replace(
+        '"authority_micros":1',
+        '"authority_micros":1,"authority_micros":1',
+      ),
+    ]
+    for (const score of scoreAttempts) {
+      expect(() => insertEntry(db, boardId, buildId, {
+        scoreComponentsJson: score,
+      })).toThrow()
+    }
+
+    const malformedRanges = [
+      JSON.stringify({
+        start_line: 1,
+        end_line: 1,
+        start_byte: 0,
+      }),
+      JSON.stringify({ ...completeRange, extra: null }),
+      sourceRangeJson.replace(
+        '"start_line":1',
+        '"start_line":1,"start_line":1',
+      ),
+    ]
+    db.pragma('ignore_check_constraints = ON')
+    for (const [index, malformedRange] of malformedRanges.entries()) {
+      insertChunk(db, boardId, {
+        id: `kc_${String(index + 5).repeat(64)}`,
+        ordinal: index + 1,
+        sourceRangeJson: malformedRange,
+      })
+    }
+    db.pragma('ignore_check_constraints = OFF')
+
+    for (const [index, malformedRange] of malformedRanges.entries()) {
+      expect(() => insertEntry(db, boardId, buildId, {
+        chunkId: `kc_${String(index + 5).repeat(64)}`,
+        sourceRangeJson: malformedRange,
+      })).toThrow()
+    }
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM context_build_entries
+      WHERE board_id=? AND context_build_id=?
+    `).get(boardId, buildId)).toEqual({ count: 0 })
+    db.close()
+  })
+
   it('intentionally leaves delivery report existence to fail-closed public reads', () => {
     const db = openDb(':memory:')
     const boardId = insertBoard(db, 'delivery-exception')
@@ -966,7 +1427,7 @@ describe('knowledge persistence migration 018', () => {
     db.close()
   })
 
-  it('enforces direct-SQL size and budget boundaries', () => {
+  it('enforces direct-SQL semantic, size, and budget boundaries', () => {
     const db = openDb(':memory:')
     const boardId = insertBoard(db, 'size-budget')
     insertSource(db, boardId)
@@ -1010,7 +1471,7 @@ describe('knowledge persistence migration 018', () => {
     expect(() => insertSource(db, boardId, {
       id: `ks_${digest('8')}`,
       provenanceJson: atLimit,
-    })).not.toThrow()
+    })).toThrow(/CHECK/)
     expect(() => insertSource(db, boardId, {
       id: `ks_${digest('9')}`,
       provenanceJson: overLimit,
