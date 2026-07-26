@@ -1121,6 +1121,35 @@ describe('knowledge persistence migration 018', () => {
       }),
       JSON.stringify({
         ...completeRequest,
+        budget: {
+          max_tokens: 10,
+          max_characters: 100,
+          sections: {
+            relevant_code: JSON.stringify({
+              max_tokens: 1,
+              max_characters: 1,
+            }),
+          },
+        },
+      }),
+      completeRequestJson.replace(
+        '"max_tokens":10',
+        '"max_tokens":-0',
+      ),
+      completeRequestJson.replace(
+        '"max_characters":100',
+        '"max_characters":-0',
+      ),
+      requestWithSection.replace(
+        '"relevant_code":{"max_tokens":1',
+        '"relevant_code":{"max_tokens":-0',
+      ),
+      requestWithSection.replace(
+        '"max_characters":1',
+        '"max_characters":-0',
+      ),
+      JSON.stringify({
+        ...completeRequest,
         selection_request_sha256: digest('A'),
       }),
       JSON.stringify({
@@ -1187,10 +1216,49 @@ describe('knowledge persistence migration 018', () => {
         usageJson: duplicateUsageSection,
       },
       {
+        usageJson: JSON.stringify({
+          used_tokens: 1,
+          used_characters: content.length,
+          sections: {
+            relevant_code: JSON.stringify({
+              used_tokens: 1,
+              used_characters: content.length,
+            }),
+          },
+        }),
+      },
+      {
+        usageJson: emptyUsage.replace(
+          '"used_tokens":0',
+          '"used_tokens":-0',
+        ),
+      },
+      {
+        usageJson: emptyUsage.replace(
+          '"used_characters":0',
+          '"used_characters":-0',
+        ),
+      },
+      {
+        usageJson: completeUsage.replace(
+          '"relevant_code":{"used_tokens":1',
+          '"relevant_code":{"used_tokens":-0',
+        ),
+      },
+      {
+        usageJson: completeUsage.replace(
+          `"used_characters":${content.length}}`,
+          '"used_characters":-0}',
+        ),
+      },
+      {
         sourceSetJson: JSON.stringify([{
           ...sourceSetEntry,
           extra: null,
         }]),
+      },
+      {
+        sourceSetJson: JSON.stringify([JSON.stringify(sourceSetEntry)]),
       },
       {
         sourceSetJson: sourceSetJson().replace(
@@ -1261,6 +1329,12 @@ describe('knowledge persistence migration 018', () => {
         }),
       },
       {
+        sourceRangeJson: sourceRangeJson.replace(
+          '"start_byte":0',
+          '"start_byte":-0',
+        ),
+      },
+      {
         symbolJson: JSON.stringify({
           language: completeSymbol.language,
           qualified_name: completeSymbol.qualified_name,
@@ -1288,16 +1362,37 @@ describe('knowledge persistence migration 018', () => {
     insertBuild(db, boardId)
     insertBuildSource(db, boardId)
     const completeScore = JSON.parse(scoreComponentsJson) as Record<string, unknown>
-    const scoreAttempts = [
-      JSON.stringify({ ...completeScore, extra: 0 }),
-      scoreComponentsJson.replace(
-        '"authority_micros":1',
-        '"authority_micros":1,"authority_micros":1',
-      ),
+    const scoreAttempts: Array<{
+      scoreComponentsJson: string
+      scoreMicros?: number
+    }> = [
+      {
+        scoreComponentsJson: JSON.stringify({ ...completeScore, extra: 0 }),
+      },
+      {
+        scoreComponentsJson: scoreComponentsJson.replace(
+          '"authority_micros":1',
+          '"authority_micros":1,"authority_micros":1',
+        ),
+      },
+      ...[
+        'authority_micros',
+        'relevance_micros',
+        'freshness_micros',
+        'recency_micros',
+        'contract_micros',
+        'pin_micros',
+      ].map((field) => ({
+        scoreComponentsJson: scoreComponentsJson.replace(
+          `"${field}":${field === 'authority_micros' ? 1 : 0}`,
+          `"${field}":-0`,
+        ),
+        scoreMicros: field === 'authority_micros' ? 0 : 1,
+      })),
     ]
     for (const score of scoreAttempts) {
       expect(() => insertEntry(db, boardId, buildId, {
-        scoreComponentsJson: score,
+        ...score,
       })).toThrow()
     }
 
@@ -1311,6 +1406,10 @@ describe('knowledge persistence migration 018', () => {
       sourceRangeJson.replace(
         '"start_line":1',
         '"start_line":1,"start_line":1',
+      ),
+      sourceRangeJson.replace(
+        '"start_byte":0',
+        '"start_byte":-0',
       ),
     ]
     db.pragma('ignore_check_constraints = ON')

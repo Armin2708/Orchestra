@@ -71,10 +71,10 @@ const KNOWLEDGE_SCHEMA_TRIGGERS = Object.freeze([
 ])
 const KNOWLEDGE_TABLE_SCHEMA_HASHES: Readonly<Record<string, string>> = Object.freeze({
   knowledge_sources: '369e581e96f74fd5003882f42c779e6c2fdaf8db70d39a9df6de6628466da6e7',
-  knowledge_chunks: '3853ae9a56e4927d39cd661e62ed7fd52fc50b5f72aae781c12e77d7563dac02',
-  context_builds: 'aa784e69c1c871046449163bced5a4df47954d8768b6ffba10343b1a588b031e',
+  knowledge_chunks: '704594fdb9c631461d55171fff7deb5286dc79fb30a3f41ddc5de1b7d9d9ceca',
+  context_builds: '203184a78bbbe6501098caaea758b08f3e2aab7fa9ce5d940cdf90261d5a80c2',
   context_build_sources: '87b7e413a8fcc3f3621643e1a0c931b5da6f1d0518647282d538cf78102454e0',
-  context_build_entries: 'cf17f6b347193090a160a481e115730032b053b5bd2d1cc3014851aac92f7f4a',
+  context_build_entries: 'a202e71e7d7391da4c17e6ce6e231ba176283f4a206cda03423806c28dc71d11',
   context_uses: '4539beb67a5e99e444fe5a6ff9c72d8f65457c875e968de8fdb45b14b9810563',
 })
 
@@ -4390,6 +4390,7 @@ const migrations: Migration[] = [
                 '$.start_byte',
                 '$.end_byte'
               )='{}'
+              AND source_range_json -> '$.start_byte' IS NOT '-0'
               AND (
                 (
                   json_type(source_range_json, '$.start_line') IS 'null'
@@ -4768,6 +4769,8 @@ const migrations: Migration[] = [
               AND json_type(
                 request_json, '$.budget.max_characters'
               ) IS 'integer'
+              AND request_json -> '$.budget.max_tokens' IS NOT '-0'
+              AND request_json -> '$.budget.max_characters' IS NOT '-0'
               AND json_type(
                 request_json, '$.budget.sections'
               ) IS 'object'
@@ -4811,6 +4814,8 @@ const migrations: Migration[] = [
               AND json_type(
                 usage_json, '$.used_characters'
               ) IS 'integer'
+              AND usage_json -> '$.used_tokens' IS NOT '-0'
+              AND usage_json -> '$.used_characters' IS NOT '-0'
               AND json_type(usage_json, '$.sections') IS 'object'
               AND json_remove(
                 json_extract(usage_json, '$.sections'),
@@ -4900,7 +4905,13 @@ const migrations: Migration[] = [
                 '$.recency_micros',
                 '$.contract_micros',
                 '$.pin_micros'
-              )='{}'),
+              )='{}'
+              AND score_components_json -> '$.authority_micros' IS NOT '-0'
+              AND score_components_json -> '$.relevance_micros' IS NOT '-0'
+              AND score_components_json -> '$.freshness_micros' IS NOT '-0'
+              AND score_components_json -> '$.recency_micros' IS NOT '-0'
+              AND score_components_json -> '$.contract_micros' IS NOT '-0'
+              AND score_components_json -> '$.pin_micros' IS NOT '-0'),
           score_micros INTEGER NOT NULL,
           rendering TEXT NOT NULL
             CHECK(rendering IN ('full', 'truncated', 'summary', 'none')),
@@ -4933,6 +4944,7 @@ const migrations: Migration[] = [
                 '$.start_byte',
                 '$.end_byte'
               )='{}'
+              AND source_range_json -> '$.start_byte' IS NOT '-0'
               AND (
                 (
                   json_type(source_range_json, '$.start_line') IS 'null'
@@ -5653,7 +5665,7 @@ const migrations: Migration[] = [
           SELECT CASE WHEN
             EXISTS (
               SELECT 1 FROM json_each(NEW.source_set_json) source
-              WHERE json_type(source.value) IS NOT 'object'
+              WHERE source.type IS NOT 'object'
                 OR json_remove(
                   source.value,
                   '$.source_id',
@@ -5745,7 +5757,7 @@ const migrations: Migration[] = [
                 'relevant_code', 'recent_changes', 'accepted_decisions',
                 'verified_deliveries', 'working_memory_delta'
               )
-                OR json_type(budget_section.value) IS NOT 'object'
+                OR budget_section.type IS NOT 'object'
                 OR (
                   SELECT COUNT(*) FROM json_each(budget_section.value)
                 )!=2
@@ -5754,6 +5766,7 @@ const migrations: Migration[] = [
                   WHERE field.key NOT IN ('max_tokens', 'max_characters')
                 )
                 OR json_type(budget_section.value, '$.max_tokens') IS NOT 'integer'
+                OR budget_section.value -> '$.max_tokens' IS '-0'
                 OR json_extract(budget_section.value, '$.max_tokens')
                   NOT BETWEEN 0 AND json_extract(
                     NEW.request_json, '$.budget.max_tokens'
@@ -5761,6 +5774,7 @@ const migrations: Migration[] = [
                 OR json_type(
                   budget_section.value, '$.max_characters'
                 ) IS NOT 'integer'
+                OR budget_section.value -> '$.max_characters' IS '-0'
                 OR json_extract(budget_section.value, '$.max_characters')
                   NOT BETWEEN 0 AND json_extract(
                     NEW.request_json, '$.budget.max_characters'
@@ -5783,7 +5797,7 @@ const migrations: Migration[] = [
                 'relevant_code', 'recent_changes', 'accepted_decisions',
                 'verified_deliveries', 'working_memory_delta'
               )
-                OR json_type(usage_section.value) IS NOT 'object'
+                OR usage_section.type IS NOT 'object'
                 OR (
                   SELECT COUNT(*) FROM json_each(usage_section.value)
                 )!=2
@@ -5792,11 +5806,13 @@ const migrations: Migration[] = [
                   WHERE field.key NOT IN ('used_tokens', 'used_characters')
                 )
                 OR json_type(usage_section.value, '$.used_tokens') IS NOT 'integer'
+                OR usage_section.value -> '$.used_tokens' IS '-0'
                 OR json_extract(usage_section.value, '$.used_tokens')
                   NOT BETWEEN 0 AND 10000000
                 OR json_type(
                   usage_section.value, '$.used_characters'
                 ) IS NOT 'integer'
+                OR usage_section.value -> '$.used_characters' IS '-0'
                 OR json_extract(usage_section.value, '$.used_characters')
                   NOT BETWEEN 0 AND 50000000
                 OR EXISTS (
