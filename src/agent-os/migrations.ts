@@ -29,6 +29,98 @@ const metadataRecord = (serialized: string): Record<string, unknown> => {
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
+const KNOWLEDGE_SCHEMA_TABLES = Object.freeze([
+  'knowledge_sources',
+  'knowledge_chunks',
+  'context_builds',
+  'context_build_sources',
+  'context_build_entries',
+  'context_uses',
+])
+const KNOWLEDGE_SCHEMA_INDEXES = Object.freeze([
+  'idx_context_build_entries_selected',
+  'idx_context_build_sources_source',
+  'idx_context_builds_status',
+  'idx_context_uses_build',
+  'idx_context_uses_job',
+  'idx_knowledge_chunks_source',
+  'idx_knowledge_sources_locator',
+  'idx_knowledge_sources_state',
+])
+const KNOWLEDGE_SCHEMA_TRIGGERS = Object.freeze([
+  'context_build_entries_delete',
+  'context_build_entries_immutable',
+  'context_build_entries_insert',
+  'context_build_sources_delete',
+  'context_build_sources_immutable',
+  'context_build_sources_insert',
+  'context_builds_delete',
+  'context_builds_identity_immutable',
+  'context_builds_scope_insert',
+  'context_builds_status_transition',
+  'context_uses_delete',
+  'context_uses_finish',
+  'context_uses_insert',
+  'context_uses_mark_build_used',
+  'knowledge_chunks_delete',
+  'knowledge_chunks_immutable',
+  'knowledge_chunks_insert',
+  'knowledge_sources_delete',
+  'knowledge_sources_immutable',
+  'knowledge_sources_scope_insert',
+])
+const KNOWLEDGE_TABLE_SCHEMA_HASHES: Readonly<Record<string, string>> = Object.freeze({
+  knowledge_sources: '9038096de8679e4fd831520a99919c82f740a270c76c38b7ddf739d2eb47eb75',
+  knowledge_chunks: '289d0fa4dede520fd9ac85998a73b7f41ced4155ad82d738b055146fd502fb75',
+  context_builds: 'd5264b5443d3d4afde9a9242a6349c9c36716c351beb68fcd8f50662ee636b9c',
+  context_build_sources: '87b7e413a8fcc3f3621643e1a0c931b5da6f1d0518647282d538cf78102454e0',
+  context_build_entries: '81ba4902d42da7e33c24133a6ca00074cfb9eebb6ecbd583076ec759caf9329b',
+  context_uses: '4539beb67a5e99e444fe5a6ff9c72d8f65457c875e968de8fdb45b14b9810563',
+})
+
+const normalizedSchemaSql = (value: string): string => value.trim()
+
+const assertKnowledgeSchemaCompatible = (db: Database.Database): void => {
+  const placeholders = KNOWLEDGE_SCHEMA_TABLES.map(() => '?').join(', ')
+  const objects = db.prepare(`SELECT type, name, tbl_name, sql
+    FROM sqlite_master
+    WHERE tbl_name IN (${placeholders})
+      AND type IN ('table', 'index', 'trigger')
+    ORDER BY type, name`).all(...KNOWLEDGE_SCHEMA_TABLES) as Array<{
+      type: 'table' | 'index' | 'trigger'
+      name: string
+      tbl_name: string
+      sql: string | null
+    }>
+  const tableRows = objects.filter((object) => object.type === 'table')
+  const tableNames = tableRows.map((object) => object.name)
+  const indexes = objects
+    .filter((object) => object.type === 'index' && object.sql !== null)
+    .map((object) => object.name)
+  const triggers = objects
+    .filter((object) => object.type === 'trigger')
+    .map((object) => object.name)
+  const exactNames = (actual: readonly string[], expected: readonly string[]): boolean =>
+    actual.length === expected.length
+      && actual.every((name, index) => name === expected[index])
+  if (
+    !exactNames(tableNames, [...KNOWLEDGE_SCHEMA_TABLES].sort())
+    || !exactNames(indexes, KNOWLEDGE_SCHEMA_INDEXES)
+    || !exactNames(triggers, KNOWLEDGE_SCHEMA_TRIGGERS)
+  ) {
+    throw new Error(
+      'migration 018-knowledge-persistence found an incompatible knowledge schema',
+    )
+  }
+  for (const table of tableRows) {
+    const actualHash = sha256(normalizedSchemaSql(table.sql ?? ''))
+    if (actualHash !== KNOWLEDGE_TABLE_SCHEMA_HASHES[table.name]) {
+      throw new Error(
+        'migration 018-knowledge-persistence found an incompatible knowledge schema',
+      )
+    }
+  }
+}
 const MALFORMED_TRANSCRIPT_TOMBSTONE = `${JSON.stringify({
   redacted: true,
   reason: 'malformed_legacy_transcript',
@@ -3855,7 +3947,7 @@ const migrations: Migration[] = [
 
       db.exec(`
         CREATE TABLE IF NOT EXISTS knowledge_sources (
-          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
           id TEXT NOT NULL
             CHECK(length(id)=67
               AND substr(id, 1, 3)='ks_'
@@ -3891,15 +3983,18 @@ const migrations: Migration[] = [
           access_scope_json TEXT NOT NULL
             CHECK(json_valid(access_scope_json)
               AND json(access_scope_json)=access_scope_json
-              AND json_type(access_scope_json)='object'),
+              AND json_type(access_scope_json)='object'
+              AND length(CAST(access_scope_json AS BLOB))<=8000000),
           targets_json TEXT NOT NULL
             CHECK(json_valid(targets_json)
               AND json(targets_json)=targets_json
-              AND json_type(targets_json)='object'),
+              AND json_type(targets_json)='object'
+              AND length(CAST(targets_json AS BLOB))<=8000000),
           provenance_json TEXT NOT NULL
             CHECK(json_valid(provenance_json)
               AND json(provenance_json)=provenance_json
-              AND json_type(provenance_json)='object'),
+              AND json_type(provenance_json)='object'
+              AND length(CAST(provenance_json AS BLOB))<=8000000),
           created_at TEXT NOT NULL CHECK(length(created_at)>0),
           updated_at TEXT NOT NULL CHECK(length(updated_at)>0),
           PRIMARY KEY(board_id, id),
@@ -3922,19 +4017,24 @@ const migrations: Migration[] = [
           content_sha256 TEXT NOT NULL
             CHECK(length(content_sha256)=64
               AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
-          character_count INTEGER NOT NULL CHECK(character_count>=0),
+          character_count INTEGER NOT NULL
+            CHECK(character_count BETWEEN 0 AND 2000000),
           byte_count INTEGER NOT NULL
-            CHECK(byte_count>=0 AND byte_count=length(CAST(content AS BLOB))),
-          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
+            CHECK(byte_count BETWEEN 0 AND 8000000
+              AND byte_count=length(CAST(content AS BLOB))),
+          estimated_tokens INTEGER NOT NULL
+            CHECK(estimated_tokens BETWEEN 0 AND 10000000),
           source_range_json TEXT NOT NULL
             CHECK(json_valid(source_range_json)
               AND json(source_range_json)=source_range_json
-              AND json_type(source_range_json)='object'),
+              AND json_type(source_range_json)='object'
+              AND length(CAST(source_range_json AS BLOB))<=8000000),
           symbol_json TEXT
             CHECK(symbol_json IS NULL OR (
               json_valid(symbol_json)
               AND json(symbol_json)=symbol_json
               AND json_type(symbol_json)='object'
+              AND length(CAST(symbol_json AS BLOB))<=8000000
             )),
           created_at TEXT NOT NULL CHECK(length(created_at)>0),
           PRIMARY KEY(board_id, id),
@@ -3953,14 +4053,16 @@ const migrations: Migration[] = [
           request_json TEXT NOT NULL
             CHECK(json_valid(request_json)
               AND json(request_json)=request_json
-              AND json_type(request_json)='object'),
+              AND json_type(request_json)='object'
+              AND length(CAST(request_json AS BLOB))<=8000000),
           request_fingerprint TEXT NOT NULL
             CHECK(length(request_fingerprint)=64
               AND request_fingerprint NOT GLOB '*[^0-9a-f]*'),
           source_set_json TEXT NOT NULL
             CHECK(json_valid(source_set_json)
               AND json(source_set_json)=source_set_json
-              AND json_type(source_set_json)='array'),
+              AND json_type(source_set_json)='array'
+              AND length(CAST(source_set_json AS BLOB))<=8000000),
           source_set_fingerprint TEXT NOT NULL
             CHECK(length(source_set_fingerprint)=64
               AND source_set_fingerprint NOT GLOB '*[^0-9a-f]*'),
@@ -3970,7 +4072,8 @@ const migrations: Migration[] = [
           usage_json TEXT NOT NULL
             CHECK(json_valid(usage_json)
               AND json(usage_json)=usage_json
-              AND json_type(usage_json)='object'),
+              AND json_type(usage_json)='object'
+              AND length(CAST(usage_json AS BLOB))<=8000000),
           source_count INTEGER NOT NULL CHECK(source_count>=0),
           entry_count INTEGER NOT NULL CHECK(entry_count>=0),
           status TEXT NOT NULL
@@ -4036,11 +4139,13 @@ const migrations: Migration[] = [
           score_components_json TEXT NOT NULL
             CHECK(json_valid(score_components_json)
               AND json(score_components_json)=score_components_json
-              AND json_type(score_components_json)='object'),
+              AND json_type(score_components_json)='object'
+              AND length(CAST(score_components_json AS BLOB))<=8000000),
           score_micros INTEGER NOT NULL,
           rendering TEXT NOT NULL
             CHECK(rendering IN ('full', 'truncated', 'summary', 'none')),
-          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
+          estimated_tokens INTEGER NOT NULL
+            CHECK(estimated_tokens BETWEEN 0 AND 10000000),
           character_count INTEGER NOT NULL CHECK(character_count>=0),
           source_kind TEXT NOT NULL
             CHECK(source_kind IN (
@@ -4059,11 +4164,13 @@ const migrations: Migration[] = [
           source_range_json TEXT NOT NULL
             CHECK(json_valid(source_range_json)
               AND json(source_range_json)=source_range_json
-              AND json_type(source_range_json)='object'),
+              AND json_type(source_range_json)='object'
+              AND length(CAST(source_range_json AS BLOB))<=8000000),
           content_sha256 TEXT NOT NULL
             CHECK(length(content_sha256)=64
               AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
           PRIMARY KEY(board_id, context_build_id, candidate_ordinal),
+          UNIQUE(board_id, context_build_id, chunk_id),
           FOREIGN KEY(board_id, context_build_id)
             REFERENCES context_builds(board_id, id) ON DELETE RESTRICT,
           CHECK(
@@ -4090,12 +4197,12 @@ const migrations: Migration[] = [
           ),
           CHECK(
             score_micros BETWEEN -1000000000000 AND 1000000000000
-            AND json_type(score_components_json, '$.authority_micros')='integer'
-            AND json_type(score_components_json, '$.relevance_micros')='integer'
-            AND json_type(score_components_json, '$.freshness_micros')='integer'
-            AND json_type(score_components_json, '$.recency_micros')='integer'
-            AND json_type(score_components_json, '$.contract_micros')='integer'
-            AND json_type(score_components_json, '$.pin_micros')='integer'
+            AND json_type(score_components_json, '$.authority_micros') IS 'integer'
+            AND json_type(score_components_json, '$.relevance_micros') IS 'integer'
+            AND json_type(score_components_json, '$.freshness_micros') IS 'integer'
+            AND json_type(score_components_json, '$.recency_micros') IS 'integer'
+            AND json_type(score_components_json, '$.contract_micros') IS 'integer'
+            AND json_type(score_components_json, '$.pin_micros') IS 'integer'
             AND json_extract(score_components_json, '$.authority_micros')
               BETWEEN -1000000000000 AND 1000000000000
             AND json_extract(score_components_json, '$.relevance_micros')
@@ -4132,8 +4239,10 @@ const migrations: Migration[] = [
           manifest_fingerprint TEXT NOT NULL
             CHECK(length(manifest_fingerprint)=64
               AND manifest_fingerprint NOT GLOB '*[^0-9a-f]*'),
-          estimated_tokens INTEGER NOT NULL CHECK(estimated_tokens>=0),
-          actual_tokens INTEGER CHECK(actual_tokens IS NULL OR actual_tokens>=0),
+          estimated_tokens INTEGER NOT NULL
+            CHECK(estimated_tokens BETWEEN 0 AND 10000000),
+          actual_tokens INTEGER
+            CHECK(actual_tokens IS NULL OR actual_tokens BETWEEN 0 AND 10000000),
           cache_identity TEXT NOT NULL CHECK(length(cache_identity)>0),
           outcome TEXT NOT NULL
             CHECK(outcome IN ('running', 'completed', 'failed', 'cancelled')),
@@ -4145,8 +4254,13 @@ const migrations: Migration[] = [
             REFERENCES context_builds(board_id, id),
           CHECK(
             (outcome='running' AND actual_tokens IS NULL AND completed_at IS NULL)
-            OR (outcome!='running' AND completed_at IS NOT NULL)
-          )
+            OR (
+              outcome!='running'
+              AND completed_at IS NOT NULL
+              AND completed_at>=injected_at
+            )
+          ),
+          CHECK(outcome!='completed' OR actual_tokens IS NOT NULL)
         );
 
         DROP INDEX IF EXISTS idx_knowledge_sources_locator;
@@ -4181,6 +4295,7 @@ const migrations: Migration[] = [
         DROP TRIGGER IF EXISTS knowledge_sources_delete;
         DROP TRIGGER IF EXISTS knowledge_chunks_immutable;
         DROP TRIGGER IF EXISTS knowledge_chunks_delete;
+        DROP TRIGGER IF EXISTS knowledge_chunks_insert;
         DROP TRIGGER IF EXISTS context_builds_scope_insert;
         DROP TRIGGER IF EXISTS context_builds_identity_immutable;
         DROP TRIGGER IF EXISTS context_builds_status_transition;
@@ -4258,7 +4373,7 @@ const migrations: Migration[] = [
           END;
 
           SELECT CASE WHEN
-            json_type(NEW.targets_json, '$.board_id')!='integer'
+            json_type(NEW.targets_json, '$.board_id') IS NOT 'integer'
             OR json_extract(NEW.targets_json, '$.board_id')!=NEW.board_id
           THEN RAISE(ABORT, 'knowledge source target board is inconsistent') END;
 
@@ -4284,6 +4399,44 @@ const migrations: Migration[] = [
                   AND board_id=NEW.board_id
               ) THEN NULL
             ELSE RAISE(ABORT, 'knowledge source card target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.targets_json, '$.contract_version') IS NULL
+              OR json_type(NEW.targets_json, '$.contract_version')='null' THEN
+              CASE WHEN
+                json_extract(NEW.targets_json, '$.contract_ref') IS NULL
+                AND json_extract(
+                  NEW.targets_json, '$.contract_snapshot_sha256'
+                ) IS NULL
+              THEN NULL
+              ELSE RAISE(ABORT, 'knowledge source contract target is inconsistent') END
+            WHEN json_type(NEW.targets_json, '$.contract_version')='integer'
+              AND json_type(NEW.targets_json, '$.card_id')='integer'
+              AND json_type(NEW.targets_json, '$.contract_ref')='text'
+              AND json_extract(NEW.targets_json, '$.contract_ref')=(
+                'card:' || json_extract(NEW.targets_json, '$.card_id')
+                || ':v' || json_extract(NEW.targets_json, '$.contract_version')
+              )
+              AND json_type(
+                NEW.targets_json, '$.contract_snapshot_sha256'
+              )='text'
+              AND length(json_extract(
+                NEW.targets_json, '$.contract_snapshot_sha256'
+              ))=64
+              AND json_extract(
+                NEW.targets_json, '$.contract_snapshot_sha256'
+              ) NOT GLOB '*[^0-9a-f]*'
+              AND EXISTS (
+                SELECT 1 FROM task_contracts contract
+                JOIN cards card ON card.id=contract.card_id
+                WHERE contract.card_id=json_extract(NEW.targets_json, '$.card_id')
+                  AND contract.version=json_extract(
+                    NEW.targets_json, '$.contract_version'
+                  )
+                  AND card.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'knowledge source contract target is inconsistent')
           END;
 
           SELECT CASE
@@ -4323,6 +4476,150 @@ const migrations: Migration[] = [
             ELSE RAISE(ABORT, 'knowledge source session target is inconsistent')
           END;
 
+          SELECT CASE WHEN
+            (
+              json_extract(NEW.targets_json, '$.workspace_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.card_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM workspaces workspace
+                WHERE workspace.id=json_extract(
+                    NEW.targets_json, '$.workspace_id'
+                  )
+                  AND (
+                    workspace.card_id IS NULL
+                    OR workspace.card_id=json_extract(
+                      NEW.targets_json, '$.card_id'
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.job_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.card_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.targets_json, '$.job_id')
+                  AND job.card_id=json_extract(NEW.targets_json, '$.card_id')
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.job_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.workspace_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.targets_json, '$.job_id')
+                  AND job.workspace_id=json_extract(
+                    NEW.targets_json, '$.workspace_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.job_id') IS NOT NULL
+              AND json_extract(
+                NEW.targets_json, '$.contract_version'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.targets_json, '$.job_id')
+                  AND job.contract_version=json_extract(
+                    NEW.targets_json, '$.contract_version'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.job_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.profile_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.targets_json, '$.job_id')
+                  AND (
+                    job.assigned_profile_id IS NULL
+                    OR job.assigned_profile_id=json_extract(
+                      NEW.targets_json, '$.profile_id'
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.session_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.card_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                LEFT JOIN jobs job ON job.id=session.job_id
+                WHERE session.id=json_extract(
+                    NEW.targets_json, '$.session_id'
+                  )
+                  AND (
+                    (
+                      session.job_id IS NOT NULL
+                      AND job.card_id=json_extract(
+                        NEW.targets_json, '$.card_id'
+                      )
+                    )
+                    OR (
+                      session.job_id IS NULL
+                      AND (
+                        workspace.card_id IS NULL
+                        OR workspace.card_id=json_extract(
+                          NEW.targets_json, '$.card_id'
+                        )
+                      )
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.session_id') IS NOT NULL
+              AND json_extract(
+                NEW.targets_json, '$.contract_version'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_sessions session
+                JOIN jobs job ON job.id=session.job_id
+                WHERE session.id=json_extract(
+                    NEW.targets_json, '$.session_id'
+                  )
+                  AND job.contract_version=json_extract(
+                    NEW.targets_json, '$.contract_version'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.session_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.job_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(NEW.targets_json, '$.session_id')
+                  AND session.job_id=json_extract(NEW.targets_json, '$.job_id')
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.session_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.profile_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(NEW.targets_json, '$.session_id')
+                  AND session.profile_id=json_extract(
+                    NEW.targets_json, '$.profile_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.targets_json, '$.session_id') IS NOT NULL
+              AND json_extract(NEW.targets_json, '$.workspace_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(NEW.targets_json, '$.session_id')
+                  AND session.workspace_id=json_extract(
+                    NEW.targets_json, '$.workspace_id'
+                  )
+              )
+            )
+          THEN RAISE(ABORT, 'knowledge source target links are inconsistent') END;
+
         END;
 
         CREATE TRIGGER knowledge_sources_immutable
@@ -4343,6 +4640,20 @@ const migrations: Migration[] = [
           SELECT RAISE(ABORT, 'knowledge chunk evidence is immutable');
         END;
 
+        CREATE TRIGGER knowledge_chunks_insert
+        BEFORE INSERT ON knowledge_chunks
+        WHEN NOT EXISTS (
+          SELECT 1 FROM knowledge_sources source
+          WHERE source.board_id=NEW.board_id
+            AND source.id=NEW.source_id
+            AND source.content_state='present'
+            AND source.redaction_state!='withheld'
+            AND source.ingest_state!='forgotten'
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'knowledge chunk source state is inconsistent');
+        END;
+
         CREATE TRIGGER knowledge_chunks_delete
         BEFORE DELETE ON knowledge_chunks
         BEGIN
@@ -4355,13 +4666,133 @@ const migrations: Migration[] = [
           SELECT CASE WHEN
             NEW.status NOT IN ('built', 'failed')
             OR
-            json_type(NEW.request_json, '$.board_id')!='integer'
+            json_type(NEW.request_json, '$.board_id') IS NOT 'integer'
             OR json_extract(NEW.request_json, '$.board_id')!=NEW.board_id
-            OR json_type(NEW.request_json, '$.access_scope')!='object'
-            OR json_type(NEW.request_json, '$.targets')!='object'
-            OR json_type(NEW.request_json, '$.targets.board_id')!='integer'
+            OR json_type(NEW.request_json, '$.access_scope') IS NOT 'object'
+            OR json_type(NEW.request_json, '$.targets') IS NOT 'object'
+            OR json_type(NEW.request_json, '$.targets.board_id') IS NOT 'integer'
             OR json_extract(NEW.request_json, '$.targets.board_id')!=NEW.board_id
           THEN RAISE(ABORT, 'context build request scope is inconsistent') END;
+
+          SELECT CASE WHEN
+            json_type(NEW.request_json, '$.budget.max_tokens') IS NOT 'integer'
+            OR json_extract(NEW.request_json, '$.budget.max_tokens') NOT BETWEEN 0 AND 10000000
+            OR json_type(NEW.request_json, '$.budget.max_characters') IS NOT 'integer'
+            OR json_extract(NEW.request_json, '$.budget.max_characters')
+              NOT BETWEEN 0 AND 50000000
+            OR json_type(NEW.request_json, '$.budget.sections') IS NOT 'object'
+            OR EXISTS (
+              SELECT 1 FROM json_each(
+                NEW.request_json, '$.budget.sections'
+              ) budget_section
+              WHERE budget_section.key NOT IN (
+                'project_brief', 'task_contract', 'repository_instructions',
+                'relevant_code', 'recent_changes', 'accepted_decisions',
+                'verified_deliveries', 'working_memory_delta'
+              )
+                OR json_type(budget_section.value) IS NOT 'object'
+                OR (
+                  SELECT COUNT(*) FROM json_each(budget_section.value)
+                )!=2
+                OR EXISTS (
+                  SELECT 1 FROM json_each(budget_section.value) field
+                  WHERE field.key NOT IN ('max_tokens', 'max_characters')
+                )
+                OR json_type(budget_section.value, '$.max_tokens') IS NOT 'integer'
+                OR json_extract(budget_section.value, '$.max_tokens')
+                  NOT BETWEEN 0 AND json_extract(
+                    NEW.request_json, '$.budget.max_tokens'
+                  )
+                OR json_type(
+                  budget_section.value, '$.max_characters'
+                ) IS NOT 'integer'
+                OR json_extract(budget_section.value, '$.max_characters')
+                  NOT BETWEEN 0 AND json_extract(
+                    NEW.request_json, '$.budget.max_characters'
+                  )
+            )
+            OR json_type(NEW.usage_json, '$.used_tokens') IS NOT 'integer'
+            OR json_extract(NEW.usage_json, '$.used_tokens') NOT BETWEEN 0 AND 10000000
+            OR json_extract(NEW.usage_json, '$.used_tokens')
+              > json_extract(NEW.request_json, '$.budget.max_tokens')
+            OR json_type(NEW.usage_json, '$.used_characters') IS NOT 'integer'
+            OR json_extract(NEW.usage_json, '$.used_characters')
+              NOT BETWEEN 0 AND 50000000
+            OR json_extract(NEW.usage_json, '$.used_characters')
+              > json_extract(NEW.request_json, '$.budget.max_characters')
+            OR json_type(NEW.usage_json, '$.sections') IS NOT 'object'
+            OR EXISTS (
+              SELECT 1 FROM json_each(NEW.usage_json, '$.sections') usage_section
+              WHERE usage_section.key NOT IN (
+                'project_brief', 'task_contract', 'repository_instructions',
+                'relevant_code', 'recent_changes', 'accepted_decisions',
+                'verified_deliveries', 'working_memory_delta'
+              )
+                OR json_type(usage_section.value) IS NOT 'object'
+                OR (
+                  SELECT COUNT(*) FROM json_each(usage_section.value)
+                )!=2
+                OR EXISTS (
+                  SELECT 1 FROM json_each(usage_section.value) field
+                  WHERE field.key NOT IN ('used_tokens', 'used_characters')
+                )
+                OR json_type(usage_section.value, '$.used_tokens') IS NOT 'integer'
+                OR json_extract(usage_section.value, '$.used_tokens')
+                  NOT BETWEEN 0 AND 10000000
+                OR json_type(
+                  usage_section.value, '$.used_characters'
+                ) IS NOT 'integer'
+                OR json_extract(usage_section.value, '$.used_characters')
+                  NOT BETWEEN 0 AND 50000000
+                OR EXISTS (
+                  SELECT 1 FROM json_each(
+                    NEW.request_json, '$.budget.sections'
+                  ) budget_section
+                  WHERE budget_section.key=usage_section.key
+                    AND (
+                      json_type(
+                        budget_section.value, '$.max_tokens'
+                      ) IS NOT 'integer'
+                      OR json_extract(budget_section.value, '$.max_tokens')
+                        NOT BETWEEN 0 AND json_extract(
+                          NEW.request_json, '$.budget.max_tokens'
+                        )
+                      OR json_type(
+                        budget_section.value, '$.max_characters'
+                      ) IS NOT 'integer'
+                      OR json_extract(budget_section.value, '$.max_characters')
+                        NOT BETWEEN 0 AND json_extract(
+                          NEW.request_json, '$.budget.max_characters'
+                        )
+                      OR json_extract(usage_section.value, '$.used_tokens')
+                        > json_extract(budget_section.value, '$.max_tokens')
+                      OR json_extract(usage_section.value, '$.used_characters')
+                        > json_extract(budget_section.value, '$.max_characters')
+                    )
+                )
+            )
+            OR COALESCE((
+              SELECT SUM(json_extract(value, '$.used_tokens'))
+              FROM json_each(NEW.usage_json, '$.sections')
+            ), 0) > json_extract(NEW.usage_json, '$.used_tokens')
+            OR COALESCE((
+              SELECT SUM(json_extract(value, '$.used_characters'))
+              FROM json_each(NEW.usage_json, '$.sections')
+            ), 0) > json_extract(NEW.usage_json, '$.used_characters')
+            OR (
+              NEW.status='failed'
+              AND (
+                NEW.source_count!=0
+                OR NEW.entry_count!=0
+                OR json_array_length(NEW.source_set_json)!=0
+                OR json_extract(NEW.usage_json, '$.used_tokens')!=0
+                OR json_extract(NEW.usage_json, '$.used_characters')!=0
+                OR EXISTS (
+                  SELECT 1 FROM json_each(NEW.usage_json, '$.sections')
+                )
+              )
+            )
+          THEN RAISE(ABORT, 'context build budget accounting is inconsistent') END;
 
           SELECT CASE
             WHEN json_extract(NEW.request_json, '$.access_scope.kind')='board' THEN NULL
@@ -4420,6 +4851,278 @@ const migrations: Migration[] = [
               ) THEN NULL
             ELSE RAISE(ABORT, 'context build access scope is inconsistent')
           END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.workspace_id') IS NULL
+              OR json_type(NEW.request_json, '$.targets.workspace_id')='null' THEN NULL
+            WHEN json_type(NEW.request_json, '$.targets.workspace_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM workspaces
+                WHERE id=json_extract(NEW.request_json, '$.targets.workspace_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build workspace target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.card_id') IS NULL
+              OR json_type(NEW.request_json, '$.targets.card_id')='null' THEN NULL
+            WHEN json_type(NEW.request_json, '$.targets.card_id')='integer'
+              AND EXISTS (
+                SELECT 1 FROM cards
+                WHERE id=json_extract(NEW.request_json, '$.targets.card_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build card target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.contract_version') IS NULL
+              OR json_type(NEW.request_json, '$.targets.contract_version')='null' THEN
+              CASE WHEN
+                json_extract(NEW.request_json, '$.targets.contract_ref') IS NULL
+                AND json_extract(
+                  NEW.request_json, '$.targets.contract_snapshot_sha256'
+                ) IS NULL
+              THEN NULL
+              ELSE RAISE(ABORT, 'context build contract target is inconsistent') END
+            WHEN json_type(NEW.request_json, '$.targets.contract_version')='integer'
+              AND json_type(NEW.request_json, '$.targets.card_id')='integer'
+              AND json_type(NEW.request_json, '$.targets.contract_ref')='text'
+              AND json_extract(NEW.request_json, '$.targets.contract_ref')=(
+                'card:' || json_extract(NEW.request_json, '$.targets.card_id')
+                || ':v' || json_extract(
+                  NEW.request_json, '$.targets.contract_version'
+                )
+              )
+              AND json_type(
+                NEW.request_json, '$.targets.contract_snapshot_sha256'
+              )='text'
+              AND length(json_extract(
+                NEW.request_json, '$.targets.contract_snapshot_sha256'
+              ))=64
+              AND json_extract(
+                NEW.request_json, '$.targets.contract_snapshot_sha256'
+              ) NOT GLOB '*[^0-9a-f]*'
+              AND EXISTS (
+                SELECT 1 FROM task_contracts contract
+                JOIN cards card ON card.id=contract.card_id
+                WHERE contract.card_id=json_extract(
+                    NEW.request_json, '$.targets.card_id'
+                  )
+                  AND contract.version=json_extract(
+                    NEW.request_json, '$.targets.contract_version'
+                  )
+                  AND card.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build contract target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.job_id') IS NULL
+              OR json_type(NEW.request_json, '$.targets.job_id')='null' THEN NULL
+            WHEN json_type(NEW.request_json, '$.targets.job_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM jobs
+                WHERE id=json_extract(NEW.request_json, '$.targets.job_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build job target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.profile_id') IS NULL
+              OR json_type(NEW.request_json, '$.targets.profile_id')='null' THEN NULL
+            WHEN json_type(NEW.request_json, '$.targets.profile_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM agent_profiles
+                WHERE id=json_extract(NEW.request_json, '$.targets.profile_id')
+                  AND board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build profile target is inconsistent')
+          END;
+
+          SELECT CASE
+            WHEN json_type(NEW.request_json, '$.targets.session_id') IS NULL
+              OR json_type(NEW.request_json, '$.targets.session_id')='null' THEN NULL
+            WHEN json_type(NEW.request_json, '$.targets.session_id')='text'
+              AND EXISTS (
+                SELECT 1 FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND workspace.board_id=NEW.board_id
+              ) THEN NULL
+            ELSE RAISE(ABORT, 'context build session target is inconsistent')
+          END;
+
+          SELECT CASE WHEN
+            (
+              json_extract(NEW.request_json, '$.targets.workspace_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.card_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM workspaces workspace
+                WHERE workspace.id=json_extract(
+                    NEW.request_json, '$.targets.workspace_id'
+                  )
+                  AND (
+                    workspace.card_id IS NULL
+                    OR workspace.card_id=json_extract(
+                      NEW.request_json, '$.targets.card_id'
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.job_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.card_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.request_json, '$.targets.job_id')
+                  AND job.card_id=json_extract(
+                    NEW.request_json, '$.targets.card_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.job_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.workspace_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(NEW.request_json, '$.targets.job_id')
+                  AND job.workspace_id=json_extract(
+                    NEW.request_json, '$.targets.workspace_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.job_id') IS NOT NULL
+              AND json_extract(
+                NEW.request_json, '$.targets.contract_version'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(
+                    NEW.request_json, '$.targets.job_id'
+                  )
+                  AND job.contract_version=json_extract(
+                    NEW.request_json, '$.targets.contract_version'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.job_id') IS NOT NULL
+              AND json_extract(
+                NEW.request_json, '$.targets.profile_id'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs job
+                WHERE job.id=json_extract(
+                    NEW.request_json, '$.targets.job_id'
+                  )
+                  AND (
+                    job.assigned_profile_id IS NULL
+                    OR job.assigned_profile_id=json_extract(
+                      NEW.request_json, '$.targets.profile_id'
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(
+                NEW.request_json, '$.targets.session_id'
+              ) IS NOT NULL
+              AND json_extract(
+                NEW.request_json, '$.targets.card_id'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_sessions session
+                JOIN workspaces workspace ON workspace.id=session.workspace_id
+                LEFT JOIN jobs job ON job.id=session.job_id
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND (
+                    (
+                      session.job_id IS NOT NULL
+                      AND job.card_id=json_extract(
+                        NEW.request_json, '$.targets.card_id'
+                      )
+                    )
+                    OR (
+                      session.job_id IS NULL
+                      AND (
+                        workspace.card_id IS NULL
+                        OR workspace.card_id=json_extract(
+                          NEW.request_json, '$.targets.card_id'
+                        )
+                      )
+                    )
+                  )
+              )
+            )
+            OR (
+              json_extract(
+                NEW.request_json, '$.targets.session_id'
+              ) IS NOT NULL
+              AND json_extract(
+                NEW.request_json, '$.targets.contract_version'
+              ) IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_sessions session
+                JOIN jobs job ON job.id=session.job_id
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND job.contract_version=json_extract(
+                    NEW.request_json, '$.targets.contract_version'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.session_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.job_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND session.job_id=json_extract(
+                    NEW.request_json, '$.targets.job_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.session_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.profile_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND session.profile_id=json_extract(
+                    NEW.request_json, '$.targets.profile_id'
+                  )
+              )
+            )
+            OR (
+              json_extract(NEW.request_json, '$.targets.session_id') IS NOT NULL
+              AND json_extract(NEW.request_json, '$.targets.workspace_id') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_sessions session
+                WHERE session.id=json_extract(
+                    NEW.request_json, '$.targets.session_id'
+                  )
+                  AND session.workspace_id=json_extract(
+                    NEW.request_json, '$.targets.workspace_id'
+                  )
+              )
+            )
+          THEN RAISE(ABORT, 'context build target links are inconsistent') END;
+
         END;
 
         CREATE TRIGGER context_builds_identity_immutable
@@ -4441,11 +5144,31 @@ const migrations: Migration[] = [
 
         CREATE TRIGGER context_builds_status_transition
         BEFORE UPDATE OF status, invalidated_at ON context_builds
-        WHEN NEW.status IS NOT OLD.status
-          AND NOT (
-            (OLD.status='built' AND NEW.status IN ('used', 'invalidated', 'failed'))
-            OR (OLD.status='used' AND NEW.status='invalidated')
+        WHEN NOT (
+          (NEW.status IS OLD.status AND NEW.invalidated_at IS OLD.invalidated_at)
+          OR (
+            OLD.status='built'
+            AND NEW.status='used'
+            AND NEW.invalidated_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM context_uses use
+              WHERE use.board_id=OLD.board_id
+                AND use.context_build_id=OLD.id
+            )
           )
+          OR (
+            OLD.status='built'
+            AND NEW.status='failed'
+            AND NEW.invalidated_at IS NULL
+          )
+          OR (
+            OLD.status IN ('built', 'used')
+            AND NEW.status='invalidated'
+            AND OLD.invalidated_at IS NULL
+            AND NEW.invalidated_at IS NOT NULL
+            AND NEW.invalidated_at>=OLD.created_at
+          )
+        )
         BEGIN
           SELECT RAISE(ABORT, 'invalid context build status transition');
         END;
@@ -4602,6 +5325,7 @@ const migrations: Migration[] = [
               AND build.id=NEW.context_build_id
               AND build.status IN ('built', 'used')
               AND build.manifest_fingerprint=NEW.manifest_fingerprint
+              AND NEW.injected_at>=build.created_at
               AND json_type(build.usage_json, '$.used_tokens')='integer'
               AND json_extract(build.usage_json, '$.used_tokens')=NEW.estimated_tokens
               AND build.source_count=(
@@ -4613,6 +5337,57 @@ const migrations: Migration[] = [
                 SELECT COUNT(*) FROM context_build_entries entry
                 WHERE entry.board_id=build.board_id
                   AND entry.context_build_id=build.id
+              )
+              AND json_extract(build.usage_json, '$.used_tokens')>=(
+                SELECT COALESCE(SUM(entry.estimated_tokens), 0)
+                FROM context_build_entries entry
+                WHERE entry.board_id=build.board_id
+                  AND entry.context_build_id=build.id
+                  AND entry.decision='selected'
+              )
+              AND json_extract(build.usage_json, '$.used_characters')>=(
+                SELECT COALESCE(SUM(entry.character_count), 0)
+                FROM context_build_entries entry
+                WHERE entry.board_id=build.board_id
+                  AND entry.context_build_id=build.id
+                  AND entry.decision='selected'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(
+                  build.usage_json, '$.sections'
+                ) usage_section
+                WHERE json_extract(
+                    usage_section.value, '$.used_tokens'
+                  )!=(
+                    SELECT COALESCE(SUM(entry.estimated_tokens), 0)
+                    FROM context_build_entries entry
+                    WHERE entry.board_id=build.board_id
+                      AND entry.context_build_id=build.id
+                      AND entry.decision='selected'
+                      AND entry.section=usage_section.key
+                  )
+                  OR json_extract(
+                    usage_section.value, '$.used_characters'
+                  )!=(
+                    SELECT COALESCE(SUM(entry.character_count), 0)
+                    FROM context_build_entries entry
+                    WHERE entry.board_id=build.board_id
+                      AND entry.context_build_id=build.id
+                      AND entry.decision='selected'
+                      AND entry.section=usage_section.key
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM context_build_entries selected
+                WHERE selected.board_id=build.board_id
+                  AND selected.context_build_id=build.id
+                  AND selected.decision='selected'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(
+                      build.usage_json, '$.sections'
+                    ) usage_section
+                    WHERE usage_section.key=selected.section
+                  )
               )
           ) THEN RAISE(ABORT, 'context use build evidence is inconsistent') END;
 
@@ -4651,7 +5426,12 @@ const migrations: Migration[] = [
               )
               AND (
                 json_extract(build.request_json, '$.targets.profile_id') IS NULL
-                OR json_extract(build.request_json, '$.targets.profile_id')=session.profile_id
+                OR json_extract(
+                  build.request_json, '$.targets.profile_id'
+                )=session.profile_id
+                OR json_extract(
+                  build.request_json, '$.targets.profile_id'
+                )=job.assigned_profile_id
               )
               AND (
                 json_extract(build.request_json, '$.targets.session_id') IS NULL
@@ -4689,6 +5469,8 @@ const migrations: Migration[] = [
           OR OLD.outcome!='running'
           OR NEW.outcome NOT IN ('completed', 'failed', 'cancelled')
           OR NEW.completed_at IS NULL
+          OR NEW.completed_at<OLD.injected_at
+          OR (NEW.outcome='completed' AND NEW.actual_tokens IS NULL)
         BEGIN
           SELECT RAISE(ABORT, 'context use identity or lifecycle is immutable');
         END;
@@ -4700,45 +5482,7 @@ const migrations: Migration[] = [
         END;
       `)
 
-      const requiredColumns: Record<string, string[]> = {
-        knowledge_sources: [
-          'board_id', 'id', 'source_kind', 'trust_class', 'content_sha256',
-          'access_scope_json', 'targets_json', 'provenance_json',
-        ],
-        knowledge_chunks: [
-          'board_id', 'id', 'source_id', 'ordinal', 'content', 'content_sha256',
-          'character_count', 'byte_count', 'source_range_json',
-        ],
-        context_builds: [
-          'board_id', 'id', 'request_fingerprint', 'source_set_fingerprint',
-          'manifest_fingerprint', 'request_json', 'source_set_json',
-          'source_count', 'entry_count', 'usage_json', 'status',
-        ],
-        context_build_sources: [
-          'board_id', 'context_build_id', 'source_ordinal', 'source_id',
-          'source_revision', 'content_sha256',
-        ],
-        context_build_entries: [
-          'board_id', 'context_build_id', 'candidate_ordinal', 'source_id',
-          'chunk_id', 'section', 'selected_ordinal', 'decision', 'reason',
-          'score_components_json', 'content_sha256',
-        ],
-        context_uses: [
-          'board_id', 'id', 'context_build_id', 'job_id', 'session_id',
-          'injection_ordinal', 'manifest_fingerprint', 'outcome',
-        ],
-      }
-      for (const [table, columns] of Object.entries(requiredColumns)) {
-        const available = new Set(
-          (db.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>)
-            .map((column) => column.name),
-        )
-        if (columns.some((column) => !available.has(column))) {
-          throw new Error(
-            'migration 018-knowledge-persistence found an incompatible knowledge schema',
-          )
-        }
-      }
+      assertKnowledgeSchemaCompatible(db)
     },
   },
 ]

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { AgentOsError } from './errors.js'
 import {
   MAX_CANONICAL_JSON_LIMITS,
+  MAX_CONTEXT_BUDGET_TOKENS,
   canonicalKnowledgeJson,
   contextBuildId,
   contextRequestFingerprint,
@@ -23,6 +24,7 @@ import type {
   KnowledgeChunk,
   KnowledgeSource,
   KnowledgeSourceSetEntry,
+  KnowledgeTargetLinks,
 } from './knowledge-types.js'
 
 export interface PutContextBuildInput {
@@ -60,6 +62,10 @@ const STORE_ERROR_MESSAGES: Record<KnowledgeStoreErrorCode, string> = {
   knowledge_storage_corrupt: 'knowledge persistence evidence is corrupt',
   knowledge_write_failed: 'knowledge persistence write failed',
 }
+const KNOWN_STORE_ERRORS = new WeakMap<object, {
+  code: KnowledgeStoreErrorCode
+  statusCode: number
+}>()
 
 /**
  * All persistence errors use fixed text. In particular, supplied content,
@@ -75,9 +81,34 @@ export class KnowledgeStoreError extends AgentOsError {
         ? 409
         : 400,
   ) {
-    super(STORE_ERROR_MESSAGES[code], statusCode, code)
+    const safeCode: KnowledgeStoreErrorCode = (
+      typeof code === 'string'
+      && Object.prototype.hasOwnProperty.call(STORE_ERROR_MESSAGES, code)
+    ) ? code : 'knowledge_write_failed'
+    const safeStatus = Number.isSafeInteger(statusCode)
+      && (statusCode === 400 || statusCode === 409 || statusCode === 500)
+      ? statusCode
+      : safeCode === 'knowledge_storage_corrupt' || safeCode === 'knowledge_write_failed'
+        ? 500
+        : safeCode === 'knowledge_replay_conflict'
+            || safeCode === 'knowledge_lifecycle_conflict'
+          ? 409
+          : 400
+    super(STORE_ERROR_MESSAGES[safeCode], safeStatus, safeCode)
     this.name = 'KnowledgeStoreError'
+    KNOWN_STORE_ERRORS.set(this, { code: safeCode, statusCode: safeStatus })
   }
+}
+
+function knownStoreError(value: unknown): {
+  code: KnowledgeStoreErrorCode
+  statusCode: number
+} | null {
+  const reference = (
+    (typeof value === 'object' && value !== null)
+    || typeof value === 'function'
+  ) ? value : null
+  return reference === null ? null : KNOWN_STORE_ERRORS.get(reference) ?? null
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u
@@ -110,8 +141,7 @@ function corruption(): never {
 function protectInput<T>(operation: () => T): T {
   try {
     return operation()
-  } catch (error) {
-    if (error instanceof KnowledgeStoreError) throw error
+  } catch {
     inputFailure()
   }
 }
@@ -120,8 +150,17 @@ function protectWrite<T>(operation: () => T): T {
   try {
     return operation()
   } catch (error) {
-    if (error instanceof KnowledgeStoreError) throw error
+    const retained = knownStoreError(error)
+    if (retained) throw new KnowledgeStoreError(retained.code, retained.statusCode)
     throw new KnowledgeStoreError('knowledge_write_failed')
+  }
+}
+
+function protectRead<T>(operation: () => T): T {
+  try {
+    return operation()
+  } catch {
+    corruption()
   }
 }
 
@@ -143,8 +182,7 @@ function parseCanonicalJson(serialized: unknown): unknown {
     const value = JSON.parse(serialized) as unknown
     if (canonicalJson(value) !== serialized) corruption()
     return value
-  } catch (error) {
-    if (error instanceof KnowledgeStoreError) throw error
+  } catch {
     corruption()
   }
 }
@@ -197,8 +235,7 @@ function requiredRecord(
       result[key] = descriptor.value
     }
     return result
-  } catch (error) {
-    if (error instanceof KnowledgeStoreError) throw error
+  } catch {
     inputFailure()
   }
 }
@@ -265,9 +302,8 @@ function useCreationEqual(left: ContextUse, right: ContextUse): boolean {
 }
 
 function rawNumber(value: unknown): number {
-  const number = Number(value)
-  if (!Number.isSafeInteger(number)) corruption()
-  return number
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) corruption()
+  return value
 }
 
 function rawNullableNumber(value: unknown): number | null {
@@ -276,7 +312,13 @@ function rawNullableNumber(value: unknown): number | null {
 }
 
 function rawNullableString(value: unknown): string | null {
-  return value === null || value === undefined ? null : String(value)
+  if (value === null || value === undefined) return null
+  return rawString(value)
+}
+
+function rawString(value: unknown): string {
+  if (typeof value !== 'string') corruption()
+  return value
 }
 
 export class KnowledgeStore {
@@ -287,13 +329,13 @@ export class KnowledgeStore {
     const boardId = positiveBoardId(source.targets.board_id)
     return protectWrite(() => {
       const save = this.db.transaction(() => {
-        this.assertBoard(boardId)
-        this.assertTargetScope(boardId, source)
         const existing = this.readSource(boardId, source.id)
         if (existing) {
           if (!sourceCreationEqual(existing, source)) replayConflict()
           return existing
         }
+        this.assertBoard(boardId)
+        this.assertTargetScope(boardId, source)
         this.db.prepare(`INSERT INTO knowledge_sources (
           board_id, id, source_kind, trust_class, title, locator, normalized_locator,
           source_revision, content_sha256, freshness_policy, freshness_state,
@@ -336,7 +378,7 @@ export class KnowledgeStore {
   getSource(boardIdValue: number, sourceIdValue: string): KnowledgeSource | null {
     const boardId = positiveBoardId(boardIdValue)
     const sourceId = identifier(sourceIdValue, SOURCE_ID)
-    return this.readSource(boardId, sourceId)
+    return protectRead(() => this.readSource(boardId, sourceId))
   }
 
   putChunk(boardIdValue: number, value: KnowledgeChunk): KnowledgeChunk {
@@ -395,30 +437,32 @@ export class KnowledgeStore {
   getChunk(boardIdValue: number, chunkIdValue: string): KnowledgeChunk | null {
     const boardId = positiveBoardId(boardIdValue)
     const chunkId = identifier(chunkIdValue, CHUNK_ID)
-    return this.readChunk(boardId, chunkId)
+    return protectRead(() => this.readChunk(boardId, chunkId))
   }
 
   listChunks(boardIdValue: number, sourceIdValue: string): KnowledgeChunk[] {
     const boardId = positiveBoardId(boardIdValue)
     const sourceId = identifier(sourceIdValue, SOURCE_ID)
-    if (!this.readSource(boardId, sourceId)) return []
-    const rows = this.db.prepare(`SELECT * FROM knowledge_chunks
-      WHERE board_id=? AND source_id=? ORDER BY ordinal, id`)
-      .all(boardId, sourceId) as Record<string, unknown>[]
-    return rows.map((row) => this.mapChunk(row, boardId))
+    return protectRead(() => {
+      if (!this.readSource(boardId, sourceId)) return []
+      const rows = this.db.prepare(`SELECT * FROM knowledge_chunks
+        WHERE board_id=? AND source_id=? ORDER BY ordinal, id`)
+        .all(boardId, sourceId) as Record<string, unknown>[]
+      return rows.map((row) => this.mapChunk(row, boardId))
+    })
   }
 
   putContextBuild(input: PutContextBuildInput): StoredContextBuild {
     const supplied = protectInput(() => this.validateBuildInput(input))
     return protectWrite(() => {
       const save = this.db.transaction(() => {
-        this.assertBoard(supplied.board_id)
-        this.assertRequestTargets(supplied.request)
         const existing = this.readBuild(supplied.board_id, supplied.id)
         if (existing) {
           if (!buildCreationEqual(existing, supplied)) replayConflict()
           return existing
         }
+        this.assertBoard(supplied.board_id)
+        this.assertRequestTargets(supplied.request)
         this.assertBuildSourcesAndEntries(supplied)
         this.db.prepare(`INSERT INTO context_builds (
           board_id, id, request_json, request_fingerprint, source_set_json,
@@ -509,8 +553,8 @@ export class KnowledgeStore {
             supplied.id,
           ) as { source_count: number; entry_count: number }
         if (
-          Number(counts.source_count) !== supplied.source_set.length
-          || Number(counts.entry_count) !== supplied.entries.length
+          rawNumber(counts.source_count) !== supplied.source_set.length
+          || rawNumber(counts.entry_count) !== supplied.entries.length
         ) {
           corruption()
         }
@@ -525,7 +569,7 @@ export class KnowledgeStore {
   getContextBuild(boardIdValue: number, buildIdValue: string): StoredContextBuild | null {
     const boardId = positiveBoardId(boardIdValue)
     const buildIdValueNormalized = identifier(buildIdValue, BUILD_ID)
-    return this.readBuild(boardId, buildIdValueNormalized)
+    return protectRead(() => this.readBuild(boardId, buildIdValueNormalized))
   }
 
   putContextUse(value: ContextUse): ContextUse {
@@ -546,6 +590,12 @@ export class KnowledgeStore {
           if (!useCreationEqual(existing, use)) replayConflict()
           return existing
         }
+        const occupiedOrdinal = this.db.prepare(`SELECT id FROM context_uses
+          WHERE board_id=? AND session_id=? AND injection_ordinal=?`)
+          .get(use.board_id, use.session_id, use.injection_ordinal) as {
+            id: string
+          } | undefined
+        if (occupiedOrdinal) replayConflict()
         if (build.status !== 'built' && build.status !== 'used') lifecycleConflict()
         if (
           use.manifest_fingerprint !== build.manifest_fingerprint
@@ -581,24 +631,29 @@ export class KnowledgeStore {
   getContextUse(boardIdValue: number, useIdValue: string): ContextUse | null {
     const boardId = positiveBoardId(boardIdValue)
     const useId = identifier(useIdValue, USE_ID)
-    return this.readUse(boardId, useId)
+    return protectRead(() => this.readUse(boardId, useId))
   }
 
   listContextUses(boardIdValue: number, buildIdValue: string): ContextUse[] {
     const boardId = positiveBoardId(boardIdValue)
     const buildIdValueNormalized = identifier(buildIdValue, BUILD_ID)
-    if (!this.readBuild(boardId, buildIdValueNormalized)) return []
-    const rows = this.db.prepare(`SELECT * FROM context_uses
-      WHERE board_id=? AND context_build_id=?
-      ORDER BY injection_ordinal, injected_at, id`)
-      .all(boardId, buildIdValueNormalized) as Record<string, unknown>[]
-    return rows.map((row) => this.mapUse(row, boardId))
+    return protectRead(() => {
+      if (!this.readBuild(boardId, buildIdValueNormalized)) return []
+      const rows = this.db.prepare(`SELECT * FROM context_uses
+        WHERE board_id=? AND context_build_id=?
+        ORDER BY injection_ordinal, injected_at, id`)
+        .all(boardId, buildIdValueNormalized) as Record<string, unknown>[]
+      return rows.map((row) => this.mapUse(row, boardId))
+    })
   }
 
   finishContextUse(input: FinishContextUseInput): ContextUse {
+    const hasCompletedAt = protectInput(
+      () => Object.prototype.hasOwnProperty.call(input, 'completed_at'),
+    )
     const fields = requiredRecord(
       input,
-      input && Object.prototype.hasOwnProperty.call(input, 'completed_at')
+      hasCompletedAt
         ? ['board_id', 'context_use_id', 'outcome', 'actual_tokens', 'completed_at']
         : ['board_id', 'context_use_id', 'outcome', 'actual_tokens'],
     )
@@ -613,7 +668,12 @@ export class KnowledgeStore {
     }
     const outcome = fields.outcome
     const actualTokens = integer(fields.actual_tokens, true)
-    if (outcome === 'completed' && actualTokens === null) inputFailure()
+    if (
+      (outcome === 'completed' && actualTokens === null)
+      || (actualTokens !== null && actualTokens > MAX_CONTEXT_BUDGET_TOKENS)
+    ) {
+      inputFailure()
+    }
     const suppliedCompletedAt = Object.prototype.hasOwnProperty.call(fields, 'completed_at')
       ? timestamp(fields.completed_at)
       : null
@@ -665,24 +725,24 @@ export class KnowledgeStore {
   private mapSource(row: Record<string, unknown>, boardId: number): KnowledgeSource {
     try {
       const raw: KnowledgeSource = {
-        id: String(row.id),
-        source_kind: String(row.source_kind) as KnowledgeSource['source_kind'],
-        trust_class: String(row.trust_class) as KnowledgeSource['trust_class'],
-        title: String(row.title),
-        locator: String(row.locator),
-        normalized_locator: String(row.normalized_locator),
-        source_revision: String(row.source_revision),
-        content_sha256: String(row.content_sha256),
-        freshness_policy: String(row.freshness_policy) as KnowledgeSource['freshness_policy'],
-        freshness_state: String(row.freshness_state) as KnowledgeSource['freshness_state'],
-        redaction_state: String(row.redaction_state) as KnowledgeSource['redaction_state'],
-        content_state: String(row.content_state) as KnowledgeSource['content_state'],
-        ingest_state: String(row.ingest_state) as KnowledgeSource['ingest_state'],
+        id: rawString(row.id),
+        source_kind: rawString(row.source_kind) as KnowledgeSource['source_kind'],
+        trust_class: rawString(row.trust_class) as KnowledgeSource['trust_class'],
+        title: rawString(row.title),
+        locator: rawString(row.locator),
+        normalized_locator: rawString(row.normalized_locator),
+        source_revision: rawString(row.source_revision),
+        content_sha256: rawString(row.content_sha256),
+        freshness_policy: rawString(row.freshness_policy) as KnowledgeSource['freshness_policy'],
+        freshness_state: rawString(row.freshness_state) as KnowledgeSource['freshness_state'],
+        redaction_state: rawString(row.redaction_state) as KnowledgeSource['redaction_state'],
+        content_state: rawString(row.content_state) as KnowledgeSource['content_state'],
+        ingest_state: rawString(row.ingest_state) as KnowledgeSource['ingest_state'],
         access_scope: parseCanonicalJson(row.access_scope_json) as KnowledgeSource['access_scope'],
         targets: parseCanonicalJson(row.targets_json) as KnowledgeSource['targets'],
         provenance: parseCanonicalJson(row.provenance_json) as KnowledgeSource['provenance'],
-        created_at: String(row.created_at),
-        updated_at: String(row.updated_at),
+        created_at: rawString(row.created_at),
+        updated_at: rawString(row.updated_at),
       }
       const source = validateKnowledgeSource(raw)
       if (
@@ -692,9 +752,9 @@ export class KnowledgeStore {
       ) {
         corruption()
       }
+      this.assertRetainedTargetScope(boardId, source.targets)
       return source
-    } catch (error) {
-      if (error instanceof KnowledgeStoreError) throw error
+    } catch {
       corruption()
     }
   }
@@ -708,11 +768,11 @@ export class KnowledgeStore {
   private mapChunk(row: Record<string, unknown>, boardId: number): KnowledgeChunk {
     try {
       const raw: KnowledgeChunk = {
-        id: String(row.id),
-        source_id: String(row.source_id),
+        id: rawString(row.id),
+        source_id: rawString(row.source_id),
         ordinal: rawNumber(row.ordinal),
-        content: String(row.content),
-        content_sha256: String(row.content_sha256),
+        content: rawString(row.content),
+        content_sha256: rawString(row.content_sha256),
         character_count: rawNumber(row.character_count),
         byte_count: rawNumber(row.byte_count),
         estimated_tokens: rawNumber(row.estimated_tokens),
@@ -720,7 +780,7 @@ export class KnowledgeStore {
         symbol: row.symbol_json === null || row.symbol_json === undefined
           ? null
           : parseCanonicalJson(row.symbol_json) as KnowledgeChunk['symbol'],
-        created_at: String(row.created_at),
+        created_at: rawString(row.created_at),
       }
       const chunk = validateKnowledgeChunk(raw)
       const source = this.readSource(boardId, chunk.source_id)
@@ -734,8 +794,7 @@ export class KnowledgeStore {
         corruption()
       }
       return chunk
-    } catch (error) {
-      if (error instanceof KnowledgeStoreError) throw error
+    } catch {
       corruption()
     }
   }
@@ -743,7 +802,12 @@ export class KnowledgeStore {
   private validateBuildInput(input: PutContextBuildInput): StoredContextBuild {
     const fields = requiredRecord(input, ['build', 'request', 'source_set'])
     const build = validateContextBuild(fields.build)
-    if (build.status !== 'built' || build.invalidated_at !== null) inputFailure()
+    if (
+      (build.status !== 'built' && build.status !== 'failed')
+      || build.invalidated_at !== null
+    ) {
+      inputFailure()
+    }
     const request = validateContextRequestIdentity(fields.request)
     const sourceSet = normalizeKnowledgeSourceSet(
       fields.source_set as readonly KnowledgeSourceSetEntry[],
@@ -751,6 +815,18 @@ export class KnowledgeStore {
     const entries = normalizeContextBuildEntries(build.entries)
     const requestFingerprint = contextRequestFingerprint(request)
     const sourceSetFingerprint = knowledgeSourceSetFingerprint(sourceSet)
+    if (
+      build.status === 'failed'
+      && (
+        sourceSet.length !== 0
+        || entries.length !== 0
+        || build.usage.used_tokens !== 0
+        || build.usage.used_characters !== 0
+        || Object.keys(build.usage.sections).length !== 0
+      )
+    ) {
+      inputFailure()
+    }
     if (
       build.board_id !== request.board_id
       || !canonicalEqual(build.access_scope, request.access_scope)
@@ -790,59 +866,58 @@ export class KnowledgeStore {
       const relationalSourceSet = sourceRows.map((source, sourceOrdinal) => {
         if (
           rawNumber(source.board_id) !== boardId
-          || String(source.context_build_id) !== buildIdValue
+          || rawString(source.context_build_id) !== buildIdValue
           || rawNumber(source.source_ordinal) !== sourceOrdinal
         ) {
           corruption()
         }
         return {
-          source_id: String(source.source_id),
-          source_revision: String(source.source_revision),
-          content_sha256: String(source.content_sha256),
-          freshness_state: String(source.freshness_state),
-          redaction_state: String(source.redaction_state),
+          source_id: rawString(source.source_id),
+          source_revision: rawString(source.source_revision),
+          content_sha256: rawString(source.content_sha256),
+          freshness_state: rawString(source.freshness_state),
+          redaction_state: rawString(source.redaction_state),
         } as KnowledgeSourceSetEntry
       })
-      const normalizedRelationalSources = normalizeKnowledgeSourceSet(relationalSourceSet)
-      if (!canonicalEqual(sourceSet, normalizedRelationalSources)) corruption()
+      if (!canonicalEqual(sourceSet, relationalSourceSet)) corruption()
       const entryRows = this.db.prepare(`SELECT * FROM context_build_entries
         WHERE board_id=? AND context_build_id=? ORDER BY candidate_ordinal`)
         .all(boardId, buildIdValue) as Record<string, unknown>[]
       const entries = entryRows.map((entry) => ({
-        source_id: String(entry.source_id),
-        chunk_id: String(entry.chunk_id),
-        section: String(entry.section),
+        source_id: rawString(entry.source_id),
+        chunk_id: rawString(entry.chunk_id),
+        section: rawString(entry.section),
         candidate_ordinal: rawNumber(entry.candidate_ordinal),
         selected_ordinal: rawNullableNumber(entry.selected_ordinal),
-        decision: String(entry.decision),
-        reason: String(entry.reason),
+        decision: rawString(entry.decision),
+        reason: rawString(entry.reason),
         score_components: parseCanonicalJson(entry.score_components_json),
         score_micros: rawNumber(entry.score_micros),
-        rendering: String(entry.rendering),
+        rendering: rawString(entry.rendering),
         estimated_tokens: rawNumber(entry.estimated_tokens),
         character_count: rawNumber(entry.character_count),
-        source_kind: String(entry.source_kind),
-        trust_class: String(entry.trust_class),
-        freshness_state: String(entry.freshness_state),
-        redaction_state: String(entry.redaction_state),
-        normalized_locator: String(entry.normalized_locator),
+        source_kind: rawString(entry.source_kind),
+        trust_class: rawString(entry.trust_class),
+        freshness_state: rawString(entry.freshness_state),
+        redaction_state: rawString(entry.redaction_state),
+        normalized_locator: rawString(entry.normalized_locator),
         source_range: parseCanonicalJson(entry.source_range_json),
-        content_sha256: String(entry.content_sha256),
+        content_sha256: rawString(entry.content_sha256),
       })) as ContextBuild['entries']
       const usage = parseCanonicalJson(row.usage_json) as ContextBuild['usage']
       const raw: ContextBuild = {
-        id: String(row.id),
+        id: rawString(row.id),
         board_id: rawNumber(row.board_id),
         access_scope: request.access_scope,
         targets: request.targets,
-        request_fingerprint: String(row.request_fingerprint),
-        source_set_fingerprint: String(row.source_set_fingerprint),
-        manifest_fingerprint: String(row.manifest_fingerprint),
+        request_fingerprint: rawString(row.request_fingerprint),
+        source_set_fingerprint: rawString(row.source_set_fingerprint),
+        manifest_fingerprint: rawString(row.manifest_fingerprint),
         budget: request.budget,
         usage,
         entries,
-        status: String(row.status) as ContextBuild['status'],
-        created_at: String(row.created_at),
+        status: rawString(row.status) as ContextBuild['status'],
+        created_at: rawString(row.created_at),
         invalidated_at: rawNullableString(row.invalidated_at),
       }
       const build = validateContextBuild(raw)
@@ -862,9 +937,9 @@ export class KnowledgeStore {
       ) {
         corruption()
       }
+      this.assertRetainedTargetScope(boardId, build.targets)
       return { ...build, request, source_set: sourceSet }
-    } catch (error) {
-      if (error instanceof KnowledgeStoreError) throw error
+    } catch {
       corruption()
     }
   }
@@ -878,18 +953,18 @@ export class KnowledgeStore {
   private mapUse(row: Record<string, unknown>, boardId: number): ContextUse {
     try {
       const raw: ContextUse = {
-        id: String(row.id),
-        context_build_id: String(row.context_build_id),
+        id: rawString(row.id),
+        context_build_id: rawString(row.context_build_id),
         board_id: rawNumber(row.board_id),
-        job_id: String(row.job_id),
-        session_id: String(row.session_id),
+        job_id: rawString(row.job_id),
+        session_id: rawString(row.session_id),
         injection_ordinal: rawNumber(row.injection_ordinal),
-        manifest_fingerprint: String(row.manifest_fingerprint),
+        manifest_fingerprint: rawString(row.manifest_fingerprint),
         estimated_tokens: rawNumber(row.estimated_tokens),
         actual_tokens: rawNullableNumber(row.actual_tokens),
-        cache_identity: String(row.cache_identity),
-        outcome: String(row.outcome) as ContextUse['outcome'],
-        injected_at: String(row.injected_at),
+        cache_identity: rawString(row.cache_identity),
+        outcome: rawString(row.outcome) as ContextUse['outcome'],
+        injected_at: rawString(row.injected_at),
         completed_at: rawNullableString(row.completed_at),
       }
       const use = validateContextUse(raw)
@@ -904,8 +979,7 @@ export class KnowledgeStore {
         corruption()
       }
       return use
-    } catch (error) {
-      if (error instanceof KnowledgeStoreError) throw error
+    } catch {
       corruption()
     }
   }
@@ -925,11 +999,11 @@ export class KnowledgeStore {
         } | undefined
       if (
         !workspace
-        || Number(workspace.board_id) !== boardId
+        || rawNumber(workspace.board_id) !== boardId
         || (
           target.card_id !== null
           && workspace.card_id !== null
-          && Number(workspace.card_id) !== target.card_id
+          && rawNumber(workspace.card_id) !== target.card_id
         )
       ) {
         scopeFailure()
@@ -938,7 +1012,7 @@ export class KnowledgeStore {
     if (target.card_id !== null) {
       const card = this.db.prepare('SELECT board_id FROM cards WHERE id=?')
         .get(target.card_id) as { board_id: number } | undefined
-      if (!card || Number(card.board_id) !== boardId) scopeFailure()
+      if (!card || rawNumber(card.board_id) !== boardId) scopeFailure()
     }
     if (target.contract_ref !== null) {
       const contract = this.db.prepare(`SELECT card.board_id, contract.version
@@ -949,27 +1023,40 @@ export class KnowledgeStore {
         } | undefined
       if (
         !contract
-        || Number(contract.board_id) !== boardId
-        || Number(contract.version) !== target.contract_version
+        || rawNumber(contract.board_id) !== boardId
+        || rawNumber(contract.version) !== target.contract_version
       ) {
         scopeFailure()
       }
     }
     if (target.job_id !== null) {
-      const job = this.db.prepare(`SELECT board_id, card_id, workspace_id FROM jobs
-        WHERE id=?`).get(target.job_id) as {
+      const job = this.db.prepare(`SELECT board_id, card_id, workspace_id,
+          contract_version, assigned_profile_id FROM jobs WHERE id=?`).get(target.job_id) as {
           board_id: number
           card_id: number | null
           workspace_id: string | null
+          contract_version: number | null
+          assigned_profile_id: string | null
         } | undefined
       if (
         !job
-        || Number(job.board_id) !== boardId
-        || (target.card_id !== null && Number(job.card_id) !== target.card_id)
+        || rawNumber(job.board_id) !== boardId
+        || (
+          target.card_id !== null
+          && rawNullableNumber(job.card_id) !== target.card_id
+        )
         || (
           target.workspace_id !== null
-          && job.workspace_id !== null
           && job.workspace_id !== target.workspace_id
+        )
+        || (
+          target.contract_version !== null
+          && rawNullableNumber(job.contract_version) !== target.contract_version
+        )
+        || (
+          target.profile_id !== null
+          && job.assigned_profile_id !== null
+          && job.assigned_profile_id !== target.profile_id
         )
       ) {
         scopeFailure()
@@ -978,47 +1065,269 @@ export class KnowledgeStore {
     if (target.profile_id !== null) {
       const profile = this.db.prepare('SELECT board_id FROM agent_profiles WHERE id=?')
         .get(target.profile_id) as { board_id: number } | undefined
-      if (!profile || Number(profile.board_id) !== boardId) scopeFailure()
+      if (!profile || rawNumber(profile.board_id) !== boardId) scopeFailure()
     }
     if (target.session_id !== null) {
-      const session = this.db.prepare(`SELECT workspace.board_id, session.job_id,
-          session.profile_id, session.workspace_id
+      const session = this.db.prepare(`SELECT workspace.board_id, workspace.card_id,
+          session.job_id, session.profile_id, session.workspace_id,
+          job.card_id AS job_card_id, job.contract_version AS job_contract_version
         FROM agent_sessions session
         JOIN workspaces workspace ON workspace.id=session.workspace_id
+        LEFT JOIN jobs job ON job.id=session.job_id
         WHERE session.id=?`).get(target.session_id) as {
           board_id: number
+          card_id: number | null
           job_id: string | null
           profile_id: string | null
           workspace_id: string
+          job_card_id: number | null
+          job_contract_version: number | null
         } | undefined
       if (
         !session
-        || Number(session.board_id) !== boardId
+        || rawNumber(session.board_id) !== boardId
         || (target.job_id !== null && session.job_id !== target.job_id)
         || (target.profile_id !== null && session.profile_id !== target.profile_id)
         || (target.workspace_id !== null && session.workspace_id !== target.workspace_id)
+        || (
+          target.card_id !== null
+          && (
+            session.job_id !== null
+              ? rawNullableNumber(session.job_card_id) !== target.card_id
+              : (
+                  session.card_id !== null
+                  && rawNullableNumber(session.card_id) !== target.card_id
+                )
+          )
+        )
+        || (
+          target.contract_version !== null
+          && (
+            session.job_id === null
+            || rawNullableNumber(session.job_contract_version) !== target.contract_version
+          )
+        )
       ) {
         scopeFailure()
       }
     }
     if (target.delivery_report_id !== null) {
-      const report = this.db.prepare(`SELECT board_id, card_id, job_id, session_id, workspace_id
-        FROM delivery_reports WHERE id=?`).get(target.delivery_report_id) as {
+      const report = this.db.prepare(`SELECT report.board_id, report.card_id,
+          report.job_id, report.session_id, report.workspace_id,
+          json_extract(report.asked_snapshot, '$.contract_version')
+            AS asked_contract_version,
+          session.profile_id AS session_profile_id,
+          job.assigned_profile_id AS job_profile_id
+        FROM delivery_reports report
+        LEFT JOIN agent_sessions session ON session.id=report.session_id
+        LEFT JOIN jobs job ON job.id=report.job_id
+        WHERE report.id=?`).get(target.delivery_report_id) as {
           board_id: number
           card_id: number
           job_id: string | null
           session_id: string | null
           workspace_id: string | null
+          asked_contract_version: number | null
+          session_profile_id: string | null
+          job_profile_id: string | null
         } | undefined
       if (
         !report
-        || Number(report.board_id) !== boardId
-        || (target.card_id !== null && Number(report.card_id) !== target.card_id)
+        || rawNumber(report.board_id) !== boardId
+        || (target.card_id !== null && rawNumber(report.card_id) !== target.card_id)
         || (target.job_id !== null && report.job_id !== target.job_id)
         || (target.session_id !== null && report.session_id !== target.session_id)
         || (target.workspace_id !== null && report.workspace_id !== target.workspace_id)
+        || (
+          target.contract_version !== null
+          && rawNullableNumber(report.asked_contract_version) !== target.contract_version
+        )
+        || (
+          target.profile_id !== null
+          && (report.session_id !== null || report.job_id !== null)
+          && report.session_profile_id !== target.profile_id
+          && report.job_profile_id !== target.profile_id
+        )
       ) {
         scopeFailure()
+      }
+    }
+  }
+
+  private assertRetainedTargetScope(
+    boardId: number,
+    target: KnowledgeTargetLinks,
+  ): void {
+    if (target.board_id !== boardId) corruption()
+    if (target.workspace_id !== null) {
+      const workspace = this.db.prepare(`SELECT board_id, card_id FROM workspaces
+        WHERE id=?`).get(target.workspace_id) as {
+          board_id: number
+          card_id: number | null
+        } | undefined
+      if (
+        workspace
+        && (
+          rawNumber(workspace.board_id) !== boardId
+          || (
+            target.card_id !== null
+            && workspace.card_id !== null
+            && rawNumber(workspace.card_id) !== target.card_id
+          )
+        )
+      ) {
+        corruption()
+      }
+    }
+    if (target.card_id !== null) {
+      const card = this.db.prepare('SELECT board_id FROM cards WHERE id=?')
+        .get(target.card_id) as { board_id: number } | undefined
+      if (card && rawNumber(card.board_id) !== boardId) corruption()
+    }
+    if (target.contract_version !== null) {
+      const contract = this.db.prepare(`SELECT card.board_id, contract.version
+        FROM task_contracts contract JOIN cards card ON card.id=contract.card_id
+        WHERE contract.card_id=?`).get(target.card_id) as {
+          board_id: number
+          version: number
+        } | undefined
+      if (
+        contract
+        && (
+          rawNumber(contract.board_id) !== boardId
+          || rawNumber(contract.version) < target.contract_version
+        )
+      ) {
+        corruption()
+      }
+    }
+    if (target.job_id !== null) {
+      const job = this.db.prepare(`SELECT board_id, card_id, workspace_id,
+          contract_version, assigned_profile_id FROM jobs WHERE id=?`).get(target.job_id) as {
+          board_id: number
+          card_id: number | null
+          workspace_id: string | null
+          contract_version: number | null
+          assigned_profile_id: string | null
+        } | undefined
+      if (
+        job
+        && (
+          rawNumber(job.board_id) !== boardId
+          || (
+            target.card_id !== null
+            && rawNullableNumber(job.card_id) !== target.card_id
+          )
+          || (
+            target.workspace_id !== null
+            && job.workspace_id !== target.workspace_id
+          )
+          || (
+            target.contract_version !== null
+            && rawNullableNumber(job.contract_version) !== target.contract_version
+          )
+          || (
+            target.profile_id !== null
+            && job.assigned_profile_id !== null
+            && job.assigned_profile_id !== target.profile_id
+          )
+        )
+      ) {
+        corruption()
+      }
+    }
+    if (target.profile_id !== null) {
+      const profile = this.db.prepare('SELECT board_id FROM agent_profiles WHERE id=?')
+        .get(target.profile_id) as { board_id: number } | undefined
+      if (profile && rawNumber(profile.board_id) !== boardId) corruption()
+    }
+    if (target.session_id !== null) {
+      const session = this.db.prepare(`SELECT workspace.board_id, workspace.card_id,
+          session.job_id, session.profile_id, session.workspace_id,
+          job.card_id AS job_card_id, job.contract_version AS job_contract_version
+        FROM agent_sessions session
+        JOIN workspaces workspace ON workspace.id=session.workspace_id
+        LEFT JOIN jobs job ON job.id=session.job_id
+        WHERE session.id=?`).get(target.session_id) as {
+          board_id: number
+          card_id: number | null
+          job_id: string | null
+          profile_id: string | null
+          workspace_id: string
+          job_card_id: number | null
+          job_contract_version: number | null
+        } | undefined
+      if (
+        session
+        && (
+          rawNumber(session.board_id) !== boardId
+          || (target.job_id !== null && session.job_id !== target.job_id)
+          || (target.profile_id !== null && session.profile_id !== target.profile_id)
+          || (target.workspace_id !== null && session.workspace_id !== target.workspace_id)
+          || (
+            target.card_id !== null
+            && (
+              session.job_id !== null
+                ? rawNullableNumber(session.job_card_id) !== target.card_id
+                : (
+                    session.card_id !== null
+                    && rawNullableNumber(session.card_id) !== target.card_id
+                  )
+            )
+          )
+          || (
+            target.contract_version !== null
+            && (
+              session.job_id === null
+              || rawNullableNumber(session.job_contract_version) !== target.contract_version
+            )
+          )
+        )
+      ) {
+        corruption()
+      }
+    }
+    if (target.delivery_report_id !== null) {
+      const report = this.db.prepare(`SELECT report.board_id, report.card_id,
+          report.job_id, report.session_id, report.workspace_id,
+          json_extract(report.asked_snapshot, '$.contract_version')
+            AS asked_contract_version,
+          session.profile_id AS session_profile_id,
+          job.assigned_profile_id AS job_profile_id
+        FROM delivery_reports report
+        LEFT JOIN agent_sessions session ON session.id=report.session_id
+        LEFT JOIN jobs job ON job.id=report.job_id
+        WHERE report.id=?`).get(target.delivery_report_id) as {
+          board_id: number
+          card_id: number
+          job_id: string | null
+          session_id: string | null
+          workspace_id: string | null
+          asked_contract_version: number | null
+          session_profile_id: string | null
+          job_profile_id: string | null
+        } | undefined
+      if (
+        report
+        && (
+          rawNumber(report.board_id) !== boardId
+          || (target.card_id !== null && rawNumber(report.card_id) !== target.card_id)
+          || (target.job_id !== null && report.job_id !== target.job_id)
+          || (target.session_id !== null && report.session_id !== target.session_id)
+          || (target.workspace_id !== null && report.workspace_id !== target.workspace_id)
+          || (
+            target.contract_version !== null
+            && rawNullableNumber(report.asked_contract_version) !== target.contract_version
+          )
+          || (
+            target.profile_id !== null
+            && (report.session_id !== null || report.job_id !== null)
+            && report.session_profile_id !== target.profile_id
+            && report.job_profile_id !== target.profile_id
+          )
+        )
+      ) {
+        corruption()
       }
     }
   }
@@ -1104,11 +1413,12 @@ export class KnowledgeStore {
 
   private assertUseScope(use: ContextUse, build: StoredContextBuild): void {
     const job = this.db.prepare(`SELECT board_id, card_id, workspace_id,
-        assigned_profile_id FROM jobs WHERE id=?`).get(use.job_id) as {
+        assigned_profile_id, contract_version FROM jobs WHERE id=?`).get(use.job_id) as {
           board_id: number
           card_id: number | null
           workspace_id: string | null
           assigned_profile_id: string | null
+          contract_version: number | null
         } | undefined
     const session = this.db.prepare(`SELECT workspace.board_id, session.job_id,
         session.workspace_id, session.profile_id
@@ -1123,8 +1433,8 @@ export class KnowledgeStore {
     if (
       !job
       || !session
-      || Number(job.board_id) !== use.board_id
-      || Number(session.board_id) !== use.board_id
+      || rawNumber(job.board_id) !== use.board_id
+      || rawNumber(session.board_id) !== use.board_id
       || session.job_id !== use.job_id
       || (
         job.workspace_id !== null
@@ -1137,15 +1447,49 @@ export class KnowledgeStore {
     if (
       (target.job_id !== null && target.job_id !== use.job_id)
       || (target.session_id !== null && target.session_id !== use.session_id)
-      || (target.workspace_id !== null && target.workspace_id !== session.workspace_id)
-      || (target.card_id !== null && Number(job.card_id) !== target.card_id)
+      || (
+        target.workspace_id !== null
+        && (
+          target.workspace_id !== session.workspace_id
+          || job.workspace_id !== target.workspace_id
+        )
+      )
+      || (
+        target.card_id !== null
+        && rawNullableNumber(job.card_id) !== target.card_id
+      )
+      || (
+        target.contract_version !== null
+        && rawNullableNumber(job.contract_version) !== target.contract_version
+      )
       || (
         target.profile_id !== null
         && target.profile_id !== session.profile_id
         && target.profile_id !== job.assigned_profile_id
       )
+      || use.injected_at < build.created_at
     ) {
       scopeFailure()
+    }
+    if (target.delivery_report_id !== null) {
+      const report = this.db.prepare(`SELECT board_id, card_id, job_id, session_id, workspace_id
+        FROM delivery_reports WHERE id=?`).get(target.delivery_report_id) as {
+          board_id: number
+          card_id: number
+          job_id: string | null
+          session_id: string | null
+          workspace_id: string | null
+        } | undefined
+      if (
+        !report
+        || rawNumber(report.board_id) !== use.board_id
+        || report.job_id !== use.job_id
+        || report.session_id !== use.session_id
+        || report.workspace_id !== session.workspace_id
+        || (target.card_id !== null && rawNumber(report.card_id) !== target.card_id)
+      ) {
+        scopeFailure()
+      }
     }
   }
 }

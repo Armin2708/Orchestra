@@ -15,6 +15,46 @@ const manifestHash = digest('b')
 const requestHash = digest('c')
 const sourceSetHash = digest('d')
 const content = 'A😀e\u0301'
+const knowledgeTables = [
+  'context_build_entries',
+  'context_build_sources',
+  'context_builds',
+  'context_uses',
+  'knowledge_chunks',
+  'knowledge_sources',
+] as const
+const knowledgeIndexes = [
+  'idx_context_build_entries_selected',
+  'idx_context_build_sources_source',
+  'idx_context_builds_status',
+  'idx_context_uses_build',
+  'idx_context_uses_job',
+  'idx_knowledge_chunks_source',
+  'idx_knowledge_sources_locator',
+  'idx_knowledge_sources_state',
+] as const
+const knowledgeTriggers = [
+  'context_build_entries_delete',
+  'context_build_entries_immutable',
+  'context_build_entries_insert',
+  'context_build_sources_delete',
+  'context_build_sources_immutable',
+  'context_build_sources_insert',
+  'context_builds_delete',
+  'context_builds_identity_immutable',
+  'context_builds_scope_insert',
+  'context_builds_status_transition',
+  'context_uses_delete',
+  'context_uses_finish',
+  'context_uses_insert',
+  'context_uses_mark_build_used',
+  'knowledge_chunks_delete',
+  'knowledge_chunks_immutable',
+  'knowledge_chunks_insert',
+  'knowledge_sources_delete',
+  'knowledge_sources_immutable',
+  'knowledge_sources_scope_insert',
+] as const
 const sourceRangeJson = JSON.stringify({
   start_line: 1,
   end_line: 1,
@@ -219,7 +259,12 @@ function insertBuild(
     overrides.usageJson ?? JSON.stringify({
       used_tokens: 1,
       used_characters: content.length,
-      sections: {},
+      sections: {
+        relevant_code: {
+          used_tokens: 1,
+          used_characters: content.length,
+        },
+      },
     }),
     overrides.sourceCount ?? 1,
     overrides.entryCount ?? 1,
@@ -369,6 +414,84 @@ function completeBuild(db: Database.Database, boardId: number): void {
   insertEntry(db, boardId)
 }
 
+function insertScopeGraph(
+  db: Database.Database,
+  boardId: number,
+  suffix: string,
+): {
+    cardId: number
+    contractVersion: number
+    jobId: string
+    profileId: string
+    sessionId: string
+    workspaceId: string
+  } {
+  const cardId = Number(db.prepare(`
+    INSERT INTO cards (board_id, title) VALUES (?, ?)
+  `).run(boardId, `knowledge ${suffix} card`).lastInsertRowid)
+  const workspaceId = `knowledge-${suffix}-workspace`
+  const jobId = `knowledge-${suffix}-job`
+  const profileId = `knowledge-${suffix}-profile`
+  const conversationId = `knowledge-${suffix}-conversation`
+  const sessionId = `knowledge-${suffix}-session`
+  db.prepare(`
+    INSERT INTO task_contracts (card_id, objective, version)
+    VALUES (?, 'exercise knowledge scope closure', 1)
+  `).run(cardId)
+  db.prepare(`
+    INSERT INTO workspaces (id, board_id, card_id, name, kind, root_path, status)
+    VALUES (?, ?, ?, ?, 'shared', ?, 'active')
+  `).run(workspaceId, boardId, cardId, workspaceId, `/tmp/${workspaceId}`)
+  db.prepare(`
+    INSERT INTO agent_profiles (
+      id, board_id, name, owner_actor_type, created_at, updated_at
+    ) VALUES (?, ?, ?, 'human', ?, ?)
+  `).run(profileId, boardId, profileId, at, at)
+  db.prepare(`
+    INSERT INTO agent_conversations (
+      id, board_id, profile_id, title, created_by_actor_type, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'human', ?, ?)
+  `).run(conversationId, boardId, profileId, conversationId, at, at)
+  db.prepare(`
+    INSERT INTO jobs (
+      id, board_id, card_id, workspace_id, provider, status, contract_version
+    ) VALUES (?, ?, ?, ?, 'codex', 'queued', 1)
+  `).run(jobId, boardId, cardId, workspaceId)
+  db.prepare(`
+    INSERT INTO agent_sessions (
+      id, workspace_id, provider, status, job_id, profile_id, conversation_id
+    ) VALUES (?, ?, 'codex', 'running', ?, ?, ?)
+  `).run(sessionId, workspaceId, jobId, profileId, conversationId)
+  return {
+    cardId,
+    contractVersion: 1,
+    jobId,
+    profileId,
+    sessionId,
+    workspaceId,
+  }
+}
+
+function fullTargets(
+  boardId: number,
+  graph: ReturnType<typeof insertScopeGraph>,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    board_id: boardId,
+    workspace_id: graph.workspaceId,
+    card_id: graph.cardId,
+    contract_ref: `card:${graph.cardId}:v${graph.contractVersion}`,
+    contract_version: graph.contractVersion,
+    contract_snapshot_sha256: digest('f'),
+    job_id: graph.jobId,
+    profile_id: graph.profileId,
+    session_id: graph.sessionId,
+    delivery_report_id: null,
+    ...overrides,
+  }
+}
+
 describe('knowledge persistence migration 018', () => {
   it('installs all six durable tables after migration 017', () => {
     const db = openDb(':memory:')
@@ -394,6 +517,73 @@ describe('knowledge persistence migration 018', () => {
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
     ).get() as { count: number }).count).toBe(18)
     db.close()
+  })
+
+  it('installs the exact six-table, eight-index, and twenty-trigger inventory', () => {
+    const db = openDb(':memory:')
+    const objects = db.prepare(`
+      SELECT type, name
+      FROM sqlite_master
+      WHERE tbl_name IN (
+        'knowledge_sources', 'knowledge_chunks', 'context_builds',
+        'context_build_sources', 'context_build_entries', 'context_uses'
+      )
+        AND type IN ('table', 'index', 'trigger')
+        AND name NOT LIKE 'sqlite_autoindex_%'
+      ORDER BY type, name
+    `).all() as Array<{ type: string; name: string }>
+
+    expect(objects.filter(({ type }) => type === 'table').map(({ name }) => name))
+      .toEqual(knowledgeTables)
+    expect(objects.filter(({ type }) => type === 'index').map(({ name }) => name))
+      .toEqual(knowledgeIndexes)
+    expect(objects.filter(({ type }) => type === 'trigger').map(({ name }) => name))
+      .toEqual(knowledgeTriggers)
+    db.close()
+  })
+
+  it('atomically rejects full-column weak and textually altered schema lookalikes', () => {
+    const weakKnowledgeSources = `
+      CREATE TABLE knowledge_sources (
+        board_id INTEGER, id TEXT, source_kind TEXT, trust_class TEXT, title TEXT,
+        locator TEXT, normalized_locator TEXT, source_revision TEXT,
+        content_sha256 TEXT, freshness_policy TEXT, freshness_state TEXT,
+        redaction_state TEXT, content_state TEXT, ingest_state TEXT,
+        access_scope_json TEXT, targets_json TEXT, provenance_json TEXT,
+        created_at TEXT, updated_at TEXT
+      )
+    `
+    const variants: Array<(canonical: string) => string> = [
+      () => weakKnowledgeSources,
+      (canonical) => canonical.replace("'forgotten'", "'FORGOTTEN'"),
+      (canonical) => canonical.replace('knowledge_sources (', 'knowledge_sources  ('),
+    ]
+
+    for (const variant of variants) {
+      const db = openDb(':memory:')
+      const canonical = (db.prepare(`
+        SELECT sql FROM sqlite_master
+        WHERE type='table' AND name='knowledge_sources'
+      `).get() as { sql: string }).sql
+      removeMigration018(db)
+      db.exec(variant(canonical))
+
+      expect(() => applyAgentOsMigrations(db)).toThrow(/incompatible knowledge schema/)
+      expect(db.prepare(`
+        SELECT COUNT(*) AS count FROM os_schema_migrations WHERE id=?
+      `).get(MIGRATION_ID)).toEqual({ count: 0 })
+      expect(db.prepare(`
+        SELECT type, name FROM sqlite_master
+        WHERE (
+          name LIKE 'knowledge_%'
+          OR name LIKE 'context_build%'
+          OR name LIKE 'context_uses%'
+        )
+          AND name NOT LIKE 'sqlite_autoindex_%'
+        ORDER BY type, name
+      `).all()).toEqual([{ type: 'table', name: 'knowledge_sources' }])
+      db.close()
+    }
   })
 
   it('upgrades a migration-017 database and safely reruns after marker loss', () => {
@@ -423,6 +613,35 @@ describe('knowledge persistence migration 018', () => {
     expect(db.prepare(`
       SELECT COUNT(*) AS count FROM os_schema_migrations WHERE id=?
     `).get(MIGRATION_ID)).toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('recovers historical migration 005 marker loss while migration 018 remains installed', () => {
+    const db = openDb(':memory:')
+    db.prepare(`
+      DELETE FROM os_schema_migrations
+      WHERE id='005-delivery-report-revision-cascade'
+    `).run()
+
+    expect(() => applyAgentOsMigrations(db)).not.toThrow()
+    expect(db.prepare(`
+      SELECT id FROM os_schema_migrations
+      WHERE id IN (
+        '005-delivery-report-revision-cascade',
+        '018-knowledge-persistence'
+      )
+      ORDER BY id
+    `).all()).toEqual([
+      { id: '005-delivery-report-revision-cascade' },
+      { id: MIGRATION_ID },
+    ])
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='table' AND name IN (
+        'knowledge_sources', 'knowledge_chunks', 'context_builds',
+        'context_build_sources', 'context_build_entries', 'context_uses'
+      )
+    `).get()).toEqual({ count: 6 })
     db.close()
   })
 
@@ -467,7 +686,7 @@ describe('knowledge persistence migration 018', () => {
     expect(() => insertChunk(db, firstBoardId, {
       id: `kc_${digest('6')}`,
       sourceId: secondOnlySourceId,
-    })).toThrow(/FOREIGN KEY/)
+    })).toThrow(/source state is inconsistent|FOREIGN KEY/)
 
     const firstWorkspaceId = 'knowledge-scope-first'
     const alternateWorkspaceId = 'knowledge-scope-alternate'
@@ -485,6 +704,194 @@ describe('knowledge persistence migration 018', () => {
       }),
       targetsJson: targets(firstBoardId, { workspace_id: alternateWorkspaceId }),
     })).toThrow(/access scope is inconsistent/)
+    db.close()
+  })
+
+  it('requires stable same-board targets and pairwise scope closure for sources and builds', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'scope-closure')
+    const alternateBoardId = insertBoard(db, 'scope-other-board')
+    const first = insertScopeGraph(db, boardId, 'scope-first')
+    const second = insertScopeGraph(db, boardId, 'scope-second')
+    const crossBoard = insertScopeGraph(db, alternateBoardId, 'scope-cross-board')
+    const validTargets = fullTargets(boardId, first)
+
+    insertSource(db, boardId, { targetsJson: JSON.stringify(validTargets) })
+    insertBuild(db, boardId, {
+      requestJson: requestJson(boardId, validTargets),
+    })
+    const validSessionContractTargets = fullTargets(boardId, first, {
+      workspace_id: null,
+      job_id: null,
+      profile_id: null,
+    })
+    insertSource(db, boardId, {
+      id: `ks_${'a'.repeat(64)}`,
+      targetsJson: JSON.stringify(validSessionContractTargets),
+    })
+    insertBuild(db, boardId, {
+      id: `cb_${'a'.repeat(64)}`,
+      requestFingerprint: 'a'.repeat(64),
+      requestJson: requestJson(boardId, validSessionContractTargets),
+    })
+    const invalidSessionContractTargets = fullTargets(boardId, first, {
+      workspace_id: null,
+      job_id: null,
+      profile_id: null,
+      session_id: second.sessionId,
+    })
+    expect(() => insertSource(db, boardId, {
+      id: `ks_${'b'.repeat(64)}`,
+      targetsJson: JSON.stringify(invalidSessionContractTargets),
+    })).toThrow(/target|scope/)
+    expect(() => insertBuild(db, boardId, {
+      id: `cb_${'b'.repeat(64)}`,
+      requestFingerprint: 'b'.repeat(64),
+      requestJson: requestJson(boardId, invalidSessionContractTargets),
+    })).toThrow(/target|scope/)
+
+    const invalidTargets = [
+      fullTargets(boardId, first, {
+        workspace_id: second.workspaceId,
+      }),
+      fullTargets(boardId, first, {
+        card_id: second.cardId,
+        contract_ref: `card:${second.cardId}:v1`,
+      }),
+      fullTargets(boardId, first, {
+        job_id: second.jobId,
+      }),
+      fullTargets(boardId, first, {
+        profile_id: second.profileId,
+      }),
+      fullTargets(boardId, first, {
+        session_id: second.sessionId,
+      }),
+      fullTargets(boardId, first, {
+        workspace_id: crossBoard.workspaceId,
+      }),
+    ]
+    for (const [index, invalid] of invalidTargets.entries()) {
+      expect(() => insertSource(db, boardId, {
+        id: `ks_${String(index + 2).repeat(64)}`,
+        targetsJson: JSON.stringify(invalid),
+      })).toThrow(/target|scope/)
+      expect(() => insertBuild(db, boardId, {
+        id: `cb_${String(index + 2).repeat(64)}`,
+        requestFingerprint: String(index + 2).repeat(64),
+        requestJson: requestJson(boardId, invalid),
+      })).toThrow(/target|scope/)
+    }
+
+    db.prepare('UPDATE task_contracts SET version=2 WHERE card_id=?')
+      .run(first.cardId)
+    const jobVersionMismatch = fullTargets(boardId, first, {
+      contract_ref: `card:${first.cardId}:v2`,
+      contract_version: 2,
+    })
+    expect(() => insertSource(db, boardId, {
+      id: `ks_${'8'.repeat(64)}`,
+      targetsJson: JSON.stringify(jobVersionMismatch),
+    })).toThrow(/target|scope/)
+    expect(() => insertBuild(db, boardId, {
+      id: `cb_${'8'.repeat(64)}`,
+      requestFingerprint: '8'.repeat(64),
+      requestJson: requestJson(boardId, jobVersionMismatch),
+    })).toThrow(/target|scope/)
+
+    db.prepare('UPDATE jobs SET contract_version=2 WHERE id=?').run(first.jobId)
+    insertSource(db, boardId, {
+      id: `ks_${'9'.repeat(64)}`,
+      targetsJson: JSON.stringify(jobVersionMismatch),
+    })
+    insertBuild(db, boardId, {
+      id: `cb_${'9'.repeat(64)}`,
+      requestFingerprint: '9'.repeat(64),
+      requestJson: requestJson(boardId, jobVersionMismatch),
+    })
+    db.close()
+  })
+
+  it('rejects missing mandatory scope fields and malformed contract snapshots', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'null-semantics')
+    const graph = insertScopeGraph(db, boardId, 'null-semantics')
+    const requiredTargets = fullTargets(boardId, graph)
+    const withoutBoard = { ...requiredTargets }
+    delete withoutBoard.board_id
+
+    expect(() => insertSource(db, boardId, {
+      targetsJson: JSON.stringify(withoutBoard),
+    })).toThrow(/target|scope/)
+    expect(() => insertSource(db, boardId, {
+      targetsJson: JSON.stringify(fullTargets(boardId, graph, {
+        contract_snapshot_sha256: digest('A'),
+      })),
+    })).toThrow(/contract target/)
+
+    const missingRequestFields = [
+      {
+        access_scope: { kind: 'board' },
+        targets: requiredTargets,
+        budget: { max_tokens: 10, max_characters: 100, sections: {} },
+      },
+      {
+        board_id: boardId,
+        access_scope: { kind: 'board' },
+        budget: { max_tokens: 10, max_characters: 100, sections: {} },
+      },
+      {
+        board_id: boardId,
+        access_scope: { kind: 'board' },
+        targets: requiredTargets,
+      },
+    ]
+    for (const [index, request] of missingRequestFields.entries()) {
+      expect(() => insertBuild(db, boardId, {
+        id: `cb_${String(index + 5).repeat(64)}`,
+        requestFingerprint: String(index + 5).repeat(64),
+        requestJson: JSON.stringify(request),
+      })).toThrow(/request scope|budget accounting/)
+    }
+    for (const [index, usage] of [
+      { used_characters: 0, sections: {} },
+      { used_tokens: 0, sections: {} },
+      { used_tokens: 0, used_characters: 0 },
+    ].entries()) {
+      expect(() => insertBuild(db, boardId, {
+        id: `cb_${['9', 'a', 'b'][index].repeat(64)}`,
+        requestFingerprint: ['9', 'a', 'b'][index].repeat(64),
+        requestJson: requestJson(boardId, requiredTargets),
+        usageJson: JSON.stringify(usage),
+      })).toThrow(/budget accounting/)
+    }
+    expect(() => insertBuild(db, boardId, {
+      id: `cb_${digest('8')}`,
+      requestFingerprint: digest('8'),
+      requestJson: requestJson(boardId, fullTargets(boardId, graph, {
+        contract_snapshot_sha256: 'abc',
+      })),
+    })).toThrow(/contract target/)
+    db.close()
+  })
+
+  it('intentionally leaves delivery report existence to fail-closed public reads', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'delivery-exception')
+    const missingDeliveryId = 'delivery-report-not-yet-visible'
+    insertSource(db, boardId, {
+      targetsJson: targets(boardId, { delivery_report_id: missingDeliveryId }),
+    })
+    insertBuild(db, boardId, {
+      requestJson: requestJson(boardId, { delivery_report_id: missingDeliveryId }),
+    })
+    const triggerSql = (db.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (
+        'knowledge_sources_scope_insert', 'context_builds_scope_insert'
+      )
+    `).all() as Array<{ sql: string }>).map(({ sql }) => sql.toLowerCase())
+    expect(triggerSql.every((sql) => !sql.includes('delivery_reports'))).toBe(true)
     db.close()
   })
 
@@ -526,6 +933,91 @@ describe('knowledge persistence migration 018', () => {
     db.close()
   })
 
+  it('restricts board deletion and rejects chunks for unavailable source states', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'source-state')
+    insertSource(db, boardId)
+    expect(() => db.prepare('DELETE FROM boards WHERE id=?').run(boardId))
+      .toThrow(/FOREIGN KEY/)
+
+    const unavailableSources: SourceOverrides[] = [
+      {
+        id: `ks_${digest('5')}`,
+        contentState: 'purged',
+      },
+      {
+        id: `ks_${digest('6')}`,
+        redactionState: 'withheld',
+        contentState: 'withheld',
+      },
+      {
+        id: `ks_${digest('7')}`,
+        ingestState: 'forgotten',
+        contentState: 'purged',
+      },
+    ]
+    for (const [index, source] of unavailableSources.entries()) {
+      insertSource(db, boardId, source)
+      expect(() => insertChunk(db, boardId, {
+        id: `kc_${String(index + 5).repeat(64)}`,
+        sourceId: source.id,
+      })).toThrow(/source state is inconsistent/)
+    }
+    db.close()
+  })
+
+  it('enforces direct-SQL size and budget boundaries', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'size-budget')
+    insertSource(db, boardId)
+    expect(() => insertChunk(db, boardId, {
+      characterCount: 2_000_001,
+    })).toThrow(/CHECK/)
+    expect(() => insertChunk(db, boardId, {
+      byteCount: 8_000_001,
+    })).toThrow(/CHECK/)
+
+    expect(() => insertBuild(db, boardId, {
+      requestJson: JSON.stringify({
+        ...JSON.parse(requestJson(boardId)),
+        budget: {
+          max_tokens: 10_000_001,
+          max_characters: 100,
+          sections: {},
+        },
+      }),
+    })).toThrow(/budget accounting/)
+    expect(() => insertBuild(db, boardId, {
+      id: `cb_${digest('5')}`,
+      requestFingerprint: digest('5'),
+      requestJson: requestJson(boardId),
+      usageJson: JSON.stringify({
+        used_tokens: 11,
+        used_characters: 5,
+        sections: {},
+      }),
+    })).toThrow(/budget accounting/)
+
+    const jsonShellBytes = Buffer.byteLength('{"padding":""}', 'utf8')
+    const atLimit = JSON.stringify({
+      padding: 'x'.repeat(8_000_000 - jsonShellBytes),
+    })
+    const overLimit = JSON.stringify({
+      padding: 'x'.repeat(8_000_001 - jsonShellBytes),
+    })
+    expect(Buffer.byteLength(atLimit, 'utf8')).toBe(8_000_000)
+    expect(Buffer.byteLength(overLimit, 'utf8')).toBe(8_000_001)
+    expect(() => insertSource(db, boardId, {
+      id: `ks_${digest('8')}`,
+      provenanceJson: atLimit,
+    })).not.toThrow()
+    expect(() => insertSource(db, boardId, {
+      id: `ks_${digest('9')}`,
+      provenanceJson: overLimit,
+    })).toThrow(/CHECK/)
+    db.close()
+  })
+
   it('enforces canonical ordered build evidence and permits withheld omitted history', () => {
     const db = openDb(':memory:')
     const boardId = insertBoard(db, 'build-evidence')
@@ -541,11 +1033,28 @@ describe('knowledge persistence migration 018', () => {
       requestJson: '{ "board_id": 1 }',
     })).toThrow()
 
-    insertBuild(db, boardId)
+    insertBuild(db, boardId, { entryCount: 2 })
     expect(() => insertBuildSource(db, boardId, { sourceOrdinal: 1 }))
       .toThrow(/order or evidence/)
     insertBuildSource(db, boardId)
 
+    expect(() => insertEntry(db, boardId, buildId, {
+      scoreComponentsJson: '{}',
+    })).toThrow(/CHECK/)
+    for (const missingKey of [
+      'authority_micros',
+      'relevance_micros',
+      'freshness_micros',
+      'recency_micros',
+      'contract_micros',
+      'pin_micros',
+    ]) {
+      const components = JSON.parse(scoreComponentsJson) as Record<string, number>
+      delete components[missingKey]
+      expect(() => insertEntry(db, boardId, buildId, {
+        scoreComponentsJson: JSON.stringify(components),
+      })).toThrow(/CHECK/)
+    }
     expect(() => insertEntry(db, boardId, buildId, {
       reason: 'stale',
     })).toThrow(/CHECK/)
@@ -561,6 +1070,10 @@ describe('knowledge persistence migration 018', () => {
       scoreMicros: 2,
     })).toThrow(/CHECK/)
     insertEntry(db, boardId)
+    expect(() => insertEntry(db, boardId, buildId, {
+      candidateOrdinal: 1,
+      selectedOrdinal: 1,
+    })).toThrow(/UNIQUE/)
     expect(() => db.prepare(`
       UPDATE context_build_entries SET score_micros=2
       WHERE board_id=? AND context_build_id=? AND candidate_ordinal=0
@@ -613,6 +1126,62 @@ describe('knowledge persistence migration 018', () => {
     db.close()
   })
 
+  it('allows aggregate wrapper overhead but requires exact per-section accounting', () => {
+    const attempt = (
+      usage: {
+        used_tokens: number
+        used_characters: number
+        sections: Record<string, { used_tokens: number; used_characters: number }>
+      },
+      entryTokens: number,
+      shouldPass: boolean,
+    ): void => {
+      const db = openDb(':memory:')
+      const boardId = insertBoard(db, `accounting-${usage.used_tokens}-${entryTokens}-${shouldPass}`)
+      insertSource(db, boardId)
+      insertChunk(db, boardId)
+      insertBuild(db, boardId, { usageJson: JSON.stringify(usage) })
+      insertBuildSource(db, boardId)
+      insertEntry(db, boardId, buildId, { estimatedTokens: entryTokens })
+      const runtime = insertRuntime(db, boardId, `accounting-${entryTokens}-${shouldPass}`)
+      const operation = (): void => insertContextUse(db, boardId, runtime, {
+        estimatedTokens: usage.used_tokens,
+      })
+      if (shouldPass) expect(operation).not.toThrow()
+      else expect(operation).toThrow(/build evidence is inconsistent/)
+      db.close()
+    }
+
+    attempt({
+      used_tokens: 2,
+      used_characters: 6,
+      sections: {
+        relevant_code: { used_tokens: 1, used_characters: 5 },
+      },
+    }, 1, true)
+    attempt({
+      used_tokens: 2,
+      used_characters: 6,
+      sections: {
+        relevant_code: { used_tokens: 2, used_characters: 5 },
+      },
+    }, 1, false)
+    attempt({
+      used_tokens: 2,
+      used_characters: 6,
+      sections: {
+        relevant_code: { used_tokens: 0, used_characters: 5 },
+      },
+    }, 1, false)
+    attempt({
+      used_tokens: 1,
+      used_characters: 5,
+      sections: {
+        relevant_code: { used_tokens: 1, used_characters: 5 },
+      },
+    }, 2, false)
+  })
+
   it('requires a complete scoped running use and permits exactly one terminal transition', () => {
     const db = openDb(':memory:')
     const boardId = insertBoard(db, 'context-use')
@@ -627,11 +1196,30 @@ describe('knowledge persistence migration 018', () => {
     expect(() => insertContextUse(db, boardId, runtime, {
       estimatedTokens: 2,
     })).toThrow(/build evidence is inconsistent/)
+    expect(() => db.prepare(`
+      UPDATE context_builds SET status='used'
+      WHERE board_id=? AND id=?
+    `).run(boardId, buildId)).toThrow(/invalid context build status/)
 
     insertContextUse(db, boardId, runtime)
     expect(db.prepare(`
       SELECT status FROM context_builds WHERE board_id=? AND id=?
     `).get(boardId, buildId)).toEqual({ status: 'used' })
+    expect(() => db.prepare(`
+      UPDATE context_uses
+      SET outcome='completed', actual_tokens=NULL, completed_at=?
+      WHERE board_id=? AND id=?
+    `).run(at, boardId, useId)).toThrow()
+    expect(() => db.prepare(`
+      UPDATE context_uses
+      SET outcome='completed', actual_tokens=1, completed_at='2026-07-25T23:59:59.000Z'
+      WHERE board_id=? AND id=?
+    `).run(boardId, useId)).toThrow()
+    expect(() => db.prepare(`
+      UPDATE context_uses
+      SET outcome='completed', actual_tokens=10000001, completed_at=?
+      WHERE board_id=? AND id=?
+    `).run(at, boardId, useId)).toThrow(/CHECK/)
     db.prepare(`
       UPDATE context_uses
       SET outcome='completed', actual_tokens=1, completed_at=?
@@ -656,6 +1244,11 @@ describe('knowledge persistence migration 018', () => {
       UPDATE context_builds SET status='failed'
       WHERE board_id=? AND id=?
     `).run(boardId, buildId)).toThrow(/invalid context build status/)
+    expect(() => db.prepare(`
+      UPDATE context_builds
+      SET status='invalidated', invalidated_at='2026-07-25T23:59:59.000Z'
+      WHERE board_id=? AND id=?
+    `).run(boardId, buildId)).toThrow(/invalid context build status/)
     db.prepare(`
       UPDATE context_builds SET status='invalidated', invalidated_at=?
       WHERE board_id=? AND id=?
@@ -666,6 +1259,32 @@ describe('knowledge persistence migration 018', () => {
       status: 'invalidated',
       invalidated_at: at,
     })
+    expect(() => db.prepare(`
+      UPDATE context_builds
+      SET invalidated_at='2026-07-26T00:00:01.000Z'
+      WHERE board_id=? AND id=?
+    `).run(boardId, buildId)).toThrow(/invalid context build status/)
+    db.close()
+  })
+
+  it('does not write os_events or expose approval surfaces from knowledge persistence', () => {
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'no-approval-events')
+    const before = db.prepare('SELECT COUNT(*) AS count FROM os_events').get()
+    completeBuild(db, boardId)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM os_events').get()).toEqual(before)
+
+    const schemaSql = (db.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE type IN ('table', 'index', 'trigger')
+        AND tbl_name IN (
+          'knowledge_sources', 'knowledge_chunks', 'context_builds',
+          'context_build_sources', 'context_build_entries', 'context_uses'
+        )
+        AND sql IS NOT NULL
+    `).all() as Array<{ sql: string }>).map(({ sql }) => sql.toLowerCase()).join('\n')
+    expect(schemaSql).not.toContain('os_events')
+    expect(schemaSql).not.toContain('approval')
     db.close()
   })
 })

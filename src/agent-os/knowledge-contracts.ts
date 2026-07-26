@@ -2185,6 +2185,7 @@ export function validateContextUse(value: unknown): ContextUse {
   if (
     (outcome === 'running' && (actualTokens !== null || completedAt !== null))
     || (outcome !== 'running' && completedAt === null)
+    || (outcome === 'completed' && actualTokens === null)
     || (completedAt !== null && completedAt < injectedAt)
   ) {
     contractError('invalid_contract', 'use_lifecycle')

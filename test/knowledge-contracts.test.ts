@@ -29,6 +29,7 @@ import {
   validateContextBudgetUsage,
   validateContextBuildEntry,
   validateContextRequestIdentity,
+  validateContextUse,
   validateKnowledgeAccessScope,
   validateKnowledgeSourceRange,
   validateKnowledgeTargetLinks,
@@ -1309,6 +1310,53 @@ describe('strict context budgets', () => {
         'budget_exceeded',
       )
     }
+  })
+})
+
+describe('context-use lifecycle contracts', () => {
+  it('requires completed token evidence and monotonic completion time', () => {
+    const identity = {
+      context_build_id: BUILD_A,
+      job_id: 'job-lifecycle',
+      session_id: 'session-lifecycle',
+      injection_ordinal: 0,
+    }
+    const running = {
+      id: contextUseId(identity),
+      ...identity,
+      board_id: 1,
+      manifest_fingerprint: HASH_A,
+      estimated_tokens: 5,
+      actual_tokens: null,
+      cache_identity: 'cache-lifecycle',
+      outcome: 'running' as const,
+      injected_at: '2026-07-26T09:01:00.000Z',
+      completed_at: null,
+    }
+
+    expect(validateContextUse(running)).toEqual(running)
+    expect(validateContextUse({
+      ...running,
+      outcome: 'failed',
+      completed_at: '2026-07-26T09:02:00.000Z',
+    })).toMatchObject({ outcome: 'failed', actual_tokens: null })
+    expectContractError(
+      () => validateContextUse({
+        ...running,
+        outcome: 'completed',
+        completed_at: '2026-07-26T09:02:00.000Z',
+      }),
+      'invalid_contract',
+    )
+    expectContractError(
+      () => validateContextUse({
+        ...running,
+        outcome: 'completed',
+        actual_tokens: 4,
+        completed_at: '2026-07-26T09:00:59.999Z',
+      }),
+      'invalid_contract',
+    )
   })
 })
 
