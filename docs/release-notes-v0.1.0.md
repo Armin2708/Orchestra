@@ -29,25 +29,44 @@ kanban.
 
 ## Verification
 
-The [hosted QA-019 checkpoint](./checkpoints/2026-07-25-agent-os-hosted-qa019.md) records GitHub
-Actions run `30171494794` at exact commit
-`3c543b52a32109747d5f0fa1521188380c55fa93`:
+The
+[exact-head functional checkpoint](./checkpoints/2026-07-26-agent-os-exact-head-95d11d5.md)
+records combined local evidence at exact commit
+`95d11d5892523b0f742eb098563ba92b13e65ba4`:
 
-- all 21 required exact-commit engineering gates passed;
-- serial and default-parallel suites each passed 127 files / 890 tests;
-- root and web TypeScript checks and production builds passed;
-- credential-free end-to-end, package creation, retained-artifact install smoke, provider doctor,
-  pinned Codex protocol, and secret-scan gates passed; and
-- root and web dependency audits passed the configured high/critical threshold. This is not a
-  zero-vulnerability claim.
+- serial and default-parallel Node 22.20.0 suites each passed 134 files / 979 tests, and the focused
+  combined gate passed 31 files / 288 tests;
+- root and web TypeScript checks, root and web production builds, and credential-free end-to-end
+  smoke passed;
+- in-app Browser inventory was exactly `[]`. The explicitly labeled Playwright fallback passed the
+  full desktop/phone assignment and Agent Home journey at `35b68fe`; at `95d11d5` it directly
+  rechecked drawer containment, the deep link, all seven phone workspace panes, real PTY
+  input/output, bounded Stop, restart with a new PID, zero console errors, and all observed APIs
+  returning `200`. This fallback does not close `QA-013`;
+- the 35-file, 616,570-byte `orchestra-board@0.1.0` tarball had SHA-256
+  `4a6fdf21238ba8d82e890cc4413f472db28c01c08f0f96a28e07aafc143393d4`, and isolated
+  clean-consumer install, CLI/version/help, and doctor diagnostic smoke behaved as expected;
+- Claude readiness passed, while overall both-provider readiness intentionally remained
+  unsupported because installed Codex `0.145.0` correctly failed closed against the pinned
+  supported `0.144.6` protocol; and
+- clean-consumer audit reported four moderate dependency nodes from one transitive Hono advisory,
+  with zero high or critical findings. This is not a zero-vulnerability claim.
 
-That checkpoint proves one frozen engineering commit and its retained package bytes. It does not
-prove publication, provenance, a later release head, real credentialed Claude/Codex sessions,
-clean-machine install/upgrade/uninstall, or the complete desktop/phone journey.
+Independent read-only combined and CSS-delta regression/security reviews passed in this
+orchestration session; no retained reviewer artifact was produced. The earlier
+[hosted QA-019 checkpoint](./checkpoints/2026-07-25-agent-os-hosted-qa019.md) remains the hosted
+evidence for `3c543b52a32109747d5f0fa1521188380c55fa93`; neither checkpoint proves
+publication, provenance, a release tag, real credentialed Claude/Codex journeys,
+clean-machine install/upgrade/uninstall, or the complete intended Browser journey.
 
 ## Remaining before release
 
-- The master program is 123 / 373 checklist boxes delivered; 250 remain open.
+- The master program is 126 / 373 checklist boxes delivered; 247 remain open. This exact-head
+  reconciliation newly closes only `JOB-010`, `PKG-002`, and `PKG-005`; milestone summaries remain
+  unchanged at 2 / 15.
+- `QA-001` remains open because the added tests do not cover every state machine; `QA-013` remains
+  open because the intended desktop/tablet/phone Browser matrix was unavailable; and `TOOL-010`
+  remains open because the readiness doctor does not yet verify installed hook state.
 - Public npm and plugin artifacts, clean-machine installation, real provider journeys, safe device
   pairing, browser/mobile acceptance, operations hardening, release documentation, tagging, and
   staged dogfood remain required.

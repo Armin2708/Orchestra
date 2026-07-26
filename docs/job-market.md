@@ -1,10 +1,11 @@
 # Typed Job Market Contracts
 
 Status: the typed contract, validation, lifecycle, dependency, budget, audit, and exclusive
-assignment foundation is implemented. Six deterministic built-in contract templates and the
-canonical assignment lifecycle are available through API and CLI. Open Work UX, runtime
-job/session binding, scheduler matching, the contract editor, and collaborative ownership remain
-open.
+assignment lifecycle is implemented. Six deterministic built-in contract templates and the
+canonical assignment lifecycle are available through API and CLI, and one exact assignment
+identity is now bound through managed jobs, sessions, execution, retry, recovery, and control
+projections. Open Work UX, scheduler matching, the contract editor, collaborative ownership, and
+the complete Job Market gate remain open.
 
 This slice is tracked in the [Agent OS North Star Delivery Program](./north-star-delivery-program.md).
 
@@ -29,13 +30,25 @@ Migration `016-job-market-assignment-lifecycle` adds:
 - `job_market_assignments`, an immutable board/card/profile/workspace responsibility history;
 - one active exclusive assignment per card;
 - market-version and assignment-version compare-and-set guards;
-- frozen nullable assignment identity columns on `jobs` and `agent_sessions` for phase-two runtime
-  binding;
+- frozen nullable assignment identity columns on `jobs` and `agent_sessions`, later consumed by
+  migration 017 runtime binding;
 - scope, capability, dependency, profile-archive, active-execution, lifecycle, and identity
   triggers.
 
 Migration 016 requires migration 015 and the Job Market, Agent Home, event, workspace, and runtime
 tables. It creates no assignment rows for legacy card owners or pre-016 runtime state.
+
+Migration `017-job-assignment-runtime-binding` completes the assignment-to-runtime cutover:
+
+- a new assigned job freezes `job_assignment_id`, `assigned_profile_id`, and
+  `assignment_market_version` as one all-null or all-present identity tuple;
+- its managed AgentSession must carry the same tuple and exact profile, conversation, provider,
+  driver, workspace, and relational job identity;
+- legacy unassigned jobs remain supported, but cannot acquire a late assignment through mutable
+  owner or context projections;
+- database and runtime guards prevent partial, substituted, cross-scope, stale, relinked, or
+  rewritten assignment identity on new and recovered runtime records; and
+- migration validation is fail-closed and does not backfill ambiguous legacy execution.
 
 Pre-016 ownerless `assigned` contracts with no active job or session are safely returned to `open`
 with a version increment. `assigned` contracts that still have active execution, plus `running` and
@@ -44,9 +57,10 @@ write a migration audit event with an explicit remediation. Retained legacy stat
 re-asserted through a same-state `assigned` transition and are ineligible for canonical assignment
 until their normal lifecycle returns them to `open`.
 
-`cards.owner_agent_id` remains a compatibility projection. Phase one rejects a non-null legacy
-owner instead of creating dual authority; the phase-two runtime-binding migration must replace
-that guard with a proven assignment-bound projection before the executor writes legacy ownership.
+`cards.owner_agent_id` remains a compatibility projection rather than assignment authority. For
+new assignment-bound work it is written only from the validated runtime identity; task and UI
+projections expose the same frozen assignment/profile/market-version tuple. Corrupt or partial
+tuples fail closed to ambient presentation rather than borrowing mutable card ownership.
 
 ## Typed fields
 
@@ -105,13 +119,16 @@ every declared required capability against the selected active AgentProfile befo
 
 Assignment history is append/terminalize only: identity fields cannot be rewritten, terminal rows
 cannot be reopened, and profile/card/workspace scope changes cannot displace retained history. A
-workspace must be active when selected, but phase one does not block later workspace
-failed/missing/archived cleanup because runtime coordination is not yet assignment-aware.
+workspace must be active when selected. Once a bound job exists, assignment identity remains
+immutable while workspace lifecycle and provider operations are revalidated at each control,
+retry, recovery, and execution boundary.
 
-Phase one deliberately does not wire assignment identity into scheduler-created jobs or managed
-sessions. The nullable frozen columns and invariants are ready for that phase-two cutover,
-including queued-only identity injection and ordinary profile/conversation linking after a bound
-job starts.
+The runtime binding resolves idempotent replay before mutable market state, freezes contract and
+delivery identity when the job is created, and permits that already-created work to execute after
+later market edits. New jobs and new session bindings still require the exact current active
+assignment. Legacy unassigned retry uses a compare-and-set guard so a concurrently appearing
+assignment cannot create mixed-authority child work. Cancellation-winning recovery never
+resurrects the session, and a provider handle is stopped only after its exact identity is trusted.
 
 ## Built-in templates
 
@@ -213,6 +230,20 @@ OS boundary.
 - JOB-010 phase-one focused gate: 10 files / 79 tests on Node 22.20.0.
 - The JOB-010 source candidate passed 122 files / 820 tests both serial and default-parallel,
   root and web TypeScript checks, production builds, and an independent P0-P2 review.
+- JOB-010 phase two introduced migration `017-job-assignment-runtime-binding` and exercised the
+  frozen identity across orchestration entry points, scheduler execution, provider dispatch,
+  retry, cancellation, recovery, fork, workspace mutation, Agent Home controls, API projections,
+  and UI joins.
+- Projection correction `8b2fcb7` proves a genuine assigned task returns the exact
+  `job_assignment_id`, `assigned_profile_id`, and `assignment_market_version`, while a corrupted
+  tuple fails closed to ambient presentation.
+- Exact combined head `95d11d5892523b0f742eb098563ba92b13e65ba4` passed both complete
+  Node 22.20.0 suites at 134 files / 979 tests, the focused combined gate at 31 files / 288 tests,
+  root/web TypeScript and production builds, and credential-free end-to-end smoke.
+- Labeled Playwright fallback acceptance passed the full desktop/phone assignment and Agent Home
+  journey at exact head `35b68fe`. Exact head `95d11d5` directly rechecked the terminal,
+  deep-link, seven-pane phone workspace, and drawer-containment delta. In-app Browser inventory
+  remained exactly `[]`, so `QA-013` stays open.
 - Migration tests prove missing prerequisites roll back and are not recorded.
 - Assignment migration tests prove explicit pre-016 lifecycle remediation, no legacy-owner or
   runtime backfill, one-active exclusivity, active-execution guards, scope,
@@ -233,10 +264,9 @@ OS boundary.
 
 - Open Work filtering and dependency/critical-path visualization;
 - validated contract editor and generated agent-brief preview;
-- scheduler job/session binding to the frozen assignment identity;
 - scheduler matching by declared capability and current capacity;
 - collaborative ownership through Teams;
 - full publish → match/assign → dependency-ready → exactly-one-job acceptance gate;
 - desktop and phone browser acceptance still requires an available configured browser instance;
 - the release-level Codex protocol contract must be deliberately reconciled from pinned CLI
-  0.144.6 to the installed 0.145.0 protocol before the product can be called shippable.
+  0.144.6 to the installed 0.145.0 protocol before a release claim.
