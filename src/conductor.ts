@@ -20,6 +20,7 @@ import {
   writeProviderModelCache,
   type AgentProviderCatalog,
 } from './agent-providers.js'
+import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 import type {
   ClaudeAgentHomeBinding,
   ClaudeNativeEvent,
@@ -485,9 +486,13 @@ export class Conductor {
     return { woke, queued, skipped }
   }
 
-  hire(opts: { boardId: number; cwd: string; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number; agentHome?: ClaudeAgentHomeBinding }): any {
+  hire(opts: { boardId: number; cwd: string; env?: Record<string, string | undefined>; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number; agentHome?: ClaudeAgentHomeBinding }): any {
     if (opts.provider && opts.provider !== DEFAULT_AGENT_PROVIDER)
       throw new Error(`provider ${opts.provider} must be routed through ProviderAgentManager`)
+    const providerEnvironment = prepareManagedSubscriptionEnvironmentV1(
+      'claude',
+      opts.env ?? process.env,
+    )
     // re-hiring an already-live name returns the existing session instead of leaking a new one
     if (opts.name) {
       const existing = [...this.hired.values()].find((h) => h.boardId === opts.boardId && h.name === opts.name)
@@ -552,6 +557,7 @@ export class Conductor {
           effort,
           permission_mode: permissionMode,
           access_profile: opts.accessProfile ?? null,
+          provider_environment: providerEnvironment.toJSON(),
         },
       })
     } catch (error) {
@@ -696,7 +702,7 @@ export class Conductor {
     // ORCHESTRA_NAME makes the in-session hooks re-register this same identity
     // instead of minting a second "session" agent for the SDK subprocess
     const env: Record<string, string | undefined> = {
-      ...process.env,
+      ...providerEnvironment.forSpawn(),
       ORCHESTRA_PORT: String(Number(process.env.ORCHESTRA_PORT ?? 4750)),
       ORCHESTRA_AGENT: name,
       ORCHESTRA_NAME: name,

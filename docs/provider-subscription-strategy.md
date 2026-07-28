@@ -1,6 +1,6 @@
 # Subscription-first terminal-agent strategy
 
-Status: **target product and release contract; not current provider-support evidence**.
+Status: **delivered contract with TOOL-014 integration in progress; not provider-support evidence**.
 
 Orchestra's primary provider path is a personal subscription used through the vendor's native
 terminal coding agent. Direct usage-priced provider API execution is an optional, explicit
@@ -30,8 +30,8 @@ must never persist the raw value.
 
 | Provider | Subscription-first upstream path | Current Orchestra state | Required blocker closure |
 |---|---|---|---|
-| Claude Code | Claude Pro/Max login through the native CLI | Managed adapter exists | enforce subscription mode; reject or require consent when API credentials would take precedence |
-| Codex CLI | ChatGPT account login through the native CLI | Managed adapter exists | require ChatGPT account mode when subscription is selected; exclude API/Bedrock substitution |
+| Claude Code | Claude Pro/Max login through the native CLI | Existing managed runtime now applies the contract's subscription environment rules; no TOOL-014 adapter or acceptance evidence is registered | close the automation-policy block, verify account/billing readiness, and pass the exact acceptance matrix |
+| Codex CLI | ChatGPT account login through the native CLI | Existing managed runtime now applies the contract's subscription environment rules; no TOOL-014 adapter or acceptance evidence is registered | verify ChatGPT account mode, register the real adapter, and pass the exact acceptance matrix |
 | Qwen Code | Alibaba Cloud Coding Plan through `/auth`, using its subscription-scoped key and coding endpoint | Manual interactive raw-terminal use only | exact adapter/version matrix and provider confirmation for autonomous/background personal-plan use |
 | Kimi Code | Kimi membership through `kimi login` or `/login` OAuth device flow | Manual raw-terminal use only | ACP adapter/version matrix and explicit detection/consent for optional metered Extra Usage |
 
@@ -74,8 +74,25 @@ session-capacity limit instead of being evicted by age.
 This is a contract boundary, not an adapter-support claim. Adapter implementations are trusted
 in-process Orchestra code; the boundary validates and redacts their returned data and contains
 ordinary callback failures through the supplied signal API, but it is not a sandbox for deliberate
-arbitrary code running in the daemon. TOOL-014, BASE-010, and the provider acceptance matrix remain
-open, so the support states above do not change.
+arbitrary code running in the daemon.
+
+The first TOOL-014 integration slice adds a capability-checking bridge from the existing
+`AgentDriver` lifecycle to the version-1 provider contract. It preserves the gateway-authorized
+cwd, prompt, environment, model, effort, access profile, cost boundary, and session identity;
+normalizes driver events and usage; and refuses any capability the driver cannot implement. The
+Agent OS runtime also owns a support-claim registry. That registry requires an exact provider,
+adapter/version, mode, runtime, billing, credential, executable-version, platform, and source-commit
+tuple with all eight release gates passed before it can return a supported adapter.
+
+The existing Claude and Codex spawn boundaries now remove contract-declared API credential and
+endpoint conflicts from managed personal-subscription environments. This prevents ambient
+usage-priced or cross-provider credentials from silently changing the selected path; it does not
+prove login state, billing mode, provider policy, or real-session compatibility.
+
+No canonical adapter or acceptance matrix is registered yet, and current production dispatch still
+uses the existing driver path. TOOL-014, BASE-010, and the provider acceptance matrix therefore
+remain open. The support states above do not change, and Qwen Code and Kimi Code remain raw-terminal
+only.
 
 ## Release acceptance
 
@@ -97,7 +114,8 @@ For every claimed provider and operating-system tuple:
 8. Prove credentials and raw approval parameters never enter managed events, logs, Trackbook
    records, diagnostics, or exports.
 
-No provider is advertised as compatible until this matrix passes on its exact frozen version.
+No provider is advertised as compatible until this matrix passes for its exact frozen adapter,
+mode, billing, credential, executable-version, platform, and source-commit tuple.
 
 ## Official upstream references
 

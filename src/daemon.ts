@@ -41,6 +41,7 @@ import {
   ProviderUnavailableError,
   type AccessProfile,
 } from './provider-agent-manager.js'
+import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -151,7 +152,8 @@ export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.en
     .split(',')
     .map((key) => key.trim())
     .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))
-  return Object.fromEntries(Object.entries(source).filter(([key, value]) =>
+  const prepared = prepareManagedSubscriptionEnvironmentV1('codex', source).forSpawn()
+  return Object.fromEntries(Object.entries(prepared).filter(([key, value]) =>
     value !== undefined
     && !codexEnvironmentDenied(key)
     && (CODEX_ENV_ALLOWLIST.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_') || requested.has(key))))

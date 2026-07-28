@@ -291,6 +291,31 @@ it('an ephemeral auditor dissolving leaves its created ticket on the board', asy
   expect(t.card(id).owner_agent_id).toBeNull()
 })
 
+it('strips managed-provider credential conflicts before the Claude SDK process starts', () => {
+  const t = setup()
+  t.conductor.hire({
+    boardId: 1,
+    cwd: '/p',
+    env: {
+      PATH: '/safe/bin',
+      ANTHROPIC_API_KEY: 'usage-priced-secret',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      OPENAI_API_KEY: 'other-provider-secret',
+      SAFE_TOOL_SETTING: 'retained',
+    },
+  })
+
+  const env = (query as any).mock.calls.at(-1)[0].options.env
+  expect(env).toMatchObject({
+    PATH: '/safe/bin',
+    SAFE_TOOL_SETTING: 'retained',
+    ORCHESTRA_MANAGED_AGENT: '1',
+  })
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+  expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined()
+  expect(env.OPENAI_API_KEY).toBeUndefined()
+})
+
 it('a launched agent authoring a side ticket parks its own card once and leaves the ticket', async () => {
   const t = setup()
   const id = t.mkCard('the ticket')

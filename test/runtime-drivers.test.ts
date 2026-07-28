@@ -108,12 +108,18 @@ describe('provider-neutral drivers', () => {
       name: 'violet-fox',
       model: 'claude-test',
       prompt: 'Implement the task',
+      env: { PATH: '/safe/bin', ANTHROPIC_API_KEY: undefined },
       metadata: { cardId: 77 },
     })
 
     expect(driver.capabilities()).toMatchObject({ rawTerminal: false, resume: true })
     expect(session).toMatchObject({ driverId: 'claude', externalId: 'sdk-1', workspaceId: 'workspace-claude' })
-    expect(hires[0]).toMatchObject({ boardId: 3, cardId: 77, model: 'claude-test' })
+    expect(hires[0]).toMatchObject({
+      boardId: 3,
+      cardId: 77,
+      model: 'claude-test',
+      env: { PATH: '/safe/bin', ANTHROPIC_API_KEY: undefined },
+    })
     expect(tasks).toEqual([{ id: 1, text: 'Implement the task' }])
     await driver.send(session.id, 'Follow-up')
     await driver.interrupt(session.id)

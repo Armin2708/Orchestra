@@ -9,8 +9,10 @@ an explicit assignment lifecycle bound through jobs, sessions, execution, retry,
 control projections, the durable Knowledge Compiler persistence foundation, and bounded
 repository-document ingestion; Open Work, matching, the complete Job Market gate, and Knowledge
 retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
-The versioned subscription-first terminal-agent contract is delivered; capability-aware adapter
-implementation and the exact declared-provider compatibility matrix remain open.
+The versioned subscription-first terminal-agent contract is delivered and its first
+capability-aware driver-bridge/support-gate slice is implemented. Canonical adapter registration,
+durable acceptance evidence, real provider execution, and the exact declared-provider
+compatibility matrix remain open.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -19,7 +21,7 @@ attention, and observed evidence remain product invariants throughout the progra
 Personal subscription entitlement through a provider's native terminal CLI is the primary managed
 execution path. Direct provider-API execution and usage-priced API credentials are optional,
 explicit secondary modes and never silent fallback. Claude Code and Codex CLI are the current
-managed adapters; Qwen Code and Kimi Code are first-release targets whose support remains open
+managed runtimes; Qwen Code and Kimi Code are first-release targets whose support remains open
 until the same versioned provider matrix and real acceptance gates pass.
 Provider terms and provider-managed overage are part of that gate: an interactive-only
 subscription cannot power background orchestration without permission, and metered overage must
@@ -112,7 +114,9 @@ board-scoped knowledge-source, chunk, context-build, and context-use persistence
 the retrieval, injection, or operator surfaces that depend on it; then deliver KNO-002's bounded
 repository-document ingestion without claiming the remaining Knowledge Compiler.
 Then deliver TOOL-013's versioned subscription-first terminal-agent boundary without claiming
-TOOL-014 adapter integration or reopening any unsupported provider state.
+provider support or reopening any unsupported provider state. Begin TOOL-014 with a sealed
+capability-aware bridge and one exact acceptance gate shared by every present and future provider,
+without claiming TOOL-014 complete before real canonical adapters and acceptance evidence exist.
 
 ### Delivered
 
@@ -188,6 +192,15 @@ TOOL-014 adapter integration or reopening any unsupported provider state.
 - cancellation settles public pending reads, validates raw iterator completion, contains ordinary
   abort-listener failures, and retains failed or hung cleanup identities inside the 1,024-session
   capacity bound; cooperative cleanup releases identity/capacity before awaited stop returns.
+- the first TOOL-014 slice bridges existing `AgentDriver` implementations into the version-1
+  provider boundary while preserving sealed launch identity, environment, model, effort, access,
+  permission, and cost evidence and rejecting declared capabilities the driver cannot implement;
+- Agent OS now owns one support-claim registry that requires the exact provider, adapter/version,
+  mode, runtime, billing, credential, executable-version, platform, and source-commit tuple plus
+  all eight declared-provider gates before returning a supported adapter;
+- managed Claude and Codex spawn environments now apply the contract's subscription-first
+  conflict rules, stripping declared usage-priced and cross-provider credential/endpoint variables
+  before the native process starts; no canonical adapter or acceptance matrix is registered.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -254,6 +267,14 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   P0, P1, or P2 findings. GitNexus could not map the new TOOL-013 symbols and returned `UNKNOWN`;
   that stale result was treated as a critical review boundary rather than evidence of low risk.
   Browser acceptance is N/A because TOOL-013 changes no route, UI, or existing runtime wiring.
+- the TOOL-014 WIP candidate passed 9 focused files / 78 tests, 5 provider-contract/integration
+  files / 131 tests, and the complete 140-file / 1,167-test serial suite on Node 22.20.0; root and
+  standalone strict test TypeScript, web TypeScript, root/web production builds, and
+  per-file Gitleaks `8.30.1` scans plus `git diff --check` passed;
+- after re-indexing the candidate, GitNexus reported a formally CRITICAL bridge impact
+  (702 symbols, 512 direct, 56 processes, and 20 modules), but its returned relationships were
+  demonstrably corrupted and unrelated to the new symbol. The result is retained as a critical
+  manual-review boundary, not presented as real low-risk evidence.
 
 ### Remaining
 
@@ -264,9 +285,11 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
 - `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
   retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
-- capability-aware managed adapters under `TOOL-014`, Qwen Code and Kimi Code managed support, and
-  an exact supported-provider/version matrix under reopened `BASE-010`; current managed behavior
-  remains Claude/Codex-only and their prior support/policy labels are unchanged;
+- complete `TOOL-014` by registering real canonical adapters, routing production dispatch through
+  the support gate, persisting acceptance evidence, and proving restart/recovery and real native
+  sessions; Qwen Code and Kimi Code managed support and the exact supported-provider/version
+  matrix under reopened `BASE-010` remain open, while current managed behavior remains
+  Claude/Codex-only and prior support/policy labels are unchanged;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
@@ -277,7 +300,7 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 
 The strict master reconciliation is **128 / 375 checklist boxes delivered; 247 remain open**.
-The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this exact-head
+The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002` and `TOOL-013`, keeps `TOOL-014` open, and keeps `BASE-010`
 reopened because the expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
@@ -307,7 +330,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[TOOL-013 exact-head checkpoint](./checkpoints/2026-07-27-agent-os-tool013-exact-head-38d1d2f.md).
+[TOOL-014 WIP integration checkpoint](./checkpoints/2026-07-27-agent-os-tool014-adapter-integration-wip.md).
+The
+[TOOL-013 exact-head checkpoint](./checkpoints/2026-07-27-agent-os-tool013-exact-head-38d1d2f.md)
+is retained as the preceding provider-contract checkpoint.
 The
 [KNO-002 exact-head checkpoint](./checkpoints/2026-07-26-agent-os-kno002-exact-head-2a9acff.md)
 is retained as the preceding Knowledge ingestion checkpoint.

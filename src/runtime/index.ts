@@ -6,6 +6,7 @@ export * from './drivers/registry.js'
 export * from './drivers/shell.js'
 export * from './drivers/claude.js'
 export * from './drivers/codex.js'
+export * from './drivers/provider-adapter.js'
 
 import { DriverRegistry } from './drivers/registry.js'
 import { ShellAgentDriver } from './drivers/shell.js'

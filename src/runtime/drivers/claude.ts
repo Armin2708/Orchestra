@@ -85,6 +85,7 @@ export interface ClaudeConductorPort {
   hire(options: {
     boardId: number
     cwd: string
+    env?: Record<string, string | undefined>
     name?: string
     model?: string
     effort?: string
@@ -147,6 +148,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     const agent = this.options.conductor.hire({
       boardId: request.boardId!,
       cwd: request.cwd,
+      ...(request.env ? { env: request.env } : {}),
       ...(request.name ? { name: request.name } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.effort ? { effort: request.effort } : {}),

@@ -43,11 +43,18 @@ whose protocol may change without notice. Orchestra therefore accepts only CLI `
 generated schema digest is recorded in `scripts/codex-protocol-contract.json`. A nearby version such
 as the host-observed `0.145.0` is not assumed compatible.
 
-The provider-neutral contract version 1 has source-level and test validation on the observed
-Darwin/Node 22.20.0 host. It covers gateway-assigned session identity, sealed launch/fork evidence,
-provider-owned environment rules, explicit billing and credential modes, lifecycle controls,
-normalized events and usage, bounded cancellation, and cleanup quarantine. This validates the
-contract itself only. It does not wire a new managed runtime, promote Codex beyond candidate state,
+The provider-neutral contract version 1 and the first TOOL-014 integration slice have source-level
+and test validation on the observed Darwin/Node 22.20.0 host. The contract covers gateway-assigned
+session identity, sealed launch/fork evidence, provider-owned environment rules, explicit billing
+and credential modes, lifecycle controls, normalized events and usage, bounded cancellation, and
+cleanup quarantine. The integration slice adds a capability-checking `AgentDriver` bridge, an
+Agent OS support-claim registry, and exact source-commit-bound acceptance evidence. Existing managed
+Claude and Codex launches now apply the contract's personal-subscription environment rules, so
+declared API credentials and endpoint selectors cannot silently replace that path.
+
+This is implementation evidence, not provider acceptance. No canonical adapter or acceptance
+matrix is registered, production dispatch does not yet require the new support gate, and the
+registry evidence is not yet durable. The slice does not promote Codex beyond candidate state,
 remove Claude's policy block, or add Qwen Code/Kimi Code managed support.
 
 ## First-release provider candidates not yet supported

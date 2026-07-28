@@ -64,6 +64,10 @@ import { projectDriverTranscript } from '../runtime/transcript.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
 import { readProviderModelCache } from '../agent-providers.js'
 import { hasOpenReviewRequest } from '../review.js'
+import {
+  ProviderAdapterRegistryV1,
+} from '../provider-adapter-registry.js'
+import type { ProviderExecutionAdapterV1 } from '../provider-contract.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -383,11 +387,13 @@ export type AgentOsRuntime = {
   supervisor: RuntimeSupervisor
   workspaceManager: WorkspaceManager
   drivers: DriverRegistry
+  providerAdapters: ProviderAdapterRegistryV1
   jobExecutor: AgentOsJobExecutor
   scheduler: JobScheduler
   adapter: AgentOsRuntimeAdapter
   descriptors(): DriverDescriptor[]
   registerDriver(driver: AgentDriver): void
+  registerProviderAdapter(adapter: ProviderExecutionAdapterV1): void
   registerClaude(conductor: ClaudeConductorPort): void
   setBus(bus: EventEmitter): void
   reconcileLost(): Promise<ProcessRecord[]>
@@ -534,6 +540,7 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
 
   const jobExecutor = new AgentOsJobExecutor(db, layer.drivers, workspaceManager, bus)
   const scheduler = new JobScheduler(db, jobExecutor)
+  const providerAdapters = new ProviderAdapterRegistryV1()
   jobExecutor.bindScheduler(scheduler)
   const registeredProviders = new Set(layer.drivers.list().map(({ id }) => id))
   const registerDriver = (driver: AgentDriver): void => {
@@ -546,6 +553,7 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
     supervisor: layer.supervisor,
     workspaceManager,
     drivers: layer.drivers,
+    providerAdapters,
     jobExecutor,
     scheduler,
     adapter,
@@ -555,6 +563,9 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
       capabilities: Object.entries(capabilities).filter(([, enabled]) => enabled).map(([name]) => name),
     })),
     registerDriver,
+    registerProviderAdapter: (adapter) => {
+      providerAdapters.register(adapter)
+    },
     registerClaude: (conductor) => {
       registerDriver(new ClaudeAgentDriverAdapter({
         conductor,
