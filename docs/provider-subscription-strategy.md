@@ -105,6 +105,17 @@ continues. Raw `attach(providerSessionId)` remains unsupported on the contract w
 implementation capabilities only: the candidate provider/mode and exact acceptance gate still
 prevent production support.
 
+The fourth TOOL-014 slice adds the repository acceptance harness invoked by
+`npm run accept:codex`. `prepare` installs the exact official `@openai/codex@0.144.6` package into
+a new mode-0700 run root, records the registry integrity plus wrapper/native executable digests,
+and creates a distinct empty `CODEX_HOME`. The operator completes the official ChatGPT device
+login in that isolated profile; the harness never reads or copies an auth cache. `run` then
+requires a clean tracked source commit and an out-of-repository run root, executes the eight
+gates, writes redacted mode-0600 gate artifacts, and verifies every digest. A failed or
+source-only gate may produce an honest failed matrix for diagnosis but cannot create a durable
+acceptance record. The harness is implemented and source-tested; no clean-profile real matrix has
+passed yet, so support status is unchanged.
+
 ## Release acceptance
 
 For every claimed provider and operating-system tuple:
@@ -127,6 +138,20 @@ For every claimed provider and operating-system tuple:
 
 No provider is advertised as compatible until this matrix passes for its exact frozen adapter,
 mode, billing, credential, executable-version, platform, and source-commit tuple.
+
+For Codex, create a new run root outside the repository and use the pinned two-phase harness:
+
+```sh
+run_root="$(mktemp -d /private/tmp/orchestra-codex-acceptance.XXXXXX)"
+npm run accept:codex -- prepare --run-root "$run_root"
+CODEX_HOME="$run_root/profile" "$run_root/tool/node_modules/.bin/codex" login --device-auth
+npm run accept:codex -- run --run-root "$run_root" --repository-root "$PWD"
+```
+
+The final command exits non-zero unless every real gate passes. Only an all-pass run persists the
+matrix and its artifact digest to the run's append-only acceptance database. That isolated
+database is evidence for review; it does not by itself change the canonical manifest, enable the
+opt-in production wrapper, or advertise Codex support.
 
 ## Official upstream references
 

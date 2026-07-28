@@ -69,6 +69,13 @@ raw attach authority. Codex native-subscription resume/restart are therefore dec
 capabilities while the provider remains candidate and its mode remains unknown; neither capability
 declaration nor source-level tests substitute for the missing clean-profile eight-gate matrix.
 
+The repository now also has a two-phase Codex acceptance harness. It installs the official pinned
+package into a new isolated profile, records registry and executable provenance, requires official
+ChatGPT device login through the CLI, and writes one redacted digest-bound artifact per gate. The
+harness requires a clean exact source commit and refuses to persist incomplete evidence. Its
+implementation and fixture tests are not provider acceptance: the clean-profile credentialed run
+is still pending, Codex remains candidate/unsupported, and no production support claim changes.
+
 ## First-release provider candidates not yet supported
 
 These providers are in the product target, but no exact Orchestra adapter/version/platform tuple

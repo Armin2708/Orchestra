@@ -12,8 +12,9 @@ retrieval, compilation, and injection remain open. The product is not yet public
 The versioned subscription-first terminal-agent contract is delivered and its first
 capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
 append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
-recovery are now implemented, but real exact-tuple acceptance, the other three managed adapters,
-and the exact declared-provider compatibility matrix remain open.
+recovery are now implemented. The conservative clean-profile Codex acceptance harness is also
+implemented, but its real exact-tuple run, the other three managed adapters, and the exact
+declared-provider compatibility matrix remain open.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -212,6 +213,10 @@ without claiming TOOL-014 complete before real canonical adapters and acceptance
   Agent OS binding and seals provider session, workspace, cwd, model, effort, access ceiling, and
   cost. The app-server adapter revalidates the active workspace before native resume/read and raw
   attach remains unavailable through the provider contract.
+- the exact-source Codex acceptance harness now prepares an isolated official
+  `@openai/codex@0.144.6` profile, requires CLI-mediated ChatGPT login, runs all eight named gates,
+  writes redacted digest-bound artifacts, and refuses durable persistence unless every gate
+  passes. The real clean-profile run remains pending and no support claim changes.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -351,7 +356,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[TOOL-014 authorized recovery WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-restart-recovery-wip.md).
+[TOOL-014 Codex acceptance-harness WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-acceptance-harness-wip.md).
+The
+[TOOL-014 authorized recovery WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-restart-recovery-wip.md)
+is retained as the preceding recovery checkpoint.
 The
 [TOOL-014 Codex adapter/evidence WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-adapter-evidence-wip.md)
 is retained as the preceding Codex integration checkpoint.
