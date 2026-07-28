@@ -58,6 +58,8 @@ const fakeDriver = (): CodexProviderDriverPortV1 => ({
   async attach(): Promise<DriverSession | null> {
     return null
   },
+  async detach(): Promise<void> {},
+  async updateSession(): Promise<void> {},
   async send(): Promise<void> {},
   async interrupt(): Promise<void> {},
   async stop(): Promise<void> {},
@@ -159,6 +161,10 @@ const createAdapter = (
   resolveExecutable: () => '/safe/bin/codex',
   readExecutable: () => EXECUTABLE_BYTES,
   readVersion: () => 'codex-cli 0.144.6',
+  resolveRecoveryTarget: (scopeId) => ({
+    workspaceId: scopeId,
+    cwd: '/workspace',
+  }),
   ...overrides,
 })
 

@@ -189,6 +189,18 @@ export type DriverLaunchRequest = {
   metadata?: Record<string, unknown>
 }
 
+export type DriverRecoveryRequest = {
+  externalId: string
+  workspaceId: OsId
+  cwd: string
+  model?: string
+  effort?: string
+  accessProfile: 'read_only' | 'workspace_write' | 'full_access'
+  maxBudgetUsd?: number
+  taskBudgetTokens?: number
+  metadata?: Record<string, unknown>
+}
+
 export type DriverSessionStatus = 'starting' | 'running' | 'idle' | 'stopping' | 'stopped' | 'failed' | 'lost'
 
 export type DriverSession = {
@@ -215,6 +227,7 @@ export interface AgentDriver {
   capabilities(): DriverCapabilities
   launch(request: DriverLaunchRequest): Promise<DriverSession>
   attach(externalId: string): Promise<DriverSession | null>
+  recover?(request: DriverRecoveryRequest): Promise<DriverSession | null>
   send(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
   stop(sessionId: string): Promise<void>

@@ -239,6 +239,9 @@ const adapterImplementation = (
   async launch(context) {
     return onLaunch(context)
   },
+  async resume(context) {
+    return onLaunch(context)
+  },
   async followUp() {},
   async fork(context) {
     return onLaunch(context)
@@ -387,19 +390,27 @@ describe('terminal-agent provider contract V1', () => {
           state: 'unsupported',
           reason_code: 'authorized_attach_not_implemented_v1',
         })
-        expect(mode.capabilities.resume).toEqual({
-          state: 'unsupported',
-          reason_code: 'durable_resume_not_implemented_v1',
-        })
-        expect(mode.capabilities.restart_recovery).toEqual({
-          state: 'unsupported',
-          reason_code: 'durable_resume_not_implemented_v1',
-        })
+        const authorizedCodexRecovery = manifest.provider_id === 'codex'
+          && mode.id === 'native_subscription'
+        expect(mode.capabilities.resume).toEqual(authorizedCodexRecovery
+          ? { state: 'supported' }
+          : {
+              state: 'unsupported',
+              reason_code: 'durable_resume_not_implemented_v1',
+            })
+        expect(mode.capabilities.restart_recovery).toEqual(
+          authorizedCodexRecovery
+            ? { state: 'supported' }
+            : {
+                state: 'unsupported',
+                reason_code: 'durable_resume_not_implemented_v1',
+              },
+        )
       }
     }
   })
 
-  it('rejects any V1 manifest that claims durable rehydration is already operable', () => {
+  it('keeps raw attach disabled and requires resume/restart recovery as one capability', () => {
     const copy = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
     copy.provider_id = 'fixture-unsafe-attach'
     copy.adapter_id = 'fixture-unsafe-attach-adapter'
@@ -407,6 +418,19 @@ describe('terminal-agent provider contract V1', () => {
     expect(() => defineProviderManifestV1(copy)).toThrowError(expect.objectContaining({
       code: 'durable_rehydration_not_supported_in_contract_v1',
     }))
+
+    const incomplete = mutableManifest(CODEX_PROVIDER_MANIFEST_V1)
+    incomplete.provider_id = 'fixture-incomplete-recovery'
+    incomplete.adapter_id = 'fixture-incomplete-recovery-adapter'
+    incomplete.modes[0]!.capabilities.restart_recovery = {
+      state: 'unsupported',
+      reason_code: 'restart_recovery_missing',
+    }
+    expect(() => defineProviderManifestV1(incomplete)).toThrowError(
+      expect.objectContaining({
+        code: 'invalid_durable_rehydration_capabilities',
+      }),
+    )
   })
 
   it('keeps capability truth mode-scoped', () => {
@@ -1379,7 +1403,7 @@ describe('validated provider adapter gateway', () => {
     })
   })
 
-  it('requires effective launch evidence and keeps V1 rehydration fail-closed', async () => {
+  it('requires effective launch evidence and authorizes only sealed resume recovery', async () => {
     const manifest = supportedManifest(CODEX_PROVIDER_MANIFEST_V1)
     const fixture = launchFixture(manifest)
     const requestedAction = defineProviderActionV1({
@@ -1426,6 +1450,9 @@ describe('validated provider adapter gateway', () => {
       scope_id: 'scope-1',
       provider_session_id: 'expected-provider-session',
       cwd: '/workspace',
+      model: 'durable-model',
+      effort: 'high',
+      access_profile: 'read_only',
       cost_limit: null,
     })
     const resumeAuthorization = authorizeProviderLaunchV1(
@@ -1435,17 +1462,62 @@ describe('validated provider adapter gateway', () => {
       fixture.boundary,
       resumeAction,
     )
-    expect(resumeAuthorization.ready).toBe(false)
-    if (resumeAuthorization.ready) throw new Error('resume must remain fail-closed')
-    expect(resumeAuthorization.blockers).toContain('capability_unsupported')
-    const resumeAdapter = defineProviderExecutionAdapterV1(
-      adapterImplementation(manifest, fixture),
-    )
+    expect(resumeAuthorization.ready).toBe(true)
+    if (!resumeAuthorization.ready) throw new Error('resume fixture authorization failed')
+    let resumeCalls = 0
+    const resumeImplementation = adapterImplementation(manifest, fixture)
+    resumeImplementation.resume = async (context) => {
+      resumeCalls += 1
+      if (context.action.kind !== 'resume') {
+        throw new Error('resume action required')
+      }
+      return {
+        contract_version: 1,
+        session_id: context.assigned_session_id,
+        provider_session_id: context.action.provider_session_id,
+        selection: fixture.plan.selection,
+        status: 'running',
+        model: {
+          requested: context.action.model,
+          effective: context.action.model ?? 'default-model',
+        },
+        effort: context.action.effort === null
+          ? null
+          : {
+              requested: context.action.effort,
+              effective: context.action.effort,
+            },
+        access_profile: {
+          requested: context.action.access_profile,
+          effective: context.action.access_profile,
+        },
+      }
+    }
+    const resumeAdapter = defineProviderExecutionAdapterV1(resumeImplementation)
     await expect(resumeAdapter.resume({
-      authorization: {} as never,
-    })).rejects.toMatchObject({
-      code: 'capability_unsupported',
+      authorization: resumeAuthorization.authorization,
+    })).resolves.toMatchObject({
+      provider_session_id: 'expected-provider-session',
+      model: {
+        requested: 'durable-model',
+        effective: 'durable-model',
+      },
+      effort: {
+        requested: 'high',
+        effective: 'high',
+      },
+      access_profile: {
+        requested: 'read_only',
+        effective: 'read_only',
+      },
     })
+    expect(resumeCalls).toBe(1)
+    await expect(resumeAdapter.resume({
+      authorization: resumeAuthorization.authorization,
+    })).rejects.toMatchObject({
+      code: 'launch_authorization_consumed',
+    })
+    expect(resumeCalls).toBe(1)
 
     const attachAdapter = defineProviderExecutionAdapterV1(
       adapterImplementation(manifest, fixture),

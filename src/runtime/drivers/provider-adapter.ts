@@ -60,6 +60,9 @@ export type AgentDriverProviderAdapterOptionsV1 = {
   launchRequest(
     context: ProviderAuthorizedLaunchContextV1,
   ): MaybePromise<DriverLaunchRequest>
+  resume?(
+    context: ProviderAuthorizedLaunchContextV1,
+  ): MaybePromise<DriverSession>
   sessionEvidence(
     context: ProviderAuthorizedLaunchContextV1,
     session: DriverSession,
@@ -207,6 +210,14 @@ const assertCapabilityAlignment = (
   requireDriver('structured_events', capabilities.streaming)
   requireDriver('token_budget', capabilities.tokenBudget === true)
   requireDriver('cost_budget', capabilities.costBudget === true)
+  requireDriver(
+    'resume',
+    capabilities.resume && typeof options.resume === 'function',
+  )
+  requireDriver(
+    'restart_recovery',
+    capabilities.resume && typeof options.resume === 'function',
+  )
   requireDriver('fork', typeof options.fork === 'function')
   requireDriver('approvals', typeof options.submitApproval === 'function')
   requireDriver('usage', typeof options.usage === 'function')
@@ -286,7 +297,9 @@ const providerSession = async (
   if (!evidence.effective_model.trim()) {
     throw new Error('provider driver did not resolve an effective model')
   }
-  if (context.action.kind !== 'launch' && context.action.kind !== 'fork') {
+  if (context.action.kind !== 'launch'
+    && context.action.kind !== 'resume'
+    && context.action.kind !== 'fork') {
     throw new Error('provider session creation action is required')
   }
   return {
@@ -364,6 +377,19 @@ export function defineAgentDriverProviderAdapterV1(
       const session = await options.driver.launch(request)
       register(context, session)
       validateDriverSession(options.driver, session, request.workspaceId)
+      return providerSession(options, context, session)
+    },
+    async resume(context) {
+      if (context.action.kind !== 'resume' || !options.resume) {
+        throw new Error('provider resume is unsupported')
+      }
+      const session = await options.resume(context)
+      register(context, session)
+      validateDriverSession(
+        options.driver,
+        session,
+        context.action.scope_id,
+      )
       return providerSession(options, context, session)
     },
     async followUp(context) {

@@ -61,6 +61,14 @@ Codex remains candidate/unsupported at the registry gate, and the opt-in route t
 enable yet. The slice does not remove Claude's policy block or add Qwen Code/Kimi Code managed
 support.
 
+The third TOOL-014 slice implements Codex resume/restart recovery behind that same gate. Resume
+authority is single-use and seals the exact provider session, workspace, cwd, model, effort, access
+ceiling, and cost boundary. Agent OS prefers this durable recovery path when a driver exposes it;
+legacy drivers retain their existing internal attach path. The contract wrapper still exposes no
+raw attach authority. Codex native-subscription resume/restart are therefore declared implemented
+capabilities while the provider remains candidate and its mode remains unknown; neither capability
+declaration nor source-level tests substitute for the missing clean-profile eight-gate matrix.
+
 ## First-release provider candidates not yet supported
 
 These providers are in the product target, but no exact Orchestra adapter/version/platform tuple

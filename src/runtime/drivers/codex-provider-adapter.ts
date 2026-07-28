@@ -36,6 +36,7 @@ import type {
   CodexApprovalDecision,
   CodexSessionForkOptions,
   CodexSessionForkResult,
+  CodexSessionUpdate,
 } from './codex.js'
 import {
   defineAgentDriverProviderAdapterV1,
@@ -62,6 +63,11 @@ type CodexProviderRuntimePortV1 = Pick<
 >
 
 export type CodexProviderDriverPortV1 = AgentDriver & {
+  detach(sessionId: string): Promise<void>
+  updateSession(
+    sessionId: string,
+    patch: CodexSessionUpdate,
+  ): Promise<void>
   forkSession(
     sessionId: string,
     options: CodexSessionForkOptions,
@@ -90,6 +96,9 @@ export type CodexProviderAdapterOptionsV1 = {
     context: ProviderAuthorizedLaunchContextV1,
   ): MaybePromise<DriverLaunchRequest>
   resolveForkTarget?(
+    scopeId: string,
+  ): MaybePromise<{ workspaceId: string; cwd: string } | null>
+  resolveRecoveryTarget?(
     scopeId: string,
   ): MaybePromise<{ workspaceId: string; cwd: string } | null>
 }
@@ -460,8 +469,48 @@ export function createCodexProviderAdapterV1(
             },
           }
     },
+    async resume(context): Promise<DriverSession> {
+      if (context.action.kind !== 'resume') {
+        throw new Error('Codex provider resume action is required')
+      }
+      const target = await options.resolveRecoveryTarget?.(
+        context.action.scope_id,
+      )
+      if (!target
+        || target.workspaceId !== context.action.scope_id
+        || target.cwd !== context.action.cwd
+        || !target.cwd.trim()) {
+        throw new Error('Codex provider recovery target is not authorized')
+      }
+      const session = await options.driver.attach(
+        context.action.provider_session_id,
+      )
+      if (!session) throw new Error('Codex provider session is no longer live')
+      try {
+        if (session.externalId !== context.action.provider_session_id
+          || session.workspaceId !== target.workspaceId
+          || metadataString(session.metadata, 'cwd') !== target.cwd) {
+          throw new Error('Codex provider recovery binding is inconsistent')
+        }
+        await options.driver.updateSession(session.id, {
+          ...(context.action.model
+            ? { model: context.action.model }
+            : {}),
+          ...(context.action.effort
+            ? { effort: context.action.effort }
+            : {}),
+          accessProfile: context.action.access_profile,
+        })
+        return session
+      } catch (error) {
+        await options.driver.detach(session.id).catch(() => undefined)
+        throw error
+      }
+    },
     async sessionEvidence(context, session) {
-      if (context.action.kind !== 'launch' && context.action.kind !== 'fork') {
+      if (context.action.kind !== 'launch'
+        && context.action.kind !== 'resume'
+        && context.action.kind !== 'fork') {
         throw new Error('Codex session evidence requires a creating action')
       }
       const metadata = session.metadata

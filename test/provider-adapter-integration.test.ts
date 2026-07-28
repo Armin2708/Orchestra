@@ -119,6 +119,7 @@ const fixtureManifest = (
 
 type FakeDriver = AgentDriver & {
   launches: DriverLaunchRequest[]
+  attached: string[]
   sent: Array<{ sessionId: string; text: string }>
   interrupted: string[]
   stopped: string[]
@@ -126,22 +127,24 @@ type FakeDriver = AgentDriver & {
 
 const fakeDriver = (manifest: ProviderManifestV1): FakeDriver => {
   const launches: DriverLaunchRequest[] = []
+  const attached: string[] = []
   const sent: Array<{ sessionId: string; text: string }> = []
   const interrupted: string[] = []
   const stopped: string[] = []
   return {
     id: manifest.provider_id,
     launches,
+    attached,
     sent,
     interrupted,
     stopped,
     capabilities: () => ({
-      attach: false,
+      attach: true,
       streaming: true,
       interrupt: true,
       stop: true,
       rawTerminal: false,
-      resume: false,
+      resume: true,
       tokenBudget: false,
       costBudget: false,
     }),
@@ -157,8 +160,19 @@ const fakeDriver = (manifest: ProviderManifestV1): FakeDriver => {
         metadata: {},
       }
     },
-    async attach() {
-      return null
+    async attach(externalId) {
+      attached.push(externalId)
+      return {
+        id: `${manifest.provider_id}:resumed-${attached.length}`,
+        externalId,
+        driverId: manifest.provider_id,
+        workspaceId: 'workspace-1',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        metadata: {
+          cwd: '/workspace',
+        },
+      }
     },
     async send(sessionId, text) {
       sent.push({ sessionId, text })
@@ -262,9 +276,24 @@ const bridge = (
       maxBudgetUsd: 1_000_000,
     }
   },
+  async resume(context) {
+    if (context.action.kind !== 'resume') {
+      throw new Error('fixture resume action is required')
+    }
+    const session = await driver.attach(context.action.provider_session_id)
+    if (!session) throw new Error('fixture provider session is missing')
+    Object.assign(session.metadata, {
+      resolvedModel: context.action.model ?? 'fixture-model',
+      resolvedEffort: context.action.effort,
+      accessProfile: context.action.access_profile,
+    })
+    return session
+  },
   async sessionEvidence(context) {
     const action = context.action
-    if (action.kind !== 'launch' && action.kind !== 'fork') {
+    if (action.kind !== 'launch'
+      && action.kind !== 'resume'
+      && action.kind !== 'fork') {
       throw new Error('fixture session evidence requires a creating action')
     }
     return {
@@ -463,6 +492,59 @@ describe('TOOL-014 capability-aware adapter integration', () => {
       session_id: session.session_id,
       sequence: 3,
       status: 'stopped',
+    })
+  })
+
+  it('resumes only the authorized provider/workspace/configuration tuple', async () => {
+    const manifest = fixtureManifest(['resume', 'restart_recovery'])
+    const driver = fakeDriver(manifest)
+    const adapter = bridge(manifest, driver)
+    const plan = defineProviderExecutionIntentV1({
+      ...executionPlan(manifest),
+      required_capabilities: [
+        'resume',
+        'restart_recovery',
+        'structured_events',
+      ],
+    })
+    const action: Extract<ProviderActionV1, { kind: 'resume' }> = {
+      contract_version: 1,
+      kind: 'resume',
+      action_id: 'resume-1',
+      scope_id: 'workspace-1',
+      provider_session_id: 'provider-session-existing',
+      cwd: '/workspace',
+      model: 'fixture-model',
+      effort: 'high',
+      access_profile: 'read_only',
+      cost_limit: null,
+    }
+    const authorization = await authorize(adapter, plan, action)
+    await expect(adapter.resume({ authorization })).resolves.toMatchObject({
+      provider_session_id: 'provider-session-existing',
+      model: {
+        requested: 'fixture-model',
+        effective: 'fixture-model',
+      },
+      effort: {
+        requested: 'high',
+        effective: 'high',
+      },
+      access_profile: {
+        requested: 'read_only',
+        effective: 'read_only',
+      },
+    })
+    expect(driver.attached).toEqual(['provider-session-existing'])
+    await expect(adapter.resume({ authorization })).rejects.toMatchObject({
+      code: 'launch_authorization_consumed',
+    })
+    expect(driver.attached).toEqual(['provider-session-existing'])
+    await expect(adapter.attach({
+      provider_session_id: 'provider-session-existing',
+      selection: plan.selection,
+    })).rejects.toMatchObject({
+      code: 'capability_unsupported',
     })
   })
 

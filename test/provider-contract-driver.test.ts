@@ -35,6 +35,8 @@ const FINGERPRINT = `sha256:${'f'.repeat(64)}`
 const supportedCapabilities = new Set<ProviderCapabilityId>([
   'launch',
   'follow_up',
+  'resume',
+  'restart_recovery',
   'interrupt',
   'stop',
   'model_discovery',
@@ -102,6 +104,7 @@ const manifest = defineProviderManifestV1({
 
 type FakeDriver = AgentDriver & {
   launches: DriverLaunchRequest[]
+  attached: string[]
   sent: string[]
   interrupted: string[]
   stopped: string[]
@@ -110,6 +113,7 @@ type FakeDriver = AgentDriver & {
 
 const rawDriver = (): FakeDriver => {
   const launches: DriverLaunchRequest[] = []
+  const attached: string[] = []
   const sent: string[] = []
   const interrupted: string[] = []
   const stopped: string[] = []
@@ -117,17 +121,18 @@ const rawDriver = (): FakeDriver => {
   return {
     id: manifest.provider_id,
     launches,
+    attached,
     sent,
     interrupted,
     stopped,
     queue,
     capabilities: () => ({
-      attach: false,
+      attach: true,
       streaming: true,
       interrupt: true,
       stop: true,
       rawTerminal: false,
-      resume: false,
+      resume: true,
       tokenBudget: false,
       costBudget: false,
     }),
@@ -148,8 +153,19 @@ const rawDriver = (): FakeDriver => {
         },
       }
     },
-    async attach() {
-      return null
+    async attach(externalId) {
+      attached.push(externalId)
+      return {
+        id: `raw-resumed-${attached.length}`,
+        externalId,
+        driverId: manifest.provider_id,
+        workspaceId: 'workspace-1',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        metadata: {
+          cwd: '/workspace',
+        },
+      }
     },
     async send(_sessionId, text) {
       sent.push(text)
@@ -237,8 +253,23 @@ const fixture = (accepted: boolean) => {
       }]
     },
     launchRequest: broker.resolve,
+    async resume(context) {
+      if (context.action.kind !== 'resume') {
+        throw new Error('resume action required')
+      }
+      const session = await raw.attach(context.action.provider_session_id)
+      if (!session) throw new Error('provider session is missing')
+      Object.assign(session.metadata, {
+        resolvedModel: context.action.model ?? 'fixture-model',
+        resolvedEffort: context.action.effort,
+        accessProfile: context.action.access_profile,
+      })
+      return session
+    },
     async sessionEvidence(context) {
-      if (context.action.kind !== 'launch' && context.action.kind !== 'fork') {
+      if (context.action.kind !== 'launch'
+        && context.action.kind !== 'resume'
+        && context.action.kind !== 'fork') {
         throw new Error('creating action required')
       }
       return {
@@ -365,6 +396,53 @@ describe('TOOL-014 production provider-contract driver', () => {
       blockers: ['acceptance_matrix_missing'],
     })
     expect(raw.launches).toEqual([])
+  })
+
+  it('routes durable recovery through authorization while raw attach stays disabled', async () => {
+    const { raw, driver } = fixture(true)
+    await expect(driver.attach('provider-session-existing')).resolves.toBeNull()
+    expect(raw.attached).toEqual([])
+
+    const session = await driver.recover!({
+      externalId: 'provider-session-existing',
+      workspaceId: 'workspace-1',
+      cwd: '/workspace',
+      model: 'fixture-model',
+      effort: 'high',
+      accessProfile: 'read_only',
+      metadata: {
+        jobId: 'job-recovery',
+        agentHomeSessionId: 'agent-home-recovery',
+      },
+    })
+    expect(session).toMatchObject({
+      externalId: 'provider-session-existing',
+      driverId: manifest.provider_id,
+      workspaceId: 'workspace-1',
+      metadata: {
+        jobId: 'job-recovery',
+        agentHomeSessionId: 'agent-home-recovery',
+        providerContractVersion: 1,
+        resolvedModel: 'fixture-model',
+        resolvedEffort: 'high',
+        accessProfile: 'read_only',
+      },
+    })
+    expect(session?.id).toMatch(/^managed-/)
+    expect(raw.attached).toEqual(['provider-session-existing'])
+  })
+
+  it('does not reach raw recovery without the exact acceptance matrix', async () => {
+    const { raw, driver } = fixture(false)
+    await expect(driver.recover!({
+      externalId: 'provider-session-existing',
+      workspaceId: 'workspace-1',
+      cwd: '/workspace',
+      accessProfile: 'workspace_write',
+    })).rejects.toMatchObject({
+      blockers: ['acceptance_matrix_missing'],
+    })
+    expect(raw.attached).toEqual([])
   })
 
   it('fails before dispatch when a token budget cannot be sealed', async () => {

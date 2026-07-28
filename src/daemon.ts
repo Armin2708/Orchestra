@@ -250,21 +250,23 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   })
   const codexProvider = new CodexProviderService(db, codexRpc, codexSupervisor, { command: codexCommand })
   const codexLaunchRequests = new ProviderLaunchRequestBrokerV1()
+  const resolveCodexWorkspaceTarget = async (scopeId: string) => {
+    const workspace = await agentOs.workspaceManager.get(scopeId)
+    return workspace?.status === 'active'
+      ? {
+          workspaceId: workspace.id,
+          cwd: agentOs.workspaceManager.root(workspace),
+        }
+      : null
+  }
   const codexAdapter = createCodexProviderAdapterV1({
     driver: codexDriver,
     service: codexRpc,
     command: codexCommand,
     environment: codexEnvironment,
     launchRequest: codexLaunchRequests.resolve,
-    resolveForkTarget: async (scopeId) => {
-      const workspace = await agentOs.workspaceManager.get(scopeId)
-      return workspace?.status === 'active'
-        ? {
-            workspaceId: workspace.id,
-            cwd: agentOs.workspaceManager.root(workspace),
-          }
-        : null
-    },
+    resolveForkTarget: resolveCodexWorkspaceTarget,
+    resolveRecoveryTarget: resolveCodexWorkspaceTarget,
   })
   agentOs.registerProviderAdapter(codexAdapter)
   const codexContractDriver = contractRouting.enabled

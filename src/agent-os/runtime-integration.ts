@@ -1601,6 +1601,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       let providerSessionLost = false
       let attachedSession: DriverSession | null = null
       let attachedSessionTrusted = false
+      let usedAuthorizedRecovery = false
       let recoveryHandleReleased = false
       const detachRecoveryHandle = async (): Promise<void> => {
         if (!attachedSession || recoveryHandleReleased || !attachedSession.id.trim()) return
@@ -1675,7 +1676,32 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         return currentSession
       }
       try {
-        const session = await driver.attach(sessionRow.external_id)
+        const durableWorkspace = await this.workspaces.get(job.workspace_id!)
+        if (!durableWorkspace || durableWorkspace.status !== 'active') {
+          throw new Error('durable recovery workspace is no longer active')
+        }
+        const recover = driver.recover
+        usedAuthorizedRecovery = typeof recover === 'function'
+        const session = recover
+          ? await recover.call(driver, {
+              externalId: sessionRow.external_id,
+              workspaceId: job.workspace_id!,
+              cwd: this.workspaces.root(durableWorkspace),
+              ...(sessionRow.model ? { model: sessionRow.model } : {}),
+              ...(sessionRow.effort ? { effort: sessionRow.effort } : {}),
+              accessProfile: sessionRow.access_profile ?? job.access_profile,
+              metadata: {
+                jobId: job.id,
+                agentHomeSessionId: sessionRow.id,
+                ...(sessionRow.profile_id
+                  ? { agentProfileId: sessionRow.profile_id }
+                  : {}),
+                ...(sessionRow.conversation_id
+                  ? { agentConversationId: sessionRow.conversation_id }
+                  : {}),
+              },
+            })
+          : await driver.attach(sessionRow.external_id)
         if (!session) {
           providerSessionLost = true
           throw new Error('provider session is no longer live')
@@ -1697,7 +1723,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         let currentlyPaused = currentSession.control_state === 'paused'
         if (currentlyPaused) this.pausedJobs.add(job.id)
         else this.pausedJobs.delete(job.id)
-        if (sessionRow.provider === 'codex') {
+        if (sessionRow.provider === 'codex' && !usedAuthorizedRecovery) {
           const update = (driver as AgentDriver & {
             updateSession?(sessionId: string, patch: {
               model?: string

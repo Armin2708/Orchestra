@@ -31,7 +31,7 @@ must never persist the raw value.
 | Provider | Subscription-first upstream path | Current Orchestra state | Required blocker closure |
 |---|---|---|---|
 | Claude Code | Claude Pro/Max login through the native CLI | Existing managed runtime now applies the contract's subscription environment rules; no TOOL-014 adapter or acceptance evidence is registered | close the automation-policy block, verify account/billing readiness, and pass the exact acceptance matrix |
-| Codex CLI | ChatGPT account login through the native CLI | The real app-server adapter is registered as an implementation and durable matrix storage exists, but Codex remains candidate/unsupported with no real acceptance record | verify exact ChatGPT account/billing mode, authorized restart recovery, and all eight real acceptance gates before reconciling support |
+| Codex CLI | ChatGPT account login through the native CLI | The real app-server adapter, durable matrix storage, and authorized restart recovery are implemented, but Codex remains candidate/unsupported with no real acceptance record | verify exact ChatGPT account/billing mode and pass all eight real acceptance gates before reconciling support |
 | Qwen Code | Alibaba Cloud Coding Plan through `/auth`, using its subscription-scoped key and coding endpoint | Manual interactive raw-terminal use only | exact adapter/version matrix and provider confirmation for autonomous/background personal-plan use |
 | Kimi Code | Kimi membership through `kimi login` or `/login` OAuth device flow | Manual raw-terminal use only | ACP adapter/version matrix and explicit detection/consent for optional metered Extra Usage |
 
@@ -95,6 +95,15 @@ after `requireSupported(...)`. No real acceptance matrix exists, so Codex's cand
 unknown native-subscription mode deliberately prevent that route from enabling; default production
 dispatch remains on the existing driver path. TOOL-014, BASE-010, and provider acceptance remain
 open. The support states above do not change, and Qwen Code and Kimi Code remain raw-terminal only.
+
+The third TOOL-014 slice adds authorized Codex restart recovery without making raw attach public
+authority. The single-use resume action seals the provider-session ID, workspace scope, cwd, model,
+effort, access ceiling, and cost boundary. Agent OS reconstructs that action only from its durable
+job/session/workspace binding, the adapter revalidates the active workspace before calling native
+`thread/resume`/`thread/read`, and persisted turn overrides are restored before event streaming
+continues. Raw `attach(providerSessionId)` remains unsupported on the contract wrapper. These are
+implementation capabilities only: the candidate provider/mode and exact acceptance gate still
+prevent production support.
 
 ## Release acceptance
 

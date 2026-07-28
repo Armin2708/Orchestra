@@ -11,9 +11,9 @@ repository-document ingestion; Open Work, matching, the complete Job Market gate
 retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
 The versioned subscription-first terminal-agent contract is delivered and its first
 capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
-append-only acceptance store, and opt-in no-fallback production wrapper are now implemented, but
-real exact-tuple acceptance, authorized restart recovery, the other three managed adapters, and
-the exact declared-provider compatibility matrix remain open.
+append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
+recovery are now implemented, but real exact-tuple acceptance, the other three managed adapters,
+and the exact declared-provider compatibility matrix remain open.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -207,7 +207,11 @@ without claiming TOOL-014 complete before real canonical adapters and acceptance
   canonical digest during runtime hydration;
 - an opt-in Agent OS production wrapper requires exact source-commit support before dispatch and
   never falls back to the raw driver. The current candidate manifest/mode and absent real matrix
-  intentionally prevent that route from enabling.
+  intentionally prevent that route from enabling;
+- authorized Codex restart recovery now reconstructs a single-use resume action from the durable
+  Agent OS binding and seals provider session, workspace, cwd, model, effort, access ceiling, and
+  cost. The app-server adapter revalidates the active workspace before native resume/read and raw
+  attach remains unavailable through the provider contract.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -283,6 +287,11 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   `git diff --check`. It proves exact-version discovery, credential-conflict readiness,
   append-only migration/restart hydration, digest-tamper rejection, accepted contract dispatch,
   and zero raw launches when acceptance is absent;
+- the third TOOL-014 recovery slice passed 5 focused files / 123 tests, 11 recovery-adjacent
+  files / 204 tests, and the complete 143-file / 1,183-test serial suite on Node 22.20.0.
+  It proves single-use resume authorization, access/configuration sealing, zero raw attach
+  authority, exact acceptance gating before native recovery, and Agent OS preference for the
+  durable recovery seam;
 - after re-indexing the candidate, GitNexus reported a formally CRITICAL bridge impact
   (702 symbols, 512 direct, 56 processes, and 20 modules), but its returned relationships were
   demonstrably corrupted and unrelated to the new symbol. The result is retained as a critical
@@ -297,8 +306,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
 - `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
   retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
-- complete `TOOL-014` by adding authorized restart recovery, passing and persisting the real
-  exact-source Codex matrix, reconciling its candidate manifest only from that evidence, and
+- complete `TOOL-014` by passing and persisting the real exact-source Codex matrix, reconciling its
+  candidate manifest only from that evidence, and
   implementing the remaining Claude/Qwen/Kimi adapters. The exact supported-provider/version
   matrix under reopened `BASE-010` remains open, while current default managed behavior remains
   Claude/Codex-only and prior support/policy labels are unchanged;
@@ -342,7 +351,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[TOOL-014 Codex adapter/evidence WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-adapter-evidence-wip.md).
+[TOOL-014 authorized recovery WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-restart-recovery-wip.md).
+The
+[TOOL-014 Codex adapter/evidence WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-adapter-evidence-wip.md)
+is retained as the preceding Codex integration checkpoint.
 The first
 [TOOL-014 bridge/support-gate checkpoint](./checkpoints/2026-07-27-agent-os-tool014-adapter-integration-wip.md)
 is retained as the preceding adapter-integration checkpoint.

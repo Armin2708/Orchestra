@@ -271,6 +271,9 @@ export type ProviderActionV1 =
       scope_id: string
       provider_session_id: string
       cwd: string
+      model: string | null
+      effort: string | null
+      access_profile: 'read_only' | 'workspace_write' | 'full_access'
       cost_limit: {
         currency: string
         max_cost_minor_units: number
@@ -573,6 +576,7 @@ export interface ProviderExecutionAdapterImplementationV1 {
   ): Promise<unknown>
   listModels(intent: Readonly<ProviderExecutionIntentV1>): Promise<unknown>
   launch(context: ProviderAuthorizedLaunchContextV1): Promise<unknown>
+  resume(context: ProviderAuthorizedLaunchContextV1): Promise<unknown>
   followUp(context: ProviderAuthorizedLaunchContextV1): Promise<void>
   fork(context: ProviderAuthorizedLaunchContextV1): Promise<unknown>
   interrupt(session_id: string): Promise<void>
@@ -710,7 +714,7 @@ const RESERVED_FIRST_RELEASE_MANIFESTS: ReadonlyMap<string, {
   }],
   ['codex', {
     adapter_id: 'codex-app-server',
-    fingerprint: '2f9f6d926c9e6a2b539f112587fd72cdde63aca999b35393bef331ba45f16f71',
+    fingerprint: '2f8f3bcb75cb3fa4e134a9211e38ab2cf623c4675a2d698ac4655e8a091ab740',
   }],
   ['qwen', {
     adapter_id: 'qwen-code-cli',
@@ -1009,10 +1013,12 @@ function validateMode(value: unknown): asserts value is ProviderExecutionModeV1 
   }
   validateCapabilities(row.capabilities)
   const capabilities = row.capabilities as ProviderCapabilitiesV1
-  if (capabilities.attach.state !== 'unsupported'
-    || capabilities.resume.state !== 'unsupported'
-    || capabilities.restart_recovery.state !== 'unsupported') {
+  if (capabilities.attach.state !== 'unsupported') {
     reject('durable_rehydration_not_supported_in_contract_v1')
+  }
+  if (capabilities.resume.state !== capabilities.restart_recovery.state
+    || !['supported', 'unsupported'].includes(capabilities.resume.state)) {
+    reject('invalid_durable_rehydration_capabilities')
   }
 }
 
@@ -2059,6 +2065,9 @@ export function defineProviderActionV1(
       'scope_id',
       'provider_session_id',
       'cwd',
+      'model',
+      'effort',
+      'access_profile',
       'cost_limit',
     ], 'invalid_provider_action')
     const providerSessionId = privateText(
@@ -2067,12 +2076,23 @@ export function defineProviderActionV1(
       4096,
     )
     const cwd = privateText(snapshot.cwd, 'invalid_provider_action', 4096)
+    const model = snapshot.model === null
+      ? null
+      : privateText(snapshot.model, 'invalid_provider_action', 256)
+    const effort = snapshot.effort === null
+      ? null
+      : privateText(snapshot.effort, 'invalid_provider_action', 256)
+    if (!['read_only', 'workspace_write', 'full_access'].includes(snapshot.access_profile)) {
+      reject('invalid_provider_action')
+    }
     return deepFreeze({
       ...snapshot,
       action_id: actionId,
       scope_id: scopeId,
       provider_session_id: providerSessionId,
       cwd,
+      model,
+      effort,
       cost_limit: costLimit,
     })
   }
@@ -2440,7 +2460,9 @@ export function providerLaunchDecisionV1(
   const inferredCapabilities = new Set<ProviderCapabilityId>(planned.required_capabilities)
   inferredCapabilities.add(plannedAction.kind)
   if (planned.execution_scope !== 'interactive') inferredCapabilities.add('structured_events')
-  if (plannedAction.kind === 'launch' || plannedAction.kind === 'fork') {
+  if (plannedAction.kind === 'launch'
+    || plannedAction.kind === 'resume'
+    || plannedAction.kind === 'fork') {
     inferredCapabilities.add('access_profile')
     if (plannedAction.model !== null) inferredCapabilities.add('model_selection')
     if (plannedAction.effort !== null) inferredCapabilities.add('effort')
@@ -2825,6 +2847,7 @@ type ProviderAdapterImplementationStateV1 = {
   readonly probeReadiness: ProviderExecutionAdapterImplementationV1['probeReadiness']
   readonly listModels: ProviderExecutionAdapterImplementationV1['listModels']
   readonly launch: ProviderExecutionAdapterImplementationV1['launch']
+  readonly resume: ProviderExecutionAdapterImplementationV1['resume']
   readonly followUp: ProviderExecutionAdapterImplementationV1['followUp']
   readonly fork: ProviderExecutionAdapterImplementationV1['fork']
   readonly interrupt: ProviderExecutionAdapterImplementationV1['interrupt']
@@ -2848,6 +2871,7 @@ const providerAdapterDefinition = (
     'probeReadiness',
     'listModels',
     'launch',
+    'resume',
     'followUp',
     'fork',
     'interrupt',
@@ -2877,6 +2901,7 @@ const providerAdapterDefinition = (
       probeReadiness: values.probeReadiness as ProviderExecutionAdapterImplementationV1['probeReadiness'],
       listModels: values.listModels as ProviderExecutionAdapterImplementationV1['listModels'],
       launch: values.launch as ProviderExecutionAdapterImplementationV1['launch'],
+      resume: values.resume as ProviderExecutionAdapterImplementationV1['resume'],
       followUp: values.followUp as ProviderExecutionAdapterImplementationV1['followUp'],
       fork: values.fork as ProviderExecutionAdapterImplementationV1['fork'],
       interrupt: values.interrupt as ProviderExecutionAdapterImplementationV1['interrupt'],
@@ -3330,7 +3355,9 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     if (!sameSelection(session.selection, context.intent.selection)) {
       reject('provider_session_selection_mismatch')
     }
-    if (context.action.kind === 'launch' || context.action.kind === 'fork') {
+    if (context.action.kind === 'launch'
+      || context.action.kind === 'resume'
+      || context.action.kind === 'fork') {
       if (session.access_profile === null
         || session.access_profile.requested !== context.action.access_profile) {
         reject('provider_session_access_mismatch')
@@ -3615,8 +3642,48 @@ class ValidatedProviderExecutionAdapter implements ProviderExecutionAdapterV1 {
     return reject('capability_unsupported')
   }
 
-  async resume(_request: ProviderResumeRequestV1): Promise<ProviderSessionV1> {
-    return reject('capability_unsupported')
+  async resume(request: ProviderResumeRequestV1): Promise<ProviderSessionV1> {
+    this.#reserveSessionRegistration()
+    let assignedSessionId: string | null = null
+    const providerSessionIds = new Set<string>()
+    let rawSessionStarted = false
+    try {
+      const authorization = authorizationFromRequest(request, 'invalid_resume_request')
+      const consumedContext = await this.#consume(authorization, 'resume')
+      if (consumedContext.action.kind !== 'resume') {
+        reject('launch_authorization_action_mismatch')
+      }
+      assignedSessionId = this.#mintAssignedSessionId()
+      const context = this.#implementationContext(
+        consumedContext,
+        assignedSessionId,
+      )
+      rawSessionStarted = true
+      const rawSession = await this.#invoke('resume', () => Reflect.apply(
+        this.#implementation.resume,
+        this.#implementation.receiver,
+        [context],
+      ))
+      const cleanupProviderSessionId = providerSessionIdForCleanup(rawSession)
+      if (cleanupProviderSessionId !== null) {
+        providerSessionIds.add(cleanupProviderSessionId)
+      }
+      const session = this.#validateSession(
+        rawSession,
+        context,
+        (definedProviderSessionId) => {
+          providerSessionIds.add(definedProviderSessionId)
+        },
+      )
+      return this.#registerSession(session, authorization).session
+    } catch (error) {
+      if (rawSessionStarted && assignedSessionId !== null) {
+        this.#cleanupFailedRawSession(assignedSessionId, providerSessionIds)
+      }
+      throw error
+    } finally {
+      this.#releaseSessionRegistration()
+    }
   }
 
   async fork(request: ProviderForkRequestV1): Promise<ProviderSessionV1> {

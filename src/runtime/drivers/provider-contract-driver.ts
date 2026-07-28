@@ -24,6 +24,7 @@ import type {
   DriverCapabilities,
   DriverEvent,
   DriverLaunchRequest,
+  DriverRecoveryRequest,
   DriverSession,
 } from '../types.js'
 import { ProviderLaunchRequestBrokerV1 } from './provider-launch-request-broker.js'
@@ -70,7 +71,7 @@ const terminalStatus = (
   status === 'stopped' || status === 'failed' || status === 'lost'
 
 const costLimit = (
-  request: DriverLaunchRequest,
+  request: Pick<DriverLaunchRequest, 'maxBudgetUsd'>,
 ): ProviderActionV1['cost_limit'] => {
   if (request.maxBudgetUsd === undefined) return null
   const minorUnits = Math.floor(request.maxBudgetUsd * 100)
@@ -237,7 +238,7 @@ export class ProviderContractAgentDriverV1 implements AgentDriver {
       interrupt: supported('interrupt'),
       stop: supported('stop'),
       rawTerminal: false,
-      resume: false,
+      resume: supported('resume') && supported('restart_recovery'),
       // TOOL-013 v1 names token-budget support but does not seal an amount.
       tokenBudget: false,
       costBudget: supported('cost_budget'),
@@ -311,45 +312,46 @@ export class ProviderContractAgentDriverV1 implements AgentDriver {
       )
     }
     const providerSession = staged.value
-    const driverSession: DriverSession = {
-      id: providerSession.session_id,
-      externalId: providerSession.provider_session_id,
-      driverId: this.id,
-      workspaceId: request.workspaceId,
-      status: providerSession.status,
-      startedAt: new Date().toISOString(),
-      metadata: {
-        ...(request.metadata ?? {}),
-        cwd: request.cwd,
-        providerContractVersion: 1,
-        providerAdapterId: this.#selection.adapter_id,
-        providerModeId: this.#selection.mode_id,
-        providerActionId: actionId,
-        resolvedModel: providerSession.model?.effective ?? request.model ?? null,
-        resolvedEffort: providerSession.effort?.effective ?? request.effort ?? null,
-        accessProfile: providerSession.access_profile?.effective
-          ?? request.accessProfile
-          ?? 'workspace_write',
-      },
-    }
-    const state: ContractDriverSessionV1 = {
-      driver_session: driverSession,
-      provider_session: providerSession,
-      selection: this.#selection,
-      queue: new BoundedAsyncQueue(this.#eventBufferSize),
-      next_sequence: 0,
-      next_action: 0,
-      event_claimed: false,
-      terminal: false,
-      stop_requested: false,
-    }
-    this.#sessions.set(driverSession.id, state)
-    void this.pump(state)
-    return structuredClone(driverSession)
+    return this.registerSession(providerSession, request, actionId)
   }
 
   async attach(): Promise<DriverSession | null> {
     return null
+  }
+
+  async recover(request: DriverRecoveryRequest): Promise<DriverSession | null> {
+    if (request.taskBudgetTokens !== undefined) {
+      throw new ProviderContractRoutingError(
+        'provider contract v1 cannot seal a token-budget amount',
+      )
+    }
+    const actionId = `resume-${randomUUID()}`
+    const action: Extract<ProviderActionV1, { kind: 'resume' }> = {
+      contract_version: 1,
+      kind: 'resume',
+      action_id: actionId,
+      scope_id: request.workspaceId,
+      provider_session_id: request.externalId,
+      cwd: request.cwd,
+      model: request.model ?? null,
+      effort: request.effort ?? null,
+      access_profile: request.accessProfile,
+      cost_limit: costLimit(request),
+    }
+    const required: ProviderCapabilityId[] = [
+      'resume',
+      'restart_recovery',
+      'structured_events',
+      'interrupt',
+      'stop',
+      'access_profile',
+      ...(request.model ? ['model_selection' as const] : []),
+      ...(request.effort ? ['effort' as const] : []),
+      ...(request.maxBudgetUsd !== undefined ? ['cost_budget' as const] : []),
+    ]
+    const authorization = await this.authorize(action, required)
+    const providerSession = await this.options.adapter.resume({ authorization })
+    return this.registerSession(providerSession, request, actionId)
   }
 
   async send(sessionId: string, text: string): Promise<void> {
@@ -421,6 +423,51 @@ export class ProviderContractAgentDriverV1 implements AgentDriver {
         }
       },
     }
+  }
+
+  private registerSession(
+    providerSession: ProviderSessionV1,
+    request: Pick<
+      DriverLaunchRequest,
+      'workspaceId' | 'cwd' | 'model' | 'effort' | 'accessProfile' | 'metadata'
+    >,
+    actionId: string,
+  ): DriverSession {
+    const driverSession: DriverSession = {
+      id: providerSession.session_id,
+      externalId: providerSession.provider_session_id,
+      driverId: this.id,
+      workspaceId: request.workspaceId,
+      status: providerSession.status,
+      startedAt: new Date().toISOString(),
+      metadata: {
+        ...(request.metadata ?? {}),
+        cwd: request.cwd,
+        providerContractVersion: 1,
+        providerAdapterId: this.#selection.adapter_id,
+        providerModeId: this.#selection.mode_id,
+        providerActionId: actionId,
+        resolvedModel: providerSession.model?.effective ?? request.model ?? null,
+        resolvedEffort: providerSession.effort?.effective ?? request.effort ?? null,
+        accessProfile: providerSession.access_profile?.effective
+          ?? request.accessProfile
+          ?? 'workspace_write',
+      },
+    }
+    const state: ContractDriverSessionV1 = {
+      driver_session: driverSession,
+      provider_session: providerSession,
+      selection: this.#selection,
+      queue: new BoundedAsyncQueue(this.#eventBufferSize),
+      next_sequence: 0,
+      next_action: 0,
+      event_claimed: false,
+      terminal: false,
+      stop_requested: false,
+    }
+    this.#sessions.set(driverSession.id, state)
+    void this.pump(state)
+    return structuredClone(driverSession)
   }
 
   private async authorize(

@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ManagedAgentSessionBinder } from '../src/agent-os/managed-session-binding.js'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
 import { openDb } from '../src/db.js'
-import type { AgentDriver, DriverSession } from '../src/runtime/index.js'
+import type {
+  AgentDriver,
+  DriverRecoveryRequest,
+  DriverSession,
+} from '../src/runtime/index.js'
 import { buildServer } from '../src/server.js'
 
 type Fixture = {
@@ -22,6 +26,7 @@ const pendingEvents = async function* () {
 const fixture = async (
   attach: () => Promise<DriverSession | null>,
   maxAttempts = 1,
+  recover?: (request: DriverRecoveryRequest) => Promise<DriverSession | null>,
 ) => {
   const db = openDb(':memory:')
   const boardId = Number(db.prepare(
@@ -34,6 +39,7 @@ const fixture = async (
 
   const runtime = createAgentOsRuntime(db)
   const attachCalls: string[] = []
+  const recoveryCalls: DriverRecoveryRequest[] = []
   const driver: AgentDriver = {
     id: 'codex-status-fixture',
     capabilities: () => ({
@@ -49,6 +55,14 @@ const fixture = async (
       attachCalls.push(externalId)
       return attach()
     },
+    ...(recover
+      ? {
+          recover: async (request: DriverRecoveryRequest) => {
+            recoveryCalls.push(structuredClone(request))
+            return recover(request)
+          },
+        }
+      : {}),
     send: async () => undefined,
     interrupt: async () => undefined,
     stop: async () => undefined,
@@ -115,8 +129,10 @@ const fixture = async (
     jobId: job.id,
     sessionId: binding.agentHomeSessionId,
     profileId: binding.agentProfileId,
+    conversationId: binding.agentConversationId,
     agentId,
     attachCalls,
+    recoveryCalls,
   }
 }
 
@@ -185,6 +201,53 @@ describe('Agent OS active-session status consistency', () => {
         job: { id: setup.jobId, status: 'running' },
         processes: [{ id: 'pty-status-process', status: 'running' }],
       },
+    })
+  })
+
+  it('prefers durable authorized recovery evidence over raw provider attach', async () => {
+    const recoveredSession: DriverSession = {
+      id: 'driver-session-authorized-recovery',
+      externalId: 'provider-thread-status',
+      driverId: 'codex-status-fixture',
+      workspaceId: 'pty-status-workspace',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      metadata: { recovered: true },
+    }
+    const setup = await fixture(
+      async () => {
+        throw new Error('raw attach must not run')
+      },
+      1,
+      async () => recoveredSession,
+    )
+
+    expect(await setup.runtime.reconcileJobs()).toEqual({
+      resumed: [setup.jobId],
+      recovered: [],
+    })
+    expect(setup.attachCalls).toEqual([])
+    expect(setup.recoveryCalls).toEqual([{
+      externalId: 'provider-thread-status',
+      workspaceId: setup.workspaceId,
+      cwd: process.cwd(),
+      model: 'status-model',
+      effort: 'high',
+      accessProfile: 'workspace_write',
+      metadata: {
+        jobId: setup.jobId,
+        agentHomeSessionId: setup.sessionId,
+        agentProfileId: setup.profileId,
+        agentConversationId: setup.conversationId,
+      },
+    }])
+    expect(statusMatrix(setup.db, setup)).toMatchObject({
+      session: {
+        status: 'running',
+        control_state: 'active',
+        recovery_state: 'attachable',
+      },
+      job: { status: 'running' },
     })
   })
 
