@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  aggregateRuntimeRuns,
   BASELINE_SCHEMA_VERSION,
   directorySummary,
   percentile,
@@ -65,6 +66,38 @@ describe('BASE-008 baseline capture harness', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+
+  it('aggregates every loopback latency sample without serializing raw samples', () => {
+    const observedRuns = [1, 2, 3].map((run) => ({
+      run,
+      startup_ms: run * 10,
+      ready_rss_bytes: run * 100,
+      ready_virtual_bytes: run * 1_000,
+      health_requests: 2,
+      health_failures: 0,
+      health_latency_ms: summarizeSamples([run, run + 3]),
+      health_latency_samples_ms: [run, run + 3],
+      graceful_shutdown: true,
+      exit_code: 0,
+      exit_signal: null,
+    }))
+    const aggregate = aggregateRuntimeRuns(observedRuns)
+
+    expect(aggregate.health_latency_ms).toEqual({
+      samples: 6,
+      min: 1,
+      mean: 3.5,
+      p50: 3,
+      p95: 6,
+      p99: 6,
+      max: 6,
+      requests: 6,
+      failures: 0,
+      aggregation: 'all sequential loopback request samples',
+    })
+    expect(aggregate.runs).toHaveLength(3)
+    expect(aggregate.runs.every((run) => !('health_latency_samples_ms' in run))).toBe(true)
   })
 
   it('keeps capture exact, credential-free, and disposable', () => {

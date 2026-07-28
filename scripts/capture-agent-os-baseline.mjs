@@ -147,6 +147,7 @@ export function validateBaseline(value) {
         || !positive(run.ready_virtual_bytes)
         || run.health_requests < 50
         || run.health_failures !== 0
+        || run.health_latency_ms?.samples !== run.health_requests
         || run.graceful_shutdown !== true
       ) {
         errors.push(`runtime run ${index + 1} is incomplete`)
@@ -159,6 +160,16 @@ export function validateBaseline(value) {
     || !positive(runtime?.health_latency_ms?.p50)
   ) {
     errors.push('runtime summaries are invalid')
+  }
+  const totalHealthRequests = Array.isArray(runtime?.runs)
+    ? runtime.runs.reduce((total, run) => total + (run.health_requests ?? 0), 0)
+    : 0
+  if (
+    runtime?.health_latency_ms?.requests !== totalHealthRequests
+    || runtime?.health_latency_ms?.samples !== totalHealthRequests
+    || runtime?.health_latency_ms?.aggregation !== 'all sequential loopback request samples'
+  ) {
+    errors.push('runtime health latency aggregation is incomplete')
   }
 
   const tokens = value.token_usage
@@ -498,6 +509,7 @@ const oneRuntimeRun = async (index, env, tempRoot) => {
       health_requests: latencySamples.length,
       health_failures: healthFailures,
       health_latency_ms: summarizeSamples(latencySamples),
+      health_latency_samples_ms: latencySamples,
       graceful_shutdown: gracefulShutdown,
       exit_code: exit.code,
       exit_signal: exit.signal,
@@ -528,33 +540,34 @@ const oneRuntimeRun = async (index, env, tempRoot) => {
   }
 }
 
-const runtimeBaseline = async (env, tempRoot) => {
-  const runs = []
-  for (let index = 1; index <= 3; index += 1) {
-    console.error(`[baseline] runtime:cold-start:${index}`)
-    runs.push(await oneRuntimeRun(index, env, tempRoot))
-  }
-  const latency = runs.flatMap((run) => [
-    run.health_latency_ms.min,
-    run.health_latency_ms.p50,
-    run.health_latency_ms.p95,
-    run.health_latency_ms.p99,
-    run.health_latency_ms.max,
-  ])
+export const aggregateRuntimeRuns = (observedRuns) => {
+  const latencySamples = observedRuns.flatMap((run) => run.health_latency_samples_ms)
+  const runs = observedRuns.map(({ health_latency_samples_ms: _samples, ...run }) => run)
   return {
-    mode: 'credential_free_loopback',
-    provider_state: 'Codex command intentionally unavailable; no provider login or turn executed',
-    auth_state: 'ORCHESTRA_NO_AUTH=1 on loopback-only disposable homes',
     runs,
     startup_ms: summarizeSamples(runs.map((run) => run.startup_ms)),
     ready_rss_bytes: summarizeSamples(runs.map((run) => run.ready_rss_bytes)),
     ready_virtual_bytes: summarizeSamples(runs.map((run) => run.ready_virtual_bytes)),
     health_latency_ms: {
-      ...summarizeSamples(latency),
+      ...summarizeSamples(latencySamples),
       requests: runs.reduce((total, run) => total + run.health_requests, 0),
       failures: runs.reduce((total, run) => total + run.health_failures, 0),
-      aggregation: 'summary-of-run summaries; each run issued 100 sequential loopback requests',
+      aggregation: 'all sequential loopback request samples',
     },
+  }
+}
+
+const runtimeBaseline = async (env, tempRoot) => {
+  const observedRuns = []
+  for (let index = 1; index <= 3; index += 1) {
+    console.error(`[baseline] runtime:cold-start:${index}`)
+    observedRuns.push(await oneRuntimeRun(index, env, tempRoot))
+  }
+  return {
+    mode: 'credential_free_loopback',
+    provider_state: 'Codex command intentionally unavailable; no provider login or turn executed',
+    auth_state: 'ORCHESTRA_NO_AUTH=1 on loopback-only disposable homes',
+    ...aggregateRuntimeRuns(observedRuns),
   }
 }
 
