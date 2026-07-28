@@ -14,6 +14,7 @@ import {
   directorySummary,
   percentile,
   summarizeSamples,
+  summarizeVitestReport,
   validateBaseline,
 } from '../scripts/capture-agent-os-baseline.mjs'
 
@@ -36,6 +37,26 @@ describe('BASE-008 baseline capture harness', () => {
       p95: 4,
       p99: 4,
       max: 4,
+    })
+    expect(summarizeVitestReport({
+      numTotalTestSuites: 4,
+      numPassedTestSuites: 4,
+      numFailedTestSuites: 0,
+      numTotalTests: 3,
+      numPassedTests: 3,
+      numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+      testResults: [{ status: 'passed' }, { status: 'passed' }],
+    })).toEqual({
+      test_files: 2,
+      passed_test_files: 2,
+      failed_test_files: 0,
+      tests: 3,
+      passed_tests: 3,
+      failed_tests: 0,
+      pending_tests: 0,
+      todo_tests: 0,
     })
   })
 
