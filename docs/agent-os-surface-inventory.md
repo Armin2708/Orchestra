@@ -46,6 +46,7 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migr
 | Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
 | Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
+| Provider acceptance | `provider_acceptance_evidence` |
 | Control plane | `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
 | Knowledge persistence | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses` |
 

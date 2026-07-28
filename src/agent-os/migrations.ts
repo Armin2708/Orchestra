@@ -77,6 +77,33 @@ const KNOWLEDGE_TABLE_SCHEMA_HASHES: Readonly<Record<string, string>> = Object.f
   context_build_entries: 'a202e71e7d7391da4c17e6ce6e231ba176283f4a206cda03423806c28dc71d11',
   context_uses: '4539beb67a5e99e444fe5a6ff9c72d8f65457c875e968de8fdb45b14b9810563',
 })
+const PROVIDER_ACCEPTANCE_EVIDENCE_COLUMNS = Object.freeze([
+  ['id', 'TEXT', 0, 1],
+  ['contract_version', 'INTEGER', 1, 0],
+  ['provider_id', 'TEXT', 1, 0],
+  ['adapter_id', 'TEXT', 1, 0],
+  ['adapter_version', 'TEXT', 1, 0],
+  ['mode_id', 'TEXT', 1, 0],
+  ['runtime_mode', 'TEXT', 1, 0],
+  ['billing_mode', 'TEXT', 1, 0],
+  ['credential_kind', 'TEXT', 1, 0],
+  ['executable_version', 'TEXT', 1, 0],
+  ['platform', 'TEXT', 1, 0],
+  ['source_commit', 'TEXT', 1, 0],
+  ['observed_at', 'TEXT', 1, 0],
+  ['matrix_json', 'TEXT', 1, 0],
+  ['matrix_sha256', 'TEXT', 1, 0],
+  ['artifact_ref', 'TEXT', 1, 0],
+  ['artifact_sha256', 'TEXT', 1, 0],
+  ['recorded_at', 'TEXT', 1, 0],
+] as const)
+const PROVIDER_ACCEPTANCE_EVIDENCE_OBJECTS = Object.freeze([
+  ['index', 'idx_provider_acceptance_evidence_tuple_latest'],
+  ['table', 'provider_acceptance_evidence'],
+  ['trigger', 'provider_acceptance_evidence_delete'],
+  ['trigger', 'provider_acceptance_evidence_insert'],
+  ['trigger', 'provider_acceptance_evidence_update'],
+] as const)
 
 const normalizedSchemaSql = (value: string): string => value.trim()
 
@@ -119,6 +146,49 @@ const assertKnowledgeSchemaCompatible = (db: Database.Database): void => {
         'migration 018-knowledge-persistence found an incompatible knowledge schema',
       )
     }
+  }
+}
+
+const assertProviderAcceptanceEvidenceSchemaCompatible = (
+  db: Database.Database,
+): void => {
+  const columns = db.prepare(`SELECT name, type, "notnull" AS required, pk
+    FROM pragma_table_info('provider_acceptance_evidence')
+    ORDER BY cid`).all() as Array<{
+      name: string
+      type: string
+      required: number
+      pk: number
+    }>
+  const objects = db.prepare(`SELECT type, name
+    FROM sqlite_master
+    WHERE tbl_name='provider_acceptance_evidence'
+      AND type IN ('table', 'index', 'trigger')
+      AND (type!='index' OR sql IS NOT NULL)
+    ORDER BY type, name`).all() as Array<{
+      type: string
+      name: string
+    }>
+  const columnsMatch = columns.length === PROVIDER_ACCEPTANCE_EVIDENCE_COLUMNS.length
+    && columns.every((column, index) => {
+      const expected = PROVIDER_ACCEPTANCE_EVIDENCE_COLUMNS[index]
+      return expected !== undefined
+        && column.name === expected[0]
+        && column.type.toUpperCase() === expected[1]
+        && column.required === expected[2]
+        && column.pk === expected[3]
+    })
+  const objectsMatch = objects.length === PROVIDER_ACCEPTANCE_EVIDENCE_OBJECTS.length
+    && objects.every((object, index) => {
+      const expected = PROVIDER_ACCEPTANCE_EVIDENCE_OBJECTS[index]
+      return expected !== undefined
+        && object.type === expected[0]
+        && object.name === expected[1]
+    })
+  if (!columnsMatch || !objectsMatch) {
+    throw new Error(
+      'migration 019-provider-acceptance-evidence found an incompatible evidence schema',
+    )
   }
 }
 const MALFORMED_TRANSCRIPT_TOMBSTONE = `${JSON.stringify({
@@ -6554,6 +6624,163 @@ const migrations: Migration[] = [
       `)
 
       assertKnowledgeSchemaCompatible(db)
+    },
+  },
+  {
+    id: '019-provider-acceptance-evidence',
+    apply(db) {
+      const hasMigration018 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='018-knowledge-persistence'`).get()
+      if (!hasMigration018) {
+        throw new Error(
+          'migration 019-provider-acceptance-evidence requires 018-knowledge-persistence',
+        )
+      }
+      const existing = db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='provider_acceptance_evidence'`).get()
+      if (existing) assertProviderAcceptanceEvidenceSchemaCompatible(db)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_acceptance_evidence (
+          id TEXT PRIMARY KEY
+            CHECK(length(id)=67
+              AND substr(id, 1, 3)='pe_'
+              AND substr(id, 4) NOT GLOB '*[^0-9a-f]*'),
+          contract_version INTEGER NOT NULL
+            CHECK(contract_version=1),
+          provider_id TEXT NOT NULL
+            CHECK(length(provider_id) BETWEEN 1 AND 128
+              AND provider_id NOT GLOB '*[^a-z0-9_.-]*'),
+          adapter_id TEXT NOT NULL
+            CHECK(length(adapter_id) BETWEEN 1 AND 128
+              AND adapter_id NOT GLOB '*[^a-z0-9_.-]*'),
+          adapter_version TEXT NOT NULL
+            CHECK(length(adapter_version) BETWEEN 1 AND 128),
+          mode_id TEXT NOT NULL
+            CHECK(length(mode_id) BETWEEN 1 AND 128
+              AND mode_id NOT GLOB '*[^a-z0-9_.-]*'),
+          runtime_mode TEXT NOT NULL
+            CHECK(runtime_mode IN ('native_cli', 'provider_api')),
+          billing_mode TEXT NOT NULL
+            CHECK(billing_mode IN ('personal_subscription', 'usage_priced_api')),
+          credential_kind TEXT NOT NULL
+            CHECK(credential_kind IN (
+              'provider_account_session', 'subscription_scoped_key',
+              'subscription_access_token', 'usage_priced_api_key'
+            )),
+          executable_version TEXT NOT NULL
+            CHECK(length(executable_version) BETWEEN 1 AND 128),
+          platform TEXT NOT NULL
+            CHECK(length(platform) BETWEEN 1 AND 128
+              AND platform NOT GLOB '*[^a-z0-9_.-]*'),
+          source_commit TEXT NOT NULL
+            CHECK(length(source_commit) IN (40, 64)
+              AND source_commit NOT GLOB '*[^0-9a-f]*'),
+          observed_at TEXT NOT NULL
+            CHECK(strftime('%s', observed_at) IS NOT NULL),
+          matrix_json TEXT NOT NULL
+            CHECK(json_valid(matrix_json)
+              AND json_type(matrix_json)='object'
+              AND json(matrix_json)=matrix_json
+              AND length(CAST(matrix_json AS BLOB))<=1000000),
+          matrix_sha256 TEXT NOT NULL
+            CHECK(length(matrix_sha256)=64
+              AND matrix_sha256 NOT GLOB '*[^0-9a-f]*'),
+          artifact_ref TEXT NOT NULL
+            CHECK(length(trim(artifact_ref)) BETWEEN 1 AND 2048
+              AND trim(artifact_ref)=artifact_ref),
+          artifact_sha256 TEXT NOT NULL
+            CHECK(length(artifact_sha256)=64
+              AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+          recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            CHECK(strftime('%s', recorded_at) IS NOT NULL),
+          UNIQUE(
+            provider_id, adapter_id, mode_id, runtime_mode, billing_mode,
+            credential_kind, executable_version, platform, source_commit,
+            observed_at
+          )
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_acceptance_evidence_tuple_latest
+          ON provider_acceptance_evidence(
+            provider_id, adapter_id, mode_id, runtime_mode, billing_mode,
+            credential_kind, executable_version, platform, source_commit,
+            observed_at DESC, recorded_at DESC
+          );
+
+        CREATE TRIGGER IF NOT EXISTS provider_acceptance_evidence_insert
+        BEFORE INSERT ON provider_acceptance_evidence
+        BEGIN
+          SELECT CASE WHEN
+            json_type(NEW.matrix_json) IS NOT 'object'
+            OR (SELECT COUNT(*) FROM json_each(NEW.matrix_json))!=13
+            OR json_type(NEW.matrix_json, '$.contract_version') IS NOT 'integer'
+            OR json_extract(NEW.matrix_json, '$.contract_version') IS NOT NEW.contract_version
+            OR json_extract(NEW.matrix_json, '$.provider_id') IS NOT NEW.provider_id
+            OR json_extract(NEW.matrix_json, '$.adapter_id') IS NOT NEW.adapter_id
+            OR json_extract(NEW.matrix_json, '$.adapter_version') IS NOT NEW.adapter_version
+            OR json_extract(NEW.matrix_json, '$.mode_id') IS NOT NEW.mode_id
+            OR json_extract(NEW.matrix_json, '$.runtime_mode') IS NOT NEW.runtime_mode
+            OR json_extract(NEW.matrix_json, '$.billing_mode') IS NOT NEW.billing_mode
+            OR json_extract(NEW.matrix_json, '$.credential_kind') IS NOT NEW.credential_kind
+            OR json_extract(NEW.matrix_json, '$.executable_version') IS NOT NEW.executable_version
+            OR json_extract(NEW.matrix_json, '$.platform') IS NOT NEW.platform
+            OR json_extract(NEW.matrix_json, '$.source_commit') IS NOT NEW.source_commit
+            OR json_extract(NEW.matrix_json, '$.observed_at') IS NOT NEW.observed_at
+            OR json_type(NEW.matrix_json, '$.gates') IS NOT 'object'
+            OR (SELECT COUNT(*) FROM json_each(NEW.matrix_json, '$.gates'))!=8
+            OR EXISTS (
+              SELECT 1 FROM json_each(NEW.matrix_json, '$.gates') gate
+              WHERE gate.key NOT IN (
+                'executable_provenance', 'subscription_billing',
+                'credential_conflict', 'managed_lifecycle', 'restart_recovery',
+                'raw_terminal_coexistence', 'failure_semantics',
+                'credential_redaction'
+              )
+                OR json_type(gate.value) IS NOT 'object'
+                OR (SELECT COUNT(*) FROM json_each(gate.value))!=2
+                OR EXISTS (
+                  SELECT 1 FROM json_each(gate.value) gate_field
+                  WHERE gate_field.key NOT IN ('state', 'evidence_refs')
+                )
+                OR json_type(gate.value, '$.state') IS NOT 'text'
+                OR json_extract(gate.value, '$.state')
+                  NOT IN ('passed', 'failed', 'not_run')
+                OR json_type(gate.value, '$.evidence_refs') IS NOT 'array'
+                OR (
+                  json_extract(gate.value, '$.state')='passed'
+                  AND json_array_length(gate.value, '$.evidence_refs')=0
+                )
+                OR EXISTS (
+                  SELECT 1 FROM json_each(gate.value, '$.evidence_refs') evidence
+                  WHERE evidence.type!='text'
+                    OR length(trim(evidence.value)) NOT BETWEEN 1 AND 2048
+                    OR trim(evidence.value)!=evidence.value
+                )
+                OR (
+                  SELECT COUNT(*) FROM json_each(gate.value, '$.evidence_refs')
+                )!=(
+                  SELECT COUNT(DISTINCT evidence.value)
+                  FROM json_each(gate.value, '$.evidence_refs') evidence
+                )
+            )
+          THEN RAISE(ABORT, 'provider acceptance matrix evidence is inconsistent') END;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS provider_acceptance_evidence_update
+        BEFORE UPDATE ON provider_acceptance_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'provider acceptance evidence is immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS provider_acceptance_evidence_delete
+        BEFORE DELETE ON provider_acceptance_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'provider acceptance evidence is immutable');
+        END;
+      `)
+
+      assertProviderAcceptanceEvidenceSchemaCompatible(db)
     },
   },
 ]

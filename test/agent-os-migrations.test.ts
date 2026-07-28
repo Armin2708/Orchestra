@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
-import { canonicalHash } from '../src/agent-os/agent-home-support.js'
+import { canonicalHash, stableJson } from '../src/agent-os/agent-home-support.js'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
@@ -49,7 +49,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(18)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(19)
     first.close()
 
     const second = openDb(file)
@@ -65,14 +65,15 @@ describe('Agent OS migrations', () => {
       'agent_home_retention_runs', 'agent_home_raw_artifact_archives',
       'agent_home_evidence_bundle_repairs', 'agent_home_transcript_repairs',
       'knowledge_sources', 'knowledge_chunks', 'context_builds',
-      'context_build_sources', 'context_build_entries', 'context_uses']) {
+      'context_build_sources', 'context_build_entries', 'context_uses',
+      'provider_acceptance_evidence']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(18)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(19)
     const migrationIds = (second.prepare(
       'SELECT id FROM os_schema_migrations ORDER BY rowid',
     ).all() as Array<{ id: string }>).map((row) => row.id)
-    expect(migrationIds.slice(-7)).toEqual([
+    expect(migrationIds.slice(-8)).toEqual([
       '012-agent-home-retention',
       '013-agent-home-structured-metadata-redaction',
       '014-agent-home-native-fork-lifecycle',
@@ -80,8 +81,9 @@ describe('Agent OS migrations', () => {
       '016-job-market-assignment-lifecycle',
       '017-job-assignment-runtime-binding',
       '018-knowledge-persistence',
+      '019-provider-acceptance-evidence',
     ])
-    expect(migrationIds.at(-1)).toBe('018-knowledge-persistence')
+    expect(migrationIds.at(-1)).toBe('019-provider-acceptance-evidence')
     expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
@@ -132,7 +134,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(18)
+    }).count).toBe(19)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -142,6 +144,100 @@ describe('Agent OS migrations', () => {
       expect((db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
         WHERE type='table' AND name=?`).get(table) as { count: number }).count).toBe(1)
     }
+    db.close()
+  })
+
+  it('keeps provider acceptance evidence append-only and rerunnable', () => {
+    const db = openDb(':memory:')
+    const gates = Object.fromEntries([
+      'executable_provenance',
+      'subscription_billing',
+      'credential_conflict',
+      'managed_lifecycle',
+      'restart_recovery',
+      'raw_terminal_coexistence',
+      'failure_semantics',
+      'credential_redaction',
+    ].map((gate) => [
+      gate,
+      {
+        state: 'passed',
+        evidence_refs: [`evidence/${gate}.json`],
+      },
+    ]))
+    const matrix = {
+      contract_version: 1,
+      provider_id: 'codex',
+      adapter_id: 'codex-app-server',
+      adapter_version: '1.0.0',
+      mode_id: 'native_subscription',
+      runtime_mode: 'native_cli',
+      billing_mode: 'personal_subscription',
+      credential_kind: 'provider_account_session',
+      executable_version: '0.144.6',
+      platform: 'darwin-arm64',
+      source_commit: 'a'.repeat(40),
+      observed_at: '2026-07-28T12:00:00.000Z',
+      gates,
+    }
+    const matrixJson = stableJson(matrix)
+    const insert = db.prepare(`INSERT INTO provider_acceptance_evidence (
+      id, contract_version, provider_id, adapter_id, adapter_version, mode_id,
+      runtime_mode, billing_mode, credential_kind, executable_version, platform,
+      source_commit, observed_at, matrix_json, matrix_sha256, artifact_ref,
+      artifact_sha256, recorded_at
+    ) VALUES (
+      @id, @contract_version, @provider_id, @adapter_id, @adapter_version, @mode_id,
+      @runtime_mode, @billing_mode, @credential_kind, @executable_version, @platform,
+      @source_commit, @observed_at, @matrix_json, @matrix_sha256, @artifact_ref,
+      @artifact_sha256, @recorded_at
+    )`)
+    const row = {
+      id: `pe_${'a'.repeat(64)}`,
+      ...matrix,
+      matrix_json: matrixJson,
+      matrix_sha256: canonicalHash(matrix),
+      artifact_ref: 'evidence/codex-darwin-arm64.json',
+      artifact_sha256: 'b'.repeat(64),
+      recorded_at: '2026-07-28T12:01:00.000Z',
+    }
+
+    expect(() => insert.run(row)).not.toThrow()
+    expect(() => db.prepare(`UPDATE provider_acceptance_evidence
+      SET artifact_ref='evidence/replaced.json' WHERE id=?`).run(row.id))
+      .toThrow(/immutable/)
+    expect(() => db.prepare('DELETE FROM provider_acceptance_evidence WHERE id=?')
+      .run(row.id)).toThrow(/immutable/)
+    expect(() => insert.run({
+      ...row,
+      id: `pe_${'c'.repeat(64)}`,
+      provider_id: 'claude',
+      observed_at: '2026-07-28T12:02:00.000Z',
+    })).toThrow(/matrix evidence is inconsistent/)
+
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id='019-provider-acceptance-evidence'`).run()
+    expect(() => applyAgentOsMigrations(db)).not.toThrow()
+    expect(db.prepare(`SELECT COUNT(*) AS count
+      FROM provider_acceptance_evidence`).get()).toEqual({ count: 1 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='019-provider-acceptance-evidence'`).get()).toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('rejects a pre-existing incompatible provider acceptance schema', () => {
+    const db = openDb(':memory:')
+    db.exec(`
+      DROP TABLE provider_acceptance_evidence;
+      CREATE TABLE provider_acceptance_evidence (id TEXT PRIMARY KEY);
+      DELETE FROM os_schema_migrations
+      WHERE id='019-provider-acceptance-evidence';
+    `)
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/019-provider-acceptance-evidence found an incompatible evidence schema/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='019-provider-acceptance-evidence'`).get()).toEqual({ count: 0 })
     db.close()
   })
 
@@ -755,10 +851,11 @@ describe('Agent OS migrations', () => {
       .get() as { count: number }).count).toBe(1)
     const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
       .all() as Array<{ id: string }>).map((row) => row.id)
-    expect(ids.slice(-5)).toEqual([
+    expect(ids.slice(-6)).toEqual([
       '016-job-market-assignment-lifecycle',
       '017-job-assignment-runtime-binding',
       '018-knowledge-persistence',
+      '019-provider-acceptance-evidence',
       '014-agent-home-native-fork-lifecycle',
       '015-agent-home-action-command-scope',
     ])
@@ -894,7 +991,7 @@ describe('Agent OS migrations', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
       WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 1 })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations')
-      .get() as { count: number }).count).toBe(18)
+      .get() as { count: number }).count).toBe(19)
     const requestLookupPlan = db.prepare(`EXPLAIN QUERY PLAN
       SELECT id, board_id, kind, source, workspace_id, card_id, session_id,
         process_id, job_id, contract_id, correlation_id, causation_id,
@@ -1122,7 +1219,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(18)
+      .toBe(19)
     db.close()
   })
 
@@ -1274,7 +1371,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(18)
+      .toBe(19)
     db.close()
   })
 
@@ -1335,7 +1432,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(18)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(19)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1430,7 +1527,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(18)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(19)
     db.close()
   })
 

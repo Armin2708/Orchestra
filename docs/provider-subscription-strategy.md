@@ -31,7 +31,7 @@ must never persist the raw value.
 | Provider | Subscription-first upstream path | Current Orchestra state | Required blocker closure |
 |---|---|---|---|
 | Claude Code | Claude Pro/Max login through the native CLI | Existing managed runtime now applies the contract's subscription environment rules; no TOOL-014 adapter or acceptance evidence is registered | close the automation-policy block, verify account/billing readiness, and pass the exact acceptance matrix |
-| Codex CLI | ChatGPT account login through the native CLI | Existing managed runtime now applies the contract's subscription environment rules; no TOOL-014 adapter or acceptance evidence is registered | verify ChatGPT account mode, register the real adapter, and pass the exact acceptance matrix |
+| Codex CLI | ChatGPT account login through the native CLI | The real app-server adapter is registered as an implementation and durable matrix storage exists, but Codex remains candidate/unsupported with no real acceptance record | verify exact ChatGPT account/billing mode, authorized restart recovery, and all eight real acceptance gates before reconciling support |
 | Qwen Code | Alibaba Cloud Coding Plan through `/auth`, using its subscription-scoped key and coding endpoint | Manual interactive raw-terminal use only | exact adapter/version matrix and provider confirmation for autonomous/background personal-plan use |
 | Kimi Code | Kimi membership through `kimi login` or `/login` OAuth device flow | Manual raw-terminal use only | ACP adapter/version matrix and explicit detection/consent for optional metered Extra Usage |
 
@@ -89,10 +89,12 @@ endpoint conflicts from managed personal-subscription environments. This prevent
 usage-priced or cross-provider credentials from silently changing the selected path; it does not
 prove login state, billing mode, provider policy, or real-session compatibility.
 
-No canonical adapter or acceptance matrix is registered yet, and current production dispatch still
-uses the existing driver path. TOOL-014, BASE-010, and the provider acceptance matrix therefore
-remain open. The support states above do not change, and Qwen Code and Kimi Code remain raw-terminal
-only.
+The canonical Codex adapter is now registered as an implementation, migration 019 stores
+append-only source-commit/artifact-bound matrices, and an opt-in production wrapper dispatches only
+after `requireSupported(...)`. No real acceptance matrix exists, so Codex's candidate manifest and
+unknown native-subscription mode deliberately prevent that route from enabling; default production
+dispatch remains on the existing driver path. TOOL-014, BASE-010, and provider acceptance remain
+open. The support states above do not change, and Qwen Code and Kimi Code remain raw-terminal only.
 
 ## Release acceptance
 

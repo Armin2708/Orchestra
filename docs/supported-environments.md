@@ -37,11 +37,12 @@ built-in executable. Doctor resolves the actual platform-native optional package
 binary's `--version`; base-package metadata alone cannot pass. The npm dependency is exact-pinned to
 stop published installs from silently moving to an unreviewed SDK/CLI pair.
 
-Codex app-server is an
-[experimental upstream command](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-app-server)
-whose protocol may change without notice. Orchestra therefore accepts only CLI `0.144.6`, whose
-generated schema digest is recorded in `scripts/codex-protocol-contract.json`. A nearby version such
-as the host-observed `0.145.0` is not assumed compatible.
+Codex app-server is the documented
+[deep-integration surface](https://learn.chatgpt.com/docs/app-server) for authentication, thread
+history, approvals, and streamed events. Its generated protocol remains CLI-version-specific.
+Orchestra therefore accepts only CLI `0.144.6`, whose generated schema digest is recorded in
+`scripts/codex-protocol-contract.json`. A nearby version such as the host-observed `0.145.0` is not
+assumed compatible.
 
 The provider-neutral contract version 1 and the first TOOL-014 integration slice have source-level
 and test validation on the observed Darwin/Node 22.20.0 host. The contract covers gateway-assigned
@@ -52,10 +53,13 @@ Agent OS support-claim registry, and exact source-commit-bound acceptance eviden
 Claude and Codex launches now apply the contract's personal-subscription environment rules, so
 declared API credentials and endpoint selectors cannot silently replace that path.
 
-This is implementation evidence, not provider acceptance. No canonical adapter or acceptance
-matrix is registered, production dispatch does not yet require the new support gate, and the
-registry evidence is not yet durable. The slice does not promote Codex beyond candidate state,
-remove Claude's policy block, or add Qwen Code/Kimi Code managed support.
+The second TOOL-014 slice registers the real Codex app-server adapter as an implementation,
+persists append-only exact-tuple acceptance evidence through migration 019, and adds an opt-in
+Agent OS production wrapper that requires the exact source commit and never falls back to the raw
+driver. This is implementation evidence, not provider acceptance. No real matrix is persisted,
+Codex remains candidate/unsupported at the registry gate, and the opt-in route therefore cannot
+enable yet. The slice does not remove Claude's policy block or add Qwen Code/Kimi Code managed
+support.
 
 ## First-release provider candidates not yet supported
 

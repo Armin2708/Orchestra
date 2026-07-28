@@ -36,6 +36,16 @@ import {
   type CodexAgentHomeBinding,
 } from './runtime/drivers/codex.js'
 import {
+  CODEX_PROTOCOL_CONFIGURATION_FINGERPRINT_V1,
+  createCodexProviderAdapterV1,
+} from './runtime/drivers/codex-provider-adapter.js'
+import {
+  ProviderContractAgentDriverV1,
+} from './runtime/drivers/provider-contract-driver.js'
+import {
+  ProviderLaunchRequestBrokerV1,
+} from './runtime/drivers/provider-launch-request-broker.js'
+import {
   CodexManagedAgentRuntime,
   ProviderAgentManager,
   ProviderUnavailableError,
@@ -54,6 +64,30 @@ export const baseUrl = () => `http://127.0.0.1:${port()}`
 export const authDisabled = () => process.env.ORCHESTRA_NO_AUTH === '1'
 
 export interface ServeOptions { expose?: boolean }
+
+export type CodexProviderContractRouting = {
+  enabled: boolean
+  source_commit: string | null
+}
+
+export const codexProviderContractRouting = (
+  source: NodeJS.ProcessEnv = process.env,
+): CodexProviderContractRouting => {
+  const requested = source.ORCHESTRA_CODEX_PROVIDER_CONTRACT?.trim() ?? ''
+  if (!requested || requested === '0') {
+    return { enabled: false, source_commit: null }
+  }
+  if (requested !== '1') {
+    throw new Error('ORCHESTRA_CODEX_PROVIDER_CONTRACT must be 0 or 1')
+  }
+  const sourceCommit = source.ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT?.trim() ?? ''
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceCommit)) {
+    throw new Error(
+      'ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT must be an exact 40- or 64-character commit',
+    )
+  }
+  return { enabled: true, source_commit: sourceCommit }
+}
 
 // hired agents to resurrect after a restart — sessions resume, cards and work persist.
 // Limit-paused agents are deliberately excluded: resurrecting them into a still-spent
@@ -161,6 +195,7 @@ export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.en
 
 export async function serve(opts: ServeOptions = {}): Promise<void> {
   assertManagedEnvironmentCompatibility(runEnvironmentDoctor('claude'))
+  const contractRouting = codexProviderContractRouting()
   // an exposed daemon is remote code execution for anyone who can reach the port
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
@@ -214,6 +249,34 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     onApprovalRequest: codexApprovalPolicyHandler(db),
   })
   const codexProvider = new CodexProviderService(db, codexRpc, codexSupervisor, { command: codexCommand })
+  const codexLaunchRequests = new ProviderLaunchRequestBrokerV1()
+  const codexAdapter = createCodexProviderAdapterV1({
+    driver: codexDriver,
+    service: codexRpc,
+    command: codexCommand,
+    environment: codexEnvironment,
+    launchRequest: codexLaunchRequests.resolve,
+    resolveForkTarget: async (scopeId) => {
+      const workspace = await agentOs.workspaceManager.get(scopeId)
+      return workspace?.status === 'active'
+        ? {
+            workspaceId: workspace.id,
+            cwd: agentOs.workspaceManager.root(workspace),
+          }
+        : null
+    },
+  })
+  agentOs.registerProviderAdapter(codexAdapter)
+  const codexContractDriver = contractRouting.enabled
+    ? new ProviderContractAgentDriverV1({
+        registry: agentOs.providerAdapters,
+        adapter: codexAdapter,
+        launchRequests: codexLaunchRequests,
+        source_commit: contractRouting.source_commit!,
+        configuration_fingerprint: CODEX_PROTOCOL_CONFIGURATION_FINGERPRINT_V1,
+        environment: codexEnvironment,
+      })
+    : null
   let runtimesClosed = false
   const shutdownRuntimes = async () => {
     if (runtimesClosed) return
@@ -228,7 +291,17 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let server: ReturnType<typeof buildServer>
   try {
     codexReady = await codexProvider.initialize()
-    if (codexReady) agentOs.registerDriver(codexDriver)
+    if (contractRouting.enabled) {
+      if (!codexReady) {
+        throw new Error(
+          'Codex provider-contract routing was requested but Codex is unavailable',
+        )
+      }
+      await codexContractDriver!.assertSupported()
+      agentOs.registerDriver(codexContractDriver!)
+    } else if (codexReady) {
+      agentOs.registerDriver(codexDriver)
+    }
     server = buildServer(db, (bus) => {
       agentOs.setBus(bus)
       maestro = new Conductor(db, bus, agentToken, { nativeEventSink: claudeNativeEventSink })

@@ -221,6 +221,11 @@ const defineAcceptanceMatrix = (
   })
 }
 
+export const defineDeclaredProviderAcceptanceMatrixV1 = (
+  value: DeclaredProviderAcceptanceMatrixV1,
+): Readonly<DeclaredProviderAcceptanceMatrixV1> =>
+  defineAcceptanceMatrix(value)
+
 export class ProviderAdapterRegistryV1 {
   readonly #manifests = new Map<string, Readonly<ProviderManifestV1>>()
   readonly #adapters = new Map<string, ProviderExecutionAdapterV1>()

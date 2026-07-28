@@ -66,8 +66,14 @@ import { readProviderModelCache } from '../agent-providers.js'
 import { hasOpenReviewRequest } from '../review.js'
 import {
   ProviderAdapterRegistryV1,
+  type DeclaredProviderAcceptanceMatrixV1,
 } from '../provider-adapter-registry.js'
 import type { ProviderExecutionAdapterV1 } from '../provider-contract.js'
+import {
+  ProviderAcceptanceEvidenceStoreV1,
+  type ProviderAcceptanceArtifactV1,
+  type ProviderAcceptanceEvidenceRecordV1,
+} from '../provider-acceptance-evidence-store.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -388,12 +394,17 @@ export type AgentOsRuntime = {
   workspaceManager: WorkspaceManager
   drivers: DriverRegistry
   providerAdapters: ProviderAdapterRegistryV1
+  providerAcceptanceEvidence: ProviderAcceptanceEvidenceStoreV1
   jobExecutor: AgentOsJobExecutor
   scheduler: JobScheduler
   adapter: AgentOsRuntimeAdapter
   descriptors(): DriverDescriptor[]
   registerDriver(driver: AgentDriver): void
   registerProviderAdapter(adapter: ProviderExecutionAdapterV1): void
+  recordProviderAcceptance(
+    matrix: DeclaredProviderAcceptanceMatrixV1,
+    artifact: ProviderAcceptanceArtifactV1,
+  ): ProviderAcceptanceEvidenceRecordV1
   registerClaude(conductor: ClaudeConductorPort): void
   setBus(bus: EventEmitter): void
   reconcileLost(): Promise<ProcessRecord[]>
@@ -541,6 +552,8 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
   const jobExecutor = new AgentOsJobExecutor(db, layer.drivers, workspaceManager, bus)
   const scheduler = new JobScheduler(db, jobExecutor)
   const providerAdapters = new ProviderAdapterRegistryV1()
+  const providerAcceptanceEvidence = new ProviderAcceptanceEvidenceStoreV1(db)
+  providerAcceptanceEvidence.hydrate(providerAdapters)
   jobExecutor.bindScheduler(scheduler)
   const registeredProviders = new Set(layer.drivers.list().map(({ id }) => id))
   const registerDriver = (driver: AgentDriver): void => {
@@ -554,6 +567,7 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
     workspaceManager,
     drivers: layer.drivers,
     providerAdapters,
+    providerAcceptanceEvidence,
     jobExecutor,
     scheduler,
     adapter,
@@ -566,6 +580,8 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
     registerProviderAdapter: (adapter) => {
       providerAdapters.register(adapter)
     },
+    recordProviderAcceptance: (matrix, artifact) =>
+      providerAcceptanceEvidence.record(providerAdapters, matrix, artifact),
     registerClaude: (conductor) => {
       registerDriver(new ClaudeAgentDriverAdapter({
         conductor,

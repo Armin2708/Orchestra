@@ -10,9 +10,10 @@ control projections, the durable Knowledge Compiler persistence foundation, and 
 repository-document ingestion; Open Work, matching, the complete Job Market gate, and Knowledge
 retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
 The versioned subscription-first terminal-agent contract is delivered and its first
-capability-aware driver-bridge/support-gate slice is implemented. Canonical adapter registration,
-durable acceptance evidence, real provider execution, and the exact declared-provider
-compatibility matrix remain open.
+capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
+append-only acceptance store, and opt-in no-fallback production wrapper are now implemented, but
+real exact-tuple acceptance, authorized restart recovery, the other three managed adapters, and
+the exact declared-provider compatibility matrix remain open.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -200,7 +201,13 @@ without claiming TOOL-014 complete before real canonical adapters and acceptance
   all eight declared-provider gates before returning a supported adapter;
 - managed Claude and Codex spawn environments now apply the contract's subscription-first
   conflict rules, stripping declared usage-priced and cross-provider credential/endpoint variables
-  before the native process starts; no canonical adapter or acceptance matrix is registered.
+  before the native process starts;
+- the real Codex app-server adapter is registered as an implementation without claiming support;
+  migration 019 persists append-only exact-tuple matrix/artifact evidence and revalidates its
+  canonical digest during runtime hydration;
+- an opt-in Agent OS production wrapper requires exact source-commit support before dispatch and
+  never falls back to the raw driver. The current candidate manifest/mode and absent real matrix
+  intentionally prevent that route from enabling.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -271,6 +278,11 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   files / 131 tests, and the complete 140-file / 1,167-test serial suite on Node 22.20.0; root and
   standalone strict test TypeScript, web TypeScript, root/web production builds, and
   per-file Gitleaks `8.30.1` scans plus `git diff --check` passed;
+- the second TOOL-014 Codex/evidence slice passed 6 focused files / 34 tests and the complete
+  143-file / 1,179-test serial suite on Node 22.20.0, plus root TypeScript and
+  `git diff --check`. It proves exact-version discovery, credential-conflict readiness,
+  append-only migration/restart hydration, digest-tamper rejection, accepted contract dispatch,
+  and zero raw launches when acceptance is absent;
 - after re-indexing the candidate, GitNexus reported a formally CRITICAL bridge impact
   (702 symbols, 512 direct, 56 processes, and 20 modules), but its returned relationships were
   demonstrably corrupted and unrelated to the new symbol. The result is retained as a critical
@@ -285,10 +297,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
 - `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
   retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
-- complete `TOOL-014` by registering real canonical adapters, routing production dispatch through
-  the support gate, persisting acceptance evidence, and proving restart/recovery and real native
-  sessions; Qwen Code and Kimi Code managed support and the exact supported-provider/version
-  matrix under reopened `BASE-010` remain open, while current managed behavior remains
+- complete `TOOL-014` by adding authorized restart recovery, passing and persisting the real
+  exact-source Codex matrix, reconciling its candidate manifest only from that evidence, and
+  implementing the remaining Claude/Qwen/Kimi adapters. The exact supported-provider/version
+  matrix under reopened `BASE-010` remains open, while current default managed behavior remains
   Claude/Codex-only and prior support/policy labels are unchanged;
 - Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
   analytics, operations hardening, clean-machine packaging, and release;
@@ -330,7 +342,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[TOOL-014 WIP integration checkpoint](./checkpoints/2026-07-27-agent-os-tool014-adapter-integration-wip.md).
+[TOOL-014 Codex adapter/evidence WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-adapter-evidence-wip.md).
+The first
+[TOOL-014 bridge/support-gate checkpoint](./checkpoints/2026-07-27-agent-os-tool014-adapter-integration-wip.md)
+is retained as the preceding adapter-integration checkpoint.
 The
 [TOOL-013 exact-head checkpoint](./checkpoints/2026-07-27-agent-os-tool013-exact-head-38d1d2f.md)
 is retained as the preceding provider-contract checkpoint.

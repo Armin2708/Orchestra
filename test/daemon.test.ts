@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import {
   codexTokenBudgetForThread,
+  codexProviderContractRouting,
   codexWorkspaceForThread,
   dataDir,
   port,
@@ -84,4 +85,25 @@ it('never forwards Claude or Orchestra credentials even when explicitly requeste
     ANTHROPIC_API_KEY: 'removed',
     CLAUDE_CONFIG_DIR: 'removed',
   })).toEqual({})
+})
+
+it('keeps Codex provider-contract routing opt-in and commit-exact', () => {
+  expect(codexProviderContractRouting({})).toEqual({
+    enabled: false,
+    source_commit: null,
+  })
+  expect(codexProviderContractRouting({
+    ORCHESTRA_CODEX_PROVIDER_CONTRACT: '1',
+    ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT: 'a'.repeat(40),
+  })).toEqual({
+    enabled: true,
+    source_commit: 'a'.repeat(40),
+  })
+  expect(() => codexProviderContractRouting({
+    ORCHESTRA_CODEX_PROVIDER_CONTRACT: 'yes',
+  })).toThrow(/must be 0 or 1/)
+  expect(() => codexProviderContractRouting({
+    ORCHESTRA_CODEX_PROVIDER_CONTRACT: '1',
+    ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT: 'main',
+  })).toThrow(/exact 40- or 64-character commit/)
 })

@@ -48,6 +48,7 @@
       "policies",
       "process_output",
       "processes",
+      "provider_acceptance_evidence",
       "workspace_assignments",
       "workspaces"
     ],
