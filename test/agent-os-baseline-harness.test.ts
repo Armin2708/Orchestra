@@ -1,8 +1,16 @@
-import { readFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   BASELINE_SCHEMA_VERSION,
+  directorySummary,
   percentile,
   summarizeSamples,
   validateBaseline,
@@ -41,6 +49,22 @@ describe('BASE-008 baseline capture harness', () => {
       'runtime requires at least three cold-start runs',
       'token totals do not prove a reduction',
     ]))
+  })
+
+  it('summarizes nested build artifacts on the host path separator', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agentboard-baseline-summary-'))
+    try {
+      mkdirSync(join(directory, 'nested'))
+      writeFileSync(join(directory, 'nested', 'artifact.txt'), 'alpha')
+      const summary = directorySummary(directory)
+      expect(summary).toMatchObject({
+        files: 1,
+        bytes: 5,
+      })
+      expect(summary.sha256).toMatch(/^[0-9a-f]{64}$/)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('keeps capture exact, credential-free, and disposable', () => {

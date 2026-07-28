@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { createServer } from 'node:net'
 import { cpus, homedir, platform, arch, release, tmpdir, totalmem } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 
@@ -291,7 +291,7 @@ const parseLastJsonArray = (text) => {
   return JSON.parse(text.slice(start === 0 ? 0 : start + 1))
 }
 
-const directorySummary = (directory) => {
+export const directorySummary = (directory) => {
   const files = []
   const walk = (current) => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
