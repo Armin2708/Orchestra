@@ -1,0 +1,1097 @@
+{
+  "schema_version": 1,
+  "backlog_item": "BASE-007",
+  "status": "defined",
+  "scope": "Agent OS phases 0 through 18",
+  "control_lifecycle": [
+    "reserved",
+    "wired_off",
+    "canary",
+    "default_on",
+    "retire_pending",
+    "retired"
+  ],
+  "implementation_states": [
+    "wired",
+    "release_gate",
+    "reserved"
+  ],
+  "global_activation_order": [
+    "Create an exact source commit and record the current database schema and compatibility state.",
+    "Create and restore-test a backup before a phase can mutate durable state.",
+    "Enable one control at a time for a bounded canary cohort.",
+    "Compare privacy-safe canonical and compatibility counts, mismatches, failures, and latency.",
+    "Promote to default-on only after API, CLI, UI, provider, restart, and rollback gates pass.",
+    "Retire compatibility behavior only after supported-window use reaches zero and rollback evidence is retained."
+  ],
+  "global_rollback_invariants": [
+    "Schema migrations are forward-only. Disabling a feature never runs an automatic down migration.",
+    "A database restore is an explicit offline recovery from a verified backup, never an in-place flag side effect.",
+    "Rollback does not delete canonical records, accepted evidence, audit events, dirty worktrees, artifacts, or user-authored content.",
+    "Active jobs and provider sessions are drained, paused, or stopped under their original provider, billing mode, workspace, and authorization; rollback never silently substitutes a provider or billing mode.",
+    "Rollback never revives expired sessions, stale assignments, revoked device credentials, or reusable master-token remote bootstrap.",
+    "Every control change records actor, exact source commit, prior and next state, reason, cohort, timestamp, and verification result without credential or sensitive-content values.",
+    "Emergency kill switches fail closed for the new surface while preserving local operator recovery and read-only evidence inspection."
+  ],
+  "excluded_operational_controls": [
+    {
+      "name": "ORCHESTRA_NO_AUTH",
+      "reason": "Development-only authentication bypass; it is never an Agent OS migration rollback."
+    },
+    {
+      "name": "ORCHESTRA_AUTOWAKE",
+      "reason": "Scheduling behavior toggle; disabling it does not select a canonical or compatibility data authority."
+    },
+    {
+      "name": "ORCHESTRA_AUTOSHIP",
+      "reason": "Workflow automation toggle; disabling it is not a schema or authority rollback."
+    },
+    {
+      "name": "ORCHESTRA_VERBOSE_RULES",
+      "reason": "Prompt-output comparison control; it is not an Agent OS phase migration."
+    },
+    {
+      "name": "ORCHESTRA_VERBOSE_OUTPUT",
+      "reason": "Prompt-output rollback control; it is not an Agent OS phase migration."
+    }
+  ],
+  "phases": [
+    {
+      "phase": 0,
+      "id": "phase-00",
+      "name": "Product contract and baseline",
+      "flags": [
+        {
+          "id": "baseline.contract_gate",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "BASE-GATE"
+          }
+        }
+      ],
+      "activation_gate": "A documented exact baseline commit reproduces tests, builds, package smoke, state inventory, and dirty-checkout exclusions.",
+      "telemetry": [
+        "Exact commit and artifact digests",
+        "Baseline command outcomes",
+        "Backlog reconciliation count"
+      ],
+      "rollback": {
+        "checkpoint": "Last reviewed baseline commit and its retained evidence bundle.",
+        "triggers": [
+          "Baseline cannot be reproduced",
+          "Inventory or dirty-checkout scope is incomplete"
+        ],
+        "actions": [
+          "Keep the baseline gate closed",
+          "Revert only the unaccepted contract delta",
+          "Regenerate evidence from the last trusted commit"
+        ],
+        "verification": [
+          "No runtime or database state changed",
+          "Previous baseline commands still reproduce"
+        ],
+        "data_policy": "Documentation-only rollback; no durable application data is mutated."
+      }
+    },
+    {
+      "phase": 1,
+      "id": "phase-01",
+      "name": "Canonical domain and event ledger",
+      "flags": [
+        {
+          "id": "domain.canonical_ledger",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.domain.canonical_ledger"
+          }
+        }
+      ],
+      "activation_gate": "Canonical schemas, backfills, causal metadata, integrity queries, and compatibility projections pass upgrade and restart tests.",
+      "telemetry": [
+        "Canonical versus compatibility write counts",
+        "Projection mismatch counts",
+        "Unattributed event counts"
+      ],
+      "rollback": {
+        "checkpoint": "Pre-canonical-write database backup plus the last compatible application commit.",
+        "triggers": [
+          "Integrity or attribution mismatch",
+          "Compatibility projection diverges"
+        ],
+        "actions": [
+          "Disable new canonical entrypoints",
+          "Return compatibility routes to their prior authority",
+          "Preserve canonical rows for diagnosis and forward repair"
+        ],
+        "verification": [
+          "Legacy reads remain coherent",
+          "No canonical row is deleted or rewritten by flag rollback"
+        ],
+        "data_policy": "Keep forward schema and canonical evidence; restore a backup only through explicit offline recovery."
+      }
+    },
+    {
+      "phase": 2,
+      "id": "phase-02",
+      "name": "Canonical orchestration",
+      "flags": [
+        {
+          "id": "orchestration.canonical_launch",
+          "implementation_state": "wired",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "environment",
+            "name": "ORCHESTRA_CANONICAL_LAUNCH",
+            "enabled_value": "1",
+            "source": "src/server.ts",
+            "source_marker": "process.env.ORCHESTRA_CANONICAL_LAUNCH === '1'",
+            "test": "test/orchestration-route-guards.test.ts"
+          }
+        }
+      ],
+      "activation_gate": "Board, CLI, and API create the same frozen contract/workspace/session/job/delivery lifecycle with idempotent dispatch.",
+      "telemetry": [
+        "Canonical and legacy launch counts",
+        "Launch mismatch and rejection reason counts",
+        "Duplicate-dispatch prevention outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Exact commit and database backup before enabling canonical Board launch.",
+        "triggers": [
+          "Lifecycle identity mismatch",
+          "Duplicate or missing dispatch",
+          "Unsupported provider regression"
+        ],
+        "actions": [
+          "Unset ORCHESTRA_CANONICAL_LAUNCH for new Board launches",
+          "Leave canonical API and CLI entrypoints explicit",
+          "Drain or recover existing jobs under their frozen identity"
+        ],
+        "verification": [
+          "New compatibility launches return the legacy envelope",
+          "Existing canonical jobs remain inspectable and are not relaunched"
+        ],
+        "data_policy": "Do not delete frozen lifecycle rows or reuse their idempotency keys."
+      }
+    },
+    {
+      "phase": 3,
+      "id": "phase-03",
+      "name": "Durable Agent Home and conversation",
+      "flags": [
+        {
+          "id": "agent_home.canonical_surface",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.agent_home.canonical_surface"
+          }
+        }
+      ],
+      "activation_gate": "Conversation, provider events, controls, forks, retention, search, export, and restart recovery pass with redaction.",
+      "telemetry": [
+        "Agent Home versus compatibility transcript reads",
+        "Projection mismatch counts",
+        "Recovery and control failure counts"
+      ],
+      "rollback": {
+        "checkpoint": "Pre-default Agent Home database backup and export/replay evidence.",
+        "triggers": [
+          "History loss or projection mismatch",
+          "Control action targets the wrong session",
+          "Sensitive payload projection"
+        ],
+        "actions": [
+          "Route new navigation back to compatibility surfaces",
+          "Disable new Agent Home mutations",
+          "Keep canonical history available read-only for diagnosis"
+        ],
+        "verification": [
+          "No conversation event or fork lineage is deleted",
+          "Existing provider sessions retain their original control scope"
+        ],
+        "data_policy": "Canonical conversation history remains authoritative and forward-readable."
+      }
+    },
+    {
+      "phase": 4,
+      "id": "phase-04",
+      "name": "Terminal and workspace parity",
+      "flags": [
+        {
+          "id": "terminal.session_binding",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.terminal.session_binding"
+          }
+        }
+      ],
+      "activation_gate": "Real PTY, cwd/worktree binding, geometry, signals, reconnect, command history, package tools, and mobile read-only controls pass.",
+      "telemetry": [
+        "PTY spawn and reconnect outcomes",
+        "Workspace/cwd mismatch counts",
+        "Signal and resize failure counts"
+      ],
+      "rollback": {
+        "checkpoint": "Last version with proven PTY and workspace attachment semantics.",
+        "triggers": [
+          "Workspace escape or wrong cwd",
+          "Shell/tool regression",
+          "Unrecoverable terminal reconnect"
+        ],
+        "actions": [
+          "Disable new terminal-binding behavior for new processes",
+          "Keep existing PTYs attached until stopped or drained",
+          "Return remote terminal controls to view-only"
+        ],
+        "verification": [
+          "No process is moved to another workspace",
+          "Dirty worktrees and terminal output are preserved"
+        ],
+        "data_policy": "Never delete a worktree, command record, or PTY evidence as a rollback side effect."
+      }
+    },
+    {
+      "phase": 5,
+      "id": "phase-05",
+      "name": "Contracts and Job Market",
+      "flags": [
+        {
+          "id": "job_market.publish_and_match",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.job_market.publish_and_match"
+          }
+        }
+      ],
+      "activation_gate": "Contract validation, dependency rules, Open Work, matching, claim/assign/reassign, and exactly-one-job dispatch pass.",
+      "telemetry": [
+        "Publish, claim, match, and assignment outcomes",
+        "Stale-version and dependency rejection counts",
+        "Exactly-one-job invariant violations"
+      ],
+      "rollback": {
+        "checkpoint": "Last compatible contract/assignment schema and verified database backup.",
+        "triggers": [
+          "Duplicate ownership or job creation",
+          "Constraint or dependency bypass",
+          "Assignment identity mismatch"
+        ],
+        "actions": [
+          "Stop new publication and matching",
+          "Keep contracts and assignments readable",
+          "Drain existing jobs under frozen versions"
+        ],
+        "verification": [
+          "No assignment is silently transferred",
+          "Published versions and audit history remain immutable"
+        ],
+        "data_policy": "Forward-fix contracts and assignments; do not down-migrate or rewrite accepted history."
+      }
+    },
+    {
+      "phase": 6,
+      "id": "phase-06",
+      "name": "Delivery and evidence trackbook",
+      "flags": [
+        {
+          "id": "delivery.canonical_review",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.delivery.canonical_review"
+          }
+        }
+      ],
+      "activation_gate": "Criteria, verifier commands, artifact hashes, requested-versus-delivered review, rejection, resubmission, override, and shipped records pass.",
+      "telemetry": [
+        "Evidence-gap and review outcome counts",
+        "Artifact verification failures",
+        "Override and reopen counts"
+      ],
+      "rollback": {
+        "checkpoint": "Last accepted delivery schema and immutable evidence snapshot.",
+        "triggers": [
+          "Evidence associated with the wrong criterion",
+          "Artifact digest mismatch",
+          "Review transition regression"
+        ],
+        "actions": [
+          "Disable automatic canonical review transitions",
+          "Require manual review on existing immutable evidence",
+          "Keep compatibility presentation read-only"
+        ],
+        "verification": [
+          "Accepted evidence and override attribution are unchanged",
+          "No generic git history is promoted to a shipped record"
+        ],
+        "data_policy": "Evidence is append-only; rollback can stop new automation but cannot erase or mutate accepted proof."
+      }
+    },
+    {
+      "phase": 7,
+      "id": "phase-07",
+      "name": "Knowledge Compiler",
+      "flags": [
+        {
+          "id": "knowledge.ingest",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.knowledge.ingest"
+          }
+        },
+        {
+          "id": "knowledge.retrieve",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.knowledge.retrieve"
+          }
+        },
+        {
+          "id": "knowledge.compile",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.knowledge.compile"
+          }
+        },
+        {
+          "id": "knowledge.inject",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.knowledge.inject"
+          }
+        }
+      ],
+      "activation_gate": "Each stage independently passes provenance, freshness, redaction, deterministic ranking, token budget, citation, and with/without-context benchmarks.",
+      "telemetry": [
+        "Sources/chunks considered, selected, rejected, and refreshed",
+        "Per-section estimated and actual token use",
+        "Citation, freshness, and task-quality outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Content-addressed source/chunk/build snapshot before enabling the next stage.",
+        "triggers": [
+          "Secret or excluded-path ingestion",
+          "Stale or contradictory injection",
+          "Token budget or quality regression"
+        ],
+        "actions": [
+          "Disable injection first, then compilation and retrieval as needed",
+          "Keep verified ingestion records for review",
+          "Run managed jobs without compiled context rather than injecting unproven material"
+        ],
+        "verification": [
+          "Prompt contains no disabled context section",
+          "Stored source provenance and context-use audit remain intact"
+        ],
+        "data_policy": "Forgetting or superseding knowledge is an explicit reviewed action, not a flag rollback."
+      }
+    },
+    {
+      "phase": 8,
+      "id": "phase-08",
+      "name": "Discussions and Q&A",
+      "flags": [
+        {
+          "id": "discussions.read",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.discussions.read"
+          }
+        },
+        {
+          "id": "discussions.write",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.discussions.write"
+          }
+        },
+        {
+          "id": "discussions.promote",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.discussions.promote"
+          }
+        }
+      ],
+      "activation_gate": "Nested posts, states, accepted answers, search, explicit subscriptions, provenance, permissions, loop prevention, and reviewed knowledge promotion pass.",
+      "telemetry": [
+        "Posts, explicit recipient wakes, and loop-prevention outcomes",
+        "Accepted and promoted answer counts",
+        "Needs-human queue outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Last verified discussion schema and accepted-answer export.",
+        "triggers": [
+          "Automated reply loop or unintended fanout",
+          "Permission or provenance failure",
+          "Unreviewed knowledge promotion"
+        ],
+        "actions": [
+          "Disable promotion and agent writes before reads",
+          "Stop discussion-generated wakes",
+          "Retain discussions read-only with provenance"
+        ],
+        "verification": [
+          "No accepted answer or resolution is removed",
+          "No disabled discussion wakes an agent"
+        ],
+        "data_policy": "Discussion history is retained; moderation and forgetting remain explicit audited commands."
+      }
+    },
+    {
+      "phase": 9,
+      "id": "phase-09",
+      "name": "Teams and conflicts",
+      "flags": [
+        {
+          "id": "teams.plan",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.teams.plan"
+          }
+        },
+        {
+          "id": "teams.delegate",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.teams.delegate"
+          }
+        },
+        {
+          "id": "conflicts.enforcement",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.conflicts.enforcement"
+          }
+        }
+      ],
+      "activation_gate": "Explicit membership, roles, bounded rounds/budgets, proposals, synthesis, delegation, conflict evidence, human override, and integrated delivery pass.",
+      "telemetry": [
+        "Participant, wake, token, cost, and round budgets",
+        "Conflict detection and resolution outcomes",
+        "Human escalation and convergence outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Pre-team planning snapshot with independent job/assignment ownership.",
+        "triggers": [
+          "Unbounded fanout or budget overrun",
+          "Non-convergent planning",
+          "Incorrect enforced conflict lease"
+        ],
+        "actions": [
+          "Stop new rounds, delegation, and enforcement",
+          "Preserve proposals and conflict evidence read-only",
+          "Return unresolved work to explicit human assignment"
+        ],
+        "verification": [
+          "No agent remains implicitly enrolled",
+          "Advisory leases do not become enforcement after rollback"
+        ],
+        "data_policy": "Keep team/conflict audit and integrated deliveries; never rewrite participant positions."
+      }
+    },
+    {
+      "phase": 10,
+      "id": "phase-10",
+      "name": "Provider-neutral tools and permissions",
+      "flags": [
+        {
+          "id": "providers.codex.contract_route",
+          "implementation_state": "wired",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "environment",
+            "name": "ORCHESTRA_CODEX_PROVIDER_CONTRACT",
+            "enabled_value": "1",
+            "source": "src/daemon.ts",
+            "source_marker": "ORCHESTRA_CODEX_PROVIDER_CONTRACT",
+            "test": "test/daemon.test.ts"
+          }
+        },
+        {
+          "id": "providers.claude.contract_route",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.providers.claude.contract_route"
+          }
+        },
+        {
+          "id": "providers.qwen.contract_route",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.providers.qwen.contract_route"
+          }
+        },
+        {
+          "id": "providers.kimi.contract_route",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.providers.kimi.contract_route"
+          }
+        },
+        {
+          "id": "tools.permission_policy",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.tools.permission_policy"
+          }
+        }
+      ],
+      "activation_gate": "Exact provider/version/platform/account/billing/capability evidence and approval/permission drift tests pass independently for each provider route.",
+      "telemetry": [
+        "Provider route selection and blocker counts",
+        "Effective capability and permission drift counts",
+        "Approval, tool, usage, and recovery outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Last exact accepted provider tuple, matrix digest, source commit, and adapter package.",
+        "triggers": [
+          "Version, billing, credential, or capability mismatch",
+          "Raw fallback or permission drift",
+          "Acceptance artifact integrity failure"
+        ],
+        "actions": [
+          "Disable only the affected provider contract route for new sessions",
+          "Drain or stop active sessions under their frozen provider and billing mode",
+          "Restore the last accepted adapter tuple only after its exact evidence is revalidated"
+        ],
+        "verification": [
+          "No provider or billing mode is substituted",
+          "Unsupported routes fail visibly before native dispatch"
+        ],
+        "data_policy": "Provider acceptance evidence remains append-only; rollback never copies, logs, or exports provider credentials."
+      }
+    },
+    {
+      "phase": 11,
+      "id": "phase-11",
+      "name": "Unified visual command center",
+      "flags": [
+        {
+          "id": "command_center.project_navigation",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.command_center.project_navigation"
+          }
+        },
+        {
+          "id": "command_center.canonical_detail",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.command_center.canonical_detail"
+          }
+        }
+      ],
+      "activation_gate": "Navigation, canonical detail surfaces, deep links, search, states, responsive layouts, accessibility, and terminal controls pass together.",
+      "telemetry": [
+        "Canonical versus compatibility route visits",
+        "Deep-link and state restoration failures",
+        "Accessibility and responsive acceptance outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Last verified Board/Agent Home navigation build and deep-link inventory.",
+        "triggers": [
+          "Canonical detail points to inconsistent state",
+          "Deep-link or accessibility regression",
+          "Terminal control becomes inaccessible"
+        ],
+        "actions": [
+          "Return navigation to existing Board and Agent Home routes",
+          "Keep new detail routes directly addressable for diagnosis",
+          "Preserve selected IDs in redirect parameters"
+        ],
+        "verification": [
+          "Existing deep links still resolve",
+          "No canonical data is mutated by UI rollback"
+        ],
+        "data_policy": "UI rollback changes presentation and routing only; canonical records remain unchanged."
+      }
+    },
+    {
+      "phase": 12,
+      "id": "phase-12",
+      "name": "Token efficiency and outcome analytics",
+      "flags": [
+        {
+          "id": "analytics.capture",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.analytics.capture"
+          }
+        },
+        {
+          "id": "analytics.display",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.analytics.display"
+          }
+        }
+      ],
+      "activation_gate": "Provider-normalized attribution, privacy review, budgets, quality-aware benchmarks, and dashboard calculations pass.",
+      "telemetry": [
+        "Captured records and attribution gaps",
+        "Token, time, evidence, and quality aggregates",
+        "Budget warning and enforcement outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Pre-capture privacy schema and pre-dashboard aggregate snapshot.",
+        "triggers": [
+          "Sensitive content capture",
+          "Incorrect provider/job attribution",
+          "Optimization reduces accepted-delivery quality"
+        ],
+        "actions": [
+          "Disable display before capture when presentation alone is wrong",
+          "Stop new capture when privacy or attribution is wrong",
+          "Retain only already-approved redacted aggregates"
+        ],
+        "verification": [
+          "No disabled analytics write occurs",
+          "Runtime success never depends on analytics availability"
+        ],
+        "data_policy": "Analytics rollback does not alter provider transcripts, jobs, contracts, or deliveries."
+      }
+    },
+    {
+      "phase": 13,
+      "id": "phase-13",
+      "name": "Secure remote and mobile control",
+      "flags": [
+        {
+          "id": "remote.pairing",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.pairing"
+          }
+        },
+        {
+          "id": "remote.device_auth",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.device_auth"
+          }
+        },
+        {
+          "id": "remote.scoped_mutation",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.scoped_mutation"
+          }
+        },
+        {
+          "id": "remote.public_tunnel",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.public_tunnel"
+          }
+        },
+        {
+          "id": "remote.terminal_write",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.terminal_write"
+          }
+        },
+        {
+          "id": "remote.push",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.push"
+          }
+        },
+        {
+          "id": "remote.kill_switch",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.remote.kill_switch"
+          }
+        }
+      ],
+      "activation_gate": "Independent pairing, device-auth, scope, tunnel, terminal-write, push, offline, revocation, abuse, platform, and accessibility gates pass.",
+      "telemetry": [
+        "Privacy-safe pairing/auth/scope denials",
+        "Revocation propagation and active-stream counts",
+        "Tunnel, terminal-write, push, and kill-switch outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Local-only build, DeviceSession credential inventory, service-worker cache version, and verified tunnel ownership state.",
+        "triggers": [
+          "Credential theft or attribution failure",
+          "Scope/step-up bypass",
+          "Revocation, offline, tunnel, terminal, or cache safety failure"
+        ],
+        "actions": [
+          "Activate remote.kill_switch and stop accepting remote requests",
+          "Stop verified Orchestra-owned tunnels",
+          "Revoke device credentials, streams, grants, push subscriptions, and authenticated caches",
+          "Keep the local loopback operator surface available"
+        ],
+        "verification": [
+          "Remote endpoints fail closed while local recovery works",
+          "Rollback does not restore a reusable master-token QR",
+          "Terminal write returns to view-only"
+        ],
+        "data_policy": "Retain redacted audit attribution; never restore revoked device credentials or authenticated cached content."
+      }
+    },
+    {
+      "phase": 14,
+      "id": "phase-14",
+      "name": "Reliability, security, and operations",
+      "flags": [
+        {
+          "id": "operations.backup_restore",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.operations.backup_restore"
+          }
+        },
+        {
+          "id": "operations.retention",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.operations.retention"
+          }
+        },
+        {
+          "id": "operations.diagnostics",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.operations.diagnostics"
+          }
+        },
+        {
+          "id": "operations.security_enforcement",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.operations.security_enforcement"
+          }
+        }
+      ],
+      "activation_gate": "Crash/restart, orphan reconciliation, backup/restore, retention, authorization, rate limits, diagnostics, metrics, alerts, capacity, shutdown, and security review pass.",
+      "telemetry": [
+        "Recovery, queue, provider, projection, and disk/database health",
+        "Authorization and rate-limit denials",
+        "Backup, restore, retention, and diagnostics outcomes"
+      ],
+      "rollback": {
+        "checkpoint": "Restore-tested database and state-root backup plus last operationally supported package.",
+        "triggers": [
+          "Data loss or duplicate work",
+          "Security boundary regression",
+          "Unsafe compaction or upgrade"
+        ],
+        "actions": [
+          "Stop new automated maintenance or rollout",
+          "Quiesce active work before package rollback",
+          "Restore only through the verified offline recovery procedure"
+        ],
+        "verification": [
+          "Database integrity and migration checksums pass",
+          "No active job or owned worktree is duplicated or erased"
+        ],
+        "data_policy": "Never use a flag to down-migrate a live database or recursively remove the Orchestra state root."
+      }
+    },
+    {
+      "phase": 15,
+      "id": "phase-15",
+      "name": "Testing and quality gates",
+      "flags": [
+        {
+          "id": "quality.north_star_gate",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "QA-GATE"
+          }
+        }
+      ],
+      "activation_gate": "Every state machine, migration, provider, PTY, lifecycle, knowledge, team, remote, accessibility, performance, dogfood, and clean-install gate passes at one exact commit.",
+      "telemetry": [
+        "Exact-commit test and artifact outcomes",
+        "Flake, retry, performance, and acceptance history",
+        "Independent review findings"
+      ],
+      "rollback": {
+        "checkpoint": "Last exact commit with a complete retained green evidence bundle.",
+        "triggers": [
+          "Required gate fails or lacks evidence",
+          "Evidence belongs to another source commit",
+          "A previously accepted regression reappears"
+        ],
+        "actions": [
+          "Keep the release gate closed",
+          "Revert or fix the failing change",
+          "Rerun the complete evidence set at the resulting exact commit"
+        ],
+        "verification": [
+          "No narrower test substitutes for the failed broad gate",
+          "Artifacts and source commit hashes match"
+        ],
+        "data_policy": "Quality rollback blocks promotion; it does not mutate production data."
+      }
+    },
+    {
+      "phase": 16,
+      "id": "phase-16",
+      "name": "Onboarding, packaging, and documentation",
+      "flags": [
+        {
+          "id": "onboarding.first_run",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.onboarding.first_run"
+          }
+        },
+        {
+          "id": "packaging.public_artifact",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "PKG-GATE"
+          }
+        },
+        {
+          "id": "telemetry.opt_in",
+          "implementation_state": "reserved",
+          "lifecycle": "reserved",
+          "default_enabled": false,
+          "binding": {
+            "kind": "reserved",
+            "name": "agent_os.telemetry.opt_in"
+          }
+        }
+      ],
+      "activation_gate": "Clean install/upgrade/uninstall, provider onboarding, safe defaults, backup/reset, troubleshooting, API docs, privacy, and support workflow pass from the retained package.",
+      "telemetry": [
+        "Privacy-safe install and doctor outcomes",
+        "Package provenance and clean-consumer smoke",
+        "Explicit telemetry-consent state"
+      ],
+      "rollback": {
+        "checkpoint": "Last retained installable package and its compatible data-version range.",
+        "triggers": [
+          "Clean install or upgrade failure",
+          "Onboarding selects unsafe provider/billing behavior",
+          "Documentation or telemetry consent is false"
+        ],
+        "actions": [
+          "Withdraw the affected package/onboarding cohort",
+          "Return users to the prior compatible package",
+          "Keep user state and explicit telemetry preference"
+        ],
+        "verification": [
+          "Prior package opens the existing forward-compatible state",
+          "No uninstall or rollback deletes user state"
+        ],
+        "data_policy": "Package rollback preserves state; incompatible database restore requires the explicit offline recovery path."
+      }
+    },
+    {
+      "phase": 17,
+      "id": "phase-17",
+      "name": "Public release and rollout",
+      "flags": [
+        {
+          "id": "release.beta",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "REL-BETA"
+          }
+        },
+        {
+          "id": "release.stable",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "REL-GATE"
+          }
+        }
+      ],
+      "activation_gate": "Exact release artifact, every declared provider, clean platforms, security, dogfood, diagnostics, rollback, support, and staged beta criteria pass.",
+      "telemetry": [
+        "Install, provider, recovery, migration, and rollback outcomes",
+        "Beta cohort and retention health",
+        "Unresolved severity counts"
+      ],
+      "rollback": {
+        "checkpoint": "Previous signed/provenance-verified release, migration compatibility range, and rollback drill.",
+        "triggers": [
+          "P0 or P1 regression",
+          "Unsafe provider, auth, migration, or remote behavior",
+          "Install/retention criteria fail"
+        ],
+        "actions": [
+          "Stop promotion and new cohort enrollment",
+          "Withdraw the affected artifact without deleting local state",
+          "Publish a verified hotfix or prior-compatible package"
+        ],
+        "verification": [
+          "Rollback/hotfix provenance is valid",
+          "Existing user state and revocations remain intact"
+        ],
+        "data_policy": "Release rollback is a package/channel action; database recovery remains explicit and forward-safe."
+      }
+    },
+    {
+      "phase": 18,
+      "id": "phase-18",
+      "name": "Explicitly deferred scope",
+      "flags": [
+        {
+          "id": "deferred.scope",
+          "implementation_state": "release_gate",
+          "lifecycle": "wired_off",
+          "default_enabled": false,
+          "binding": {
+            "kind": "release_gate",
+            "name": "DEFERRED-SCOPE-GATE"
+          }
+        }
+      ],
+      "activation_gate": "A separate decision records prerequisite completion, scope, threat/budget analysis, rollout controls, and evidence before any deferred capability enters implementation.",
+      "telemetry": [
+        "Explicit scope-decision records",
+        "Prerequisite and budget evidence",
+        "Independent review outcome"
+      ],
+      "rollback": {
+        "checkpoint": "Stable core release before the deferred capability is admitted.",
+        "triggers": [
+          "Core prerequisite regresses",
+          "Scope or safety evidence is incomplete",
+          "Deferred work threatens core reliability"
+        ],
+        "actions": [
+          "Keep or return the deferred-scope gate to closed",
+          "Remove the capability from active rollout",
+          "Preserve only explicitly reviewed data and audit evidence"
+        ],
+        "verification": [
+          "Core behavior is unchanged",
+          "No deferred capability remains silently enabled"
+        ],
+        "data_policy": "Deferred capabilities receive their own migration and recovery contract before they may create authoritative data."
+      }
+    }
+  ]
+}

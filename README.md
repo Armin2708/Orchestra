@@ -15,7 +15,9 @@ provider-neutral agent sessions, executable task contracts, evidence, context ma
 checkpoints, durable scheduling, and a single human-attention queue—without removing any CLI or
 raw-terminal capability. Its [Delivery Trackbook](docs/delivery-trackbook.md) keeps the frozen
 Asked contract, reported result, observed evidence, human overrides, and acceptance visibly
-separate.
+separate. The [migration-control and rollback matrix](docs/agent-os-migration-controls.md) names
+every phase control, activation boundary, and fail-closed rollback point without claiming reserved
+controls are implemented.
 
 The provider strategy is **personal subscription through the vendor's native terminal CLI first**.
 Direct provider-API execution and usage-priced API credentials are optional, explicit secondary

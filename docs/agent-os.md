@@ -14,6 +14,8 @@ direct provider-API execution is optional, separately selected, and may never re
 unavailable subscription session silently.
 See [Subscription-first terminal-agent strategy](provider-subscription-strategy.md) for the
 current/target provider matrix and acceptance rules.
+The [migration controls and rollback contract](./agent-os-migration-controls.md) defines the
+closed-by-default control, activation gate, and recovery boundary for every delivery phase.
 
 ## Open the cockpit
 

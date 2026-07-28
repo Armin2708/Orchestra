@@ -14,7 +14,9 @@ capability-aware driver-bridge/support-gate slice is implemented. The canonical 
 append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
 recovery are now implemented. The conservative clean-profile Codex acceptance harness is also
 implemented, but its real exact-tuple run, the other three managed adapters, and the exact
-declared-provider compatibility matrix remain open.
+declared-provider compatibility matrix remain open. BASE-007 now defines a closed-by-default
+migration control and rollback point for every phase without claiming that reserved controls or
+unfinished phases are implemented.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -119,9 +121,15 @@ Then deliver TOOL-013's versioned subscription-first terminal-agent boundary wit
 provider support or reopening any unsupported provider state. Begin TOOL-014 with a sealed
 capability-aware bridge and one exact acceptance gate shared by every present and future provider,
 without claiming TOOL-014 complete before real canonical adapters and acceptance evidence exist.
+Define BASE-007's phase-by-phase activation and rollback contract independently of those unfinished
+runtime gates.
 
 ### Delivered
 
+- BASE-007's machine-readable and human migration-control matrix covers phases 0 through 18 with
+  44 default-closed controls, explicit activation/telemetry/data boundaries, and one complete
+  rollback point per phase. Only the two existing environment flags are labeled wired; 36 controls
+  remain explicitly reserved and six are release gates rather than runtime bindings;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -217,6 +225,10 @@ without claiming TOOL-014 complete before real canonical adapters and acceptance
   `@openai/codex@0.144.6` profile, requires CLI-mediated ChatGPT login, runs all eight named gates,
   writes redacted digest-bound artifacts, and refuses durable persistence unless every gate
   passes. The real clean-profile run remains pending and no support claim changes.
+- BASE-007 passed 7 focused migration-control tests, 12 combined migration/package truthfulness
+  tests, and the complete Node 22.20.0 suite at 145 files / 1,194 tests. Every phase, control
+  lifecycle, source binding, remote kill-switch split, forward-only data invariant, link, and
+  package inclusion is executable evidence.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -324,17 +336,20 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   installed hook state;
 - public package publication and clean-machine plugin/npm installation; the successful hosted
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
+- reserved BASE-007 controls still require their owning implementation, canary, rollback drill,
+  and phase acceptance evidence before they can advance beyond `reserved`.
 
-The strict master reconciliation is **128 / 375 checklist boxes delivered; 247 remain open**.
+The strict master reconciliation is **129 / 375 checklist boxes delivered; 246 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002` and `TOOL-013`, keeps `TOOL-014` open, and keeps `BASE-010`
-reopened because the expanded provider target does not yet have an exact compatibility matrix.
+program state closes `KNO-002`, `TOOL-013`, and `BASE-007`, keeps `TOOL-014` open, and keeps
+`BASE-010` reopened because the expanded provider target does not yet have an exact compatibility
+matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
-| Phase 0 — Product contract/baseline | 9 / 13 | 4 |
+| Phase 0 — Product contract/baseline | 10 / 13 | 3 |
 | Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
@@ -356,7 +371,11 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[TOOL-014 Codex acceptance-harness WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-acceptance-harness-wip.md).
+[BASE-007 migration-control checkpoint](./checkpoints/2026-07-28-agent-os-base007-migration-controls.md).
+The
+[TOOL-014 Codex acceptance-harness WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-acceptance-harness-wip.md)
+is retained as the active provider-acceptance continuation; its clean-profile login timed out
+without creating a matrix or changing support state.
 The
 [TOOL-014 authorized recovery WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-restart-recovery-wip.md)
 is retained as the preceding recovery checkpoint.

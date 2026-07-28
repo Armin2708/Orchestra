@@ -247,6 +247,10 @@ original/repaired hashes, byte counts, raw artifact IDs, run identity, and repai
 
 ## Migration and rollback policy
 
+The [migration-control matrix](./agent-os-migration-controls.md) is authoritative for current
+control implementation state, activation gates, and rollback checkpoints. A reserved control name
+does not claim a runtime binding or completed phase.
+
 1. Every schema change is an idempotent forward migration with upgrade and integrity tests.
 2. Canonical writes begin behind a migration flag while legacy behavior remains available.
 3. Compatibility routes read canonical state or project legacy state without dual authoritative
