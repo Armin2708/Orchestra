@@ -20,7 +20,9 @@ unfinished phases are implemented. BASE-008 now anchors tests, builds, packaging
 memory, loopback latency, and deterministic injected-context token usage to one exact clean source
 commit without converting observations into release thresholds. BASE-009 now proves the canonical
 request-to-accepted-delivery-to-cited-knowledge lifecycle as an executable specification without
-claiming an automatic production compiler or a real provider turn.
+claiming an automatic production compiler or a real provider turn. DOM-010 now standardizes
+durable actor, causal, workspace, session, job, and contract metadata at the canonical event
+boundary.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -145,6 +147,9 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   job/session/workspace, scoped delivery submission/verification/acceptance, bounded verified
   summary, exact `verified_delivery` source/chunk, cited context manifest/use, idempotent replay,
   and fail-closed unaccepted/forged-scope behavior;
+- DOM-010 adds migration `020-causal-event-metadata`, bounded actor and causal identity on
+  `EventStore`, legacy backfill, exact migration-owned schema assertions, missing scope indexes,
+  and causal replay conflict semantics while retaining stable provider/session transition replay;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -252,6 +257,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
 - BASE-009 exact code head `bb7c32f0a78608c113ee3c953ed5fd4ef3c0b4a4` passed 2 direct
   acceptance tests, 6 focused files / 78 tests, both complete suites at 148 files / 1,205 tests,
   root/web TypeScript and production builds, Gitleaks, and LOW/zero-flow GitNexus review.
+- DOM-010 exact code head `40de6d385441d3a66e4ab779d1eb3616c0b2ad87` passed 4 direct
+  causal-metadata tests, both complete suites at 149 files / 1,209 tests, root/web TypeScript and
+  production builds, changed-diff Gitleaks, and critical-scope GitNexus review with all 17 mapped
+  flows covered by the complete regression gate.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -365,18 +374,18 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **131 / 375 checklist boxes delivered; 244 remain open**.
+The strict master reconciliation is **132 / 375 checklist boxes delivered; 243 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, and `BASE-009`, keeps
-`TOOL-014` open, and keeps `BASE-010` reopened because the expanded provider target does not yet
-have an exact compatibility matrix.
+program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, and `DOM-010`,
+keeps `TOOL-014` open, and keeps `BASE-010` reopened because the expanded provider target does not
+yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
+| Phase 1 — Canonical domain/event ledger | 14 / 20 | 6 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
@@ -397,7 +406,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[BASE-009 request-to-knowledge checkpoint](./checkpoints/2026-07-28-agent-os-base009-request-to-knowledge-acceptance.md).
+[DOM-010 causal-metadata checkpoint](./checkpoints/2026-07-28-agent-os-dom010-causal-metadata.md).
+The
+[BASE-009 request-to-knowledge checkpoint](./checkpoints/2026-07-28-agent-os-base009-request-to-knowledge-acceptance.md)
+is retained as the preceding acceptance checkpoint.
 The
 [BASE-008 current-baseline checkpoint](./checkpoints/2026-07-28-agent-os-base008-current-baseline.md)
 is retained as the preceding baseline checkpoint.
@@ -472,6 +484,10 @@ superseded history.
   request-to-knowledge acceptance tests and 6 focused files / 78 tests passed; serial and
   default-parallel suites each passed 148 files / 1,205 tests, with root/web TypeScript/build,
   Gitleaks, LOW/zero-flow GitNexus review, and shared-main preservation.
+- DOM-010 exact code head `40de6d385441d3a66e4ab779d1eb3616c0b2ad87`: 4 / 4 direct
+  causal-metadata tests passed; serial and default-parallel suites each passed 149 files / 1,209
+  tests, with root/web TypeScript/build, changed-diff Gitleaks, critical-scope GitNexus review,
+  and shared-main preservation.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

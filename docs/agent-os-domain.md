@@ -214,6 +214,26 @@ New Agent OS commands and events use:
 Clients may supply an idempotency key but never an authoritative actor identity. Same key plus same
 normalized request replays the original result; same key plus different request is a conflict.
 
+Migration `020-causal-event-metadata` makes this contract concrete for `os_events`:
+
+- `actor_type` is required and `actor_id` is nullable. An explicit service-derived actor wins;
+  existing service-produced payload actors remain compatible, and internal events otherwise use
+  `system` plus their normalized source as the actor identity.
+- New canonical events default `correlation_id` to their event ID when an operation ID is not
+  supplied. An omitted correlation on idempotent replay reuses the original value.
+- Explicit actor, correlation, or causation changes under the same idempotency key are conflicts,
+  just like changes to event kind, source, scope, version, or payload.
+- Actor type is bounded to 64 characters, actor ID to 256, and correlation, causation, workspace,
+  session, job, and contract IDs to 512. Values are trimmed at the append boundary; blank or
+  oversized values fail closed.
+- The migration backfills pre-existing rows, validates exact migration-owned indexes and triggers,
+  and adds actor, causation, session, and contract query indexes. It can safely replay after marker
+  loss and rejects partial or textually altered migration-owned schemas.
+
+Direct SQL remains a compatibility path for migration/projection code, not the canonical append
+API. `EventStore.append` is the boundary that guarantees a non-null correlation for all new Agent
+OS events.
+
 ## Retention and redaction
 
 | Record | Default |
