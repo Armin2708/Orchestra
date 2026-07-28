@@ -123,8 +123,18 @@ describe('BASE-008 exact engineering baseline evidence', () => {
       'docs/agent-os-current-baseline.json',
       'docs/agent-os-current-baseline.md',
     ]))
-    expect(program).toContain('130 / 375 checklist boxes delivered; 245 remain open')
-    expect(program).toContain('| Phase 0 — Product contract/baseline | 11 / 13 | 2 |')
+    const reconciliation = program.match(
+      /strict master reconciliation is \*\*(\d+) \/ 375 checklist boxes delivered; (\d+) remain open\*\*/,
+    )
+    if (!reconciliation) throw new Error('program reconciliation is missing')
+    expect(Number(reconciliation[1])).toBeGreaterThanOrEqual(130)
+    expect(Number(reconciliation[2])).toBeLessThanOrEqual(245)
+    const phaseZero = program.match(
+      /\| Phase 0 — Product contract\/baseline \| (\d+) \/ 13 \| (\d+) \|/,
+    )
+    if (!phaseZero) throw new Error('Phase 0 reconciliation is missing')
+    expect(Number(phaseZero[1])).toBeGreaterThanOrEqual(11)
+    expect(Number(phaseZero[2])).toBeLessThanOrEqual(2)
     expect(program).toContain('BASE-008')
   })
 })

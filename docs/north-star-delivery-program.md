@@ -18,7 +18,9 @@ declared-provider compatibility matrix remain open. BASE-007 now defines a close
 migration control and rollback point for every phase without claiming that reserved controls or
 unfinished phases are implemented. BASE-008 now anchors tests, builds, packaging, cold startup,
 memory, loopback latency, and deterministic injected-context token usage to one exact clean source
-commit without converting observations into release thresholds.
+commit without converting observations into release thresholds. BASE-009 now proves the canonical
+request-to-accepted-delivery-to-cited-knowledge lifecycle as an executable specification without
+claiming an automatic production compiler or a real provider turn.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -125,7 +127,8 @@ capability-aware bridge and one exact acceptance gate shared by every present an
 without claiming TOOL-014 complete before real canonical adapters and acceptance evidence exist.
 Define BASE-007's phase-by-phase activation and rollback contract independently of those unfinished
 runtime gates. Capture BASE-008's current engineering baseline with an executable, credential-free,
-exact-source contract before expanding the full-lifecycle acceptance harness.
+exact-source contract before expanding the full-lifecycle acceptance harness. Complete BASE-009 by
+carrying a canonical request through accepted evidence into exact cited reuse by a later request.
 
 ### Delivered
 
@@ -138,6 +141,10 @@ exact-source contract before expanding the full-lifecycle acceptance harness.
   package/install smoke, three disposable loopback cold starts, ready memory, all 300 health
   request latencies, and deterministic injected-context token usage without reading provider
   credentials or claiming provider-native token evidence;
+- BASE-009's executable north-star gate uses two canonical API requests to prove frozen request,
+  job/session/workspace, scoped delivery submission/verification/acceptance, bounded verified
+  summary, exact `verified_delivery` source/chunk, cited context manifest/use, idempotent replay,
+  and fail-closed unaccepted/forged-scope behavior;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -242,6 +249,9 @@ exact-source contract before expanding the full-lifecycle acceptance harness.
   typechecks and builds passed, package/install smoke passed, 3 / 3 daemon starts and graceful
   exits passed, all 300 loopback health requests passed, and compact injected context measured
   449 tokens versus 903 verbose (50.3% reduction) with 11 / 11 compliance gates.
+- BASE-009 exact code head `bb7c32f0a78608c113ee3c953ed5fd4ef3c0b4a4` passed 2 direct
+  acceptance tests, 6 focused files / 78 tests, both complete suites at 148 files / 1,205 tests,
+  root/web TypeScript and production builds, Gitleaks, and LOW/zero-flow GitNexus review.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -352,19 +362,20 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 - reserved BASE-007 controls still require their owning implementation, canary, rollback drill,
   and phase acceptance evidence before they can advance beyond `reserved`.
 - BASE-008 provider-native completion tokens remain explicitly unmeasured; TOOL-014 owns real
-  provider-turn evidence, while BASE-009 owns the full request-to-knowledge acceptance lifecycle.
+  provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
+  production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **130 / 375 checklist boxes delivered; 245 remain open**.
+The strict master reconciliation is **131 / 375 checklist boxes delivered; 244 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002`, `TOOL-013`, `BASE-007`, and `BASE-008`, keeps `TOOL-014` open,
-and keeps `BASE-010` reopened because the expanded provider target does not yet have an exact
-compatibility matrix.
+program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, and `BASE-009`, keeps
+`TOOL-014` open, and keeps `BASE-010` reopened because the expanded provider target does not yet
+have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
-| Phase 0 — Product contract/baseline | 11 / 13 | 2 |
+| Phase 0 — Product contract/baseline | 12 / 13 | 1 |
 | Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
@@ -386,7 +397,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[BASE-008 current-baseline checkpoint](./checkpoints/2026-07-28-agent-os-base008-current-baseline.md).
+[BASE-009 request-to-knowledge checkpoint](./checkpoints/2026-07-28-agent-os-base009-request-to-knowledge-acceptance.md).
+The
+[BASE-008 current-baseline checkpoint](./checkpoints/2026-07-28-agent-os-base008-current-baseline.md)
+is retained as the preceding baseline checkpoint.
 The
 [BASE-007 migration-control checkpoint](./checkpoints/2026-07-28-agent-os-base007-migration-controls.md)
 is retained as the preceding baseline checkpoint.
@@ -454,6 +468,10 @@ superseded history.
   builds, package/install smoke, 3 / 3 cold starts, 300 / 300 health requests, and the 903 → 449
   deterministic injected-token gate passed. The exact JSON remains descriptive single-host
   evidence and excludes provider-native turns.
+- BASE-009 exact code head `bb7c32f0a78608c113ee3c953ed5fd4ef3c0b4a4`: 2 / 2 direct
+  request-to-knowledge acceptance tests and 6 focused files / 78 tests passed; serial and
+  default-parallel suites each passed 148 files / 1,205 tests, with root/web TypeScript/build,
+  Gitleaks, LOW/zero-flow GitNexus review, and shared-main preservation.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;
