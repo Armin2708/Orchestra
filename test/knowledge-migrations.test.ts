@@ -520,7 +520,7 @@ describe('knowledge persistence migration 018', () => {
     `).get(MIGRATION_ID)).toEqual({ id: MIGRATION_ID })
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '019-provider-acceptance-evidence' })
+    `).get()).toEqual({ id: '020-causal-event-metadata' })
     const tables = (db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
@@ -538,7 +538,7 @@ describe('knowledge persistence migration 018', () => {
     ])
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get() as { count: number }).count).toBe(19)
+    ).get() as { count: number }).count).toBe(20)
     db.close()
   })
 

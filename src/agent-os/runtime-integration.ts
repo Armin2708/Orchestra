@@ -2728,7 +2728,11 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     status: 'stopped' | 'failed',
     source: string,
   ): void {
-    const previous = this.db.prepare(`SELECT id, correlation_id FROM os_events
+    const idempotencyKey = `job:${job.id}:session-${status}:${Math.max(1, job.attempts)}`
+    const existing = this.db.prepare(`SELECT correlation_id, causation_id FROM os_events
+      WHERE board_id=? AND idempotency_key=?`).get(job.board_id, idempotencyKey) as
+      { correlation_id: string | null; causation_id: string | null } | undefined
+    const previous = existing ? undefined : this.db.prepare(`SELECT id, correlation_id FROM os_events
       WHERE job_id=? ORDER BY rowid DESC LIMIT 1`).get(job.id) as
       { id: string; correlation_id: string | null } | undefined
     new EventStore(this.db).append({
@@ -2738,9 +2742,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       sessionId,
       jobId: job.id,
       contractId: job.card_id && job.contract_version ? `card:${job.card_id}:v${job.contract_version}` : null,
-      correlationId: previous?.correlation_id ?? job.id,
-      causationId: previous?.id ?? null,
-      idempotencyKey: `job:${job.id}:session-${status}:${Math.max(1, job.attempts)}`,
+      correlationId: existing ? existing.correlation_id : previous?.correlation_id ?? job.id,
+      causationId: existing ? existing.causation_id : previous?.id ?? null,
+      idempotencyKey,
       kind: `agent_session.${status}`,
       source,
       payload: { job_id: job.id, session_id: sessionId, attempt: job.attempts },

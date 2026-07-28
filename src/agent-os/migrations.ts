@@ -104,8 +104,116 @@ const PROVIDER_ACCEPTANCE_EVIDENCE_OBJECTS = Object.freeze([
   ['trigger', 'provider_acceptance_evidence_insert'],
   ['trigger', 'provider_acceptance_evidence_update'],
 ] as const)
+const CAUSAL_EVENT_METADATA_COLUMNS = Object.freeze([
+  ['actor_type', 'TEXT', 1, "'system'"],
+  ['actor_id', 'TEXT', 0, null],
+] as const)
+const CAUSAL_EVENT_METADATA_INVALID = `
+  NEW.actor_type IS NULL
+  OR length(trim(NEW.actor_type)) NOT BETWEEN 1 AND 64
+  OR trim(NEW.actor_type)!=NEW.actor_type
+  OR (
+    NEW.actor_id IS NOT NULL
+    AND (
+      length(trim(NEW.actor_id)) NOT BETWEEN 1 AND 256
+      OR trim(NEW.actor_id)!=NEW.actor_id
+    )
+  )
+  OR (
+    NEW.correlation_id IS NOT NULL
+    AND (
+      length(trim(NEW.correlation_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.correlation_id)!=NEW.correlation_id
+    )
+  )
+  OR (
+    NEW.causation_id IS NOT NULL
+    AND (
+      length(trim(NEW.causation_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.causation_id)!=NEW.causation_id
+    )
+  )
+  OR (
+    NEW.workspace_id IS NOT NULL
+    AND (
+      length(trim(NEW.workspace_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.workspace_id)!=NEW.workspace_id
+    )
+  )
+  OR (
+    NEW.session_id IS NOT NULL
+    AND (
+      length(trim(NEW.session_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.session_id)!=NEW.session_id
+    )
+  )
+  OR (
+    NEW.job_id IS NOT NULL
+    AND (
+      length(trim(NEW.job_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.job_id)!=NEW.job_id
+    )
+  )
+  OR (
+    NEW.contract_id IS NOT NULL
+    AND (
+      length(trim(NEW.contract_id)) NOT BETWEEN 1 AND 512
+      OR trim(NEW.contract_id)!=NEW.contract_id
+    )
+  )
+`
+const CAUSAL_EVENT_METADATA_OBJECTS = Object.freeze([
+  {
+    type: 'index',
+    name: 'idx_os_events_actor',
+    sql: `CREATE INDEX idx_os_events_actor
+      ON os_events(board_id, actor_type, actor_id, created_at, id)`,
+  },
+  {
+    type: 'index',
+    name: 'idx_os_events_causation',
+    sql: `CREATE INDEX idx_os_events_causation
+      ON os_events(causation_id, created_at, id)`,
+  },
+  {
+    type: 'index',
+    name: 'idx_os_events_contract',
+    sql: `CREATE INDEX idx_os_events_contract
+      ON os_events(contract_id, created_at, id)`,
+  },
+  {
+    type: 'index',
+    name: 'idx_os_events_session',
+    sql: `CREATE INDEX idx_os_events_session
+      ON os_events(session_id, created_at, id)`,
+  },
+  {
+    type: 'trigger',
+    name: 'os_events_causal_metadata_insert',
+    sql: `CREATE TRIGGER os_events_causal_metadata_insert
+      BEFORE INSERT ON os_events
+      BEGIN
+        SELECT CASE WHEN ${CAUSAL_EVENT_METADATA_INVALID}
+        THEN RAISE(ABORT, 'os event causal metadata is invalid') END;
+      END`,
+  },
+  {
+    type: 'trigger',
+    name: 'os_events_causal_metadata_update',
+    sql: `CREATE TRIGGER os_events_causal_metadata_update
+      BEFORE UPDATE OF actor_type, actor_id, correlation_id, causation_id,
+        workspace_id, session_id, job_id, contract_id
+      ON os_events
+      BEGIN
+        SELECT CASE WHEN ${CAUSAL_EVENT_METADATA_INVALID}
+        THEN RAISE(ABORT, 'os event causal metadata is invalid') END;
+      END`,
+  },
+] as const)
 
 const normalizedSchemaSql = (value: string): string => value.trim()
+const normalizedObjectSql = (value: string): string =>
+  value.replace(/\s+/g, ' ').replace(/;\s*$/, '').trim()
 
 const assertKnowledgeSchemaCompatible = (db: Database.Database): void => {
   const placeholders = KNOWLEDGE_SCHEMA_TABLES.map(() => '?').join(', ')
@@ -188,6 +296,125 @@ const assertProviderAcceptanceEvidenceSchemaCompatible = (
   if (!columnsMatch || !objectsMatch) {
     throw new Error(
       'migration 019-provider-acceptance-evidence found an incompatible evidence schema',
+    )
+  }
+}
+
+const assertCausalEventMetadataColumnsCompatible = (
+  db: Database.Database,
+): void => {
+  const columns = db.prepare(`SELECT name, type, "notnull" AS required, dflt_value
+    FROM pragma_table_info('os_events')
+    WHERE name IN ('actor_type', 'actor_id')
+    ORDER BY cid`).all() as Array<{
+      name: string
+      type: string
+      required: number
+      dflt_value: string | null
+    }>
+  const matches = columns.length === CAUSAL_EVENT_METADATA_COLUMNS.length
+    && columns.every((column, index) => {
+      const expected = CAUSAL_EVENT_METADATA_COLUMNS[index]
+      return expected !== undefined
+        && column.name === expected[0]
+        && column.type.toUpperCase() === expected[1]
+        && column.required === expected[2]
+        && column.dflt_value === expected[3]
+    })
+  if (!matches) {
+    throw new Error(
+      'migration 020-causal-event-metadata found incompatible actor metadata columns',
+    )
+  }
+}
+
+const assertCausalEventMetadataSchemaCompatible = (
+  db: Database.Database,
+): void => {
+  assertCausalEventMetadataColumnsCompatible(db)
+  const objects = db.prepare(`SELECT type, name, sql
+    FROM sqlite_master
+    WHERE tbl_name='os_events'
+      AND name IN (
+        'idx_os_events_actor',
+        'idx_os_events_causation',
+        'idx_os_events_contract',
+        'idx_os_events_session',
+        'os_events_causal_metadata_insert',
+        'os_events_causal_metadata_update'
+      )
+    ORDER BY type, name`).all() as Array<{
+      type: string
+      name: string
+      sql: string | null
+    }>
+  const objectsMatch = objects.length === CAUSAL_EVENT_METADATA_OBJECTS.length
+    && objects.every((object, index) => {
+      const expected = CAUSAL_EVENT_METADATA_OBJECTS[index]
+      return expected !== undefined
+        && object.type === expected.type
+        && object.name === expected.name
+        && normalizedObjectSql(object.sql ?? '') === normalizedObjectSql(expected.sql)
+    })
+  const invalidRow = db.prepare(`SELECT id
+    FROM os_events
+    WHERE correlation_id IS NULL
+      OR actor_type IS NULL
+      OR length(trim(actor_type)) NOT BETWEEN 1 AND 64
+      OR trim(actor_type)!=actor_type
+      OR (
+        actor_id IS NOT NULL
+        AND (
+          length(trim(actor_id)) NOT BETWEEN 1 AND 256
+          OR trim(actor_id)!=actor_id
+        )
+      )
+      OR (
+        correlation_id IS NOT NULL
+        AND (
+          length(trim(correlation_id)) NOT BETWEEN 1 AND 512
+          OR trim(correlation_id)!=correlation_id
+        )
+      )
+      OR (
+        causation_id IS NOT NULL
+        AND (
+          length(trim(causation_id)) NOT BETWEEN 1 AND 512
+          OR trim(causation_id)!=causation_id
+        )
+      )
+      OR (
+        workspace_id IS NOT NULL
+        AND (
+          length(trim(workspace_id)) NOT BETWEEN 1 AND 512
+          OR trim(workspace_id)!=workspace_id
+        )
+      )
+      OR (
+        session_id IS NOT NULL
+        AND (
+          length(trim(session_id)) NOT BETWEEN 1 AND 512
+          OR trim(session_id)!=session_id
+        )
+      )
+      OR (
+        job_id IS NOT NULL
+        AND (
+          length(trim(job_id)) NOT BETWEEN 1 AND 512
+          OR trim(job_id)!=job_id
+        )
+      )
+      OR (
+        contract_id IS NOT NULL
+        AND (
+          length(trim(contract_id)) NOT BETWEEN 1 AND 512
+          OR trim(contract_id)!=contract_id
+        )
+      )
+    LIMIT 1`).get()
+  if (!objectsMatch || invalidRow) {
+    throw new Error(
+      'migration 020-causal-event-metadata found incompatible causal event metadata',
     )
   }
 }
@@ -6781,6 +7008,121 @@ const migrations: Migration[] = [
       `)
 
       assertProviderAcceptanceEvidenceSchemaCompatible(db)
+    },
+  },
+  {
+    id: '020-causal-event-metadata',
+    apply(db) {
+      const hasMigration019 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='019-provider-acceptance-evidence'`).get()
+      if (!hasMigration019) {
+        throw new Error(
+          'migration 020-causal-event-metadata requires 019-provider-acceptance-evidence',
+        )
+      }
+
+      const columns = new Set(
+        (db.prepare(`SELECT name FROM pragma_table_info('os_events')`).all() as Array<{
+          name: string
+        }>).map((column) => column.name),
+      )
+      const hasActorType = columns.has('actor_type')
+      const hasActorId = columns.has('actor_id')
+      if (hasActorType !== hasActorId) {
+        throw new Error(
+          'migration 020-causal-event-metadata found incompatible actor metadata columns',
+        )
+      }
+      if (!hasActorType) {
+        db.exec(`
+          ALTER TABLE os_events
+            ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'system';
+          ALTER TABLE os_events
+            ADD COLUMN actor_id TEXT;
+        `)
+      }
+      assertCausalEventMetadataColumnsCompatible(db)
+
+      const needsBackfill = db.prepare(`SELECT 1
+        FROM os_events
+        WHERE correlation_id IS NULL
+          OR (
+            actor_type='system'
+            AND actor_id IS NULL
+            AND length(trim(source)) BETWEEN 1 AND 256
+          )
+        LIMIT 1`).get()
+      if (needsBackfill) {
+        const assignmentUpdateTrigger = db.prepare(`SELECT sql
+          FROM sqlite_master
+          WHERE type='trigger'
+            AND name='os_events_job_assignment_identity_update'`).get() as
+          { sql: string } | undefined
+        if (assignmentUpdateTrigger) {
+          db.exec('DROP TRIGGER os_events_job_assignment_identity_update')
+        }
+
+        db.exec(`
+          UPDATE os_events
+          SET actor_type=CASE
+                WHEN actor_type='system'
+                  AND actor_id IS NULL
+                  AND CASE WHEN json_valid(payload)
+                    THEN json_type(payload, '$.actor.type')='text'
+                      AND length(trim(json_extract(
+                        payload, '$.actor.type'
+                      ))) BETWEEN 1 AND 64
+                    ELSE 0
+                  END
+                THEN trim(json_extract(payload, '$.actor.type'))
+                ELSE actor_type
+              END,
+              actor_id=CASE
+                WHEN actor_type='system'
+                  AND actor_id IS NULL
+                  AND CASE WHEN json_valid(payload)
+                    THEN json_type(payload, '$.actor.type')='text'
+                      AND length(trim(json_extract(
+                        payload, '$.actor.type'
+                      ))) BETWEEN 1 AND 64
+                    ELSE 0
+                  END
+                THEN CASE
+                  WHEN json_type(payload, '$.actor.id')='text'
+                    AND length(trim(json_extract(
+                      payload, '$.actor.id'
+                    ))) BETWEEN 1 AND 256
+                  THEN trim(json_extract(payload, '$.actor.id'))
+                  WHEN trim(json_extract(payload, '$.actor.type'))='system'
+                    AND length(trim(source)) BETWEEN 1 AND 256
+                  THEN trim(source)
+                  ELSE NULL
+                END
+                WHEN actor_type='system'
+                  AND actor_id IS NULL
+                  AND length(trim(source)) BETWEEN 1 AND 256
+                THEN trim(source)
+                ELSE actor_id
+              END,
+              correlation_id=coalesce(correlation_id, id)
+          WHERE correlation_id IS NULL
+            OR (
+              actor_type='system'
+              AND actor_id IS NULL
+              AND length(trim(source)) BETWEEN 1 AND 256
+            );
+        `)
+
+        if (assignmentUpdateTrigger) db.exec(assignmentUpdateTrigger.sql)
+      }
+
+      const objectExists = db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type=? AND name=?`)
+      for (const object of CAUSAL_EVENT_METADATA_OBJECTS) {
+        if (!objectExists.get(object.type, object.name)) db.exec(object.sql)
+      }
+
+      assertCausalEventMetadataSchemaCompatible(db)
     },
   },
 ]

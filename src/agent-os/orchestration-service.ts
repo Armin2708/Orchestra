@@ -118,7 +118,6 @@ export class OrchestrationService {
           return existing.id
         }
       }
-
       const assignment = resolveCurrentJobAssignment(this.db, card.boardId, input.cardId)
       assertExpectedJobAssignment(input.expectedJobAssignment, assignment)
       const profile = assignment
@@ -126,6 +125,10 @@ export class OrchestrationService {
         : requestedProfile
       this.assertSupportedOptions(input, profile)
       this.assertPreflight(card.boardId, contract, input, profile)
+      if (this.db.prepare(`SELECT 1 FROM jobs
+        WHERE card_id=? AND status IN ('queued','running','cancelling')`).get(input.cardId)) {
+        throw new ConflictError('card already has an active job')
+      }
       if (assignment?.workspaceId && input.workspaceId !== undefined
         && input.workspaceId !== null && input.workspaceId !== assignment.workspaceId) {
         throw new ConflictError('requested workspace differs from the active Job Market assignment')

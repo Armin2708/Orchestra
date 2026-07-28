@@ -947,7 +947,7 @@ describe('Agent Home lifecycle, search, and export controls', () => {
       })
       expect(replacement.session.display_name).toBe('Recovered name')
       expect((reopened.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations`)
-        .get() as { count: number }).count).toBe(19)
+        .get() as { count: number }).count).toBe(20)
       expect((reopened.prepare(`SELECT status FROM agent_session_actions
         WHERE idempotency_key='reopen:rename'`).get() as { status: string }).status)
         .toBe('succeeded')

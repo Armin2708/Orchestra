@@ -1,11 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import {
+  actorIdentity,
+  boundedString,
+  optionalBoundedString,
+  type ActorIdentity,
+} from './agent-home-support.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { parseJson, timestamp } from './json.js'
 
 export interface OsEvent {
   id: string
   board_id: number
+  actor_type: string
+  actor_id: string | null
   workspace_id: string | null
   card_id: number | null
   session_id: string | null
@@ -24,6 +32,7 @@ export interface OsEvent {
 
 export interface AppendEvent {
   boardId: number
+  actor?: ActorIdentity
   workspaceId?: string | null
   cardId?: number | null
   sessionId?: string | null
@@ -54,11 +63,33 @@ export class EventStore {
 
   append(input: AppendEvent): OsEvent {
     if (!Number.isSafeInteger(input.boardId) || input.boardId <= 0) throw new ValidationError('boardId is required')
-    if (!input.kind.trim()) throw new ValidationError('event kind is required')
-    if (!input.source.trim()) throw new ValidationError('event source is required')
     if (!this.db.prepare('SELECT 1 FROM boards WHERE id=?').get(input.boardId)) throw new NotFoundError('board not found')
 
-    const idempotencyKey = input.idempotencyKey?.trim() || null
+    const kind = boundedString(input.kind, 'event kind', 128)
+    const source = boundedString(input.source, 'event source', 128)
+    const actor = input.actor
+      ? actorIdentity(input.actor)
+      : actorFromPayload(input.payload) ?? { type: 'system', id: source }
+    const workspaceId = optionalBoundedString(input.workspaceId, 'workspaceId', 512)
+    const cardId = input.cardId ?? null
+    if (cardId !== null && (!Number.isSafeInteger(cardId) || cardId <= 0)) {
+      throw new ValidationError('cardId must be a positive integer')
+    }
+    const sessionId = optionalBoundedString(input.sessionId, 'sessionId', 512)
+    const processId = optionalBoundedString(input.processId, 'processId', 512)
+    const jobId = optionalBoundedString(input.jobId, 'jobId', 512)
+    const contractId = optionalBoundedString(input.contractId, 'contractId', 512)
+    const requestedCorrelationId = optionalBoundedString(
+      input.correlationId,
+      'correlationId',
+      512,
+    )
+    const causationId = optionalBoundedString(input.causationId, 'causationId', 512)
+    const idempotencyKey = optionalBoundedString(
+      input.idempotencyKey,
+      'idempotencyKey',
+      512,
+    )
     const payload = stableJson(input.payload ?? {})
     const eventVersion = input.eventVersion ?? 1
     if (!Number.isSafeInteger(eventVersion) || eventVersion < 1) {
@@ -68,43 +99,54 @@ export class EventStore {
       const existing = this.db.prepare('SELECT * FROM os_events WHERE board_id=? AND idempotency_key=?')
         .get(input.boardId, idempotencyKey) as Record<string, unknown> | undefined
       if (existing) {
-        const same = String(existing.kind) === input.kind.trim()
-          && String(existing.source) === input.source.trim()
-          && (existing.workspace_id ?? null) === (input.workspaceId ?? null)
-          && (existing.card_id ?? null) === (input.cardId ?? null)
-          && (existing.session_id ?? null) === (input.sessionId ?? null)
-          && (existing.process_id ?? null) === (input.processId ?? null)
-          && (existing.job_id ?? null) === (input.jobId ?? null)
-          && (existing.contract_id ?? null) === (input.contractId ?? null)
+        const existingCorrelationId = nullableString(existing.correlation_id)
+        const replayCorrelationId = requestedCorrelationId ?? existingCorrelationId
+        const same = String(existing.kind) === kind
+          && String(existing.source) === source
+          && String(existing.actor_type ?? 'system') === actor.type
+          && nullableString(existing.actor_id) === actor.id
+          && nullableString(existing.workspace_id) === workspaceId
+          && nullableNumber(existing.card_id) === cardId
+          && nullableString(existing.session_id) === sessionId
+          && nullableString(existing.process_id) === processId
+          && nullableString(existing.job_id) === jobId
+          && nullableString(existing.contract_id) === contractId
+          && existingCorrelationId === replayCorrelationId
+          && nullableString(existing.causation_id) === causationId
           && Number(existing.event_version ?? 1) === eventVersion
           && String(existing.payload) === payload
         if (!same) throw new ConflictError('event idempotency key was already used for a different event')
         return mapEvent(existing)
       }
     }
+    const id = randomUUID()
     const row = {
-      id: randomUUID(),
+      id,
       board_id: input.boardId,
-      workspace_id: input.workspaceId ?? null,
-      card_id: input.cardId ?? null,
-      session_id: input.sessionId ?? null,
-      process_id: input.processId ?? null,
-      job_id: input.jobId ?? null,
-      contract_id: input.contractId ?? null,
-      correlation_id: input.correlationId ?? null,
-      causation_id: input.causationId ?? null,
+      actor_type: actor.type,
+      actor_id: actor.id,
+      workspace_id: workspaceId,
+      card_id: cardId,
+      session_id: sessionId,
+      process_id: processId,
+      job_id: jobId,
+      contract_id: contractId,
+      correlation_id: requestedCorrelationId ?? id,
+      causation_id: causationId,
       idempotency_key: idempotencyKey,
       event_version: eventVersion,
-      kind: input.kind.trim(),
-      source: input.source.trim(),
+      kind,
+      source,
       payload,
       created_at: input.createdAt ?? timestamp(),
     }
     this.db.prepare(`INSERT INTO os_events
-      (id, board_id, workspace_id, card_id, session_id, process_id, job_id, contract_id,
-       correlation_id, causation_id, idempotency_key, event_version, kind, source, payload, created_at)
-      VALUES (@id, @board_id, @workspace_id, @card_id, @session_id, @process_id, @job_id, @contract_id,
-       @correlation_id, @causation_id, @idempotency_key, @event_version, @kind, @source, @payload, @created_at)`)
+      (id, board_id, actor_type, actor_id, workspace_id, card_id, session_id, process_id,
+       job_id, contract_id, correlation_id, causation_id, idempotency_key, event_version,
+       kind, source, payload, created_at)
+      VALUES (@id, @board_id, @actor_type, @actor_id, @workspace_id, @card_id, @session_id,
+       @process_id, @job_id, @contract_id, @correlation_id, @causation_id, @idempotency_key,
+       @event_version, @kind, @source, @payload, @created_at)`)
       .run(row)
     return mapEvent(row)
   }
@@ -138,20 +180,45 @@ function mapEvent(row: Record<string, unknown>): OsEvent {
   return {
     id: String(row.id),
     board_id: Number(row.board_id),
-    workspace_id: row.workspace_id === null || row.workspace_id === undefined ? null : String(row.workspace_id),
-    card_id: row.card_id === null || row.card_id === undefined ? null : Number(row.card_id),
-    session_id: row.session_id === null || row.session_id === undefined ? null : String(row.session_id),
-    process_id: row.process_id === null || row.process_id === undefined ? null : String(row.process_id),
-    job_id: row.job_id === null || row.job_id === undefined ? null : String(row.job_id),
-    contract_id: row.contract_id === null || row.contract_id === undefined ? null : String(row.contract_id),
-    correlation_id: row.correlation_id === null || row.correlation_id === undefined ? null : String(row.correlation_id),
-    causation_id: row.causation_id === null || row.causation_id === undefined ? null : String(row.causation_id),
-    idempotency_key: row.idempotency_key === null || row.idempotency_key === undefined ? null : String(row.idempotency_key),
+    actor_type: String(row.actor_type ?? 'system'),
+    actor_id: nullableString(row.actor_id),
+    workspace_id: nullableString(row.workspace_id),
+    card_id: nullableNumber(row.card_id),
+    session_id: nullableString(row.session_id),
+    process_id: nullableString(row.process_id),
+    job_id: nullableString(row.job_id),
+    contract_id: nullableString(row.contract_id),
+    correlation_id: nullableString(row.correlation_id),
+    causation_id: nullableString(row.causation_id),
+    idempotency_key: nullableString(row.idempotency_key),
     event_version: Number(row.event_version ?? 1),
     kind: String(row.kind),
     source: String(row.source),
     payload: parseJson(row.payload, {}),
     created_at: String(row.created_at),
+  }
+}
+
+function nullableString(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value)
+}
+
+function nullableNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value)
+}
+
+function actorFromPayload(value: unknown): ActorIdentity | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = (value as Record<string, unknown>).actor
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null
+  const actor = candidate as Record<string, unknown>
+  if (typeof actor.type !== 'string') return null
+  const type = actor.type.trim()
+  if (!type || type.length > 64) return null
+  const id = typeof actor.id === 'string' ? actor.id.trim() : ''
+  return {
+    type,
+    id: id && id.length <= 256 ? id : null,
   }
 }
 
