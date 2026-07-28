@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "backlog_item": "BASE-008",
+  "status": "observed",
+  "captured_at": "2026-07-28T20:21:54.400Z",
+  "started_at": "2026-07-28T20:19:43.833Z",
+  "source": {
+    "commit": "51b168d96becccd4aa3506dec9e80fcebda43ed7",
+    "tree": "50cb9c7c9062bf3f25701a6dff66fee3d34befd0",
+    "tracked_clean_before_capture": true,
+    "package_lock_sha256": "d78a8c7ac1d32829c56ce5355fde3c13048eed89b1214e12855c0d4c435ee2ac",
+    "environment_files_present": []
+  },
+  "methodology": {
+    "scope": "single-host local engineering baseline",
+    "thresholds": "descriptive measurements, not release SLOs or performance budgets",
+    "isolation": "tracked clean tree, locked dependencies, empty npm user config, disposable daemon homes",
+    "startup_repetitions": 3,
+    "health_requests_per_run": 100
+  },
+  "host": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "os_release": "25.5.0",
+    "logical_cpus": 12,
+    "total_memory_bytes": 25769803776,
+    "node_version": "22.20.0",
+    "npm_version": "10.9.3"
+  },
+  "tests": {
+    "default_parallel": {
+      "command": "npm test",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 22483.43,
+      "test_files": 146,
+      "passed_test_files": 146,
+      "failed_test_files": 0,
+      "tests": 1199,
+      "passed_tests": 1199,
+      "failed_tests": 0,
+      "pending_tests": 0,
+      "todo_tests": 0
+    },
+    "serial": {
+      "command": "npm test -- --maxWorkers=1",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 87722.114,
+      "test_files": 146,
+      "passed_test_files": 146,
+      "failed_test_files": 0,
+      "tests": 1199,
+      "passed_tests": 1199,
+      "failed_tests": 0,
+      "pending_tests": 0,
+      "todo_tests": 0
+    }
+  },
+  "builds": {
+    "root_typecheck": {
+      "command": "npx tsc --noEmit",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 384.853
+    },
+    "root_production": {
+      "command": "npm run build",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 659.222,
+      "output": {
+        "files": 1,
+        "bytes": 1807439,
+        "sha256": "6881d1b529ca37e1af0090d23e940c76d0d109512c5369916bed603cccc336a0"
+      }
+    },
+    "web_typecheck": {
+      "command": "cd web && npx tsc --noEmit",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 1885.06
+    },
+    "web_production": {
+      "command": "cd web && npm run build",
+      "passed": true,
+      "exit_code": 0,
+      "wall_ms": 1266.02,
+      "output": {
+        "files": 16,
+        "bytes": 995285,
+        "sha256": "aad9b5e71d10eb5cbda816870ecdbfaca30fa9f3c6d088d4f4451e5ea4a4669a"
+      }
+    }
+  },
+  "package": {
+    "command": "node scripts/package-install-smoke.mjs",
+    "passed": true,
+    "exit_code": 0,
+    "wall_ms": 12202.995,
+    "name": "orchestra-board",
+    "version": "0.1.0",
+    "filename": "orchestra-board-0.1.0.tgz",
+    "bytes": 680660,
+    "unpacked_bytes": 3051963,
+    "file_count": 37,
+    "sha256": "f217f5da9454ec88016b95a5094c5016a006941885f922aa8166fb99dc04ffde",
+    "npm_integrity": "sha512-3/SejIlxHL2wy+XzG1mVGYXWTMctocV7EAg7dulGNs9XtPTVvxCGA23yxsuJPO/PFWZbjfiLB18kJimK2N2PLQ==",
+    "npm_shasum": "6a0e6f5fd91468bc9b5cda209db4f1f6f8272e9b",
+    "required_files": [
+      "README.md",
+      "dist/cli.js",
+      "environment-compatibility.json",
+      "package.json",
+      "web/dist/index.html"
+    ],
+    "install_smoke": {
+      "scripts_disabled": true,
+      "cli_version": "0.1.0",
+      "passed": true
+    }
+  },
+  "runtime": {
+    "mode": "credential_free_loopback",
+    "provider_state": "Codex command intentionally unavailable; no provider login or turn executed",
+    "auth_state": "ORCHESTRA_NO_AUTH=1 on loopback-only disposable homes",
+    "runs": [
+      {
+        "run": 1,
+        "startup_ms": 728.157,
+        "ready_rss_bytes": 123830272,
+        "ready_virtual_bytes": 456985591808,
+        "health_requests": 100,
+        "health_failures": 0,
+        "health_latency_ms": {
+          "samples": 100,
+          "min": 0.194,
+          "mean": 0.331,
+          "p50": 0.26,
+          "p95": 0.75,
+          "p99": 1.174,
+          "max": 1.773
+        },
+        "graceful_shutdown": true,
+        "exit_code": 0,
+        "exit_signal": null
+      },
+      {
+        "run": 2,
+        "startup_ms": 724.909,
+        "ready_rss_bytes": 126287872,
+        "ready_virtual_bytes": 456994406400,
+        "health_requests": 100,
+        "health_failures": 0,
+        "health_latency_ms": {
+          "samples": 100,
+          "min": 0.18,
+          "mean": 0.319,
+          "p50": 0.259,
+          "p95": 0.595,
+          "p99": 1.108,
+          "max": 1.241
+        },
+        "graceful_shutdown": true,
+        "exit_code": 0,
+        "exit_signal": null
+      },
+      {
+        "run": 3,
+        "startup_ms": 718.605,
+        "ready_rss_bytes": 123846656,
+        "ready_virtual_bytes": 456985706496,
+        "health_requests": 100,
+        "health_failures": 0,
+        "health_latency_ms": {
+          "samples": 100,
+          "min": 0.16,
+          "mean": 0.276,
+          "p50": 0.22,
+          "p95": 0.598,
+          "p99": 0.934,
+          "max": 1.242
+        },
+        "graceful_shutdown": true,
+        "exit_code": 0,
+        "exit_signal": null
+      }
+    ],
+    "startup_ms": {
+      "samples": 3,
+      "min": 718.605,
+      "mean": 723.89,
+      "p50": 724.909,
+      "p95": 728.157,
+      "p99": 728.157,
+      "max": 728.157
+    },
+    "ready_rss_bytes": {
+      "samples": 3,
+      "min": 123830272,
+      "mean": 124654933.333,
+      "p50": 123846656,
+      "p95": 126287872,
+      "p99": 126287872,
+      "max": 126287872
+    },
+    "ready_virtual_bytes": {
+      "samples": 3,
+      "min": 456985591808,
+      "mean": 456988568234.667,
+      "p50": 456985706496,
+      "p95": 456994406400,
+      "p99": 456994406400,
+      "max": 456994406400
+    },
+    "health_latency_ms": {
+      "samples": 300,
+      "min": 0.16,
+      "mean": 0.309,
+      "p50": 0.25,
+      "p95": 0.698,
+      "p99": 1.174,
+      "max": 1.773,
+      "requests": 300,
+      "failures": 0,
+      "aggregation": "all sequential loopback request samples"
+    }
+  },
+  "token_usage": {
+    "method": "deterministic_injected_context_estimate",
+    "command": "npx vitest run test/token-diet-ab.test.ts",
+    "passed": true,
+    "exit_code": 0,
+    "wall_ms": 1034.982,
+    "estimator": "ceil(characters / 4) per emitted hook payload",
+    "scenario": "session-start → no-card nudge → register → message delivery → overlap create → stale nudge → update → stop-block → loop-guard → done → session-end",
+    "verbose": {
+      "chars": 3609,
+      "tokens": 903,
+      "count": 5
+    },
+    "compact": {
+      "chars": 1795,
+      "tokens": 449,
+      "count": 5
+    },
+    "reduction_pct": 50.3,
+    "output_rules_cost": {
+      "chars": 130,
+      "tokens": 33
+    },
+    "compliance": {
+      "passed": 11,
+      "total": 11
+    },
+    "provider_native_completion_tokens": {
+      "measured": false,
+      "excluded_reason": "A credential-free deterministic baseline cannot execute provider-native turns; real provider token evidence remains gated by TOOL-014 acceptance."
+    }
+  }
+}

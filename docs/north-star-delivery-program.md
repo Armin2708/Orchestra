@@ -16,7 +16,9 @@ recovery are now implemented. The conservative clean-profile Codex acceptance ha
 implemented, but its real exact-tuple run, the other three managed adapters, and the exact
 declared-provider compatibility matrix remain open. BASE-007 now defines a closed-by-default
 migration control and rollback point for every phase without claiming that reserved controls or
-unfinished phases are implemented.
+unfinished phases are implemented. BASE-008 now anchors tests, builds, packaging, cold startup,
+memory, loopback latency, and deterministic injected-context token usage to one exact clean source
+commit without converting observations into release thresholds.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -122,7 +124,8 @@ provider support or reopening any unsupported provider state. Begin TOOL-014 wit
 capability-aware bridge and one exact acceptance gate shared by every present and future provider,
 without claiming TOOL-014 complete before real canonical adapters and acceptance evidence exist.
 Define BASE-007's phase-by-phase activation and rollback contract independently of those unfinished
-runtime gates.
+runtime gates. Capture BASE-008's current engineering baseline with an executable, credential-free,
+exact-source contract before expanding the full-lifecycle acceptance harness.
 
 ### Delivered
 
@@ -130,6 +133,11 @@ runtime gates.
   44 default-closed controls, explicit activation/telemetry/data boundaries, and one complete
   rollback point per phase. Only the two existing environment flags are labeled wired; 36 controls
   remain explicitly reserved and six are release gates rather than runtime bindings;
+- BASE-008's versioned capture/validation harness records exact source and host identity,
+  default-parallel and one-worker tests, root/web typechecks and production artifacts, real
+  package/install smoke, three disposable loopback cold starts, ready memory, all 300 health
+  request latencies, and deterministic injected-context token usage without reading provider
+  credentials or claiming provider-native token evidence;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -229,6 +237,11 @@ runtime gates.
   tests, and the complete Node 22.20.0 suite at 145 files / 1,194 tests. Every phase, control
   lifecycle, source binding, remote kill-switch split, forward-only data invariant, link, and
   package inclusion is executable evidence.
+- BASE-008 measured exact clean source `51b168d96becccd4aa3506dec9e80fcebda43ed7`
+  on Node 22.20.0/npm 10.9.3: both full modes passed 146 files / 1,199 tests, root/web
+  typechecks and builds passed, package/install smoke passed, 3 / 3 daemon starts and graceful
+  exits passed, all 300 loopback health requests passed, and compact injected context measured
+  449 tokens versus 903 verbose (50.3% reduction) with 11 / 11 compliance gates.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -338,18 +351,20 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   `QA-019` run proves the frozen engineering commit, not publication or a later release head.
 - reserved BASE-007 controls still require their owning implementation, canary, rollback drill,
   and phase acceptance evidence before they can advance beyond `reserved`.
+- BASE-008 provider-native completion tokens remain explicitly unmeasured; TOOL-014 owns real
+  provider-turn evidence, while BASE-009 owns the full request-to-knowledge acceptance lifecycle.
 
-The strict master reconciliation is **129 / 375 checklist boxes delivered; 246 remain open**.
+The strict master reconciliation is **130 / 375 checklist boxes delivered; 245 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002`, `TOOL-013`, and `BASE-007`, keeps `TOOL-014` open, and keeps
-`BASE-010` reopened because the expanded provider target does not yet have an exact compatibility
-matrix.
+program state closes `KNO-002`, `TOOL-013`, `BASE-007`, and `BASE-008`, keeps `TOOL-014` open,
+and keeps `BASE-010` reopened because the expanded provider target does not yet have an exact
+compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
-| Phase 0 — Product contract/baseline | 10 / 13 | 3 |
+| Phase 0 — Product contract/baseline | 11 / 13 | 2 |
 | Phase 1 — Canonical domain/event ledger | 13 / 20 | 7 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
@@ -371,7 +386,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[BASE-007 migration-control checkpoint](./checkpoints/2026-07-28-agent-os-base007-migration-controls.md).
+[BASE-008 current-baseline checkpoint](./checkpoints/2026-07-28-agent-os-base008-current-baseline.md).
+The
+[BASE-007 migration-control checkpoint](./checkpoints/2026-07-28-agent-os-base007-migration-controls.md)
+is retained as the preceding baseline checkpoint.
 The
 [TOOL-014 Codex acceptance-harness WIP checkpoint](./checkpoints/2026-07-28-agent-os-tool014-codex-acceptance-harness-wip.md)
 is retained as the active provider-acceptance continuation; its clean-profile login timed out
@@ -431,6 +449,11 @@ superseded history.
   ingestion tests, 111 / 111 Knowledge tests, 138 files / 1,056 tests serially, root/web
   TypeScript and production builds, per-file Gitleaks, two zero-P0–P2 reviews, and LOW/zero-flow
   GitNexus change detection passed.
+- BASE-008 measured harness head `51b168d96becccd4aa3506dec9e80fcebda43ed7`: 146 / 146
+  files and 1,199 / 1,199 tests in default-parallel and one-worker modes; root/web TypeScript and
+  builds, package/install smoke, 3 / 3 cold starts, 300 / 300 health requests, and the 903 → 449
+  deterministic injected-token gate passed. The exact JSON remains descriptive single-host
+  evidence and excludes provider-native turns.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

@@ -87,10 +87,18 @@ export function validateBaseline(value) {
       errors.push(`${mode} tests did not pass`)
       continue
     }
-    if (!positive(result.test_files) || result.failed_test_files !== 0) {
+    if (
+      !positive(result.test_files)
+      || result.passed_test_files !== result.test_files
+      || result.failed_test_files !== 0
+    ) {
       errors.push(`${mode} test-file counts are invalid`)
     }
-    if (!positive(result.tests) || result.failed_tests !== 0) {
+    if (
+      !positive(result.tests)
+      || result.passed_tests !== result.tests
+      || result.failed_tests !== 0
+    ) {
       errors.push(`${mode} test counts are invalid`)
     }
     if (!positive(result.wall_ms)) errors.push(`${mode} wall time is invalid`)
@@ -328,6 +336,29 @@ export const directorySummary = (directory) => {
   }
 }
 
+export function summarizeVitestReport(report) {
+  if (!object(report) || !Array.isArray(report.testResults)) {
+    throw new Error('Vitest JSON report is missing testResults')
+  }
+  const passedTestFiles = report.testResults
+    .filter((result) => result?.status === 'passed').length
+  const failedTestFiles = report.testResults
+    .filter((result) => result?.status === 'failed').length
+  if (passedTestFiles + failedTestFiles !== report.testResults.length) {
+    throw new Error('Vitest JSON report has an unsupported test-file status')
+  }
+  return {
+    test_files: report.testResults.length,
+    passed_test_files: passedTestFiles,
+    failed_test_files: failedTestFiles,
+    tests: report.numTotalTests,
+    passed_tests: report.numPassedTests,
+    failed_tests: report.numFailedTests,
+    pending_tests: report.numPendingTests,
+    todo_tests: report.numTodoTests,
+  }
+}
+
 const testResult = async (name, extraArgs, reportPath, env) => {
   const result = requirePassed(await runCommand(
     'npm',
@@ -349,14 +380,7 @@ const testResult = async (name, extraArgs, reportPath, env) => {
     passed: true,
     exit_code: result.exit_code,
     wall_ms: result.wall_ms,
-    test_files: report.numTotalTestSuites,
-    passed_test_files: report.numPassedTestSuites,
-    failed_test_files: report.numFailedTestSuites,
-    tests: report.numTotalTests,
-    passed_tests: report.numPassedTests,
-    failed_tests: report.numFailedTests,
-    pending_tests: report.numPendingTests,
-    todo_tests: report.numTodoTests,
+    ...summarizeVitestReport(report),
   }
 }
 
