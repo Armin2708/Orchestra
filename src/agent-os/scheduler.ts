@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import { canonicalHash } from './agent-home-support.js'
 import { AttentionService } from './attention.js'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
+import { resolveIdempotencyKey } from './idempotency.js'
 import {
   resolveCurrentJobAssignment,
   type FrozenJobAssignmentIdentity,
@@ -83,6 +89,10 @@ export interface SchedulerTick {
   deferred: string[]
 }
 
+export interface CancelJobInput {
+  idempotencyKey?: string | null
+}
+
 export class JobScheduler {
   private readonly events: EventStore
   private readonly attention: AttentionService
@@ -130,12 +140,59 @@ export class JobScheduler {
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new ValidationError('maxAttempts must be at least 1')
     const scheduledAt = input.scheduledAt ?? timestamp()
     if (Number.isNaN(Date.parse(scheduledAt))) throw new ValidationError('scheduledAt must be an ISO date')
+    const idempotencyKey = input.idempotencyKey == null
+      ? null
+      : resolveIdempotencyKey({ camel: input.idempotencyKey }) ?? null
+    const computedFingerprint = idempotencyKey
+      ? canonicalHash({
+          command: 'job.launch',
+          request: {
+            board_id: input.boardId,
+            card_id: input.cardId ?? null,
+            workspace_id: input.workspaceId ?? null,
+            provider: input.provider.trim(),
+            driver_id: driverId,
+            model: input.model ?? null,
+            effort: input.effort ?? null,
+            access_profile: accessProfile,
+            policy_id: input.policyId ?? null,
+            contract_version: input.contractVersion ?? null,
+            job_assignment: jobAssignment,
+            priority,
+            max_attempts: maxAttempts,
+            budget_tokens: input.budgetTokens ?? null,
+            budget_cents: input.budgetCents ?? null,
+            scheduled_at: input.scheduledAt ?? null,
+            correlation_id: input.correlationId ?? null,
+            causation_id: input.causationId ?? null,
+          },
+        })
+      : null
+    const requestFingerprint = input.requestFingerprint ?? computedFingerprint
+    if (requestFingerprint != null
+      && !/^[0-9a-f]{64}$/.test(requestFingerprint)) {
+      throw new ValidationError('requestFingerprint must be a lowercase SHA-256 digest')
+    }
+    if (idempotencyKey) {
+      const replay = this.db.prepare(`
+        SELECT * FROM jobs
+        WHERE board_id=? AND idempotency_key=?
+      `).get(input.boardId, idempotencyKey) as Record<string, unknown> | undefined
+      if (replay) {
+        if (replay.request_fingerprint !== requestFingerprint) {
+          throw new ConflictError(
+            'idempotency key was already used for a different launch request',
+          )
+        }
+        return mapJob(replay)
+      }
+    }
     const row = {
       id: randomUUID(), board_id: input.boardId, card_id: input.cardId ?? null,
       workspace_id: input.workspaceId ?? null, provider: input.provider.trim(), driver_id: driverId,
       model: input.model ?? null, effort: input.effort ?? null, access_profile: accessProfile,
       policy_id: input.policyId ?? null, contract_version: input.contractVersion ?? null,
-      idempotency_key: input.idempotencyKey ?? null, request_fingerprint: input.requestFingerprint ?? null,
+      idempotency_key: idempotencyKey, request_fingerprint: requestFingerprint,
       job_assignment_id: jobAssignment?.jobAssignmentId ?? null,
       assigned_profile_id: jobAssignment?.assignedProfileId ?? null,
       assignment_market_version: jobAssignment?.assignmentMarketVersion ?? null,
@@ -161,6 +218,19 @@ export class JobScheduler {
         .run(row)
     } catch (error) {
       if (String(error).includes('card already has an active job')) throw new ConflictError('card already has an active job')
+      if (idempotencyKey
+        && String(error).includes('jobs.board_id, jobs.idempotency_key')) {
+        const replay = this.db.prepare(`
+          SELECT * FROM jobs
+          WHERE board_id=? AND idempotency_key=?
+        `).get(input.boardId, idempotencyKey) as Record<string, unknown> | undefined
+        if (replay?.request_fingerprint !== requestFingerprint) {
+          throw new ConflictError(
+            'idempotency key was already used for a different launch request',
+          )
+        }
+        if (replay) return mapJob(replay)
+      }
       throw error
     }
     this.events.append({ boardId: row.board_id, workspaceId: row.workspace_id, cardId: row.card_id,
@@ -205,17 +275,63 @@ export class JobScheduler {
     return job
   }
 
-  async cancel(id: string): Promise<Job> {
+  async cancel(id: string, input: CancelJobInput = {}): Promise<Job> {
     const job = this.get(id)
     if (!job) throw new NotFoundError('job not found')
-    if (['succeeded', 'cancelled'].includes(job.status)) return job
+    const identity = commandRequestIdentity({
+      boardId: job.board_id,
+      idempotencyKey: input.idempotencyKey,
+      command: 'job.cancel',
+      scopeId: job.id,
+      request: { job_id: job.id },
+    })
+    const commands = new CommandIdempotencyStore(this.db)
+    if (identity) {
+      const replay = commands.replay(identity)
+      if (replay) {
+        const result = this.get(commands.succeededResult(replay))
+        if (!result) throw new ConflictError('idempotent cancellation result is missing')
+        return result
+      }
+    }
+    if (['succeeded', 'cancelled'].includes(job.status)) {
+      if (identity) {
+        const record = this.db.transaction(() => {
+          const replay = commands.replay(identity)
+          if (replay) return replay
+          return commands.recordSucceeded(identity, job.id)
+        })
+        record.immediate()
+      }
+      return job
+    }
+    if (identity) {
+      const claimed = commands.claim(identity)
+      if (claimed.replay) {
+        const result = this.get(commands.succeededResult(claimed.receipt))
+        if (!result) throw new ConflictError('idempotent cancellation result is missing')
+        return result
+      }
+    }
     const beginCancellation = this.db.transaction(() => {
       const claimed = this.db.prepare(`UPDATE jobs SET status='cancelling', error=NULL
         WHERE id=? AND status IN ('queued','running','blocked','cancelling')`).run(id)
       if (claimed.changes === 1) this.appendJobEvent(job, 'job.cancelling', {})
       return claimed.changes
     })
-    if (beginCancellation.immediate() !== 1) return this.get(id)!
+    if (beginCancellation.immediate() !== 1) {
+      const current = this.get(id)!
+      if (!identity) return current
+      if (['succeeded', 'cancelled'].includes(current.status)) {
+        commands.succeed(identity, current.id)
+        return current
+      }
+      const conflict = new ConflictError(
+        'job cancellation is already in progress under a different command',
+      )
+      commands.fail(identity, conflict)
+      throw conflict
+    }
     try {
       if (job.status === 'running' || job.status === 'cancelling') await this.executor?.cancel?.(job)
     } catch (error) {
@@ -223,6 +339,7 @@ export class JobScheduler {
       this.db.prepare("UPDATE jobs SET error=? WHERE id=? AND status='cancelling'").run(`cancellation not confirmed: ${detail}`, id)
       this.attention.create({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
         kind: 'job.cancellation_failed', severity: 'critical', title: 'Job cancellation needs attention', detail })
+      if (identity) commands.fail(identity, error)
       throw error
     }
     const at = timestamp()
@@ -232,6 +349,7 @@ export class JobScheduler {
       this.appendJobEvent(job, 'job.cancelled', {})
     })
     finalize.immediate()
+    if (identity) commands.succeed(identity, job.id)
     return this.get(id)!
   }
 

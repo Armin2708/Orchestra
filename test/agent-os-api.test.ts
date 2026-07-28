@@ -85,16 +85,19 @@ describe('Agent OS API', () => {
 
   it('covers workspace, process, context, contract, evidence, policy, checkpoint, job, conflict, and attention routes', async () => {
     const { db, boardId, otherBoardId, cardId, otherCardId, server } = await fixture()
-    const invalid = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`, headers: auth,
+    const invalid = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      headers: { ...auth, 'idempotency-key': 'api-workspace-invalid' },
       payload: { name: '', card_id: cardId } })
     expect(invalid.statusCode).toBe(400)
 
-    const createdResponse = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`, headers: auth,
+    const createdResponse = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      headers: { ...auth, 'idempotency-key': 'api-workspace-primary' },
       payload: { name: 'primary', card_id: cardId } })
     expect(createdResponse.statusCode).toBe(201)
     const workspace = createdResponse.json().workspace
     expect(workspace).toMatchObject({ root_path: '/repo-api', status: 'active', card_id: cardId })
-    const second = (await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`, headers: auth,
+    const second = (await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      headers: { ...auth, 'idempotency-key': 'api-workspace-overlap' },
       payload: { name: 'overlap', root_path: '/repo-api' } })).json().workspace
     expect(second.id).not.toBe(workspace.id)
     expect((await server.inject({ method: 'GET', url: `/api/v1/os/boards/${otherBoardId}/workspaces`, headers: auth })).json().workspaces)
@@ -144,7 +147,8 @@ describe('Agent OS API', () => {
     expect((await server.inject({ method: 'GET', url: `/api/v1/os/cards/${cardId}/evidence`, headers: auth })).json().evidence.changed_files)
       .toEqual(['src/api.ts'])
 
-    const policy = (await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/policies`, headers: auth,
+    const policy = (await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/policies`,
+      headers: { ...auth, 'idempotency-key': 'api-policy-create' },
       payload: { name: 'API policy', file_globs: ['src/**'], command_globs: ['npm test'] } })).json().policy
     const evaluation = await server.inject({ method: 'POST', url: `/api/v1/os/policies/${policy.id}/evaluate`, headers: auth,
       payload: { kind: 'secret', value: 'DATABASE_URL' } })
@@ -152,7 +156,8 @@ describe('Agent OS API', () => {
     expect((await server.inject({ method: 'GET', url: `/api/v1/os/boards/${boardId}/policies`, headers: auth })).json().policies)
       .toHaveLength(1)
 
-    const checkpoint = await server.inject({ method: 'POST', url: `/api/v1/os/workspaces/${workspace.id}/checkpoints`, headers: auth,
+    const checkpoint = await server.inject({ method: 'POST', url: `/api/v1/os/workspaces/${workspace.id}/checkpoints`,
+      headers: { ...auth, 'idempotency-key': 'api-checkpoint-create' },
       payload: { name: 'API checkpoint', git_head: 'deadbeef', process_recipes: [{ command: 'npm test' }] } })
     expect(checkpoint.statusCode).toBe(201)
     expect((await server.inject({ method: 'GET', url: `/api/v1/os/workspaces/${workspace.id}/checkpoints`, headers: auth })).json().checkpoints)
@@ -160,7 +165,8 @@ describe('Agent OS API', () => {
     expect((await server.inject({ method: 'POST', url: `/api/v1/os/checkpoints/${checkpoint.json().checkpoint.id}/fork`, headers: auth,
       payload: { name: 'fork' } })).statusCode).toBe(501)
 
-    const jobResponse = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`, headers: auth,
+    const jobResponse = await server.inject({ method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      headers: { ...auth, 'idempotency-key': 'api-job-create' },
       payload: { card_id: cardId, workspace_id: workspace.id, provider: 'future-provider', priority: 3 } })
     expect(jobResponse.statusCode).toBe(201)
     expect(jobResponse.json().job).toMatchObject({ status: 'queued' })

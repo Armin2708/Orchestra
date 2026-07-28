@@ -101,8 +101,25 @@ async function acceptanceFixture(databasePath = ':memory:') {
   return { db, boardId, cardId, server }
 }
 
+let responseSequence = 0
+
 const responseBody = async (server: FastifyInstance, method: string, url: string, body?: unknown) => {
-  const response = await server.inject({ method, url, ...(body === undefined ? {} : { payload: body }) })
+  const bodyRecord = body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : undefined
+  const bodyKey = bodyRecord?.idempotency_key ?? bodyRecord?.idempotencyKey
+  const response = await server.inject({
+    method,
+    url,
+    ...(method === 'POST' ? {
+      headers: {
+        'idempotency-key': typeof bodyKey === 'string'
+          ? bodyKey
+          : `canonical-acceptance:${++responseSequence}`,
+      },
+    } : {}),
+    ...(body === undefined ? {} : { payload: body }),
+  })
   const parsed = response.json()
   if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(parsed.error ?? `HTTP ${response.statusCode}`)
   return parsed

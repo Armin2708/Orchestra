@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import picomatch from 'picomatch'
-import { NotFoundError, ValidationError } from './errors.js'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
+import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { parseJson, stringArray, timestamp } from './json.js'
 
 export type PolicyKind = 'filesystem' | 'command' | 'network' | 'secret'
@@ -44,6 +48,7 @@ export interface CreatePolicy {
   networkHosts?: unknown
   secretNames?: unknown
   approvalScope?: string
+  idempotencyKey?: string | null
 }
 
 export class PolicyEngine {
@@ -56,20 +61,52 @@ export class PolicyEngine {
     if (!['advisory', 'ask', 'allow', 'deny'].includes(approvalScope)) {
       throw new ValidationError('approval_scope must be advisory, ask, allow, or deny')
     }
-    const at = timestamp()
-    const row = {
-      id: randomUUID(), board_id: input.boardId, name: input.name.trim(),
-      file_globs: JSON.stringify(stringArray(input.fileGlobs, 'file_globs')),
-      command_globs: JSON.stringify(stringArray(input.commandGlobs, 'command_globs')),
-      network_hosts: JSON.stringify(stringArray(input.networkHosts, 'network_hosts')),
-      secret_names: JSON.stringify(stringArray(input.secretNames, 'secret_names')),
-      approval_scope: approvalScope, created_at: at, updated_at: at,
+    const normalized = {
+      name: input.name.trim(),
+      file_globs: stringArray(input.fileGlobs, 'file_globs'),
+      command_globs: stringArray(input.commandGlobs, 'command_globs'),
+      network_hosts: stringArray(input.networkHosts, 'network_hosts'),
+      secret_names: stringArray(input.secretNames, 'secret_names'),
+      approval_scope: approvalScope,
     }
-    this.db.prepare(`INSERT INTO policies
-      (id, board_id, name, file_globs, command_globs, network_hosts, secret_names, approval_scope, created_at, updated_at)
-      VALUES (@id, @board_id, @name, @file_globs, @command_globs, @network_hosts, @secret_names, @approval_scope, @created_at, @updated_at)`)
-      .run(row)
-    return mapPolicy(row)
+    const identity = commandRequestIdentity({
+      boardId: input.boardId,
+      idempotencyKey: input.idempotencyKey,
+      command: 'policy.create',
+      scopeId: String(input.boardId),
+      request: normalized,
+    })
+    const commands = new CommandIdempotencyStore(this.db)
+    const create = () => {
+      if (identity) {
+        const replay = commands.replay(identity)
+        if (replay) {
+          const policy = this.get(commands.succeededResult(replay))
+          if (!policy) throw new ConflictError('idempotent policy result is missing')
+          return policy
+        }
+      }
+      const at = timestamp()
+      const row = {
+        id: randomUUID(),
+        board_id: input.boardId,
+        name: normalized.name,
+        file_globs: JSON.stringify(normalized.file_globs),
+        command_globs: JSON.stringify(normalized.command_globs),
+        network_hosts: JSON.stringify(normalized.network_hosts),
+        secret_names: JSON.stringify(normalized.secret_names),
+        approval_scope: normalized.approval_scope,
+        created_at: at,
+        updated_at: at,
+      }
+      this.db.prepare(`INSERT INTO policies
+        (id, board_id, name, file_globs, command_globs, network_hosts, secret_names, approval_scope, created_at, updated_at)
+        VALUES (@id, @board_id, @name, @file_globs, @command_globs, @network_hosts, @secret_names, @approval_scope, @created_at, @updated_at)`)
+        .run(row)
+      if (identity) commands.recordSucceeded(identity, row.id)
+      return mapPolicy(row)
+    }
+    return identity ? this.db.transaction(create).immediate() : create()
   }
 
   listBoard(boardId: number): Policy[] {

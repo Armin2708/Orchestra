@@ -136,6 +136,17 @@ async function fixture(options: {
       drivers,
     },
   })
+  let commandSequence = 0
+  server.addHook('preValidation', async (request) => {
+    if (request.method !== 'POST' || request.headers['idempotency-key'] !== undefined) return
+    const body = request.body
+    const bodyKey = body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).idempotency_key
+      : undefined
+    request.headers['idempotency-key'] = typeof bodyKey === 'string'
+      ? bodyKey
+      : `orchestration-launch:${++commandSequence}`
+  })
   servers.push(server)
   await server.ready()
   return { db, boardId, cardId, executor, scheduler, orchestration, legacyCalls, server }
@@ -249,7 +260,7 @@ describe('canonical card launch routes', () => {
       contract_id: `card:${cardId}:v${body.contract.version}`,
       contract_version: body.contract.version,
       correlation_id: body.session.context.correlation_id,
-      idempotency_key: null,
+      idempotency_key: expect.any(String),
     })
     expect(body.delivery.contract_id).toBe(body.orchestration.contract_id)
     expect(body.session.agent_id).toBe(body.agent.id)
@@ -336,7 +347,7 @@ describe('canonical card launch routes', () => {
       contract_id: `card:${cardId}:v${created.contract.version}`,
       contract_version: created.contract.version,
       correlation_id: created.session.context.correlation_id,
-      idempotency_key: null,
+      idempotency_key: expect.any(String),
     })
     expect(created.delivery.contract_id).toBe(created.orchestration.contract_id)
 

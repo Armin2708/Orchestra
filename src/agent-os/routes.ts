@@ -12,19 +12,28 @@ import {
 import { ArtifactStore } from './artifact-store.js'
 import { AttentionService } from './attention.js'
 import { Checkpoint, CheckpointForker, CheckpointService } from './checkpoints.js'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
 import { ContextStore, PutContextItem } from './context-store.js'
 import { DeliveryReportService } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
 import { objectBody, positiveId, requiredString } from './json.js'
-import { resolveIdempotencyKey } from './idempotency.js'
+import { requireIdempotencyKey } from './idempotency.js'
 import { LegacyBusEvent, LegacyEventProjection } from './legacy-projection.js'
 import { orchestrationIdentity } from './orchestration-envelope.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { PolicyEngine, PolicyKind } from './policy-engine.js'
 import { JobExecutor, JobScheduler } from './scheduler.js'
 import { JobMarketService, type ContractAccessNeed, type JobMarketStatus } from './job-market.js'
-import { CreateWorkspace, Workspace, WorkspaceStore } from './workspace-store.js'
+import {
+  CreateWorkspace,
+  Workspace,
+  WorkspaceStore,
+  workspaceCreateCommandIdentity,
+} from './workspace-store.js'
 import {
   AGENT_DEFAULT_EFFORT_LEVELS,
   AgentDefaultsValidationError,
@@ -156,6 +165,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const attention = new AttentionService(db)
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
+  const commands = new CommandIdempotencyStore(db)
   const scheduler = options.scheduler ?? new JobScheduler(db, options.jobExecutor)
   const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
   const isOperator = options.isOperator ?? (() => true)
@@ -215,6 +225,12 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/workspaces', async (request, reply) => {
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     const cardId = optionalPositiveId(body.card_id ?? body.cardId, 'card_id')
     const projectPath = (db.prepare('SELECT project_path FROM boards WHERE id=?').get(boardId) as { project_path: string }).project_path
     const input: CreateWorkspace = {
@@ -222,11 +238,36 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       kind: stringValue(body.kind) ?? 'shared', rootPath: requiredString(body.root_path ?? body.rootPath ?? projectPath, 'root_path'),
       worktreePath: nullableValue(body.worktree_path ?? body.worktreePath), branch: nullableValue(body.branch),
       baseRef: nullableValue(body.base_ref ?? body.baseRef), status: stringValue(body.status), env: envObject(body.env ?? body.env_json),
+      idempotencyKey,
     }
-    const workspace = options.runtime?.createWorkspace ? await options.runtime.createWorkspace(input) : workspaces.create(input)
+    const identity = workspaceCreateCommandIdentity(input)!
+    let workspace: Workspace
+    if (options.runtime?.createWorkspace) {
+      const claim = commands.claim(identity)
+      if (claim.replay) {
+        const replay = workspaces.get(commands.succeededResult(claim.receipt))
+        if (!replay) throw new ConflictError('idempotent workspace result is missing')
+        workspace = replay
+      } else {
+        try {
+          workspace = await options.runtime.createWorkspace(input)
+          if (!workspaces.get(workspace.id)) {
+            throw new ValidationError('workspace runtime did not persist the returned workspace')
+          }
+          commands.succeed(identity, workspace.id)
+        } catch (error) {
+          commands.fail(identity, error)
+          throw error
+        }
+      }
+    } else {
+      workspace = workspaces.create(input)
+    }
     if (!workspaces.get(workspace.id)) throw new ValidationError('workspace runtime did not persist the returned workspace')
-    if (!options.runtime?.createWorkspace) events.append({ boardId, workspaceId: workspace.id, cardId: workspace.card_id,
-      kind: 'workspace.created', source: 'api', payload: { kind: workspace.kind, root_path: workspace.root_path } })
+    if (!options.runtime?.createWorkspace) events.append({ boardId, workspaceId: workspace.id, cardId: input.cardId,
+      idempotencyKey: `command:${identity.requestFingerprint}`,
+      kind: 'workspace.created', source: 'api',
+      payload: { kind: input.kind, root_path: input.rootPath } })
     return reply.code(201).send({ workspace })
   })
 
@@ -496,10 +537,33 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     reply.code(201).send({ delivery: deliveries.prepareForJob(request.params.id) }))
   app.post<{ Params: { id: string }; Body: unknown }>('/jobs/:id/deliveries/submit', (request) => {
     const body = objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     const actor = requiredString(body.actor, 'actor')
     const evidenceInput = Array.isArray(body.evidence)
       ? { artifact_ids: body.evidence }
       : recordValue(body.evidence, 'evidence')
+    const hasVerification = body.criteria !== undefined
+      || body.criterion_results !== undefined
+      || body.deliverable_results !== undefined
+    const criterionResults = hasVerification
+      ? arrayValue(body.criteria ?? body.criterion_results, 'criteria')
+      : []
+    const deliverableResults = hasVerification
+      ? arrayValue(body.deliverable_results, 'deliverable_results')
+      : []
+    if ([...criterionResults, ...deliverableResults].some(resultHasOverride)) {
+      requireOperator(request)
+    }
+    const verification = hasVerification ? {
+      actor,
+      results: operatorizeOverrides(criterionResults) as any,
+      deliverableResults: operatorizeOverrides(deliverableResults) as any,
+    } : null
     const prepared = deliveries.prepareForJob(request.params.id)
     let delivery = deliveries.submit(prepared.id, {
       actor,
@@ -513,17 +577,11 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
         'artifact_ids',
       ) as string[],
       gaps: arrayValue(body.gaps ?? evidenceInput.gaps, 'gaps') as string[],
+      idempotencyKey,
+      verification,
     })
-    if (body.criteria !== undefined || body.criterion_results !== undefined || body.deliverable_results !== undefined) {
-      const criterionResults = arrayValue(body.criteria ?? body.criterion_results, 'criteria')
-      const deliverableResults = arrayValue(body.deliverable_results, 'deliverable_results')
-      const hasOverride = [...criterionResults, ...deliverableResults].some(resultHasOverride)
-      if (hasOverride) requireOperator(request)
-      delivery = deliveries.verifySubmission(delivery.id, {
-        actor,
-        results: operatorizeOverrides(criterionResults) as any,
-        deliverableResults: operatorizeOverrides(deliverableResults) as any,
-      })
+    if (verification) {
+      delivery = deliveries.verifySubmission(delivery.id, verification)
     }
     return { delivery }
   })
@@ -542,9 +600,16 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/accept', (request) => {
     requireOperator(request)
     const body = objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     return { delivery: deliveries.accept(request.params.id, {
       actor: 'human',
       note: stringValue(body.note),
+      idempotencyKey,
     }) }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/reject', (request) => {
@@ -581,10 +646,17 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/boards/:id/policies', (request, reply) => {
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     const policy = policies.create({ boardId, name: requiredString(body.name, 'name'),
       fileGlobs: body.file_globs ?? body.fileGlobs, commandGlobs: body.command_globs ?? body.commandGlobs,
       networkHosts: body.network_hosts ?? body.networkHosts, secretNames: body.secret_names ?? body.secretNames,
-      approvalScope: stringValue(body.approval_scope ?? body.approvalScope) })
+      approvalScope: stringValue(body.approval_scope ?? body.approvalScope),
+      idempotencyKey })
     return reply.code(201).send({ policy })
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/policies/:id/evaluate', (request) => {
@@ -606,21 +678,81 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/checkpoints', async (request, reply) => {
     const body = objectBody(request.body)
     const workspace = requireWorkspace(workspaces, request.params.id)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     const name = requiredString(body.name, 'name')
     const sessionId = nullableValue(body.session_id ?? body.sessionId)
     const hasContext = body.context !== undefined || body.context_json !== undefined
     const contextValue = recordValue(body.context ?? body.context_json, 'context')
-    const captured = options.runtime?.captureCheckpoint && body.git_head === undefined && body.gitHead === undefined
-      ? await options.runtime.captureCheckpoint({ workspace, name, sessionId, context: contextValue }) : null
-    const checkpoint = checkpoints.create({ workspaceId: request.params.id, sessionId, name,
-      gitHead: stringValue(body.git_head ?? body.gitHead) ?? captured?.gitHead ?? gitHead(workspace),
-      patchArtifactId: nullableValue(body.patch_artifact_id ?? body.patchArtifactId ?? captured?.patchArtifactId),
-      context: hasContext ? contextValue : captured?.context ?? contextValue,
-      processRecipes: body.process_recipes !== undefined || body.processRecipes !== undefined
-        ? arrayValue(body.process_recipes ?? body.processRecipes, 'process_recipes') : captured?.processRecipes ?? [] })
-    events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
-      kind: 'checkpoint.created', source: 'api', payload: { checkpoint_id: checkpoint.id, git_head: checkpoint.git_head } })
-    return reply.code(201).send({ checkpoint })
+    const explicitGitHead = stringValue(body.git_head ?? body.gitHead)
+    const explicitPatchArtifactId = nullableValue(body.patch_artifact_id ?? body.patchArtifactId)
+    const hasProcessRecipes = body.process_recipes !== undefined || body.processRecipes !== undefined
+    const explicitProcessRecipes = hasProcessRecipes
+      ? arrayValue(body.process_recipes ?? body.processRecipes, 'process_recipes')
+      : null
+    const identity = commandRequestIdentity({
+      boardId: workspace.board_id,
+      idempotencyKey,
+      command: 'checkpoint.create',
+      scopeId: workspace.id,
+      request: {
+        name,
+        session_id: sessionId,
+        git_head: explicitGitHead ?? null,
+        patch_artifact_id: explicitPatchArtifactId,
+        context: hasContext ? contextValue : null,
+        process_recipes: explicitProcessRecipes,
+      },
+    })!
+    const claim = commands.claim(identity)
+    if (claim.replay) {
+      const checkpoint = checkpoints.get(commands.succeededResult(claim.receipt))
+      if (!checkpoint) throw new ConflictError('idempotent checkpoint result is missing')
+      return reply.code(201).send({ checkpoint })
+    }
+    try {
+      const captured = options.runtime?.captureCheckpoint && explicitGitHead === undefined
+        ? await options.runtime.captureCheckpoint({
+            workspace,
+            name,
+            sessionId,
+            context: contextValue,
+          })
+        : null
+      const persist = db.transaction(() => {
+        const checkpoint = checkpoints.create({
+          workspaceId: request.params.id,
+          sessionId,
+          name,
+          gitHead: explicitGitHead ?? captured?.gitHead ?? gitHead(workspace),
+          patchArtifactId: explicitPatchArtifactId ?? captured?.patchArtifactId,
+          context: hasContext ? contextValue : captured?.context ?? contextValue,
+          processRecipes: explicitProcessRecipes ?? captured?.processRecipes ?? [],
+        })
+        events.append({
+          boardId: workspace.board_id,
+          workspaceId: workspace.id,
+          cardId: workspace.card_id,
+          idempotencyKey: `command:${identity.requestFingerprint}`,
+          kind: 'checkpoint.created',
+          source: 'api',
+          payload: {
+            checkpoint_id: checkpoint.id,
+            git_head: checkpoint.git_head,
+          },
+        })
+        commands.succeed(identity, checkpoint.id)
+        return checkpoint
+      })
+      return reply.code(201).send({ checkpoint: persist.immediate() })
+    } catch (error) {
+      commands.fail(identity, error)
+      throw error
+    }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/checkpoints/:id/fork', async (request, reply) => {
     const body = objectBody(request.body)
@@ -640,6 +772,12 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     requireOperator(request)
     const boardId = board(db, request.params.id)
     const body = objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
     const cardId = optionalPositiveId(body.card_id ?? body.cardId, 'card_id')
     const workspaceValue = cardId && Object.prototype.hasOwnProperty.call(body, 'workspace_id')
       ? body.workspace_id : body.workspace_id ?? body.workspaceId
@@ -662,12 +800,6 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const scopedCard = db.prepare('SELECT board_id FROM cards WHERE id=?').get(cardId) as { board_id: number } | undefined
       if (!scopedCard) throw new NotFoundError('card not found')
       if (scopedCard.board_id !== boardId) throw new ValidationError('card belongs to a different board')
-      const idempotencyKey = resolveIdempotencyKey({
-        header: request.headers['idempotency-key'],
-        rawHeaders: request.raw.rawHeaders,
-        snake: body.idempotency_key,
-        camel: body.idempotencyKey,
-      })
       const launchInput = { cardId, expectedBoardId: boardId, workspaceId,
         provider, model, effort: null, priority, maxAttempts, budgetTokens, budgetCents, scheduledAt,
         idempotencyKey }
@@ -686,7 +818,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       })
     }
     const created = scheduler.create({ boardId, cardId, workspaceId, provider, model, priority,
-      maxAttempts, budgetTokens, budgetCents, scheduledAt })
+      maxAttempts, budgetTokens, budgetCents, scheduledAt, idempotencyKey })
     await scheduler.tick()
     return reply.code(201).send({ job: scheduler.get(created.id) })
   })
@@ -714,9 +846,18 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       events: jobEvents,
     }
   })
-  app.post<{ Params: { id: string } }>('/jobs/:id/cancel', async (request) => {
+  app.post<{ Params: { id: string }; Body: unknown }>('/jobs/:id/cancel', async (request) => {
     requireOperator(request)
-    return { job: await scheduler.cancel(request.params.id) }
+    const body = request.body == null ? {} : objectBody(request.body)
+    const idempotencyKey = requireIdempotencyKey({
+      header: request.headers['idempotency-key'],
+      rawHeaders: request.raw.rawHeaders,
+      snake: body.idempotency_key,
+      camel: body.idempotencyKey,
+    })
+    return {
+      job: await scheduler.cancel(request.params.id, { idempotencyKey }),
+    }
   })
 
   app.get<{ Params: { id: string } }>('/boards/:id/conflicts', (request) => {

@@ -60,7 +60,10 @@ export function ProviderLaunchControl({
   const launch = async (event: React.MouseEvent) => {
     if (stopPropagation) event.stopPropagation()
     if (launching) return
-    const body = providerLaunchBody(provider, model, effort, accessProfile || null)
+    const body = {
+      ...providerLaunchBody(provider, model, effort, accessProfile || null),
+      idempotency_key: window.crypto.randomUUID(),
+    }
     if (body.access_profile === 'full_access' && !window.confirm(
       `Launch ${selectedProvider?.name ?? 'this agent'} with full access? It can read and modify files outside the workspace and run unsandboxed commands.`,
     )) return

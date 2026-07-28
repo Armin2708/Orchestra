@@ -210,6 +210,96 @@ const CAUSAL_EVENT_METADATA_OBJECTS = Object.freeze([
       END`,
   },
 ] as const)
+const COMMAND_RECEIPT_COLUMNS = Object.freeze([
+  ['board_id', 'INTEGER', 1, 1],
+  ['idempotency_key', 'TEXT', 1, 2],
+  ['command', 'TEXT', 1, 0],
+  ['scope_id', 'TEXT', 1, 0],
+  ['request_fingerprint', 'TEXT', 1, 0],
+  ['status', 'TEXT', 1, 0],
+  ['result_id', 'TEXT', 0, 0],
+  ['error_message', 'TEXT', 0, 0],
+  ['created_at', 'TEXT', 1, 0],
+  ['completed_at', 'TEXT', 0, 0],
+] as const)
+const COMMAND_RECEIPT_TABLE_SQL = `CREATE TABLE os_command_receipts (
+  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL
+    CHECK(length(idempotency_key) BETWEEN 1 AND 200
+      AND trim(idempotency_key)=idempotency_key
+      AND instr(CAST(idempotency_key AS BLOB), X'00')=0
+      AND idempotency_key NOT GLOB (
+        '*[' || char(1) || '-' || char(31) || char(127) || ']*'
+      )),
+  command TEXT NOT NULL
+    CHECK(command IN (
+      'workspace.create',
+      'checkpoint.create',
+      'policy.create',
+      'delivery.submit',
+      'delivery.accept',
+      'job.cancel'
+    )),
+  scope_id TEXT NOT NULL
+    CHECK(length(scope_id) BETWEEN 1 AND 512
+      AND trim(scope_id)=scope_id),
+  request_fingerprint TEXT NOT NULL
+    CHECK(length(request_fingerprint)=64
+      AND request_fingerprint NOT GLOB '*[^0-9a-f]*'),
+  status TEXT NOT NULL
+    CHECK(status IN ('pending','succeeded','failed')),
+  result_id TEXT
+    CHECK(result_id IS NULL OR (
+      length(result_id) BETWEEN 1 AND 512
+      AND trim(result_id)=result_id
+    )),
+  error_message TEXT
+    CHECK(error_message IS NULL OR length(error_message) BETWEEN 1 AND 4000),
+  created_at TEXT NOT NULL
+    CHECK(strftime('%s', created_at) IS NOT NULL),
+  completed_at TEXT
+    CHECK(completed_at IS NULL OR strftime('%s', completed_at) IS NOT NULL),
+  PRIMARY KEY(board_id, idempotency_key),
+  CHECK(
+    (status='pending' AND result_id IS NULL
+      AND completed_at IS NULL AND error_message IS NULL)
+    OR
+    (status='succeeded' AND result_id IS NOT NULL
+      AND completed_at IS NOT NULL AND error_message IS NULL)
+    OR
+    (status='failed' AND result_id IS NULL AND completed_at IS NOT NULL
+      AND error_message IS NOT NULL)
+  )
+) WITHOUT ROWID`
+const COMMAND_RECEIPT_OBJECTS = Object.freeze([
+  {
+    type: 'index',
+    name: 'idx_os_command_receipts_scope',
+    sql: `CREATE INDEX idx_os_command_receipts_scope
+      ON os_command_receipts(board_id, command, scope_id, created_at)`,
+  },
+  {
+    type: 'trigger',
+    name: 'os_command_receipts_update_lifecycle',
+    sql: `CREATE TRIGGER os_command_receipts_update_lifecycle
+      BEFORE UPDATE ON os_command_receipts
+      BEGIN
+        SELECT CASE WHEN
+          NEW.board_id IS NOT OLD.board_id
+          OR NEW.idempotency_key IS NOT OLD.idempotency_key
+          OR NEW.command IS NOT OLD.command
+          OR NEW.scope_id IS NOT OLD.scope_id
+          OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+          OR NEW.created_at IS NOT OLD.created_at
+          OR OLD.status!='pending'
+          OR NEW.status NOT IN ('succeeded','failed')
+        THEN RAISE(
+          ABORT,
+          'command receipt identity or lifecycle is immutable'
+        ) END;
+      END`,
+  },
+] as const)
 
 const normalizedSchemaSql = (value: string): string => value.trim()
 const normalizedObjectSql = (value: string): string =>
@@ -415,6 +505,129 @@ const assertCausalEventMetadataSchemaCompatible = (
   if (!objectsMatch || invalidRow) {
     throw new Error(
       'migration 020-causal-event-metadata found incompatible causal event metadata',
+    )
+  }
+}
+const assertCommandReceiptSchemaCompatible = (
+  db: Database.Database,
+): void => {
+  const table = db.prepare(`SELECT sql
+    FROM sqlite_master
+    WHERE type='table' AND name='os_command_receipts'`).get() as
+    { sql: string | null } | undefined
+  const columns = db.prepare(`SELECT name, type, "notnull" AS required, pk
+    FROM pragma_table_info('os_command_receipts')
+    ORDER BY cid`).all() as Array<{
+      name: string
+      type: string
+      required: number
+      pk: number
+    }>
+  const objects = db.prepare(`SELECT type, name, sql
+    FROM sqlite_master
+    WHERE tbl_name='os_command_receipts'
+      AND type IN ('index','trigger')
+      AND sql IS NOT NULL
+    ORDER BY type, name`).all() as Array<{
+      type: string
+      name: string
+      sql: string | null
+    }>
+  const columnsMatch = columns.length === COMMAND_RECEIPT_COLUMNS.length
+    && columns.every((column, index) => {
+      const expected = COMMAND_RECEIPT_COLUMNS[index]
+      return expected !== undefined
+        && column.name === expected[0]
+        && column.type.toUpperCase() === expected[1]
+        && column.required === expected[2]
+        && column.pk === expected[3]
+    })
+  const objectsMatch = objects.length === COMMAND_RECEIPT_OBJECTS.length
+    && objects.every((object, index) => {
+      const expected = COMMAND_RECEIPT_OBJECTS[index]
+      return expected !== undefined
+        && object.type === expected.type
+        && object.name === expected.name
+        && normalizedObjectSql(object.sql ?? '') === normalizedObjectSql(expected.sql)
+    })
+  const domainTables = new Set(
+    (db.prepare(`SELECT name FROM sqlite_master
+      WHERE type='table' AND name IN (
+        'workspaces','checkpoints','policies','delivery_reports','jobs'
+      )`).all() as Array<{ name: string }>).map((row) => row.name),
+  )
+  const hasEveryDomainTable = [
+    'workspaces',
+    'checkpoints',
+    'policies',
+    'delivery_reports',
+    'jobs',
+  ].every((name) => domainTables.has(name))
+  const receiptCount = (db.prepare(`SELECT COUNT(*) AS count
+    FROM os_command_receipts`).get() as { count: number }).count
+  const invalidRow = hasEveryDomainTable
+    ? db.prepare(`SELECT idempotency_key
+      FROM os_command_receipts receipt
+      WHERE (
+        receipt.status='succeeded'
+        AND NOT (
+        (
+          receipt.command='workspace.create'
+          AND receipt.scope_id=CAST(receipt.board_id AS TEXT)
+          AND EXISTS (
+            SELECT 1 FROM workspaces
+            WHERE id=receipt.result_id AND board_id=receipt.board_id
+          )
+        )
+        OR (
+          receipt.command='checkpoint.create'
+          AND receipt.scope_id=(
+            SELECT workspace_id FROM checkpoints
+            WHERE id=receipt.result_id
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM checkpoints checkpoint
+            JOIN workspaces workspace ON workspace.id=checkpoint.workspace_id
+            WHERE checkpoint.id=receipt.result_id
+              AND workspace.board_id=receipt.board_id
+          )
+        )
+        OR (
+          receipt.command='policy.create'
+          AND receipt.scope_id=CAST(receipt.board_id AS TEXT)
+          AND EXISTS (
+            SELECT 1 FROM policies
+            WHERE id=receipt.result_id AND board_id=receipt.board_id
+          )
+        )
+        OR (
+          receipt.command IN ('delivery.submit','delivery.accept')
+          AND receipt.scope_id=receipt.result_id
+          AND EXISTS (
+            SELECT 1 FROM delivery_reports
+            WHERE id=receipt.result_id AND board_id=receipt.board_id
+          )
+        )
+        OR (
+          receipt.command='job.cancel'
+          AND receipt.scope_id=receipt.result_id
+          AND EXISTS (
+            SELECT 1 FROM jobs
+            WHERE id=receipt.result_id AND board_id=receipt.board_id
+          )
+        )
+        )
+      )
+      LIMIT 1`).get()
+    : receiptCount > 0
+  if (!table
+    || normalizedObjectSql(table.sql ?? '') !== normalizedObjectSql(COMMAND_RECEIPT_TABLE_SQL)
+    || !columnsMatch
+    || !objectsMatch
+    || invalidRow) {
+    throw new Error(
+      'migration 021-command-idempotency-coverage found an incompatible command receipt schema',
     )
   }
 }
@@ -7123,6 +7336,31 @@ const migrations: Migration[] = [
       }
 
       assertCausalEventMetadataSchemaCompatible(db)
+    },
+  },
+  {
+    id: '021-command-idempotency-coverage',
+    apply(db) {
+      const hasMigration020 = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='020-causal-event-metadata'`).get()
+      if (!hasMigration020) {
+        throw new Error(
+          'migration 021-command-idempotency-coverage requires 020-causal-event-metadata',
+        )
+      }
+
+      const existing = db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='os_command_receipts'`).get()
+      if (existing) {
+        assertCommandReceiptSchemaCompatible(db)
+      } else {
+        db.exec(`
+          ${COMMAND_RECEIPT_TABLE_SQL};
+          ${COMMAND_RECEIPT_OBJECTS.map((object) => `${object.sql};`).join('\n')}
+        `)
+      }
+
+      assertCommandReceiptSchemaCompatible(db)
     },
   },
 ]

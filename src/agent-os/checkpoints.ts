@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { ArtifactStore } from './artifact-store.js'
-import { NotFoundError, UnsupportedError, ValidationError } from './errors.js'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
+import {
+  ConflictError,
+  NotFoundError,
+  UnsupportedError,
+  ValidationError,
+} from './errors.js'
 import { parseJson, timestamp } from './json.js'
 import { CreateWorkspace, Workspace, WorkspaceStore } from './workspace-store.js'
 
@@ -25,6 +34,7 @@ export interface CreateCheckpoint {
   patchArtifactId?: string | null
   context?: Record<string, unknown>
   processRecipes?: unknown[]
+  idempotencyKey?: string | null
 }
 
 export type CheckpointForker = (checkpoint: Checkpoint, request: { name: string; branch?: string; targetPath?: string }) =>
@@ -46,22 +56,58 @@ export class CheckpointService {
     const workspace = this.workspaces.get(input.workspaceId)
     if (!workspace) throw new NotFoundError('workspace not found')
     if (!input.name.trim() || !input.gitHead.trim()) throw new ValidationError('checkpoint name and gitHead are required')
-    if (input.patchArtifactId) {
-      const artifact = this.artifacts.get(input.patchArtifactId)
-      if (!artifact) throw new NotFoundError('patch artifact not found')
-      if (artifact.workspace_id !== input.workspaceId) throw new ValidationError('patch artifact belongs to a different workspace')
+    const normalized = {
+      workspace_id: input.workspaceId,
+      session_id: input.sessionId ?? null,
+      name: input.name.trim(),
+      git_head: input.gitHead.trim(),
+      patch_artifact_id: input.patchArtifactId ?? null,
+      context: input.context ?? {},
+      process_recipes: input.processRecipes ?? [],
     }
-    const row = {
-      id: randomUUID(), workspace_id: input.workspaceId, session_id: input.sessionId ?? null,
-      name: input.name.trim(), git_head: input.gitHead.trim(), patch_artifact_id: input.patchArtifactId ?? null,
-      context_json: JSON.stringify(input.context ?? {}), process_recipes: JSON.stringify(input.processRecipes ?? []),
-      created_at: timestamp(),
+    const identity = commandRequestIdentity({
+      boardId: workspace.board_id,
+      idempotencyKey: input.idempotencyKey,
+      command: 'checkpoint.create',
+      scopeId: input.workspaceId,
+      request: normalized,
+    })
+    const commands = new CommandIdempotencyStore(this.db)
+    const create = () => {
+      if (identity) {
+        const replay = commands.replay(identity)
+        if (replay) {
+          const checkpoint = this.get(commands.succeededResult(replay))
+          if (!checkpoint) throw new ConflictError('idempotent checkpoint result is missing')
+          return checkpoint
+        }
+      }
+      if (input.patchArtifactId) {
+        const artifact = this.artifacts.get(input.patchArtifactId)
+        if (!artifact) throw new NotFoundError('patch artifact not found')
+        if (artifact.workspace_id !== input.workspaceId) {
+          throw new ValidationError('patch artifact belongs to a different workspace')
+        }
+      }
+      const row = {
+        id: randomUUID(),
+        workspace_id: normalized.workspace_id,
+        session_id: normalized.session_id,
+        name: normalized.name,
+        git_head: normalized.git_head,
+        patch_artifact_id: normalized.patch_artifact_id,
+        context_json: JSON.stringify(normalized.context),
+        process_recipes: JSON.stringify(normalized.process_recipes),
+        created_at: timestamp(),
+      }
+      this.db.prepare(`INSERT INTO checkpoints
+        (id, workspace_id, session_id, name, git_head, patch_artifact_id, context_json, process_recipes, created_at)
+        VALUES (@id, @workspace_id, @session_id, @name, @git_head, @patch_artifact_id, @context_json, @process_recipes, @created_at)`)
+        .run(row)
+      if (identity) commands.recordSucceeded(identity, row.id)
+      return mapCheckpoint(row)
     }
-    this.db.prepare(`INSERT INTO checkpoints
-      (id, workspace_id, session_id, name, git_head, patch_artifact_id, context_json, process_recipes, created_at)
-      VALUES (@id, @workspace_id, @session_id, @name, @git_head, @patch_artifact_id, @context_json, @process_recipes, @created_at)`)
-      .run(row)
-    return mapCheckpoint(row)
+    return identity ? this.db.transaction(create).immediate() : create()
   }
 
   get(id: string): Checkpoint | null {

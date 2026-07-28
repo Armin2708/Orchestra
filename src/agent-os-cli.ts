@@ -402,6 +402,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--branch <name>')
     .option('--base <ref>', 'base git ref')
     .option('--env <json>', 'environment overrides as JSON')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (name, options) => {
       const id = await boardId(options.board)
@@ -413,6 +414,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         branch: options.branch,
         base_ref: options.base,
         env: parseJsonOption<Record<string, string>>(options.env, '--env'),
+        idempotency_key: commandKey(
+          `workspace-create:${id}:${name}`,
+          options.idempotency,
+        ),
       })
       print(await deps.api('POST', `/os/boards/${id}/workspaces`, body), options.json)
     })
@@ -729,6 +734,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--artifacts <json>', 'artifact-id JSON array')
     .option('--gaps <json>', 'reported-gap JSON array')
     .option('--stdin', 'read a JSON report object, or plain summary text, from stdin')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (jobId, options) => {
       await ready()
@@ -760,6 +766,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         artifact_ids: parseJsonOption<string[]>(options.artifacts, '--artifacts')
           ?? input.artifact_ids ?? input.artifactIds,
         gaps: parseJsonOption<string[]>(options.gaps, '--gaps') ?? input.gaps,
+        idempotency_key: commandKey(
+          `delivery-submit:${jobId}`,
+          options.idempotency,
+        ),
       })), options.json, ['delivery'])
     })
   delivery.command('verify <id>')
@@ -788,12 +798,17 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
   delivery.command('accept <id>')
     .option('--actor <actor>', 'accepting actor', 'human')
     .option('--note <text>')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
       print(await deps.api('POST', `/os/deliveries/${segment(id)}/accept`, compact({
         actor: options.actor,
         note: options.note,
+        idempotency_key: commandKey(
+          `delivery-accept:${id}`,
+          options.idempotency,
+        ),
       })), options.json, ['delivery'])
     })
   delivery.command('reject <id>')
@@ -848,6 +863,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
   checkpoint.command('create <workspace> <name>')
     .option('--context <json>')
     .option('--recipes <json>', 'restart recipe JSON array')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (workspaceId, name, options) => {
       await ready()
@@ -855,6 +871,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         name,
         context: parseJsonOption<Record<string, unknown>>(options.context, '--context'),
         process_recipes: parseJsonOption<unknown[]>(options.recipes, '--recipes'),
+        idempotency_key: commandKey(
+          `checkpoint-create:${workspaceId}:${name}`,
+          options.idempotency,
+        ),
       })), options.json)
     })
   checkpoint.command('fork <id>')
@@ -905,7 +925,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         budget_tokens: options.tokens,
         budget_cents: options.cost,
         scheduled_at: options.at,
-        idempotency_key: options.idempotencyKey,
+        idempotency_key: commandKey(
+          `job-create:${id}:${cardId}`,
+          options.idempotencyKey,
+        ),
       }))
       if (options.json) return print(result, true)
       const job = result?.job ?? result
@@ -919,10 +942,13 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       ].join(' '))
     })
   job.command('cancel <id>')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (id, options) => {
       await ready()
-      print(await deps.api('POST', `/os/jobs/${segment(id)}/cancel`), options.json)
+      print(await deps.api('POST', `/os/jobs/${segment(id)}/cancel`, {
+        idempotency_key: commandKey(`job-cancel:${id}`, options.idempotency),
+      }), options.json)
     })
   registerJobAssignmentCommands(job, deps)
 
@@ -941,6 +967,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--hosts <hosts>', 'comma-separated network hosts')
     .option('--secrets <names>', 'comma-separated secret names')
     .option('--approval <scope>', 'allow, ask, or deny', 'ask')
+    .option('--idempotency <key>')
     .option('--json', 'print the complete response')
     .action(async (name, options) => {
       const id = await boardId(options.board)
@@ -951,6 +978,10 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         network_hosts: csv(options.hosts) ?? [],
         secret_names: csv(options.secrets) ?? [],
         approval_scope: options.approval,
+        idempotency_key: commandKey(
+          `policy-create:${id}:${name}`,
+          options.idempotency,
+        ),
       }), options.json)
     })
   policy.command('evaluate <id> <kind> <value>')

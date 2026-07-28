@@ -8,6 +8,7 @@ import { buildServer } from '../src/server.js'
 const TOKEN = 'delivery-api-token'
 const auth = { authorization: `Bearer ${TOKEN}` }
 const servers: FastifyInstance[] = []
+let commandSequence = 0
 
 afterEach(async () => {
   await Promise.allSettled(servers.splice(0).map((server) => server.close()))
@@ -20,6 +21,11 @@ async function fixture() {
   const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
     VALUES (?, 'Delivery API', 'Return a complete delivery report')`).run(boardId).lastInsertRowid)
   const server = buildServer(db, undefined, { token: TOKEN })
+  server.addHook('onRequest', async (request) => {
+    if (request.method === 'POST' && !request.headers['idempotency-key']) {
+      request.headers['idempotency-key'] = `delivery-api-${++commandSequence}`
+    }
+  })
   servers.push(server)
   await server.ready()
   return { db, boardId, cardId, server }

@@ -21,7 +21,7 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
-import { resolveIdempotencyKey } from './agent-os/idempotency.js'
+import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
 import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
@@ -906,7 +906,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         if (!jobExecutor.supportedProviders().includes(provider)) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS provider driver')
         }
-        const idempotencyKey = resolveIdempotencyKey({
+        const idempotencyKey = requireIdempotencyKey({
           header: req.headers['idempotency-key'],
           rawHeaders: req.raw.rawHeaders,
           snake: req.body?.idempotency_key,

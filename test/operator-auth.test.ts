@@ -505,7 +505,8 @@ describe('operator and agent API principals', () => {
       },
     })).statusCode).toBe(200)
     const launched = await server.inject({
-      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`, headers: operator,
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
+      headers: { ...operator, 'idempotency-key': 'operator-auth:launch' },
       payload: { card_id: cardId, provider: 'test-provider' },
     })
     const { job, delivery } = launched.json()
@@ -515,7 +516,8 @@ describe('operator and agent API principals', () => {
     })).json().artifact
 
     expect((await server.inject({
-      method: 'POST', url: `/api/v1/os/jobs/${job.id}/deliveries/submit`, headers: agent,
+      method: 'POST', url: `/api/v1/os/jobs/${job.id}/deliveries/submit`,
+      headers: { ...agent, 'idempotency-key': 'operator-auth:delivery-submit' },
       payload: {
         actor: 'worker', summary: 'Output and tests are ready.',
         items: [{ deliverableId: 'output', status: 'delivered' }],
@@ -539,11 +541,13 @@ describe('operator and agent API principals', () => {
     })).statusCode).toBe(200)
 
     expect((await server.inject({
-      method: 'POST', url: `/api/v1/os/deliveries/${delivery.id}/accept`, headers: agent,
+      method: 'POST', url: `/api/v1/os/deliveries/${delivery.id}/accept`,
+      headers: { ...agent, 'idempotency-key': 'operator-auth:agent-delivery-accept' },
       payload: { actor: 'human' },
     })).statusCode).toBe(403)
     const accepted = await server.inject({
-      method: 'POST', url: `/api/v1/os/deliveries/${delivery.id}/accept`, headers: operator,
+      method: 'POST', url: `/api/v1/os/deliveries/${delivery.id}/accept`,
+      headers: { ...operator, 'idempotency-key': 'operator-auth:delivery-accept' },
       payload: { actor: 'forged-agent-label', note: 'Reviewed.' },
     })
     expect(accepted.statusCode).toBe(200)

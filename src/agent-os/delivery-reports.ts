@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
@@ -164,6 +168,8 @@ export interface SubmitDeliveryInput {
   commits?: string[]
   artifactIds?: string[]
   gaps?: string[]
+  idempotencyKey?: string | null
+  verification?: VerifyDeliveryInput | null
 }
 
 export interface EvidenceReferenceInput {
@@ -198,6 +204,7 @@ export interface VerifyDeliveryInput {
 export interface AcceptDeliveryInput {
   actor: string
   note?: string | null
+  idempotencyKey?: string | null
 }
 
 export interface RejectDeliveryInput {
@@ -431,17 +438,46 @@ export class DeliveryReportService {
     const artifactIds = boundedStringArray(input.artifactIds ?? [], 'artifactIds', LIMITS.artifacts, LIMITS.id)
     const gaps = boundedStringArray(input.gaps ?? [], 'gaps', LIMITS.gaps, LIMITS.text)
     const submission = { actor, summary, deliveredItems, claims, changedFiles, commits, artifactIds, gaps }
+    const identity = commandRequestIdentity({
+      boardId: report.board_id,
+      idempotencyKey: input.idempotencyKey,
+      command: 'delivery.submit',
+      scopeId: report.id,
+      request: {
+        ...submission,
+        verification: input.verification ?? null,
+      },
+    })
+    const commands = new CommandIdempotencyStore(this.db)
+    if (identity) {
+      const replay = commands.replay(identity)
+      if (replay) return this.get(commands.succeededResult(replay))
+    }
     if (['submitted', 'verified', 'accepted'].includes(report.status)) {
       this.assertSubmissionRetry(report, submission)
+      if (identity) {
+        const record = this.db.transaction(() => {
+          const replay = commands.replay(identity)
+          if (replay) return this.get(commands.succeededResult(replay))
+          commands.recordSucceeded(identity, report.id)
+          return this.get(report.id)
+        })
+        return record.immediate()
+      }
       return report
     }
     if (report.status !== 'draft') throw new ConflictError('only a draft delivery report can be submitted')
     for (const artifactId of artifactIds) this.assertArtifactScope(report, artifactId)
 
     const submit = this.db.transaction(() => {
+      if (identity) {
+        const replay = commands.replay(identity)
+        if (replay) return this.get(commands.succeededResult(replay))
+      }
       const current = this.get(id)
       if (['submitted', 'verified', 'accepted'].includes(current.status)) {
         this.assertSubmissionRetry(current, submission)
+        if (identity) commands.recordSucceeded(identity, current.id)
         return current
       }
       if (current.status !== 'draft') throw new ConflictError('only a draft delivery report can be submitted')
@@ -456,6 +492,7 @@ export class DeliveryReportService {
         changed_file_count: changedFiles.length, commit_count: commits.length,
         artifact_count: artifactIds.length, reported_gaps: gaps,
       }))
+      if (identity) commands.recordSucceeded(identity, current.id)
       return this.get(id)
     })
     return submit.immediate()
@@ -542,9 +579,25 @@ export class DeliveryReportService {
   accept(id: string, input: AcceptDeliveryInput): DeliveryReport {
     const actor = boundedString(input.actor, 'actor', LIMITS.actor)
     const note = nullableBoundedString(input.note, 'note', LIMITS.note)
+    const initial = this.get(id)
+    const identity = commandRequestIdentity({
+      boardId: initial.board_id,
+      idempotencyKey: input.idempotencyKey,
+      command: 'delivery.accept',
+      scopeId: initial.id,
+      request: { actor, note },
+    })
+    const commands = new CommandIdempotencyStore(this.db)
     const accept = this.db.transaction(() => {
+      if (identity) {
+        const replay = commands.replay(identity)
+        if (replay) return this.get(commands.succeededResult(replay))
+      }
       const report = this.get(id)
-      if (report.status === 'accepted') return report
+      if (report.status === 'accepted') {
+        if (identity) commands.recordSucceeded(identity, report.id)
+        return report
+      }
       if (report.status !== 'verified') throw new ConflictError('only a verified delivery report can be accepted')
       const blockers = acceptanceBlockers(report)
       if (blockers.length) throw new ConflictError(`delivery is not completion-ready: ${blockers.join('; ')}`)
@@ -552,6 +605,7 @@ export class DeliveryReportService {
       this.db.prepare(`UPDATE delivery_reports SET status='accepted', accepted_by=?, acceptance_note=?,
         accepted_at=?, updated_at=? WHERE id=?`).run(actor, note, at, at, id)
       this.appendEvent('delivery.accepted', actor, eventScope(report, { note }))
+      if (identity) commands.recordSucceeded(identity, report.id)
       return this.get(id)
     })
     return accept.immediate()

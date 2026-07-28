@@ -65,6 +65,17 @@ async function fixture() {
       drivers: () => runtime.descriptors(),
     },
   })
+  let commandSequence = 0
+  server.addHook('preValidation', async (request) => {
+    if (request.method !== 'POST' || request.headers['idempotency-key'] !== undefined) return
+    const body = request.body
+    const bodyKey = body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).idempotency_key
+      : undefined
+    request.headers['idempotency-key'] = typeof bodyKey === 'string'
+      ? bodyKey
+      : `runtime-integration:${++commandSequence}`
+  })
   runtime.setBus(server.bus)
   servers.push(server)
   await server.ready()

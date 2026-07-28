@@ -63,3 +63,10 @@ export function resolveIdempotencyKey(sources: IdempotencyKeySources): string | 
   }
   return values[0]
 }
+
+/** Resolve a mutation identity and reject commands that cannot be replayed safely. */
+export function requireIdempotencyKey(sources: IdempotencyKeySources): string {
+  const key = resolveIdempotencyKey(sources)
+  if (!key) throw new ValidationError('Idempotency-Key header is required')
+  return key
+}

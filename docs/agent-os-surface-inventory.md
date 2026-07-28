@@ -12,7 +12,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 37 | 3 | 10 | 2 | 52 |
+| SQLite application tables | 38 | 3 | 10 | 2 | 53 |
 | Registered HTTP routes | 94 | 29 | 25 | 9 | 157 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -47,7 +47,7 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migr
 | Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
 | Provider acceptance | `provider_acceptance_evidence` |
-| Control plane | `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
+| Control plane | `os_command_receipts`, `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
 | Knowledge persistence | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses` |
 
 ### Compatibility

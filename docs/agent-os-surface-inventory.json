@@ -44,6 +44,7 @@
       "jobs",
       "knowledge_chunks",
       "knowledge_sources",
+      "os_command_receipts",
       "os_events",
       "policies",
       "process_output",

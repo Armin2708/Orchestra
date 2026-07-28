@@ -91,6 +91,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
         name: 'Restart acceptance workspace',
         kind: 'shared',
         root_path: project,
+        idempotency_key: 'restart-acceptance:workspace',
       },
     )).workspace
 

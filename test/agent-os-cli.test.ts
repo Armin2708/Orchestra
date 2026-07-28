@@ -222,7 +222,19 @@ describe('Agent OS CLI', () => {
   it('creates an isolated workspace on the resolved project board', async () => {
     const { calls, deps, run } = setup({ id: 9, name: 'fix-auth' })
 
-    await run('workspace', 'create', 'fix-auth', '--card', '7', '--base', 'main', '--env', '{"MODE":"test"}')
+    await run(
+      'workspace',
+      'create',
+      'fix-auth',
+      '--card',
+      '7',
+      '--base',
+      'main',
+      '--env',
+      '{"MODE":"test"}',
+      '--idempotency',
+      'workspace-create-1',
+    )
 
     expect(deps.ensureReady).toHaveBeenCalledOnce()
     expect(deps.resolveBoard).toHaveBeenCalledOnce()
@@ -235,6 +247,7 @@ describe('Agent OS CLI', () => {
         kind: 'worktree',
         base_ref: 'main',
         env: { MODE: 'test' },
+        idempotency_key: 'workspace-create-1',
       },
     }])
   })
@@ -386,6 +399,77 @@ describe('Agent OS CLI', () => {
     ])
   })
 
+  it('covers checkpoint creation, job cancellation, and policy creation with replay keys', async () => {
+    const { calls, run } = setup({ id: 'result-1' })
+
+    await run(
+      'checkpoint', 'create', 'workspace/a', 'before-refactor',
+      '--context', '{"branch":"main"}',
+      '--recipes', '[{"name":"tests","command":"npm test"}]',
+      '--idempotency', 'checkpoint-create-1',
+    )
+    await run('job', 'cancel', 'job/a', '--idempotency', 'job-cancel-1')
+    await run(
+      'policy', 'create', 'restricted',
+      '--board', '42',
+      '--files', 'src/**,test/**',
+      '--commands', 'npm test',
+      '--hosts', 'example.com',
+      '--secrets', 'CI',
+      '--approval', 'ask',
+      '--idempotency', 'policy-create-1',
+    )
+
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/os/workspaces/workspace%2Fa/checkpoints',
+        body: {
+          name: 'before-refactor',
+          context: { branch: 'main' },
+          process_recipes: [{ name: 'tests', command: 'npm test' }],
+          idempotency_key: 'checkpoint-create-1',
+        },
+      },
+      {
+        method: 'POST',
+        path: '/os/jobs/job%2Fa/cancel',
+        body: { idempotency_key: 'job-cancel-1' },
+      },
+      {
+        method: 'POST',
+        path: '/os/boards/42/policies',
+        body: {
+          name: 'restricted',
+          file_globs: ['src/**', 'test/**'],
+          command_globs: ['npm test'],
+          network_hosts: ['example.com'],
+          secret_names: ['CI'],
+          approval_scope: 'ask',
+          idempotency_key: 'policy-create-1',
+        },
+      },
+    ])
+  })
+
+  it('generates a unique replay key when job creation omits one', async () => {
+    const { calls, run } = setup({ job: { id: 'job-1', status: 'queued' } })
+
+    await run('job', 'create', '7', '--board', '42')
+
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/os/boards/42/jobs',
+      body: {
+        card_id: 7,
+        provider: 'claude',
+        idempotency_key: expect.stringMatching(
+          /^orchestra-cli:job-create:42:7:[0-9a-f-]{36}$/,
+        ),
+      },
+    })
+  })
+
   it('submits structured delivery items, criterion outcomes, and evidence for a job', async () => {
     const { calls, run } = setup({ delivery: { id: 'delivery-1', status: 'verified' } })
 
@@ -401,6 +485,7 @@ describe('Agent OS CLI', () => {
       '--commits', '["abc"]',
       '--artifacts', '["artifact-1"]',
       '--gaps', '["visual QA remains"]',
+      '--idempotency', 'delivery-submit-1',
     )
 
     expect(calls).toEqual([{
@@ -417,6 +502,7 @@ describe('Agent OS CLI', () => {
         commits: ['abc'],
         artifact_ids: ['artifact-1'],
         gaps: ['visual QA remains'],
+        idempotency_key: 'delivery-submit-1',
       },
     }])
   })
@@ -424,9 +510,24 @@ describe('Agent OS CLI', () => {
   it('accepts a plain stdin delivery summary and exposes review lifecycle commands', async () => {
     const { calls, run } = setup({ delivery: { id: 'delivery-1' } })
 
-    await run('delivery', 'submit', 'job-1', '--stdin')
+    await run(
+      'delivery',
+      'submit',
+      'job-1',
+      '--stdin',
+      '--idempotency',
+      'delivery-submit-stdin-1',
+    )
     await run('delivery', 'verify', 'delivery-1', '--criteria', '[{"text":"works","met":"unverifiable"}]')
-    await run('delivery', 'accept', 'delivery-1', '--note', 'reviewed')
+    await run(
+      'delivery',
+      'accept',
+      'delivery-1',
+      '--note',
+      'reviewed',
+      '--idempotency',
+      'accept-1',
+    )
     await run('delivery', 'reject', 'delivery-2', '--reason', 'missing evidence')
     await run('delivery', 'revise', 'delivery-2')
     await run('delivery', 'show', '7')
@@ -434,12 +535,14 @@ describe('Agent OS CLI', () => {
     expect(calls).toEqual([
       { method: 'POST', path: '/os/jobs/job-1/deliveries/submit', body: {
         actor: 'agent', summary: 'exact\nbytes',
+        idempotency_key: 'delivery-submit-stdin-1',
       } },
       { method: 'POST', path: '/os/deliveries/delivery-1/verify', body: {
         actor: 'verifier', results: [{ text: 'works', met: 'unverifiable' }],
       } },
       { method: 'POST', path: '/os/deliveries/delivery-1/accept', body: {
         actor: 'human', note: 'reviewed',
+        idempotency_key: 'accept-1',
       } },
       { method: 'POST', path: '/os/deliveries/delivery-2/reject', body: {
         actor: 'human', reason: 'missing evidence',

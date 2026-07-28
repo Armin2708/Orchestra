@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { pathsIntersect } from '../overlap.js'
+import {
+  CommandIdempotencyStore,
+  commandRequestIdentity,
+} from './command-idempotency.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { parseJson, timestamp } from './json.js'
 
@@ -31,7 +35,29 @@ export interface CreateWorkspace {
   baseRef?: string | null
   status?: string
   env?: Record<string, string>
+  idempotencyKey?: string | null
 }
+
+const normalizedWorkspaceCreate = (input: CreateWorkspace) => ({
+  card_id: input.cardId ?? null,
+  name: input.name.trim(),
+  kind: input.kind?.trim() || 'shared',
+  root_path: input.rootPath,
+  worktree_path: input.worktreePath ?? null,
+  branch: input.branch ?? null,
+  base_ref: input.baseRef ?? null,
+  status: workspaceStatus(input.status ?? 'active'),
+  env: input.env ?? {},
+})
+
+export const workspaceCreateCommandIdentity = (input: CreateWorkspace) =>
+  commandRequestIdentity({
+    boardId: input.boardId,
+    idempotencyKey: input.idempotencyKey,
+    command: 'workspace.create',
+    scopeId: String(input.boardId),
+    request: normalizedWorkspaceCreate(input),
+  })
 
 export class WorkspaceStore {
   constructor(private readonly db: Database.Database) {}
@@ -42,19 +68,33 @@ export class WorkspaceStore {
     if (!['shared', 'worktree'].includes(kind)) throw new ValidationError('workspace kind must be shared or worktree')
     if (!input.name.trim()) throw new ValidationError('workspace name is required')
     if (!input.rootPath.trim()) throw new ValidationError('rootPath is required')
-    const at = timestamp()
-    const row = {
-      id: randomUUID(), board_id: input.boardId, card_id: input.cardId ?? null,
-      name: input.name.trim(), kind, root_path: input.rootPath,
-      worktree_path: input.worktreePath ?? null, branch: input.branch ?? null,
-      base_ref: input.baseRef ?? null, status: workspaceStatus(input.status ?? 'active'),
-      env_json: JSON.stringify(input.env ?? {}), created_at: at, updated_at: at,
+    const normalized = normalizedWorkspaceCreate(input)
+    const identity = workspaceCreateCommandIdentity(input)
+    const commands = new CommandIdempotencyStore(this.db)
+    const create = () => {
+      if (identity) {
+        const replay = commands.replay(identity)
+        if (replay) {
+          const workspace = this.get(commands.succeededResult(replay))
+          if (!workspace) throw new ConflictError('idempotent workspace result is missing')
+          return workspace
+        }
+      }
+      const at = timestamp()
+      const row = {
+        id: randomUUID(), board_id: input.boardId,
+        ...normalized,
+        env_json: JSON.stringify(normalized.env),
+        created_at: at, updated_at: at,
+      }
+      this.db.prepare(`INSERT INTO workspaces
+        (id, board_id, card_id, name, kind, root_path, worktree_path, branch, base_ref, status, env_json, created_at, updated_at)
+        VALUES (@id, @board_id, @card_id, @name, @kind, @root_path, @worktree_path, @branch, @base_ref, @status, @env_json, @created_at, @updated_at)`)
+        .run(row)
+      if (identity) commands.recordSucceeded(identity, row.id)
+      return mapWorkspace(row)
     }
-    this.db.prepare(`INSERT INTO workspaces
-      (id, board_id, card_id, name, kind, root_path, worktree_path, branch, base_ref, status, env_json, created_at, updated_at)
-      VALUES (@id, @board_id, @card_id, @name, @kind, @root_path, @worktree_path, @branch, @base_ref, @status, @env_json, @created_at, @updated_at)`)
-      .run(row)
-    return mapWorkspace(row)
+    return identity ? this.db.transaction(create).immediate() : create()
   }
 
   listBoard(boardId: number, includeArchived = false): Workspace[] {
