@@ -17,6 +17,7 @@ import {
   commandRequestIdentity,
 } from './command-idempotency.js'
 import { ContextStore, PutContextItem } from './context-store.js'
+import { ComputedWorkspaceConflictService } from './conflict-service.js'
 import { DeliveryReportService } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { EventStore } from './event-store.js'
@@ -166,6 +167,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const policies = new PolicyEngine(db)
   const context = new ContextStore(db)
   const commands = new CommandIdempotencyStore(db)
+  const conflicts = new ComputedWorkspaceConflictService(db)
   const scheduler = options.scheduler ?? new JobScheduler(db, options.jobExecutor)
   const orchestration = options.orchestration ?? new OrchestrationService(db, scheduler)
   const isOperator = options.isOperator ?? (() => true)
@@ -862,7 +864,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
 
   app.get<{ Params: { id: string } }>('/boards/:id/conflicts', (request) => {
     const boardId = board(db, request.params.id)
-    return { conflicts: workspaces.conflicts(boardId) }
+    return { conflicts: conflicts.listBoard(boardId) }
   })
 
   app.get('/drivers', () => ({ drivers: descriptors(options.drivers, [
