@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { canonicalHash, stableJson } from './agent-home-support.js'
+import { applyCompatibilityForwardMigration } from './compatibility-forward-migration.js'
 import { conversationEventContentHash } from './conversation-event-integrity.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
@@ -7363,9 +7364,15 @@ const migrations: Migration[] = [
       assertCommandReceiptSchemaCompatible(db)
     },
   },
+  {
+    id: '022-legacy-projection-forward-plan',
+    apply(db) {
+      applyCompatibilityForwardMigration(db)
+    },
+  },
 ]
 
-/** Apply each Agent OS migration exactly once, atomically, and without touching legacy tables. */
+/** Apply each Agent OS migration exactly once and atomically without deleting legacy tables. */
 export function applyAgentOsMigrations(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS os_schema_migrations (
