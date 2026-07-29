@@ -36,6 +36,61 @@ export const AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS = Object.freeze([
 export type CompatibilityMigrationTelemetryCohort =
   typeof AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS[number]
 
+const CANONICAL_LINK_COHORTS = Object.freeze([
+  'canonical_linked',
+  'canonical_unlinked',
+  'migration_quarantined',
+] as const)
+
+export const AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS = Object.freeze({
+  boards: Object.freeze(['shared_scope'] as const),
+  task_contracts: CANONICAL_LINK_COHORTS,
+  agent_usage: CANONICAL_LINK_COHORTS,
+  agents: CANONICAL_LINK_COHORTS,
+  cards: CANONICAL_LINK_COHORTS,
+  card_events: CANONICAL_LINK_COHORTS,
+  messages: Object.freeze(['legacy_only'] as const),
+  message_targets: Object.freeze(['legacy_only'] as const),
+  deliveries: Object.freeze(['legacy_only'] as const),
+  milestones: Object.freeze(['deferred_replacement'] as const),
+  ideas: Object.freeze(['deferred_replacement'] as const),
+  review_decisions: CANONICAL_LINK_COHORTS,
+  token_telemetry: Object.freeze(['legacy_only'] as const),
+} satisfies Readonly<
+  Record<
+    AgentOsLegacyCompatibilityTable,
+    readonly CompatibilityMigrationTelemetryCohort[]
+  >
+>)
+
+const LEGACY_TARGET_OPERATIONS = Object.freeze([
+  'legacy_read',
+  'legacy_write',
+  'adapter_translation',
+  'failure',
+] as const)
+
+export const AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS = Object.freeze({
+  boards: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  task_contracts: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  agent_usage: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  agents: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  cards: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  card_events: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  messages: LEGACY_TARGET_OPERATIONS,
+  message_targets: LEGACY_TARGET_OPERATIONS,
+  deliveries: LEGACY_TARGET_OPERATIONS,
+  milestones: LEGACY_TARGET_OPERATIONS,
+  ideas: LEGACY_TARGET_OPERATIONS,
+  review_decisions: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
+  token_telemetry: LEGACY_TARGET_OPERATIONS,
+} satisfies Readonly<
+  Record<
+    AgentOsLegacyCompatibilityTable,
+    readonly CompatibilityMigrationTelemetryOperation[]
+  >
+>)
+
 export const AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS =
   Object.freeze([
     'missing_legacy_row',
@@ -243,6 +298,19 @@ function sqlEnum(values: readonly string[]): string {
   return values.map((value) => `'${value}'`).join(',')
 }
 
+function sqlTableValueContract(
+  column: string,
+  contract: Readonly<
+    Record<AgentOsLegacyCompatibilityTable, readonly string[]>
+  >,
+): string {
+  return AGENT_OS_LEGACY_COMPATIBILITY_TABLES
+    .map((table) => (
+      `(table_name='${table}' AND ${column} IN (${sqlEnum(contract[table])}))`
+    ))
+    .join('\n          OR ')
+}
+
 const TABLE_ENUM_SQL = sqlEnum(AGENT_OS_LEGACY_COMPATIBILITY_TABLES)
 const OPERATION_ENUM_SQL = sqlEnum(
   AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
@@ -257,6 +325,14 @@ const MISMATCH_DIAGNOSTIC_ENUM_SQL = sqlEnum(
 )
 const FAILURE_DIAGNOSTIC_ENUM_SQL = sqlEnum(
   AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
+)
+const TABLE_COHORT_CHECK_SQL = sqlTableValueContract(
+  'cohort',
+  AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS,
+)
+const TABLE_OPERATION_CHECK_SQL = sqlTableValueContract(
+  'operation',
+  AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS,
 )
 
 const UTC_DAY_CHECK_SQL = (column: string): string => `
@@ -298,26 +374,13 @@ const LINK_AWARE_KEY_SQL: Readonly<
   }),
 })
 
-const STATIC_TRIGGER_COHORTS: Readonly<
-  Partial<
-    Record<AgentOsLegacyCompatibilityTable, CompatibilityMigrationTelemetryCohort>
-  >
-> = Object.freeze({
-  boards: 'shared_scope',
-  messages: 'legacy_only',
-  message_targets: 'legacy_only',
-  deliveries: 'legacy_only',
-  milestones: 'deferred_replacement',
-  ideas: 'deferred_replacement',
-  token_telemetry: 'legacy_only',
-})
-
 function triggerCohortSql(
   table: AgentOsLegacyCompatibilityTable,
   rowReference: 'NEW' | 'OLD',
 ): string {
-  const cohort = STATIC_TRIGGER_COHORTS[table]
-  if (cohort) return `'${cohort}'`
+  const allowedCohorts =
+    AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS[table]
+  if (allowedCohorts.length === 1) return `'${allowedCohorts[0]}'`
 
   const key = LINK_AWARE_KEY_SQL[table]?.[rowReference]
   if (!key) {
@@ -385,6 +448,12 @@ const BASE_SCHEMA = Object.freeze([
         CHECK(typeof(count)='integer' AND count BETWEEN 1 AND ${MAX_SAFE_COUNT}),
       PRIMARY KEY(day, table_name, operation, cohort, diagnostic_code),
       CHECK(
+        ${TABLE_COHORT_CHECK_SQL}
+      ),
+      CHECK(
+        ${TABLE_OPERATION_CHECK_SQL}
+      ),
+      CHECK(
         (
           operation IN (${NORMAL_OPERATION_ENUM_SQL})
           AND diagnostic_code='none'
@@ -416,6 +485,12 @@ const BASE_SCHEMA = Object.freeze([
       PRIMARY KEY(table_name, operation, cohort, diagnostic_code),
       CHECK(first_day<=last_day),
       CHECK(
+        ${TABLE_COHORT_CHECK_SQL}
+      ),
+      CHECK(
+        ${TABLE_OPERATION_CHECK_SQL}
+      ),
+      CHECK(
         (
           operation IN (${NORMAL_OPERATION_ENUM_SQL})
           AND diagnostic_code='none'
@@ -437,6 +512,21 @@ const BASE_SCHEMA = Object.freeze([
     sql: `CREATE TABLE ${TELEMETRY_COVERAGE_TABLE} (
       day TEXT NOT NULL CHECK(${UTC_DAY_CHECK_SQL('day')}),
       table_name TEXT NOT NULL CHECK(table_name IN (${TABLE_ENUM_SQL})),
+      legacy_write_count INTEGER NOT NULL
+        CHECK(
+          typeof(legacy_write_count)='integer'
+          AND legacy_write_count BETWEEN 0 AND ${MAX_SAFE_COUNT}
+        ),
+      mismatch_count INTEGER NOT NULL
+        CHECK(
+          typeof(mismatch_count)='integer'
+          AND mismatch_count BETWEEN 0 AND ${MAX_SAFE_COUNT}
+        ),
+      failure_count INTEGER NOT NULL
+        CHECK(
+          typeof(failure_count)='integer'
+          AND failure_count BETWEEN 0 AND ${MAX_SAFE_COUNT}
+        ),
       PRIMARY KEY(day, table_name)
     ) STRICT`,
   }),
@@ -472,9 +562,73 @@ const TELEMETRY_TRIGGERS = Object.freeze(
   )),
 )
 
+const TELEMETRY_INTEGRITY_TRIGGERS = Object.freeze([
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_daily_sealed_insert',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_daily_sealed_insert
+      BEFORE INSERT ON ${TELEMETRY_DAILY_TABLE}
+      WHEN EXISTS (
+        SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+        WHERE day=NEW.day AND table_name=NEW.table_name
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry day is sealed');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_daily_sealed_update',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_daily_sealed_update
+      BEFORE UPDATE ON ${TELEMETRY_DAILY_TABLE}
+      WHEN EXISTS (
+        SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+        WHERE day=OLD.day AND table_name=OLD.table_name
+      ) OR EXISTS (
+        SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+        WHERE day=NEW.day AND table_name=NEW.table_name
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry day is sealed');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_coverage_immutable_insert',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_coverage_immutable_insert
+      BEFORE INSERT ON ${TELEMETRY_COVERAGE_TABLE}
+      WHEN EXISTS (
+        SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+        WHERE day=NEW.day AND table_name=NEW.table_name
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_coverage_immutable_update',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_coverage_immutable_update
+      BEFORE UPDATE ON ${TELEMETRY_COVERAGE_TABLE}
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_coverage_immutable_delete',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_coverage_immutable_delete
+      BEFORE DELETE ON ${TELEMETRY_COVERAGE_TABLE}
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable');
+      END`,
+  }),
+] satisfies readonly SchemaObject[])
+
 const COMPATIBILITY_TELEMETRY_SCHEMA = Object.freeze([
   ...BASE_SCHEMA,
   ...TELEMETRY_TRIGGERS,
+  ...TELEMETRY_INTEGRITY_TRIGGERS,
 ] satisfies readonly SchemaObject[])
 
 export const AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES =
@@ -486,6 +640,12 @@ export const AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES =
   Object.freeze(
     TELEMETRY_TRIGGERS.map(({ name }) => name),
   )
+
+export const
+  AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES =
+    Object.freeze(
+      TELEMETRY_INTEGRITY_TRIGGERS.map(({ name }) => name),
+    )
 
 function tableExists(db: Database.Database, table: string): boolean {
   return !!db.prepare(`
@@ -523,7 +683,6 @@ function normalizeSchemaSql(sql: string): string {
     .replace(/\s+/g, ' ')
     .replace(/;\s*$/, '')
     .trim()
-    .toLowerCase()
 }
 
 export function assertCompatibilityMigrationTelemetrySchemaCompatible(
@@ -548,13 +707,15 @@ export function assertCompatibilityMigrationTelemetrySchemaCompatible(
     }
   }
 
+  const legacyTablePlaceholders =
+    AGENT_OS_LEGACY_COMPATIBILITY_TABLES.map(() => '?').join(',')
   const actualTelemetryTriggers = db.prepare(`
     SELECT name FROM sqlite_master
     WHERE type='trigger'
-      AND lower(coalesce(sql, ''))
-        LIKE '%${TELEMETRY_DAILY_TABLE}%'
+      AND tbl_name IN (${legacyTablePlaceholders})
+      AND name LIKE 'trg_os_compatibility_telemetry_%'
     ORDER BY name
-  `).all() as Array<{ name: string }>
+  `).all(...AGENT_OS_LEGACY_COMPATIBILITY_TABLES) as Array<{ name: string }>
   const expectedTelemetryTriggers = [...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES]
     .sort()
   if (
@@ -566,6 +727,30 @@ export function assertCompatibilityMigrationTelemetrySchemaCompatible(
     throw new Error(
       `migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`
       + ' found unexpected legacy mutation telemetry triggers',
+    )
+  }
+
+  const actualIntegrityTriggers = db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type='trigger'
+      AND tbl_name IN (?, ?)
+    ORDER BY name
+  `).all(
+    TELEMETRY_DAILY_TABLE,
+    TELEMETRY_COVERAGE_TABLE,
+  ) as Array<{ name: string }>
+  const expectedIntegrityTriggers = [
+    ...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
+  ].sort()
+  if (
+    actualIntegrityTriggers.length !== expectedIntegrityTriggers.length
+    || actualIntegrityTriggers.some(
+      ({ name }, index) => name !== expectedIntegrityTriggers[index],
+    )
+  ) {
+    throw new Error(
+      `migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`
+      + ' found unexpected telemetry integrity triggers',
     )
   }
 }
@@ -711,6 +896,29 @@ function assertDiagnosticCompatibility(
   }
 }
 
+function assertTableTelemetryContract(
+  table: AgentOsLegacyCompatibilityTable,
+  operation: CompatibilityMigrationTelemetryOperation,
+  cohort: CompatibilityMigrationTelemetryCohort,
+): void {
+  const cohorts = (
+    AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS[table]
+  ) as readonly CompatibilityMigrationTelemetryCohort[]
+  if (!cohorts.includes(cohort)) {
+    throw new TypeError(
+      `cohort is not supported for compatibility telemetry table ${table}`,
+    )
+  }
+  const operations = (
+    AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS[table]
+  ) as readonly CompatibilityMigrationTelemetryOperation[]
+  if (!operations.includes(operation)) {
+    throw new TypeError(
+      `operation is not supported for compatibility telemetry table ${table}`,
+    )
+  }
+}
+
 export function recordCompatibilityMigrationTelemetry(
   db: Database.Database,
   input: CompatibilityMigrationTelemetryObservation,
@@ -728,6 +936,7 @@ export function recordCompatibilityMigrationTelemetry(
     AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
   )
   assertEnum('cohort', input.cohort, AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS)
+  assertTableTelemetryContract(input.table, input.operation, input.cohort)
   assertEnum(
     'diagnostic_code',
     input.diagnostic_code,
@@ -739,41 +948,43 @@ export function recordCompatibilityMigrationTelemetry(
     : assertSafeCount('count', input.count, 1)
   const day = utcDay(input.observed_at)
 
-  db.prepare(`
-    INSERT INTO ${TELEMETRY_DAILY_TABLE} (
-      day, table_name, operation, cohort, diagnostic_code, count
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(
-      day, table_name, operation, cohort, diagnostic_code
-    ) DO UPDATE SET count=count+excluded.count
-  `).run(
-    day,
-    input.table,
-    input.operation,
-    input.cohort,
-    input.diagnostic_code,
-    count,
-  )
+  return runAtomically(db, () => {
+    db.prepare(`
+      INSERT INTO ${TELEMETRY_DAILY_TABLE} (
+        day, table_name, operation, cohort, diagnostic_code, count
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(
+        day, table_name, operation, cohort, diagnostic_code
+      ) DO UPDATE SET count=count+excluded.count
+    `).run(
+      day,
+      input.table,
+      input.operation,
+      input.cohort,
+      input.diagnostic_code,
+      count,
+    )
 
-  const row = db.prepare(`
-    SELECT day, table_name AS "table", operation, cohort,
-      diagnostic_code, count
-    FROM ${TELEMETRY_DAILY_TABLE}
-    WHERE day=? AND table_name=? AND operation=? AND cohort=?
-      AND diagnostic_code=?
-  `).get(
-    day,
-    input.table,
-    input.operation,
-    input.cohort,
-    input.diagnostic_code,
-  ) as CompatibilityMigrationTelemetryDailyRow | undefined
-  if (!row) {
-    throw new Error('compatibility telemetry aggregation did not persist')
-  }
-  return Object.freeze({
-    ...row,
-    count: assertSafeCount('stored telemetry count', row.count),
+    const row = db.prepare(`
+      SELECT day, table_name AS "table", operation, cohort,
+        diagnostic_code, count
+      FROM ${TELEMETRY_DAILY_TABLE}
+      WHERE day=? AND table_name=? AND operation=? AND cohort=?
+        AND diagnostic_code=?
+    `).get(
+      day,
+      input.table,
+      input.operation,
+      input.cohort,
+      input.diagnostic_code,
+    ) as CompatibilityMigrationTelemetryDailyRow | undefined
+    if (!row) {
+      throw new Error('compatibility telemetry aggregation did not persist')
+    }
+    return Object.freeze({
+      ...row,
+      count: assertSafeCount('stored telemetry count', row.count),
+    })
   })
 }
 
@@ -878,38 +1089,40 @@ function dayBounds(
 export function queryCompatibilityMigrationTelemetrySummary(
   db: Database.Database,
 ): CompatibilityMigrationTelemetrySummaryResult {
-  const rows = db.prepare(`
-    SELECT table_name AS "table", operation, cohort, diagnostic_code,
-      SUM(count) AS count
-    FROM (
-      SELECT table_name, operation, cohort, diagnostic_code, count
-      FROM ${TELEMETRY_HISTORY_TABLE}
-      UNION ALL
-      SELECT table_name, operation, cohort, diagnostic_code, count
-      FROM ${TELEMETRY_DAILY_TABLE}
+  return runReadSnapshot(db, () => {
+    const rows = db.prepare(`
+      SELECT table_name AS "table", operation, cohort, diagnostic_code,
+        SUM(count) AS count
+      FROM (
+        SELECT table_name, operation, cohort, diagnostic_code, count
+        FROM ${TELEMETRY_HISTORY_TABLE}
+        UNION ALL
+        SELECT table_name, operation, cohort, diagnostic_code, count
+        FROM ${TELEMETRY_DAILY_TABLE}
+      )
+      GROUP BY table_name, operation, cohort, diagnostic_code
+      ORDER BY table_name, operation, cohort, diagnostic_code
+    `).all() as CompatibilityMigrationTelemetrySummaryRow[]
+    const frozenRows = Object.freeze(rows.map((row) => Object.freeze({
+      ...row,
+      count: assertSafeCount('summary telemetry count', row.count),
+    })))
+    const historical = dayBounds(
+      db,
+      TELEMETRY_HISTORY_TABLE,
+      'first_day',
+      'last_day',
     )
-    GROUP BY table_name, operation, cohort, diagnostic_code
-    ORDER BY table_name, operation, cohort, diagnostic_code
-  `).all() as CompatibilityMigrationTelemetrySummaryRow[]
-  const frozenRows = Object.freeze(rows.map((row) => Object.freeze({
-    ...row,
-    count: assertSafeCount('summary telemetry count', row.count),
-  })))
-  const historical = dayBounds(
-    db,
-    TELEMETRY_HISTORY_TABLE,
-    'first_day',
-    'last_day',
-  )
-  const daily = dayBounds(db, TELEMETRY_DAILY_TABLE, 'day', 'day')
-  const totals = totalsForRows(frozenRows)
-  return Object.freeze({
-    rows: frozenRows,
-    historical_first_day: historical.first_day,
-    historical_through_day: historical.last_day,
-    retained_daily_first_day: daily.first_day,
-    retained_daily_through_day: daily.last_day,
-    ...totals,
+    const daily = dayBounds(db, TELEMETRY_DAILY_TABLE, 'day', 'day')
+    const totals = totalsForRows(frozenRows)
+    return Object.freeze({
+      rows: frozenRows,
+      historical_first_day: historical.first_day,
+      historical_through_day: historical.last_day,
+      retained_daily_first_day: daily.first_day,
+      retained_daily_through_day: daily.last_day,
+      ...totals,
+    })
   })
 }
 
@@ -932,6 +1145,13 @@ function runAtomically<Result>(
   return db.transaction(work).immediate()
 }
 
+function runReadSnapshot<Result>(
+  db: Database.Database,
+  work: () => Result,
+): Result {
+  return db.transaction(work).deferred()
+}
+
 /**
  * Mark one fully observed UTC day only after it is complete and after 023 was active beforehand.
  *
@@ -947,32 +1167,111 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
   if (day >= today) {
     throw new RangeError('only a completed UTC day can be sealed')
   }
-  assertCompatibilityMigrationTelemetrySchemaCompatible(db)
-  const marker = db.prepare(`
-    SELECT applied_at FROM os_schema_migrations WHERE id=?
-  `).get(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID) as {
-    applied_at: string
-  } | undefined
-  if (!marker) {
-    throw new Error(
-      `coverage requires migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`,
-    )
-  }
-  const appliedDay = marker.applied_at.slice(0, 10)
-  assertUtcDay('migration applied_at day', appliedDay)
-  if (day <= appliedDay) {
-    throw new RangeError(
-      'coverage day must begin after the telemetry migration installation day',
-    )
-  }
 
   runAtomically(db, () => {
+    assertCompatibilityMigrationTelemetrySchemaCompatible(db)
+    const marker = db.prepare(`
+      SELECT applied_at FROM os_schema_migrations WHERE id=?
+    `).get(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID) as {
+      applied_at: string
+    } | undefined
+    if (!marker) {
+      throw new Error(
+        `coverage requires migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`,
+      )
+    }
+    const appliedDay = marker.applied_at.slice(0, 10)
+    assertUtcDay('migration applied_at day', appliedDay)
+    if (day <= appliedDay) {
+      throw new RangeError(
+        'coverage day must begin after the telemetry migration installation day',
+      )
+    }
+
+    const existing = db.prepare(`
+      SELECT table_name, legacy_write_count, mismatch_count, failure_count
+      FROM ${TELEMETRY_COVERAGE_TABLE}
+      WHERE day=?
+      ORDER BY table_name
+    `).all(day) as Array<{
+      table_name: string
+      legacy_write_count: number
+      mismatch_count: number
+      failure_count: number
+    }>
+    if (existing.length !== 0) {
+      if (existing.length !== AGENT_OS_LEGACY_COMPATIBILITY_TABLES.length) {
+        throw new Error(
+          'compatibility telemetry coverage day is only partially sealed',
+        )
+      }
+      for (const row of existing) {
+        assertSafeCount(
+          'coverage legacy_write_count',
+          row.legacy_write_count,
+        )
+        assertSafeCount('coverage mismatch_count', row.mismatch_count)
+        assertSafeCount('coverage failure_count', row.failure_count)
+      }
+      return
+    }
+
+    const tableValues = AGENT_OS_LEGACY_COMPATIBILITY_TABLES
+      .map((table) => `('${table}')`)
+      .join(',')
+    const snapshots = db.prepare(`
+      WITH legacy_tables(table_name) AS (VALUES ${tableValues})
+      SELECT
+        legacy_tables.table_name,
+        COALESCE(SUM(
+          CASE WHEN daily.operation='legacy_write' THEN daily.count ELSE 0 END
+        ), 0) AS legacy_write_count,
+        COALESCE(SUM(
+          CASE WHEN daily.operation='mismatch' THEN daily.count ELSE 0 END
+        ), 0) AS mismatch_count,
+        COALESCE(SUM(
+          CASE WHEN daily.operation='failure' THEN daily.count ELSE 0 END
+        ), 0) AS failure_count
+      FROM legacy_tables
+      LEFT JOIN ${TELEMETRY_DAILY_TABLE} AS daily
+        ON daily.day=?
+        AND daily.table_name=legacy_tables.table_name
+      GROUP BY legacy_tables.table_name
+      ORDER BY legacy_tables.table_name
+    `).all(day) as Array<{
+      table_name: AgentOsLegacyCompatibilityTable
+      legacy_write_count: number
+      mismatch_count: number
+      failure_count: number
+    }>
+    if (snapshots.length !== AGENT_OS_LEGACY_COMPATIBILITY_TABLES.length) {
+      throw new Error(
+        'compatibility telemetry coverage snapshot is incomplete',
+      )
+    }
+
     const insert = db.prepare(`
-      INSERT OR IGNORE INTO ${TELEMETRY_COVERAGE_TABLE} (day, table_name)
-      VALUES (?, ?)
+      INSERT INTO ${TELEMETRY_COVERAGE_TABLE} (
+        day, table_name, legacy_write_count, mismatch_count, failure_count
+      ) VALUES (?, ?, ?, ?, ?)
     `)
-    for (const table of AGENT_OS_LEGACY_COMPATIBILITY_TABLES) {
-      insert.run(day, table)
+    for (const snapshot of snapshots) {
+      insert.run(
+        day,
+        snapshot.table_name,
+        assertSafeCount(
+          'coverage legacy_write_count',
+          snapshot.legacy_write_count,
+        ),
+        assertSafeCount(
+          'coverage mismatch_count',
+          snapshot.mismatch_count,
+        ),
+        assertSafeCount(
+          'coverage failure_count',
+          snapshot.failure_count,
+        ),
+      )
     }
   })
 }
@@ -997,9 +1296,17 @@ export function rollupCompatibilityMigrationTelemetry(
     )
   }
   const retainFromDay = addUtcDays(utcDay(input.now), -(retainDays - 1))
+  const eligibleDaysSql = `
+    SELECT day
+    FROM ${TELEMETRY_COVERAGE_TABLE}
+    WHERE day<?
+    GROUP BY day
+    HAVING COUNT(*)=${AGENT_OS_LEGACY_COMPATIBILITY_TABLES.length}
+  `
 
   return runAtomically(db, () => {
     const aggregate = db.prepare(`
+      WITH eligible_days(day) AS (${eligibleDaysSql})
       SELECT
         COUNT(*) AS rows_compacted,
         COALESCE(SUM(count), 0) AS count_compacted,
@@ -1009,7 +1316,7 @@ export function rollupCompatibilityMigrationTelemetry(
           AS failure_count_compacted,
         MAX(day) AS compacted_through_day
       FROM ${TELEMETRY_DAILY_TABLE}
-      WHERE day<?
+      WHERE day IN (SELECT day FROM eligible_days)
     `).get(retainFromDay) as {
       rows_compacted: number
       count_compacted: number
@@ -1019,6 +1326,7 @@ export function rollupCompatibilityMigrationTelemetry(
     }
 
     db.prepare(`
+      WITH eligible_days(day) AS (${eligibleDaysSql})
       INSERT INTO ${TELEMETRY_HISTORY_TABLE} (
         table_name, operation, cohort, diagnostic_code,
         first_day, last_day, count
@@ -1026,7 +1334,7 @@ export function rollupCompatibilityMigrationTelemetry(
       SELECT table_name, operation, cohort, diagnostic_code,
         MIN(day), MAX(day), SUM(count)
       FROM ${TELEMETRY_DAILY_TABLE}
-      WHERE day<?
+      WHERE day IN (SELECT day FROM eligible_days)
       GROUP BY table_name, operation, cohort, diagnostic_code
       ON CONFLICT(
         table_name, operation, cohort, diagnostic_code
@@ -1036,10 +1344,9 @@ export function rollupCompatibilityMigrationTelemetry(
         count=count+excluded.count
     `).run(retainFromDay)
     db.prepare(`
-      DELETE FROM ${TELEMETRY_DAILY_TABLE} WHERE day<?
-    `).run(retainFromDay)
-    db.prepare(`
-      DELETE FROM ${TELEMETRY_COVERAGE_TABLE} WHERE day<?
+      WITH eligible_days(day) AS (${eligibleDaysSql})
+      DELETE FROM ${TELEMETRY_DAILY_TABLE}
+      WHERE day IN (SELECT day FROM eligible_days)
     `).run(retainFromDay)
 
     return Object.freeze({
@@ -1073,80 +1380,77 @@ export function queryCompatibilityMigrationWriterObservation(
   assertEnum('table', query.table, AGENT_OS_LEGACY_COMPATIBILITY_TABLES)
   assertDayRange(query.from_day, query.through_day)
   const calendarDays = calendarDayCount(query.from_day, query.through_day)
-  const coverage = db.prepare(`
-    SELECT COUNT(*) AS count
-    FROM ${TELEMETRY_COVERAGE_TABLE}
-    WHERE table_name=? AND day BETWEEN ? AND ?
-  `).get(query.table, query.from_day, query.through_day) as { count: number }
-  const counts = db.prepare(`
-    SELECT
-      COALESCE(SUM(
-        CASE WHEN operation='legacy_write' THEN count ELSE 0 END
-      ), 0) AS legacy_write_count,
-      COALESCE(SUM(
-        CASE WHEN operation='mismatch' THEN count ELSE 0 END
-      ), 0) AS mismatch_count,
-      COALESCE(SUM(
-        CASE WHEN operation='failure' THEN count ELSE 0 END
-      ), 0) AS failure_count
-    FROM ${TELEMETRY_DAILY_TABLE}
-    WHERE table_name=? AND day BETWEEN ? AND ?
-  `).get(query.table, query.from_day, query.through_day) as {
-    legacy_write_count: number
-    mismatch_count: number
-    failure_count: number
-  }
 
-  const coveredDays = assertSafeCount('covered_days', coverage.count)
-  const legacyWriteCount = assertSafeCount(
-    'legacy_write_count',
-    counts.legacy_write_count,
-  )
-  const mismatchCount = assertSafeCount(
-    'mismatch_count',
-    counts.mismatch_count,
-  )
-  const failureCount = assertSafeCount(
-    'failure_count',
-    counts.failure_count,
-  )
+  return runReadSnapshot(db, () => {
+    const snapshot = db.prepare(`
+      SELECT
+        COUNT(*) AS covered_days,
+        COALESCE(SUM(legacy_write_count), 0) AS legacy_write_count,
+        COALESCE(SUM(mismatch_count), 0) AS mismatch_count,
+        COALESCE(SUM(failure_count), 0) AS failure_count
+      FROM ${TELEMETRY_COVERAGE_TABLE}
+      WHERE table_name=? AND day BETWEEN ? AND ?
+    `).get(query.table, query.from_day, query.through_day) as {
+      covered_days: number
+      legacy_write_count: number
+      mismatch_count: number
+      failure_count: number
+    }
 
-  let status: CompatibilityMigrationWriterObservationStatus
-  let reason: CompatibilityMigrationWriterObservationReason
-  if (legacyWriteCount > 0) {
-    status = 'legacy_writer_observed'
-    reason = 'legacy_write_nonzero'
-  } else if (mismatchCount > 0 || failureCount > 0) {
-    status = 'diagnostic_risk_observed'
-    reason = 'diagnostic_nonzero'
-  } else if (
-    calendarDays
-      < AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE.minimum_complete_utc_days
-  ) {
-    status = 'insufficient_observation'
-    reason = 'window_too_short'
-  } else if (coveredDays !== calendarDays) {
-    status = 'insufficient_observation'
-    reason = 'coverage_gap'
-  } else {
-    status = 'eligible_for_operator_review'
-    reason = 'operator_review_required'
-  }
+    const coveredDays = assertSafeCount(
+      'covered_days',
+      snapshot.covered_days,
+    )
+    const legacyWriteCount = assertSafeCount(
+      'legacy_write_count',
+      snapshot.legacy_write_count,
+    )
+    const mismatchCount = assertSafeCount(
+      'mismatch_count',
+      snapshot.mismatch_count,
+    )
+    const failureCount = assertSafeCount(
+      'failure_count',
+      snapshot.failure_count,
+    )
 
-  return Object.freeze({
-    table: query.table,
-    from_day: query.from_day,
-    through_day: query.through_day,
-    calendar_days: calendarDays,
-    covered_days: coveredDays,
-    required_days:
-      AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE.minimum_complete_utc_days,
-    legacy_write_count: legacyWriteCount,
-    mismatch_count: mismatchCount,
-    failure_count: failureCount,
-    status,
-    reason,
-    writer_removal_authorized: false,
-    operator_gate: 'ORC-020',
+    let status: CompatibilityMigrationWriterObservationStatus
+    let reason: CompatibilityMigrationWriterObservationReason
+    if (legacyWriteCount > 0) {
+      status = 'legacy_writer_observed'
+      reason = 'legacy_write_nonzero'
+    } else if (mismatchCount > 0 || failureCount > 0) {
+      status = 'diagnostic_risk_observed'
+      reason = 'diagnostic_nonzero'
+    } else if (
+      calendarDays
+        < AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE.minimum_complete_utc_days
+    ) {
+      status = 'insufficient_observation'
+      reason = 'window_too_short'
+    } else if (coveredDays !== calendarDays) {
+      status = 'insufficient_observation'
+      reason = 'coverage_gap'
+    } else {
+      status = 'eligible_for_operator_review'
+      reason = 'operator_review_required'
+    }
+
+    return Object.freeze({
+      table: query.table,
+      from_day: query.from_day,
+      through_day: query.through_day,
+      calendar_days: calendarDays,
+      covered_days: coveredDays,
+      required_days:
+        AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE.minimum_complete_utc_days,
+      legacy_write_count: legacyWriteCount,
+      mismatch_count: mismatchCount,
+      failure_count: failureCount,
+      status,
+      reason,
+      writer_removal_authorized: false,
+      operator_gate: 'ORC-020',
+    })
   })
 }
