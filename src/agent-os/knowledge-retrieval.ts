@@ -349,6 +349,57 @@ function assertBoard(db: Database.Database, boardId: number): void {
   if (!board) runtimeError('retrieval_scope_invalid')
 }
 
+function exactContractSnapshotSha256(
+  row: Record<string, unknown>,
+  fail: () => never,
+): string {
+  const array = (value: unknown): unknown[] => {
+    if (typeof value !== 'string') fail()
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (!Array.isArray(parsed)) fail()
+      return parsed
+    } catch {
+      fail()
+    }
+  }
+  const nullableInteger = (value: unknown): number | null => {
+    if (value === null) return null
+    if (!Number.isSafeInteger(value)) fail()
+    return Number(value)
+  }
+  if (
+    typeof row.objective !== 'string'
+    || typeof row.updated_at !== 'string'
+    || row.updated_at.length === 0
+    || (row.base_ref !== null && typeof row.base_ref !== 'string')
+    || (row.policy_id !== null && typeof row.policy_id !== 'string')
+    || !Number.isSafeInteger(row.priority)
+    || !Number.isSafeInteger(row.version)
+  ) {
+    fail()
+  }
+  const snapshot = {
+    objective: row.objective,
+    deliverables: array(row.deliverables),
+    acceptance_criteria: array(row.acceptance_criteria),
+    verify_commands: array(row.verify_commands),
+    non_goals: array(row.non_goals),
+    risks: array(row.risks),
+    dependencies: array(row.dependencies),
+    base_ref: row.base_ref,
+    budget_tokens: nullableInteger(row.budget_tokens),
+    budget_cents: nullableInteger(row.budget_cents),
+    priority: Number(row.priority),
+    policy_id: row.policy_id,
+    contract_version: Number(row.version),
+    contract_updated_at: row.updated_at,
+  }
+  return createHash('sha256')
+    .update(JSON.stringify(snapshot), 'utf8')
+    .digest('hex')
+}
+
 function assertTargetsAuthority(
   db: Database.Database,
   boardId: number,
@@ -367,9 +418,9 @@ function assertTargetsAuthority(
       !workspace
       || Number(workspace.board_id) !== boardId
       || (
-        target.card_id !== null
-        && workspace.card_id !== null
-        && Number(workspace.card_id) !== target.card_id
+        workspace.card_id === null
+          ? target.card_id !== null
+          : Number(workspace.card_id) !== target.card_id
       )
     ) fail()
   }
@@ -379,17 +430,25 @@ function assertTargetsAuthority(
     if (!card || Number(card.board_id) !== boardId) fail()
   }
   if (target.contract_ref !== null) {
-    const contract = db.prepare(`SELECT card.board_id, contract.version
+    const contracts = db.prepare(`SELECT card.board_id, contract.objective,
+        contract.deliverables, contract.acceptance_criteria,
+        contract.verify_commands, contract.non_goals, contract.risks,
+        contract.dependencies, contract.base_ref, contract.budget_tokens,
+        contract.budget_cents, contract.priority, contract.policy_id,
+        contract.version, contract.updated_at
       FROM task_contracts contract
       JOIN cards card ON card.id=contract.card_id
-      WHERE contract.card_id=?`).get(target.card_id) as {
-      board_id: number
-      version: number
-    } | undefined
+      WHERE contract.card_id=? AND contract.version=?`)
+      .all(target.card_id, target.contract_version) as Array<Record<string, unknown>>
     if (
-      !contract
-      || Number(contract.board_id) !== boardId
-      || Number(contract.version) !== target.contract_version
+      contracts.length !== 1
+      || Number(contracts[0].board_id) !== boardId
+      || Number(contracts[0].version) !== target.contract_version
+      || (
+        target.delivery_report_id === null
+        && exactContractSnapshotSha256(contracts[0], fail)
+          !== target.contract_snapshot_sha256
+      )
     ) fail()
   }
   if (target.job_id !== null) {
@@ -413,7 +472,6 @@ function assertTargetsAuthority(
       )
       || (
         target.profile_id !== null
-        && job.assigned_profile_id !== null
         && job.assigned_profile_id !== target.profile_id
       )
     ) fail()
@@ -448,14 +506,15 @@ function assertTargetsAuthority(
       || (
         target.card_id !== null
         && (
-          session.job_id !== null
-            ? Number(session.job_card_id) !== target.card_id
-            : (
-                session.card_id !== null
-                && Number(session.card_id) !== target.card_id
-              )
+            session.job_id !== null
+              ? Number(session.job_card_id) !== target.card_id
+              : (
+                  session.card_id === null
+                    ? target.card_id !== null
+                    : Number(session.card_id) !== target.card_id
+                )
+          )
         )
-      )
       || (
         target.contract_version !== null
         && (
@@ -468,6 +527,7 @@ function assertTargetsAuthority(
   if (target.delivery_report_id !== null) {
     const report = db.prepare(`SELECT report.board_id, report.card_id,
         report.job_id, report.session_id, report.workspace_id,
+        report.asked_snapshot,
         json_extract(report.asked_snapshot, '$.contract_version')
           AS asked_contract_version,
         session.profile_id AS session_profile_id,
@@ -481,6 +541,7 @@ function assertTargetsAuthority(
       job_id: string | null
       session_id: string | null
       workspace_id: string | null
+      asked_snapshot: string
       asked_contract_version: number | null
       session_profile_id: string | null
       job_profile_id: string | null
@@ -494,13 +555,27 @@ function assertTargetsAuthority(
       || (target.workspace_id !== null && report.workspace_id !== target.workspace_id)
       || (
         target.contract_version !== null
-        && Number(report.asked_contract_version) !== target.contract_version
+        && (
+          Number(report.asked_contract_version) !== target.contract_version
+          || typeof report.asked_snapshot !== 'string'
+          || createHash('sha256')
+            .update(report.asked_snapshot, 'utf8')
+            .digest('hex') !== target.contract_snapshot_sha256
+        )
       )
       || (
         target.profile_id !== null
-        && (report.session_id !== null || report.job_id !== null)
-        && report.session_profile_id !== target.profile_id
-        && report.job_profile_id !== target.profile_id
+        && (
+          (report.session_id === null && report.job_id === null)
+          || (
+            report.session_id !== null
+            && report.session_profile_id !== target.profile_id
+          )
+          || (
+            report.job_id !== null
+            && report.job_profile_id !== target.profile_id
+          )
+        )
       )
     ) fail()
   }
@@ -1054,28 +1129,7 @@ function bindList(
 
 function allowedAccessScopes(request: KnowledgeRetrievalRequest): string[] {
   const values: unknown[] = [{ kind: 'board' }]
-  if (request.targets.workspace_id !== null) {
-    values.push({ kind: 'workspace', workspace_id: request.targets.workspace_id })
-  }
-  if (
-    request.targets.card_id !== null
-    && request.targets.contract_version !== null
-  ) {
-    values.push({
-      kind: 'contract',
-      card_id: request.targets.card_id,
-      contract_version: request.targets.contract_version,
-    })
-  }
-  if (request.targets.job_id !== null) {
-    values.push({ kind: 'job', job_id: request.targets.job_id })
-  }
-  if (request.targets.profile_id !== null) {
-    values.push({ kind: 'profile', profile_id: request.targets.profile_id })
-  }
-  if (request.targets.session_id !== null) {
-    values.push({ kind: 'session', session_id: request.targets.session_id })
-  }
+  if (request.access_scope.kind !== 'board') values.push(request.access_scope)
   return values.map((value) => canonicalKnowledgeJson(value)).sort(compareCodeUnits)
 }
 
