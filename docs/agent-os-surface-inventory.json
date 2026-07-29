@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "3630baa28073871deef3e24d4562dcef32530353",
+  "observed_at_commit": "98c722f10357311d5c1dfdb4ca8e83228adc2b8c",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -44,6 +44,23 @@
       "source": "src/agent-os/service-boundaries.ts"
     }
   ],
+  "server_composition": {
+    "role": "composition_and_compatibility_routing",
+    "source": "src/server-composition.ts",
+    "registrar": "registerAgentOsRoutes",
+    "registration_source": "src/agent-os/routes.ts",
+    "owns": [
+      "Fastify lifecycle and authentication",
+      "dependency injection",
+      "focused route-plugin registration",
+      "legacy compatibility route registration"
+    ],
+    "excludes": [
+      "canonical domain state transitions",
+      "canonical service construction",
+      "domain persistence and validation rules"
+    ]
+  },
   "table_sources": [
     "src/db.ts",
     "src/agent-os/migrations.ts"

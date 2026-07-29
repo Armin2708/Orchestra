@@ -25,7 +25,9 @@ durable actor, causal, workspace, session, job, and contract metadata at the can
 boundary. DOM-013 now requires replay identity across every canonical create, launch, retry,
 submit, accept, and cancel command family. DOM-014 now exposes typed, independently injectable
 service boundaries for all seven named domains while keeping partial and reserved implementations
-explicit.
+explicit. DOM-015 now keeps the critical `buildServer` hub at the composition/compatibility
+boundary and delegates Agent OS option assembly plus focused route registration to a dedicated
+module.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -161,6 +163,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   deliveries, discussions, knowledge, conflicts, and device pairing; canonical services remain
   canonical, Knowledge remains persistence-only, conflicts remain compatibility-only overlap
   detection, and Discussions/device pairing remain reserved with no service;
+- DOM-015 adds one explicit `composition_and_compatibility_routing` server contract, moves Agent OS
+  driver/provider fallback assembly and focused plugin registration out of `buildServer`, and
+  statically rejects canonical service construction, inline Agent OS routes, or SQL in that
+  composition seam;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -280,6 +286,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   files / 26 tests, both complete suites at 152 files / 1,221 tests, root/web TypeScript and
   production builds, changed-diff Gitleaks, and MEDIUM worktree-local GitNexus review across 4
   Agent OS plugin flows.
+- DOM-015 exact code head `98c722f10357311d5c1dfdb4ca8e83228adc2b8c` passed 6 focused
+  files / 28 tests, both complete suites at 154 files / 1,228 tests, root/web TypeScript and
+  production builds, changed-diff Gitleaks, and LOW worktree-local GitNexus review with no mapped
+  affected execution flow.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -393,10 +403,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **134 / 375 checklist boxes delivered; 241 remain open**.
+The strict master reconciliation is **135 / 375 checklist boxes delivered; 240 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-014`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
+`DOM-013` through `DOM-015`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
@@ -404,7 +414,7 @@ plug-and-play release.
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 16 / 20 | 4 |
+| Phase 1 — Canonical domain/event ledger | 17 / 20 | 3 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
@@ -425,10 +435,13 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[DOM-014 focused-service-boundaries checkpoint](./checkpoints/2026-07-29-agent-os-dom014-service-boundaries.md).
+[DOM-015 server-composition checkpoint](./checkpoints/2026-07-29-agent-os-dom015-buildserver-composition.md).
+The
+[DOM-014 focused-service-boundaries checkpoint](./checkpoints/2026-07-29-agent-os-dom014-service-boundaries.md)
+is retained as the preceding domain checkpoint.
 The
 [DOM-013 command-idempotency checkpoint](./checkpoints/2026-07-28-agent-os-dom013-command-idempotency.md)
-is retained as the preceding domain checkpoint.
+is retained as earlier domain history.
 The
 [DOM-010 causal-metadata checkpoint](./checkpoints/2026-07-28-agent-os-dom010-causal-metadata.md)
 is retained as earlier domain history.
@@ -521,6 +534,10 @@ superseded history.
   26 service-boundary/API tests passed; serial and default-parallel suites each passed 152 files /
   1,221 tests, with root/web TypeScript/build, changed-diff Gitleaks, MEDIUM four-flow GitNexus
   review, and shared-main preservation.
+- DOM-015 exact code head `98c722f10357311d5c1dfdb4ca8e83228adc2b8c`: 5 / 5 direct
+  composition-contract tests and 6 focused files / 28 tests passed; serial and default-parallel
+  suites each passed 154 files / 1,228 tests, with root/web TypeScript/build, changed-diff
+  Gitleaks, LOW/zero-flow staged GitNexus review, and shared-main preservation.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

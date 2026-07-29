@@ -24,7 +24,7 @@ describe('Agent OS service boundary documentation', () => {
     const contract = read('docs/agent-os-service-boundaries.md')
 
     expect(inventory.observed_at_commit)
-      .toBe('3630baa28073871deef3e24d4562dcef32530353')
+      .toBe('98c722f10357311d5c1dfdb4ca8e83228adc2b8c')
     expect(inventory.service_boundaries.map(({ name }) => name))
       .toEqual(AGENT_OS_DOMAIN_SERVICE_NAMES)
     expect(inventory.service_boundaries.map(({ implementation_state }) =>

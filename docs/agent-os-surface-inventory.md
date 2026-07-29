@@ -1,8 +1,8 @@
 # Agent OS surface inventory
 
-Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary
-and DOM-014's focused service-boundary topology, observed at exact code head
-`3630baa28073871deef3e24d4562dcef32530353`.
+Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
+DOM-014's focused service-boundary topology, and DOM-015's server composition boundary, observed at
+exact code head `98c722f10357311d5c1dfdb4ca8e83228adc2b8c`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -28,8 +28,9 @@ until migration telemetry and release gates allow removal.
 - **Legacy:** the original Board, presence, message, milestone, review, and telemetry product.
 - **Infrastructure:** shared daemon, auth, streaming, push, settings, and schema machinery.
 
-The source contract is `docs/agent-os-domain.md:102`; route registration is rooted at
-`src/server.ts:1406` and `src/agent-os/routes.ts:111`.
+The source contract is `docs/agent-os-domain.md:102`; Agent OS route registration is delegated by
+`src/server.ts:1423` through `src/server-composition.ts:97` to
+`src/agent-os/routes.ts:124`.
 
 ## Focused service boundaries
 
@@ -49,6 +50,25 @@ which partial foundation exists.
 
 The exact ownership/exclusion contract is
 [`agent-os-service-boundaries.md`](./agent-os-service-boundaries.md).
+
+## Server composition boundary
+
+`buildServer` owns Fastify lifecycle/authentication, dependency injection, focused route-plugin
+registration, and the supported legacy compatibility routes. It delegates Agent OS default
+provider/driver discovery and plugin registration to `src/server-composition.ts`; neither module
+constructs a canonical domain service on this path.
+
+| Contract | Exact value |
+|---|---|
+| Role | `composition_and_compatibility_routing` |
+| Source | `src/server-composition.ts` |
+| Focused registrar | `registerAgentOsRoutes` in `src/agent-os/routes.ts` |
+| Excludes | canonical domain transitions, service construction, persistence, and validation |
+
+The static drift guard rejects direct Agent OS registrar imports in `src/server.ts`, inline HTTP
+handlers or SQL in the composition module, and canonical service constructors in either boundary.
+The full contract and fallback-preservation evidence are in
+[`agent-os-server-composition.md`](./agent-os-server-composition.md).
 
 ## Database tables
 
