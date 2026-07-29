@@ -180,6 +180,115 @@ function put(
   for (const chunk of chunks) store.putChunk(source.targets.board_id, chunk)
 }
 
+function addCard(db: Database.Database, title: string): number {
+  return Number(db.prepare('INSERT INTO cards (board_id, title) VALUES (1, ?)')
+    .run(title).lastInsertRowid)
+}
+
+function addWorkspace(
+  db: Database.Database,
+  id: string,
+  cardId: number | null,
+): void {
+  db.prepare(`INSERT INTO workspaces
+    (id, board_id, card_id, name, kind, root_path, status)
+    VALUES (?, 1, ?, ?, 'shared', ?, 'active')`)
+    .run(id, cardId, id, `/${id}`)
+}
+
+function addJob(
+  db: Database.Database,
+  id: string,
+  cardId: number,
+  workspaceId: string,
+  profileId: string | null = null,
+  contractVersion: number | null = null,
+): void {
+  db.prepare(`INSERT INTO jobs
+    (id, board_id, card_id, workspace_id, provider, status,
+     assigned_profile_id, contract_version)
+    VALUES (?, 1, ?, ?, 'codex', 'failed', ?, ?)`)
+    .run(id, cardId, workspaceId, profileId, contractVersion)
+}
+
+function addSession(
+  db: Database.Database,
+  id: string,
+  workspaceId: string,
+  jobId: string | null,
+  profileId: string | null = null,
+): void {
+  db.prepare(`INSERT INTO agent_sessions
+    (id, workspace_id, provider, status, job_id, profile_id)
+    VALUES (?, ?, 'codex', 'stopped', ?, ?)`)
+    .run(id, workspaceId, jobId, profileId)
+}
+
+function addProfile(db: Database.Database, id: string): void {
+  db.prepare(`INSERT INTO agent_profiles
+    (id, board_id, name, owner_actor_type, created_at, updated_at)
+    VALUES (?, 1, ?, 'system', ?, ?)`)
+    .run(id, id, AT, AT)
+}
+
+function addContract(
+  db: Database.Database,
+  cardId: number,
+  version: number,
+): { asked: Record<string, unknown>; snapshot_sha256: string } {
+  const deliverables = [{
+    id: 'deliverable-scope',
+    text: 'Close forged retrieval scopes',
+    required: true,
+    metadata: {},
+  }]
+  const acceptanceCriteria = [{
+    id: 'criterion-scope',
+    text: 'Reject every disconnected target tuple',
+    required: true,
+    deliverable_ids: ['deliverable-scope'],
+    metadata: {},
+  }]
+  const asked = {
+    objective: 'Close forged retrieval scopes',
+    deliverables,
+    acceptance_criteria: acceptanceCriteria,
+    verify_commands: ['npm test'],
+    non_goals: [],
+    risks: [],
+    dependencies: [],
+    base_ref: 'main',
+    budget_tokens: null,
+    budget_cents: null,
+    priority: 0,
+    policy_id: null,
+    contract_version: version,
+    contract_updated_at: AT,
+  }
+  db.prepare(`INSERT INTO task_contracts
+    (card_id, objective, deliverables, acceptance_criteria, verify_commands,
+     non_goals, risks, dependencies, base_ref, budget_tokens, budget_cents,
+     priority, policy_id, version, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL, ?, ?)`)
+    .run(
+      cardId,
+      asked.objective,
+      JSON.stringify(deliverables),
+      JSON.stringify(acceptanceCriteria),
+      JSON.stringify(asked.verify_commands),
+      JSON.stringify(asked.non_goals),
+      JSON.stringify(asked.risks),
+      JSON.stringify(asked.dependencies),
+      asked.base_ref,
+      version,
+      AT,
+    )
+  return {
+    asked,
+    snapshot_sha256: sha256(JSON.stringify(asked)),
+  }
+}
+
 function request(
   overrides: Partial<KnowledgeRetrievalRequest> = {},
 ): KnowledgeRetrievalRequest {
@@ -605,10 +714,209 @@ describe('knowledge retrieval filters, citations, and policy', () => {
     expect(second.results.map((match) => match.citation.source_id)).toEqual([
       boardSource.id,
     ])
+    const boardWithPrivateTarget = retrieveKnowledge(db, request({
+      targets: targetLinks(1, { workspace_id: 'workspace-one' }),
+    }))
+    expect(boardWithPrivateTarget.results.map((match) => match.citation.source_id))
+      .toEqual([boardSource.id])
     expect(caughtRuntime(() => retrieveKnowledge(db, request({
       access_scope: { kind: 'workspace', workspace_id: 'workspace-foreign' },
       targets: targetLinks(1, { workspace_id: 'workspace-foreign' }),
     }))).code).toBe('retrieval_scope_invalid')
+  })
+
+  it('rejects unrelated same-board targets and an unassigned job with a profile', () => {
+    const db = database()
+    const firstCard = addCard(db, 'First target')
+    const secondCard = addCard(db, 'Second target')
+    addWorkspace(db, 'scope-workspace-one', firstCard)
+    addWorkspace(db, 'scope-workspace-two', secondCard)
+    addProfile(db, 'scope-profile')
+    addJob(
+      db,
+      'scope-unassigned-job',
+      firstCard,
+      'scope-workspace-one',
+    )
+
+    const disconnectedWorkspace = request({
+      targets: targetLinks(1, {
+        workspace_id: 'scope-workspace-one',
+        card_id: secondCard,
+      }),
+    })
+    const unassignedProfile = request({
+      targets: targetLinks(1, {
+        card_id: firstCard,
+        job_id: 'scope-unassigned-job',
+        profile_id: 'scope-profile',
+      }),
+    })
+    for (const forged of [disconnectedWorkspace, unassignedProfile]) {
+      expect(caughtRuntime(() => retrieveKnowledge(db, forged)).code)
+        .toBe('retrieval_scope_invalid')
+      expect(caughtRuntime(() => retrieveKnowledge(db, forged)).code)
+        .toBe('retrieval_scope_invalid')
+    }
+  })
+
+  it('binds the exact current contract version and authoritative snapshot bytes', () => {
+    const db = database()
+    const cardId = addCard(db, 'Contract target')
+    const contract = addContract(db, cardId, 2)
+    const reportId = 'retrieval-contract-report'
+    const askedSnapshot = JSON.stringify(contract.asked)
+    db.prepare(`INSERT INTO delivery_reports
+      (id, lineage_id, sequence, board_id, card_id, status, asked_snapshot,
+       created_by, created_at, updated_at)
+      VALUES (?, ?, 1, 1, ?, 'draft', ?, 'retrieval-test', ?, ?)`)
+      .run(reportId, reportId, cardId, askedSnapshot, AT, AT)
+
+    const boardSource = sourceFixture(1, 'contract-board')
+    const boardChunk = chunkFixture(
+      boardSource,
+      'deterministic retrieval board contract evidence',
+    )
+    const contractTargets = targetLinks(1, {
+      card_id: cardId,
+      contract_ref: `card:${cardId}:v2`,
+      contract_version: 2,
+      contract_snapshot_sha256: contract.snapshot_sha256,
+      delivery_report_id: reportId,
+    })
+    const contractSource = sourceFixture(1, 'contract-private', {
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: contractTargets,
+    })
+    const contractChunk = chunkFixture(
+      contractSource,
+      'deterministic retrieval private contract evidence',
+    )
+    put(db, boardSource, boardChunk)
+    put(db, contractSource, contractChunk)
+    synchronizeKnowledgeRetrievalIndex(db, { board_id: 1, indexed_at: AT })
+
+    const exact = retrieveKnowledge(db, request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: contractTargets,
+    }))
+    expect(exact.results.map((match) => match.citation.source_id).sort())
+      .toEqual([boardSource.id, contractSource.id].sort())
+
+    const currentContract = retrieveKnowledge(db, request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: {
+        ...contractTargets,
+        delivery_report_id: null,
+      },
+    }))
+    expect(currentContract.results.map((match) => match.citation.source_id).sort())
+      .toEqual([boardSource.id, contractSource.id].sort())
+
+    const staleVersion = request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 1,
+      },
+      targets: {
+        ...contractTargets,
+        contract_ref: `card:${cardId}:v1`,
+        contract_version: 1,
+        delivery_report_id: null,
+      },
+    })
+    expect(caughtRuntime(() => retrieveKnowledge(db, staleVersion)).code)
+      .toBe('retrieval_scope_invalid')
+
+    const wrongSnapshot = request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: {
+        ...contractTargets,
+        contract_snapshot_sha256: 'f'.repeat(64),
+      },
+    })
+    expect(caughtRuntime(() => retrieveKnowledge(db, wrongSnapshot)).code)
+      .toBe('retrieval_scope_invalid')
+
+    const reorderedReportId = 'retrieval-contract-report-reordered'
+    const reorderedAsked = JSON.stringify({
+      contract_updated_at: AT,
+      ...contract.asked,
+    })
+    db.prepare(`INSERT INTO delivery_reports
+      (id, lineage_id, sequence, board_id, card_id, status, asked_snapshot,
+       created_by, created_at, updated_at)
+      VALUES (?, ?, 1, 1, ?, 'draft', ?, 'retrieval-test', ?, ?)`)
+      .run(
+        reorderedReportId,
+        reorderedReportId,
+        cardId,
+        reorderedAsked,
+        AT,
+        AT,
+      )
+    const reorderedSnapshot = request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: {
+        ...contractTargets,
+        delivery_report_id: reorderedReportId,
+      },
+    })
+    expect(caughtRuntime(() => retrieveKnowledge(db, reorderedSnapshot)).code)
+      .toBe('retrieval_scope_invalid')
+  })
+
+  it('rejects a disconnected delivery report, session, and job tuple', () => {
+    const db = database()
+    const cardId = addCard(db, 'Report tuple')
+    addWorkspace(db, 'report-workspace', cardId)
+    addJob(db, 'report-job-one', cardId, 'report-workspace')
+    addJob(db, 'report-job-two', cardId, 'report-workspace')
+    addSession(db, 'report-session-one', 'report-workspace', 'report-job-one')
+    addSession(db, 'report-session-two', 'report-workspace', 'report-job-two')
+    db.prepare(`INSERT INTO delivery_reports
+      (id, lineage_id, sequence, board_id, card_id, job_id, session_id,
+       workspace_id, status, asked_snapshot, created_by, created_at, updated_at)
+      VALUES (
+        'retrieval-disconnected-report', 'retrieval-disconnected-report',
+        1, 1, ?, 'report-job-one', 'report-session-one', 'report-workspace',
+        'draft', '{}', 'retrieval-test', ?, ?
+      )`).run(cardId, AT, AT)
+
+    const forged = request({
+      targets: targetLinks(1, {
+        workspace_id: 'report-workspace',
+        card_id: cardId,
+        job_id: 'report-job-one',
+        session_id: 'report-session-two',
+        delivery_report_id: 'retrieval-disconnected-report',
+      }),
+    })
+    expect(caughtRuntime(() => retrieveKnowledge(db, forged)).code)
+      .toBe('retrieval_scope_invalid')
+    expect(caughtRuntime(() => retrieveKnowledge(db, forged)).code)
+      .toBe('retrieval_scope_invalid')
   })
 })
 

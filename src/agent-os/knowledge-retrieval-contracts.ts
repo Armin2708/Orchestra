@@ -529,16 +529,31 @@ export function sourceVisibleToKnowledgeRetrievalRequest(
     case 'board':
       return true
     case 'workspace':
-      return request.targets.workspace_id === accessScope.workspace_id
+      return request.access_scope.kind === 'workspace'
+        && request.access_scope.workspace_id === accessScope.workspace_id
+        && request.targets.workspace_id === targets.workspace_id
     case 'contract':
-      return request.targets.card_id === accessScope.card_id
+      return request.access_scope.kind === 'contract'
+        && request.access_scope.card_id === accessScope.card_id
+        && request.access_scope.contract_version === accessScope.contract_version
+        && request.targets.card_id === targets.card_id
+        && request.targets.contract_version === targets.contract_version
+        && request.targets.contract_snapshot_sha256
+          === targets.contract_snapshot_sha256
+        && request.targets.card_id === accessScope.card_id
         && request.targets.contract_version === accessScope.contract_version
     case 'job':
-      return request.targets.job_id === accessScope.job_id
+      return request.access_scope.kind === 'job'
+        && request.access_scope.job_id === accessScope.job_id
+        && request.targets.job_id === targets.job_id
     case 'profile':
-      return request.targets.profile_id === accessScope.profile_id
+      return request.access_scope.kind === 'profile'
+        && request.access_scope.profile_id === accessScope.profile_id
+        && request.targets.profile_id === targets.profile_id
     case 'session':
-      return request.targets.session_id === accessScope.session_id
+      return request.access_scope.kind === 'session'
+        && request.access_scope.session_id === accessScope.session_id
+        && request.targets.session_id === targets.session_id
   }
 }
 
