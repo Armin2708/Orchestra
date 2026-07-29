@@ -935,6 +935,76 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     db.close()
   })
 
+  it('uses a nested savepoint when a caught rollup failure commits its outer transaction', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-01-01T00:00:00.000Z'),
+      operation: 'failure',
+      diagnostic_code: 'schema_incompatible',
+      count: 2,
+    }))
+    db.exec(`
+      CREATE TRIGGER test_dom019_abort_nested_rollup
+      BEFORE DELETE ON ${DAILY_TABLE}
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated nested rollup delete failure');
+      END
+    `)
+
+    const outer = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO kv (key, value) VALUES ('dom019-before', 'preserved')
+      `).run()
+      expect(() => rollupCompatibilityMigrationTelemetry(db, {
+        now: new Date('2025-07-01T00:00:00.000Z'),
+      })).toThrow(/simulated nested rollup delete failure/)
+      db.prepare(`
+        INSERT INTO kv (key, value) VALUES ('dom019-after', 'committed')
+      `).run()
+    })
+    outer()
+
+    expect(db.prepare(`
+      SELECT key AS marker, value FROM kv
+      WHERE key IN ('dom019-before', 'dom019-after')
+      ORDER BY key
+    `).all()).toEqual([
+      { marker: 'dom019-after', value: 'committed' },
+      { marker: 'dom019-before', value: 'preserved' },
+    ])
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${DAILY_TABLE}`).get())
+      .toEqual({ count: 1 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
+      .toEqual({ count: 0 })
+
+    db.exec('DROP TRIGGER test_dom019_abort_nested_rollup')
+    expect(rollupCompatibilityMigrationTelemetry(db, {
+      now: new Date('2025-07-01T00:00:00.000Z'),
+    })).toMatchObject({
+      rows_compacted: 1,
+      count_compacted: 2,
+      failure_count_compacted: 2,
+    })
+    expect(rollupCompatibilityMigrationTelemetry(db, {
+      now: new Date('2025-07-01T00:00:00.000Z'),
+    })).toMatchObject({
+      rows_compacted: 0,
+      count_compacted: 0,
+      failure_count_compacted: 0,
+    })
+    expect(queryCompatibilityMigrationTelemetrySummary(db)).toMatchObject({
+      total_count: 2,
+      failure_count: 2,
+    })
+    expect(db.prepare(`
+      SELECT operation, count FROM ${HISTORY_TABLE}
+    `).all()).toEqual([
+      { operation: 'failure', count: 2 },
+    ])
+    db.close()
+  })
+
   it('enforces the bounded retention window', () => {
     const db = openDb(':memory:')
     installTelemetry(db)

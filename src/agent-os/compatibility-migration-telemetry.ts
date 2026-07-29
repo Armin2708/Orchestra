@@ -929,7 +929,6 @@ function runAtomically<Result>(
   db: Database.Database,
   work: () => Result,
 ): Result {
-  if (db.inTransaction) return work()
   return db.transaction(work).immediate()
 }
 
