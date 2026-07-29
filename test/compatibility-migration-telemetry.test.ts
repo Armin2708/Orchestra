@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import {
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
+  AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES,
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES,
   AGENT_OS_COMPATIBILITY_TELEMETRY_COHORTS,
@@ -14,6 +15,8 @@ import {
   AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
   AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
   AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE,
+  AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS,
+  AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS,
   AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE,
   applyCompatibilityMigrationTelemetryMigration,
   assertCompatibilityMigrationTelemetrySchemaCompatible,
@@ -90,6 +93,58 @@ function tempDatabaseFile(prefix: string): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   tempDirs.push(directory)
   return path.join(directory, 'orchestra.db')
+}
+
+type StatementMethod = 'all' | 'get' | 'run'
+
+function observeDatabaseStatements(
+  db: Database.Database,
+  observer: (
+    sql: string,
+    method: StatementMethod,
+    inTransaction: boolean,
+  ) => void,
+): Database.Database {
+  return new Proxy(db, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (sql: string) => {
+          const statement = target.prepare(sql)
+          return new Proxy(statement, {
+            get(statementTarget, statementProperty) {
+              const value = Reflect.get(
+                statementTarget,
+                statementProperty,
+                statementTarget,
+              ) as unknown
+              if (
+                (
+                  statementProperty === 'all'
+                  || statementProperty === 'get'
+                  || statementProperty === 'run'
+                )
+                && typeof value === 'function'
+              ) {
+                return (...args: unknown[]) => {
+                  observer(
+                    sql,
+                    statementProperty,
+                    target.inTransaction,
+                  )
+                  return Reflect.apply(value, statementTarget, args)
+                }
+              }
+              return typeof value === 'function'
+                ? value.bind(statementTarget)
+                : value
+            },
+          })
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as Database.Database
 }
 
 function insertAllLegacyRows(db: Database.Database): {
@@ -281,6 +336,62 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     ])
     expect(new Set(AGENT_OS_COMPATIBILITY_TELEMETRY_DIAGNOSTICS).size)
       .toBe(12)
+    expect(AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS).toEqual({
+      boards: ['shared_scope'],
+      task_contracts: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      agent_usage: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      agents: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      cards: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      card_events: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      messages: ['legacy_only'],
+      message_targets: ['legacy_only'],
+      deliveries: ['legacy_only'],
+      milestones: ['deferred_replacement'],
+      ideas: ['deferred_replacement'],
+      review_decisions: [
+        'canonical_linked',
+        'canonical_unlinked',
+        'migration_quarantined',
+      ],
+      token_telemetry: ['legacy_only'],
+    })
+    expect(Object.isFrozen(
+      AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS,
+    )).toBe(true)
+    for (
+      const cohorts of Object.values(
+        AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS,
+      )
+    ) {
+      expect(Object.isFrozen(cohorts)).toBe(true)
+    }
+    expect(AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS.messages)
+      .toEqual([
+        'legacy_read',
+        'legacy_write',
+        'adapter_translation',
+        'failure',
+      ])
     expect(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID)
       .toBe('023-compatibility-migration-telemetry')
   })
@@ -303,6 +414,12 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toHaveLength(13 * 3)
     expect(new Set(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES).size)
       .toBe(13 * 3)
+    expect(
+      AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
+    ).toHaveLength(5)
+    expect(new Set(
+      AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
+    ).size).toBe(5)
     expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
       .not.toThrow()
     db.close()
@@ -378,6 +495,24 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     altered.close()
   })
 
+  it('preserves quoted-literal case during exact schema comparison', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    db.unsafeMode(true)
+    db.pragma('writable_schema = ON')
+    db.prepare(`
+      UPDATE sqlite_master
+      SET sql=replace(sql, '''legacy_only''', '''LEGACY_ONLY''')
+      WHERE name=?
+    `).run(DAILY_TABLE)
+    db.pragma('writable_schema = OFF')
+    db.unsafeMode(false)
+
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
+      .toThrow(new RegExp(`incompatible ${DAILY_TABLE} schema`))
+    db.close()
+  })
+
   it('replays a lost 023 marker without duplicating triggers or counters', () => {
     const db = openDb(':memory:')
     installTelemetry(db)
@@ -405,8 +540,14 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     `).get()).toEqual(before)
     expect(db.prepare(`
       SELECT COUNT(*) AS count FROM sqlite_master
-      WHERE type='trigger' AND name LIKE 'trg_os_compatibility_telemetry_%'
-    `).get()).toEqual({ count: 39 })
+      WHERE type='trigger' AND name IN (
+        ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES
+          .map(() => '?')
+          .join(',')}
+      )
+    `).get(
+      ...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES,
+    )).toEqual({ count: 39 })
     db.prepare('UPDATE boards SET name=name WHERE id=?').run(boardId)
     expect(db.prepare(`
       SELECT count FROM ${DAILY_TABLE}
@@ -441,9 +582,12 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       FROM sqlite_master
       WHERE type='trigger'
         AND name LIKE 'trg_os_compatibility_telemetry_%'
+        AND tbl_name IN (
+          ${AGENT_OS_LEGACY_COMPATIBILITY_TABLES.map(() => '?').join(',')}
+        )
       GROUP BY tbl_name
       ORDER BY tbl_name
-    `).all()
+    `).all(...AGENT_OS_LEGACY_COMPATIBILITY_TABLES)
     expect(triggerCoverage).toEqual(
       [...AGENT_OS_LEGACY_COMPATIBILITY_TABLES]
         .sort()
@@ -519,6 +663,76 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     db.close()
   })
 
+  it('enforces identical table/cohort and table/operation matrices in TypeScript', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+
+    const invalid = [
+      observation({ table: 'boards', cohort: 'canonical_linked' }),
+      observation({ table: 'cards', cohort: 'shared_scope' }),
+      observation({
+        table: 'messages',
+        operation: 'canonical_read',
+        cohort: 'legacy_only',
+      }),
+      observation({
+        table: 'message_targets',
+        operation: 'canonical_write',
+        cohort: 'legacy_only',
+      }),
+      observation({
+        table: 'deliveries',
+        operation: 'projection_refresh',
+        cohort: 'legacy_only',
+      }),
+      observation({
+        table: 'milestones',
+        operation: 'mismatch',
+        cohort: 'deferred_replacement',
+        diagnostic_code: 'value_mismatch',
+      }),
+      observation({
+        table: 'ideas',
+        operation: 'canonical_read',
+        cohort: 'deferred_replacement',
+      }),
+      observation({
+        table: 'token_telemetry',
+        operation: 'mismatch',
+        cohort: 'legacy_only',
+        diagnostic_code: 'scope_mismatch',
+      }),
+    ]
+    for (const input of invalid) {
+      expect(
+        () => recordCompatibilityMigrationTelemetry(db, input),
+      ).toThrow(/not supported for compatibility telemetry table/)
+    }
+
+    expect(recordCompatibilityMigrationTelemetry(db, observation({
+      table: 'messages',
+      operation: 'adapter_translation',
+      cohort: 'legacy_only',
+    }))).toMatchObject({
+      table: 'messages',
+      operation: 'adapter_translation',
+      cohort: 'legacy_only',
+      count: 1,
+    })
+    expect(recordCompatibilityMigrationTelemetry(db, observation({
+      table: 'milestones',
+      operation: 'failure',
+      cohort: 'deferred_replacement',
+      diagnostic_code: 'translation_rejected',
+    }))).toMatchObject({
+      table: 'milestones',
+      operation: 'failure',
+      cohort: 'deferred_replacement',
+      count: 1,
+    })
+    db.close()
+  })
+
   it('aggregates safely across restart without storing replay state in memory', () => {
     const file = tempDatabaseFile('orchestra-dom019-restart-')
     const first = openDb(file)
@@ -562,6 +776,58 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       })
     second.close()
     first.close()
+  })
+
+  it('keeps record UPSERT and SELECT in one immediate transaction or savepoint', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    const statements: Array<{
+      sql: string
+      method: StatementMethod
+      inTransaction: boolean
+    }> = []
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method, inTransaction) => {
+        statements.push({ sql, method, inTransaction })
+        if (sql.includes('SELECT day, table_name AS "table"')) {
+          throw new Error('simulated post-upsert read failure')
+        }
+      },
+    )
+
+    const outer = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO kv (key, value) VALUES ('record-before', 'preserved')
+      `).run()
+      expect(
+        () => recordCompatibilityMigrationTelemetry(
+          observed,
+          observation({ count: 2 }),
+        ),
+      ).toThrow(/simulated post-upsert read failure/)
+      db.prepare(`
+        INSERT INTO kv (key, value) VALUES ('record-after', 'committed')
+      `).run()
+    })
+    outer()
+
+    expect(statements.some(({ sql }) => sql.includes('INSERT INTO'))).toBe(true)
+    expect(statements.some(({ sql }) => (
+      sql.includes('SELECT day, table_name AS "table"')
+    ))).toBe(true)
+    expect(statements.every(({ inTransaction }) => inTransaction)).toBe(true)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${DAILY_TABLE}`).get())
+      .toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT key FROM kv
+      WHERE key IN ('record-before', 'record-after')
+      ORDER BY key
+    `).all()).toEqual([
+      { key: 'record-after' },
+      { key: 'record-before' },
+    ])
+    db.close()
   })
 
   it('rejects malformed inputs and arbitrary detail before SQLite persistence', () => {
@@ -640,8 +906,159 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     for (const row of invalidRows) {
       expect(() => insert.run(...row)).toThrow()
     }
+    const invalidMatrixRows = [
+      ['2025-02-01', 'boards', 'legacy_read', 'canonical_linked', 'none', 1],
+      ['2025-02-01', 'cards', 'legacy_read', 'shared_scope', 'none', 1],
+      ['2025-02-01', 'messages', 'canonical_read', 'legacy_only', 'none', 1],
+      [
+        '2025-02-01',
+        'message_targets',
+        'canonical_write',
+        'legacy_only',
+        'none',
+        1,
+      ],
+      [
+        '2025-02-01',
+        'deliveries',
+        'projection_refresh',
+        'legacy_only',
+        'none',
+        1,
+      ],
+      [
+        '2025-02-01',
+        'milestones',
+        'mismatch',
+        'deferred_replacement',
+        'value_mismatch',
+        1,
+      ],
+      [
+        '2025-02-01',
+        'ideas',
+        'canonical_read',
+        'deferred_replacement',
+        'none',
+        1,
+      ],
+      [
+        '2025-02-01',
+        'token_telemetry',
+        'mismatch',
+        'legacy_only',
+        'scope_mismatch',
+        1,
+      ],
+    ]
+    const historyInsert = db.prepare(`
+      INSERT INTO ${HISTORY_TABLE} (
+        table_name, operation, cohort, diagnostic_code,
+        first_day, last_day, count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const row of invalidMatrixRows) {
+      expect(() => insert.run(...row)).toThrow()
+      expect(() => historyInsert.run(
+        row[1],
+        row[2],
+        row[3],
+        row[4],
+        row[0],
+        row[0],
+        row[5],
+      )).toThrow()
+    }
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ${DAILY_TABLE}`).get())
       .toEqual({ count: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('seals immutable retained snapshots and rejects late API, SQL, and trigger writes', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2025-01-01 00:00:00')
+    const rawCoverage = db.prepare(`
+      INSERT INTO ${COVERAGE_TABLE} (
+        day, table_name, legacy_write_count, mismatch_count, failure_count
+      ) VALUES ('2025-01-02', 'boards', ?, ?, ?)
+    `)
+    expect(() => rawCoverage.run(-1, 0, 0)).toThrow()
+    expect(() => rawCoverage.run(0, 1.5, 0)).toThrow()
+    expect(
+      () => rawCoverage.run(0, 0, Number.MAX_SAFE_INTEGER + 1),
+    ).toThrow()
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-02-05T12:00:00.000Z'),
+      operation: 'legacy_write',
+      count: 2,
+    }))
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-02-05T12:00:00.000Z'),
+      operation: 'mismatch',
+      diagnostic_code: 'projection_stale',
+      count: 3,
+    }))
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-02-05T12:00:00.000Z'),
+      operation: 'failure',
+      diagnostic_code: 'unexpected_failure',
+      count: 4,
+    }))
+
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-02-05')
+    expect(db.prepare(`
+      SELECT legacy_write_count, mismatch_count, failure_count
+      FROM ${COVERAGE_TABLE}
+      WHERE day='2025-02-05' AND table_name='cards'
+    `).get()).toEqual({
+      legacy_write_count: 2,
+      mismatch_count: 3,
+      failure_count: 4,
+    })
+    expect(() => db.prepare(`
+      UPDATE ${COVERAGE_TABLE}
+      SET legacy_write_count=0
+      WHERE day='2025-02-05' AND table_name='cards'
+    `).run()).toThrow(/coverage is immutable/)
+    expect(() => db.prepare(`
+      DELETE FROM ${COVERAGE_TABLE}
+      WHERE day='2025-02-05' AND table_name='cards'
+    `).run()).toThrow(/coverage is immutable/)
+    expect(() => db.prepare(`
+      INSERT OR REPLACE INTO ${COVERAGE_TABLE} (
+        day, table_name, legacy_write_count, mismatch_count, failure_count
+      ) VALUES ('2025-02-05', 'cards', 0, 0, 0)
+    `).run()).toThrow(/coverage is immutable/)
+    expect(() => recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-02-05T20:00:00.000Z'),
+      operation: 'legacy_write',
+    }))).toThrow(/day is sealed/)
+    expect(() => db.prepare(`
+      INSERT INTO ${DAILY_TABLE} (
+        day, table_name, operation, cohort, diagnostic_code, count
+      ) VALUES (
+        '2025-02-05', 'cards', 'canonical_read',
+        'canonical_linked', 'none', 1
+      )
+    `).run()).toThrow(/day is sealed/)
+    expect(() => db.prepare(`
+      UPDATE ${DAILY_TABLE}
+      SET count=count+1
+      WHERE day='2025-02-05' AND table_name='cards'
+    `).run()).toThrow(/day is sealed/)
+
+    const today = new Date().toISOString().slice(0, 10)
+    db.prepare(`
+      INSERT INTO ${COVERAGE_TABLE} (
+        day, table_name, legacy_write_count, mismatch_count, failure_count
+      ) VALUES (?, 'boards', 0, 0, 0)
+    `).run(today)
+    expect(() => db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/dom019-sealed-trigger', 'Sealed trigger')
+    `).run()).toThrow(/day is sealed/)
     db.close()
   })
 
@@ -680,7 +1097,13 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
         'last_day',
         'count',
       ],
-      [COVERAGE_TABLE]: ['day', 'table_name'],
+      [COVERAGE_TABLE]: [
+        'day',
+        'table_name',
+        'legacy_write_count',
+        'mismatch_count',
+        'failure_count',
+      ],
     }
     const forbiddenColumns = new Set([
       'board_id',
@@ -806,9 +1229,56 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     db.close()
   })
 
+  it('reads summary rows and both bounds from one deferred snapshot', () => {
+    const file = tempDatabaseFile('orchestra-dom019-summary-snapshot-')
+    const first = openDb(file)
+    installTelemetry(first)
+    recordCompatibilityMigrationTelemetry(first, observation({
+      observed_at: new Date('2025-04-01T12:00:00.000Z'),
+      count: 1,
+    }))
+    const second = new Database(file)
+    second.pragma('busy_timeout = 1000')
+    const statements: Array<{
+      sql: string
+      inTransaction: boolean
+    }> = []
+    let interleaved = false
+    const observed = observeDatabaseStatements(
+      first,
+      (sql, _method, inTransaction) => {
+        statements.push({ sql, inTransaction })
+        if (!interleaved && sql.includes('SELECT MIN(')) {
+          interleaved = true
+          recordCompatibilityMigrationTelemetry(second, observation({
+            observed_at: new Date('2025-04-03T12:00:00.000Z'),
+            count: 2,
+          }))
+        }
+      },
+    )
+
+    const during = queryCompatibilityMigrationTelemetrySummary(observed)
+    expect(interleaved).toBe(true)
+    expect(statements).toHaveLength(3)
+    expect(statements.every(({ inTransaction }) => inTransaction)).toBe(true)
+    expect(during).toMatchObject({
+      total_count: 1,
+      retained_daily_first_day: '2025-04-01',
+      retained_daily_through_day: '2025-04-01',
+    })
+    expect(queryCompatibilityMigrationTelemetrySummary(first)).toMatchObject({
+      total_count: 3,
+      retained_daily_first_day: '2025-04-01',
+      retained_daily_through_day: '2025-04-03',
+    })
+    second.close()
+    first.close()
+  })
+
   it('rolls expired rows up atomically without losing mismatch or failure counts', () => {
     const db = openDb(':memory:')
-    installTelemetry(db)
+    installTelemetry(db, '2024-12-31 00:00:00')
     recordCompatibilityMigrationTelemetry(db, observation({
       observed_at: new Date('2025-01-01T00:00:00.000Z'),
       operation: 'canonical_read',
@@ -831,6 +1301,8 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       operation: 'legacy_write',
       count: 7,
     }))
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-02')
     const before = queryCompatibilityMigrationTelemetrySummary(db)
 
     const rolled = rollupCompatibilityMigrationTelemetry(db, {
@@ -869,16 +1341,73 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     db.close()
   })
 
+  it('leaves unsealed expired rows visible until they can be snapshotted', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2024-12-31 00:00:00')
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-01-01T12:00:00.000Z'),
+      operation: 'legacy_write',
+      count: 6,
+    }))
+
+    expect(rollupCompatibilityMigrationTelemetry(db, {
+      now: new Date('2025-07-01T00:00:00.000Z'),
+    })).toEqual({
+      retain_from_day: '2025-04-03',
+      compacted_through_day: null,
+      rows_compacted: 0,
+      count_compacted: 0,
+      mismatch_count_compacted: 0,
+      failure_count_compacted: 0,
+    })
+    expect(db.prepare(`
+      SELECT count FROM ${DAILY_TABLE}
+      WHERE day='2025-01-01' AND table_name='cards'
+        AND operation='legacy_write'
+    `).get()).toEqual({ count: 6 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
+      .toEqual({ count: 0 })
+
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
+    expect(db.prepare(`
+      SELECT legacy_write_count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-01-01' AND table_name='cards'
+    `).get()).toEqual({ legacy_write_count: 6 })
+    expect(rollupCompatibilityMigrationTelemetry(db, {
+      now: new Date('2025-07-01T00:00:00.000Z'),
+    })).toMatchObject({
+      compacted_through_day: '2025-01-01',
+      rows_compacted: 1,
+      count_compacted: 6,
+    })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+      WHERE day='2025-01-01'
+    `).get()).toEqual({ count: 0 })
+    expect(queryCompatibilityMigrationWriterObservation(db, {
+      table: 'cards',
+      from_day: '2025-01-01',
+      through_day: '2025-01-01',
+    })).toMatchObject({
+      covered_days: 1,
+      legacy_write_count: 6,
+      status: 'legacy_writer_observed',
+      reason: 'legacy_write_nonzero',
+    })
+    db.close()
+  })
+
   it('makes rollup replay and restart safe', () => {
     const file = tempDatabaseFile('orchestra-dom019-rollup-')
     const first = openDb(file)
-    installTelemetry(first)
+    installTelemetry(first, '2024-12-31 00:00:00')
     recordCompatibilityMigrationTelemetry(first, observation({
       observed_at: new Date('2025-01-01T00:00:00.000Z'),
       operation: 'mismatch',
       diagnostic_code: 'scope_mismatch',
       count: 4,
     }))
+    sealCompletedCompatibilityMigrationTelemetryDay(first, '2025-01-01')
     const firstRollup = rollupCompatibilityMigrationTelemetry(first, {
       now: new Date('2025-07-01T00:00:00.000Z'),
     })
@@ -904,15 +1433,102 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     reopened.close()
   })
 
+  it('retains coverage and blocking counts across rollup, reopen, and reseal', () => {
+    const file = tempDatabaseFile('orchestra-dom019-coverage-rollup-')
+    const first = openDb(file)
+    installTelemetry(first, '2025-01-01 00:00:00')
+    recordCompatibilityMigrationTelemetry(first, observation({
+      observed_at: new Date('2025-02-01T12:00:00.000Z'),
+      operation: 'legacy_write',
+      count: 2,
+    }))
+    recordCompatibilityMigrationTelemetry(first, observation({
+      observed_at: new Date('2025-02-01T12:00:00.000Z'),
+      operation: 'mismatch',
+      diagnostic_code: 'scope_mismatch',
+      count: 3,
+    }))
+    recordCompatibilityMigrationTelemetry(first, observation({
+      observed_at: new Date('2025-02-01T12:00:00.000Z'),
+      operation: 'failure',
+      diagnostic_code: 'schema_incompatible',
+      count: 4,
+    }))
+    for (let offset = 0; offset < 30; offset += 1) {
+      sealCompletedCompatibilityMigrationTelemetryDay(
+        first,
+        dayOffset('2025-02-01', offset),
+      )
+    }
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+    `).get()).toEqual({ count: 13 * 30 })
+
+    rollupCompatibilityMigrationTelemetry(first, {
+      now: new Date('2025-07-01T12:00:00.000Z'),
+      retain_days: 90,
+    })
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+      WHERE day BETWEEN '2025-02-01' AND '2025-03-02'
+    `).get()).toEqual({ count: 0 })
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+    `).get()).toEqual({ count: 13 * 30 })
+    first.close()
+
+    const reopened = new Database(file)
+    for (let offset = 0; offset < 30; offset += 1) {
+      sealCompletedCompatibilityMigrationTelemetryDay(
+        reopened,
+        dayOffset('2025-02-01', offset),
+      )
+    }
+    const observedStatements: Array<{
+      sql: string
+      inTransaction: boolean
+    }> = []
+    const observedDb = observeDatabaseStatements(
+      reopened,
+      (sql, _method, inTransaction) => {
+        observedStatements.push({ sql, inTransaction })
+      },
+    )
+    const result = queryCompatibilityMigrationWriterObservation(observedDb, {
+      table: 'cards',
+      from_day: '2025-02-01',
+      through_day: dayOffset('2025-02-01', 29),
+    })
+    expect(result).toMatchObject({
+      covered_days: 30,
+      legacy_write_count: 2,
+      mismatch_count: 3,
+      failure_count: 4,
+      status: 'legacy_writer_observed',
+      reason: 'legacy_write_nonzero',
+      writer_removal_authorized: false,
+    })
+    expect(observedStatements).toHaveLength(1)
+    expect(observedStatements[0]?.sql).toContain(COVERAGE_TABLE)
+    expect(observedStatements[0]?.sql).not.toContain(DAILY_TABLE)
+    expect(observedStatements[0]?.sql).not.toContain(HISTORY_TABLE)
+    expect(observedStatements[0]?.inTransaction).toBe(true)
+    expect(reopened.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+    `).get()).toEqual({ count: 13 * 30 })
+    reopened.close()
+  })
+
   it('rolls history insertion back if the daily delete cannot complete', () => {
     const db = openDb(':memory:')
-    installTelemetry(db)
+    installTelemetry(db, '2024-12-31 00:00:00')
     recordCompatibilityMigrationTelemetry(db, observation({
       observed_at: new Date('2025-01-01T00:00:00.000Z'),
       operation: 'failure',
       diagnostic_code: 'schema_incompatible',
       count: 2,
     }))
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
     db.exec(`
       CREATE TRIGGER test_dom019_abort_rollup
       BEFORE DELETE ON ${DAILY_TABLE}
@@ -937,13 +1553,14 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
 
   it('uses a nested savepoint when a caught rollup failure commits its outer transaction', () => {
     const db = openDb(':memory:')
-    installTelemetry(db)
+    installTelemetry(db, '2024-12-31 00:00:00')
     recordCompatibilityMigrationTelemetry(db, observation({
       observed_at: new Date('2025-01-01T00:00:00.000Z'),
       operation: 'failure',
       diagnostic_code: 'schema_incompatible',
       count: 2,
     }))
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
     db.exec(`
       CREATE TRIGGER test_dom019_abort_nested_rollup
       BEFORE DELETE ON ${DAILY_TABLE}
@@ -1076,12 +1693,6 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
   it('keeps usage, diagnostic risk, short windows, and coverage gaps non-removable', () => {
     const db = openDb(':memory:')
     installTelemetry(db, '2025-01-01 00:00:00')
-    for (let offset = 0; offset < 30; offset += 1) {
-      sealCompletedCompatibilityMigrationTelemetryDay(
-        db,
-        dayOffset('2025-02-01', offset),
-      )
-    }
     recordCompatibilityMigrationTelemetry(db, observation({
       observed_at: new Date('2025-02-05T12:00:00.000Z'),
       table: 'cards',
@@ -1094,6 +1705,12 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       operation: 'mismatch',
       diagnostic_code: 'lifecycle_mismatch',
     }))
+    for (let offset = 0; offset < 30; offset += 1) {
+      sealCompletedCompatibilityMigrationTelemetryDay(
+        db,
+        dayOffset('2025-02-01', offset),
+      )
+    }
 
     expect(queryCompatibilityMigrationWriterObservation(db, {
       table: 'cards',
@@ -1124,21 +1741,106 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       reason: 'window_too_short',
       writer_removal_authorized: false,
     })
-    db.prepare(`
-      DELETE FROM ${COVERAGE_TABLE}
-      WHERE table_name='boards' AND day='2025-02-15'
-    `).run()
     expect(queryCompatibilityMigrationWriterObservation(db, {
       table: 'boards',
       from_day: '2025-02-01',
-      through_day: dayOffset('2025-02-01', 29),
+      through_day: dayOffset('2025-02-01', 30),
     })).toMatchObject({
-      covered_days: 29,
+      covered_days: 30,
       status: 'insufficient_observation',
       reason: 'coverage_gap',
       writer_removal_authorized: false,
     })
     db.close()
+  })
+
+  it('holds the schema boundary and rolls partial sealing back in a nested savepoint', () => {
+    const file = tempDatabaseFile('orchestra-dom019-seal-boundary-')
+    const first = openDb(file)
+    installTelemetry(first, '2025-01-01 00:00:00')
+    const second = new Database(file)
+    second.pragma('busy_timeout = 0')
+    const protectedTrigger =
+      AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES[0]!
+    const statements: Array<{
+      sql: string
+      inTransaction: boolean
+    }> = []
+    let boundaryAttempted = false
+    let boundaryError = ''
+    let failPartialSeal = false
+    let coverageInsertRuns = 0
+    const observed = observeDatabaseStatements(
+      first,
+      (sql, method, inTransaction) => {
+        statements.push({ sql, inTransaction })
+        if (
+          !boundaryAttempted
+          && sql.includes('SELECT type, sql FROM sqlite_master')
+        ) {
+          boundaryAttempted = true
+          try {
+            second.exec(`DROP TRIGGER ${protectedTrigger}`)
+          } catch (error) {
+            boundaryError = String(error)
+          }
+        }
+        if (
+          failPartialSeal
+          && method === 'run'
+          && sql.includes(`INSERT INTO ${COVERAGE_TABLE}`)
+        ) {
+          coverageInsertRuns += 1
+          if (coverageInsertRuns === 5) {
+            throw new Error('simulated coverage insert failure')
+          }
+        }
+      },
+    )
+
+    sealCompletedCompatibilityMigrationTelemetryDay(
+      observed,
+      '2025-01-02',
+    )
+    expect(boundaryAttempted).toBe(true)
+    expect(boundaryError).toMatch(/database is locked/)
+    expect(statements.length).toBeGreaterThan(13)
+    expect(statements.every(({ inTransaction }) => inTransaction)).toBe(true)
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(first))
+      .not.toThrow()
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-01-02'
+    `).get()).toEqual({ count: 13 })
+
+    failPartialSeal = true
+    const outer = first.transaction(() => {
+      first.prepare(`
+        INSERT INTO kv (key, value) VALUES ('seal-before', 'preserved')
+      `).run()
+      expect(() => sealCompletedCompatibilityMigrationTelemetryDay(
+        observed,
+        '2025-01-03',
+      )).toThrow(/simulated coverage insert failure/)
+      first.prepare(`
+        INSERT INTO kv (key, value) VALUES ('seal-after', 'committed')
+      `).run()
+    })
+    outer()
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-01-03'
+    `).get()).toEqual({ count: 0 })
+    expect(first.prepare(`
+      SELECT key FROM kv
+      WHERE key IN ('seal-before', 'seal-after')
+      ORDER BY key
+    `).all()).toEqual([
+      { key: 'seal-after' },
+      { key: 'seal-before' },
+    ])
+    second.close()
+    first.close()
   })
 
   it('refuses to seal the install day, current day, or an incompatible trigger set', () => {
