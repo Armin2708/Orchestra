@@ -15,7 +15,8 @@ type CompositionInventory = {
   }
 }
 
-const CODE_HEAD = '98c722f10357311d5c1dfdb4ca8e83228adc2b8c'
+const INVENTORY_HEAD = 'f5df13666ccdfdf552e423a379faf60463fc6643'
+const DOM015_CODE_HEAD = '98c722f10357311d5c1dfdb4ca8e83228adc2b8c'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
 
@@ -25,7 +26,7 @@ describe('Agent OS server composition documentation', () => {
       read('docs/agent-os-surface-inventory.json'),
     ) as CompositionInventory
 
-    expect(inventory.observed_at_commit).toBe(CODE_HEAD)
+    expect(inventory.observed_at_commit).toBe(INVENTORY_HEAD)
     expect(inventory.server_composition).toEqual({
       role: SERVER_COMPOSITION_CONTRACT.role,
       source: 'src/server-composition.ts',
@@ -42,7 +43,7 @@ describe('Agent OS server composition documentation', () => {
   it('records exact behavior-preservation evidence without claiming a route or schema change', () => {
     const contract = read('docs/agent-os-server-composition.md')
 
-    expect(contract).toContain(CODE_HEAD)
+    expect(contract).toContain(DOM015_CODE_HEAD)
     expect(contract).toContain('1 file / 5 tests PASS')
     expect(contract).toContain('154 files / 1,228 tests PASS')
     expect(contract).toContain('changes no database schema, URL, status code, response envelope')
@@ -59,9 +60,9 @@ describe('Agent OS server composition documentation', () => {
     expect(checkpoint).toContain('135 / 375 delivered; 240 open')
     expect(checkpoint).toContain('DOM-016, DOM-017, and DOM-019 remain open')
     expect(checkpoint).toContain('DOM-016 is the next independent dependency-ready item')
-    expect(program).toContain('135 / 375 checklist boxes delivered; 240 remain open')
-    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 17 / 20 | 3 |')
-    expect(program).toContain('DOM-013` through `DOM-015`')
+    expect(program).toContain('136 / 375 checklist boxes delivered; 239 remain open')
+    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 18 / 20 | 2 |')
+    expect(program).toContain('DOM-013` through `DOM-016`')
   })
 
   it('keeps the human inventory explicit about composition ownership and exclusions', () => {
@@ -71,6 +72,6 @@ describe('Agent OS server composition documentation', () => {
     expect(inventory).toContain('| Role | `composition_and_compatibility_routing` |')
     expect(inventory).toMatch(/neither module\s+constructs a canonical domain service/)
     expect(inventory).toContain('src/server-composition.ts:97')
-    expect(inventory).toContain(CODE_HEAD)
+    expect(inventory).toContain(INVENTORY_HEAD)
   })
 })

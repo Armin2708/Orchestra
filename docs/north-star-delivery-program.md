@@ -27,7 +27,8 @@ submit, accept, and cancel command family. DOM-014 now exposes typed, independen
 service boundaries for all seven named domains while keeping partial and reserved implementations
 explicit. DOM-015 now keeps the critical `buildServer` hub at the composition/compatibility
 boundary and delegates Agent OS option assembly plus focused route registration to a dedicated
-module.
+module. DOM-016 now assigns every compatibility/legacy table one non-competing authority and
+cutover contract while leaving physical migration and telemetry to DOM-017 and DOM-019.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -167,6 +168,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   driver/provider fallback assembly and focused plugin registration out of `buildServer`, and
   statically rejects canonical service construction, inline Agent OS routes, or SQL in that
   composition seam;
+- DOM-016 adds one immutable authority/cutover catalog for all 13 compatibility and legacy tables,
+  separates shared scope, bounded compatibility authority, scope-partitioned bridges, projection
+  sinks, legacy-event ingress, and still-isolated legacy domains, and hands physical
+  migration/backfill/rollback to DOM-017 plus old-versus-canonical usage measurement to DOM-019;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -290,6 +295,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   files / 28 tests, both complete suites at 154 files / 1,228 tests, root/web TypeScript and
   production builds, changed-diff Gitleaks, and LOW worktree-local GitNexus review with no mapped
   affected execution flow.
+- DOM-016 exact code head `f5df13666ccdfdf552e423a379faf60463fc6643` passed 4 / 4 direct
+  authority-contract tests, both complete suites at 156 files / 1,236 tests, root/web TypeScript
+  and production builds, changed-diff Gitleaks, and LOW worktree-local GitNexus review with no
+  indexed changed symbol or affected execution flow.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -377,6 +386,9 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 
 ### Remaining
 
+- DOM-017 physical forward migrations/backfills/validation/rollback plans and DOM-019
+  old-versus-canonical read/write telemetry remain open; DOM-016 is the logical authority design,
+  not either implementation;
 - a real daemon-mid-session to browser-continuation E2E gate;
 - combined desktop/phone acceptance in the intended in-app Browser surface when that backend is
   available;
@@ -403,10 +415,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **135 / 375 checklist boxes delivered; 240 remain open**.
+The strict master reconciliation is **136 / 375 checklist boxes delivered; 239 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-015`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
+`DOM-013` through `DOM-016`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
@@ -414,7 +426,7 @@ plug-and-play release.
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 17 / 20 | 3 |
+| Phase 1 — Canonical domain/event ledger | 18 / 20 | 2 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
@@ -435,10 +447,13 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[DOM-015 server-composition checkpoint](./checkpoints/2026-07-29-agent-os-dom015-buildserver-composition.md).
+[DOM-016 legacy-projection checkpoint](./checkpoints/2026-07-29-agent-os-dom016-legacy-projections.md).
+The
+[DOM-015 server-composition checkpoint](./checkpoints/2026-07-29-agent-os-dom015-buildserver-composition.md)
+is retained as the preceding domain checkpoint.
 The
 [DOM-014 focused-service-boundaries checkpoint](./checkpoints/2026-07-29-agent-os-dom014-service-boundaries.md)
-is retained as the preceding domain checkpoint.
+is retained as earlier domain history.
 The
 [DOM-013 command-idempotency checkpoint](./checkpoints/2026-07-28-agent-os-dom013-command-idempotency.md)
 is retained as earlier domain history.
@@ -538,6 +553,11 @@ superseded history.
   composition-contract tests and 6 focused files / 28 tests passed; serial and default-parallel
   suites each passed 154 files / 1,228 tests, with root/web TypeScript/build, changed-diff
   Gitleaks, LOW/zero-flow staged GitNexus review, and shared-main preservation.
+- DOM-016 exact code head `f5df13666ccdfdf552e423a379faf60463fc6643`: 4 / 4 direct
+  legacy-projection authority tests and 5 source/inventory/documentation files / 20 tests passed;
+  serial and default-parallel suites each passed 156 files / 1,236 tests, with root/web
+  TypeScript/build, changed-diff Gitleaks, LOW/zero-flow staged GitNexus review, and shared-main
+  preservation.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

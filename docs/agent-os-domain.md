@@ -271,6 +271,11 @@ The [migration-control matrix](./agent-os-migration-controls.md) is authoritativ
 control implementation state, activation gates, and rollback checkpoints. A reserved control name
 does not claim a runtime binding or completed phase.
 
+The [legacy projection contract](./agent-os-compatibility-projections.md) assigns every
+compatibility/legacy table one current authority mode, read/write boundary, canonical relationship,
+target disposition, and cutover gate. It is a logical design: DOM-017 owns physical
+migrations/backfills/rollback plans, and DOM-019 owns old-versus-canonical usage telemetry.
+
 1. Every schema change is an idempotent forward migration with upgrade and integrity tests.
 2. Canonical writes begin behind a migration flag while legacy behavior remains available.
 3. Compatibility routes read canonical state or project legacy state without dual authoritative

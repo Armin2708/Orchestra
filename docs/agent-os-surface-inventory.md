@@ -1,8 +1,9 @@
 # Agent OS surface inventory
 
 Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
-DOM-014's focused service-boundary topology, and DOM-015's server composition boundary, observed at
-exact code head `98c722f10357311d5c1dfdb4ca8e83228adc2b8c`.
+DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
+legacy projection contract, observed at exact code head
+`f5df13666ccdfdf552e423a379faf60463fc6643`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -69,6 +70,27 @@ The static drift guard rejects direct Agent OS registrar imports in `src/server.
 handlers or SQL in the composition module, and canonical service constructors in either boundary.
 The full contract and fallback-preservation evidence are in
 [`agent-os-server-composition.md`](./agent-os-server-composition.md).
+
+## Legacy projection and compatibility-view contract
+
+All 3 compatibility and 10 legacy tables have one executable authority entry in
+`src/agent-os/compatibility-projection-contract.ts`. The contract distinguishes shared scope,
+bounded compatibility authority, field/lineage-partitioned bridges, projection sinks, legacy-event
+ingress, and legacy domains with no canonical replacement. No entry permits two authorities to
+resolve by last-write-wins.
+
+| Contract | Exact value |
+|---|---|
+| Schema / backlog item | `1` / `DOM-016` |
+| Covered tables | 13 / 13 compatibility and legacy tables |
+| Physical migration owner | `DOM-017` |
+| Read/write telemetry owner | `DOM-019` |
+| Runtime effect | none; logical design only |
+
+DOM-016 does not create SQLite views, backfill data, disable a writer, or relabel low-level
+messages as Discussions, message receipts as work Deliveries, or injected-context estimates as
+provider usage. The exact per-table read/write/cutover rules are in
+[`agent-os-compatibility-projections.md`](./agent-os-compatibility-projections.md).
 
 ## Database tables
 

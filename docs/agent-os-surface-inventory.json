@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "98c722f10357311d5c1dfdb4ca8e83228adc2b8c",
+  "observed_at_commit": "f5df13666ccdfdf552e423a379faf60463fc6643",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -59,6 +59,29 @@
       "canonical domain state transitions",
       "canonical service construction",
       "domain persistence and validation rules"
+    ]
+  },
+  "legacy_projection_contract": {
+    "schema_version": 1,
+    "backlog_item": "DOM-016",
+    "source": "src/agent-os/compatibility-projection-contract.ts",
+    "migration_owner": "DOM-017",
+    "telemetry_owner": "DOM-019",
+    "table_count": 13,
+    "authority_modes": [
+      "shared_scope",
+      "compatibility_authority",
+      "scope_partitioned_bridge",
+      "projection_sink",
+      "legacy_event_ingress",
+      "isolated_legacy_domain"
+    ],
+    "target_dispositions": [
+      "retain_shared_scope",
+      "canonical_command_adapter",
+      "read_only_projection",
+      "retain_distinct_semantics",
+      "retire_after_replacement"
     ]
   },
   "table_sources": [

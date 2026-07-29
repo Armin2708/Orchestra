@@ -16,6 +16,9 @@ See [Subscription-first terminal-agent strategy](provider-subscription-strategy.
 current/target provider matrix and acceptance rules.
 The [migration controls and rollback contract](./agent-os-migration-controls.md) defines the
 closed-by-default control, activation gate, and recovery boundary for every delivery phase.
+The [legacy projection and compatibility-view contract](./agent-os-compatibility-projections.md)
+defines which old tables are shared scope, bounded bridges, read projections, or deliberately
+isolated legacy domains before physical migration.
 
 ## Open the cockpit
 
