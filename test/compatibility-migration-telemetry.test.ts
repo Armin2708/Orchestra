@@ -424,10 +424,10 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toBe(13 * 3)
     expect(
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
-    ).toHaveLength(9)
+    ).toHaveLength(12)
     expect(new Set(
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
-    ).size).toBe(9)
+    ).size).toBe(12)
     expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
       .not.toThrow()
     db.close()
@@ -1867,11 +1867,14 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       reason: 'legacy_write_nonzero',
       writer_removal_authorized: false,
     })
-    expect(observedStatements).toHaveLength(1)
-    expect(observedStatements[0]?.sql).toContain(COVERAGE_TABLE)
-    expect(observedStatements[0]?.sql).not.toContain(DAILY_TABLE)
-    expect(observedStatements[0]?.sql).not.toContain(HISTORY_TABLE)
-    expect(observedStatements[0]?.inTransaction).toBe(true)
+    const coverageReads = observedStatements.filter(
+      ({ sql }) => sql.includes(`FROM ${COVERAGE_TABLE}`),
+    )
+    expect(coverageReads).toHaveLength(1)
+    expect(coverageReads[0]?.sql).not.toContain(DAILY_TABLE)
+    expect(coverageReads[0]?.sql).not.toContain(HISTORY_TABLE)
+    expect(observedStatements.every(({ inTransaction }) => inTransaction))
+      .toBe(true)
     expect(reopened.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
     `).get()).toEqual({ count: 13 * 30 })
@@ -1888,22 +1891,40 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       count: 2,
     }))
     sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
-    db.exec(`
-      CREATE TRIGGER test_dom019_abort_rollup
-      BEFORE DELETE ON ${DAILY_TABLE}
-      BEGIN
-        SELECT RAISE(ABORT, 'simulated rollup delete failure');
-      END
-    `)
+    let injected = false
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method, inTransaction) => {
+        if (
+          !injected
+          && method === 'run'
+          && sql.includes(`DELETE FROM ${DAILY_TABLE}`)
+        ) {
+          expect(inTransaction).toBe(true)
+          injected = true
+          db.exec(`
+            CREATE TRIGGER test_dom019_abort_rollup
+            BEFORE DELETE ON ${DAILY_TABLE}
+            BEGIN
+              SELECT RAISE(ABORT, 'simulated rollup delete failure');
+            END
+          `)
+        }
+      },
+    )
 
-    expect(() => rollupCompatibilityMigrationTelemetry(db, {
+    expect(() => rollupCompatibilityMigrationTelemetry(observed, {
       now: new Date('2025-07-01T00:00:00.000Z'),
     })).toThrow(/simulated rollup delete failure/)
+    expect(injected).toBe(true)
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ${DAILY_TABLE}`).get())
       .toEqual({ count: 1 })
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
       .toEqual({ count: 0 })
-    db.exec('DROP TRIGGER test_dom019_abort_rollup')
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='trigger' AND name='test_dom019_abort_rollup'
+    `).get()).toEqual({ count: 0 })
     expect(rollupCompatibilityMigrationTelemetry(db, {
       now: new Date('2025-07-01T00:00:00.000Z'),
     }).count_compacted).toBe(2)
@@ -1920,19 +1941,33 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       count: 2,
     }))
     sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
-    db.exec(`
-      CREATE TRIGGER test_dom019_abort_nested_rollup
-      BEFORE DELETE ON ${DAILY_TABLE}
-      BEGIN
-        SELECT RAISE(ABORT, 'simulated nested rollup delete failure');
-      END
-    `)
+    let injected = false
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method, inTransaction) => {
+        if (
+          !injected
+          && method === 'run'
+          && sql.includes(`DELETE FROM ${DAILY_TABLE}`)
+        ) {
+          expect(inTransaction).toBe(true)
+          injected = true
+          db.exec(`
+            CREATE TRIGGER test_dom019_abort_nested_rollup
+            BEFORE DELETE ON ${DAILY_TABLE}
+            BEGIN
+              SELECT RAISE(ABORT, 'simulated nested rollup delete failure');
+            END
+          `)
+        }
+      },
+    )
 
     const outer = db.transaction(() => {
       db.prepare(`
         INSERT INTO kv (key, value) VALUES ('dom019-before', 'preserved')
       `).run()
-      expect(() => rollupCompatibilityMigrationTelemetry(db, {
+      expect(() => rollupCompatibilityMigrationTelemetry(observed, {
         now: new Date('2025-07-01T00:00:00.000Z'),
       })).toThrow(/simulated nested rollup delete failure/)
       db.prepare(`
@@ -1940,6 +1975,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       `).run()
     })
     outer()
+    expect(injected).toBe(true)
 
     expect(db.prepare(`
       SELECT key AS marker, value FROM kv
@@ -1953,8 +1989,10 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toEqual({ count: 1 })
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
       .toEqual({ count: 0 })
-
-    db.exec('DROP TRIGGER test_dom019_abort_nested_rollup')
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='trigger' AND name='test_dom019_abort_nested_rollup'
+    `).get()).toEqual({ count: 0 })
     expect(rollupCompatibilityMigrationTelemetry(db, {
       now: new Date('2025-07-01T00:00:00.000Z'),
     })).toMatchObject({
@@ -2135,7 +2173,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
         statements.push({ sql, inTransaction })
         if (
           !boundaryAttempted
-          && sql.includes('SELECT type, sql FROM sqlite_master')
+          && sql.includes('SELECT type, name, sql FROM sqlite_master')
         ) {
           boundaryAttempted = true
           try {

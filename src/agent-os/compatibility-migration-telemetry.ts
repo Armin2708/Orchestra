@@ -234,6 +234,17 @@ export interface CompatibilityMigrationTelemetryRollupResult {
   readonly failure_count_compacted: number
 }
 
+export interface CompatibilityMigrationTelemetryCollectorEpochRefreshInput {
+  readonly now: Date
+}
+
+export interface CompatibilityMigrationTelemetryCollectorEpoch {
+  readonly installed_day: string
+  readonly collector_schema_version: number
+  readonly valid_from_day: string
+  readonly refreshed: boolean
+}
+
 export interface CompatibilityMigrationWriterObservationQuery {
   readonly table: AgentOsLegacyCompatibilityTable
   readonly from_day: string
@@ -293,6 +304,19 @@ const TELEMETRY_HISTORY_TABLE =
   'os_compatibility_migration_telemetry_history'
 const TELEMETRY_COVERAGE_TABLE =
   'os_compatibility_migration_telemetry_coverage'
+export const AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE =
+  'os_compatibility_migration_telemetry_state'
+const TELEMETRY_GUARD_FUNCTION =
+  'orchestra_compatibility_migration_telemetry_guard'
+
+type TelemetryMutationGuard = 'idle' | 'epoch' | 'seal' | 'rollup'
+
+type TelemetryGuardState = {
+  mode: TelemetryMutationGuard
+}
+
+const TELEMETRY_GUARD_STATES =
+  new WeakMap<Database.Database, TelemetryGuardState>()
 
 function sqlEnum(values: readonly string[]): string {
   return values.map((value) => `'${value}'`).join(',')
@@ -531,6 +555,22 @@ const BASE_SCHEMA = Object.freeze([
     ) STRICT`,
   }),
   Object.freeze({
+    type: 'table' as const,
+    name: AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE,
+    sql: `CREATE TABLE ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE} (
+      singleton INTEGER PRIMARY KEY
+        CHECK(typeof(singleton)='integer' AND singleton=1),
+      installed_day TEXT NOT NULL CHECK(${UTC_DAY_CHECK_SQL('installed_day')}),
+      collector_schema_version INTEGER NOT NULL
+        CHECK(
+          typeof(collector_schema_version)='integer'
+          AND collector_schema_version>=0
+        ),
+      valid_from_day TEXT NOT NULL CHECK(${UTC_DAY_CHECK_SQL('valid_from_day')}),
+      CHECK(installed_day<=valid_from_day)
+    ) STRICT`,
+  }),
+  Object.freeze({
     type: 'index' as const,
     name: 'idx_os_compatibility_telemetry_daily_table_day',
     sql: `CREATE INDEX idx_os_compatibility_telemetry_daily_table_day
@@ -594,15 +634,30 @@ const TELEMETRY_INTEGRITY_TRIGGERS = Object.freeze([
   }),
   Object.freeze({
     type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_daily_guard_delete',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_daily_guard_delete
+      BEFORE DELETE ON ${TELEMETRY_DAILY_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'rollup'
+        OR NOT EXISTS (
+          SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+          WHERE day=OLD.day AND table_name=OLD.table_name
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry daily deletion is rollup-managed');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
     name: 'trg_os_compatibility_telemetry_coverage_immutable_insert',
     sql: `CREATE TRIGGER trg_os_compatibility_telemetry_coverage_immutable_insert
       BEFORE INSERT ON ${TELEMETRY_COVERAGE_TABLE}
-      WHEN EXISTS (
-        SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
-        WHERE day=NEW.day AND table_name=NEW.table_name
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'seal'
+        OR EXISTS (
+          SELECT 1 FROM ${TELEMETRY_COVERAGE_TABLE}
+          WHERE day=NEW.day AND table_name=NEW.table_name
       )
       BEGIN
-        SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable');
+        SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable; inserts are seal-managed');
       END`,
   }),
   Object.freeze({
@@ -623,6 +678,68 @@ const TELEMETRY_INTEGRITY_TRIGGERS = Object.freeze([
         SELECT RAISE(ABORT, 'compatibility telemetry coverage is immutable');
       END`,
   }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_history_guard_insert',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_history_guard_insert
+      BEFORE INSERT ON ${TELEMETRY_HISTORY_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'rollup'
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry history mutation is guarded');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_history_guard_update',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_history_guard_update
+      BEFORE UPDATE ON ${TELEMETRY_HISTORY_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'rollup'
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry history mutation is guarded');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_history_guard_delete',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_history_guard_delete
+      BEFORE DELETE ON ${TELEMETRY_HISTORY_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'rollup'
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry history mutation is guarded');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_state_guard_insert',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_state_guard_insert
+      BEFORE INSERT ON ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'epoch'
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry state mutation is guarded');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_state_guard_update',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_state_guard_update
+      BEFORE UPDATE ON ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'epoch'
+        OR NEW.singleton<>OLD.singleton
+        OR NEW.installed_day<>OLD.installed_day
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry state mutation is guarded');
+      END`,
+  }),
+  Object.freeze({
+    type: 'trigger' as const,
+    name: 'trg_os_compatibility_telemetry_state_guard_delete',
+    sql: `CREATE TRIGGER trg_os_compatibility_telemetry_state_guard_delete
+      BEFORE DELETE ON ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+      WHEN ${TELEMETRY_GUARD_FUNCTION}()<>'epoch'
+      BEGIN
+        SELECT RAISE(ABORT, 'compatibility telemetry state mutation is guarded');
+      END`,
+  }),
 ] satisfies readonly SchemaObject[])
 
 const COMPATIBILITY_TELEMETRY_SCHEMA = Object.freeze([
@@ -630,6 +747,13 @@ const COMPATIBILITY_TELEMETRY_SCHEMA = Object.freeze([
   ...TELEMETRY_TRIGGERS,
   ...TELEMETRY_INTEGRITY_TRIGGERS,
 ] satisfies readonly SchemaObject[])
+
+const TELEMETRY_OWNED_TABLES = Object.freeze([
+  TELEMETRY_DAILY_TABLE,
+  TELEMETRY_HISTORY_TABLE,
+  TELEMETRY_COVERAGE_TABLE,
+  AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE,
+])
 
 export const AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES =
   Object.freeze(
@@ -688,17 +812,35 @@ function normalizeSchemaSql(sql: string): string {
 export function assertCompatibilityMigrationTelemetrySchemaCompatible(
   db: Database.Database,
 ): void {
+  const ownedTablePlaceholders =
+    TELEMETRY_OWNED_TABLES.map(() => '?').join(',')
+  const actualOwnedObjects = db.prepare(`
+    SELECT type, name, sql FROM sqlite_master
+    WHERE sql IS NOT NULL
+      AND (
+        (
+          type IN ('index', 'trigger')
+          AND tbl_name IN (${ownedTablePlaceholders})
+        )
+        OR name LIKE 'os_compatibility_migration_telemetry_%'
+        OR name LIKE 'idx_os_compatibility_telemetry_%'
+        OR name LIKE 'trg_os_compatibility_telemetry_%'
+      )
+    ORDER BY type, name
+  `).all(...TELEMETRY_OWNED_TABLES) as Array<{
+    type: string
+    name: string
+    sql: string
+  }>
+  const actualByName = new Map(
+    actualOwnedObjects.map((actual) => [actual.name, actual]),
+  )
   for (const expected of COMPATIBILITY_TELEMETRY_SCHEMA) {
-    const actual = db.prepare(`
-      SELECT type, sql FROM sqlite_master WHERE name=?
-    `).get(expected.name) as {
-      type: string
-      sql: string | null
-    } | undefined
+    const actual = actualByName.get(expected.name)
     if (
       !actual
       || actual.type !== expected.type
-      || normalizeSchemaSql(actual.sql ?? '') !== normalizeSchemaSql(expected.sql)
+      || normalizeSchemaSql(actual.sql) !== normalizeSchemaSql(expected.sql)
     ) {
       throw new Error(
         `migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`
@@ -706,51 +848,10 @@ export function assertCompatibilityMigrationTelemetrySchemaCompatible(
       )
     }
   }
-
-  const legacyTablePlaceholders =
-    AGENT_OS_LEGACY_COMPATIBILITY_TABLES.map(() => '?').join(',')
-  const actualTelemetryTriggers = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type='trigger'
-      AND tbl_name IN (${legacyTablePlaceholders})
-      AND name LIKE 'trg_os_compatibility_telemetry_%'
-    ORDER BY name
-  `).all(...AGENT_OS_LEGACY_COMPATIBILITY_TABLES) as Array<{ name: string }>
-  const expectedTelemetryTriggers = [...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES]
-    .sort()
-  if (
-    actualTelemetryTriggers.length !== expectedTelemetryTriggers.length
-    || actualTelemetryTriggers.some(
-      ({ name }, index) => name !== expectedTelemetryTriggers[index],
-    )
-  ) {
+  if (actualOwnedObjects.length !== COMPATIBILITY_TELEMETRY_SCHEMA.length) {
     throw new Error(
       `migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`
-      + ' found unexpected legacy mutation telemetry triggers',
-    )
-  }
-
-  const actualIntegrityTriggers = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type='trigger'
-      AND tbl_name IN (?, ?)
-    ORDER BY name
-  `).all(
-    TELEMETRY_DAILY_TABLE,
-    TELEMETRY_COVERAGE_TABLE,
-  ) as Array<{ name: string }>
-  const expectedIntegrityTriggers = [
-    ...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
-  ].sort()
-  if (
-    actualIntegrityTriggers.length !== expectedIntegrityTriggers.length
-    || actualIntegrityTriggers.some(
-      ({ name }, index) => name !== expectedIntegrityTriggers[index],
-    )
-  ) {
-    throw new Error(
-      `migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`
-      + ' found unexpected telemetry integrity triggers',
+      + ' found unexpected telemetry integrity triggers or owned schema objects',
     )
   }
 }
@@ -806,8 +907,8 @@ function assertExactKeys(
   if (missing.length || extra.length) {
     throw new TypeError(
       `compatibility telemetry input keys are invalid`
-      + ` (missing=${missing.join(',') || 'none'}`
-      + ` extra=${extra.join(',') || 'none'})`,
+      + ` (missing_count=${missing.length}`
+      + ` unexpected_count=${extra.length})`,
     )
   }
 }
@@ -1152,6 +1253,205 @@ function runReadSnapshot<Result>(
   return db.transaction(work).deferred()
 }
 
+type StoredCompatibilityMigrationTelemetryCollectorEpoch = {
+  singleton: number
+  installed_day: string
+  collector_schema_version: number
+  valid_from_day: string
+}
+
+function ensureTelemetryGuardState(
+  db: Database.Database,
+): TelemetryGuardState {
+  const existing = TELEMETRY_GUARD_STATES.get(db)
+  if (existing) {
+    db.function(TELEMETRY_GUARD_FUNCTION, () => existing.mode)
+    return existing
+  }
+
+  const state: TelemetryGuardState = { mode: 'idle' }
+  db.function(TELEMETRY_GUARD_FUNCTION, () => state.mode)
+  TELEMETRY_GUARD_STATES.set(db, state)
+  return state
+}
+
+function withTelemetryMutationGuard<Result>(
+  db: Database.Database,
+  mode: Exclude<TelemetryMutationGuard, 'idle'>,
+  work: () => Result,
+): Result {
+  const state = ensureTelemetryGuardState(db)
+  if (state.mode !== 'idle') {
+    throw new Error('compatibility telemetry mutation guard is already active')
+  }
+  state.mode = mode
+  try {
+    return work()
+  } finally {
+    state.mode = 'idle'
+  }
+}
+
+function sqliteSchemaVersion(db: Database.Database): number {
+  return assertSafeCount(
+    'SQLite schema_version',
+    db.pragma('schema_version', { simple: true }),
+  )
+}
+
+function telemetryMigrationMarker(
+  db: Database.Database,
+): { applied_at: string } | undefined {
+  const marker = db.prepare(`
+    SELECT applied_at FROM os_schema_migrations WHERE id=?
+  `).get(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID) as {
+    applied_at: unknown
+  } | undefined
+  if (!marker) return undefined
+  if (typeof marker.applied_at !== 'string') {
+    throw new Error('compatibility telemetry migration marker is malformed')
+  }
+  return { applied_at: marker.applied_at }
+}
+
+function storedCompatibilityMigrationTelemetryCollectorEpoch(
+  db: Database.Database,
+): StoredCompatibilityMigrationTelemetryCollectorEpoch {
+  const rows = db.prepare(`
+    SELECT singleton, installed_day, collector_schema_version, valid_from_day
+    FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    ORDER BY singleton
+  `).all() as StoredCompatibilityMigrationTelemetryCollectorEpoch[]
+  if (rows.length !== 1 || rows[0]?.singleton !== 1) {
+    throw new Error('compatibility telemetry collector epoch is uninitialized')
+  }
+  const row = rows[0]
+  assertUtcDay('collector installed_day', row.installed_day)
+  assertUtcDay('collector valid_from_day', row.valid_from_day)
+  assertSafeCount(
+    'collector_schema_version',
+    row.collector_schema_version,
+  )
+  if (row.installed_day > row.valid_from_day) {
+    throw new Error('compatibility telemetry collector epoch is malformed')
+  }
+  return row
+}
+
+function assertCompatibilityMigrationTelemetryCollectorEpochCurrent(
+  db: Database.Database,
+): StoredCompatibilityMigrationTelemetryCollectorEpoch {
+  assertCompatibilityMigrationTelemetrySchemaCompatible(db)
+  if (!telemetryMigrationMarker(db)) {
+    throw new Error(
+      `coverage requires migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`,
+    )
+  }
+  const epoch = storedCompatibilityMigrationTelemetryCollectorEpoch(db)
+  if (epoch.collector_schema_version !== sqliteSchemaVersion(db)) {
+    throw new Error(
+      'compatibility telemetry collector schema epoch requires startup refresh',
+    )
+  }
+  return epoch
+}
+
+/**
+ * Validate the exact collector schema after all startup migrations and advance the collector
+ * epoch only when SQLite reports a schema change. Advancing the epoch conservatively forfeits
+ * every unsealed day through `now`; a stable restart performs no write.
+ */
+export function refreshCompatibilityMigrationTelemetryCollectorEpoch(
+  db: Database.Database,
+  input: CompatibilityMigrationTelemetryCollectorEpochRefreshInput,
+): CompatibilityMigrationTelemetryCollectorEpoch {
+  assertExactKeys(input, ['now'])
+  assertValidDate('now', input.now)
+  const observedDay = utcDay(input.now)
+
+  return withTelemetryMutationGuard(db, 'epoch', () => (
+    runAtomically(db, () => {
+      assertCompatibilityMigrationTelemetrySchemaCompatible(db)
+      const marker = telemetryMigrationMarker(db)
+      if (!marker) {
+        throw new Error(
+          `collector epoch requires migration `
+          + AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
+        )
+      }
+      const markerDay = marker.applied_at.slice(0, 10)
+      assertUtcDay('migration applied_at day', markerDay)
+      const currentSchemaVersion = sqliteSchemaVersion(db)
+      const rows = db.prepare(`
+        SELECT singleton, installed_day, collector_schema_version, valid_from_day
+        FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+        ORDER BY singleton
+      `).all() as StoredCompatibilityMigrationTelemetryCollectorEpoch[]
+      if (rows.length > 1) {
+        throw new Error('compatibility telemetry collector epoch is malformed')
+      }
+
+      const existing = rows[0]
+      if (!existing) {
+        const validFromDay = markerDay > observedDay
+          ? markerDay
+          : observedDay
+        db.prepare(`
+          INSERT INTO ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE} (
+            singleton, installed_day, collector_schema_version, valid_from_day
+          ) VALUES (1, ?, ?, ?)
+        `).run(markerDay, currentSchemaVersion, validFromDay)
+        return Object.freeze({
+          installed_day: markerDay,
+          collector_schema_version: currentSchemaVersion,
+          valid_from_day: validFromDay,
+          refreshed: true,
+        })
+      }
+
+      assertUtcDay('collector installed_day', existing.installed_day)
+      assertUtcDay('collector valid_from_day', existing.valid_from_day)
+      assertSafeCount(
+        'collector_schema_version',
+        existing.collector_schema_version,
+      )
+      if (existing.installed_day > existing.valid_from_day) {
+        throw new Error('compatibility telemetry collector epoch is malformed')
+      }
+      if (existing.collector_schema_version === currentSchemaVersion) {
+        return Object.freeze({
+          installed_day: existing.installed_day,
+          collector_schema_version: existing.collector_schema_version,
+          valid_from_day: existing.valid_from_day,
+          refreshed: false,
+        })
+      }
+
+      const validFromDay = existing.valid_from_day > observedDay
+        ? existing.valid_from_day
+        : observedDay
+      const update = db.prepare(`
+        UPDATE ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+        SET collector_schema_version=?, valid_from_day=?
+        WHERE singleton=1 AND collector_schema_version=?
+      `).run(
+        currentSchemaVersion,
+        validFromDay,
+        existing.collector_schema_version,
+      )
+      if (update.changes !== 1) {
+        throw new Error('compatibility telemetry collector epoch update raced')
+      }
+      return Object.freeze({
+        installed_day: existing.installed_day,
+        collector_schema_version: currentSchemaVersion,
+        valid_from_day: validFromDay,
+        refreshed: true,
+      })
+    })
+  ))
+}
+
 /**
  * Mark one fully observed UTC day only after it is complete and after 023 was active beforehand.
  *
@@ -1168,26 +1468,9 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
     throw new RangeError('only a completed UTC day can be sealed')
   }
 
-  runAtomically(db, () => {
-    assertCompatibilityMigrationTelemetrySchemaCompatible(db)
-    const marker = db.prepare(`
-      SELECT applied_at FROM os_schema_migrations WHERE id=?
-    `).get(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID) as {
-      applied_at: string
-    } | undefined
-    if (!marker) {
-      throw new Error(
-        `coverage requires migration ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID}`,
-      )
-    }
-    const appliedDay = marker.applied_at.slice(0, 10)
-    assertUtcDay('migration applied_at day', appliedDay)
-    if (day <= appliedDay) {
-      throw new RangeError(
-        'coverage day must begin after the telemetry migration installation day',
-      )
-    }
-
+  withTelemetryMutationGuard(db, 'seal', () => runAtomically(db, () => {
+    const epoch =
+      assertCompatibilityMigrationTelemetryCollectorEpochCurrent(db)
     const existing = db.prepare(`
       SELECT table_name, legacy_write_count, mismatch_count, failure_count
       FROM ${TELEMETRY_COVERAGE_TABLE}
@@ -1214,6 +1497,11 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
         assertSafeCount('coverage failure_count', row.failure_count)
       }
       return
+    }
+    if (day <= epoch.valid_from_day) {
+      throw new RangeError(
+        'coverage day must begin after the current collector epoch',
+      )
     }
 
     const tableValues = AGENT_OS_LEGACY_COMPATIBILITY_TABLES
@@ -1273,7 +1561,56 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
         ),
       )
     }
-  })
+  }))
+}
+
+type TelemetryConservationRow = {
+  table_name: AgentOsLegacyCompatibilityTable
+  operation: CompatibilityMigrationTelemetryOperation
+  cohort: CompatibilityMigrationTelemetryCohort
+  diagnostic_code: CompatibilityMigrationTelemetryDiagnostic
+  count: number
+}
+
+function compatibilityMigrationTelemetryConservationSnapshot(
+  db: Database.Database,
+): readonly TelemetryConservationRow[] {
+  const rows = db.prepare(`
+    SELECT table_name, operation, cohort, diagnostic_code, SUM(count) AS count
+    FROM (
+      SELECT table_name, operation, cohort, diagnostic_code, count
+      FROM ${TELEMETRY_HISTORY_TABLE}
+      UNION ALL
+      SELECT table_name, operation, cohort, diagnostic_code, count
+      FROM ${TELEMETRY_DAILY_TABLE}
+    )
+    GROUP BY table_name, operation, cohort, diagnostic_code
+    ORDER BY table_name, operation, cohort, diagnostic_code
+  `).all() as TelemetryConservationRow[]
+  return Object.freeze(rows.map((row) => Object.freeze({
+    ...row,
+    count: assertSafeCount('conserved telemetry count', row.count),
+  })))
+}
+
+function assertCompatibilityMigrationTelemetryConserved(
+  before: readonly TelemetryConservationRow[],
+  after: readonly TelemetryConservationRow[],
+): void {
+  const matches = before.length === after.length && before.every(
+    (row, index) => {
+      const candidate = after[index]
+      return !!candidate
+        && candidate.table_name === row.table_name
+        && candidate.operation === row.operation
+        && candidate.cohort === row.cohort
+        && candidate.diagnostic_code === row.diagnostic_code
+        && candidate.count === row.count
+    },
+  )
+  if (!matches) {
+    throw new Error('compatibility telemetry rollup failed conservation')
+  }
 }
 
 export function rollupCompatibilityMigrationTelemetry(
@@ -1304,7 +1641,9 @@ export function rollupCompatibilityMigrationTelemetry(
     HAVING COUNT(*)=${AGENT_OS_LEGACY_COMPATIBILITY_TABLES.length}
   `
 
-  return runAtomically(db, () => {
+  return withTelemetryMutationGuard(db, 'rollup', () => runAtomically(db, () => {
+    assertCompatibilityMigrationTelemetryCollectorEpochCurrent(db)
+    const before = compatibilityMigrationTelemetryConservationSnapshot(db)
     const aggregate = db.prepare(`
       WITH eligible_days(day) AS (${eligibleDaysSql})
       SELECT
@@ -1343,11 +1682,18 @@ export function rollupCompatibilityMigrationTelemetry(
         last_day=MAX(last_day, excluded.last_day),
         count=count+excluded.count
     `).run(retainFromDay)
-    db.prepare(`
+    const deleted = db.prepare(`
       WITH eligible_days(day) AS (${eligibleDaysSql})
       DELETE FROM ${TELEMETRY_DAILY_TABLE}
       WHERE day IN (SELECT day FROM eligible_days)
     `).run(retainFromDay)
+    if (deleted.changes !== aggregate.rows_compacted) {
+      throw new Error(
+        'compatibility telemetry compaction deleted an unexpected row count',
+      )
+    }
+    const after = compatibilityMigrationTelemetryConservationSnapshot(db)
+    assertCompatibilityMigrationTelemetryConserved(before, after)
 
     return Object.freeze({
       retain_from_day: retainFromDay,
@@ -1369,7 +1715,7 @@ export function rollupCompatibilityMigrationTelemetry(
         aggregate.failure_count_compacted,
       ),
     })
-  })
+  }))
 }
 
 export function queryCompatibilityMigrationWriterObservation(
@@ -1382,6 +1728,8 @@ export function queryCompatibilityMigrationWriterObservation(
   const calendarDays = calendarDayCount(query.from_day, query.through_day)
 
   return runReadSnapshot(db, () => {
+    const epoch =
+      assertCompatibilityMigrationTelemetryCollectorEpochCurrent(db)
     const snapshot = db.prepare(`
       SELECT
         COUNT(*) AS covered_days,
@@ -1428,7 +1776,10 @@ export function queryCompatibilityMigrationWriterObservation(
     ) {
       status = 'insufficient_observation'
       reason = 'window_too_short'
-    } else if (coveredDays !== calendarDays) {
+    } else if (
+      query.from_day <= epoch.valid_from_day
+      || coveredDays !== calendarDays
+    ) {
       status = 'insufficient_observation'
       reason = 'coverage_gap'
     } else {
