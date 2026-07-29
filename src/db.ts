@@ -165,13 +165,23 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agent_usage ADD COLUMN cost_cents INTEGER`) } catch { /* exists */ }
   db.exec(`
     UPDATE agent_usage
-      SET provider=COALESCE((SELECT provider FROM agents WHERE agents.id=agent_usage.agent_id), provider, 'claude');
+      SET provider=COALESCE(
+        (SELECT provider FROM agents WHERE agents.id=agent_usage.agent_id),
+        provider,
+        'claude'
+      )
+      WHERE provider IS NOT COALESCE(
+        (SELECT provider FROM agents WHERE agents.id=agent_usage.agent_id),
+        provider,
+        'claude'
+      );
     UPDATE agent_usage
       SET total_tokens=input_tokens + cache_read + cache_creation + output_tokens
       WHERE total_tokens=0 AND (input_tokens + cache_read + cache_creation + output_tokens) > 0;
     UPDATE agent_usage SET cached_input_tokens=cache_read
       WHERE cached_input_tokens=0 AND cache_read > 0;
-    UPDATE agent_usage SET cache_read=0, cache_creation=0 WHERE provider='codex';
+    UPDATE agent_usage SET cache_read=0, cache_creation=0
+      WHERE provider='codex' AND (cache_read!=0 OR cache_creation!=0);
     CREATE INDEX IF NOT EXISTS agent_usage_board_provider_day_idx
       ON agent_usage(board_id, provider, day);
   `)

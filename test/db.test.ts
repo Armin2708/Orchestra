@@ -39,3 +39,49 @@ it('migrates legacy messages without losing existing mail', () => {
   db.close()
   fs.rmSync(dir, { recursive: true })
 })
+
+it('does not rewrite normalized agent usage during restart maintenance', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-db-restart-'))
+  const file = path.join(dir, 'restart.db')
+  try {
+    const first = openDb(file)
+    first.prepare(`
+      INSERT INTO boards (project_path, name) VALUES ('/p/restart', 'restart')
+    `).run()
+    first.prepare(`
+      INSERT INTO agents (board_id, name, provider) VALUES (1, 'worker', 'codex')
+    `).run()
+    first.prepare(`
+      INSERT INTO agent_usage (board_id, agent_id, day, provider)
+      VALUES (1, 1, '2026-07-29', 'codex')
+    `).run()
+    first.exec(`
+      CREATE TABLE startup_agent_usage_updates (
+        id INTEGER PRIMARY KEY
+      );
+      CREATE TRIGGER audit_startup_agent_usage_update
+      AFTER UPDATE ON agent_usage
+      BEGIN
+        INSERT INTO startup_agent_usage_updates (id) VALUES (NULL);
+      END;
+    `)
+    first.close()
+
+    const second = openDb(file)
+    expect(second.prepare(`
+      SELECT COUNT(*) AS count FROM startup_agent_usage_updates
+    `).get()).toEqual({ count: 0 })
+    expect(second.prepare(`
+      SELECT provider, cache_read, cache_creation
+      FROM agent_usage
+      WHERE board_id=1 AND agent_id=1 AND day='2026-07-29'
+    `).get()).toEqual({
+      provider: 'codex',
+      cache_read: 0,
+      cache_creation: 0,
+    })
+    second.close()
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
