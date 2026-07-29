@@ -18,6 +18,7 @@ import type {
   RepositoryProvenance,
 } from './knowledge-types.js'
 import {
+  KnowledgeContractError,
   canonicalKnowledgeJson,
   knowledgeChunkId,
   knowledgeSourceId,
@@ -32,12 +33,12 @@ export const KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION = 1 as const
 export const MAX_KNOWLEDGE_RETRIEVAL_RESULTS = 50
 export const MAX_KNOWLEDGE_RETRIEVAL_QUERY_CHARACTERS = 256
 export const MAX_KNOWLEDGE_RETRIEVAL_QUERY_TERMS = 16
+export const MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES = 8_000_000
 
 const MAX_FILTER_VALUES = 64
 const MAX_FILTER_TEXT_CHARACTERS = 4_096
 const MAX_REVISION_CHARACTERS = 512
 const MAX_IDENTIFIER_CHARACTERS = 256
-const MAX_RESULT_BYTES = 8_000_000
 const SHA256 = /^[a-f0-9]{64}$/u
 const COMMIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 const SOURCE_ID = /^ks_[a-f0-9]{64}$/u
@@ -156,6 +157,21 @@ export interface KnowledgeRetrievalResult {
   results: KnowledgeRetrievalMatch[]
 }
 
+export interface KnowledgeRetrievalTrustedMatchExpectation {
+  relevance_micros: number
+  citation: KnowledgeRetrievalCitation
+}
+
+/**
+ * This value is an expectation supplied by a trusted caller, not an
+ * authenticator embedded in an untrusted result. Runtime retrieval derives it
+ * independently from the exact index state and ranked database rows.
+ */
+export interface KnowledgeRetrievalTrustedExpectation {
+  index_snapshot_sha256: string
+  ranked_matches: KnowledgeRetrievalTrustedMatchExpectation[]
+}
+
 function contractError(
   code: KnowledgeRetrievalContractErrorCode,
   field: string | null = null,
@@ -179,12 +195,23 @@ function materialize(
       max_depth: 16,
       max_nodes: 20_000,
       max_string_characters: 2_000_000,
-      max_serialized_bytes: result ? MAX_RESULT_BYTES : 64_000,
+      max_serialized_bytes: result
+        ? MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES
+        : 64_000,
     })
     return JSON.parse(serialized) as unknown
   } catch {
     contractError(code, field)
   }
+}
+
+function canonicalResultJson(value: unknown): string {
+  return canonicalKnowledgeJson(value, {
+    max_depth: 16,
+    max_nodes: 20_000,
+    max_string_characters: 2_000_000,
+    max_serialized_bytes: MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES,
+  })
 }
 
 function record(
@@ -839,6 +866,64 @@ function citationMatchesRequest(
     )
 }
 
+/**
+ * Retains the largest contiguous ranked prefix whose exact canonical result
+ * representation fits the aggregate result bound. A match is serialized at
+ * most once for accounting, and a too-large match ends the prefix rather than
+ * allowing lower-ranked results to leapfrog it.
+ */
+export function boundedKnowledgeRetrievalResultPrefix(
+  envelope: Omit<KnowledgeRetrievalResult, 'results'>,
+  rankedMatches: readonly KnowledgeRetrievalMatch[],
+): KnowledgeRetrievalMatch[] {
+  if (rankedMatches.length > MAX_KNOWLEDGE_RETRIEVAL_RESULTS) {
+    contractError('invalid_result', 'results')
+  }
+  let retainedBytes: number
+  try {
+    retainedBytes = Buffer.byteLength(
+      canonicalResultJson({ ...envelope, results: [] }),
+      'utf8',
+    )
+  } catch {
+    contractError('invalid_result', 'result')
+  }
+  const retained: KnowledgeRetrievalMatch[] = []
+  for (let index = 0; index < rankedMatches.length; index += 1) {
+    const match = rankedMatches[index]
+    if (match.rank !== index + 1) contractError('invalid_result', 'match.rank')
+    let matchBytes: number
+    try {
+      matchBytes = Buffer.byteLength(canonicalResultJson(match), 'utf8')
+    } catch (error) {
+      if (
+        error instanceof KnowledgeContractError
+        && error.code === 'canonical_size_exceeded'
+      ) {
+        break
+      }
+      contractError('invalid_result', 'match')
+    }
+    const separatorBytes = retained.length === 0 ? 0 : 1
+    if (
+      retainedBytes + separatorBytes + matchBytes
+      > MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES
+    ) {
+      break
+    }
+    retainedBytes += separatorBytes + matchBytes
+    retained.push(match)
+  }
+  return retained
+}
+
+/**
+ * Structural validation verifies canonical shape, self-consistent identities,
+ * request filters, and deterministic ordering. It does not authenticate the
+ * self-supplied index hash, ranking scores, or mutable citation metadata; use
+ * attestKnowledgeRetrievalResult with a separately trusted expectation for
+ * that boundary.
+ */
 export function validateKnowledgeRetrievalResult(
   value: unknown,
   requestValue?: KnowledgeRetrievalRequest,
@@ -956,6 +1041,81 @@ export function validateKnowledgeRetrievalResult(
     )
   ) {
     contractError('invalid_result', 'request_binding')
+  }
+  return output
+}
+
+/**
+ * Validates a result and then binds it to an independently trusted index
+ * snapshot, exact ranked relevance values, and every citation field.
+ */
+export function attestKnowledgeRetrievalResult(
+  value: unknown,
+  requestValue: KnowledgeRetrievalRequest,
+  expectationValue: KnowledgeRetrievalTrustedExpectation,
+): KnowledgeRetrievalResult {
+  const output = validateKnowledgeRetrievalResult(value, requestValue)
+  const expectation = record(
+    materialize(
+      expectationValue,
+      'invalid_result',
+      'trusted_expectation',
+      true,
+    ),
+    'invalid_result',
+    'trusted_expectation',
+  )
+  exactKeys(
+    expectation,
+    ['index_snapshot_sha256', 'ranked_matches'],
+    'invalid_result',
+    'trusted_expectation',
+  )
+  const expectedSnapshot = sha256(
+    expectation.index_snapshot_sha256,
+    'invalid_result',
+    'trusted_expectation.index_snapshot_sha256',
+  )
+  if (
+    !Array.isArray(expectation.ranked_matches)
+    || expectation.ranked_matches.length !== output.results.length
+    || expectation.ranked_matches.length > MAX_KNOWLEDGE_RETRIEVAL_RESULTS
+  ) {
+    contractError('invalid_result', 'trusted_expectation')
+  }
+  const expectedMatches = expectation.ranked_matches.map((entry, index) => {
+    const expected = record(
+      entry,
+      'invalid_result',
+      'trusted_expectation.match',
+    )
+    exactKeys(
+      expected,
+      ['relevance_micros', 'citation'],
+      'invalid_result',
+      'trusted_expectation.match',
+    )
+    return {
+      relevance_micros: integer(
+        expected.relevance_micros,
+        'invalid_result',
+        'trusted_expectation.relevance_micros',
+        0,
+        1_000_000_000_000,
+      ),
+      citation: citation(expected.citation, output.results[index].content),
+    }
+  })
+  if (
+    output.index_snapshot_sha256 !== expectedSnapshot
+    || output.results.some((match, index) => {
+      const expected = expectedMatches[index]
+      return match.relevance_micros !== expected.relevance_micros
+        || canonicalKnowledgeJson(match.citation)
+          !== canonicalKnowledgeJson(expected.citation)
+    })
+  ) {
+    contractError('invalid_result', 'trusted_expectation')
   }
   return output
 }

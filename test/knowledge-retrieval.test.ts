@@ -6,11 +6,14 @@ import type Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import {
+  canonicalKnowledgeJson,
   knowledgeChunkId,
   knowledgeSourceId,
 } from '../src/agent-os/knowledge-contracts.js'
 import {
   KnowledgeRetrievalContractError,
+  MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES,
+  attestKnowledgeRetrievalResult,
   knowledgeRetrievalFtsExpression,
   knowledgeRetrievalRequestHash,
   validateKnowledgeRetrievalRequest,
@@ -528,6 +531,39 @@ describe('knowledge retrieval filters, citations, and policy', () => {
     }
   })
 
+  it('returns a deterministic aggregate-byte-bounded prefix for near-max chunks', () => {
+    const db = database()
+    const content = `deterministic retrieval ${'€'.repeat(1_999_000)}`
+    const firstSource = sourceFixture(1, 'near-max-first')
+    const secondSource = sourceFixture(1, 'near-max-second')
+    const firstChunk = chunkFixture(firstSource, content)
+    const secondChunk = chunkFixture(secondSource, content)
+    put(db, firstSource, firstChunk)
+    put(db, secondSource, secondChunk)
+    expect(synchronizeKnowledgeRetrievalIndex(db, {
+      board_id: 1,
+      indexed_at: AT,
+    })).toMatchObject({
+      inserted_documents: 2,
+      document_count: 2,
+    })
+
+    const result = retrieveKnowledge(db, request())
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].citation.source_id).toBe(
+      [firstSource.id, secondSource.id].sort()[0],
+    )
+    expect(retrieveKnowledge(db, request())).toEqual(result)
+    const serialized = canonicalKnowledgeJson(result, {
+      max_depth: 16,
+      max_nodes: 20_000,
+      max_string_characters: 2_000_000,
+      max_serialized_bytes: MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES,
+    })
+    expect(Buffer.byteLength(serialized, 'utf8'))
+      .toBeLessThanOrEqual(MAX_KNOWLEDGE_RETRIEVAL_RESULT_BYTES)
+  })
+
   it('applies exact repository, commit, revision, kind, path, prefix, and symbol filters', () => {
     const db = database()
     const symbolSource = sourceFixture(1, 'symbol', {
@@ -887,6 +923,79 @@ describe('knowledge retrieval filters, citations, and policy', () => {
       .toBe('retrieval_scope_invalid')
   })
 
+  it('retains historical targets across sync, rebuild, and retrieval', () => {
+    const db = database()
+    const cardId = addCard(db, 'Historical retrieval target')
+    const contract = addContract(db, cardId, 2)
+    const reportId = 'retrieval-historical-report'
+    const askedSnapshot = JSON.stringify(contract.asked)
+    db.prepare(`INSERT INTO delivery_reports
+      (id, lineage_id, sequence, board_id, card_id, status, asked_snapshot,
+       created_by, created_at, updated_at)
+      VALUES (?, ?, 1, 1, ?, 'accepted', ?, 'retrieval-test', ?, ?)`)
+      .run(reportId, reportId, cardId, askedSnapshot, AT, AT)
+    const historicalTargets = targetLinks(1, {
+      card_id: cardId,
+      contract_ref: `card:${cardId}:v2`,
+      contract_version: 2,
+      contract_snapshot_sha256: contract.snapshot_sha256,
+      delivery_report_id: reportId,
+    })
+    const source = sourceFixture(1, 'historical-target', {
+      targets: historicalTargets,
+    })
+    const chunk = chunkFixture(
+      source,
+      'deterministic retrieval retains historical report evidence',
+    )
+    put(db, source, chunk)
+    synchronizeKnowledgeRetrievalIndex(db, { board_id: 1, indexed_at: AT })
+
+    db.exec('DROP TRIGGER delivery_reports_asked_immutable')
+    db.prepare('UPDATE delivery_reports SET asked_snapshot=? WHERE id=?')
+      .run('{"contract_version":2}', reportId)
+    expect(caughtRuntime(() => synchronizeKnowledgeRetrievalIndex(db, {
+      board_id: 1,
+      indexed_at: LATER,
+    })).code).toBe('retrieval_source_corrupt')
+    db.prepare('UPDATE delivery_reports SET asked_snapshot=? WHERE id=?')
+      .run(askedSnapshot, reportId)
+
+    db.prepare('DELETE FROM delivery_reports WHERE id=?').run(reportId)
+    db.prepare(`UPDATE task_contracts
+      SET objective='Advanced contract', version=3, updated_at=?
+      WHERE card_id=?`).run(LATER, cardId)
+
+    expect(synchronizeKnowledgeRetrievalIndex(db, {
+      board_id: 1,
+      indexed_at: LATER,
+    })).toMatchObject({
+      status: 'unchanged',
+      inserted_documents: 0,
+      document_count: 1,
+    })
+    expect(rebuildKnowledgeRetrievalIndex(db, {
+      board_id: 1,
+      indexed_at: LATER,
+    })).toMatchObject({
+      status: 'rebuilt',
+      inserted_documents: 1,
+      document_count: 1,
+    })
+    expect(retrieveKnowledge(db, request()).results.map(
+      (match) => match.citation.source_id,
+    )).toEqual([source.id])
+
+    expect(caughtRuntime(() => retrieveKnowledge(db, request({
+      access_scope: {
+        kind: 'contract',
+        card_id: cardId,
+        contract_version: 2,
+      },
+      targets: historicalTargets,
+    }))).code).toBe('retrieval_scope_invalid')
+  })
+
   it('rejects a disconnected delivery report, session, and job tuple', () => {
     const db = database()
     const cardId = addCard(db, 'Report tuple')
@@ -1038,17 +1147,35 @@ describe('knowledge retrieval fail-closed contracts and drift', () => {
       .toBe('retrieval_source_corrupt')
   })
 
-  it('binds result ranks, content hashes, citations, filters, and request identity', () => {
+  it('separates structural result validation from trusted result attestation', () => {
     const db = database()
     const source = sourceFixture(1, 'binding')
     const chunk = chunkFixture(
       source,
       'deterministic retrieval binds every result',
     )
+    const secondSource = sourceFixture(1, 'binding-second')
+    const secondChunk = chunkFixture(
+      secondSource,
+      'deterministic retrieval binds every second result',
+    )
     put(db, source, chunk)
+    put(db, secondSource, secondChunk)
     synchronizeKnowledgeRetrievalIndex(db, { board_id: 1, indexed_at: AT })
     const retrievalRequest = request()
     const result = retrieveKnowledge(db, retrievalRequest)
+    const trustedExpectation = {
+      index_snapshot_sha256: result.index_snapshot_sha256,
+      ranked_matches: result.results.map((match) => ({
+        relevance_micros: match.relevance_micros,
+        citation: structuredClone(match.citation),
+      })),
+    }
+    expect(attestKnowledgeRetrievalResult(
+      result,
+      retrievalRequest,
+      trustedExpectation,
+    )).toEqual(result)
 
     const forgedHash = structuredClone(result)
     forgedHash.results[0].citation.chunk_content_sha256 = 'f'.repeat(64)
@@ -1075,6 +1202,63 @@ describe('knowledge retrieval fail-closed contracts and drift', () => {
     expect(caughtContract(() => validateKnowledgeRetrievalResult(
       result,
       filteredRequest,
+    )).code).toBe('invalid_result')
+
+    const forgedSnapshot = structuredClone(result)
+    forgedSnapshot.index_snapshot_sha256 = 'f'.repeat(64)
+    expect(validateKnowledgeRetrievalResult(forgedSnapshot, retrievalRequest))
+      .toEqual(forgedSnapshot)
+    expect(caughtContract(() => attestKnowledgeRetrievalResult(
+      forgedSnapshot,
+      retrievalRequest,
+      trustedExpectation,
+    )).code).toBe('invalid_result')
+
+    const forgedRelevance = structuredClone(result)
+    forgedRelevance.results[0].relevance_micros += 1
+    expect(validateKnowledgeRetrievalResult(forgedRelevance, retrievalRequest))
+      .toEqual(forgedRelevance)
+    expect(caughtContract(() => attestKnowledgeRetrievalResult(
+      forgedRelevance,
+      retrievalRequest,
+      trustedExpectation,
+    )).code).toBe('invalid_result')
+
+    const forgedOrder = structuredClone(result)
+    forgedOrder.results.reverse()
+    forgedOrder.results.forEach((match, index) => {
+      match.rank = index + 1
+      match.relevance_micros = 2 - index
+    })
+    expect(validateKnowledgeRetrievalResult(forgedOrder, retrievalRequest))
+      .toEqual(forgedOrder)
+    expect(caughtContract(() => attestKnowledgeRetrievalResult(
+      forgedOrder,
+      retrievalRequest,
+      trustedExpectation,
+    )).code).toBe('invalid_result')
+
+    const forgedTrust = structuredClone(result)
+    forgedTrust.results[0].citation.title = 'Forged trusted title'
+    forgedTrust.results[0].citation.trust_class = 'instruction'
+    expect(validateKnowledgeRetrievalResult(forgedTrust, retrievalRequest))
+      .toEqual(forgedTrust)
+    expect(caughtContract(() => attestKnowledgeRetrievalResult(
+      forgedTrust,
+      retrievalRequest,
+      trustedExpectation,
+    )).code).toBe('invalid_result')
+
+    const forgedCitationMetadata = structuredClone(result)
+    forgedCitationMetadata.results[0].citation.provenance.adapter_id = 'forged-adapter'
+    expect(validateKnowledgeRetrievalResult(
+      forgedCitationMetadata,
+      retrievalRequest,
+    )).toEqual(forgedCitationMetadata)
+    expect(caughtContract(() => attestKnowledgeRetrievalResult(
+      forgedCitationMetadata,
+      retrievalRequest,
+      trustedExpectation,
     )).code).toBe('invalid_result')
   })
 })

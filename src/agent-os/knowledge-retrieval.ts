@@ -12,16 +12,18 @@ import {
 } from './knowledge-contracts.js'
 import {
   KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+  attestKnowledgeRetrievalResult,
+  boundedKnowledgeRetrievalResultPrefix,
   knowledgeRetrievalFtsExpression,
   knowledgeRetrievalRequestHash,
   sourceVisibleToKnowledgeRetrievalRequest,
   validateKnowledgeRetrievalRequest,
-  validateKnowledgeRetrievalResult,
 } from './knowledge-retrieval-contracts.js'
 import type {
   KnowledgeRetrievalCitation,
   KnowledgeRetrievalRequest,
   KnowledgeRetrievalResult,
+  KnowledgeRetrievalTrustedExpectation,
 } from './knowledge-retrieval-contracts.js'
 
 const RETRIEVAL_SCHEMA_VERSION = 1
@@ -400,13 +402,17 @@ function exactContractSnapshotSha256(
     .digest('hex')
 }
 
+type TargetAuthorityMode = 'current_request' | 'retained_source'
+
 function assertTargetsAuthority(
   db: Database.Database,
   boardId: number,
   target: KnowledgeTargetLinks,
   failure: KnowledgeRetrievalErrorCode,
+  mode: TargetAuthorityMode,
 ): void {
   const fail = (): never => runtimeError(failure)
+  const retained = mode === 'retained_source'
   if (target.board_id !== boardId) fail()
   if (target.workspace_id !== null) {
     const workspace = db.prepare(`SELECT board_id, card_id FROM workspaces
@@ -414,23 +420,34 @@ function assertTargetsAuthority(
       board_id: number
       card_id: number | null
     } | undefined
-    if (
-      !workspace
-      || Number(workspace.board_id) !== boardId
+    if (!workspace) {
+      if (!retained) fail()
+    } else if (
+      Number(workspace.board_id) !== boardId
       || (
-        workspace.card_id === null
-          ? target.card_id !== null
-          : Number(workspace.card_id) !== target.card_id
+        retained
+          ? (
+              target.card_id !== null
+              && workspace.card_id !== null
+              && Number(workspace.card_id) !== target.card_id
+            )
+          : (
+              workspace.card_id === null
+                ? target.card_id !== null
+                : Number(workspace.card_id) !== target.card_id
+            )
       )
-    ) fail()
+    ) {
+      fail()
+    }
   }
   if (target.card_id !== null) {
     const card = db.prepare('SELECT board_id FROM cards WHERE id=?')
       .get(target.card_id) as { board_id: number } | undefined
-    if (!card || Number(card.board_id) !== boardId) fail()
+    if ((!card && !retained) || (card && Number(card.board_id) !== boardId)) fail()
   }
   if (target.contract_ref !== null) {
-    const contracts = db.prepare(`SELECT card.board_id, contract.objective,
+    const contract = db.prepare(`SELECT card.board_id, contract.objective,
         contract.deliverables, contract.acceptance_criteria,
         contract.verify_commands, contract.non_goals, contract.risks,
         contract.dependencies, contract.base_ref, contract.budget_tokens,
@@ -438,18 +455,29 @@ function assertTargetsAuthority(
         contract.version, contract.updated_at
       FROM task_contracts contract
       JOIN cards card ON card.id=contract.card_id
-      WHERE contract.card_id=? AND contract.version=?`)
-      .all(target.card_id, target.contract_version) as Array<Record<string, unknown>>
-    if (
-      contracts.length !== 1
-      || Number(contracts[0].board_id) !== boardId
-      || Number(contracts[0].version) !== target.contract_version
-      || (
-        target.delivery_report_id === null
-        && exactContractSnapshotSha256(contracts[0], fail)
-          !== target.contract_snapshot_sha256
-      )
-    ) fail()
+      WHERE contract.card_id=?`).get(target.card_id) as Record<string, unknown> | undefined
+    if (!contract) {
+      if (!retained) fail()
+    } else {
+      const contractVersion = Number(contract.version)
+      if (
+        Number(contract.board_id) !== boardId
+        || !Number.isSafeInteger(contractVersion)
+        || (
+          retained
+            ? contractVersion < Number(target.contract_version)
+            : contractVersion !== Number(target.contract_version)
+        )
+        || (
+          target.delivery_report_id === null
+          && contractVersion === Number(target.contract_version)
+          && exactContractSnapshotSha256(contract, fail)
+            !== target.contract_snapshot_sha256
+        )
+      ) {
+        fail()
+      }
+    }
   }
   if (target.job_id !== null) {
     const job = db.prepare(`SELECT board_id, card_id, workspace_id,
@@ -461,9 +489,10 @@ function assertTargetsAuthority(
       contract_version: number | null
       assigned_profile_id: string | null
     } | undefined
-    if (
-      !job
-      || Number(job.board_id) !== boardId
+    if (!job) {
+      if (!retained) fail()
+    } else if (
+      Number(job.board_id) !== boardId
       || (target.card_id !== null && Number(job.card_id) !== target.card_id)
       || (target.workspace_id !== null && job.workspace_id !== target.workspace_id)
       || (
@@ -472,14 +501,23 @@ function assertTargetsAuthority(
       )
       || (
         target.profile_id !== null
-        && job.assigned_profile_id !== target.profile_id
+        && (
+          retained
+            ? (
+                job.assigned_profile_id !== null
+                && job.assigned_profile_id !== target.profile_id
+              )
+            : job.assigned_profile_id !== target.profile_id
+        )
       )
-    ) fail()
+    ) {
+      fail()
+    }
   }
   if (target.profile_id !== null) {
     const profile = db.prepare('SELECT board_id FROM agent_profiles WHERE id=?')
       .get(target.profile_id) as { board_id: number } | undefined
-    if (!profile || Number(profile.board_id) !== boardId) fail()
+    if ((!profile && !retained) || (profile && Number(profile.board_id) !== boardId)) fail()
   }
   if (target.session_id !== null) {
     const session = db.prepare(`SELECT workspace.board_id, workspace.card_id,
@@ -497,24 +535,32 @@ function assertTargetsAuthority(
       job_card_id: number | null
       job_contract_version: number | null
     } | undefined
-    if (
-      !session
-      || Number(session.board_id) !== boardId
+    if (!session) {
+      if (!retained) fail()
+    } else if (
+      Number(session.board_id) !== boardId
       || (target.job_id !== null && session.job_id !== target.job_id)
       || (target.profile_id !== null && session.profile_id !== target.profile_id)
       || (target.workspace_id !== null && session.workspace_id !== target.workspace_id)
       || (
         target.card_id !== null
         && (
-            session.job_id !== null
-              ? Number(session.job_card_id) !== target.card_id
-              : (
-                  session.card_id === null
-                    ? target.card_id !== null
-                    : Number(session.card_id) !== target.card_id
-                )
-          )
+          session.job_id !== null
+            ? Number(session.job_card_id) !== target.card_id
+            : (
+                retained
+                  ? (
+                      session.card_id !== null
+                      && Number(session.card_id) !== target.card_id
+                    )
+                  : (
+                      session.card_id === null
+                        ? target.card_id !== null
+                        : Number(session.card_id) !== target.card_id
+                    )
+              )
         )
+      )
       || (
         target.contract_version !== null
         && (
@@ -522,7 +568,9 @@ function assertTargetsAuthority(
           || Number(session.job_contract_version) !== target.contract_version
         )
       )
-    ) fail()
+    ) {
+      fail()
+    }
   }
   if (target.delivery_report_id !== null) {
     const report = db.prepare(`SELECT report.board_id, report.card_id,
@@ -546,9 +594,10 @@ function assertTargetsAuthority(
       session_profile_id: string | null
       job_profile_id: string | null
     } | undefined
-    if (
-      !report
-      || Number(report.board_id) !== boardId
+    if (!report) {
+      if (!retained) fail()
+    } else if (
+      Number(report.board_id) !== boardId
       || (target.card_id !== null && Number(report.card_id) !== target.card_id)
       || (target.job_id !== null && report.job_id !== target.job_id)
       || (target.session_id !== null && report.session_id !== target.session_id)
@@ -577,8 +626,38 @@ function assertTargetsAuthority(
           )
         )
       )
-    ) fail()
+    ) {
+      fail()
+    }
   }
+}
+
+function assertCurrentRequestTargetsAuthority(
+  db: Database.Database,
+  boardId: number,
+  target: KnowledgeTargetLinks,
+): void {
+  assertTargetsAuthority(
+    db,
+    boardId,
+    target,
+    'retrieval_scope_invalid',
+    'current_request',
+  )
+}
+
+function assertRetainedSourceTargetsAuthority(
+  db: Database.Database,
+  boardId: number,
+  target: KnowledgeTargetLinks,
+): void {
+  assertTargetsAuthority(
+    db,
+    boardId,
+    target,
+    'retrieval_source_corrupt',
+    'retained_source',
+  )
 }
 
 function readSources(
@@ -628,12 +707,7 @@ function readSources(
       ) {
         runtimeError('retrieval_source_corrupt')
       }
-      assertTargetsAuthority(
-        db,
-        boardId,
-        source.targets,
-        'retrieval_source_corrupt',
-      )
+      assertRetainedSourceTargetsAuthority(db, boardId, source.targets)
       output.set(source.id, source)
     } catch (error) {
       if (error instanceof KnowledgeRetrievalError) throw error
@@ -737,9 +811,20 @@ function retrievalDocuments(
     const documentFingerprint = hash('document', {
       board_id: boardId,
       source,
-      chunk,
+      chunk: {
+        id: chunk.id,
+        source_id: chunk.source_id,
+        ordinal: chunk.ordinal,
+        content_sha256: chunk.content_sha256,
+        character_count: chunk.character_count,
+        byte_count: chunk.byte_count,
+        estimated_tokens: chunk.estimated_tokens,
+        source_range: chunk.source_range,
+        symbol: chunk.symbol,
+        created_at: chunk.created_at,
+      },
       fts: {
-        content: chunk.content,
+        content_sha256: chunk.content_sha256,
         title: source.title,
         locator: source.normalized_locator,
         symbol: ftsSymbol,
@@ -1261,11 +1346,10 @@ export function retrieveKnowledge(
     assertRetrievalSchema(db)
     const retrieve = db.transaction(() => {
       assertBoard(db, request.board_id)
-      assertTargetsAuthority(
+      assertCurrentRequestTargetsAuthority(
         db,
         request.board_id,
         request.targets,
-        'retrieval_scope_invalid',
       )
       const desired = retrievalDocuments(db, request.board_id)
       const indexed = readIndexedDocuments(db, request.board_id)
@@ -1284,7 +1368,7 @@ export function retrieveKnowledge(
       } catch {
         runtimeError('retrieval_query_failed')
       }
-      const results = matches.map((row, index) => {
+      const ranked = matches.map((row) => {
         const rowid = rawInteger(row.fts_rowid, MAX_SAFE_FTS_ROWID)
         const document = documentByRowid.get(rowid)
         const relevance = rawInteger(row.relevance_micros, 1_000_000_000_000)
@@ -1298,22 +1382,36 @@ export function retrieveKnowledge(
         ) {
           runtimeError('retrieval_index_drift')
         }
+        return { document, relevance_micros: relevance }
+      })
+      const envelope: Omit<KnowledgeRetrievalResult, 'results'> = {
+        version: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
+        request_sha256: knowledgeRetrievalRequestHash(request),
+        normalized_query: request.query,
+        index_snapshot_sha256: state.snapshot_sha256,
+      }
+      const candidates = ranked.map(({ document, relevance_micros }, index) => {
         return {
           rank: index + 1,
-          relevance_micros: relevance,
+          relevance_micros,
           content: document.chunk.content,
           content_trust: 'untrusted_data' as const,
           citation: citationFor(document),
         }
       })
+      const results = boundedKnowledgeRetrievalResultPrefix(envelope, candidates)
       const result: KnowledgeRetrievalResult = {
-        version: KNOWLEDGE_RETRIEVAL_CONTRACT_VERSION,
-        request_sha256: knowledgeRetrievalRequestHash(request),
-        normalized_query: request.query,
-        index_snapshot_sha256: state.snapshot_sha256,
+        ...envelope,
         results,
       }
-      return validateKnowledgeRetrievalResult(result, request)
+      const expectation: KnowledgeRetrievalTrustedExpectation = {
+        index_snapshot_sha256: state.snapshot_sha256,
+        ranked_matches: ranked.slice(0, results.length).map((match) => ({
+          relevance_micros: match.relevance_micros,
+          citation: citationFor(match.document),
+        })),
+      }
+      return attestKnowledgeRetrievalResult(result, request, expectation)
     })
     return retrieve.immediate()
   }, 'retrieval_query_failed')
