@@ -1,6 +1,31 @@
 import Database from 'better-sqlite3'
 import { applyAgentOsMigrations } from './agent-os/migrations.js'
 
+const AGENTS_PROVIDER_SESSION_INDEX_SQL =
+  `CREATE UNIQUE INDEX agents_provider_session_idx
+    ON agents(provider, external_session_id)
+    WHERE external_session_id IS NOT NULL`
+
+function normalizeSchemaSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').replace(/;\s*$/, '').trim()
+}
+
+function ensureAgentsProviderSessionIndex(db: Database.Database): void {
+  const existing = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type='index' AND name='agents_provider_session_idx'
+  `).get() as { sql: string | null } | undefined
+  if (
+    existing?.sql
+    && normalizeSchemaSql(existing.sql)
+      === normalizeSchemaSql(AGENTS_PROVIDER_SESSION_INDEX_SQL)
+  ) {
+    return
+  }
+  if (existing) db.exec('DROP INDEX agents_provider_session_idx')
+  db.exec(`${AGENTS_PROVIDER_SESSION_INDEX_SQL};`)
+}
+
 export function openDb(file: string): Database.Database {
   const db = new Database(file)
   db.pragma('journal_mode = WAL')
@@ -139,9 +164,6 @@ export function openDb(file: string): Database.Database {
         AND id NOT IN (SELECT MAX(candidate.id) FROM agents candidate
           WHERE candidate.external_session_id IS NOT NULL
           GROUP BY candidate.provider, candidate.external_session_id);
-    DROP INDEX IF EXISTS agents_provider_session_idx;
-    CREATE UNIQUE INDEX IF NOT EXISTS agents_provider_session_idx
-      ON agents(provider, external_session_id) WHERE external_session_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS agents_board_provider_status_idx
       ON agents(board_id, provider, status);
     CREATE TRIGGER IF NOT EXISTS agents_sync_claude_session_insert
@@ -158,6 +180,7 @@ export function openDb(file: string): Database.Database {
         UPDATE agents SET external_session_id=NEW.sdk_session WHERE id=NEW.id;
       END;
   `)
+  ensureAgentsProviderSessionIndex(db)
   try { db.exec(`ALTER TABLE agent_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agent_usage ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agent_usage ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }

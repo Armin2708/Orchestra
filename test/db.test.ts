@@ -65,9 +65,15 @@ it('does not rewrite normalized agent usage during restart maintenance', () => {
         INSERT INTO startup_agent_usage_updates (id) VALUES (NULL);
       END;
     `)
+    const schemaVersionBeforeRestart = first.pragma(
+      'schema_version',
+      { simple: true },
+    )
     first.close()
 
     const second = openDb(file)
+    expect(second.pragma('schema_version', { simple: true }))
+      .toBe(schemaVersionBeforeRestart)
     expect(second.prepare(`
       SELECT COUNT(*) AS count FROM startup_agent_usage_updates
     `).get()).toEqual({ count: 0 })
@@ -81,6 +87,39 @@ it('does not rewrite normalized agent usage during restart maintenance', () => {
       cache_creation: 0,
     })
     second.close()
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+it('repairs an incompatible provider-session index once, then stays stable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-db-index-'))
+  const file = path.join(dir, 'index.db')
+  try {
+    openDb(file).close()
+    const altered = new Database(file)
+    altered.exec(`
+      DROP INDEX agents_provider_session_idx;
+      CREATE INDEX agents_provider_session_idx ON agents(provider);
+    `)
+    altered.close()
+
+    const repaired = openDb(file)
+    expect(repaired.prepare(`
+      SELECT "unique" AS is_unique, partial
+      FROM pragma_index_list('agents')
+      WHERE name='agents_provider_session_idx'
+    `).get()).toEqual({ is_unique: 1, partial: 1 })
+    const repairedSchemaVersion = repaired.pragma(
+      'schema_version',
+      { simple: true },
+    )
+    repaired.close()
+
+    const stable = openDb(file)
+    expect(stable.pragma('schema_version', { simple: true }))
+      .toBe(repairedSchemaVersion)
+    stable.close()
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
