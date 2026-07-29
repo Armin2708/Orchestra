@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
@@ -19,7 +19,7 @@ afterEach(async () => {
   while (databases.length) databases.pop()!.close()
 })
 
-async function fixture() {
+async function fixture(options: { withOperatorHook?: boolean } = {}) {
   const db = openDb(':memory:')
   databases.push(db)
   const boardId = Number(db.prepare(
@@ -85,7 +85,12 @@ async function fixture() {
     db,
     orchestration,
     supportedProviders: ['codex'],
-    isOperator: (request) => request.headers.authorization === 'Bearer operator',
+    ...(options.withOperatorHook === false
+      ? {}
+      : {
+          isOperator: (request: FastifyRequest) =>
+            request.headers.authorization === 'Bearer operator',
+        }),
   })
   servers.push(server)
   await server.ready()
@@ -242,5 +247,26 @@ describe('Open Work API', () => {
     })
     expect(unconfirmed.statusCode).toBe(400)
     expect(unconfirmed.json().error).toMatch(/confirm must be true/)
+  })
+
+  it('fails dispatch closed when composition omits the operator hook', async () => {
+    const { cardId, market, server } = await fixture({ withOperatorHook: false })
+    const matched = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/cards/${cardId}/open-work/match`,
+      payload: { expected_market_version: market.market_version },
+    })
+    const response = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/cards/${cardId}/open-work/dispatch`,
+      headers: {
+        authorization: 'Bearer operator',
+        'idempotency-key': 'api-missing-operator-hook',
+      },
+      payload: { match: matched.json().match, confirm: true },
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error).toMatch(/operator authorization is required/)
   })
 })

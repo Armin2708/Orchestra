@@ -48,7 +48,9 @@ export const openWorkPlugin: FastifyPluginAsync<OpenWorkRouteOptions> = async (
     globalCapacity: options.globalCapacity,
     perProfileCapacity: options.perProfileCapacity,
   })
-  const isOperator = options.isOperator ?? (() => true)
+  // Composition must opt into dispatch authority. An omitted hook is never an
+  // authorization grant.
+  const isOperator = options.isOperator ?? (() => false)
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AgentOsError) {
