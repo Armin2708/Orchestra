@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import type Database from 'better-sqlite3'
 import type { FastifyInstance } from 'fastify'
 import Fastify from 'fastify'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openDb } from '../src/db.js'
 import {
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
@@ -17,6 +17,7 @@ import {
   refreshCompatibilityMigrationTelemetryCollectorEpoch,
 } from '../src/agent-os/compatibility-migration-telemetry.js'
 import { registerAgentOsRoutes } from '../src/agent-os/routes.js'
+import { buildServer } from '../src/server.js'
 
 const OPERATOR_HEADERS = { 'x-test-operator': 'true' }
 const servers: FastifyInstance[] = []
@@ -24,6 +25,7 @@ const databases: Database.Database[] = []
 const tempDirectories: string[] = []
 
 afterEach(async () => {
+  vi.useRealTimers()
   for (const server of servers.splice(0)) await server.close()
   for (const db of databases.splice(0)) {
     if (db.open) db.close()
@@ -130,7 +132,12 @@ function reinstallTelemetry(
 describe('compatibility migration telemetry API', () => {
   it('exposes bounded operator queries, diagnostics, retention, and rollup', async () => {
     const { db, server } = await fixture()
-    const today = new Date().toISOString().slice(0, 10)
+    const today = (db.prepare(`
+      SELECT valid_from_day
+      FROM os_compatibility_migration_telemetry_state
+    `).get() as { valid_from_day: string }).valid_from_day
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${today}T12:00:00.000Z`))
     recordDiagnostics(db, today)
 
     const summary = await server.inject({
@@ -233,6 +240,7 @@ describe('compatibility migration telemetry API', () => {
       code: 'validation_error',
       error: 'only a completed UTC day can be sealed',
     })
+    vi.useRealTimers()
   })
 
   it('requires operator authority before every query or mutation', async () => {
@@ -283,35 +291,89 @@ describe('compatibility migration telemetry API', () => {
     `).get()).toEqual(before)
   })
 
+  it('fails closed when the route registrar has no operator authority hook', async () => {
+    const db = openDb(':memory:')
+    databases.push(db)
+    const server = Fastify()
+    server.decorate('bus', new EventEmitter())
+    registerAgentOsRoutes(server, { db })
+    servers.push(server)
+    await server.ready()
+
+    const summary = await server.inject({
+      method: 'GET',
+      url: '/api/v1/os/compatibility-migration-telemetry/summary',
+    })
+    expect(summary.statusCode).toBe(403)
+    const rollup = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/compatibility-migration-telemetry/rollup',
+      payload: {},
+    })
+    expect(rollup.statusCode).toBe(403)
+  })
+
+  it('uses the production operator principal and rejects agent credentials', async () => {
+    const operatorAuthValue = ['dom019', 'operator', 'test'].join('-')
+    const agentAuthValue = ['dom019', 'agent', 'test'].join('-')
+    const db = openDb(':memory:')
+    databases.push(db)
+    const server = buildServer(db, undefined, {
+      token: operatorAuthValue,
+      agentToken: agentAuthValue,
+    })
+    servers.push(server)
+    await server.ready()
+
+    const url = '/api/v1/os/compatibility-migration-telemetry/summary'
+    expect((await server.inject({ method: 'GET', url })).statusCode).toBe(401)
+    expect((await server.inject({
+      method: 'GET',
+      url,
+      headers: { authorization: `Bearer ${agentAuthValue}` },
+    })).statusCode).toBe(403)
+    expect((await server.inject({
+      method: 'GET',
+      url,
+      headers: { authorization: `Bearer ${operatorAuthValue}` },
+    })).statusCode).toBe(200)
+  })
+
   it('seals a completed day idempotently and exposes diagnostic coverage', async () => {
     const { db, server } = await fixture()
-    reinstallTelemetry(db, '2026-01-01 12:00:00')
+    const currentDay = new Date().toISOString().slice(0, 10)
+    const installedDay = utcDayOffset(currentDay, -200)
+    const observedDay = utcDayOffset(installedDay, 1)
+    reinstallTelemetry(db, `${installedDay} 12:00:00`)
     expect(db.prepare(`
       SELECT valid_from_day
       FROM os_compatibility_migration_telemetry_state
-    `).get()).toEqual({ valid_from_day: '2026-01-01' })
-    recordDiagnostics(db, '2026-01-02')
+    `).get()).toEqual({ valid_from_day: installedDay })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${currentDay}T12:00:00.000Z`))
+    recordDiagnostics(db, observedDay)
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const sealed = await server.inject({
         method: 'POST',
         url: '/api/v1/os/compatibility-migration-telemetry/seal',
         headers: OPERATOR_HEADERS,
-        payload: { day: '2026-01-02' },
+        payload: { day: observedDay },
       })
       expect(sealed.statusCode, sealed.body).toBe(200)
-      expect(sealed.json()).toEqual({ sealed_day: '2026-01-02' })
+      expect(sealed.json()).toEqual({ sealed_day: observedDay })
     }
     expect(db.prepare(`
       SELECT COUNT(*) AS count
       FROM os_compatibility_migration_telemetry_coverage
-      WHERE day='2026-01-02'
-    `).get()).toEqual({ count: 13 })
+      WHERE day=?
+    `).get(observedDay)).toEqual({ count: 13 })
 
     const observation = await server.inject({
       method: 'GET',
       url: '/api/v1/os/compatibility-migration-telemetry/writer-observation'
-        + '?table=cards&from_day=2026-01-02&through_day=2026-01-02',
+        + `?table=cards&from_day=${observedDay}`
+        + `&through_day=${observedDay}`,
       headers: OPERATOR_HEADERS,
     })
     expect(observation.statusCode).toBe(200)
@@ -323,6 +385,48 @@ describe('compatibility migration telemetry API', () => {
       reason: 'diagnostic_nonzero',
       writer_removal_authorized: false,
     })
+
+    const rollup = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/compatibility-migration-telemetry/rollup',
+      headers: OPERATOR_HEADERS,
+      payload: { retain_days: 90 },
+    })
+    expect(rollup.statusCode).toBe(200)
+    expect(rollup.json().rollup).toMatchObject({
+      compacted_through_day: observedDay,
+      rows_compacted: 2,
+      count_compacted: 5,
+      mismatch_count_compacted: 2,
+      failure_count_compacted: 3,
+    })
+
+    const compactedDaily = await server.inject({
+      method: 'GET',
+      url: '/api/v1/os/compatibility-migration-telemetry/daily'
+        + `?from_day=${observedDay}&through_day=${observedDay}`
+        + '&table=cards',
+      headers: OPERATOR_HEADERS,
+    })
+    expect(compactedDaily.statusCode).toBe(409)
+    expect(compactedDaily.json()).toEqual({
+      code: 'conflict',
+      error: 'daily compatibility telemetry detail is unavailable for a range'
+        + ' overlapping compacted history; use the summary query',
+    })
+
+    const summary = await server.inject({
+      method: 'GET',
+      url: '/api/v1/os/compatibility-migration-telemetry/summary',
+      headers: OPERATOR_HEADERS,
+    })
+    expect(summary.statusCode).toBe(200)
+    expect(summary.json().telemetry).toMatchObject({
+      total_count: 5,
+      mismatch_count: 2,
+      failure_count: 3,
+    })
+    vi.useRealTimers()
   })
 
   it('rejects malformed or secret-shaped input without echoing it', async () => {
@@ -372,6 +476,20 @@ describe('compatibility migration telemetry API', () => {
       error: 'request body keys are invalid'
         + ' (missing_count=0 unexpected_count=1)',
     })
+
+    for (const retainDays of ['90', [90], null, '']) {
+      const coerciveBody = await server.inject({
+        method: 'POST',
+        url: '/api/v1/os/compatibility-migration-telemetry/rollup',
+        headers: OPERATOR_HEADERS,
+        payload: { retain_days: retainDays },
+      })
+      expect(coerciveBody.statusCode).toBe(400)
+      expect(coerciveBody.json()).toEqual({
+        code: 'validation_error',
+        error: 'retain_days must be an integer from 90 to 3650',
+      })
+    }
   })
 
   it('preserves operator query evidence across a database restart', async () => {

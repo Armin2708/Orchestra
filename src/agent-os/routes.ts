@@ -189,6 +189,13 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const requireOperator = (request: FastifyRequest) => {
     if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')
   }
+  const requireCompatibilityTelemetryOperator = (request: FastifyRequest) => {
+    if (!options.isOperator || !isOperator(request)) {
+      throw new ForbiddenError(
+        'operator authorization is required for this action',
+      )
+    }
+  }
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
   const projection = new LegacyEventProjection(db)
@@ -233,7 +240,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.get<{ Querystring: Record<string, unknown> }>(
     '/compatibility-migration-telemetry/summary',
     (request) => {
-      requireOperator(request)
+      requireCompatibilityTelemetryOperator(request)
       compatibilityTelemetryInput(request.query, [], [], 'query')
       return {
         telemetry: queryCompatibilityMigrationTelemetrySummary(db),
@@ -251,7 +258,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.get<{ Querystring: Record<string, unknown> }>(
     '/compatibility-migration-telemetry/daily',
     (request) => {
-      requireOperator(request)
+      requireCompatibilityTelemetryOperator(request)
       const query = compatibilityTelemetryInput(
         request.query,
         ['from_day', 'through_day'],
@@ -265,12 +272,25 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const table = query.table === undefined
         ? undefined
         : compatibilityTelemetryTable(query.table)
+      const telemetry = queryCompatibilityMigrationTelemetryDaily(db, {
+        from_day: fromDay,
+        through_day: throughDay,
+        ...(table === undefined ? {} : { table }),
+      })
+      const summary = queryCompatibilityMigrationTelemetrySummary(db)
+      if (
+        summary.historical_first_day !== null
+        && summary.historical_through_day !== null
+        && fromDay <= summary.historical_through_day
+        && throughDay >= summary.historical_first_day
+      ) {
+        throw new ConflictError(
+          'daily compatibility telemetry detail is unavailable for a range'
+          + ' overlapping compacted history; use the summary query',
+        )
+      }
       return {
-        telemetry: queryCompatibilityMigrationTelemetryDaily(db, {
-          from_day: fromDay,
-          through_day: throughDay,
-          ...(table === undefined ? {} : { table }),
-        }),
+        telemetry,
       }
     },
   )
@@ -278,7 +298,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.get<{ Querystring: Record<string, unknown> }>(
     '/compatibility-migration-telemetry/writer-observation',
     (request) => {
-      requireOperator(request)
+      requireCompatibilityTelemetryOperator(request)
       const query = compatibilityTelemetryInput(
         request.query,
         ['table', 'from_day', 'through_day'],
@@ -302,7 +322,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Body: unknown }>(
     '/compatibility-migration-telemetry/seal',
     (request) => {
-      requireOperator(request)
+      requireCompatibilityTelemetryOperator(request)
       const body = compatibilityTelemetryInput(
         objectBody(request.body),
         ['day'],
@@ -325,23 +345,15 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Body: unknown }>(
     '/compatibility-migration-telemetry/rollup',
     (request) => {
-      requireOperator(request)
+      requireCompatibilityTelemetryOperator(request)
       const body = compatibilityTelemetryInput(
-        request.body == null ? {} : objectBody(request.body),
+        request.body === undefined ? {} : objectBody(request.body),
         [],
         ['retain_days'],
         'request body',
       )
-      const retainDays = boundedInteger(
-        body.retain_days,
-        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
-          .minimum_daily_retention_days,
-        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
-          .minimum_daily_retention_days,
-        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
-          .maximum_daily_retention_days,
-        'retain_days',
-      )
+      const retainDays =
+        compatibilityTelemetryRetentionDays(body.retain_days)
       return {
         rollup: rollupCompatibilityMigrationTelemetry(db, {
           now: new Date(),
@@ -1142,6 +1154,27 @@ function compatibilityTelemetryTable(
     )
   }
   return table as AgentOsLegacyCompatibilityTable
+}
+
+function compatibilityTelemetryRetentionDays(value: unknown): number {
+  const minimum =
+    AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
+      .minimum_daily_retention_days
+  const maximum =
+    AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
+      .maximum_daily_retention_days
+  if (value === undefined) return minimum
+  if (
+    typeof value !== 'number'
+    || !Number.isSafeInteger(value)
+    || value < minimum
+    || value > maximum
+  ) {
+    throw new ValidationError(
+      `retain_days must be an integer from ${minimum} to ${maximum}`,
+    )
+  }
+  return value
 }
 
 function optionalSignedInteger(value: unknown, fallback: number, field: string): number {
