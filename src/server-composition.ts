@@ -1,0 +1,102 @@
+import type Database from 'better-sqlite3'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import {
+  claudeProviderCatalog,
+  codexProviderCatalog,
+  type AgentProviderCatalog,
+} from './agent-providers.js'
+import {
+  registerAgentOsRoutes,
+  type AgentOsRouteOptions,
+} from './agent-os/routes.js'
+import { CODEX_CAPABILITIES } from './provider-agent-manager.js'
+
+export type AgentOsServerRouteOptions = Omit<AgentOsRouteOptions, 'db'>
+
+export interface AgentOsServerCompositionHost {
+  providerCatalog?(): Promise<AgentProviderCatalog[]>
+}
+
+export interface AgentOsServerCompositionInput {
+  db: Database.Database
+  host?: AgentOsServerCompositionHost
+  agentOs?: AgentOsServerRouteOptions
+  isOperator: (request: FastifyRequest) => boolean
+}
+
+export const SERVER_COMPOSITION_CONTRACT = Object.freeze({
+  role: 'composition_and_compatibility_routing',
+  owns: Object.freeze([
+    'Fastify lifecycle and authentication',
+    'dependency injection',
+    'focused route-plugin registration',
+    'legacy compatibility route registration',
+  ]),
+  excludes: Object.freeze([
+    'canonical domain state transitions',
+    'canonical service construction',
+    'domain persistence and validation rules',
+  ]),
+  canonical_route_registrar: 'registerAgentOsRoutes',
+} as const)
+
+const fallbackProviders = (): AgentProviderCatalog[] => [
+  claudeProviderCatalog({
+    available: false,
+    detail: 'Requires the daemon Conductor before Claude models can be discovered.',
+  }),
+  codexProviderCatalog({
+    available: false,
+    capabilities: CODEX_CAPABILITIES,
+    detail: 'Requires the daemon Codex app-server runtime.',
+  }),
+]
+
+/**
+ * Builds the canonical Agent OS route options from already-created runtime dependencies.
+ *
+ * This is intentionally composition-only: it does not construct a scheduler or domain service,
+ * execute SQL, or define an HTTP handler. The focused route plugins retain those responsibilities.
+ */
+export function composeAgentOsRouteOptions(
+  input: AgentOsServerCompositionInput,
+): AgentOsRouteOptions {
+  const defaultDrivers = () => [
+    {
+      id: 'claude',
+      available: Boolean(input.host),
+      capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
+      detail: input.host ? undefined : 'requires the daemon Conductor',
+    },
+    {
+      id: 'codex',
+      available: false,
+      capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
+      detail: 'requires the daemon Codex app-server runtime',
+    },
+    {
+      id: 'shell',
+      available: Boolean(input.agentOs?.runtime),
+      capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
+      detail: input.agentOs?.runtime ? undefined : 'requires the PTY runtime',
+    },
+  ]
+  const defaultProviders = async () => input.host?.providerCatalog
+    ? input.host.providerCatalog()
+    : fallbackProviders()
+
+  return {
+    ...input.agentOs,
+    db: input.db,
+    drivers: input.agentOs?.drivers ?? defaultDrivers,
+    providers: input.agentOs?.providers ?? defaultProviders,
+    isOperator: input.isOperator,
+  }
+}
+
+export function registerAgentOsServerComposition(
+  server: FastifyInstance,
+  input: AgentOsServerCompositionInput,
+): void {
+  registerAgentOsRoutes(server, composeAgentOsRouteOptions(input))
+}

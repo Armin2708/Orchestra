@@ -23,15 +23,17 @@ import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
-import { registerAgentOsRoutes, type AgentOsRouteOptions } from './agent-os/routes.js'
-import { CODEX_PROVIDER_ID, claudeProviderCatalog, codexProviderCatalog, type AgentProviderCatalog } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
 import {
   ACCESS_PROFILES,
-  CODEX_CAPABILITIES,
   ProviderUnavailableError,
   type AccessProfile,
 } from './provider-agent-manager.js'
 import { registerAgentSessionControlRoutes, type AgentSessionControlHost } from './agent-session-controls.js'
+import {
+  registerAgentOsServerComposition,
+  type AgentOsServerRouteOptions,
+} from './server-composition.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -75,7 +77,7 @@ export interface ServerOptions {
   autowakeAt?: () => string | null
   // daemon-only Agent OS runtime/driver seams; in-process tests keep the durable read APIs
   // while unsupported process mutations continue to fail explicitly.
-  agentOs?: Omit<AgentOsRouteOptions, 'db'>
+  agentOs?: AgentOsServerRouteOptions
 }
 
 const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
@@ -1418,32 +1420,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     req.raw.on('close', () => { server.bus.off('event', onEvent); clearInterval(ping) })
   })
 
-  const defaultAgentOsDrivers = () => [
-      { id: 'claude', available: !!maestro, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
-        detail: maestro ? undefined : 'requires the daemon Conductor' },
-      { id: 'codex', available: false, capabilities: ['launch', 'attach', 'send', 'interrupt', 'events'],
-        detail: 'requires the daemon Codex app-server runtime' },
-      { id: 'shell', available: !!opts.agentOs?.runtime, capabilities: ['launch', 'input', 'resize', 'signal', 'events'],
-        detail: opts.agentOs?.runtime ? undefined : 'requires the PTY runtime' },
-    ]
-  const defaultAgentProviders = async () => maestro?.providerCatalog
-    ? maestro.providerCatalog()
-    : [
-        claudeProviderCatalog({
-          available: false,
-          detail: 'Requires the daemon Conductor before Claude models can be discovered.',
-        }),
-        codexProviderCatalog({
-          available: false,
-          capabilities: CODEX_CAPABILITIES,
-          detail: 'Requires the daemon Codex app-server runtime.',
-        }),
-      ]
-  registerAgentOsRoutes(server, {
-    ...opts.agentOs,
+  registerAgentOsServerComposition(server, {
     db,
-    drivers: opts.agentOs?.drivers ?? defaultAgentOsDrivers,
-    providers: opts.agentOs?.providers ?? defaultAgentProviders,
+    host: maestro,
+    agentOs: opts.agentOs,
     isOperator: (request) => request.orchestraPrincipal === 'operator',
   })
 
