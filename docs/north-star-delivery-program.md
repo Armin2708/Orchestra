@@ -28,7 +28,9 @@ service boundaries for all seven named domains while keeping partial and reserve
 explicit. DOM-015 now keeps the critical `buildServer` hub at the composition/compatibility
 boundary and delegates Agent OS option assembly plus focused route registration to a dedicated
 module. DOM-016 now assigns every compatibility/legacy table one non-competing authority and
-cutover contract while leaving physical migration and telemetry to DOM-017 and DOM-019.
+cutover contract. DOM-017 now implements its idempotent physical migration, deterministic
+backfill/quarantine evidence, five validation categories, compatibility range, and forward-only
+rollback plan while leaving usage/mismatch telemetry to DOM-019.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -172,6 +174,11 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   separates shared scope, bounded compatibility authority, scope-partitioned bridges, projection
   sinks, legacy-event ingress, and still-isolated legacy domains, and hands physical
   migration/backfill/rollback to DOM-017 plus old-versus-canonical usage measurement to DOM-019;
+- DOM-017 adds migration `022-legacy-projection-forward-plan`, exact schema prerequisites,
+  deterministic link or quarantine evidence for the seven movable/validated sources, normalized
+  TaskContract adoption, collision-free Agent Home adoption, historical event import, all five
+  count/key/scope/lifecycle/hash validators, marker-loss replay, an explicit compatibility range,
+  and a backup-backed forward-only rollback contract with no automatic down migration;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -386,9 +393,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 
 ### Remaining
 
-- DOM-017 physical forward migrations/backfills/validation/rollback plans and DOM-019
-  old-versus-canonical read/write telemetry remain open; DOM-016 is the logical authority design,
-  not either implementation;
+- DOM-019 old-versus-canonical read/write and mismatch telemetry remains open; DOM-017 does not
+  advance a reserved control, disable legacy writers, or claim telemetry/cutover completion;
 - a real daemon-mid-session to browser-continuation E2E gate;
 - combined desktop/phone acceptance in the intended in-app Browser surface when that backend is
   available;
@@ -415,10 +421,10 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **136 / 375 checklist boxes delivered; 239 remain open**.
+The strict master reconciliation is **137 / 375 checklist boxes delivered; 238 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-016`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
+`DOM-013` through `DOM-017`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
@@ -426,7 +432,7 @@ plug-and-play release.
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 18 / 20 | 2 |
+| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
@@ -447,7 +453,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[DOM-016 legacy-projection checkpoint](./checkpoints/2026-07-29-agent-os-dom016-legacy-projections.md).
+[DOM-017 forward-migration checkpoint](./checkpoints/2026-07-29-agent-os-dom017-forward-migrations.md).
+The
+[DOM-016 legacy-projection checkpoint](./checkpoints/2026-07-29-agent-os-dom016-legacy-projections.md)
+is retained as the preceding domain checkpoint.
 The
 [DOM-015 server-composition checkpoint](./checkpoints/2026-07-29-agent-os-dom015-buildserver-composition.md)
 is retained as the preceding domain checkpoint.

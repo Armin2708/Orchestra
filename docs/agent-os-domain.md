@@ -273,8 +273,11 @@ does not claim a runtime binding or completed phase.
 
 The [legacy projection contract](./agent-os-compatibility-projections.md) assigns every
 compatibility/legacy table one current authority mode, read/write boundary, canonical relationship,
-target disposition, and cutover gate. It is a logical design: DOM-017 owns physical
-migrations/backfills/rollback plans, and DOM-019 owns old-versus-canonical usage telemetry.
+target disposition, and cutover gate. DOM-017's
+[compatibility forward-migration contract](./agent-os-forward-migrations.md) now implements the
+physical migration, deterministic backfills/quarantine, five validation categories, and
+forward-only rollback plan. DOM-019 still owns old-versus-canonical usage telemetry and no
+cutover control advances here.
 
 1. Every schema change is an idempotent forward migration with upgrade and integrity tests.
 2. Canonical writes begin behind a migration flag while legacy behavior remains available.

@@ -19,6 +19,9 @@ closed-by-default control, activation gate, and recovery boundary for every deli
 The [legacy projection and compatibility-view contract](./agent-os-compatibility-projections.md)
 defines which old tables are shared scope, bounded bridges, read projections, or deliberately
 isolated legacy domains before physical migration.
+The [compatibility forward-migration and rollback contract](./agent-os-forward-migrations.md)
+defines DOM-017's exact migration order, deterministic backfills/quarantine, five validation
+categories, backup checkpoint, compatibility range, and forward-only recovery procedure.
 
 ## Open the cockpit
 

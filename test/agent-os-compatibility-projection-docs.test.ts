@@ -12,6 +12,7 @@ type ProjectionInventory = {
   legacy_projection_contract: {
     schema_version: number
     backlog_item: string
+    code_head: string
     source: string
     migration_owner: string
     telemetry_owner: string
@@ -21,6 +22,7 @@ type ProjectionInventory = {
   }
 }
 
+const INVENTORY_HEAD = '74d632f46bfeaaead1c7a52ced8a317915baacbf'
 const CODE_HEAD = 'f5df13666ccdfdf552e423a379faf60463fc6643'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
@@ -31,10 +33,11 @@ describe('Agent OS compatibility projection documentation', () => {
       read('docs/agent-os-surface-inventory.json'),
     ) as ProjectionInventory
 
-    expect(inventory.observed_at_commit).toBe(CODE_HEAD)
+    expect(inventory.observed_at_commit).toBe(INVENTORY_HEAD)
     expect(inventory.legacy_projection_contract).toEqual({
       schema_version: AGENT_OS_LEGACY_PROJECTION_CONTRACT.schema_version,
       backlog_item: AGENT_OS_LEGACY_PROJECTION_CONTRACT.backlog_item,
+      code_head: CODE_HEAD,
       source: 'src/agent-os/compatibility-projection-contract.ts',
       migration_owner: AGENT_OS_LEGACY_PROJECTION_CONTRACT.migration_owner,
       telemetry_owner: AGENT_OS_LEGACY_PROJECTION_CONTRACT.telemetry_owner,
@@ -86,8 +89,8 @@ describe('Agent OS compatibility projection documentation', () => {
     expect(agentOs).toContain('[legacy projection and compatibility-view contract]')
     expect(domain).toContain('[legacy projection contract]')
     expect(inventory).toContain('## Legacy projection and compatibility-view contract')
-    expect(program).toContain('136 / 375 checklist boxes delivered; 239 remain open')
-    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 18 / 20 | 2 |')
+    expect(program).toContain('137 / 375 checklist boxes delivered; 238 remain open')
+    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |')
     expect(checkpoint).toContain('136 / 375 delivered; 239 open')
     expect(checkpoint).toContain('DOM-017 and DOM-019 remain open')
   })

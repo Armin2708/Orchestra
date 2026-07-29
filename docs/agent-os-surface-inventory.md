@@ -2,8 +2,8 @@
 
 Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
-legacy projection contract, observed at exact code head
-`f5df13666ccdfdf552e423a379faf60463fc6643`.
+legacy projection contract plus DOM-017's physical forward migration, observed at exact code head
+`74d632f46bfeaaead1c7a52ced8a317915baacbf`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -14,7 +14,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 38 | 3 | 10 | 2 | 53 |
+| SQLite application tables | 38 | 3 | 10 | 5 | 56 |
 | Registered HTTP routes | 94 | 29 | 25 | 9 | 157 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -85,19 +85,41 @@ resolve by last-write-wins.
 | Covered tables | 13 / 13 compatibility and legacy tables |
 | Physical migration owner | `DOM-017` |
 | Read/write telemetry owner | `DOM-019` |
-| Runtime effect | none; logical design only |
+| DOM-016 runtime effect | none; logical design only |
 
 DOM-016 does not create SQLite views, backfill data, disable a writer, or relabel low-level
 messages as Discussions, message receipts as work Deliveries, or injected-context estimates as
-provider usage. The exact per-table read/write/cutover rules are in
+provider usage. DOM-017 now implements the physical migration without changing those semantic
+boundaries. The exact per-table read/write/cutover rules are in
 [`agent-os-compatibility-projections.md`](./agent-os-compatibility-projections.md).
+
+## Compatibility forward migration
+
+Migration `022-legacy-projection-forward-plan` implements the DOM-017 physical handoff for all
+13 compatibility and legacy tables at code head
+`74d632f46bfeaaead1c7a52ced8a317915baacbf`.
+
+| Contract | Exact value |
+|---|---|
+| Prerequisite | migration `021-command-idempotency-coverage` plus exact source/target schemas |
+| Covered tables | 13 / 13 plan entries |
+| Deterministic dispositions | links or quarantine for every row on the seven movable/validated source surfaces |
+| Validation | count, key, scope, lifecycle, and linked-snapshot hash |
+| Evidence tables | `os_compatibility_projection_links`, `os_compatibility_projection_quarantine`, `os_compatibility_migration_checks` |
+| Failure behavior | the enclosing migration transaction aborts before marker `022` is recorded |
+| Rollback | forward-only; no automatic down migration and no deletion or demotion of canonical writes |
+| Telemetry owner | `DOM-019`; no usage cutover control advances here |
+
+The operator ordering, backup checkpoint, compatibility range, exact validation queries, and
+offline restore boundary are in
+[`agent-os-forward-migrations.md`](./agent-os-forward-migrations.md).
 
 ## Database tables
 
 The exact live schema is obtained by opening a fresh database, applying every migration, and
-reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migrations start at
-`src/agent-os/migrations.ts:124`; the migration ledger is created at
-`src/agent-os/migrations.ts:1975`.
+reading `sqlite_master`. Base tables are defined in `src/db.ts`; Agent OS migrations and their
+transactional ledger are defined in `src/agent-os/migrations.ts`; DOM-017's evidence schema is
+defined in `src/agent-os/compatibility-forward-migration.ts`.
 
 ### Canonical
 
@@ -138,7 +160,10 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts:9`; Agent OS migr
 ### Infrastructure
 
 `kv` stores daemon settings/cache values. `os_schema_migrations` records applied Agent OS
-migrations. SQLite's own internal tables are intentionally excluded.
+migrations. `os_compatibility_projection_links` records deterministic source-to-canonical
+identity, `os_compatibility_projection_quarantine` records rows that cannot be migrated without
+guessing, and `os_compatibility_migration_checks` records the five validation categories.
+SQLite's own internal tables are intentionally excluded.
 
 ## HTTP APIs
 

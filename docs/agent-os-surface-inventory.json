@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "f5df13666ccdfdf552e423a379faf60463fc6643",
+  "observed_at_commit": "74d632f46bfeaaead1c7a52ced8a317915baacbf",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -64,6 +64,7 @@
   "legacy_projection_contract": {
     "schema_version": 1,
     "backlog_item": "DOM-016",
+    "code_head": "f5df13666ccdfdf552e423a379faf60463fc6643",
     "source": "src/agent-os/compatibility-projection-contract.ts",
     "migration_owner": "DOM-017",
     "telemetry_owner": "DOM-019",
@@ -84,9 +85,32 @@
       "retire_after_replacement"
     ]
   },
+  "compatibility_forward_migration": {
+    "schema_version": 1,
+    "backlog_item": "DOM-017",
+    "code_head": "74d632f46bfeaaead1c7a52ced8a317915baacbf",
+    "source": "src/agent-os/compatibility-forward-migration.ts",
+    "migration_id": "022-legacy-projection-forward-plan",
+    "prior_schema": "021-command-idempotency-coverage",
+    "plan_entry_count": 13,
+    "validation_categories": [
+      "count",
+      "key",
+      "scope",
+      "lifecycle",
+      "hash"
+    ],
+    "evidence_tables": [
+      "os_compatibility_projection_links",
+      "os_compatibility_projection_quarantine",
+      "os_compatibility_migration_checks"
+    ],
+    "automatic_down_migration": false
+  },
   "table_sources": [
     "src/db.ts",
-    "src/agent-os/migrations.ts"
+    "src/agent-os/migrations.ts",
+    "src/agent-os/compatibility-forward-migration.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -149,6 +173,9 @@
     ],
     "infrastructure": [
       "kv",
+      "os_compatibility_migration_checks",
+      "os_compatibility_projection_links",
+      "os_compatibility_projection_quarantine",
       "os_schema_migrations"
     ]
   },
