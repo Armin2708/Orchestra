@@ -424,10 +424,10 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toBe(13 * 3)
     expect(
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
-    ).toHaveLength(12)
+    ).toHaveLength(14)
     expect(new Set(
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
-    ).size).toBe(12)
+    ).size).toBe(14)
     expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
       .not.toThrow()
     db.close()
@@ -461,6 +461,94 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     expect(db.prepare(`
       SELECT * FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
     `).get()).toEqual(beforeState)
+    db.close()
+  })
+
+  it('keeps epoch reads unprivileged and forbids valid-from regression during refresh', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2025-01-01 00:00:00')
+    const trigger =
+      AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES[0]!
+    const triggerSql = (db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?
+    `).get(trigger) as { sql: string }).sql
+    db.exec(`DROP TRIGGER ${trigger}`)
+    db.exec(triggerSql)
+    refreshCompatibilityMigrationTelemetryCollectorEpoch(db, {
+      now: new Date('2025-02-01T12:00:00.000Z'),
+    })
+
+    let earlyAttempted = false
+    let earlyError = ''
+    const observed = observeDatabaseStatements(
+      db,
+      () => {
+        if (earlyAttempted) return
+        earlyAttempted = true
+        try {
+          db.prepare(`
+            UPDATE ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+            SET valid_from_day='2025-01-01'
+          `).run()
+        } catch (error) {
+          earlyError = String(error)
+        }
+      },
+    )
+    expect(refreshCompatibilityMigrationTelemetryCollectorEpoch(observed, {
+      now: new Date('2025-02-02T12:00:00.000Z'),
+    })).toMatchObject({
+      valid_from_day: '2025-02-01',
+      refreshed: false,
+    })
+    expect(earlyAttempted).toBe(true)
+    expect(earlyError).toMatch(/state mutation is guarded/)
+    expect(db.prepare(`
+      SELECT valid_from_day
+      FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    `).get()).toEqual({ valid_from_day: '2025-02-01' })
+    expect(() => sealCompletedCompatibilityMigrationTelemetryDay(
+      db,
+      '2025-02-01',
+    )).toThrow(/must begin after the current collector epoch/)
+
+    db.exec('CREATE TABLE dom019_epoch_drift (id INTEGER PRIMARY KEY)')
+    let writeAttempted = false
+    let writeError = ''
+    const observedWrite = observeDatabaseStatements(
+      db,
+      (sql, method) => {
+        if (
+          writeAttempted
+          || method !== 'run'
+          || !sql.includes(
+            `UPDATE ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}`,
+          )
+        ) return
+        writeAttempted = true
+        try {
+          db.prepare(`
+            UPDATE ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+            SET valid_from_day='2025-01-01'
+          `).run()
+        } catch (error) {
+          writeError = String(error)
+        }
+      },
+    )
+    expect(refreshCompatibilityMigrationTelemetryCollectorEpoch(
+      observedWrite,
+      { now: new Date('2025-03-01T12:00:00.000Z') },
+    )).toMatchObject({
+      valid_from_day: '2025-03-01',
+      refreshed: true,
+    })
+    expect(writeAttempted).toBe(true)
+    expect(writeError).toMatch(/state mutation is guarded|cannot|monotonic/i)
+    expect(db.prepare(`
+      SELECT valid_from_day
+      FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    `).get()).toEqual({ valid_from_day: '2025-03-01' })
     db.close()
   })
 
@@ -645,6 +733,341 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
       WHERE day='2025-02-03'
     `).get()).toEqual({ count: 13 })
+    db.close()
+  })
+
+  it('acknowledges a legacy write before a transient TEMP AFTER trigger suppresses later programs', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    const schemaVersion = Number(
+      db.pragma('schema_version', { simple: true }),
+    )
+    db.exec(`
+      CREATE TEMP TRIGGER test_dom019_temp_after_legacy
+      AFTER INSERT ON main.boards
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `)
+
+    db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/dom019-temp-after', 'TEMP after')
+    `).run()
+    db.exec('DROP TRIGGER temp.test_dom019_temp_after_legacy')
+
+    expect(Number(db.pragma('schema_version', { simple: true })))
+      .toBe(schemaVersion)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM boards
+      WHERE project_path='/dom019-temp-after'
+    `).get()).toEqual({ count: 1 })
+    expect(db.prepare(`
+      SELECT SUM(count) AS count FROM ${DAILY_TABLE}
+      WHERE table_name='boards' AND operation='legacy_write'
+    `).get()).toEqual({ count: 1 })
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
+      .not.toThrow()
+    db.close()
+  })
+
+  it('rolls a legacy mutation back when TEMP daily triggers suppress or rewrite its acknowledgment', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    db.exec(`
+      CREATE TEMP TRIGGER test_dom019_temp_suppress_daily
+      BEFORE INSERT ON main.${DAILY_TABLE}
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `)
+
+    expect(() => db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/dom019-temp-suppressed', 'TEMP suppressed')
+    `).run()).toThrow(/collector write failed/)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM boards
+      WHERE project_path='/dom019-temp-suppressed'
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+      WHERE table_name='boards' AND operation='legacy_write'
+    `).get()).toEqual({ count: 0 })
+    db.exec('DROP TRIGGER temp.test_dom019_temp_suppress_daily')
+
+    db.exec(`
+      CREATE TEMP TRIGGER test_dom019_temp_rewrite_daily
+      AFTER INSERT ON main.${DAILY_TABLE}
+      WHEN NEW.operation='legacy_write'
+      BEGIN
+        UPDATE ${DAILY_TABLE}
+        SET operation='canonical_read'
+        WHERE day=NEW.day
+          AND table_name=NEW.table_name
+          AND operation=NEW.operation
+          AND cohort=NEW.cohort
+          AND diagnostic_code=NEW.diagnostic_code;
+      END
+    `)
+    expect(() => db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/dom019-temp-rewritten', 'TEMP rewritten')
+    `).run()).toThrow(/blocking evidence is monotonic/)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM boards
+      WHERE project_path='/dom019-temp-rewritten'
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+      WHERE table_name='boards'
+    `).get()).toEqual({ count: 0 })
+    db.exec('DROP TRIGGER temp.test_dom019_temp_rewrite_daily')
+    db.close()
+  })
+
+  it('rolls a repeated legacy write back when TEMP suppresses the collector update', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    const boardId = Number(db.prepare(`
+      INSERT INTO boards (project_path, name)
+      VALUES ('/dom019-temp-update', 'Before')
+    `).run().lastInsertRowid)
+    db.exec(`
+      CREATE TEMP TRIGGER test_dom019_temp_suppress_daily_update
+      BEFORE UPDATE ON main.${DAILY_TABLE}
+      WHEN OLD.operation='legacy_write'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `)
+
+    expect(() => db.prepare(`
+      UPDATE boards SET name='After' WHERE id=?
+    `).run(boardId)).toThrow(/collector write failed/)
+    expect(db.prepare(`
+      SELECT name FROM boards WHERE id=?
+    `).get(boardId)).toEqual({ name: 'Before' })
+    expect(db.prepare(`
+      SELECT count FROM ${DAILY_TABLE}
+      WHERE table_name='boards' AND operation='legacy_write'
+    `).get()).toEqual({ count: 1 })
+    db.exec('DROP TRIGGER temp.test_dom019_temp_suppress_daily_update')
+    db.close()
+  })
+
+  it('rejects active TEMP objects attached to protected telemetry surfaces', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    db.exec(`
+      CREATE TEMP TRIGGER arbitrary_temp_board_trigger
+      AFTER UPDATE ON main.boards
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `)
+
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
+      .toThrow(/protected TEMP schema object/)
+    expect(() => queryCompatibilityMigrationTelemetryDaily(db, {
+      from_day: '2025-02-01',
+      through_day: '2025-02-01',
+    })).toThrow(/protected TEMP schema object/)
+
+    db.exec('DROP TRIGGER temp.arbitrary_temp_board_trigger')
+    db.exec('CREATE TEMP TABLE BOARDS (arbitrary_detail TEXT)')
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
+      .toThrow(/protected TEMP schema object/)
+    db.exec('DROP TABLE temp.BOARDS')
+    expect(() => assertCompatibilityMigrationTelemetrySchemaCompatible(db))
+      .not.toThrow()
+    db.close()
+  })
+
+  it('keeps blocking evidence monotonic without a replaceable rowid', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2025-01-01 00:00:00')
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-02-01T12:00:00.000Z'),
+      table: 'boards',
+      operation: 'legacy_write',
+      cohort: 'shared_scope',
+      count: 5,
+    }))
+
+    expect(() => db.prepare(`
+      SELECT rowid FROM ${DAILY_TABLE}
+    `).all()).toThrow(/rowid/)
+    expect(() => db.exec(`
+      INSERT OR REPLACE INTO ${DAILY_TABLE} (
+        day, table_name, operation, cohort, diagnostic_code, count
+      )
+      SELECT day, table_name, operation, cohort, diagnostic_code, 1
+      FROM ${DAILY_TABLE}
+      WHERE operation='legacy_write'
+    `)).toThrow(/blocking evidence cannot decrease/)
+    expect(() => db.prepare(`
+      UPDATE ${DAILY_TABLE}
+      SET operation='canonical_read'
+      WHERE operation='legacy_write'
+    `).run()).toThrow(/blocking evidence is monotonic/)
+    expect(() => db.prepare(`
+      UPDATE ${DAILY_TABLE}
+      SET count=count-1
+      WHERE operation='legacy_write'
+    `).run()).toThrow(/blocking evidence is monotonic/)
+    expect(db.prepare(`
+      UPDATE ${DAILY_TABLE}
+      SET count=count+1
+      WHERE operation='legacy_write'
+    `).run().changes).toBe(1)
+
+    db.exec(`
+      INSERT OR REPLACE INTO ${DAILY_TABLE} (
+        day, table_name, operation, cohort, diagnostic_code, count
+      )
+      SELECT day, table_name, 'canonical_read', cohort, 'none', count
+      FROM ${DAILY_TABLE}
+      WHERE operation='legacy_write'
+    `)
+    expect(db.prepare(`
+      SELECT count FROM ${DAILY_TABLE}
+      WHERE table_name='boards' AND operation='legacy_write'
+    `).get()).toEqual({ count: 6 })
+
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-02-01')
+    expect(db.prepare(`
+      SELECT legacy_write_count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-02-01' AND table_name='boards'
+    `).get()).toEqual({ legacy_write_count: 6 })
+    db.close()
+  })
+
+  it('rolls back a record when a reentrant TEMP trigger suppresses its exact write', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db)
+    let injected = false
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method) => {
+        if (
+          !injected
+          && method === 'run'
+          && sql.includes(`INSERT INTO ${DAILY_TABLE}`)
+        ) {
+          injected = true
+          db.exec(`
+            CREATE TEMP TRIGGER test_dom019_reentrant_record_suppress
+            BEFORE INSERT ON main.${DAILY_TABLE}
+            BEGIN
+              SELECT RAISE(IGNORE);
+            END
+          `)
+        }
+      },
+    )
+
+    expect(() => recordCompatibilityMigrationTelemetry(
+      observed,
+      observation(),
+    )).toThrow(/aggregation write was suppressed/)
+    expect(injected).toBe(true)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_temp_master
+      WHERE name='test_dom019_reentrant_record_suppress'
+    `).get()).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rolls back sealing when a reentrant TEMP trigger suppresses coverage', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2025-01-01 00:00:00')
+    let injected = false
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method) => {
+        if (
+          !injected
+          && method === 'run'
+          && sql.includes(`INSERT INTO ${COVERAGE_TABLE}`)
+        ) {
+          injected = true
+          db.exec(`
+            CREATE TEMP TRIGGER test_dom019_reentrant_seal_suppress
+            BEFORE INSERT ON main.${COVERAGE_TABLE}
+            BEGIN
+              SELECT RAISE(IGNORE);
+            END
+          `)
+        }
+      },
+    )
+
+    expect(() => sealCompletedCompatibilityMigrationTelemetryDay(
+      observed,
+      '2025-01-02',
+    )).toThrow(/coverage insert was suppressed/)
+    expect(injected).toBe(true)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-01-02'
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_temp_master
+      WHERE name='test_dom019_reentrant_seal_suppress'
+    `).get()).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rolls back sealing when reentrant work changes a blocking snapshot', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2025-01-01 00:00:00')
+    let injected = false
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method) => {
+        if (
+          !injected
+          && method === 'run'
+          && sql.includes(`INSERT INTO ${COVERAGE_TABLE}`)
+        ) {
+          injected = true
+          db.exec(`
+            CREATE TEMP TRIGGER test_dom019_reentrant_seal_rewrite
+            BEFORE INSERT ON main.${COVERAGE_TABLE}
+            WHEN NEW.table_name='boards'
+            BEGIN
+              INSERT INTO ${DAILY_TABLE} (
+                day, table_name, operation, cohort, diagnostic_code, count
+              ) VALUES (
+                NEW.day, 'boards', 'legacy_write', 'shared_scope', 'none', 1
+              );
+            END
+          `)
+        }
+      },
+    )
+
+    expect(() => sealCompletedCompatibilityMigrationTelemetryDay(
+      observed,
+      '2025-01-02',
+    )).toThrow(/coverage is immutable|snapshot/)
+    expect(injected).toBe(true)
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
+      WHERE day='2025-01-02'
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM ${DAILY_TABLE}
+      WHERE day='2025-01-02'
+    `).get()).toEqual({ count: 0 })
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_temp_master
+      WHERE name='test_dom019_reentrant_seal_rewrite'
+    `).get()).toEqual({ count: 0 })
     db.close()
   })
 
@@ -1527,7 +1950,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
 
     const during = queryCompatibilityMigrationTelemetrySummary(observed)
     expect(interleaved).toBe(true)
-    expect(statements).toHaveLength(3)
+    expect(statements.length).toBeGreaterThanOrEqual(3)
     expect(statements.every(({ inTransaction }) => inTransaction)).toBe(true)
     expect(during).toMatchObject({
       total_count: 1,
@@ -1637,6 +2060,68 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     `).get()).toEqual({ count: 2 })
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
       .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('keeps rollup guards idle through its baseline and rolls injected early deletion back', () => {
+    const db = openDb(':memory:')
+    installTelemetry(db, '2024-12-31 00:00:00')
+    recordCompatibilityMigrationTelemetry(db, observation({
+      observed_at: new Date('2025-01-01T12:00:00.000Z'),
+      operation: 'legacy_write',
+      count: 7,
+    }))
+    sealCompletedCompatibilityMigrationTelemetryDay(db, '2025-01-01')
+
+    let earlyAttempted = false
+    let earlyError = ''
+    let deletePhaseAttempted = false
+    let injectedDeleteChanges = 0
+    const observed = observeDatabaseStatements(
+      db,
+      (sql, method) => {
+        if (!earlyAttempted) {
+          earlyAttempted = true
+          try {
+            db.prepare(`
+              DELETE FROM ${DAILY_TABLE}
+              WHERE day='2025-01-01' AND operation='legacy_write'
+            `).run()
+          } catch (error) {
+            earlyError = String(error)
+          }
+          return
+        }
+        if (
+          !deletePhaseAttempted
+          && method === 'run'
+          && sql.includes(`DELETE FROM ${DAILY_TABLE}`)
+        ) {
+          deletePhaseAttempted = true
+          injectedDeleteChanges = db.prepare(`
+            DELETE FROM ${DAILY_TABLE}
+            WHERE day='2025-01-01' AND operation='legacy_write'
+          `).run().changes
+        }
+      },
+    )
+
+    expect(() => rollupCompatibilityMigrationTelemetry(observed, {
+      now: new Date('2025-07-01T00:00:00.000Z'),
+    })).toThrow(/deleted an unexpected row count/)
+    expect(earlyAttempted).toBe(true)
+    expect(earlyError).toMatch(/daily deletion is rollup-managed/)
+    expect(deletePhaseAttempted).toBe(true)
+    expect(injectedDeleteChanges).toBe(1)
+    expect(db.prepare(`
+      SELECT count FROM ${DAILY_TABLE}
+      WHERE day='2025-01-01' AND operation='legacy_write'
+    `).get()).toEqual({ count: 7 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${HISTORY_TABLE}`).get())
+      .toEqual({ count: 0 })
+    const summary = queryCompatibilityMigrationTelemetrySummary(db)
+    expect(summary.total_count).toBe(7)
+    expect(summary.operation_totals.legacy_write).toBe(7)
     db.close()
   })
 
