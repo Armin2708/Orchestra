@@ -494,6 +494,7 @@ describe('knowledge source ingestion security', () => {
   it.each([
     ['comment', '// helper()', 'helper', 'function'],
     ['string literal', 'const text = "helper()"', 'helper', 'function'],
+    ['regular expression literal', 'const pattern = /helper()/u', 'helper', 'function'],
     ['unrelated identifier', 'const helperValue = 1', 'helper', 'function'],
     ['method declaration', 'helper() { return 2 }', 'helper', 'class'],
   ] as const)(
@@ -562,6 +563,248 @@ describe('knowledge source ingestion security', () => {
         }))
       expect(error.code).toBe('evidence_mismatch')
       expectNoKnowledge(db)
+    },
+  )
+
+  it.each([
+    [
+      'C prototype despite mismatched language metadata',
+      'typescript',
+      'c',
+      'int helper(void) { return 1; }',
+      [
+        'int forged_caller(void) {',
+        '  void helper();',
+        '  return 2;',
+        '}',
+      ].join('\n'),
+      'function',
+    ],
+    [
+      'Java declaration',
+      'java',
+      'java',
+      'final class HelperTarget { static int helper() { return 1; } }',
+      [
+        'interface ForgedCaller {',
+        '  void helper();',
+        '}',
+      ].join('\n'),
+      'interface',
+    ],
+  ] as const)(
+    'rejects calls relationships proved only by a %s',
+    (
+      _label,
+      language,
+      extension,
+      targetExcerpt,
+      sourceExcerpt,
+      sourceKind,
+    ) => {
+      const fixture = repositoryFixture()
+      const repositoryPath = `src/relationship-prototype.${extension}`
+      write(
+        fixture.root,
+        repositoryPath,
+        `${targetExcerpt}\n${sourceExcerpt}\n`,
+      )
+      const head = commit(fixture.root, `add ${_label}`)
+      const { db, boardId } = boardDb(fixture.root)
+      const targetLines = targetExcerpt.split('\n').length
+      const sourceLines = sourceExcerpt.split('\n').length
+      const sourceStart = targetLines + 1
+      const evidenceLine = sourceStart + 1
+      const error = caught(() =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: repositoryPath,
+              start_line: 1,
+              end_line: targetLines,
+              language,
+              qualified_name: 'helper',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'forged-caller',
+              path: repositoryPath,
+              start_line: sourceStart,
+              end_line: sourceStart + sourceLines - 1,
+              language,
+              qualified_name: 'ForgedCaller',
+              symbol_kind: sourceKind,
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'calls',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256('  void helper();'),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: evidenceLine,
+                end_line: evidenceLine,
+              }],
+            },
+          ],
+        }))
+      expect(error.code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    },
+  )
+
+  it('rejects dynamic import followed by an unrelated target identifier', () => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = [
+      'export function helper(): number {',
+      '  return 1',
+      '}',
+    ].join('\n')
+    const forgedLine = "  import('./x'); const helper = 1"
+    const sourceExcerpt = [
+      'export function forgedImport(): number {',
+      forgedLine,
+      '  return helper',
+      '}',
+    ].join('\n')
+    write(
+      fixture.root,
+      'src/import-forgery.ts',
+      `${targetExcerpt}\n${sourceExcerpt}\n`,
+    )
+    const head = commit(fixture.root, 'add dynamic import forgery')
+    const { db, boardId } = boardDb(fixture.root)
+    const error = caught(() =>
+      new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'helper',
+            path: 'src/import-forgery.ts',
+            start_line: 1,
+            end_line: 3,
+            language: 'typescript',
+            qualified_name: 'helper',
+            symbol_kind: 'function',
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'forged-import',
+            path: 'src/import-forgery.ts',
+            start_line: 4,
+            end_line: 7,
+            language: 'typescript',
+            qualified_name: 'forgedImport',
+            symbol_kind: 'function',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'imports',
+              target_key: 'helper',
+              expected_evidence_sha256: sha256(forgedLine),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 5,
+              end_line: 5,
+            }],
+          },
+        ],
+      }))
+    expect(error.code).toBe('evidence_mismatch')
+    expectNoKnowledge(db)
+  })
+
+  it.each([
+    [
+      'TypeScript named import',
+      'typescript',
+      'ts',
+      [
+        'export function helper(): number {',
+        '  return 1',
+        '}',
+      ].join('\n'),
+      "import { helper } from './target.js'",
+      'export const imported = helper',
+    ],
+    [
+      'Python from import',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      'from target import helper',
+      'imported = helper',
+    ],
+    [
+      'Java qualified import',
+      'java',
+      'java',
+      [
+        'package example;',
+        'public final class helper {}',
+      ].join('\n'),
+      'import example.helper;',
+      'final class Imported { helper value; }',
+    ],
+  ] as const)(
+    'retains a real %s relationship',
+    (
+      _label,
+      language,
+      extension,
+      targetExcerpt,
+      importLine,
+      importedLine,
+    ) => {
+      const fixture = repositoryFixture()
+      const targetPath = `src/import-target.${extension}`
+      const sourcePath = `src/import-source.${extension}`
+      const sourceExcerpt = `${importLine}\n${importedLine}`
+      write(fixture.root, targetPath, `${targetExcerpt}\n`)
+      write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
+      const head = commit(fixture.root, `add ${_label}`)
+      const { db, boardId } = boardDb(fixture.root)
+      const report = new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'helper',
+            path: targetPath,
+            start_line: 1,
+            end_line: targetExcerpt.split('\n').length,
+            language,
+            qualified_name: 'helper',
+            symbol_kind: 'function',
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'imported',
+            path: sourcePath,
+            start_line: 1,
+            end_line: 2,
+            language,
+            qualified_name: 'Imported',
+            symbol_kind: 'module',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'imports',
+              target_key: 'helper',
+              expected_evidence_sha256: sha256(importLine),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 1,
+              end_line: 1,
+            }],
+          },
+        ],
+      })
+      expect(report.sources).toHaveLength(2)
+      expect(report.chunks.some((chunk) =>
+        chunk.content.includes('"kind":"imports"'))).toBe(true)
     },
   )
 
