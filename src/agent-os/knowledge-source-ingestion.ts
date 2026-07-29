@@ -39,6 +39,7 @@ export const MAX_KNOWLEDGE_SOURCE_PATHS = 32
 export const MAX_KNOWLEDGE_SOURCE_HISTORY_COMMITS = 50
 export const MAX_KNOWLEDGE_SOURCE_BLAME_LINES = 500
 export const MAX_KNOWLEDGE_SOURCE_GOTCHAS = 32
+export const MAX_KNOWLEDGE_SOURCE_DELIVERY_PATHS = 200
 export const MAX_KNOWLEDGE_SOURCE_FILE_BYTES = 2_000_000
 export const MAX_KNOWLEDGE_SOURCE_TOTAL_BYTES = 16_000_000
 
@@ -105,6 +106,10 @@ export class KnowledgeSourceIngestionError extends Error {
 export interface StructuralRelationshipInput {
   kind: string
   target_key: string
+  /** SHA-256 of the exact raw relationship citation before redaction. */
+  expected_evidence_sha256: string
+  /** Must equal the target symbol's exact raw source hash. */
+  target_source_sha256: string
   start_line?: number
   end_line?: number
 }
@@ -214,6 +219,12 @@ interface LoadedEvidence {
   line_separators: string[]
 }
 
+interface Excerpt {
+  raw: string
+  redacted: string
+  changed: boolean
+}
+
 interface PlannedKnowledge {
   source: KnowledgeSource
   chunk: KnowledgeChunk
@@ -224,11 +235,27 @@ interface RedactedEnvelope {
   redacted: boolean
 }
 
+interface PersistedStructuralMetadata {
+  key: string
+  language: string
+  qualified_name: string
+  symbol_kind: string
+  redacted: boolean
+}
+
+interface VerifiedDeliveryCommitEvidence {
+  canonical_tip: string
+  commits_oldest_first: string[]
+  touched_paths: string[]
+  paths_by_commit: ReadonlyMap<string, ReadonlySet<string>>
+}
+
 const SHA256 = /^[a-f0-9]{64}$/u
 const COMMIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 const REPOSITORY_KEY = /^[a-z0-9](?:[a-z0-9._/-]{0,254}[a-z0-9])?$/u
 const SAFE_KEY = /^[A-Za-z0-9](?:[A-Za-z0-9._:/#-]{0,255})$/u
 const RELATIONSHIP_KIND = /^[a-z][a-z0-9_-]{0,63}$/u
+const CODE_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u
 const CODE_EXTENSIONS = new Set([
   '.bash',
@@ -802,7 +829,7 @@ function excerpt(
   evidence: LoadedEvidence,
   startLine: number,
   endLine: number,
-): { raw: string; redacted: string; changed: boolean } {
+): Excerpt {
   if (
     startLine > endLine
     || startLine > evidence.lines.length
@@ -1210,17 +1237,35 @@ function validateStructuralInput(
       ).map((relationship): StructuralRelationshipInput => {
         const relation = safeRecord(
           relationship,
-          ['kind', 'target_key'],
+          [
+            'kind',
+            'target_key',
+            'expected_evidence_sha256',
+            'target_source_sha256',
+          ],
           ['start_line', 'end_line'],
         )
         const kind = safeText(relation.kind, 64)
         const target = safeText(relation.target_key, 256)
+        const expectedEvidenceHash = safeText(
+          relation.expected_evidence_sha256,
+          64,
+        )
+        const targetSourceHash = safeText(relation.target_source_sha256, 64)
         if (!RELATIONSHIP_KIND.test(kind) || !SAFE_KEY.test(target)) {
+          fail('invalid_input')
+        }
+        if (
+          !SHA256.test(expectedEvidenceHash)
+          || !SHA256.test(targetSourceHash)
+        ) {
           fail('invalid_input')
         }
         return {
           kind,
           target_key: target,
+          expected_evidence_sha256: expectedEvidenceHash,
+          target_source_sha256: targetSourceHash,
           start_line: relation.start_line === undefined
             ? undefined
             : positiveInteger(relation.start_line),
@@ -1272,6 +1317,178 @@ function validateStructuralInput(
   return { common: commonInput(record), symbols }
 }
 
+function persistedStructuralMetadata(
+  symbol: StructuralSymbolInput,
+): PersistedStructuralMetadata {
+  const fields = [
+    ['key', symbol.key],
+    ['language', symbol.language],
+    ['qualified_name', symbol.qualified_name],
+    ['symbol_kind', symbol.symbol_kind],
+  ] as const
+  const output = Object.create(null) as Record<string, string>
+  let changed = false
+  for (const [name, value] of fields) {
+    const redaction = redactSensitiveText(value)
+    if (redaction.value === null || redaction.value.length === 0) {
+      fail('evidence_mismatch')
+    }
+    output[name] = redaction.value
+    changed ||= redaction.changed
+  }
+  return {
+    key: output.key,
+    language: output.language,
+    qualified_name: output.qualified_name,
+    symbol_kind: output.symbol_kind,
+    redacted: changed,
+  }
+}
+
+function relationshipTokens(value: string, language: string): string[] {
+  const tokens: string[] = []
+  const hashComments = /^(?:bash|perl|python|r|ruby|sh|shell|zsh)$/u
+    .test(language.toLowerCase())
+  let index = 0
+  while (index < value.length) {
+    const current = value[index]
+    const next = value[index + 1] ?? ''
+    if (/\s/u.test(current)) {
+      index += 1
+      continue
+    }
+    if (current === '/' && next === '/') {
+      const end = value.indexOf('\n', index + 2)
+      index = end < 0 ? value.length : end + 1
+      continue
+    }
+    if (current === '/' && next === '*') {
+      const end = value.indexOf('*/', index + 2)
+      if (end < 0) fail('evidence_mismatch')
+      index = end + 2
+      continue
+    }
+    if (hashComments && current === '#') {
+      const end = value.indexOf('\n', index + 1)
+      index = end < 0 ? value.length : end + 1
+      continue
+    }
+    if (current === '"' || current === '\'' || current === '`') {
+      const quote = current
+      index += 1
+      let closed = false
+      while (index < value.length) {
+        if (value[index] === '\\') {
+          index += 2
+          continue
+        }
+        if (value[index] === quote) {
+          index += 1
+          closed = true
+          break
+        }
+        index += 1
+      }
+      if (!closed) fail('evidence_mismatch')
+      continue
+    }
+    if (/[A-Za-z_$]/u.test(current)) {
+      let end = index + 1
+      while (end < value.length && /[A-Za-z0-9_$]/u.test(value[end])) {
+        end += 1
+      }
+      tokens.push(value.slice(index, end))
+      index = end
+      continue
+    }
+    tokens.push(current)
+    index += 1
+  }
+  return tokens
+}
+
+function targetIdentifier(qualifiedName: string): string {
+  const identifier = qualifiedName.split(/[.:/#]/u).at(-1) ?? ''
+  if (!CODE_IDENTIFIER.test(identifier)) fail('evidence_mismatch')
+  return identifier
+}
+
+function hasTokenPair(
+  tokens: readonly string[],
+  first: string,
+  second: string,
+): boolean {
+  return tokens.some((token, index) =>
+    token === first && tokens[index + 1] === second)
+}
+
+function matchingParenthesis(
+  tokens: readonly string[],
+  openIndex: number,
+): number | null {
+  let depth = 0
+  for (let index = openIndex; index < tokens.length; index += 1) {
+    if (tokens[index] === '(') depth += 1
+    if (tokens[index] !== ')') continue
+    depth -= 1
+    if (depth === 0) return index
+    if (depth < 0) return null
+  }
+  return null
+}
+
+function assertSyntacticRelationship(
+  relationship: StructuralRelationshipInput,
+  sourceLanguage: string,
+  relationshipEvidence: string,
+  targetQualifiedName: string,
+): void {
+  if (relationship.kind === 'contains') return
+  const identifier = targetIdentifier(targetQualifiedName)
+  const tokens = relationshipTokens(relationshipEvidence, sourceLanguage)
+  switch (relationship.kind) {
+    case 'calls': {
+      const declarationTokens = new Set(['class', 'def', 'fn', 'func', 'function'])
+      const proved = tokens.some((token, index) => {
+        if (
+          token !== identifier
+          || tokens[index + 1] !== '('
+          || declarationTokens.has(tokens[index - 1] ?? '')
+        ) {
+          return false
+        }
+        const close = matchingParenthesis(tokens, index + 1)
+        if (close === null) return false
+        const after = tokens[close + 1] ?? ''
+        const arrow = after === '=' && tokens[close + 2] === '>'
+        return after !== '{' && after !== ':' && !arrow
+      })
+      if (!proved) fail('evidence_mismatch')
+      return
+    }
+    case 'extends':
+      if (!hasTokenPair(tokens, 'extends', identifier)) fail('evidence_mismatch')
+      return
+    case 'implements':
+      if (!hasTokenPair(tokens, 'implements', identifier)) {
+        fail('evidence_mismatch')
+      }
+      return
+    case 'imports': {
+      const importIndex = tokens.indexOf('import')
+      if (
+        importIndex < 0
+        || !tokens.slice(importIndex + 1).includes(identifier)
+      ) {
+        fail('evidence_mismatch')
+      }
+      return
+    }
+    default:
+      fail('evidence_mismatch')
+  }
+}
+
 function structuralPlans(
   common: CommonInput,
   root: string,
@@ -1280,6 +1497,10 @@ function structuralPlans(
   const evidenceCache = new Map<string, LoadedEvidence>()
   const blameCache = new Map<string, BlameLine[]>()
   const symbolMap = new Map(symbols.map((symbol) => [symbol.key, symbol]))
+  const metadataMap = new Map(symbols.map((symbol) => [
+    symbol.key,
+    persistedStructuralMetadata(symbol),
+  ]))
   const plans: PlannedKnowledge[] = []
   let evidenceBytes = 0
   for (const symbol of [...symbols].sort((left, right) =>
@@ -1287,6 +1508,8 @@ function structuralPlans(
       || left.start_line - right.start_line
       || left.end_line - right.end_line
       || compareText(left.key, right.key))) {
+    const persistedSymbol = metadataMap.get(symbol.key)
+    if (!persistedSymbol) fail('contradictory_evidence')
     let evidence = evidenceCache.get(symbol.path)
     if (!evidence) {
       evidence = loadEvidence(root, common.base_commit_sha, symbol.path)
@@ -1324,6 +1547,14 @@ function structuralPlans(
           fail('evidence_mismatch')
         }
         const relationshipExcerpt = excerpt(evidence!, startLine, endLine)
+        if (
+          sha256(relationshipExcerpt.raw)
+            !== relationship.expected_evidence_sha256
+          || target.expected_source_sha256
+            !== relationship.target_source_sha256
+        ) {
+          fail('evidence_mismatch')
+        }
         if (relationship.kind === 'contains') {
           if (
             symbol.path !== target.path
@@ -1333,11 +1564,15 @@ function structuralPlans(
             fail('contradictory_evidence')
           }
         } else {
-          const targetToken = target.qualified_name.split(/[.:/#]/u).at(-1) ?? ''
-          if (!targetToken || !relationshipExcerpt.raw.includes(targetToken)) {
-            fail('evidence_mismatch')
-          }
+          assertSyntacticRelationship(
+            relationship,
+            symbol.language,
+            relationshipExcerpt.raw,
+            target.qualified_name,
+          )
         }
+        const persistedTarget = metadataMap.get(target.key)
+        if (!persistedTarget) fail('contradictory_evidence')
         return {
           citation: {
             commit_sha: common.base_commit_sha,
@@ -1348,12 +1583,13 @@ function structuralPlans(
           },
           persisted_evidence_sha256: sha256(relationshipExcerpt.redacted),
           source_sha256: sha256(relationshipExcerpt.raw),
+          target_source_sha256: relationship.target_source_sha256,
           kind: relationship.kind,
           target: {
             end_line: target.end_line,
-            key: target.key,
+            key: persistedTarget.key,
             path: target.path,
-            qualified_name: target.qualified_name,
+            qualified_name: persistedTarget.qualified_name,
             start_line: target.start_line,
           },
         }
@@ -1383,34 +1619,70 @@ function structuralPlans(
       relationships,
       schema_version: 1,
       symbol: {
-        key: symbol.key,
-        language: symbol.language,
-        qualified_name: symbol.qualified_name,
-        symbol_kind: symbol.symbol_kind,
+        key: persistedSymbol.key,
+        language: persistedSymbol.language,
+        qualified_name: persistedSymbol.qualified_name,
+        symbol_kind: persistedSymbol.symbol_kind,
       },
     })
     plans.push(planKnowledge({
       common,
       kind: 'code_symbol',
       trust: 'reference',
-      title: symbol.qualified_name,
+      title: persistedSymbol.qualified_name,
       locator:
-        `code-symbols/${symbol.path}/lines-${symbol.start_line}-${symbol.end_line}-${sha256(symbol.key).slice(0, 12)}.json`,
+        `code-symbols/${symbol.path}/lines-${symbol.start_line}-${symbol.end_line}.json`,
       source_revision: common.base_commit_sha,
       content: envelope.content,
       redacted: envelope.redacted || sourceExcerpt.changed
+        || persistedSymbol.redacted
         || blamed.some((line) => line.text === '[REDACTED]'),
       source_range: range(symbol.start_line, symbol.end_line),
       symbol: {
-        language: symbol.language,
-        qualified_name: symbol.qualified_name,
-        symbol_kind: symbol.symbol_kind,
+        language: persistedSymbol.language,
+        qualified_name: persistedSymbol.qualified_name,
+        symbol_kind: persistedSymbol.symbol_kind,
         signature_sha256: symbol.expected_source_sha256,
       },
       targets: boardTargets(common.board_id),
     }))
   }
   return plans
+}
+
+function assertStructuralLogicalCompatibility(
+  db: Database.Database,
+  boardId: number,
+  plans: readonly PlannedKnowledge[],
+): void {
+  const logicalPlans = new Map<string, string>()
+  for (const plan of plans) {
+    const logicalKey = canonicalKnowledgeJson({
+      normalized_locator: plan.source.normalized_locator,
+      source_kind: plan.source.source_kind,
+      source_revision: plan.source.source_revision,
+    })
+    const plannedId = logicalPlans.get(logicalKey)
+    if (plannedId !== undefined && plannedId !== plan.source.id) {
+      fail('persistence_conflict')
+    }
+    logicalPlans.set(logicalKey, plan.source.id)
+    const rows = db.prepare(`SELECT id FROM knowledge_sources
+      WHERE board_id=? AND source_kind=? AND normalized_locator=?
+        AND source_revision=?
+      ORDER BY id`).all(
+      boardId,
+      plan.source.source_kind,
+      plan.source.normalized_locator,
+      plan.source.source_revision,
+    ) as Array<{ id: string }>
+    if (
+      rows.length > 1
+      || rows.some((row) => row.id !== plan.source.id)
+    ) {
+      fail('persistence_conflict')
+    }
+  }
 }
 
 function validateGitContextInput(
@@ -1736,32 +2008,200 @@ function currentAcceptedReport(
   return report
 }
 
+function singleParentAtCommit(root: string, commit: string): string | null {
+  const output = gitScalar(root, ['rev-list', '--parents', '-n', '1', commit])
+  const parts = output.split(' ')
+  if (
+    parts[0] !== commit
+    || parts.length > 2
+    || (parts[1] !== undefined && !COMMIT_SHA.test(parts[1]))
+  ) {
+    fail('evidence_mismatch')
+  }
+  return parts[1] ?? null
+}
+
+function changedPathsAtCommit(root: string, commit: string): string[] {
+  const output = gitText(root, [
+    'diff-tree',
+    '--root',
+    '--no-commit-id',
+    '--name-only',
+    '--no-renames',
+    '-r',
+    '-z',
+    commit,
+  ], {
+    allow_empty: true,
+    allow_nul: true,
+    failure: 'evidence_mismatch',
+  })
+  if (output.length === 0) return []
+  const changed = output.split('\u0000').filter(Boolean)
+    .map((item) => safeRepositoryPath(item))
+  const unique = [...new Set(changed)].sort(compareText)
+  if (unique.length > MAX_KNOWLEDGE_SOURCE_DELIVERY_PATHS) {
+    fail('evidence_mismatch')
+  }
+  return unique
+}
+
+function changedLineRangesAtCommit(
+  root: string,
+  commit: string,
+  repositoryPath: string,
+): Array<{ start_line: number; end_line: number }> {
+  const patch = gitText(root, [
+    'diff-tree',
+    '--root',
+    '--no-commit-id',
+    '--no-renames',
+    '--no-ext-diff',
+    '--no-textconv',
+    '-r',
+    '--unified=0',
+    '--patch',
+    commit,
+    '--',
+    repositoryPath,
+  ], {
+    allow_empty: true,
+    failure: 'evidence_mismatch',
+  })
+  const ranges: Array<{ start_line: number; end_line: number }> = []
+  const hunk = /^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,([0-9]+))? @@/gmu
+  for (let match = hunk.exec(patch); match; match = hunk.exec(patch)) {
+    const startLine = Number(match[1])
+    const count = match[2] === undefined ? 1 : Number(match[2])
+    if (
+      !Number.isSafeInteger(startLine)
+      || !Number.isSafeInteger(count)
+      || startLine < 0
+      || count < 0
+    ) {
+      fail('evidence_mismatch')
+    }
+    if (count === 0) continue
+    ranges.push({
+      start_line: startLine,
+      end_line: startLine + count - 1,
+    })
+  }
+  return ranges
+}
+
 function assertDeliveryEvidence(
   root: string,
   baseCommit: string,
   report: DeliveryReport,
   sourceCommit: string,
-): void {
+): VerifiedDeliveryCommitEvidence {
   if (
     report.commits.length === 0
+    || report.commits.length > MAX_KNOWLEDGE_SOURCE_HISTORY_COMMITS
     || report.commits.some((commit) => !COMMIT_SHA.test(commit))
     || report.commits.length !== new Set(report.commits).size
     || !report.commits.includes(sourceCommit)
   ) {
     fail('evidence_mismatch')
   }
-  for (const commit of report.commits) {
+  const commitSet = new Set(report.commits)
+  const parentByCommit = new Map<string, string | null>()
+  for (const commit of commitSet) {
     assertCommit(root, commit, 'evidence_mismatch')
-    assertAncestor(root, commit, baseCommit)
+    parentByCommit.set(commit, singleParentAtCommit(root, commit))
   }
-  const safeChangedPaths = report.changed_files.map((file) =>
-    safeRepositoryPath(file))
+  const memberParents = new Set(
+    [...parentByCommit.values()].filter(
+      (parent): parent is string => parent !== null && commitSet.has(parent),
+    ),
+  )
+  const tips = [...commitSet].filter((commit) => !memberParents.has(commit))
+  if (tips.length !== 1) fail('contradictory_evidence')
+  const canonicalTip = tips[0]
+  if (canonicalTip !== sourceCommit) fail('evidence_mismatch')
+
+  const remaining = new Set(commitSet)
+  const tipFirst: string[] = []
+  let cursor: string | null = canonicalTip
+  while (cursor !== null && remaining.has(cursor)) {
+    tipFirst.push(cursor)
+    remaining.delete(cursor)
+    cursor = parentByCommit.get(cursor) ?? null
+  }
+  if (remaining.size !== 0) fail('contradictory_evidence')
+  assertAncestor(root, canonicalTip, baseCommit)
+
   if (
-    safeChangedPaths.length !== new Set(safeChangedPaths).size
-    || report.changed_files.length === 0
+    report.changed_files.length === 0
+    || report.changed_files.length > MAX_KNOWLEDGE_SOURCE_DELIVERY_PATHS
+  ) {
+    fail('evidence_mismatch')
+  }
+  const reportedPaths = report.changed_files
+    .map((file) => safeRepositoryPath(file))
+    .sort(compareText)
+  if (
+    reportedPaths.length !== new Set(reportedPaths).size
   ) {
     fail('contradictory_evidence')
   }
+  const pathsByCommit = new Map<string, string[]>()
+  const touched = new Set<string>()
+  for (const commit of tipFirst) {
+    const paths = changedPathsAtCommit(root, commit)
+    pathsByCommit.set(commit, paths)
+    for (const repositoryPath of paths) touched.add(repositoryPath)
+  }
+  const touchedPaths = [...touched].sort(compareText)
+  if (
+    touchedPaths.length !== reportedPaths.length
+    || touchedPaths.some((item, index) => item !== reportedPaths[index])
+  ) {
+    fail('evidence_mismatch')
+  }
+  return {
+    canonical_tip: canonicalTip,
+    commits_oldest_first: [...tipFirst].reverse(),
+    touched_paths: touchedPaths,
+    paths_by_commit: new Map(
+      [...pathsByCommit].map(([commit, paths]) => [
+        commit,
+        new Set(paths),
+      ]),
+    ),
+  }
+}
+
+function gotchaEvidenceAtDeliveryCommit(
+  root: string,
+  commitEvidence: VerifiedDeliveryCommitEvidence,
+  gotcha: VerifiedGotchaInput,
+): {
+  commit_sha: string
+  evidence: LoadedEvidence
+  cited: Excerpt
+} {
+  for (
+    const commit of [...commitEvidence.commits_oldest_first].reverse()
+  ) {
+    if (!commitEvidence.paths_by_commit.get(commit)?.has(gotcha.path)) continue
+    const changedRanges = changedLineRangesAtCommit(root, commit, gotcha.path)
+    if (!changedRanges.some((changed) =>
+      gotcha.start_line >= changed.start_line
+      && gotcha.end_line <= changed.end_line)) {
+      continue
+    }
+    const evidence = loadEvidence(root, commit, gotcha.path)
+    const cited = excerpt(evidence, gotcha.start_line, gotcha.end_line)
+    if (
+      sha256(cited.raw) === gotcha.expected_source_sha256
+      && cited.redacted.includes(gotcha.text)
+    ) {
+      return { commit_sha: commit, evidence, cited }
+    }
+  }
+  fail('evidence_mismatch')
 }
 
 function deliveryPlans(
@@ -1770,7 +2210,11 @@ function deliveryPlans(
   report: DeliveryReport,
   sourceCommit: string,
   gotchas: readonly VerifiedGotchaInput[],
+  commitEvidence: VerifiedDeliveryCommitEvidence,
 ): PlannedKnowledge[] {
+  if (sourceCommit !== commitEvidence.canonical_tip) {
+    fail('contradictory_evidence')
+  }
   const summary = generateVerifiedDeliverySummary({
     latestAcceptedReport: report,
     currentReport: report,
@@ -1779,10 +2223,12 @@ function deliveryPlans(
     accepted_at: report.accepted_at,
     accepted_by: report.accepted_by,
     citation: {
+      commits_oldest_first: commitEvidence.commits_oldest_first,
       commit_sha: sourceCommit,
       delivery_report_id: report.id,
       repository_key: common.repository_key,
       revision: report.sequence,
+      touched_paths: commitEvidence.touched_paths,
     },
     confidence_micros: 1_000_000,
     human_summary: summary.human,
@@ -1806,7 +2252,6 @@ function deliveryPlans(
     symbol: null,
     targets: deliveryTargets(report),
   })]
-  const changedPaths = new Set(report.changed_files)
   const loadedPaths = new Set<string>()
   let evidenceBytes = 0
   for (const gotcha of [...gotchas].sort((left, right) =>
@@ -1814,23 +2259,20 @@ function deliveryPlans(
       || left.start_line - right.start_line
       || left.end_line - right.end_line
       || compareText(left.text, right.text))) {
-    if (!changedPaths.has(gotcha.path)) fail('evidence_mismatch')
-    const evidence = loadEvidence(root, sourceCommit, gotcha.path)
-    if (!loadedPaths.has(gotcha.path)) {
-      loadedPaths.add(gotcha.path)
-      evidenceBytes += Buffer.byteLength(evidence.text, 'utf8')
+    const selected = gotchaEvidenceAtDeliveryCommit(
+      root,
+      commitEvidence,
+      gotcha,
+    )
+    const evidenceKey = `${selected.commit_sha}\u0000${gotcha.path}`
+    if (!loadedPaths.has(evidenceKey)) {
+      loadedPaths.add(evidenceKey)
+      evidenceBytes += Buffer.byteLength(selected.evidence.text, 'utf8')
       if (evidenceBytes > MAX_KNOWLEDGE_SOURCE_TOTAL_BYTES) fail('invalid_input')
-    }
-    const cited = excerpt(evidence, gotcha.start_line, gotcha.end_line)
-    if (
-      sha256(cited.raw) !== gotcha.expected_source_sha256
-      || !cited.redacted.includes(gotcha.text)
-    ) {
-      fail('evidence_mismatch')
     }
     const blamed = parseBlame(
       root,
-      sourceCommit,
+      selected.commit_sha,
       gotcha.path,
       gotcha.start_line,
       gotcha.end_line,
@@ -1839,7 +2281,7 @@ function deliveryPlans(
       accepted_at: report.accepted_at,
       author: report.accepted_by,
       citation: {
-        commit_sha: sourceCommit,
+        commit_sha: selected.commit_sha,
         delivery_report_id: report.id,
         end_line: gotcha.end_line,
         path: gotcha.path,
@@ -1849,9 +2291,9 @@ function deliveryPlans(
       confidence_micros: 900_000,
       evidence: {
         authors: uniqueAuthors(blamed),
-        persisted_evidence_sha256: sha256(cited.redacted),
+        persisted_evidence_sha256: sha256(selected.cited.redacted),
         source_sha256: gotcha.expected_source_sha256,
-        text: cited.redacted,
+        text: selected.cited.redacted,
       },
       gotcha: gotcha.text,
       interpretation: 'data_only',
@@ -1866,9 +2308,9 @@ function deliveryPlans(
       title: `Verified gotcha ${gotcha.path}:${gotcha.start_line}`,
       locator:
         `gotchas/${gotcha.path}/lines-${gotcha.start_line}-${gotcha.end_line}.json`,
-      source_revision: sourceCommit,
+      source_revision: selected.commit_sha,
       content: envelope.content,
-      redacted: envelope.redacted || cited.changed,
+      redacted: envelope.redacted || selected.cited.changed,
       source_range: range(gotcha.start_line, gotcha.end_line),
       symbol: null,
       targets: deliveryTargets(report),
@@ -1894,7 +2336,18 @@ export class KnowledgeSourceIngestor {
       assertRepositoryStable(this.db, input.common, verified)
       const plans = structuralPlans(input.common, verified.root, input.symbols)
       assertRepositoryStable(this.db, input.common, verified)
-      return persist(this.db, input.common, verified, plans)
+      assertStructuralLogicalCompatibility(this.db, input.common.board_id, plans)
+      return persist(
+        this.db,
+        input.common,
+        verified,
+        plans,
+        () => assertStructuralLogicalCompatibility(
+          this.db,
+          input.common.board_id,
+          plans,
+        ),
+      )
     } catch (error) {
       throw new KnowledgeSourceIngestionError(
         trustedCode(error) ?? 'persistence_failed',
@@ -1956,7 +2409,7 @@ export class KnowledgeSourceIngestor {
         input.common.board_id,
         input.report_id,
       )
-      assertDeliveryEvidence(
+      const commitEvidence = assertDeliveryEvidence(
         verified.root,
         input.common.base_commit_sha,
         report,
@@ -1968,6 +2421,7 @@ export class KnowledgeSourceIngestor {
         report,
         input.source_commit_sha,
         input.gotchas,
+        commitEvidence,
       )
       return persist(
         this.db,
@@ -1987,12 +2441,21 @@ export class KnowledgeSourceIngestor {
           ) {
             fail('stale_evidence')
           }
-          assertDeliveryEvidence(
+          const retainedEvidence = assertDeliveryEvidence(
             verified.root,
             input.common.base_commit_sha,
             retained,
             input.source_commit_sha,
           )
+          if (
+            retainedEvidence.canonical_tip !== commitEvidence.canonical_tip
+            || canonicalKnowledgeJson(retainedEvidence.commits_oldest_first)
+              !== canonicalKnowledgeJson(commitEvidence.commits_oldest_first)
+            || canonicalKnowledgeJson(retainedEvidence.touched_paths)
+              !== canonicalKnowledgeJson(commitEvidence.touched_paths)
+          ) {
+            fail('stale_evidence')
+          }
         },
       )
     } catch (error) {

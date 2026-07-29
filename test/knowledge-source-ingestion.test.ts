@@ -77,10 +77,13 @@ function repositoryFixture(): {
   write(root, 'src/service.ts', `${source}\n`)
   write(root, 'src/other.ts', 'export const other = 1\n')
   const firstCommit = commit(root, 'add service symbols')
-  write(root, 'src/service.ts', `${source.replace('return 1', 'return 2')}\n`)
+  const updatedSource = source
+    .replace('return 1', 'return 2')
+    .replace('preserve helper ordering', 'preserve helper call ordering')
+  write(root, 'src/service.ts', `${updatedSource}\n`)
   const head = commit(root, 'update helper behavior')
   write(root, 'README.md', 'Unrelated working tree material.\n')
-  return { root, firstCommit, head, source: source.replace('return 1', 'return 2') }
+  return { root, firstCommit, head, source: updatedSource }
 }
 
 function boardDb(root: string): { db: Database.Database; boardId: number } {
@@ -118,6 +121,8 @@ function structuralInput(
         relationships: [{
           kind: 'calls',
           target_key: 'helper',
+          expected_evidence_sha256: sha256(lines[4]),
+          target_source_sha256: sha256(lines.slice(0, 3).join('\n')),
           start_line: 5,
           end_line: 5,
         }],
@@ -200,8 +205,8 @@ describe('knowledge source ingestion', () => {
       .ingestStructural(input)
     expect(firstReport.sources).toHaveLength(2)
     expect(firstReport.sources.map((source) => source.locator)).toEqual([
-      expect.stringContaining('/lines-1-3-'),
-      expect.stringContaining('/lines-4-6-'),
+      expect.stringContaining('/lines-1-3.json'),
+      expect.stringContaining('/lines-4-6.json'),
     ])
     const callerChunk = firstReport.chunks.find((chunk) =>
       chunk.symbol?.qualified_name === 'caller')
@@ -310,7 +315,7 @@ describe('knowledge source ingestion', () => {
     const fixture = repositoryFixture()
     const { db, boardId } = boardDb(fixture.root)
     const delivery = acceptedDelivery(db, boardId, fixture.head)
-    const gotchaText = 'Gotcha: caller must preserve helper ordering.'
+    const gotchaText = 'Gotcha: caller must preserve helper call ordering.'
     const citedLine = fixture.source.split('\n')[4]
     const report = new KnowledgeSourceIngestor(db).ingestVerifiedDelivery({
       board_id: boardId,
