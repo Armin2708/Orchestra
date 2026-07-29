@@ -514,6 +514,42 @@ describe('knowledge source ingestion security', () => {
       'function',
     ],
     [
+      'division before a line comment',
+      'const value = 1 / 2 // helper()',
+      'helper',
+      'function',
+    ],
+    [
+      'division before a block comment',
+      'const value = 1 / 2 /* helper() */',
+      'helper',
+      'function',
+    ],
+    [
+      'division and regular expression before a line comment',
+      'const value = 1 / /safe()/ // helper()',
+      'helper',
+      'function',
+    ],
+    [
+      'division and regular expression before a block comment',
+      'const value = 1 / /safe()/ /* helper() */',
+      'helper',
+      'function',
+    ],
+    [
+      'regular expression containing escaped slashes',
+      'const pattern = /https:\\/\\/example[.]test\\/helper()/u',
+      'helper',
+      'function',
+    ],
+    [
+      'regular expression containing character classes',
+      'const pattern = /[a-z]+helper()[0-9]/u',
+      'helper',
+      'function',
+    ],
+    [
       'regular expression after export default',
       'export default /helper()/',
       'helper',
@@ -596,6 +632,146 @@ describe('knowledge source ingestion security', () => {
                 target_source_sha256: sha256(targetExcerpt),
                 start_line: 5,
                 end_line: 4 + evidenceLines.length,
+              }],
+            },
+          ],
+        }))
+      expect(error.code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    },
+  )
+
+  it.each([
+    [
+      'a Python triple-double-quoted string',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      [
+        'def forged_caller():',
+        '    text = """',
+        '        helper()',
+        '    """',
+        '    return 2',
+      ].join('\n'),
+      'function',
+      1,
+      3,
+    ],
+    [
+      'a Python triple-single-quoted string',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      [
+        'def forged_caller():',
+        "    text = '''",
+        '        helper()',
+        "    '''",
+        '    return 2',
+      ].join('\n'),
+      'function',
+      1,
+      3,
+    ],
+    [
+      'a Java text block',
+      'java',
+      'java',
+      'final class Target { static int helper() { return 1; } }',
+      [
+        'final class ForgedCaller {',
+        '  static final String TEXT = """',
+        '      helper()',
+        '      """;',
+        '}',
+      ].join('\n'),
+      'class',
+      1,
+      3,
+    ],
+    [
+      'a bare Python newline before parentheses',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      [
+        'def forged_caller():',
+        '    helper',
+        '    ()',
+        '    return 2',
+      ].join('\n'),
+      'function',
+      1,
+      2,
+    ],
+  ] as const)(
+    'rejects calls relationships proved only by %s',
+    (
+      _label,
+      language,
+      extension,
+      targetExcerpt,
+      sourceExcerpt,
+      sourceKind,
+      evidenceStartOffset,
+      evidenceEndOffset,
+    ) => {
+      const fixture = repositoryFixture()
+      const repositoryPath = `src/literal-call-forgery.${extension}`
+      write(
+        fixture.root,
+        repositoryPath,
+        `${targetExcerpt}\n${sourceExcerpt}\n`,
+      )
+      const head = commit(fixture.root, `add ${_label}`)
+      const { db, boardId } = boardDb(fixture.root)
+      const targetLines = targetExcerpt.split('\n').length
+      const sourceLines = sourceExcerpt.split('\n')
+      const sourceStart = targetLines + 1
+      const evidenceExcerpt = sourceLines
+        .slice(evidenceStartOffset, evidenceEndOffset + 1)
+        .join('\n')
+      const error = caught(() =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: repositoryPath,
+              start_line: 1,
+              end_line: targetLines,
+              language,
+              qualified_name: 'helper',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'forged-caller',
+              path: repositoryPath,
+              start_line: sourceStart,
+              end_line: sourceStart + sourceLines.length - 1,
+              language,
+              qualified_name: 'ForgedCaller',
+              symbol_kind: sourceKind,
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'calls',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256(evidenceExcerpt),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: sourceStart + evidenceStartOffset,
+                end_line: sourceStart + evidenceEndOffset,
               }],
             },
           ],
@@ -782,6 +958,46 @@ describe('knowledge source ingestion security', () => {
       1,
     ],
     [
+      'TypeScript call inside an arrow-function body',
+      'typescript',
+      'ts',
+      'export function helper(): void {}',
+      [
+        'export const caller = (): void => {',
+        '  helper()',
+        '}',
+      ].join('\n'),
+      1,
+      1,
+    ],
+    [
+      'TypeScript bare top-level call',
+      'typescript',
+      'ts',
+      'export function helper(): void {}',
+      'helper()',
+      0,
+      0,
+    ],
+    [
+      'Python implicitly continued multiline call',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      [
+        'def caller():',
+        '    return (',
+        '        helper',
+        '        ()',
+        '    )',
+      ].join('\n'),
+      1,
+      4,
+    ],
+    [
       'Java call after a control condition',
       'java',
       'java',
@@ -877,6 +1093,56 @@ describe('knowledge source ingestion security', () => {
     },
   )
 
+  it('retains a same-file TypeScript extends relationship', () => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = 'export class Base {}'
+    const sourceExcerpt = 'export class Derived extends Base {}'
+    write(
+      fixture.root,
+      'src/real-extends.ts',
+      `${targetExcerpt}\n${sourceExcerpt}\n`,
+    )
+    const head = commit(fixture.root, 'add same-file extends relationship')
+    const { db, boardId } = boardDb(fixture.root)
+    const report = new KnowledgeSourceIngestor(db).ingestStructural({
+      ...baseInput(fixture, boardId),
+      base_commit_sha: head,
+      symbols: [
+        {
+          key: 'base',
+          path: 'src/real-extends.ts',
+          start_line: 1,
+          end_line: 1,
+          language: 'typescript',
+          qualified_name: 'Base',
+          symbol_kind: 'class',
+          expected_source_sha256: sha256(targetExcerpt),
+        },
+        {
+          key: 'derived',
+          path: 'src/real-extends.ts',
+          start_line: 2,
+          end_line: 2,
+          language: 'typescript',
+          qualified_name: 'Derived',
+          symbol_kind: 'class',
+          expected_source_sha256: sha256(sourceExcerpt),
+          relationships: [{
+            kind: 'extends',
+            target_key: 'base',
+            expected_evidence_sha256: sha256(sourceExcerpt),
+            target_source_sha256: sha256(targetExcerpt),
+            start_line: 2,
+            end_line: 2,
+          }],
+        },
+      ],
+    })
+    expect(report.sources).toHaveLength(2)
+    expect(report.chunks.some((chunk) =>
+      chunk.content.includes('"kind":"extends"'))).toBe(true)
+  })
+
   it('retains a multiline TypeScript implements relationship', () => {
     const fixture = repositoryFixture()
     const targetExcerpt = 'export interface Helper { value: number }'
@@ -932,6 +1198,312 @@ describe('knowledge source ingestion security', () => {
     expect(report.chunks.some((chunk) =>
       chunk.content.includes('"kind":"implements"'))).toBe(true)
   })
+
+  it.each([
+    [
+      'rejects a cross-file call claimed against a same-named wrong module',
+      false,
+      'calls',
+      'src/path-call-actual.ts',
+      'src/path-call-wrong.ts',
+      'src/path-call-source.ts',
+      'export function helper(): number { return 1 }',
+      'export function helper(): number { return 2 }',
+      "import { helper } from './path-call-actual.js'",
+      'export const value = helper()',
+      'helper',
+      'function',
+      'module',
+    ],
+    [
+      'retains a path-bound cross-file call',
+      true,
+      'calls',
+      'src/path-call-positive.ts',
+      'src/path-call-positive-wrong.ts',
+      'src/path-call-positive-source.ts',
+      'export function helper(): number { return 1 }',
+      'export function helper(): number { return 2 }',
+      "import { helper } from './path-call-positive.js'",
+      'export const value = helper()',
+      'helper',
+      'function',
+      'module',
+    ],
+    [
+      'rejects cross-file extends claimed against a same-named wrong module',
+      false,
+      'extends',
+      'src/path-extends-actual.ts',
+      'src/path-extends-wrong.ts',
+      'src/path-extends-source.ts',
+      'export class Base {}',
+      'export class Base {}',
+      "import { Base } from './path-extends-actual.js'",
+      'export class Derived extends Base {}',
+      'Base',
+      'class',
+      'class',
+    ],
+    [
+      'retains path-bound cross-file extends',
+      true,
+      'extends',
+      'src/path-extends-positive.ts',
+      'src/path-extends-positive-wrong.ts',
+      'src/path-extends-positive-source.ts',
+      'export class Base {}',
+      'export class Base {}',
+      "import { Base } from './path-extends-positive.js'",
+      'export class Derived extends Base {}',
+      'Base',
+      'class',
+      'class',
+    ],
+    [
+      'rejects cross-file implements claimed against a wrong module',
+      false,
+      'implements',
+      'src/path-implements-actual.ts',
+      'src/path-implements-wrong.ts',
+      'src/path-implements-source.ts',
+      'export interface Contract { value: number }',
+      'export interface Contract { value: number }',
+      "import { Contract } from './path-implements-actual.js'",
+      'export class Implementation implements Contract { value = 1 }',
+      'Contract',
+      'interface',
+      'class',
+    ],
+    [
+      'retains path-bound cross-file implements',
+      true,
+      'implements',
+      'src/path-implements-positive.ts',
+      'src/path-implements-positive-wrong.ts',
+      'src/path-implements-positive-source.ts',
+      'export interface Contract { value: number }',
+      'export interface Contract { value: number }',
+      "import { Contract } from './path-implements-positive.js'",
+      'export class Implementation implements Contract { value = 1 }',
+      'Contract',
+      'interface',
+      'class',
+    ],
+    [
+      'retains a class-qualified member call through a named alias import',
+      true,
+      'calls',
+      'src/path-member-positive.ts',
+      'src/path-member-positive-wrong.ts',
+      'src/path-member-positive-source.ts',
+      [
+        'export class Class {',
+        '  static method(): number { return 1 }',
+        '}',
+      ].join('\n'),
+      [
+        'export class Class {',
+        '  static method(): number { return 2 }',
+        '}',
+      ].join('\n'),
+      "import { Class as LocalClass } from './path-member-positive.js'",
+      'export const value = LocalClass.method()',
+      'Class.method',
+      'method',
+      'module',
+    ],
+  ] as const)(
+    '%s',
+    (
+      _label,
+      retain,
+      relationshipKind,
+      actualPath,
+      wrongPath,
+      sourcePath,
+      actualExcerpt,
+      wrongExcerpt,
+      importLine,
+      relationshipLine,
+      targetQualifiedName,
+      targetKind,
+      sourceKind,
+    ) => {
+      const fixture = repositoryFixture()
+      const sourceExcerpt = `${importLine}\n${relationshipLine}`
+      write(fixture.root, actualPath, `${actualExcerpt}\n`)
+      write(fixture.root, wrongPath, `${wrongExcerpt}\n`)
+      write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
+      const head = commit(fixture.root, _label)
+      const { db, boardId } = boardDb(fixture.root)
+      const targetPath = retain ? actualPath : wrongPath
+      const targetExcerpt = retain ? actualExcerpt : wrongExcerpt
+      const ingest = (): ReturnType<
+        KnowledgeSourceIngestor['ingestStructural']
+      > => new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'target',
+            path: targetPath,
+            start_line: 1,
+            end_line: targetExcerpt.split('\n').length,
+            language: 'typescript',
+            qualified_name: targetQualifiedName,
+            symbol_kind: targetKind,
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'source',
+            path: sourcePath,
+            start_line: 1,
+            end_line: 2,
+            language: 'typescript',
+            qualified_name: 'Source',
+            symbol_kind: sourceKind,
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: relationshipKind,
+              target_key: 'target',
+              expected_evidence_sha256: sha256(relationshipLine),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 2,
+              end_line: 2,
+            }],
+          },
+        ],
+      })
+      if (retain) {
+        const report = ingest()
+        expect(report.sources).toHaveLength(2)
+        expect(report.chunks.some((chunk) =>
+          chunk.content.includes(`"kind":"${relationshipKind}"`))).toBe(true)
+      } else {
+        const error = caught(ingest)
+        expect(error.code).toBe('evidence_mismatch')
+        expectNoKnowledge(db)
+      }
+    },
+  )
+
+  it('rejects an unqualified member call when only its owner import is known', () => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = [
+      'export class Class {',
+      '  static method(): number { return 1 }',
+      '}',
+    ].join('\n')
+    const sourceExcerpt = [
+      "import { Class } from './member-owner.js'",
+      'export const value = method()',
+    ].join('\n')
+    write(fixture.root, 'src/member-owner.ts', `${targetExcerpt}\n`)
+    write(fixture.root, 'src/member-source.ts', `${sourceExcerpt}\n`)
+    const head = commit(fixture.root, 'add unbound member call')
+    const { db, boardId } = boardDb(fixture.root)
+    const error = caught(() =>
+      new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'method',
+            path: 'src/member-owner.ts',
+            start_line: 1,
+            end_line: 3,
+            language: 'typescript',
+            qualified_name: 'Class.method',
+            symbol_kind: 'method',
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'source',
+            path: 'src/member-source.ts',
+            start_line: 1,
+            end_line: 2,
+            language: 'typescript',
+            qualified_name: 'Source',
+            symbol_kind: 'module',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'calls',
+              target_key: 'method',
+              expected_evidence_sha256: sha256('export const value = method()'),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 2,
+              end_line: 2,
+            }],
+          },
+        ],
+      }))
+    expect(error.code).toBe('evidence_mismatch')
+    expectNoKnowledge(db)
+  })
+
+  it.each([
+    ['comment', '// export function helper(): void {}'],
+    ['string literal', 'export const text = "helper"'],
+    ['unrelated declaration', 'export function unrelated(): void {}'],
+  ] as const)(
+    'rejects an imported target attested only by an identifier in a %s',
+    (_label, targetExcerpt) => {
+      const fixture = repositoryFixture()
+      const importLine =
+        "import { helper } from './unattested-import-target.js'"
+      const sourceExcerpt = `${importLine}\nexport const value = helper`
+      write(
+        fixture.root,
+        'src/unattested-import-target.ts',
+        `${targetExcerpt}\n`,
+      )
+      write(
+        fixture.root,
+        'src/unattested-import-source.ts',
+        `${sourceExcerpt}\n`,
+      )
+      const head = commit(fixture.root, `add unattested ${_label} target`)
+      const { db, boardId } = boardDb(fixture.root)
+      const error = caught(() =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: 'src/unattested-import-target.ts',
+              start_line: 1,
+              end_line: 1,
+              language: 'typescript',
+              qualified_name: 'helper',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'source',
+              path: 'src/unattested-import-source.ts',
+              start_line: 1,
+              end_line: 2,
+              language: 'typescript',
+              qualified_name: 'Source',
+              symbol_kind: 'module',
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'imports',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256(importLine),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: 1,
+                end_line: 1,
+              }],
+            },
+          ],
+        }))
+      expect(error.code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    },
+  )
 
   it('rejects dynamic import followed by an unrelated target identifier', () => {
     const fixture = repositoryFixture()
@@ -1025,6 +1597,21 @@ describe('knowledge source ingestion security', () => {
       'export function helper(): number { return 2 }',
     ],
     [
+      'colliding explicit JavaScript module path',
+      'typescript',
+      'src/import-target.ts',
+      'src/import-explicit-collision.ts',
+      [
+        'export function helper(): number {',
+        '  return 1',
+        '}',
+      ].join('\n'),
+      "import { helper } from './import-target.js'",
+      'export const imported = helper',
+      'src/import-target.js',
+      'export function helper() { return 2 }',
+    ],
+    [
       'CommonJS target name from the wrong module',
       'cjs',
       'src/import-target.cjs',
@@ -1034,6 +1621,31 @@ describe('knowledge source ingestion security', () => {
       'module.exports = helper',
       'src/other.cjs',
       'module.exports = function helper() { return 2 }',
+    ],
+    [
+      'member CommonJS require',
+      'cjs',
+      'src/import-target.cjs',
+      'src/import-member-forged.cjs',
+      'module.exports = function helper() { return 1 }',
+      "const helper = fake.require('./import-target.cjs').helper",
+      'module.exports = helper',
+      'src/fake.cjs',
+      'module.exports = { require() {} }',
+    ],
+    [
+      'shadowed CommonJS require',
+      'cjs',
+      'src/import-target.cjs',
+      'src/import-shadowed-forged.cjs',
+      'module.exports = function helper() { return 1 }',
+      [
+        'const require = fake',
+        "const helper = require('./import-target.cjs').helper",
+      ].join('\n'),
+      'module.exports = helper',
+      'src/fake.cjs',
+      'module.exports = function fake() {}',
     ],
     [
       'Python export from the wrong module',
@@ -1048,6 +1660,34 @@ describe('knowledge source ingestion security', () => {
       'imported = helper',
       'src/other.py',
       'def helper(): return 2',
+    ],
+    [
+      'Python cross-statement from/import fusion',
+      'python',
+      'iterable.py',
+      'src/import_fusion.py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      'yield from iterable\nimport helper',
+      'imported = helper',
+      'src/other.py',
+      'def unrelated(): return 2',
+    ],
+    [
+      'over-deep Python relative import',
+      'python',
+      'target.py',
+      'src/import_overdeep.py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      'from ........target import helper',
+      'imported = helper',
+      'src/other.py',
+      'def unrelated(): return 2',
     ],
     [
       'Java type from the wrong package',
@@ -1078,6 +1718,7 @@ describe('knowledge source ingestion security', () => {
     ) => {
       const fixture = repositoryFixture()
       const sourceExcerpt = `${importLine}\n${importedLine}`
+      const importLineCount = importLine.split('\n').length
       write(fixture.root, targetPath, `${targetExcerpt}\n`)
       write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
       write(fixture.root, otherPath, `${otherExcerpt}\n`)
@@ -1102,7 +1743,7 @@ describe('knowledge source ingestion security', () => {
               key: 'forged-import',
               path: sourcePath,
               start_line: 1,
-              end_line: 2,
+              end_line: importLineCount + 1,
               language,
               qualified_name: 'forgedImport',
               symbol_kind: 'module',
@@ -1113,7 +1754,7 @@ describe('knowledge source ingestion security', () => {
                 expected_evidence_sha256: sha256(importLine),
                 target_source_sha256: sha256(targetExcerpt),
                 start_line: 1,
-                end_line: 1,
+                end_line: importLineCount,
               }],
             },
           ],
@@ -1131,6 +1772,19 @@ describe('knowledge source ingestion security', () => {
       'src/import-source.ts',
       [
         'export function helper(): number {',
+        '  return 1',
+        '}',
+      ].join('\n'),
+      "import { helper } from './import-target.js'",
+      'export const imported = helper',
+    ],
+    [
+      'JavaScript exact explicit-extension import',
+      'javascript',
+      'src/import-target.js',
+      'src/import-exact-source.js',
+      [
+        'export function helper() {',
         '  return 1',
         '}',
       ].join('\n'),
@@ -1174,6 +1828,18 @@ describe('knowledge source ingestion security', () => {
       ].join('\n'),
       'from .import_target import helper as local_helper',
       'imported = local_helper',
+    ],
+    [
+      'Python boundary-depth relative import',
+      'python',
+      'src/import_target.py',
+      'src/pkg/import_source.py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      'from ..import_target import helper',
+      'imported = helper',
     ],
     [
       'Java qualified import',
