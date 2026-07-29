@@ -1345,36 +1345,108 @@ function persistedStructuralMetadata(
   }
 }
 
-function relationshipTokens(value: string, language: string): string[] {
+const RELATIONSHIP_LITERAL_TOKEN = '<literal>'
+const RELATIONSHIP_REGEX_TOKEN = '<regex>'
+
+function ecmaScriptLanguage(
+  language: string,
+  repositoryPath: string,
+): boolean {
+  return new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx'])
+    .has(path.posix.extname(repositoryPath).toLowerCase())
+    || /^(?:cjs|ecmascript|javascript|js|jsx|mjs|node|ts|tsx|typescript)$/u
+      .test(language.toLowerCase())
+}
+
+function previousRelationshipToken(tokens: readonly string[]): string | null {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index] !== '\n') return tokens[index]
+  }
+  return null
+}
+
+function canStartRegexLiteral(tokens: readonly string[]): boolean {
+  const previous = previousRelationshipToken(tokens)
+  if (previous === null) return true
+  return new Set([
+    '(', '[', '{', ',', ';', ':', '=', '!', '?', '+', '-', '*', '%',
+    '&', '|', '^', '~', '<', '>', 'await', 'case', 'delete', 'do', 'else',
+    'in', 'instanceof', 'new', 'of', 'return', 'throw', 'typeof', 'void',
+    'yield',
+  ]).has(previous)
+}
+
+function regexLiteralEnd(value: string, start: number): number {
+  let index = start + 1
+  let inCharacterClass = false
+  while (index < value.length) {
+    const current = value[index]
+    if (current === '\\') {
+      index += 2
+      continue
+    }
+    if (current === '\n' || current === '\r') fail('evidence_mismatch')
+    if (current === '[') inCharacterClass = true
+    if (current === ']') inCharacterClass = false
+    if (current === '/' && !inCharacterClass) {
+      index += 1
+      while (index < value.length && /[A-Za-z]/u.test(value[index])) index += 1
+      return index
+    }
+    index += 1
+  }
+  fail('evidence_mismatch')
+}
+
+function relationshipTokens(
+  value: string,
+  language: string,
+  repositoryPath: string,
+): string[] {
   const tokens: string[] = []
   const hashComments = /^(?:bash|perl|python|r|ruby|sh|shell|zsh)$/u
     .test(language.toLowerCase())
+    || new Set(['.bash', '.pl', '.py', '.r', '.rb', '.sh', '.zsh'])
+      .has(path.posix.extname(repositoryPath).toLowerCase())
+  const regexLiterals = ecmaScriptLanguage(language, repositoryPath)
   let index = 0
   while (index < value.length) {
     const current = value[index]
     const next = value[index + 1] ?? ''
     if (/\s/u.test(current)) {
+      if (current === '\n') tokens.push('\n')
       index += 1
       continue
     }
     if (current === '/' && next === '/') {
       const end = value.indexOf('\n', index + 2)
-      index = end < 0 ? value.length : end + 1
+      index = end < 0 ? value.length : end
       continue
     }
     if (current === '/' && next === '*') {
       const end = value.indexOf('*/', index + 2)
       if (end < 0) fail('evidence_mismatch')
+      if (value.slice(index, end + 2).includes('\n')) tokens.push('\n')
       index = end + 2
+      continue
+    }
+    if (
+      current === '/'
+      && regexLiterals
+      && canStartRegexLiteral(tokens)
+    ) {
+      index = regexLiteralEnd(value, index)
+      tokens.push(RELATIONSHIP_REGEX_TOKEN)
       continue
     }
     if (hashComments && current === '#') {
       const end = value.indexOf('\n', index + 1)
-      index = end < 0 ? value.length : end + 1
+      index = end < 0 ? value.length : end
       continue
     }
     if (current === '"' || current === '\'' || current === '`') {
       const quote = current
+      const start = index
       index += 1
       let closed = false
       while (index < value.length) {
@@ -1390,6 +1462,8 @@ function relationshipTokens(value: string, language: string): string[] {
         index += 1
       }
       if (!closed) fail('evidence_mismatch')
+      tokens.push(RELATIONSHIP_LITERAL_TOKEN)
+      if (value.slice(start, index).includes('\n')) tokens.push('\n')
       continue
     }
     if (/[A-Za-z_$]/u.test(current)) {
@@ -1437,31 +1511,167 @@ function matchingParenthesis(
   return null
 }
 
+function significantTokenAfter(
+  tokens: readonly string[],
+  index: number,
+): { token: string; index: number } | null {
+  for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+    if (tokens[cursor] !== '\n') return { token: tokens[cursor], index: cursor }
+  }
+  return null
+}
+
+function statementPrefix(tokens: readonly string[], index: number): string[] {
+  let start = index
+  while (
+    start > 0
+    && !new Set(['\n', ';', '{', '}']).has(tokens[start - 1])
+  ) {
+    start -= 1
+  }
+  return tokens.slice(start, index)
+}
+
+function declarationLikeCall(
+  tokens: readonly string[],
+  identifierIndex: number,
+  closeIndex: number,
+  sourceLanguage: string,
+  sourcePath: string,
+): boolean {
+  const previous = tokens[identifierIndex - 1] ?? ''
+  const declarationTokens = new Set([
+    'class', 'def', 'fn', 'func', 'function', 'fun', 'proc', 'sub',
+  ])
+  if (declarationTokens.has(previous)) return true
+
+  const after = significantTokenAfter(tokens, closeIndex)
+  if (after?.token === '{' || after?.token === ':') return true
+  if (
+    after?.token === '='
+    && tokens[after.index + 1] === '>'
+  ) {
+    return true
+  }
+  if (
+    after?.token === '-'
+    && tokens[after.index + 1] === '>'
+  ) {
+    return true
+  }
+
+  const declarationLanguage =
+    /^(?:c|c\+\+|cc|cpp|cs|csharp|h|hpp|java|kt|kotlin|kts|objective-c|scala|swift)$/u
+      .test(sourceLanguage.toLowerCase())
+    || new Set([
+      '.c', '.cc', '.cpp', '.cs', '.h', '.hpp', '.java', '.kt', '.kts',
+      '.scala', '.swift',
+    ]).has(path.posix.extname(sourcePath).toLowerCase())
+  if (!declarationLanguage) return false
+
+  const prefix = statementPrefix(tokens, identifierIndex)
+  if (prefix.length === 0) return false
+  const invocationContext = new Set([
+    '(', '[', ',', '.', ':', '=', '?', '+', '-', '/', '%', '!', '~',
+    'await', 'case', 'new', 'return', 'throw', 'yield',
+  ])
+  if (
+    invocationContext.has(prefix.at(-1) ?? '')
+    || prefix.includes('=')
+    || prefix.some((token, index) =>
+      (token === '&' || token === '|') && prefix[index + 1] === token)
+  ) {
+    return false
+  }
+  return prefix.some((token) => CODE_IDENTIFIER.test(token))
+}
+
+function staticImportContains(
+  tokens: readonly string[],
+  identifier: string,
+  sourceLanguage: string,
+  sourcePath: string,
+): boolean {
+  const ecmaScript = ecmaScriptLanguage(sourceLanguage, sourcePath)
+  for (let importIndex = 0; importIndex < tokens.length; importIndex += 1) {
+    if (tokens[importIndex] !== 'import') continue
+    const first = significantTokenAfter(tokens, importIndex)
+    if (first === null) continue
+    if (ecmaScript && first.token === '(') {
+      const close = matchingParenthesis(tokens, first.index)
+      if (close === null) fail('evidence_mismatch')
+      importIndex = close
+      continue
+    }
+
+    const clause: string[] = []
+    let depth = 0
+    for (let cursor = importIndex + 1; cursor < tokens.length; cursor += 1) {
+      const token = tokens[cursor]
+      if (token === '(' || token === '[' || token === '{') depth += 1
+      if (token === ')' || token === ']' || token === '}') {
+        depth -= 1
+        if (depth < 0) break
+      }
+      if (depth === 0 && (token === ';' || token === '\n')) break
+      clause.push(token)
+    }
+    if (ecmaScript) {
+      const fromIndex = clause.indexOf('from')
+      if (
+        fromIndex >= 0
+        && clause.slice(0, fromIndex).includes(identifier)
+      ) {
+        return true
+      }
+      const identifierIndex = clause.indexOf(identifier)
+      if (
+        identifierIndex >= 0
+        && clause[identifierIndex + 1] === '='
+        && clause[identifierIndex + 2] === 'require'
+        && clause[identifierIndex + 3] === '('
+      ) {
+        return true
+      }
+      continue
+    }
+    if (clause.includes(identifier)) return true
+  }
+  return false
+}
+
 function assertSyntacticRelationship(
   relationship: StructuralRelationshipInput,
   sourceLanguage: string,
+  sourcePath: string,
   relationshipEvidence: string,
   targetQualifiedName: string,
 ): void {
   if (relationship.kind === 'contains') return
   const identifier = targetIdentifier(targetQualifiedName)
-  const tokens = relationshipTokens(relationshipEvidence, sourceLanguage)
+  const tokens = relationshipTokens(
+    relationshipEvidence,
+    sourceLanguage,
+    sourcePath,
+  )
   switch (relationship.kind) {
     case 'calls': {
-      const declarationTokens = new Set(['class', 'def', 'fn', 'func', 'function'])
       const proved = tokens.some((token, index) => {
         if (
           token !== identifier
           || tokens[index + 1] !== '('
-          || declarationTokens.has(tokens[index - 1] ?? '')
         ) {
           return false
         }
         const close = matchingParenthesis(tokens, index + 1)
         if (close === null) return false
-        const after = tokens[close + 1] ?? ''
-        const arrow = after === '=' && tokens[close + 2] === '>'
-        return after !== '{' && after !== ':' && !arrow
+        return !declarationLikeCall(
+          tokens,
+          index,
+          close,
+          sourceLanguage,
+          sourcePath,
+        )
       })
       if (!proved) fail('evidence_mismatch')
       return
@@ -1475,10 +1685,8 @@ function assertSyntacticRelationship(
       }
       return
     case 'imports': {
-      const importIndex = tokens.indexOf('import')
       if (
-        importIndex < 0
-        || !tokens.slice(importIndex + 1).includes(identifier)
+        !staticImportContains(tokens, identifier, sourceLanguage, sourcePath)
       ) {
         fail('evidence_mismatch')
       }
@@ -1567,6 +1775,7 @@ function structuralPlans(
           assertSyntacticRelationship(
             relationship,
             symbol.language,
+            symbol.path,
             relationshipExcerpt.raw,
             target.qualified_name,
           )
