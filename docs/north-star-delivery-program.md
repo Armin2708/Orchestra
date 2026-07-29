@@ -23,7 +23,9 @@ request-to-accepted-delivery-to-cited-knowledge lifecycle as an executable speci
 claiming an automatic production compiler or a real provider turn. DOM-010 now standardizes
 durable actor, causal, workspace, session, job, and contract metadata at the canonical event
 boundary. DOM-013 now requires replay identity across every canonical create, launch, retry,
-submit, accept, and cancel command family.
+submit, accept, and cancel command family. DOM-014 now exposes typed, independently injectable
+service boundaries for all seven named domains while keeping partial and reserved implementations
+explicit.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -155,6 +157,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   public API keys, normalized request fingerprints, replay/conflict behavior, and CLI/browser key
   generation for workspace, policy, checkpoint, launch, delivery-submit, delivery-accept, and
   job-cancel commands while retaining the existing Agent Home create/retry identities;
+- DOM-014 adds one immutable service-boundary catalog for orchestration, conversations,
+  deliveries, discussions, knowledge, conflicts, and device pairing; canonical services remain
+  canonical, Knowledge remains persistence-only, conflicts remain compatibility-only overlap
+  detection, and Discussions/device pairing remain reserved with no service;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -270,6 +276,10 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   command-contract tests, both complete suites at 151 files / 1,217 tests, root/web TypeScript and
   production builds, changed-diff Gitleaks, and critical-scope GitNexus review with all 25
   worktree-local mapped flows covered by the complete regression gate.
+- DOM-014 exact code head `3630baa28073871deef3e24d4562dcef32530353` passed 4 focused
+  files / 26 tests, both complete suites at 152 files / 1,221 tests, root/web TypeScript and
+  production builds, changed-diff Gitleaks, and MEDIUM worktree-local GitNexus review across 4
+  Agent OS plugin flows.
 
 See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md).
 
@@ -383,18 +393,18 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **133 / 375 checklist boxes delivered; 242 remain open**.
+The strict master reconciliation is **134 / 375 checklist boxes delivered; 241 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the expanded provider
-target does not yet have an exact compatibility matrix.
+`DOM-013` through `DOM-014`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
+expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
 
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 15 / 20 | 5 |
+| Phase 1 — Canonical domain/event ledger | 16 / 20 | 4 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
@@ -415,10 +425,13 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[DOM-013 command-idempotency checkpoint](./checkpoints/2026-07-28-agent-os-dom013-command-idempotency.md).
+[DOM-014 focused-service-boundaries checkpoint](./checkpoints/2026-07-29-agent-os-dom014-service-boundaries.md).
+The
+[DOM-013 command-idempotency checkpoint](./checkpoints/2026-07-28-agent-os-dom013-command-idempotency.md)
+is retained as the preceding domain checkpoint.
 The
 [DOM-010 causal-metadata checkpoint](./checkpoints/2026-07-28-agent-os-dom010-causal-metadata.md)
-is retained as the preceding domain checkpoint.
+is retained as earlier domain history.
 The
 [BASE-009 request-to-knowledge checkpoint](./checkpoints/2026-07-28-agent-os-base009-request-to-knowledge-acceptance.md)
 is retained as the preceding acceptance checkpoint.
@@ -504,6 +517,10 @@ superseded history.
   command-contract tests passed; serial and default-parallel suites each passed 151 files / 1,217
   tests, with root/web TypeScript/build, changed-diff Gitleaks, critical-scope GitNexus review,
   and shared-main preservation.
+- DOM-014 exact code head `3630baa28073871deef3e24d4562dcef32530353`: 4 focused files /
+  26 service-boundary/API tests passed; serial and default-parallel suites each passed 152 files /
+  1,221 tests, with root/web TypeScript/build, changed-diff Gitleaks, MEDIUM four-flow GitNexus
+  review, and shared-main preservation.
 - `QA-019` and `QA-020` are delivered. A later release candidate still needs its own exact-head
   hosted run; this checkpoint does not prove publication, provenance, tagging, or release.
 - Browser and mobile gates remain open because the intended in-app Browser backend is unavailable;

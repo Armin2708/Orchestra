@@ -1,12 +1,49 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "2a9acffe3021e7906712a8522ebf6080d2a14563",
+  "observed_at_commit": "3630baa28073871deef3e24d4562dcef32530353",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
     "legacy": "The original Board, message, milestone, presence, review, or telemetry surface.",
     "infrastructure": "Shared daemon, auth, streaming, push, migration, or settings infrastructure."
   },
+  "service_boundaries": [
+    {
+      "name": "orchestration",
+      "implementation_state": "canonical",
+      "source": "src/agent-os/orchestration-service.ts"
+    },
+    {
+      "name": "conversations",
+      "implementation_state": "canonical",
+      "source": "src/agent-os/conversations.ts"
+    },
+    {
+      "name": "deliveries",
+      "implementation_state": "canonical",
+      "source": "src/agent-os/delivery-reports.ts"
+    },
+    {
+      "name": "discussions",
+      "implementation_state": "reserved",
+      "source": "src/agent-os/service-boundaries.ts"
+    },
+    {
+      "name": "knowledge",
+      "implementation_state": "persistence_only",
+      "source": "src/agent-os/knowledge-store.ts"
+    },
+    {
+      "name": "conflicts",
+      "implementation_state": "compatibility_only",
+      "source": "src/agent-os/conflict-service.ts"
+    },
+    {
+      "name": "device_pairing",
+      "implementation_state": "reserved",
+      "source": "src/agent-os/service-boundaries.ts"
+    }
+  ],
   "table_sources": [
     "src/db.ts",
     "src/agent-os/migrations.ts"
@@ -687,7 +724,7 @@
   "planned_not_implemented": [
     {
       "noun": "Discussion and DiscussionPost",
-      "reason": "Current ask/reply/message transport is not a durable searchable Q&A domain."
+      "reason": "A reserved service boundary exists, but current ask/reply/message transport is not a durable searchable Q&A domain."
     },
     {
       "noun": "Team and PlanningSession",
@@ -695,7 +732,7 @@
     },
     {
       "noun": "Conflict",
-      "reason": "Current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
+      "reason": "A compatibility-only detection service exists, but current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
     },
     {
       "noun": "Knowledge ingestion, retrieval, compilation, and operator surfaces",
@@ -703,7 +740,7 @@
     },
     {
       "noun": "DeviceSession",
-      "reason": "Remote pairing still uses the operator master token; named scoped revocable device credentials do not exist."
+      "reason": "A reserved device-pairing boundary exists, but remote pairing still uses the operator master token; named scoped revocable device credentials do not exist."
     }
   ]
 }

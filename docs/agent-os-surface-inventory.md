@@ -1,7 +1,8 @@
 # Agent OS surface inventory
 
-Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
-observed at exact code head `2a9acffe3021e7906712a8522ebf6080d2a14563`.
+Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary
+and DOM-014's focused service-boundary topology, observed at exact code head
+`3630baa28073871deef3e24d4562dcef32530353`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -29,6 +30,25 @@ until migration telemetry and release gates allow removal.
 
 The source contract is `docs/agent-os-domain.md:102`; route registration is rooted at
 `src/server.ts:1406` and `src/agent-os/routes.ts:111`.
+
+## Focused service boundaries
+
+Implementation state is separate from the future domain target. `reserved` means the boundary is
+named and fail-closed but has no service; `persistence_only` and `compatibility_only` name exactly
+which partial foundation exists.
+
+| Boundary | Implementation state | Source |
+|---|---|---|
+| `orchestration` | `canonical` | `src/agent-os/orchestration-service.ts` |
+| `conversations` | `canonical` | `src/agent-os/conversations.ts` |
+| `deliveries` | `canonical` | `src/agent-os/delivery-reports.ts` |
+| `discussions` | `reserved` | `src/agent-os/service-boundaries.ts` |
+| `knowledge` | `persistence_only` | `src/agent-os/knowledge-store.ts` |
+| `conflicts` | `compatibility_only` | `src/agent-os/conflict-service.ts` |
+| `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
+
+The exact ownership/exclusion contract is
+[`agent-os-service-boundaries.md`](./agent-os-service-boundaries.md).
 
 ## Database tables
 
@@ -343,17 +363,17 @@ markers are listed in the JSON inventory and fail the drift test if removed or r
 
 ## Planned domains without complete current surfaces
 
-The canonical domain document names the target. Some rows have no current canonical foundation;
-Knowledge now has durable persistence and a standalone repository-document ingestor, but not the
+The canonical domain document names the target. A reserved service slot is not an implementation.
+Knowledge has durable persistence and a standalone repository-document ingestor, but not the
 surrounding retrieval or product surfaces:
 
 | Planned domain | Current nearest surface | Missing canonical boundary |
 |---|---|---|
-| Discussion / DiscussionPost | `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
+| Discussion / DiscussionPost | reserved boundary; `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
 | Team / PlanningSession | explicit `swarm` transport | bounded participants/roles/budgets/rounds/proposals/synthesis |
-| Conflict | computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
+| Conflict | compatibility-only computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
 | Knowledge ingestion, retrieval, compilation, and operator surfaces | durable `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, and `context_uses` persistence; bounded `RepositoryDocumentIngestor` for AGENTS/README/docs/convention/architecture files; current `context_items` manifest | code/history/discussion/delivery/graph adapters, FTS/retrieval, managed injection, freshness automation, review controls, API/UI, benchmarks |
-| DeviceSession | `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
+| DeviceSession | reserved boundary; `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
 
 These rows identify incomplete product boundaries, not necessarily total absence. Existing
 foundations must be named precisely, while the remaining services/APIs/UI and acceptance evidence
