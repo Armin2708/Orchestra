@@ -19,6 +19,85 @@ afterEach(() => {
   for (const directory of tempDirs.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
 })
 
+function installLegacyCompatibilityFixtureTables(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id INTEGER PRIMARY KEY,
+      board_id INTEGER NOT NULL REFERENCES boards(id),
+      name TEXT NOT NULL,
+      role TEXT,
+      provider TEXT NOT NULL DEFAULT 'claude',
+      model TEXT,
+      effort TEXT,
+      access_profile TEXT,
+      kind TEXT NOT NULL DEFAULT 'session',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS card_events (
+      id INTEGER PRIMARY KEY,
+      card_id INTEGER NOT NULL REFERENCES cards(id),
+      agent_id INTEGER,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS milestones (
+      id INTEGER PRIMARY KEY,
+      board_id INTEGER NOT NULL REFERENCES boards(id),
+      title TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ideas (
+      id INTEGER PRIMARY KEY,
+      board_id INTEGER NOT NULL REFERENCES boards(id),
+      text TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS deliveries (
+      message_id INTEGER NOT NULL,
+      agent_id INTEGER NOT NULL,
+      PRIMARY KEY (message_id, agent_id)
+    );
+    CREATE TABLE IF NOT EXISTS review_decisions (
+      id INTEGER PRIMARY KEY,
+      board_id INTEGER NOT NULL REFERENCES boards(id),
+      card_id INTEGER NOT NULL REFERENCES cards(id),
+      milestone_id INTEGER,
+      step_order INTEGER,
+      decision TEXT NOT NULL,
+      note TEXT,
+      decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS token_telemetry (
+      board_id INTEGER NOT NULL,
+      agent_id INTEGER NOT NULL,
+      hook_event TEXT NOT NULL,
+      day TEXT NOT NULL,
+      chars INTEGER NOT NULL DEFAULT 0,
+      tokens INTEGER NOT NULL DEFAULT 0,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (board_id, agent_id, hook_event, day)
+    );
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      board_id INTEGER NOT NULL,
+      agent_id INTEGER NOT NULL,
+      day TEXT NOT NULL,
+      PRIMARY KEY (board_id, agent_id, day)
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY,
+      board_id INTEGER NOT NULL REFERENCES boards(id),
+      kind TEXT NOT NULL DEFAULT 'ask',
+      body TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS message_targets (
+      message_id INTEGER NOT NULL,
+      agent_id INTEGER NOT NULL,
+      PRIMARY KEY (message_id, agent_id)
+    );
+  `)
+}
+
 describe('Agent OS migrations', () => {
   it('does not record migration 009 when its prerequisite tables are absent', () => {
     const db = new Database(':memory:')
@@ -49,7 +128,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(22)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(23)
     first.close()
 
     const second = openDb(file)
@@ -71,11 +150,11 @@ describe('Agent OS migrations', () => {
       'os_compatibility_migration_checks']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(22)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(23)
     const migrationIds = (second.prepare(
       'SELECT id FROM os_schema_migrations ORDER BY rowid',
     ).all() as Array<{ id: string }>).map((row) => row.id)
-    expect(migrationIds.slice(-11)).toEqual([
+    expect(migrationIds.slice(-12)).toEqual([
       '012-agent-home-retention',
       '013-agent-home-structured-metadata-redaction',
       '014-agent-home-native-fork-lifecycle',
@@ -87,8 +166,9 @@ describe('Agent OS migrations', () => {
       '020-causal-event-metadata',
       '021-command-idempotency-coverage',
       '022-legacy-projection-forward-plan',
+      '023-compatibility-migration-telemetry',
     ])
-    expect(migrationIds.at(-1)).toBe('022-legacy-projection-forward-plan')
+    expect(migrationIds.at(-1)).toBe('023-compatibility-migration-telemetry')
     expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
@@ -139,7 +219,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(22)
+    }).count).toBe(23)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -857,12 +937,12 @@ describe('Agent OS migrations', () => {
     const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
       .all() as Array<{ id: string }>).map((row) => row.id)
     expect(ids.slice(-8)).toEqual([
-      '017-job-assignment-runtime-binding',
       '018-knowledge-persistence',
       '019-provider-acceptance-evidence',
       '020-causal-event-metadata',
       '021-command-idempotency-coverage',
       '022-legacy-projection-forward-plan',
+      '023-compatibility-migration-telemetry',
       '014-agent-home-native-fork-lifecycle',
       '015-agent-home-action-command-scope',
     ])
@@ -998,7 +1078,7 @@ describe('Agent OS migrations', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
       WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 1 })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations')
-      .get() as { count: number }).count).toBe(22)
+      .get() as { count: number }).count).toBe(23)
     const requestLookupPlan = db.prepare(`EXPLAIN QUERY PLAN
       SELECT id, board_id, kind, source, workspace_id, card_id, session_id,
         process_id, job_id, contract_id, correlation_id, causation_id,
@@ -1226,7 +1306,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(22)
+      .toBe(23)
     db.close()
   })
 
@@ -1378,7 +1458,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(22)
+      .toBe(23)
     db.close()
   })
 
@@ -1402,7 +1482,18 @@ describe('Agent OS migrations', () => {
         id TEXT PRIMARY KEY, board_id INTEGER, card_id INTEGER, workspace_id TEXT,
         provider TEXT NOT NULL DEFAULT 'claude'
       );
-      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT, context_json TEXT NOT NULL DEFAULT '{}');
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        agent_id INTEGER,
+        workspace_id TEXT,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        external_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'starting',
+        context_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE os_events (
         id TEXT PRIMARY KEY, board_id INTEGER NOT NULL, workspace_id TEXT, card_id INTEGER,
         session_id TEXT, process_id TEXT, kind TEXT NOT NULL, source TEXT NOT NULL,
@@ -1427,6 +1518,7 @@ describe('Agent OS migrations', () => {
         VALUES (1, 'Preserve old meaning', '["old criterion"]', '[]', 'HEAD', '["npm test"]', 0,
           '2026-07-22T00:00:00.000Z');
     `)
+    installLegacyCompatibilityFixtureTables(db)
     const legacyCriteria: unknown[] = [
       'old criterion', 42, true, false, null, ['nested', 7], { foo: 'bar' },
       { text: 12, required: 'legacy' },
@@ -1439,7 +1531,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(22)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(23)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1474,7 +1566,8 @@ describe('Agent OS migrations', () => {
   it('upgrades populated migration-004 report revisions and cascades card deletion', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-os-revision-upgrade-'))
     tempDirs.push(directory)
-    const db = new Database(path.join(directory, 'legacy-revisions.db'))
+    const file = path.join(directory, 'legacy-revisions.db')
+    const db = new Database(file)
     db.pragma('foreign_keys = ON')
     db.exec(`
       CREATE TABLE boards (id INTEGER PRIMARY KEY, project_path TEXT NOT NULL, name TEXT NOT NULL);
@@ -1490,7 +1583,18 @@ describe('Agent OS migrations', () => {
         id TEXT PRIMARY KEY, board_id INTEGER, card_id INTEGER, workspace_id TEXT,
         provider TEXT NOT NULL DEFAULT 'claude'
       );
-      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT, context_json TEXT NOT NULL DEFAULT '{}');
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        agent_id INTEGER,
+        workspace_id TEXT,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        external_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'starting',
+        context_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE os_events (
         id TEXT PRIMARY KEY, board_id INTEGER NOT NULL, workspace_id TEXT, card_id INTEGER,
         session_id TEXT, process_id TEXT, kind TEXT NOT NULL, source TEXT NOT NULL,
@@ -1510,6 +1614,7 @@ describe('Agent OS migrations', () => {
       INSERT INTO boards (id, project_path, name) VALUES (1, '/legacy-revisions', 'legacy revisions');
       INSERT INTO cards (id, board_id, title, description) VALUES (1, 1, 'Old report', 'Preserve revisions');
     `)
+    installLegacyCompatibilityFixtureTables(db)
 
     applyAgentOsMigrations(db)
     db.prepare("DELETE FROM os_schema_migrations WHERE id='005-delivery-report-revision-cascade'").run()
@@ -1534,7 +1639,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(22)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(23)
     db.close()
   })
 

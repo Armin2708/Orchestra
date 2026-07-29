@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openDb } from '../src/db.js'
+import { openDb as openApplicationDb } from '../src/db.js'
 import {
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
@@ -64,6 +64,40 @@ function installTelemetry(
     now: new Date(appliedAtUtc),
   })
 }
+
+function openDbBeforeTelemetry(file: string): Database.Database {
+  const db = openApplicationDb(file)
+  const placeholders =
+    AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES
+      .map(() => '?')
+      .join(',')
+  const objects = db.prepare(`
+    SELECT type, name
+    FROM sqlite_master
+    WHERE name IN (${placeholders})
+    ORDER BY CASE type
+      WHEN 'trigger' THEN 1
+      WHEN 'index' THEN 2
+      ELSE 3
+    END
+  `).all(
+    ...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES,
+  ) as Array<{
+    type: 'table' | 'index' | 'trigger'
+    name: string
+  }>
+  for (const object of objects) {
+    const name = `"${object.name.replaceAll('"', '""')}"`
+    db.exec(`DROP ${object.type.toUpperCase()} IF EXISTS ${name}`)
+  }
+  db.prepare('DELETE FROM os_schema_migrations WHERE id=?')
+    .run(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID)
+  return db
+}
+
+// Store-unit tests control the historical installation day explicitly. Integration coverage below
+// uses openApplicationDb directly to exercise production migration registration and refresh.
+const openDb = openDbBeforeTelemetry
 
 function schemaObjectCount(db: Database.Database): number {
   const placeholders =
@@ -402,6 +436,73 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       ])
     expect(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID)
       .toBe('023-compatibility-migration-telemetry')
+  })
+
+  it('registers migration 023 and refreshes collector drift once at startup', () => {
+    const file = tempDatabaseFile('orchestra-dom019-startup-')
+    const today = new Date().toISOString().slice(0, 10)
+    const first = openApplicationDb(file)
+    expect(first.prepare(`
+      SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
+    `).get()).toEqual({
+      id: AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
+    })
+    expect(first.prepare(`
+      SELECT COUNT(*) AS count FROM os_schema_migrations
+    `).get()).toEqual({ count: 23 })
+    expect(schemaObjectCount(first))
+      .toBe(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES.length)
+    const before = first.prepare(`
+      SELECT installed_day, collector_schema_version, valid_from_day
+      FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    `).get() as {
+      installed_day: string
+      collector_schema_version: number
+      valid_from_day: string
+    }
+    expect(before).toMatchObject({
+      installed_day: today,
+      valid_from_day: today,
+    })
+    first.close()
+
+    const drift = new Database(file)
+    const trigger =
+      AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES[0]!
+    const triggerSql = (drift.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?
+    `).get(trigger) as { sql: string }).sql
+    drift.exec(`DROP TRIGGER ${trigger}`)
+    drift.exec(triggerSql)
+    const driftedSchemaVersion =
+      Number(drift.pragma('schema_version', { simple: true }))
+    expect(driftedSchemaVersion).not.toBe(before.collector_schema_version)
+    drift.close()
+
+    const refreshed = openApplicationDb(file)
+    const afterRefresh = refreshed.prepare(`
+      SELECT installed_day, collector_schema_version, valid_from_day
+      FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    `).get()
+    expect(afterRefresh).toEqual({
+      installed_day: today,
+      collector_schema_version: driftedSchemaVersion,
+      valid_from_day: today,
+    })
+    expect(refreshed.prepare(`
+      SELECT total_changes() AS count
+    `).get()).toEqual({ count: 1 })
+    refreshed.close()
+
+    const stable = openApplicationDb(file)
+    expect(stable.prepare(`
+      SELECT installed_day, collector_schema_version, valid_from_day
+      FROM ${AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE}
+    `).get()).toEqual(afterRefresh)
+    expect(stable.prepare(`
+      SELECT total_changes() AS count
+    `).get()).toEqual({ count: 0 })
+    stable.close()
   })
 
   it('applies idempotently after 022 and creates one exact 39-trigger set', () => {

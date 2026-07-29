@@ -814,6 +814,61 @@ describe('durable Agent Home domain', () => {
         provider TEXT,
         access_profile TEXT
       );
+      CREATE TABLE agent_usage (
+        board_id INTEGER NOT NULL,
+        agent_id INTEGER NOT NULL,
+        day TEXT NOT NULL,
+        PRIMARY KEY (board_id, agent_id, day)
+      );
+      CREATE TABLE card_events (
+        id INTEGER PRIMARY KEY,
+        card_id INTEGER NOT NULL REFERENCES cards(id),
+        agent_id INTEGER,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        kind TEXT NOT NULL DEFAULT 'ask',
+        body TEXT NOT NULL
+      );
+      CREATE TABLE message_targets (
+        message_id INTEGER NOT NULL,
+        agent_id INTEGER NOT NULL,
+        PRIMARY KEY (message_id, agent_id)
+      );
+      CREATE TABLE deliveries (
+        message_id INTEGER NOT NULL,
+        agent_id INTEGER NOT NULL,
+        PRIMARY KEY (message_id, agent_id)
+      );
+      CREATE TABLE milestones (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        title TEXT NOT NULL
+      );
+      CREATE TABLE ideas (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        text TEXT NOT NULL
+      );
+      CREATE TABLE review_decisions (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        card_id INTEGER NOT NULL REFERENCES cards(id),
+        decision TEXT NOT NULL,
+        decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE token_telemetry (
+        board_id INTEGER NOT NULL,
+        agent_id INTEGER NOT NULL,
+        hook_event TEXT NOT NULL,
+        day TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (board_id, agent_id, hook_event, day)
+      );
       CREATE TABLE workspaces (
         id TEXT PRIMARY KEY, board_id INTEGER NOT NULL REFERENCES boards(id),
         name TEXT NOT NULL, kind TEXT NOT NULL, root_path TEXT NOT NULL,
@@ -940,7 +995,7 @@ describe('durable Agent Home domain', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(22)
+      .toBe(23)
     expect(db.prepare(`SELECT id, legacy_agent_id, name, provenance_json
       FROM agent_profiles ORDER BY legacy_agent_id`).all()).toEqual([
       expect.objectContaining({

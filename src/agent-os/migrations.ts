@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { canonicalHash, stableJson } from './agent-home-support.js'
 import { applyCompatibilityForwardMigration } from './compatibility-forward-migration.js'
+import {
+  AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
+  applyCompatibilityMigrationTelemetryMigration,
+  refreshCompatibilityMigrationTelemetryCollectorEpoch,
+} from './compatibility-migration-telemetry.js'
 import { conversationEventContentHash } from './conversation-event-integrity.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
@@ -7370,6 +7375,12 @@ const migrations: Migration[] = [
       applyCompatibilityForwardMigration(db)
     },
   },
+  {
+    id: AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
+    apply(db) {
+      applyCompatibilityMigrationTelemetryMigration(db)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once and atomically without deleting legacy tables. */
@@ -7391,4 +7402,7 @@ export function applyAgentOsMigrations(db: Database.Database): void {
     }
   })
   migrate()
+  refreshCompatibilityMigrationTelemetryCollectorEpoch(db, {
+    now: new Date(),
+  })
 }
