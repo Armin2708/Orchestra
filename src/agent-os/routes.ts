@@ -47,6 +47,21 @@ import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
 import { registerTaskContractTemplateRoutes } from './contract-template-routes.js'
 import { jobAssignmentPlugin } from './job-assignment-routes.js'
+import {
+  AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
+  AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
+  AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE,
+  AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE,
+  queryCompatibilityMigrationTelemetryDaily,
+  queryCompatibilityMigrationTelemetrySummary,
+  queryCompatibilityMigrationWriterObservation,
+  rollupCompatibilityMigrationTelemetry,
+  sealCompletedCompatibilityMigrationTelemetryDay,
+} from './compatibility-migration-telemetry.js'
+import {
+  AGENT_OS_LEGACY_COMPATIBILITY_TABLES,
+  type AgentOsLegacyCompatibilityTable,
+} from './compatibility-projection-contract.js'
 
 export interface ProcessRecord {
   id: string
@@ -214,6 +229,127 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       throw error
     }
   })
+
+  app.get<{ Querystring: Record<string, unknown> }>(
+    '/compatibility-migration-telemetry/summary',
+    (request) => {
+      requireOperator(request)
+      compatibilityTelemetryInput(request.query, [], [], 'query')
+      return {
+        telemetry: queryCompatibilityMigrationTelemetrySummary(db),
+        diagnostics: {
+          mismatch: AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
+          failure: AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
+        },
+        retention_rule: AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE,
+        writer_observation_rule:
+          AGENT_OS_COMPATIBILITY_WRITER_OBSERVATION_RULE,
+      }
+    },
+  )
+
+  app.get<{ Querystring: Record<string, unknown> }>(
+    '/compatibility-migration-telemetry/daily',
+    (request) => {
+      requireOperator(request)
+      const query = compatibilityTelemetryInput(
+        request.query,
+        ['from_day', 'through_day'],
+        ['table'],
+        'query',
+      )
+      const fromDay = compatibilityTelemetryDay(query.from_day, 'from_day')
+      const throughDay =
+        compatibilityTelemetryDay(query.through_day, 'through_day')
+      compatibilityTelemetryDayRange(fromDay, throughDay)
+      const table = query.table === undefined
+        ? undefined
+        : compatibilityTelemetryTable(query.table)
+      return {
+        telemetry: queryCompatibilityMigrationTelemetryDaily(db, {
+          from_day: fromDay,
+          through_day: throughDay,
+          ...(table === undefined ? {} : { table }),
+        }),
+      }
+    },
+  )
+
+  app.get<{ Querystring: Record<string, unknown> }>(
+    '/compatibility-migration-telemetry/writer-observation',
+    (request) => {
+      requireOperator(request)
+      const query = compatibilityTelemetryInput(
+        request.query,
+        ['table', 'from_day', 'through_day'],
+        [],
+        'query',
+      )
+      const fromDay = compatibilityTelemetryDay(query.from_day, 'from_day')
+      const throughDay =
+        compatibilityTelemetryDay(query.through_day, 'through_day')
+      compatibilityTelemetryDayRange(fromDay, throughDay)
+      return {
+        observation: queryCompatibilityMigrationWriterObservation(db, {
+          table: compatibilityTelemetryTable(query.table),
+          from_day: fromDay,
+          through_day: throughDay,
+        }),
+      }
+    },
+  )
+
+  app.post<{ Body: unknown }>(
+    '/compatibility-migration-telemetry/seal',
+    (request) => {
+      requireOperator(request)
+      const body = compatibilityTelemetryInput(
+        objectBody(request.body),
+        ['day'],
+        [],
+        'request body',
+      )
+      const day = compatibilityTelemetryDay(body.day, 'day')
+      try {
+        sealCompletedCompatibilityMigrationTelemetryDay(db, day)
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError) {
+          throw new ValidationError(error.message)
+        }
+        throw error
+      }
+      return { sealed_day: day }
+    },
+  )
+
+  app.post<{ Body: unknown }>(
+    '/compatibility-migration-telemetry/rollup',
+    (request) => {
+      requireOperator(request)
+      const body = compatibilityTelemetryInput(
+        request.body == null ? {} : objectBody(request.body),
+        [],
+        ['retain_days'],
+        'request body',
+      )
+      const retainDays = boundedInteger(
+        body.retain_days,
+        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
+          .minimum_daily_retention_days,
+        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
+          .minimum_daily_retention_days,
+        AGENT_OS_COMPATIBILITY_TELEMETRY_RETENTION_RULE
+          .maximum_daily_retention_days,
+        'retain_days',
+      )
+      return {
+        rollup: rollupCompatibilityMigrationTelemetry(db, {
+          now: new Date(),
+          retain_days: retainDays,
+        }),
+      }
+    },
+  )
 
   app.get<{ Params: { id: string }; Querystring: { archived?: string; status?: string } }>('/boards/:id/workspaces', (request) => {
     const boardId = board(db, request.params.id)
@@ -946,6 +1082,66 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   const number = Number(value)
   if (!Number.isSafeInteger(number) || number < min || number > max) throw new ValidationError(`${field} must be an integer from ${min} to ${max}`)
   return number
+}
+
+function compatibilityTelemetryInput(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  const keys = Object.keys(value)
+  const allowed = new Set([...required, ...optional])
+  const missingCount =
+    required.filter((key) => !Object.hasOwn(value, key)).length
+  const unexpectedCount = keys.filter((key) => !allowed.has(key)).length
+  if (missingCount !== 0 || unexpectedCount !== 0) {
+    throw new ValidationError(
+      `${label} keys are invalid`
+      + ` (missing_count=${missingCount}`
+      + ` unexpected_count=${unexpectedCount})`,
+    )
+  }
+  return value
+}
+
+function compatibilityTelemetryDay(value: unknown, field: string): string {
+  const day = requiredString(value, field)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    throw new ValidationError(`${field} must be an exact UTC YYYY-MM-DD day`)
+  }
+  const parsed = new Date(`${day}T00:00:00.000Z`)
+  if (
+    !Number.isFinite(parsed.getTime())
+    || parsed.toISOString().slice(0, 10) !== day
+  ) {
+    throw new ValidationError(`${field} must be an exact UTC YYYY-MM-DD day`)
+  }
+  return day
+}
+
+function compatibilityTelemetryDayRange(
+  fromDay: string,
+  throughDay: string,
+): void {
+  if (fromDay > throughDay) {
+    throw new ValidationError('from_day must not be after through_day')
+  }
+}
+
+function compatibilityTelemetryTable(
+  value: unknown,
+): AgentOsLegacyCompatibilityTable {
+  const table = requiredString(value, 'table')
+  if (
+    !(AGENT_OS_LEGACY_COMPATIBILITY_TABLES as readonly string[])
+      .includes(table)
+  ) {
+    throw new ValidationError(
+      'table is not a supported compatibility telemetry value',
+    )
+  }
+  return table as AgentOsLegacyCompatibilityTable
 }
 
 function optionalSignedInteger(value: unknown, fallback: number, field: string): number {
