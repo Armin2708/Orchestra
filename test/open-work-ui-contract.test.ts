@@ -283,6 +283,9 @@ describe('Open Work responsive style contract', () => {
       /@media \(max-width: 767px\)[\s\S]*\.ow-workbench,[\s\S]*grid-template-columns: minmax\(0, 1fr\)/,
     )
     expect(cssSource).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*\.open-work button \{ min-height: 44px; \}/,
+    )
+    expect(cssSource).toMatch(
       /@media \(max-width: 767px\)[\s\S]*\.ow-contract-actions \.ow-button,[\s\S]*min-height: 44px/,
     )
     expect(cssSource).toContain('overflow-x: hidden')
