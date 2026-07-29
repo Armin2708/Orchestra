@@ -158,8 +158,12 @@ function expectNoKnowledge(db: Database.Database): void {
 function acceptedDelivery(
   db: Database.Database,
   boardId: number,
-  commitSha: string,
+  commitShas: string | readonly string[],
+  changedFiles: readonly string[] = ['src/service.ts'],
 ): string {
+  const commits = typeof commitShas === 'string'
+    ? [commitShas]
+    : [...commitShas]
   const cardId = Number(db.prepare(`INSERT INTO cards
     (board_id, title, description) VALUES (?, ?, ?)`)
     .run(boardId, 'Security delivery', 'Verify durable evidence security')
@@ -180,10 +184,13 @@ function acceptedDelivery(
       text: item.text,
       status: 'delivered',
     })),
-    changedFiles: ['src/service.ts'],
-    commits: [commitSha],
+    changedFiles: [...changedFiles],
+    commits,
   })
-  const evidence = [{ kind: 'commit' as const, ref: commitSha }]
+  const evidence = commits.map((commitSha) => ({
+    kind: 'commit' as const,
+    ref: commitSha,
+  }))
   const verified = deliveries.verify(submitted.id, {
     actor: 'verifier',
     deliverableResults: submitted.asked.deliverables.map((item) => ({
@@ -261,6 +268,84 @@ describe('knowledge source ingestion security', () => {
     expect(envelope.evidence.text).not.toContain(RAW_SECRET)
   })
 
+  it('redacts structural metadata before titles, symbols, and relationships persist', () => {
+    const fixture = repositoryFixture()
+    const metadataSecret = ['github_pat_', '1234567890ABCDEF'].join('')
+    const targetExcerpt = [
+      `export function ${metadataSecret}(): number {`,
+      '  return 7',
+      '}',
+    ].join('\n')
+    const callerExcerpt = [
+      'export function metadataCaller(): number {',
+      `  return ${metadataSecret}()`,
+      '}',
+    ].join('\n')
+    write(
+      fixture.root,
+      'src/metadata.ts',
+      `${targetExcerpt}\n${callerExcerpt}\n`,
+    )
+    const head = commit(fixture.root, 'add secret-shaped structural metadata')
+    const { db, boardId } = boardDb(fixture.root)
+    const report = new KnowledgeSourceIngestor(db).ingestStructural({
+      ...baseInput(fixture, boardId),
+      base_commit_sha: head,
+      symbols: [
+        {
+          key: metadataSecret,
+          path: 'src/metadata.ts',
+          start_line: 1,
+          end_line: 3,
+          language: `typescript-${metadataSecret}`,
+          qualified_name: metadataSecret,
+          symbol_kind: `function-${metadataSecret}`,
+          expected_source_sha256: sha256(targetExcerpt),
+        },
+        {
+          key: 'metadata-caller',
+          path: 'src/metadata.ts',
+          start_line: 4,
+          end_line: 6,
+          language: 'typescript',
+          qualified_name: 'metadataCaller',
+          symbol_kind: 'function',
+          expected_source_sha256: sha256(callerExcerpt),
+          relationships: [{
+            kind: 'calls',
+            target_key: metadataSecret,
+            expected_evidence_sha256:
+              sha256(`  return ${metadataSecret}()`),
+            target_source_sha256: sha256(targetExcerpt),
+            start_line: 5,
+            end_line: 5,
+          }],
+        },
+      ],
+    })
+    expect(report.sources).toHaveLength(2)
+    expect(report.sources.every((source) =>
+      !source.title.includes(metadataSecret)
+      && source.redaction_state === 'redacted')).toBe(true)
+    expect(JSON.stringify(report.chunks.map((chunk) => chunk.symbol)))
+      .not.toContain(metadataSecret)
+    expect(report.chunks.every((chunk) =>
+      !chunk.content.includes(metadataSecret))).toBe(true)
+    const caller = report.chunks.find((chunk) =>
+      chunk.symbol?.qualified_name === 'metadataCaller')
+    const envelope = JSON.parse(caller!.content) as {
+      relationships: Array<{ target: { key: string; qualified_name: string } }>
+    }
+    expect(JSON.stringify(envelope.relationships)).not.toContain(metadataSecret)
+    expect(envelope.relationships[0].target).toEqual({
+      end_line: 3,
+      key: '[REDACTED]',
+      path: 'src/metadata.ts',
+      qualified_name: '[REDACTED]',
+      start_line: 1,
+    })
+  })
+
   it('verifies raw evidence hashes with committed CRLF separators intact', () => {
     const fixture = repositoryFixture()
     const crlfExcerpt = [
@@ -321,6 +406,8 @@ describe('knowledge source ingestion security', () => {
           relationships: [{
             kind: 'calls',
             target_key: 'missing-target',
+            expected_evidence_sha256: sha256('missing evidence'),
+            target_source_sha256: sha256('missing target'),
             start_line: 99,
             end_line: 99,
           }],
@@ -331,6 +418,27 @@ describe('knowledge source ingestion security', () => {
       new KnowledgeSourceIngestor(db).ingestStructural(input))
     expect(['evidence_mismatch', 'contradictory_evidence']).toContain(error.code)
     expectNoKnowledge(db)
+  })
+
+  it('rejects conflicting structural evidence even when the caller changes symbol.key', () => {
+    const fixture = repositoryFixture()
+    const { db, boardId } = boardDb(fixture.root)
+    const ingestor = new KnowledgeSourceIngestor(db)
+    const input = baseInput(fixture, boardId)
+    const retained = ingestor.ingestStructural(input)
+    expect(retained.sources).toHaveLength(1)
+    const error = caught(() => ingestor.ingestStructural({
+      ...input,
+      symbols: [{
+        ...input.symbols[0],
+        key: 'caller-controlled-alternate-key',
+      }],
+    }))
+    expect(error.code).toBe('persistence_conflict')
+    expect(db.prepare('SELECT COUNT(*) AS count FROM knowledge_sources').get())
+      .toEqual({ count: 1 })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM knowledge_chunks').get())
+      .toEqual({ count: 1 })
   })
 
   it.each([
@@ -371,6 +479,8 @@ describe('knowledge source ingestion security', () => {
       relationships: [{
         kind: 'calls',
         target_key: 'hostile',
+        expected_evidence_sha256: sha256('  return 2'),
+        target_source_sha256: sha256(fixture.hostile),
         start_line: 2,
         end_line: 2,
       }],
@@ -380,6 +490,80 @@ describe('knowledge source ingestion security', () => {
     expect(error.code).toBe('evidence_mismatch')
     expectNoKnowledge(db)
   })
+
+  it.each([
+    ['comment', '// helper()', 'helper', 'function'],
+    ['string literal', 'const text = "helper()"', 'helper', 'function'],
+    ['unrelated identifier', 'const helperValue = 1', 'helper', 'function'],
+    ['method declaration', 'helper() { return 2 }', 'helper', 'class'],
+  ] as const)(
+    'rejects calls relationships proved only by a %s',
+    (_label, evidenceLine, targetName, sourceKind) => {
+      const fixture = repositoryFixture()
+      const targetExcerpt = [
+        `export function ${targetName}(): number {`,
+        '  return 1',
+        '}',
+      ].join('\n')
+      const sourceExcerpt = sourceKind === 'class'
+        ? [
+            'export class ForgedCaller {',
+            `  ${evidenceLine}`,
+            '}',
+          ].join('\n')
+        : [
+            'export function forgedCaller(): number {',
+            `  ${evidenceLine}`,
+            '  return 2',
+            '}',
+          ].join('\n')
+      write(
+        fixture.root,
+        'src/relationship-forgery.ts',
+        `${targetExcerpt}\n${sourceExcerpt}\n`,
+      )
+      const head = commit(fixture.root, `add ${_label} forgery`)
+      const { db, boardId } = boardDb(fixture.root)
+      const sourceEnd = sourceKind === 'class' ? 6 : 7
+      const error = caught(() =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: 'src/relationship-forgery.ts',
+              start_line: 1,
+              end_line: 3,
+              language: 'typescript',
+              qualified_name: targetName,
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'forged-caller',
+              path: 'src/relationship-forgery.ts',
+              start_line: 4,
+              end_line: sourceEnd,
+              language: 'typescript',
+              qualified_name: 'ForgedCaller',
+              symbol_kind: sourceKind,
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'calls',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256(`  ${evidenceLine}`),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: 5,
+                end_line: 5,
+              }],
+            },
+          ],
+        }))
+      expect(error.code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    },
+  )
 
   it('rejects mismatched board and repository scope', () => {
     const fixture = repositoryFixture()
@@ -443,6 +627,133 @@ describe('knowledge source ingestion security', () => {
         observed_at: OBSERVED_AT,
         report_id: reportId,
         source_commit_sha: fixture.head,
+      }))
+    expect(error.code).toBe('evidence_mismatch')
+    expectNoKnowledge(db)
+  })
+
+  it('rejects report paths not derived from its exact commits', () => {
+    const fixture = repositoryFixture()
+    const { db, boardId } = boardDb(fixture.root)
+    const reportId = acceptedDelivery(db, boardId, fixture.head)
+    db.prepare('UPDATE delivery_reports SET changed_files=? WHERE id=?')
+      .run(JSON.stringify(['src/hostile.ts']), reportId)
+    const error = caught(() =>
+      new KnowledgeSourceIngestor(db).ingestVerifiedDelivery({
+        board_id: boardId,
+        repository_key: 'example/security',
+        repository_root: fixture.root,
+        base_commit_sha: fixture.head,
+        observed_at: OBSERVED_AT,
+        report_id: reportId,
+        source_commit_sha: fixture.head,
+      }))
+    expect(error.code).toBe('evidence_mismatch')
+    expectNoKnowledge(db)
+  })
+
+  it('rejects excluded delivery paths before any report evidence persists', () => {
+    const fixture = repositoryFixture()
+    const { db, boardId } = boardDb(fixture.root)
+    const reportId = acceptedDelivery(
+      db,
+      boardId,
+      [fixture.initialCommit, fixture.head],
+      ['.env', 'secrets/token.ts', 'src/hostile.ts', 'src/service.ts'],
+    )
+    const error = caught(() =>
+      new KnowledgeSourceIngestor(db).ingestVerifiedDelivery({
+        board_id: boardId,
+        repository_key: 'example/security',
+        repository_root: fixture.root,
+        base_commit_sha: fixture.head,
+        observed_at: OBSERVED_AT,
+        report_id: reportId,
+        source_commit_sha: fixture.head,
+      }))
+    expect(error.code).toBe('excluded_path')
+    expectNoKnowledge(db)
+  })
+
+  it('uses the canonical delivery tip while citing gotchas from the exact earlier commit', () => {
+    const fixture = repositoryFixture()
+    const earlierLine =
+      'export const earlier = 1 // Gotcha: earlier delivery evidence'
+    write(fixture.root, 'src/earlier.ts', `${earlierLine}\n`)
+    const earlierCommit = commit(fixture.root, 'add earlier delivery evidence')
+    write(fixture.root, 'src/later.ts', 'export const later = 2\n')
+    const canonicalTip = commit(fixture.root, 'add later delivery evidence')
+    const { db, boardId } = boardDb(fixture.root)
+    const reportId = acceptedDelivery(
+      db,
+      boardId,
+      [earlierCommit, canonicalTip],
+      ['src/earlier.ts', 'src/later.ts'],
+    )
+    const ingestor = new KnowledgeSourceIngestor(db)
+    const request = {
+      board_id: boardId,
+      repository_key: 'example/security',
+      repository_root: fixture.root,
+      base_commit_sha: canonicalTip,
+      observed_at: OBSERVED_AT,
+      report_id: reportId,
+      gotchas: [{
+        path: 'src/earlier.ts',
+        start_line: 1,
+        end_line: 1,
+        text: 'Gotcha: earlier delivery evidence',
+        expected_source_sha256: sha256(earlierLine),
+      }],
+    }
+    const nonCanonical = caught(() => ingestor.ingestVerifiedDelivery({
+      ...request,
+      source_commit_sha: earlierCommit,
+    }))
+    expect(nonCanonical.code).toBe('evidence_mismatch')
+    expectNoKnowledge(db)
+
+    const retained = ingestor.ingestVerifiedDelivery({
+      ...request,
+      source_commit_sha: canonicalTip,
+    })
+    expect(retained.sources).toHaveLength(2)
+    const gotchaSource = retained.sources.find((source) =>
+      source.source_kind === 'gotcha')
+    expect(gotchaSource?.source_revision).toBe(earlierCommit)
+    const gotchaChunk = retained.chunks.find((chunk) =>
+      chunk.source_id === gotchaSource?.id)
+    const envelope = JSON.parse(gotchaChunk!.content) as {
+      citation: { commit_sha: string }
+      kind: string
+    }
+    expect(envelope).toMatchObject({
+      citation: { commit_sha: earlierCommit },
+      kind: 'gotcha',
+    })
+  })
+
+  it('rejects gotcha ranges that the canonical delivery commit did not change', () => {
+    const fixture = repositoryFixture()
+    const { db, boardId } = boardDb(fixture.root)
+    const reportId = acceptedDelivery(db, boardId, fixture.head)
+    const error = caught(() =>
+      new KnowledgeSourceIngestor(db).ingestVerifiedDelivery({
+        board_id: boardId,
+        repository_key: 'example/security',
+        repository_root: fixture.root,
+        base_commit_sha: fixture.head,
+        observed_at: OBSERVED_AT,
+        report_id: reportId,
+        source_commit_sha: fixture.head,
+        gotchas: [{
+          path: 'src/service.ts',
+          start_line: 1,
+          end_line: 1,
+          text: 'export function service',
+          expected_source_sha256:
+            sha256('export function service(): number {'),
+        }],
       }))
     expect(error.code).toBe('evidence_mismatch')
     expectNoKnowledge(db)
