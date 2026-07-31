@@ -2799,6 +2799,24 @@ function commonJsImportContains(
               const classScoped = stack.some((braceIndex) =>
                 statementPrefix(tokens, braceIndex).includes('class'))
               if (classScoped) return stack
+              const strictDirectiveAt = (braceIndex: number | null): boolean => {
+                let cursor = braceIndex === null ? 0 : braceIndex + 1
+                while (cursor < tokens.length) {
+                  while (
+                    cursor < tokens.length
+                    && new Set(['\n', ';']).has(tokens[cursor])
+                  ) {
+                    cursor += 1
+                  }
+                  if (cursor >= tokens.length) return false
+                  const directive = relationshipLiteralValue(tokens[cursor])
+                  if (directive === null) return false
+                  if (directive === 'use strict') return true
+                  cursor += 1
+                }
+                return false
+              }
+              let nearestFunctionScope: number | null = null
               for (let index = stack.length - 1; index >= 0; index -= 1) {
                 const containerPrefix = statementPrefix(tokens, stack[index])
                   .filter((candidate) => candidate !== '\n')
@@ -2817,9 +2835,14 @@ function commonJsImportContains(
                   ]).has(containerPrefix[beforeOpen])
                 const functionBody = containerPrefix.at(-1) === ')'
                   && !controlBody
-                if (arrowBody || functionBody) return stack.slice(0, index + 1)
+                if (!arrowBody && !functionBody) continue
+                nearestFunctionScope ??= index
+                if (strictDirectiveAt(stack[index])) return stack
               }
-              return []
+              if (strictDirectiveAt(null)) return stack
+              return nearestFunctionScope === null
+                ? []
+                : stack.slice(0, nearestFunctionScope + 1)
             })()
           : openingBraceStackAt(tokens, tokenIndex)
       return declaration
