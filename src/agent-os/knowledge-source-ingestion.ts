@@ -2714,12 +2714,21 @@ function commonJsImportContains(
       const before = significantTokenBefore(tokens, tokenIndex)
       const after = significantTokenAfter(tokens, tokenIndex)
       if (before?.token === '.') return false
+      const generatorFunction = before?.token === '*'
+        ? significantTokenBefore(tokens, before.index)
+        : null
+      const functionKeyword = before?.token === 'function'
+        ? before
+        : generatorFunction?.token === 'function'
+          ? generatorFunction
+          : null
       const bounds = statementBoundsAt(tokens, tokenIndex)
       const prefix = tokens.slice(bounds.start, tokenIndex)
         .filter((candidate) => candidate !== '\n')
       const declaration = new Set([
         'class', 'const', 'def', 'fn', 'function', 'let', 'var',
       ]).has(before?.token ?? '')
+        || functionKeyword !== null
         || (
           prefix.some((candidate) =>
             new Set(['const', 'let', 'var']).has(candidate))
@@ -2731,8 +2740,8 @@ function commonJsImportContains(
             new Set(['const', 'let', 'var']).has(candidate))
         )
       const namedFunctionExpressionBody = (() => {
-        if (before?.token !== 'function' || after?.token !== '(') return null
-        const functionPrefix = statementPrefix(tokens, before.index)
+        if (functionKeyword === null || after?.token !== '(') return null
+        const functionPrefix = statementPrefix(tokens, functionKeyword.index)
           .filter((candidate) => candidate !== '\n')
         const declarationModifiers = new Set(['async', 'default', 'export'])
         let prefixEnd = functionPrefix.length
@@ -2759,12 +2768,12 @@ function commonJsImportContains(
             || beforeLabels.at(-1) === 'else'
           )
           && (() => {
-            const braceStack = openingBraceStackAt(tokens, before.index)
+            const braceStack = openingBraceStackAt(tokens, functionKeyword.index)
             if (braceStack.length === 0) return true
-            if (executableContainerAt(tokens, before.index)) return true
+            if (executableContainerAt(tokens, functionKeyword.index)) return true
             const bracePrefix = statementPrefix(
               tokens,
-              braceStack.at(-1) ?? before.index,
+              braceStack.at(-1) ?? functionKeyword.index,
             ).filter((candidate) => candidate !== '\n')
             return bracePrefix.length === 0
           })()
@@ -2785,7 +2794,7 @@ function commonJsImportContains(
         const body = significantTokenAfter(tokens, parametersClose)
         return body?.token === '{' ? body.index : null
       })()
-      const namedFunctionDeclaration = before?.token === 'function'
+      const namedFunctionDeclaration = functionKeyword !== null
         && after?.token === '('
         && namedFunctionExpressionBody === null
       const declarationStack = namedFunctionExpressionBody !== null
