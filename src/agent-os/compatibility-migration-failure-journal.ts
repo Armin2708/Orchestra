@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -29,7 +30,7 @@ export const AGENT_OS_COMPATIBILITY_FAILURE_DAY_SEAL_RECEIPTS_TABLE =
 const MAIN_GUARD_FUNCTION =
   'orchestra_compatibility_failure_journal_guard'
 const ZERO_HASH = '0'.repeat(64)
-const JOURNAL_SCHEMA_VERSION = 1
+const JOURNAL_SCHEMA_VERSION = 2
 const DEFAULT_CAPACITY = 1_024
 const MAX_CAPACITY = 100_000
 const MAX_DAY_SEALS = 3_650
@@ -53,6 +54,13 @@ const MAIN_SCHEMA = Object.freeze([
       singleton INTEGER PRIMARY KEY CHECK (singleton=1),
       journal_generation TEXT NOT NULL
         CHECK (length(journal_generation)=36),
+      journal_binding TEXT NOT NULL
+        CHECK (length(journal_binding)=36),
+      activated_day TEXT NOT NULL
+        CHECK (
+          activated_day GLOB '????-??-??'
+          AND COALESCE(strftime('%Y-%m-%d', activated_day), '')=activated_day
+        ),
       applied_through_sequence INTEGER NOT NULL
         CHECK (
           applied_through_sequence>=0
@@ -125,6 +133,9 @@ const MAIN_SCHEMA = Object.freeze([
     sql: `CREATE TRIGGER trg_os_compatibility_failure_journal_state_update_guard
       BEFORE UPDATE ON ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
       WHEN ${MAIN_GUARD_FUNCTION}()<>'reconcile'
+        OR NEW.journal_generation<>OLD.journal_generation
+        OR NEW.journal_binding<>OLD.journal_binding
+        OR NEW.activated_day<>OLD.activated_day
       BEGIN
         SELECT RAISE(ABORT, 'compatibility failure journal state update is guarded');
       END`,
@@ -539,8 +550,26 @@ const SIDECAR_SCHEMA = Object.freeze([
     name: SIDECAR_STATE_TABLE,
     sql: `CREATE TABLE ${SIDECAR_STATE_TABLE} (
       singleton INTEGER PRIMARY KEY CHECK (singleton=1),
-      schema_version INTEGER NOT NULL CHECK (schema_version=1),
+      schema_version INTEGER NOT NULL CHECK (schema_version=2),
       journal_generation TEXT NOT NULL CHECK (length(journal_generation)=36),
+      binding_state TEXT NOT NULL
+        CHECK (binding_state IN ('unbound', 'bound')),
+      journal_binding TEXT
+        CHECK (
+          journal_binding IS NULL
+          OR length(journal_binding)=36
+        ),
+      activated_day TEXT
+        CHECK (
+          activated_day IS NULL
+          OR (
+            activated_day GLOB '????-??-??'
+            AND COALESCE(
+              strftime('%Y-%m-%d', activated_day),
+              ''
+            )=activated_day
+          )
+        ),
       capacity INTEGER NOT NULL CHECK (capacity BETWEEN 1 AND ${MAX_CAPACITY}),
       next_sequence INTEGER NOT NULL
         CHECK (next_sequence BETWEEN 1 AND 9007199254740991),
@@ -569,7 +598,19 @@ const SIDECAR_SCHEMA = Object.freeze([
               ''
             )=last_observed_day
           )
+        ),
+      CHECK (
+        (
+          binding_state='unbound'
+          AND journal_binding IS NULL
+          AND activated_day IS NULL
         )
+        OR (
+          binding_state='bound'
+          AND journal_binding IS NOT NULL
+          AND activated_day IS NOT NULL
+        )
+      )
     ) STRICT, WITHOUT ROWID`,
   },
   {
@@ -579,6 +620,11 @@ const SIDECAR_SCHEMA = Object.freeze([
       producer_instance TEXT PRIMARY KEY CHECK (length(producer_instance)=36),
       process_id INTEGER NOT NULL
         CHECK (process_id BETWEEN 1 AND ${MAX_PROCESS_ID}),
+      process_identity TEXT NOT NULL
+        CHECK (
+          length(process_identity)=64
+          AND process_identity NOT GLOB '*[^0-9a-f]*'
+        ),
       opened_at TEXT NOT NULL CHECK (length(opened_at) BETWEEN 20 AND 32),
       closed_at TEXT CHECK (
         closed_at IS NULL OR length(closed_at) BETWEEN 20 AND 32
@@ -698,6 +744,8 @@ const SIDECAR_SCHEMA = Object.freeze([
 type StoredMainState = {
   singleton: number
   journal_generation: string
+  journal_binding: string
+  activated_day: string
   applied_through_sequence: number
   applied_envelope_hash: string
 }
@@ -706,12 +754,23 @@ type StoredSidecarState = {
   singleton: number
   schema_version: number
   journal_generation: string
+  binding_state: 'unbound' | 'bound'
+  journal_binding: string | null
+  activated_day: string | null
   capacity: number
   next_sequence: number
   pruned_through_sequence: number
   pruned_envelope_hash: string
   last_envelope_hash: string
   last_observed_day: string | null
+}
+
+type StoredSession = {
+  producer_instance: string
+  process_id: number
+  process_identity: string
+  opened_at: string
+  closed_at: string | null
 }
 
 type StoredAttempt = {
@@ -892,8 +951,8 @@ function readMainState(
   db: Database.Database,
 ): StoredMainState | undefined {
   const rows = db.prepare(`
-    SELECT singleton, journal_generation, applied_through_sequence,
-      applied_envelope_hash
+    SELECT singleton, journal_generation, journal_binding,
+      activated_day, applied_through_sequence, applied_envelope_hash
     FROM ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
     ORDER BY singleton
   `).all() as StoredMainState[]
@@ -910,6 +969,8 @@ function readMainState(
     )
   }
   assertUuid('journal_generation', state.journal_generation)
+  assertUuid('journal_binding', state.journal_binding)
+  assertUtcDay('journal activated_day', state.activated_day)
   assertSafeInteger(
     'applied_through_sequence',
     state.applied_through_sequence,
@@ -928,9 +989,10 @@ function readMainState(
 
 function readSidecarState(db: Database.Database): StoredSidecarState {
   const rows = db.prepare(`
-    SELECT singleton, schema_version, journal_generation, capacity,
-      next_sequence, pruned_through_sequence, pruned_envelope_hash,
-      last_envelope_hash, last_observed_day
+    SELECT singleton, schema_version, journal_generation, binding_state,
+      journal_binding, activated_day, capacity, next_sequence,
+      pruned_through_sequence, pruned_envelope_hash, last_envelope_hash,
+      last_observed_day
     FROM ${SIDECAR_STATE_TABLE}
     ORDER BY singleton
   `).all() as StoredSidecarState[]
@@ -946,6 +1008,20 @@ function readSidecarState(db: Database.Database): StoredSidecarState {
     )
   }
   assertUuid('journal_generation', state.journal_generation)
+  if (
+    state.binding_state !== 'unbound'
+    && state.binding_state !== 'bound'
+  ) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'binding_uninitialized',
+    )
+  }
+  if (state.journal_binding !== null) {
+    assertUuid('journal_binding', state.journal_binding)
+  }
+  if (state.activated_day !== null) {
+    assertUtcDay('journal activated_day', state.activated_day)
+  }
   assertSafeInteger('capacity', state.capacity, 1)
   assertSafeInteger('next_sequence', state.next_sequence, 1)
   assertSafeInteger(
@@ -963,6 +1039,20 @@ function readSidecarState(db: Database.Database): StoredSidecarState {
     || (
       state.pruned_through_sequence === 0
       && state.pruned_envelope_hash !== ZERO_HASH
+    )
+    || (
+      state.binding_state === 'unbound'
+      && (
+        state.journal_binding !== null
+        || state.activated_day !== null
+      )
+    )
+    || (
+      state.binding_state === 'bound'
+      && (
+        state.journal_binding === null
+        || state.activated_day === null
+      )
     )
     || (state.next_sequence === 1 && state.last_observed_day !== null)
     || (state.next_sequence > 1 && state.last_observed_day === null)
@@ -1054,7 +1144,9 @@ function validateAttempt(
   }
 }
 
-function isProcessAlive(processId: number): boolean {
+let cachedBootIdentity: string | undefined
+
+function processExists(processId: number): boolean {
   try {
     process.kill(processId, 0)
     return true
@@ -1069,51 +1161,222 @@ function isProcessAlive(processId: number): boolean {
   }
 }
 
-function reapInactiveSessions(sidecar: Database.Database): void {
-  runAtomically(sidecar, () => {
-    const sessions = sidecar.prepare(`
-      SELECT producer_instance, process_id, opened_at, closed_at
-      FROM ${SIDECAR_SESSIONS_TABLE}
-      ORDER BY producer_instance
-    `).all() as Array<{
-      producer_instance: string
-      process_id: number
-      opened_at: string
-      closed_at: string | null
-    }>
-    for (const session of sessions) {
-      assertUuid('producer_instance', session.producer_instance)
-      if (
-        assertSafeInteger('session process_id', session.process_id, 1)
-          > MAX_PROCESS_ID
-      ) {
-        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
-          'envelope_chain_malformed',
-        )
-      }
-      assertIsoTimestamp('session opened_at', session.opened_at)
-      if (session.closed_at !== null) {
-        assertIsoTimestamp('session closed_at', session.closed_at)
-        continue
-      }
-      if (!isProcessAlive(session.process_id)) {
-        sidecar.prepare(`
-          UPDATE ${SIDECAR_SESSIONS_TABLE}
-          SET closed_at=?
-          WHERE producer_instance=? AND closed_at IS NULL
-        `).run(new Date().toISOString(), session.producer_instance)
-      }
+function boundedCommandOutput(
+  executable: string,
+  args: readonly string[],
+): string {
+  try {
+    const output = execFileSync(executable, args, {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        LANG: 'C',
+        LC_ALL: 'C',
+      },
+      maxBuffer: 4_096,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1_000,
+    }).trim().replace(/\s+/g, ' ')
+    if (output.length === 0 || output.length > 512) {
+      throw new Error('bounded process identity output is invalid')
     }
-    sidecar.prepare(`
-      DELETE FROM ${SIDECAR_SESSIONS_TABLE}
-      WHERE closed_at IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM ${SIDECAR_ATTEMPTS_TABLE}
-          WHERE producer_instance=
-            ${SIDECAR_SESSIONS_TABLE}.producer_instance
-        )
-    `).run()
-  })
+    return output
+  } catch (error) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'envelope_chain_malformed',
+      { cause: error },
+    )
+  }
+}
+
+function bootIdentity(): string {
+  if (cachedBootIdentity) return cachedBootIdentity
+  if (process.platform === 'linux') {
+    try {
+      const value = fs.readFileSync(
+        '/proc/sys/kernel/random/boot_id',
+        'utf8',
+      ).trim().toLowerCase()
+      assertUuid('Linux boot identity', value)
+      cachedBootIdentity = value
+      return value
+    } catch (error) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'envelope_chain_malformed',
+        { cause: error },
+      )
+    }
+  }
+  if (process.platform === 'darwin') {
+    const value = boundedCommandOutput(
+      '/usr/sbin/sysctl',
+      ['-n', 'kern.boottime'],
+    )
+    const match = /\bsec = (\d+), usec = (\d+)\b/.exec(value)
+    if (!match) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'envelope_chain_malformed',
+      )
+    }
+    cachedBootIdentity = `${match[1]}.${match[2]}`
+    return cachedBootIdentity
+  }
+  throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+    'envelope_chain_malformed',
+  )
+}
+
+function processIdentity(processId: number): string | undefined {
+  if (
+    assertSafeInteger('process_id', processId, 1) > MAX_PROCESS_ID
+  ) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'envelope_chain_malformed',
+    )
+  }
+  if (!processExists(processId)) return undefined
+
+  let started: string
+  if (process.platform === 'linux') {
+    try {
+      const stat = fs.readFileSync(`/proc/${processId}/stat`, 'utf8')
+      const commandEnd = stat.lastIndexOf(') ')
+      const fields = commandEnd < 0
+        ? []
+        : stat.slice(commandEnd + 2).trim().split(/\s+/)
+      const startTicks = fields[19]
+      if (!startTicks || !/^\d+$/.test(startTicks)) {
+        throw new Error('Linux process start identity is malformed')
+      }
+      started = startTicks
+    } catch (error) {
+      if (!processExists(processId)) return undefined
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'envelope_chain_malformed',
+        { cause: error },
+      )
+    }
+  } else if (process.platform === 'darwin') {
+    try {
+      started = boundedCommandOutput(
+        '/bin/ps',
+        ['-p', String(processId), '-o', 'lstart='],
+      )
+    } catch (error) {
+      if (!processExists(processId)) return undefined
+      throw error
+    }
+  } else {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'envelope_chain_malformed',
+    )
+  }
+
+  return createHash('sha256').update(JSON.stringify([
+    'process-identity-v1',
+    process.platform,
+    bootIdentity(),
+    started,
+  ])).digest('hex')
+}
+
+function isProcessAlive(
+  processId: number,
+  expectedIdentity: string,
+): boolean {
+  assertHash('process_identity', expectedIdentity)
+  const currentIdentity = processIdentity(processId)
+  return currentIdentity !== undefined && currentIdentity === expectedIdentity
+}
+
+function assertStoredSession(session: StoredSession): void {
+  assertUuid('producer_instance', session.producer_instance)
+  if (
+    assertSafeInteger('session process_id', session.process_id, 1)
+      > MAX_PROCESS_ID
+  ) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'envelope_chain_malformed',
+    )
+  }
+  assertHash('session process_identity', session.process_identity)
+  assertIsoTimestamp('session opened_at', session.opened_at)
+  if (session.closed_at !== null) {
+    assertIsoTimestamp('session closed_at', session.closed_at)
+  }
+}
+
+function reapInactiveSessionsLocked(sidecar: Database.Database): void {
+  const sessions = sidecar.prepare(`
+    SELECT producer_instance, process_id, process_identity,
+      opened_at, closed_at
+    FROM ${SIDECAR_SESSIONS_TABLE}
+    ORDER BY producer_instance
+  `).all() as StoredSession[]
+  for (const session of sessions) {
+    assertStoredSession(session)
+    if (
+      session.closed_at === null
+      && !isProcessAlive(session.process_id, session.process_identity)
+    ) {
+      sidecar.prepare(`
+        UPDATE ${SIDECAR_SESSIONS_TABLE}
+        SET closed_at=?
+        WHERE producer_instance=? AND closed_at IS NULL
+      `).run(new Date().toISOString(), session.producer_instance)
+    }
+  }
+  sidecar.prepare(`
+    DELETE FROM ${SIDECAR_SESSIONS_TABLE}
+    WHERE closed_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM ${SIDECAR_ATTEMPTS_TABLE}
+        WHERE producer_instance=
+          ${SIDECAR_SESSIONS_TABLE}.producer_instance
+      )
+  `).run()
+}
+
+function assertPristineUnboundSidecar(
+  sidecar: Database.Database,
+  state: StoredSidecarState,
+): void {
+  if (
+    state.binding_state !== 'unbound'
+    || state.journal_binding !== null
+    || state.activated_day !== null
+    || state.next_sequence !== 1
+    || state.pruned_through_sequence !== 0
+    || state.pruned_envelope_hash !== ZERO_HASH
+    || state.last_envelope_hash !== ZERO_HASH
+    || state.last_observed_day !== null
+  ) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'binding_uninitialized',
+    )
+  }
+  const counts = sidecar.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM ${SIDECAR_SESSIONS_TABLE}) AS sessions,
+      (SELECT COUNT(*) FROM ${SIDECAR_ATTEMPTS_TABLE}) AS attempts,
+      (SELECT COUNT(*) FROM ${SIDECAR_FAILURES_TABLE}) AS failures,
+      (SELECT COUNT(*) FROM ${SIDECAR_DAY_SEALS_TABLE}) AS day_seals
+  `).get() as {
+    sessions: number
+    attempts: number
+    failures: number
+    day_seals: number
+  }
+  if (
+    assertSafeInteger('unbound session count', counts.sessions) !== 0
+    || assertSafeInteger('unbound attempt count', counts.attempts) !== 0
+    || assertSafeInteger('unbound failure count', counts.failures) !== 0
+    || assertSafeInteger('unbound day seal count', counts.day_seals) !== 0
+  ) {
+    throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+      'binding_uninitialized',
+    )
+  }
 }
 
 export class CompatibilityMigrationFailureJournal
@@ -1164,6 +1427,15 @@ implements CompatibilityMigrationFailureJournalBinding {
     ) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'generation_mismatch',
+      )
+    }
+    if (
+      sidecar.binding_state !== 'bound'
+      || sidecar.journal_binding !== main.journal_binding
+      || sidecar.activated_day !== main.activated_day
+    ) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'binding_uninitialized',
       )
     }
     const foreignReceipts = this.#main.prepare(`
@@ -1619,33 +1891,23 @@ implements CompatibilityMigrationFailureJournalBinding {
 
   #producerIsActive(producerInstance: string): boolean {
     const session = this.#sidecar.prepare(`
-      SELECT process_id, opened_at, closed_at
+      SELECT producer_instance, process_id, process_identity,
+        opened_at, closed_at
       FROM ${SIDECAR_SESSIONS_TABLE}
       WHERE producer_instance=?
-    `).get(producerInstance) as {
-      process_id: number
-      opened_at: string
-      closed_at: string | null
-    } | undefined
+    `).get(producerInstance) as StoredSession | undefined
     if (!session) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'envelope_chain_malformed',
       )
     }
-    if (
-      assertSafeInteger('session process_id', session.process_id, 1)
-        > MAX_PROCESS_ID
-    ) {
-      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
-        'envelope_chain_malformed',
-      )
-    }
-    assertIsoTimestamp('session opened_at', session.opened_at)
+    assertStoredSession(session)
     if (session.closed_at !== null) {
-      assertIsoTimestamp('session closed_at', session.closed_at)
       return false
     }
-    if (isProcessAlive(session.process_id)) return true
+    if (isProcessAlive(session.process_id, session.process_identity)) {
+      return true
+    }
     this.#sidecar.prepare(`
       UPDATE ${SIDECAR_SESSIONS_TABLE}
       SET closed_at=?
@@ -1793,6 +2055,98 @@ implements CompatibilityMigrationFailureJournalBinding {
     }
   }
 
+  #advanceReturnedOutcome(
+    previous: StoredMainState,
+    attempt: StoredAttempt,
+  ): 'failure' | 'success' {
+    try {
+      return runAtomically(this.#main, () => {
+        assertCompatibilityMigrationFailureJournalSchemaCompatible(this.#main)
+        const current = readMainState(this.#main)
+        if (
+          !current
+          || current.journal_generation !== this.journal_generation
+          || current.applied_through_sequence
+            !== previous.applied_through_sequence
+          || current.applied_envelope_hash !== previous.applied_envelope_hash
+        ) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            'high_water_mismatch',
+          )
+        }
+
+        const receipt = this.#storedSuccessReceipt(attempt.sequence)
+        if (receipt && receipt.envelope_hash !== attempt.envelope_hash) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            'receipt_mismatch',
+          )
+        }
+        if (!receipt) {
+          recordCompatibilityMigrationTelemetry(this.#main, {
+            observed_at: new Date(`${attempt.observed_day}T12:00:00.000Z`),
+            table: attempt.table_name,
+            operation: 'failure',
+            cohort: attempt.cohort,
+            diagnostic_code: 'unexpected_failure',
+          })
+        }
+
+        const changes = withMainGuard(this.#main, 'reconcile', () => {
+          const updated = this.#main.prepare(`
+            UPDATE ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
+            SET applied_through_sequence=?, applied_envelope_hash=?
+            WHERE singleton=1
+              AND journal_generation=?
+              AND applied_through_sequence=?
+              AND applied_envelope_hash=?
+          `).run(
+            attempt.sequence,
+            attempt.envelope_hash,
+            this.journal_generation,
+            previous.applied_through_sequence,
+            previous.applied_envelope_hash,
+          )
+          const deleted = receipt
+            ? this.#main.prepare(`
+              DELETE FROM ${
+                AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE
+              }
+              WHERE journal_generation=? AND sequence=? AND envelope_hash=?
+            `).run(
+              this.journal_generation,
+              attempt.sequence,
+              attempt.envelope_hash,
+            )
+            : undefined
+          return {
+            updated: updated.changes,
+            deleted: deleted?.changes ?? 0,
+          }
+        })
+        if (
+          changes.updated !== 1
+          || (receipt ? changes.deleted !== 1 : changes.deleted !== 0)
+        ) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            receipt ? 'receipt_mismatch' : 'high_water_mismatch',
+          )
+        }
+        return receipt ? 'success' : 'failure'
+      })
+    } catch (error) {
+      if (
+        error
+          instanceof CompatibilityMigrationTelemetryEvidenceIncompleteError
+      ) {
+        throw error
+      }
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'reconcile_blocked',
+        { cause: error },
+      )
+    }
+  }
+
   #pruneThrough(sequence: number, hash: string): number {
     return runAtomically(this.#sidecar, () => {
       const state = readSidecarState(this.#sidecar)
@@ -1918,19 +2272,24 @@ implements CompatibilityMigrationFailureJournalBinding {
           'receipt_mismatch',
         )
       }
+      let returnedOutcome: 'failure' | 'success' | undefined
       if (!failure && !receipt) {
-        if (
-          attempt.operation_returned_at === null
-          && this.#producerIsActive(attempt.producer_instance)
-        ) {
+        if (attempt.operation_returned_at !== null) {
+          returnedOutcome = this.#advanceReturnedOutcome(main, attempt)
+        } else if (this.#producerIsActive(attempt.producer_instance)) {
           throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
             'pending_attempt',
           )
+        } else {
+          this.#markFailureSequence(expectedSequence, 'unexpected_failure')
+          failure = this.#storedFailure(attempt)
         }
-        this.#markFailureSequence(expectedSequence, 'unexpected_failure')
-        failure = this.#storedFailure(attempt)
       }
-      if (failure) {
+      if (returnedOutcome === 'failure') {
+        failuresImported += 1
+      } else if (returnedOutcome === 'success') {
+        successesReconciled += 1
+      } else if (failure) {
         this.#advanceFailure(main, attempt, failure)
         failuresImported += 1
       } else if (receipt) {
@@ -2036,9 +2395,19 @@ implements CompatibilityMigrationFailureJournalBinding {
     day: string,
   ): CompatibilityMigrationFailureDaySealEvidence {
     assertUtcDay('day', day)
+    const today = utcDay(new Date())
+    if (day >= today) {
+      throw new RangeError('only a completed UTC day can be sealed')
+    }
     if (this.#main.inTransaction) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'reconcile_in_transaction',
+      )
+    }
+    const { main } = this.#assertBinding()
+    if (day <= main.activated_day) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'coverage_receipt_missing',
       )
     }
     const collectorSchemaVersion = this.#collectorSchemaVersion()
@@ -2243,8 +2612,13 @@ implements CompatibilityMigrationFailureJournalBinding {
   }
 
   #assertReceiptForDay(day: string): void {
+    const { main } = this.#assertBinding()
+    if (day <= main.activated_day) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'coverage_receipt_missing',
+      )
+    }
     const epoch = this.#collectorSchemaVersion()
-    const main = readMainState(this.#main)
     const receipt = this.#main.prepare(`
       SELECT day, journal_generation, sealed_through_sequence,
         sealed_envelope_hash, collector_schema_version
@@ -2254,8 +2628,7 @@ implements CompatibilityMigrationFailureJournalBinding {
       CompatibilityMigrationFailureDaySealEvidence | undefined
     )
     if (
-      !main
-      || !receipt
+      !receipt
       || receipt.journal_generation !== this.journal_generation
       || receipt.collector_schema_version !== epoch
       || receipt.sealed_through_sequence > main.applied_through_sequence
@@ -2380,6 +2753,7 @@ export function openCompatibilityMigrationFailureJournal(
   let sidecar: Database.Database | undefined
   try {
     sidecar = new Database(input.journal_path)
+    const sidecarDb = sidecar
     sidecar.pragma('journal_mode = DELETE')
     sidecar.pragma('synchronous = EXTRA')
     sidecar.pragma('fullfsync = ON')
@@ -2395,10 +2769,11 @@ export function openCompatibilityMigrationFailureJournal(
       const generation = randomUUID()
       sidecar.prepare(`
         INSERT INTO ${SIDECAR_STATE_TABLE} (
-          singleton, schema_version, journal_generation, capacity,
-          next_sequence, pruned_through_sequence, pruned_envelope_hash,
-          last_envelope_hash, last_observed_day
-        ) VALUES (1, ?, ?, ?, 1, 0, ?, ?, NULL)
+          singleton, schema_version, journal_generation, binding_state,
+          journal_binding, activated_day, capacity, next_sequence,
+          pruned_through_sequence, pruned_envelope_hash, last_envelope_hash,
+          last_observed_day
+        ) VALUES (1, ?, ?, 'unbound', NULL, NULL, ?, 1, 0, ?, ?, NULL)
       `).run(
         JOURNAL_SCHEMA_VERSION,
         generation,
@@ -2408,7 +2783,7 @@ export function openCompatibilityMigrationFailureJournal(
       )
     }
     assertSidecarSchemaCompatible(sidecar)
-    const sidecarState = readSidecarState(sidecar)
+    let sidecarState = readSidecarState(sidecar)
     if (sidecarState.capacity !== capacity) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'generation_mismatch',
@@ -2416,37 +2791,51 @@ export function openCompatibilityMigrationFailureJournal(
     }
 
     let mainState = preexistingMainState
-    if (!mainState) {
-      if (
-        sidecarState.next_sequence !== 1
-        || sidecarState.pruned_through_sequence !== 0
-        || sidecarState.pruned_envelope_hash !== ZERO_HASH
-        || sidecarState.last_envelope_hash !== ZERO_HASH
-        || sidecarState.last_observed_day !== null
-      ) {
+    if (!mainState && sidecarState.binding_state === 'bound') {
+      mainState = readMainState(main)
+      if (!mainState) {
         throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
           'binding_uninitialized',
         )
       }
-      runAtomically(main, () => {
+    }
+    if (!mainState) {
+      assertPristineUnboundSidecar(sidecar, sidecarState)
+      mainState = runAtomically(main, () => {
+        const existingState = readMainState(main)
+        if (existingState) return existingState
+        const activatedDay = utcDay(new Date())
+        const journalBinding = randomUUID()
         const inserted = withMainGuard(
           main,
           'initialize',
           () => main.prepare(`
             INSERT INTO ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE} (
-              singleton, journal_generation, applied_through_sequence,
-              applied_envelope_hash
-            ) VALUES (1, ?, 0, ?)
-          `).run(sidecarState.journal_generation, ZERO_HASH),
+              singleton, journal_generation, journal_binding,
+              activated_day, applied_through_sequence, applied_envelope_hash
+            ) VALUES (1, ?, ?, ?, 0, ?)
+          `).run(
+            sidecarState.journal_generation,
+            journalBinding,
+            activatedDay,
+            ZERO_HASH,
+          ),
         )
         if (inserted.changes !== 1) {
           throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
             'binding_uninitialized',
           )
         }
+        const created = readMainState(main)
+        if (!created) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            'binding_uninitialized',
+          )
+        }
+        return created
       })
-      mainState = readMainState(main)
     }
+    sidecarState = readSidecarState(sidecar)
     if (
       !mainState
       || mainState.journal_generation !== sidecarState.journal_generation
@@ -2455,35 +2844,92 @@ export function openCompatibilityMigrationFailureJournal(
         'generation_mismatch',
       )
     }
-
-    reapInactiveSessions(sidecar)
-    const activeSessions = sidecar.prepare(`
-      SELECT COUNT(*) AS count
-      FROM ${SIDECAR_SESSIONS_TABLE}
-      WHERE closed_at IS NULL
-    `).get() as { count: number }
-    if (
-      assertSafeInteger('active journal session count', activeSessions.count)
-        >= capacity
-    ) {
-      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
-        'session_capacity_exhausted',
-      )
+    if (sidecarState.binding_state === 'unbound') {
+      runAtomically(sidecarDb, () => {
+        const current = readSidecarState(sidecarDb)
+        if (current.binding_state === 'bound') return
+        assertPristineUnboundSidecar(sidecarDb, current)
+        const updated = sidecarDb.prepare(`
+          UPDATE ${SIDECAR_STATE_TABLE}
+          SET binding_state='bound', journal_binding=?, activated_day=?
+          WHERE singleton=1
+            AND binding_state='unbound'
+            AND journal_binding IS NULL
+            AND activated_day IS NULL
+        `).run(mainState.journal_binding, mainState.activated_day)
+        if (updated.changes !== 1) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            'binding_uninitialized',
+          )
+        }
+      })
+      sidecarState = readSidecarState(sidecar)
     }
-    const existingSession = sidecar.prepare(`
-      SELECT 1 FROM ${SIDECAR_SESSIONS_TABLE}
-      WHERE producer_instance=?
-    `).get(runtimeInstance)
-    if (existingSession) {
+    if (
+      sidecarState.binding_state !== 'bound'
+      || sidecarState.journal_binding !== mainState.journal_binding
+      || sidecarState.activated_day !== mainState.activated_day
+    ) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'binding_uninitialized',
       )
     }
-    sidecar.prepare(`
-      INSERT INTO ${SIDECAR_SESSIONS_TABLE} (
-        producer_instance, process_id, opened_at, closed_at
-      ) VALUES (?, ?, ?, NULL)
-    `).run(runtimeInstance, process.pid, new Date().toISOString())
+
+    const currentProcessIdentity = processIdentity(process.pid)
+    if (!currentProcessIdentity) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'sidecar_unavailable',
+      )
+    }
+    runAtomically(sidecarDb, () => {
+      const current = readSidecarState(sidecarDb)
+      if (
+        current.journal_generation !== mainState.journal_generation
+        || current.binding_state !== 'bound'
+        || current.journal_binding !== mainState.journal_binding
+        || current.activated_day !== mainState.activated_day
+      ) {
+        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+          'binding_uninitialized',
+        )
+      }
+      reapInactiveSessionsLocked(sidecarDb)
+      const activeSessions = sidecarDb.prepare(`
+        SELECT COUNT(*) AS count
+        FROM ${SIDECAR_SESSIONS_TABLE}
+        WHERE closed_at IS NULL
+      `).get() as { count: number }
+      if (
+        assertSafeInteger(
+          'active journal session count',
+          activeSessions.count,
+        ) >= capacity
+      ) {
+        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+          'session_capacity_exhausted',
+        )
+      }
+      const existingSession = sidecarDb.prepare(`
+        SELECT 1 FROM ${SIDECAR_SESSIONS_TABLE}
+        WHERE producer_instance=?
+      `).get(runtimeInstance)
+      if (existingSession) {
+        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+          'binding_uninitialized',
+        )
+      }
+      sidecarDb.prepare(`
+        INSERT INTO ${SIDECAR_SESSIONS_TABLE} (
+          producer_instance, process_id, process_identity,
+          opened_at, closed_at
+        ) VALUES (?, ?, ?, ?, NULL)
+      `).run(
+        runtimeInstance,
+        process.pid,
+        currentProcessIdentity,
+        new Date().toISOString(),
+      )
+    })
 
     const journal = new CompatibilityMigrationFailureJournal(
       main,

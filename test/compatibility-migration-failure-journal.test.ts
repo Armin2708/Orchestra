@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AGENT_OS_COMPATIBILITY_FAILURE_DAY_SEAL_RECEIPTS_TABLE,
   AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE,
@@ -45,6 +45,10 @@ afterEach(() => {
   for (const directory of tempDirs.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 function tempFiles(prefix: string): {
@@ -282,6 +286,33 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     expect([...strict.values()]).toEqual([1, 1, 1, 1, 1])
     expect(sidecarTableColumns(
       sidecar,
+      'compatibility_failure_journal_state',
+    )).toEqual([
+      'singleton',
+      'schema_version',
+      'journal_generation',
+      'binding_state',
+      'journal_binding',
+      'activated_day',
+      'capacity',
+      'next_sequence',
+      'pruned_through_sequence',
+      'pruned_envelope_hash',
+      'last_envelope_hash',
+      'last_observed_day',
+    ])
+    expect(sidecarTableColumns(
+      sidecar,
+      'compatibility_failure_journal_sessions',
+    )).toEqual([
+      'producer_instance',
+      'process_id',
+      'process_identity',
+      'opened_at',
+      'closed_at',
+    ])
+    expect(sidecarTableColumns(
+      sidecar,
       'compatibility_failure_journal_attempts',
     )).toEqual([
       'sequence',
@@ -326,6 +357,20 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
       AGENT_OS_COMPATIBILITY_FAILURE_DAY_SEAL_RECEIPTS_TABLE,
     ) as Array<{ name: string; strict: number }>
     expect(mainStrict.map(({ strict: value }) => value)).toEqual([1, 1, 1])
+    expect((db.prepare(`
+      SELECT name
+      FROM pragma_table_info(?)
+      ORDER BY cid
+    `).all(
+      AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE,
+    ) as Array<{ name: string }>).map(({ name }) => name)).toEqual([
+      'singleton',
+      'journal_generation',
+      'journal_binding',
+      'activated_day',
+      'applied_through_sequence',
+      'applied_envelope_hash',
+    ])
     sidecar.close()
   })
 
@@ -474,6 +519,8 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
   })
 
   it('[audit 11] orders concurrent producers and fails closed while the first RESERVED attempt remains active', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-03-31T12:00:00.000Z'))
     const files = tempFiles('orchestra-dom019-journal-concurrency-')
     const db = trackedDb(files.main)
     const first = trackedJournal(db, files.journal)
@@ -494,6 +541,7 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
       }),
     )
     first.markFailed(firstReservation, 'translation_rejected')
+    vi.setSystemTime(new Date('2025-04-03T12:00:00.000Z'))
     expect(first.prepareDaySeal('2025-04-01')).toMatchObject({
       sealed_through_sequence: firstReservation.sequence,
       sealed_envelope_hash: firstReservation.envelope_hash,
@@ -515,6 +563,8 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
   })
 
   it('[audit 12] seals against an immutable sidecar barrier and rejects unreceipted coverage before writer observation or rollup', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T12:00:00.000Z'))
     const files = tempFiles('orchestra-dom019-journal-seal-')
     const db = trackedDb(files.main)
     reinstallTelemetryAt(db, '2025-01-01 00:00:00')
@@ -527,6 +577,7 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     const futureAttempt = journal.reserve(failureInput(
       '2025-01-03T12:00:00.000Z',
     ))
+    vi.setSystemTime(new Date('2025-01-04T12:00:00.000Z'))
     expect(journal.prepareDaySeal('2025-01-02')).toMatchObject({
       sealed_through_sequence: failure.sequence,
       sealed_envelope_hash: failure.envelope_hash,
@@ -660,6 +711,305 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     )
   })
 
+  it('[review P1] leaves a returned attempt unpoisoned while its success receipt is uncommitted', () => {
+    const files = tempFiles('orchestra-dom019-journal-return-race-')
+    const writerDb = trackedDb(files.main)
+    const drainerDb = trackedDb(files.main)
+    writerDb.pragma('busy_timeout = 25')
+    drainerDb.pragma('busy_timeout = 25')
+    const writer = trackedJournal(writerDb, files.journal)
+    const drainer = trackedJournal(drainerDb, files.journal)
+
+    writerDb.exec('BEGIN IMMEDIATE')
+    const reservation = writer.reserve(failureInput())
+    writer.recordSuccessReceipt(reservation)
+    expect(() => drainer.drain()).toThrow(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'reconcile_blocked',
+      }),
+    )
+
+    const sidecar = new Database(files.journal)
+    expect(sidecar.prepare(`
+      SELECT COUNT(*) AS count
+      FROM compatibility_failure_journal_failures
+    `).get()).toEqual({ count: 0 })
+    sidecar.close()
+
+    writerDb.exec('COMMIT')
+    expect(drainer.drain()).toMatchObject({
+      applied_through_sequence: reservation.sequence,
+      failures_imported: 0,
+      successes_reconciled: 1,
+      attempts_pruned: 1,
+    })
+    expect(queryCompatibilityMigrationTelemetrySummary(drainerDb, drainer))
+      .toMatchObject({ failure_count: 0 })
+  })
+
+  it('[review P1] refuses receipts for coverage sealed before journal activation', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-02-02T12:00:00.000Z'))
+    const files = tempFiles('orchestra-dom019-journal-retroactive-seal-')
+    const db = trackedDb(files.main)
+    reinstallTelemetryAt(db, '2025-01-01 00:00:00')
+    const days = Array.from(
+      { length: 30 },
+      (_, index) => `2025-01-${String(index + 2).padStart(2, '0')}`,
+    )
+    for (const day of days) {
+      sealCompletedCompatibilityMigrationTelemetryDay(db, day)
+    }
+
+    const journal = trackedJournal(db, files.journal)
+    expect(() => {
+      for (const day of days) {
+        sealCompletedCompatibilityMigrationTelemetryDay(db, day, journal)
+      }
+    }).toThrow(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'coverage_receipt_missing',
+      }),
+    )
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${AGENT_OS_COMPATIBILITY_FAILURE_DAY_SEAL_RECEIPTS_TABLE}
+    `).get()).toEqual({ count: 0 })
+    expect(() => queryCompatibilityMigrationWriterObservation(db, {
+      table: 'cards',
+      from_day: days[0],
+      through_day: days.at(-1),
+    }, journal)).toThrow(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'coverage_receipt_missing',
+      }),
+    )
+  })
+
+  it('[review P1] rejects a bound seal-only sidecar copied to an uninitialized main database', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T12:00:00.000Z'))
+    const sourceFiles = tempFiles('orchestra-dom019-journal-bound-source-')
+    const sourceDb = trackedDb(sourceFiles.main)
+    reinstallTelemetryAt(sourceDb, '2025-01-01 00:00:00')
+    const sourceJournal = trackedJournal(sourceDb, sourceFiles.journal)
+    vi.setSystemTime(new Date('2025-01-03T12:00:00.000Z'))
+    sourceJournal.prepareDaySeal('2025-01-02')
+    sourceJournal.close()
+
+    const targetFiles = tempFiles('orchestra-dom019-journal-bound-target-')
+    const targetDb = trackedDb(targetFiles.main)
+    fs.copyFileSync(sourceFiles.journal, targetFiles.journal)
+    let openingError: unknown
+    try {
+      journals.push(openCompatibilityMigrationFailureJournal(targetDb, {
+        journal_path: targetFiles.journal,
+        capacity: 16,
+        runtime_instance: randomUUID(),
+      }))
+    } catch (error) {
+      openingError = error
+    }
+    expect(openingError).toEqual(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'binding_uninitialized',
+      }),
+    )
+    expect(targetDb.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
+    `).get()).toEqual({ count: 0 })
+
+    const copied = new Database(targetFiles.journal)
+    copied.prepare(`
+      UPDATE compatibility_failure_journal_state
+      SET binding_state='unbound', journal_binding=NULL, activated_day=NULL
+      WHERE singleton=1
+    `).run()
+    copied.close()
+    let unboundEvidenceError: unknown
+    try {
+      journals.push(openCompatibilityMigrationFailureJournal(targetDb, {
+        journal_path: targetFiles.journal,
+        capacity: 16,
+        runtime_instance: randomUUID(),
+      }))
+    } catch (error) {
+      unboundEvidenceError = error
+    }
+    expect(unboundEvidenceError).toEqual(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'binding_uninitialized',
+      }),
+    )
+    expect(targetDb.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
+    `).get()).toEqual({ count: 0 })
+  })
+
+  it('[review P1] recovers a pristine main-first binding crash without accepting foreign evidence', () => {
+    const files = tempFiles('orchestra-dom019-journal-binding-recovery-')
+    const db = trackedDb(files.main)
+    const first = trackedJournal(db, files.journal)
+    first.close()
+    const mainState = db.prepare(`
+      SELECT journal_binding, activated_day
+      FROM ${AGENT_OS_COMPATIBILITY_FAILURE_JOURNAL_STATE_TABLE}
+    `).get() as {
+      journal_binding: string
+      activated_day: string
+    }
+
+    const sidecar = new Database(files.journal)
+    sidecar.prepare(`
+      UPDATE compatibility_failure_journal_state
+      SET binding_state='unbound', journal_binding=NULL, activated_day=NULL
+      WHERE singleton=1
+    `).run()
+    sidecar.close()
+
+    const recovered = trackedJournal(db, files.journal)
+    expect(recovered.drain()).toMatchObject({
+      applied_through_sequence: 0,
+    })
+    const rebound = new Database(files.journal)
+    expect(rebound.prepare(`
+      SELECT binding_state, journal_binding, activated_day
+      FROM compatibility_failure_journal_state
+    `).get()).toEqual({
+      binding_state: 'bound',
+      journal_binding: mainState.journal_binding,
+      activated_day: mainState.activated_day,
+    })
+    rebound.close()
+  })
+
+  it('[review P2] reaps a crashed producer when its PID belongs to a different process lifetime', () => {
+    const files = tempFiles('orchestra-dom019-journal-pid-reuse-')
+    const db = trackedDb(files.main)
+    const first = trackedJournal(db, files.journal)
+    first.reserve(failureInput())
+    first.close()
+
+    const sidecar = new Database(files.journal)
+    sidecar.prepare(`
+      UPDATE compatibility_failure_journal_sessions
+      SET process_id=?, process_identity=?, closed_at=NULL
+    `).run(process.pid, 'f'.repeat(64))
+    sidecar.close()
+
+    const recovered = trackedJournal(db, files.journal)
+    expect(recovered.drain()).toMatchObject({
+      applied_through_sequence: 1,
+      failures_imported: 1,
+      attempts_pruned: 1,
+    })
+    expect(queryCompatibilityMigrationTelemetrySummary(db, recovered))
+      .toMatchObject({ failure_count: 1 })
+  })
+
+  it('[review P2] performs session reap, capacity check, and admission in one immediate transaction', () => {
+    const files = tempFiles('orchestra-dom019-journal-session-atomic-')
+    const db = trackedDb(files.main)
+    const prototype = Database.prototype as unknown as {
+      prepare: typeof Database.prototype.prepare
+    }
+    const originalPrepare = prototype.prepare
+    let observedCountOutsideTransaction = false
+    let reentering = false
+    let interleaved: CompatibilityMigrationFailureJournal | undefined
+    prototype.prepare = function (
+      this: Database.Database,
+      source: string,
+    ) {
+      const statement = originalPrepare.call(this, source)
+      const normalized = source.replace(/\s+/g, ' ').trim()
+      if (
+        normalized !==
+          'SELECT COUNT(*) AS count'
+          + ' FROM compatibility_failure_journal_sessions'
+          + ' WHERE closed_at IS NULL'
+      ) {
+        return statement
+      }
+      const mutable = statement as unknown as {
+        get: (...parameters: unknown[]) => unknown
+      }
+      const originalGet = mutable.get.bind(mutable)
+      mutable.get = (...parameters: unknown[]) => {
+        const result = originalGet(...parameters)
+        if (!this.inTransaction && !reentering) {
+          observedCountOutsideTransaction = true
+          reentering = true
+          try {
+            interleaved = openCompatibilityMigrationFailureJournal(db, {
+              journal_path: files.journal,
+              capacity: 1,
+              runtime_instance: randomUUID(),
+            })
+            journals.push(interleaved)
+          } finally {
+            reentering = false
+          }
+        }
+        return result
+      }
+      return statement
+    } as typeof Database.prototype.prepare
+
+    try {
+      journals.push(openCompatibilityMigrationFailureJournal(db, {
+        journal_path: files.journal,
+        capacity: 1,
+        runtime_instance: randomUUID(),
+      }))
+    } finally {
+      prototype.prepare = originalPrepare
+    }
+
+    expect(observedCountOutsideTransaction).toBe(false)
+    expect(interleaved).toBeUndefined()
+    expect(() => openCompatibilityMigrationFailureJournal(db, {
+      journal_path: files.journal,
+      capacity: 1,
+      runtime_instance: randomUUID(),
+    })).toThrow(
+      expect.objectContaining({ reason: 'session_capacity_exhausted' }),
+    )
+    const sidecar = new Database(files.journal)
+    expect(sidecar.prepare(`
+      SELECT COUNT(*) AS count
+      FROM compatibility_failure_journal_sessions
+      WHERE closed_at IS NULL
+    `).get()).toEqual({ count: 1 })
+    sidecar.close()
+  })
+
+  it('[review P3] rejects current and future direct seals without blocking a current reservation', () => {
+    const files = tempFiles('orchestra-dom019-journal-future-seal-')
+    const db = trackedDb(files.main)
+    const journal = trackedJournal(db, files.journal)
+    const today = new Date().toISOString().slice(0, 10)
+
+    expect(() => journal.prepareDaySeal(today)).toThrow(RangeError)
+    expect(() => journal.prepareDaySeal('2099-01-01')).toThrow(RangeError)
+    const sidecar = new Database(files.journal)
+    expect(sidecar.prepare(`
+      SELECT COUNT(*) AS count
+      FROM compatibility_failure_journal_day_seals
+    `).get()).toEqual({ count: 0 })
+    sidecar.close()
+    expect(journal.reserve(failureInput(
+      `${today}T12:00:00.000Z`,
+    ))).toMatchObject({ sequence: 1 })
+  })
+
   it('fails closed without creating a replacement for a missing or copied sidecar, then accepts the restored generation', () => {
     const firstFiles = tempFiles('orchestra-dom019-journal-restore-a-')
     const firstDb = trackedDb(firstFiles.main)
@@ -774,10 +1124,11 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     const admissionCheck = new Database(files.journal)
     expect(() => admissionCheck.prepare(`
       INSERT INTO compatibility_failure_journal_sessions (
-        producer_instance, process_id, opened_at, closed_at
-      ) VALUES (?, 2147483648, ?, NULL)
+        producer_instance, process_id, process_identity, opened_at, closed_at
+      ) VALUES (?, 2147483648, ?, ?, NULL)
     `).run(
       randomUUID(),
+      '0'.repeat(64),
       new Date().toISOString(),
     )).toThrow(/CHECK constraint failed/)
     expect(admissionCheck.prepare(`
@@ -797,9 +1148,13 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     const stale = new Database(files.journal)
     stale.prepare(`
       INSERT INTO compatibility_failure_journal_sessions (
-        producer_instance, process_id, opened_at, closed_at
-      ) VALUES (?, 2147483647, ?, NULL)
-    `).run(randomUUID(), new Date().toISOString())
+        producer_instance, process_id, process_identity, opened_at, closed_at
+      ) VALUES (?, 2147483647, ?, ?, NULL)
+    `).run(
+      randomUUID(),
+      '0'.repeat(64),
+      new Date().toISOString(),
+    )
     stale.close()
     for (let index = 0; index < 8; index += 1) {
       trackedJournal(db, files.journal, 1).close()
@@ -847,7 +1202,10 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
     const sealFiles = tempFiles('orchestra-dom019-journal-seal-tamper-')
     const sealDb = trackedDb(sealFiles.main)
     reinstallTelemetryAt(sealDb, '2025-01-01 00:00:00')
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T12:00:00.000Z'))
     const sealJournal = trackedJournal(sealDb, sealFiles.journal)
+    vi.setSystemTime(new Date('2025-01-03T12:00:00.000Z'))
     sealJournal.prepareDaySeal('2025-01-02')
     sealJournal.close()
     const rawSeal = new Database(sealFiles.journal)
