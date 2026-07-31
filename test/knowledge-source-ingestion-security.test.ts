@@ -980,6 +980,46 @@ describe('knowledge source ingestion security', () => {
       0,
     ],
     [
+      'TypeScript call before division and a line comment',
+      'typescript',
+      'ts',
+      'export function helper(): void {}',
+      [
+        'export function caller(): void {',
+        '  helper()',
+        '  const ratio = 1 / 2 // comment',
+        '}',
+      ].join('\n'),
+      1,
+      2,
+    ],
+    [
+      'TypeScript optional call',
+      'typescript',
+      'ts',
+      'export function helper(): void {}',
+      [
+        'export function caller(): void {',
+        '  helper?.()',
+        '}',
+      ].join('\n'),
+      1,
+      1,
+    ],
+    [
+      'TypeScript parenthesized call',
+      'typescript',
+      'ts',
+      'export function helper(): void {}',
+      [
+        'export function caller(): void {',
+        '  (helper)()',
+        '}',
+      ].join('\n'),
+      1,
+      1,
+    ],
+    [
       'Python implicitly continued multiline call',
       'python',
       'py',
@@ -998,6 +1038,22 @@ describe('knowledge source ingestion security', () => {
       4,
     ],
     [
+      'Python explicitly continued call',
+      'python',
+      'py',
+      [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      [
+        'def caller():',
+        '    return helper \\',
+        '        ()',
+      ].join('\n'),
+      1,
+      2,
+    ],
+    [
       'Java call after a control condition',
       'java',
       'java',
@@ -1011,6 +1067,23 @@ describe('knowledge source ingestion security', () => {
       ].join('\n'),
       2,
       2,
+    ],
+    [
+      'Java call inside a nested control block',
+      'java',
+      'java',
+      'final class Target { static void helper() {} }',
+      [
+        'final class Caller {',
+        '  static void caller(boolean ready) {',
+        '    if (ready) {',
+        '      helper();',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'),
+      3,
+      3,
     ],
     [
       'C call after a control condition',
@@ -1064,7 +1137,7 @@ describe('knowledge source ingestion security', () => {
             end_line: targetLines,
             language,
             qualified_name: 'helper',
-            symbol_kind: 'function',
+            symbol_kind: language === 'java' ? 'method' : 'function',
             expected_source_sha256: sha256(targetExcerpt),
           },
           {
@@ -1197,6 +1270,70 @@ describe('knowledge source ingestion security', () => {
     expect(report.sources).toHaveLength(2)
     expect(report.chunks.some((chunk) =>
       chunk.content.includes('"kind":"implements"'))).toBe(true)
+  })
+
+  it.each([
+    [
+      'retains the second interface in an implements list',
+      true,
+      'export class Implementation implements First, Second {}',
+    ],
+    [
+      'rejects an interface absent from an implements list',
+      false,
+      'export class Implementation implements First, Other {}',
+    ],
+  ] as const)('%s', (_label, retain, sourceExcerpt) => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = 'export interface Second {}'
+    write(
+      fixture.root,
+      'src/implements-list.ts',
+      `${targetExcerpt}\n${sourceExcerpt}\n`,
+    )
+    const head = commit(fixture.root, _label)
+    const { db, boardId } = boardDb(fixture.root)
+    const ingest = () =>
+      new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'second',
+            path: 'src/implements-list.ts',
+            start_line: 1,
+            end_line: 1,
+            language: 'typescript',
+            qualified_name: 'Second',
+            symbol_kind: 'interface',
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'implementation',
+            path: 'src/implements-list.ts',
+            start_line: 2,
+            end_line: 2,
+            language: 'typescript',
+            qualified_name: 'Implementation',
+            symbol_kind: 'class',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'implements',
+              target_key: 'second',
+              expected_evidence_sha256: sha256(sourceExcerpt),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 2,
+              end_line: 2,
+            }],
+          },
+        ],
+      })
+    if (retain) {
+      expect(ingest().sources).toHaveLength(2)
+    } else {
+      expect(caught(ingest).code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    }
   })
 
   it.each([
@@ -1388,6 +1525,105 @@ describe('knowledge source ingestion security', () => {
     },
   )
 
+  it.each([
+    [
+      'rejects an imported call shadowed by a function parameter',
+      false,
+      [
+        "import { helper } from './shadow-target.js'",
+        'export function caller(helper: () => number): number {',
+        '  return helper()',
+        '}',
+      ],
+      3,
+    ],
+    [
+      'rejects an imported call shadowed by a local declaration',
+      false,
+      [
+        "import { helper } from './shadow-target.js'",
+        'export function caller(): number {',
+        '  const helper = (): number => 2',
+        '  return helper()',
+        '}',
+      ],
+      4,
+    ],
+    [
+      'retains an imported call with an unshadowed local binding',
+      true,
+      [
+        "import { helper } from './shadow-target.js'",
+        'export function caller(value: number): number {',
+        '  return helper() + value',
+        '}',
+      ],
+      3,
+    ],
+  ] as const)(
+    '%s',
+    (_label, retain, sourceLines, callLine) => {
+      const fixture = repositoryFixture()
+      const targetExcerpt =
+        'export function helper(): number { return 1 }'
+      const sourceExcerpt = sourceLines.join('\n')
+      write(
+        fixture.root,
+        'src/shadow-target.ts',
+        `${targetExcerpt}\n`,
+      )
+      write(
+        fixture.root,
+        'src/shadow-source.ts',
+        `${sourceExcerpt}\n`,
+      )
+      const head = commit(fixture.root, _label)
+      const { db, boardId } = boardDb(fixture.root)
+      const callEvidence = sourceLines[callLine - 1]
+      const ingest = () =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: 'src/shadow-target.ts',
+              start_line: 1,
+              end_line: 1,
+              language: 'typescript',
+              qualified_name: 'helper',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'caller',
+              path: 'src/shadow-source.ts',
+              start_line: 1,
+              end_line: sourceLines.length,
+              language: 'typescript',
+              qualified_name: 'caller',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'calls',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256(callEvidence),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: callLine,
+                end_line: callLine,
+              }],
+            },
+          ],
+        })
+      if (retain) {
+        expect(ingest().sources).toHaveLength(2)
+      } else {
+        expect(caught(ingest).code).toBe('evidence_mismatch')
+        expectNoKnowledge(db)
+      }
+    },
+  )
+
   it('rejects an unqualified member call when only its owner import is known', () => {
     const fixture = repositoryFixture()
     const targetExcerpt = [
@@ -1505,6 +1741,223 @@ describe('knowledge source ingestion security', () => {
     },
   )
 
+  it.each([
+    ['rejects an assignment labeled as a function', false, 'function'],
+    ['retains an assignment labeled as a variable', true, 'variable'],
+  ] as const)('%s', (_label, retain, targetKind) => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = 'helper = 1'
+    const importLine = 'from .kind_target import helper'
+    const sourceExcerpt = `${importLine}\nvalue = helper`
+    write(fixture.root, 'src/kind_target.py', `${targetExcerpt}\n`)
+    write(fixture.root, 'src/kind_source.py', `${sourceExcerpt}\n`)
+    const head = commit(fixture.root, _label)
+    const { db, boardId } = boardDb(fixture.root)
+    const ingest = () =>
+      new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'helper',
+            path: 'src/kind_target.py',
+            start_line: 1,
+            end_line: 1,
+            language: 'python',
+            qualified_name: 'helper',
+            symbol_kind: targetKind,
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'source',
+            path: 'src/kind_source.py',
+            start_line: 1,
+            end_line: 2,
+            language: 'python',
+            qualified_name: 'Source',
+            symbol_kind: 'module',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'imports',
+              target_key: 'helper',
+              expected_evidence_sha256: sha256(importLine),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 1,
+              end_line: 1,
+            }],
+          },
+        ],
+      })
+    if (retain) {
+      expect(ingest().sources).toHaveLength(2)
+    } else {
+      expect(caught(ingest).code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    }
+  })
+
+  it.each([
+    [
+      'retains the preferred TypeScript candidate for a .js specifier',
+      true,
+      'src/module-choice.ts',
+      'src/module-choice.tsx',
+      './module-choice.js',
+    ],
+    [
+      'rejects a lower-priority TypeScript substitute for a .js specifier',
+      false,
+      'src/module-choice.tsx',
+      'src/module-choice.ts',
+      './module-choice.js',
+    ],
+    [
+      'retains an extensionless direct file before its directory index',
+      true,
+      'src/extensionless-choice.ts',
+      'src/extensionless-choice/index.ts',
+      './extensionless-choice',
+    ],
+    [
+      'rejects an extensionless directory index when a direct file exists',
+      false,
+      'src/extensionless-choice/index.ts',
+      'src/extensionless-choice.ts',
+      './extensionless-choice',
+    ],
+  ] as const)(
+    '%s',
+    (_label, retain, targetPath, otherPath, specifier) => {
+      const fixture = repositoryFixture()
+      const targetExcerpt =
+        'export function helper(): number { return 1 }'
+      const otherExcerpt =
+        'export function helper(): number { return 2 }'
+      const sourcePath = 'src/module-choice-source.ts'
+      const importLine = `import { helper } from '${specifier}'`
+      const sourceExcerpt = `${importLine}\nexport const value = helper`
+      write(fixture.root, targetPath, `${targetExcerpt}\n`)
+      write(fixture.root, otherPath, `${otherExcerpt}\n`)
+      write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
+      const head = commit(fixture.root, _label)
+      const { db, boardId } = boardDb(fixture.root)
+      const ingest = () =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'helper',
+              path: targetPath,
+              start_line: 1,
+              end_line: 1,
+              language: 'typescript',
+              qualified_name: 'helper',
+              symbol_kind: 'function',
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'source',
+              path: sourcePath,
+              start_line: 1,
+              end_line: 2,
+              language: 'typescript',
+              qualified_name: 'Source',
+              symbol_kind: 'module',
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: 'imports',
+                target_key: 'helper',
+                expected_evidence_sha256: sha256(importLine),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: 1,
+                end_line: 1,
+              }],
+            },
+          ],
+        })
+      if (retain) {
+        expect(ingest().sources).toHaveLength(2)
+      } else {
+        expect(caught(ingest).code).toBe('evidence_mismatch')
+        expectNoKnowledge(db)
+      }
+    },
+  )
+
+  it.each([
+    [
+      'retains a Python package initializer over a colliding module',
+      true,
+      'src/python_choice/__init__.py',
+      'src/python_choice.py',
+    ],
+    [
+      'rejects a colliding Python module when a package initializer exists',
+      false,
+      'src/python_choice.py',
+      'src/python_choice/__init__.py',
+    ],
+  ] as const)('%s', (_label, retain, targetPath, otherPath) => {
+    const fixture = repositoryFixture()
+    const targetExcerpt = [
+      'def helper():',
+      '    return 1',
+    ].join('\n')
+    const otherExcerpt = [
+      'def helper():',
+      '    return 2',
+    ].join('\n')
+    const importLine = 'from .python_choice import helper'
+    const sourceExcerpt = `${importLine}\nvalue = helper`
+    write(fixture.root, targetPath, `${targetExcerpt}\n`)
+    write(fixture.root, otherPath, `${otherExcerpt}\n`)
+    write(fixture.root, 'src/python_choice_source.py', `${sourceExcerpt}\n`)
+    const head = commit(fixture.root, _label)
+    const { db, boardId } = boardDb(fixture.root)
+    const ingest = () =>
+      new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'helper',
+            path: targetPath,
+            start_line: 1,
+            end_line: 2,
+            language: 'python',
+            qualified_name: 'helper',
+            symbol_kind: 'function',
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'source',
+            path: 'src/python_choice_source.py',
+            start_line: 1,
+            end_line: 2,
+            language: 'python',
+            qualified_name: 'Source',
+            symbol_kind: 'module',
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: 'imports',
+              target_key: 'helper',
+              expected_evidence_sha256: sha256(importLine),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: 1,
+              end_line: 1,
+            }],
+          },
+        ],
+      })
+    if (retain) {
+      expect(ingest().sources).toHaveLength(2)
+    } else {
+      expect(caught(ingest).code).toBe('evidence_mismatch')
+      expectNoKnowledge(db)
+    }
+  })
+
   it('rejects dynamic import followed by an unrelated target identifier', () => {
     const fixture = repositoryFixture()
     const targetExcerpt = [
@@ -1610,6 +2063,28 @@ describe('knowledge source ingestion security', () => {
       'export const imported = helper',
       'src/import-target.js',
       'export function helper() { return 2 }',
+    ],
+    [
+      'default import with a mismatched local binding',
+      'typescript',
+      'src/import-default-target.ts',
+      'src/import-default-mismatch.ts',
+      'export default function helper(): number { return 1 }',
+      "import localHelper from './import-default-target.js'",
+      'export const imported = localHelper',
+      'src/other.ts',
+      'export const unrelated = 2',
+    ],
+    [
+      'default import of a named-only export',
+      'typescript',
+      'src/import-named-only-target.ts',
+      'src/import-named-as-default.ts',
+      'export function helper(): number { return 1 }',
+      "import helper from './import-named-only-target.js'",
+      'export const imported = helper',
+      'src/other.ts',
+      'export const unrelated = 2',
     ],
     [
       'CommonJS target name from the wrong module',
@@ -1736,7 +2211,7 @@ describe('knowledge source ingestion security', () => {
               end_line: targetExcerpt.split('\n').length,
               language,
               qualified_name: 'helper',
-              symbol_kind: 'function',
+              symbol_kind: language === 'java' ? 'class' : 'function',
               expected_source_sha256: sha256(targetExcerpt),
             },
             {
@@ -1789,6 +2264,15 @@ describe('knowledge source ingestion security', () => {
         '}',
       ].join('\n'),
       "import { helper } from './import-target.js'",
+      'export const imported = helper',
+    ],
+    [
+      'TypeScript default import',
+      'typescript',
+      'src/import-default-target.ts',
+      'src/import-default-source.ts',
+      'export default function helper(): number { return 1 }',
+      "import helper from './import-default-target.js'",
       'export const imported = helper',
     ],
     [
@@ -1916,7 +2400,11 @@ describe('knowledge source ingestion security', () => {
             end_line: targetExcerpt.split('\n').length,
             language,
             qualified_name: 'helper',
-            symbol_kind: 'function',
+            symbol_kind: language === 'java'
+              ? targetExcerpt.includes('class helper')
+                ? 'class'
+                : 'method'
+              : 'function',
             expected_source_sha256: sha256(targetExcerpt),
           },
           {
@@ -1942,6 +2430,233 @@ describe('knowledge source ingestion security', () => {
       expect(report.sources).toHaveLength(2)
       expect(report.chunks.some((chunk) =>
         chunk.content.includes('"kind":"imports"'))).toBe(true)
+    },
+  )
+
+  it.each([
+    {
+      label: 'TypeScript namespace-qualified call',
+      language: 'typescript',
+      targetPath: 'src/namespace-call-target.ts',
+      targetExcerpt: 'export function helper(): number { return 1 }',
+      targetQualifiedName: 'Namespace.helper',
+      targetKind: 'function',
+      sourcePath: 'src/namespace-call-source.ts',
+      sourceExcerpt: [
+        "import * as ns from './namespace-call-target.js'",
+        'export const value = ns.helper()',
+      ].join('\n'),
+      sourceQualifiedName: 'value',
+      sourceKind: 'constant',
+      relationshipKind: 'calls',
+      relationshipStartLine: 2,
+      relationshipEndLine: 2,
+    },
+    {
+      label: 'TypeScript namespace-qualified inheritance',
+      language: 'typescript',
+      targetPath: 'src/namespace-base-target.ts',
+      targetExcerpt: 'export class Base {}',
+      targetQualifiedName: 'Namespace.Base',
+      targetKind: 'class',
+      sourcePath: 'src/namespace-base-source.ts',
+      sourceExcerpt: [
+        "import * as ns from './namespace-base-target.js'",
+        'export class Derived extends ns.Base {}',
+      ].join('\n'),
+      sourceQualifiedName: 'Derived',
+      sourceKind: 'class',
+      relationshipKind: 'extends',
+      relationshipStartLine: 2,
+      relationshipEndLine: 2,
+    },
+    {
+      label: 'TypeScript type-only import and export',
+      language: 'typescript',
+      targetPath: 'src/type-only-target.ts',
+      targetExcerpt: 'export type Helper = { value: number }',
+      targetQualifiedName: 'Helper',
+      targetKind: 'type',
+      sourcePath: 'src/type-only-source.ts',
+      sourceExcerpt: [
+        "import type { Helper } from './type-only-target.js'",
+        'export type Value = Helper',
+      ].join('\n'),
+      sourceQualifiedName: 'Value',
+      sourceKind: 'type',
+      relationshipKind: 'imports',
+      relationshipStartLine: 1,
+      relationshipEndLine: 1,
+    },
+    {
+      label: 'Python explicitly continued import',
+      language: 'python',
+      targetPath: 'src/continued_target.py',
+      targetExcerpt: [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/continued_import.py',
+      sourceExcerpt: [
+        'from .continued_target \\',
+        '    import helper',
+        'imported = helper',
+      ].join('\n'),
+      sourceQualifiedName: 'imported',
+      sourceKind: 'variable',
+      relationshipKind: 'imports',
+      relationshipStartLine: 1,
+      relationshipEndLine: 2,
+    },
+    {
+      label: 'Java type wildcard import',
+      language: 'java',
+      targetPath: 'src/example/Helper.java',
+      targetExcerpt: [
+        'package example;',
+        'public final class Helper {}',
+      ].join('\n'),
+      targetQualifiedName: 'Helper',
+      targetKind: 'class',
+      sourcePath: 'src/example/WildcardImported.java',
+      sourceExcerpt: [
+        'import example.*;',
+        'final class WildcardImported { Helper value; }',
+      ].join('\n'),
+      sourceQualifiedName: 'WildcardImported',
+      sourceKind: 'class',
+      relationshipKind: 'imports',
+      relationshipStartLine: 1,
+      relationshipEndLine: 1,
+    },
+    {
+      label: 'Java static wildcard import',
+      language: 'java',
+      targetPath: 'src/example/Target.java',
+      targetExcerpt: [
+        'package example;',
+        'public final class Target {',
+        '  public static int helper() { return 1; }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Target.helper',
+      targetKind: 'method',
+      sourcePath: 'src/example/StaticWildcardImported.java',
+      sourceExcerpt: [
+        'import static example.Target.*;',
+        'final class StaticWildcardImported { int value = helper(); }',
+      ].join('\n'),
+      sourceQualifiedName: 'StaticWildcardImported',
+      sourceKind: 'class',
+      relationshipKind: 'imports',
+      relationshipStartLine: 1,
+      relationshipEndLine: 1,
+    },
+    {
+      label: 'Java fully qualified inheritance',
+      language: 'java',
+      targetPath: 'src/example/Base.java',
+      targetExcerpt: [
+        'package example;',
+        'public class Base {}',
+      ].join('\n'),
+      targetQualifiedName: 'Base',
+      targetKind: 'class',
+      sourcePath: 'src/example/FullyQualifiedDerived.java',
+      sourceExcerpt: 'final class FullyQualifiedDerived extends example.Base {}',
+      sourceQualifiedName: 'FullyQualifiedDerived',
+      sourceKind: 'class',
+      relationshipKind: 'extends',
+      relationshipStartLine: 1,
+      relationshipEndLine: 1,
+    },
+    {
+      label: 'Java uninitialized static field import',
+      language: 'java',
+      targetPath: 'src/example/TargetField.java',
+      targetExcerpt: [
+        'package example;',
+        'public final class TargetField {',
+        '  public static int helper;',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'TargetField.helper',
+      targetKind: 'field',
+      sourcePath: 'src/example/ImportedField.java',
+      sourceExcerpt: [
+        'import static example.TargetField.helper;',
+        'final class ImportedField { int value = helper; }',
+      ].join('\n'),
+      sourceQualifiedName: 'ImportedField',
+      sourceKind: 'class',
+      relationshipKind: 'imports',
+      relationshipStartLine: 1,
+      relationshipEndLine: 1,
+    },
+  ] as const)(
+    'retains a real $label relationship',
+    ({
+      label,
+      language,
+      targetPath,
+      targetExcerpt,
+      targetQualifiedName,
+      targetKind,
+      sourcePath,
+      sourceExcerpt,
+      sourceQualifiedName,
+      sourceKind,
+      relationshipKind,
+      relationshipStartLine,
+      relationshipEndLine,
+    }) => {
+      const fixture = repositoryFixture()
+      write(fixture.root, targetPath, `${targetExcerpt}\n`)
+      write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
+      const head = commit(fixture.root, `add ${label}`)
+      const { db, boardId } = boardDb(fixture.root)
+      const relationshipLines = sourceExcerpt.split('\n')
+        .slice(relationshipStartLine - 1, relationshipEndLine)
+        .join('\n')
+      const report = new KnowledgeSourceIngestor(db).ingestStructural({
+        ...baseInput(fixture, boardId),
+        base_commit_sha: head,
+        symbols: [
+          {
+            key: 'target',
+            path: targetPath,
+            start_line: 1,
+            end_line: targetExcerpt.split('\n').length,
+            language,
+            qualified_name: targetQualifiedName,
+            symbol_kind: targetKind,
+            expected_source_sha256: sha256(targetExcerpt),
+          },
+          {
+            key: 'source',
+            path: sourcePath,
+            start_line: 1,
+            end_line: sourceExcerpt.split('\n').length,
+            language,
+            qualified_name: sourceQualifiedName,
+            symbol_kind: sourceKind,
+            expected_source_sha256: sha256(sourceExcerpt),
+            relationships: [{
+              kind: relationshipKind,
+              target_key: 'target',
+              expected_evidence_sha256: sha256(relationshipLines),
+              target_source_sha256: sha256(targetExcerpt),
+              start_line: relationshipStartLine,
+              end_line: relationshipEndLine,
+            }],
+          },
+        ],
+      })
+      expect(report.sources).toHaveLength(2)
+      expect(report.chunks.some((chunk) =>
+        chunk.content.includes(`"kind":"${relationshipKind}"`))).toBe(true)
     },
   )
 
