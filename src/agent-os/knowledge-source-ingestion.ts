@@ -2753,13 +2753,16 @@ function commonJsImportContains(
         let parentheses = 0
         let brackets = 0
         let braces = 0
-        let pendingNestedClasses = 0
+        let pendingNestedBodies = 0
         let previous = ''
         for (let cursor = afterName.index + 1; cursor < tokens.length; cursor += 1) {
           const candidate = tokens[cursor]
           if (candidate === '\n') continue
-          if (candidate === 'class' && previous !== '.') {
-            pendingNestedClasses += 1
+          if (
+            new Set(['class', 'function']).has(candidate)
+            && previous !== '.'
+          ) {
+            pendingNestedBodies += 1
           } else if (candidate === '(') {
             parentheses += 1
           } else if (candidate === ')') {
@@ -2773,12 +2776,12 @@ function commonJsImportContains(
               parentheses === 0
               && brackets === 0
               && braces === 0
-              && pendingNestedClasses === 0
+              && pendingNestedBodies === 0
             ) {
               return cursor
             }
             braces += 1
-            pendingNestedClasses = Math.max(0, pendingNestedClasses - 1)
+            pendingNestedBodies = Math.max(0, pendingNestedBodies - 1)
           } else if (candidate === '}') {
             braces = Math.max(0, braces - 1)
           }
