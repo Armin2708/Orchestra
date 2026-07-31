@@ -917,14 +917,11 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
   it('[review P2] performs session reap, capacity check, and admission in one immediate transaction', () => {
     const files = tempFiles('orchestra-dom019-journal-session-atomic-')
     const db = trackedDb(files.main)
-    const prototype = Database.prototype as unknown as {
-      prepare: typeof Database.prototype.prepare
-    }
-    const originalPrepare = prototype.prepare
+    const originalPrepare = Database.prototype.prepare
     let observedCountOutsideTransaction = false
     let reentering = false
     let interleaved: CompatibilityMigrationFailureJournal | undefined
-    prototype.prepare = function (
+    Database.prototype.prepare = function (
       this: Database.Database,
       source: string,
     ) {
@@ -970,7 +967,7 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
         runtime_instance: randomUUID(),
       }))
     } finally {
-      prototype.prepare = originalPrepare
+      Database.prototype.prepare = originalPrepare
     }
 
     expect(observedCountOutsideTransaction).toBe(false)
