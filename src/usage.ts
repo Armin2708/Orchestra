@@ -1,4 +1,7 @@
 import type Database from 'better-sqlite3'
+import {
+  runBoundCompatibilityMigrationOperation,
+} from './agent-os/compatibility-migration-instrumentation.js'
 
 // real SDK token accounting per hired agent — input / cache-read / cache-creation / output.
 // deliberately separate from token_telemetry, which estimates orchestra's *injected* context;
@@ -48,6 +51,18 @@ export const turnUsage = (resultUsage: any, fallback: UsageSplit): UsageSplit =>
 const usageNumber = (value: unknown): number =>
   Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0
 
+function assertProviderUsageUtcDay(
+  db: Database.Database,
+  expectedDay: string,
+): void {
+  const { day } = db.prepare(`SELECT date('now') AS day`).get() as {
+    day: string
+  }
+  if (day !== expectedDay) {
+    throw new Error('provider usage crossed a UTC day boundary')
+  }
+}
+
 export function fromCodexUsage(value: unknown): ProviderUsageSplit {
   const row = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const input = usageNumber(row.inputTokens ?? row.input_tokens)
@@ -74,42 +89,84 @@ export function recordProviderUsage(
   usage: ProviderUsageSplit,
 ): void {
   if (usage.total_tokens <= 0 && usage.cost_cents == null) return
+  const observedAt = new Date()
+  const day = observedAt.toISOString().slice(0, 10)
   // Claude reports cache reads as a separate additive bucket. Codex reports cached
   // input as a subset of input_tokens, so mirroring it into the legacy additive
   // cache_read column would inflate usageTotal()/boardUsage() rollups.
   const legacyCacheRead = usage.provider === 'codex' ? 0 : usage.cached_input_tokens
-  db.prepare(`
-    INSERT INTO agent_usage (
-      board_id, agent_id, day, provider, input_tokens, cache_read, cache_creation, output_tokens,
-      total_tokens, cached_input_tokens, reasoning_output_tokens, cost_cents
-    ) VALUES (?, ?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(board_id, agent_id, day) DO UPDATE SET
-      provider = excluded.provider,
-      input_tokens = input_tokens + excluded.input_tokens,
-      cache_read = cache_read + excluded.cache_read,
-      cache_creation = cache_creation + excluded.cache_creation,
-      output_tokens = output_tokens + excluded.output_tokens,
-      total_tokens = total_tokens + excluded.total_tokens,
-      cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
-      reasoning_output_tokens = reasoning_output_tokens + excluded.reasoning_output_tokens,
-      cost_cents = CASE
-        WHEN excluded.cost_cents IS NULL THEN cost_cents
-        WHEN cost_cents IS NULL THEN excluded.cost_cents
-        ELSE cost_cents + excluded.cost_cents
-      END`)
-    .run(
-      boardId,
-      agentId,
-      usage.provider,
-      usage.input_tokens,
-      legacyCacheRead,
-      usage.cache_creation_input_tokens,
-      usage.output_tokens,
-      usage.total_tokens,
-      usage.cached_input_tokens,
-      usage.reasoning_output_tokens,
-      usage.cost_cents,
-    )
+  runBoundCompatibilityMigrationOperation(
+    db,
+    {
+      observed_at: observedAt,
+      subject: {
+        table: 'agent_usage',
+        board_id: boardId,
+        agent_id: agentId,
+        day,
+      },
+      success_observations: [
+        { operation: 'adapter_translation' },
+        { operation: 'projection_refresh' },
+      ],
+      failure_diagnostic: 'projection_refresh_rejected',
+    },
+    () => {
+      assertProviderUsageUtcDay(db, day)
+      const parameters = {
+        board_id: boardId,
+        agent_id: agentId,
+        day,
+        provider: usage.provider,
+        input_tokens: usage.input_tokens,
+        cache_read: legacyCacheRead,
+        cache_creation: usage.cache_creation_input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+        cost_cents: usage.cost_cents,
+      }
+      const update = db.prepare(`
+        UPDATE agent_usage SET
+          provider=@provider,
+          input_tokens=input_tokens+@input_tokens,
+          cache_read=cache_read+@cache_read,
+          cache_creation=cache_creation+@cache_creation,
+          output_tokens=output_tokens+@output_tokens,
+          total_tokens=total_tokens+@total_tokens,
+          cached_input_tokens=cached_input_tokens+@cached_input_tokens,
+          reasoning_output_tokens=reasoning_output_tokens+@reasoning_output_tokens,
+          cost_cents=CASE
+            WHEN @cost_cents IS NULL THEN cost_cents
+            WHEN cost_cents IS NULL THEN @cost_cents
+            ELSE cost_cents+@cost_cents
+          END
+        WHERE board_id=@board_id AND agent_id=@agent_id AND day=@day
+      `).run(parameters)
+      if (update.changes === 1) {
+        assertProviderUsageUtcDay(db, day)
+        return
+      }
+      if (update.changes !== 0) {
+        throw new Error('provider usage update affected an invalid row count')
+      }
+      const insert = db.prepare(`
+        INSERT INTO agent_usage (
+          board_id, agent_id, day, provider, input_tokens, cache_read, cache_creation, output_tokens,
+          total_tokens, cached_input_tokens, reasoning_output_tokens, cost_cents
+        ) VALUES (
+          @board_id, @agent_id, @day, @provider, @input_tokens, @cache_read,
+          @cache_creation, @output_tokens, @total_tokens, @cached_input_tokens,
+          @reasoning_output_tokens, @cost_cents
+        )
+      `).run(parameters)
+      if (insert.changes !== 1) {
+        throw new Error('provider usage insert did not persist')
+      }
+      assertProviderUsageUtcDay(db, day)
+    },
+  )
 }
 
 export function recordUsage(db: Database.Database, boardId: number, agentId: number, u: UsageSplit): void {

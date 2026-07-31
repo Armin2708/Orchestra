@@ -56,10 +56,48 @@ export type CompatibilityMigrationSuccessObservation =
   }>
 
 export interface CompatibilityMigrationOperationInput {
+  readonly observed_at?: Date
   readonly subject: CompatibilityTelemetrySubject
   readonly success_observations:
     readonly CompatibilityMigrationSuccessObservation[]
   readonly failure_diagnostic: CompatibilityMigrationFailureDiagnostic
+}
+
+const FAILURE_JOURNALS = new WeakMap<
+  Database.Database,
+  CompatibilityMigrationFailureJournal
+>()
+
+/** Bind the daemon-owned failure journal to real compatibility operations on one database. */
+export function bindCompatibilityMigrationFailureJournal(
+  db: Database.Database,
+  failureJournal: CompatibilityMigrationFailureJournal,
+): () => void {
+  const existing = FAILURE_JOURNALS.get(db)
+  if (existing) {
+    throw new Error('compatibility failure journal is already bound')
+  }
+  FAILURE_JOURNALS.set(db, failureJournal)
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    if (FAILURE_JOURNALS.get(db) === failureJournal) {
+      FAILURE_JOURNALS.delete(db)
+    }
+  }
+}
+
+/** Instrument a real operation when the daemon has bound its durable journal. */
+export function runBoundCompatibilityMigrationOperation<Result>(
+  db: Database.Database,
+  input: CompatibilityMigrationOperationInput,
+  operation: () => Result,
+): Result {
+  const failureJournal = FAILURE_JOURNALS.get(db)
+  return failureJournal
+    ? runCompatibilityMigrationOperation(db, failureJournal, input, operation)
+    : db.transaction(operation).immediate()
 }
 
 const SINGLE_COHORTS = Object.freeze({
@@ -143,7 +181,12 @@ export function runCompatibilityMigrationOperation<Result>(
   operation: () => Result,
 ): Result {
   assertSuccessObservations(input)
-  const observedAt = new Date()
+  const observedAt = input.observed_at === undefined
+    ? new Date()
+    : new Date(input.observed_at.getTime())
+  if (!Number.isFinite(observedAt.getTime())) {
+    throw new TypeError('observed_at must be a valid Date')
+  }
   const cohort = resolveCompatibilityMigrationTelemetryCohort(
     db,
     input.subject,

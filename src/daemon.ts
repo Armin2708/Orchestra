@@ -18,6 +18,9 @@ import { acquireDaemonLease } from './agent-os/daemon-lease.js'
 import {
   openCompatibilityMigrationFailureJournal,
 } from './agent-os/compatibility-migration-failure-journal.js'
+import {
+  bindCompatibilityMigrationFailureJournal,
+} from './agent-os/compatibility-migration-instrumentation.js'
 import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
 import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
@@ -209,6 +212,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   const lease = acquireDaemonLease(db)
   let compatibilityFailureJournal:
     ReturnType<typeof openCompatibilityMigrationFailureJournal> | undefined
+  let unbindCompatibilityFailureJournal: (() => void) | undefined
   let maestro: Conductor | undefined
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
@@ -294,6 +298,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     codexDriver.dispose()
     codexProvider.dispose()
     await codexSupervisor.stop().catch(() => undefined)
+    unbindCompatibilityFailureJournal?.()
+    unbindCompatibilityFailureJournal = undefined
     compatibilityFailureJournal?.close()
   }
   let codexReady = false
@@ -308,6 +314,11 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         ),
       },
     )
+    unbindCompatibilityFailureJournal =
+      bindCompatibilityMigrationFailureJournal(
+        db,
+        compatibilityFailureJournal,
+      )
     codexReady = await codexProvider.initialize()
     if (contractRouting.enabled) {
       if (!codexReady) {

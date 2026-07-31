@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import type { FastifyInstance } from 'fastify'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 import {
@@ -14,12 +14,14 @@ import {
   queryCompatibilityMigrationTelemetrySummary,
 } from '../src/agent-os/compatibility-migration-telemetry.js'
 import {
+  bindCompatibilityMigrationFailureJournal,
   resolveCompatibilityMigrationTelemetryCohort,
 } from '../src/agent-os/compatibility-migration-instrumentation.js'
 import {
   AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
 } from '../src/agent-os/compatibility-forward-migration.js'
 import { LegacyEventProjection } from '../src/agent-os/legacy-projection.js'
+import { recordProviderUsage } from '../src/usage.js'
 
 type OpenDatabase = ReturnType<typeof openDb>
 
@@ -34,11 +36,14 @@ interface Fixture {
 const databases = new Set<OpenDatabase>()
 const journals = new Set<CompatibilityMigrationFailureJournal>()
 const servers = new Set<FastifyInstance>()
+const journalBindings = new Set<() => void>()
 const temporaryDirectories = new Set<string>()
 
 afterEach(async () => {
   for (const server of servers) await server.close()
   servers.clear()
+  for (const unbind of journalBindings) unbind()
+  journalBindings.clear()
   for (const journal of journals) journal.close()
   journals.clear()
   for (const db of databases) {
@@ -133,7 +138,236 @@ function cardEventTelemetry(resource: Fixture): Array<{
   }>
 }
 
+function bindJournal(resource: Fixture): () => void {
+  const unbind = bindCompatibilityMigrationFailureJournal(
+    resource.db,
+    resource.journal,
+  )
+  journalBindings.add(unbind)
+  return unbind
+}
+
+function agentUsageFixture(resource: Fixture): {
+  boardId: number
+  agentId: number
+} {
+  const boardId = Number(resource.db.prepare(`
+    INSERT INTO boards (project_path, name)
+    VALUES ('/dom019-provider-usage', 'DOM-019 provider usage')
+  `).run().lastInsertRowid)
+  const agentId = Number(resource.db.prepare(`
+    INSERT INTO agents (board_id, name, provider)
+    VALUES (?, 'usage-otter', 'codex')
+  `).run(boardId).lastInsertRowid)
+  return { boardId, agentId }
+}
+
+function recordUsage(
+  resource: Fixture,
+  boardId: number,
+  agentId: number,
+): void {
+  recordProviderUsage(resource.db, boardId, agentId, {
+    provider: 'codex',
+    total_tokens: 150,
+    input_tokens: 100,
+    cached_input_tokens: 80,
+    cache_creation_input_tokens: 0,
+    output_tokens: 50,
+    reasoning_output_tokens: 20,
+    cost_cents: null,
+  })
+}
+
+function agentUsageTelemetry(resource: Fixture): Array<{
+  operation: string
+  cohort: string
+  diagnostic_code: string
+  count: number
+}> {
+  queryCompatibilityMigrationTelemetrySummary(resource.db, resource.journal)
+  return resource.db.prepare(`
+    SELECT operation, cohort, diagnostic_code, count
+    FROM os_compatibility_migration_telemetry_daily
+    WHERE table_name='agent_usage'
+    ORDER BY operation, cohort, diagnostic_code
+  `).all() as Array<{
+    operation: string
+    cohort: string
+    diagnostic_code: string
+    count: number
+  }>
+}
+
 describe('DOM-019 real compatibility instrumentation', () => {
+  it('records the real provider-usage translation and projection refresh atomically', () => {
+    const resource = fixture()
+    const { boardId, agentId } = agentUsageFixture(resource)
+    bindJournal(resource)
+
+    recordUsage(resource, boardId, agentId)
+    recordUsage(resource, boardId, agentId)
+
+    expect(resource.db.prepare(`
+      SELECT provider, total_tokens, cached_input_tokens
+      FROM agent_usage WHERE board_id=? AND agent_id=?
+    `).get(boardId, agentId)).toEqual({
+      provider: 'codex',
+      total_tokens: 300,
+      cached_input_tokens: 160,
+    })
+    expect(agentUsageTelemetry(resource)).toEqual([
+      {
+        operation: 'adapter_translation',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'none',
+        count: 2,
+      },
+      {
+        operation: 'legacy_write',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'none',
+        count: 2,
+      },
+      {
+        operation: 'projection_refresh',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'none',
+        count: 2,
+      },
+    ])
+  })
+
+  it('rolls back rejected provider usage and drains one bounded failure', () => {
+    const resource = fixture()
+    const { boardId, agentId } = agentUsageFixture(resource)
+    const privateFailure = 'private_provider_usage_rejection_detail'
+    bindJournal(resource)
+    resource.db.exec(`
+      CREATE TEMP TRIGGER reject_provider_usage
+      BEFORE INSERT ON agent_usage
+      BEGIN
+        SELECT RAISE(ABORT, '${privateFailure}');
+      END
+    `)
+
+    expect(() => recordUsage(resource, boardId, agentId))
+      .toThrow(privateFailure)
+
+    expect(resource.db.prepare(`
+      SELECT COUNT(*) AS count FROM agent_usage
+    `).get()).toEqual({ count: 0 })
+    resource.db.exec('DROP TRIGGER temp.reject_provider_usage')
+    expect(agentUsageTelemetry(resource)).toEqual([
+      {
+        operation: 'failure',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'projection_refresh_rejected',
+        count: 1,
+      },
+    ])
+    expect(JSON.stringify(agentUsageTelemetry(resource)))
+      .not.toContain(privateFailure)
+  })
+
+  it('turns an outer provider-usage rollback into one unexpected failure', () => {
+    const resource = fixture()
+    const { boardId, agentId } = agentUsageFixture(resource)
+    const callerFailure = new Error('caller-owned provider usage rollback')
+    bindJournal(resource)
+
+    expect(() => resource.db.transaction(() => {
+      recordUsage(resource, boardId, agentId)
+      throw callerFailure
+    })()).toThrow(callerFailure)
+
+    expect(resource.db.prepare(`
+      SELECT COUNT(*) AS count FROM agent_usage
+    `).get()).toEqual({ count: 0 })
+    expect(agentUsageTelemetry(resource)).toEqual([
+      {
+        operation: 'failure',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'unexpected_failure',
+        count: 1,
+      },
+    ])
+  })
+
+  it('fails closed instead of splitting provider telemetry across UTC days', () => {
+    const resource = fixture()
+    const { boardId, agentId } = agentUsageFixture(resource)
+    const sqliteDay = (resource.db.prepare(`
+      SELECT date('now') AS day
+    `).get() as { day: string }).day
+    const priorDay = new Date(`${sqliteDay}T00:00:00.000Z`)
+    priorDay.setUTCDate(priorDay.getUTCDate() - 1)
+    priorDay.setUTCHours(23, 59, 59, 900)
+    bindJournal(resource)
+    vi.useFakeTimers({ now: priorDay })
+    try {
+      expect(() => recordUsage(resource, boardId, agentId))
+        .toThrow(/crossed a UTC day boundary/)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(resource.db.prepare(`
+      SELECT COUNT(*) AS count FROM agent_usage
+    `).get()).toEqual({ count: 0 })
+    expect(agentUsageTelemetry(resource)).toEqual([
+      {
+        operation: 'failure',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'projection_refresh_rejected',
+        count: 1,
+      },
+    ])
+  })
+
+  it('keeps journal ownership single and stops instrumentation after unbind', () => {
+    const resource = fixture()
+    const { boardId, agentId } = agentUsageFixture(resource)
+    const unbind = bindJournal(resource)
+
+    expect(() => bindCompatibilityMigrationFailureJournal(
+      resource.db,
+      resource.journal,
+    )).toThrow(/already bound/)
+
+    unbind()
+    resource.journal.close()
+    journals.delete(resource.journal)
+    let observedTransaction = false
+    resource.db.function('observe_provider_usage_transaction', () => {
+      observedTransaction = resource.db.inTransaction
+      return 1
+    })
+    resource.db.exec(`
+      CREATE TEMP TRIGGER observe_unbound_provider_usage_transaction
+      BEFORE INSERT ON agent_usage
+      BEGIN
+        SELECT observe_provider_usage_transaction();
+      END
+    `)
+    expect(() => recordUsage(resource, boardId, agentId)).not.toThrow()
+    expect(observedTransaction).toBe(true)
+
+    expect(resource.db.prepare(`
+      SELECT operation, cohort, diagnostic_code, count
+      FROM os_compatibility_migration_telemetry_daily
+      WHERE table_name='agent_usage'
+      ORDER BY operation
+    `).all()).toEqual([
+      {
+        operation: 'legacy_write',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'none',
+        count: 1,
+      },
+    ])
+  })
+
   it('records a real legacy-event translation and canonical event write', () => {
     const resource = fixture()
     const { boardId, cardId } = boardAndCard(resource.db)
