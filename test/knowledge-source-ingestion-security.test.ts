@@ -1624,6 +1624,467 @@ describe('knowledge source ingestion security', () => {
     },
   )
 
+  it.each([
+    {
+      label: 'rejects a same-file call shadowed by a function parameter',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/same-file-parameter.ts',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper(): number { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/same-file-parameter.ts',
+      sourceExcerpt: [
+        'export function caller(helper: () => number): number {',
+        '  return helper()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'none',
+    },
+    {
+      label: 'retains a Python import after a prior function parameter',
+      retain: true,
+      language: 'python',
+      targetPath: 'src/prior_target.py',
+      targetFilePrefix: '',
+      targetExcerpt: [
+        'def helper():',
+        '    return 1',
+      ].join('\n'),
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/prior_source.py',
+      sourceExcerpt: [
+        'from .prior_target import helper',
+        'def earlier(helper):',
+        '    return helper()',
+        'def caller():',
+        '    return helper()',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 4,
+      relationshipEndOffset: 4,
+      proof: 'none',
+    },
+    {
+      label: 'rejects a call shadowed by a later hoisted declaration',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/later-shadow-target.ts',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper(): number { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/later-shadow-source.ts',
+      sourceExcerpt: [
+        "import { helper } from './later-shadow-target.js'",
+        'export function caller(): number {',
+        '  return helper()',
+        '  function helper(): number { return 2 }',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects a qualified method absent from its owner',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/absent-member-target.ts',
+      targetFilePrefix: '',
+      targetExcerpt: [
+        'export class Container {}',
+        'export function method(): number { return 1 }',
+      ].join('\n'),
+      targetQualifiedName: 'Container.method',
+      targetKind: 'method',
+      sourcePath: 'src/absent-member-source.ts',
+      sourceExcerpt: [
+        "import { Container } from './absent-member-target.js'",
+        "// @ts-expect-error Container intentionally has no static 'method'",
+        'export const value = Container.method()',
+      ].join('\n'),
+      sourceQualifiedName: 'value',
+      sourceKind: 'constant',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects a Java initializer reference as a claimed field',
+      retain: false,
+      language: 'java',
+      targetPath: 'src/example/Target.java',
+      targetFilePrefix: '',
+      targetExcerpt: [
+        'package example;',
+        'import static example.Other.helper;',
+        'public final class Target {',
+        '  public static int actual = helper;',
+        '}',
+        'final class Other {',
+        '  static int helper = 1;',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Target.helper',
+      targetKind: 'field',
+      sourcePath: 'src/example/ImportedMissingField.java',
+      sourceExcerpt: [
+        'package example;',
+        'import static example.Target.helper;',
+        'final class ImportedMissingField {',
+        '  int value = helper;',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'ImportedMissingField',
+      sourceKind: 'class',
+      relationshipKind: 'imports',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'none',
+    },
+    {
+      label: 'retains a qualified Python method owned by its class',
+      retain: true,
+      language: 'python',
+      targetPath: 'src/python_owner_target.py',
+      targetFilePrefix: '',
+      targetExcerpt: [
+        'class Container:',
+        '    @staticmethod',
+        '    def method():',
+        '        return 1',
+      ].join('\n'),
+      targetQualifiedName: 'Container.method',
+      targetKind: 'method',
+      sourcePath: 'src/python-owner-source.py',
+      sourceExcerpt: [
+        'from .python_owner_target import Container',
+        'value = Container.method()',
+      ].join('\n'),
+      sourceQualifiedName: 'value',
+      sourceKind: 'variable',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'none',
+    },
+    {
+      label: 'rejects a member declared only by a nested owner',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/nested-owner-target.ts',
+      targetFilePrefix: '',
+      targetExcerpt: [
+        'export class Outer {',
+        '  static Inner = class Inner {',
+        '    static method(): number { return 1 }',
+        '  }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Outer.method',
+      targetKind: 'method',
+      sourcePath: 'src/nested-owner-source.ts',
+      sourceExcerpt: [
+        "import { Outer } from './nested-owner-target.js'",
+        "// @ts-expect-error Outer intentionally has no static 'method'",
+        'export const value = Outer.method()',
+      ].join('\n'),
+      sourceQualifiedName: 'value',
+      sourceKind: 'constant',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects a same-file call captured from an outer function',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/captured-outer.ts',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper(): number { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/captured-outer.ts',
+      sourceExcerpt: [
+        'export function outer(): number {',
+        '  function helper(): number { return 2 }',
+        '  function caller(): number {',
+        '    return helper()',
+        '  }',
+        '  return caller()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'outer',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects a captured member after a multiline target preface',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/multiline-preface.ts',
+      targetFilePrefix: [
+        '/*',
+        ' * target preface',
+        ' * preserves source lines',
+        ' */',
+      ].join('\n'),
+      targetExcerpt: [
+        'export class Container {',
+        '  static method(): number { return 1 }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Container.method',
+      targetKind: 'method',
+      sourcePath: 'src/multiline-preface.ts',
+      sourceExcerpt: [
+        'export function outer(): number {',
+        '  function method(): number { return 2 }',
+        '  function caller(): number {',
+        '    return method()',
+        '  }',
+        '  return caller()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'outer',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects a nested alternate import shadowing the target import',
+      retain: false,
+      language: 'javascript',
+      targetPath: 'src/nested-import-target.js',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper() { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/nested-import-source.js',
+      sourceExcerpt: [
+        "import { helper } from './nested-import-target.js'",
+        'export function caller() {',
+        "  const { helper } = require('./other.js')",
+        '  return helper()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'none',
+    },
+    {
+      label: 'rejects a top-level alternate import rebinding the target',
+      retain: false,
+      language: 'javascript',
+      targetPath: 'src/top-level-import-target.js',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper() { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/top-level-import-source.js',
+      sourceExcerpt: [
+        "var { helper } = require('./top-level-import-target.js')",
+        "var { helper } = require('./other.js')",
+        'export function caller() {',
+        '  return helper()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'none',
+    },
+    {
+      label: 'retains a function-local import from the exact target',
+      retain: true,
+      language: 'javascript',
+      targetPath: 'src/local-import-target.js',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper() { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/local-import-source.js',
+      sourceExcerpt: [
+        'export function caller() {',
+        "  const { helper } = require('./local-import-target.js')",
+        '  return helper()',
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'none',
+    },
+    {
+      label: 'rejects an exact require declared after the call',
+      retain: false,
+      language: 'javascript',
+      targetPath: 'src/later-require-target.js',
+      targetFilePrefix: '',
+      targetExcerpt: 'export function helper() { return 1 }',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/later-require-source.js',
+      sourceExcerpt: [
+        'export function caller() {',
+        '  return helper()',
+        "  const { helper } = require('./later-require-target.js')",
+        '}',
+      ].join('\n'),
+      sourceQualifiedName: 'caller',
+      sourceKind: 'function',
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'none',
+    },
+  ] as const)(
+    '$label',
+    ({
+      label,
+      retain,
+      language,
+      targetPath,
+      targetFilePrefix,
+      targetExcerpt,
+      targetQualifiedName,
+      targetKind,
+      sourcePath,
+      sourceExcerpt,
+      sourceQualifiedName,
+      sourceKind,
+      relationshipKind,
+      relationshipStartOffset,
+      relationshipEndOffset,
+      proof,
+    }) => {
+      const fixture = repositoryFixture()
+      const samePath = targetPath === sourcePath
+      const targetLines = targetExcerpt.split('\n')
+      const sourceLines = sourceExcerpt.split('\n')
+      const targetStartLine = targetFilePrefix.length === 0
+        ? 1
+        : targetFilePrefix.split('\n').length + 1
+      const sourceStartLine = samePath
+        ? targetStartLine + targetLines.length
+        : 1
+      const filePrefix = targetFilePrefix.length === 0
+        ? ''
+        : `${targetFilePrefix}\n`
+      write(
+        fixture.root,
+        targetPath,
+        samePath
+          ? `${filePrefix}${targetExcerpt}\n${sourceExcerpt}\n`
+          : `${filePrefix}${targetExcerpt}\n`,
+      )
+      if (!samePath) {
+        write(fixture.root, sourcePath, `${sourceExcerpt}\n`)
+      }
+      const head = commit(fixture.root, label)
+      if (proof === 'typescript') {
+        const compiler = path.resolve('node_modules/typescript/bin/tsc')
+        const compilePaths = [...new Set([targetPath, sourcePath])]
+          .map((repositoryPath) => path.join(fixture.root, repositoryPath))
+        expect(() => execFileSync(
+          process.execPath,
+          [
+            compiler,
+            '--noEmit',
+            '--strict',
+            '--skipLibCheck',
+            '--target',
+            'ES2022',
+            '--module',
+            'NodeNext',
+            '--moduleResolution',
+            'NodeNext',
+            ...compilePaths,
+          ],
+          {
+            cwd: fixture.root,
+            encoding: 'utf8',
+          },
+        )).not.toThrow()
+      }
+      const relationshipEvidence = sourceLines
+        .slice(relationshipStartOffset, relationshipEndOffset + 1)
+        .join('\n')
+      const relationshipStartLine =
+        sourceStartLine + relationshipStartOffset
+      const relationshipEndLine = sourceStartLine + relationshipEndOffset
+      const { db, boardId } = boardDb(fixture.root)
+      const ingest = () =>
+        new KnowledgeSourceIngestor(db).ingestStructural({
+          ...baseInput(fixture, boardId),
+          base_commit_sha: head,
+          symbols: [
+            {
+              key: 'target',
+              path: targetPath,
+              start_line: targetStartLine,
+              end_line: targetStartLine + targetLines.length - 1,
+              language,
+              qualified_name: targetQualifiedName,
+              symbol_kind: targetKind,
+              expected_source_sha256: sha256(targetExcerpt),
+            },
+            {
+              key: 'source',
+              path: sourcePath,
+              start_line: sourceStartLine,
+              end_line: sourceStartLine + sourceLines.length - 1,
+              language,
+              qualified_name: sourceQualifiedName,
+              symbol_kind: sourceKind,
+              expected_source_sha256: sha256(sourceExcerpt),
+              relationships: [{
+                kind: relationshipKind,
+                target_key: 'target',
+                expected_evidence_sha256: sha256(relationshipEvidence),
+                target_source_sha256: sha256(targetExcerpt),
+                start_line: relationshipStartLine,
+                end_line: relationshipEndLine,
+              }],
+            },
+          ],
+        })
+      if (retain) {
+        expect(ingest().sources).toHaveLength(2)
+      } else {
+        expect(caught(ingest).code).toBe('evidence_mismatch')
+        expectNoKnowledge(db)
+      }
+    },
+  )
+
   it('rejects an unqualified member call when only its owner import is known', () => {
     const fixture = repositoryFixture()
     const targetExcerpt = [
