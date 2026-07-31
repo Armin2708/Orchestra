@@ -2734,8 +2734,50 @@ function commonJsImportContains(
         if (before?.token !== 'function' || after?.token !== '(') return null
         const functionPrefix = statementPrefix(tokens, before.index)
           .filter((candidate) => candidate !== '\n')
-        if (functionPrefix.every((candidate) =>
-          new Set(['async', 'default', 'export']).has(candidate))) {
+        const declarationModifiers = new Set(['async', 'default', 'export'])
+        let prefixEnd = functionPrefix.length
+        while (
+          prefixEnd > 0
+          && declarationModifiers.has(functionPrefix[prefixEnd - 1])
+        ) {
+          prefixEnd -= 1
+        }
+        const statementContext = functionPrefix.slice(0, prefixEnd)
+        let labelsStart = statementContext.length
+        while (
+          labelsStart >= 2
+          && statementContext[labelsStart - 1] === ':'
+          && CODE_IDENTIFIER.test(statementContext[labelsStart - 2])
+        ) {
+          labelsStart -= 2
+        }
+        const beforeLabels = statementContext.slice(0, labelsStart)
+        const labeledDeclaration = labelsStart < statementContext.length
+          && (
+            beforeLabels.length === 0
+            || controlConditionPrefix(beforeLabels)
+            || beforeLabels.at(-1) === 'else'
+          )
+          && (() => {
+            const braceStack = openingBraceStackAt(tokens, before.index)
+            if (braceStack.length === 0) return true
+            if (executableContainerAt(tokens, before.index)) return true
+            const bracePrefix = statementPrefix(
+              tokens,
+              braceStack.at(-1) ?? before.index,
+            ).filter((candidate) => candidate !== '\n')
+            return bracePrefix.length === 0
+          })()
+        const conditionalDeclaration = controlConditionPrefix(statementContext)
+          || statementContext.at(-1) === 'else'
+        const switchClauseDeclaration = statementContext.at(-1) === ':'
+          && new Set(['case', 'default']).has(statementContext[0] ?? '')
+        if (
+          statementContext.length === 0
+          || labeledDeclaration
+          || conditionalDeclaration
+          || switchClauseDeclaration
+        ) {
           return null
         }
         const parametersClose = matchingParenthesis(tokens, after.index)
@@ -2743,12 +2785,43 @@ function commonJsImportContains(
         const body = significantTokenAfter(tokens, parametersClose)
         return body?.token === '{' ? body.index : null
       })()
-      const declarationStack = namedFunctionExpressionBody === null
-        ? openingBraceStackAt(tokens, tokenIndex)
-        : [
+      const namedFunctionDeclaration = before?.token === 'function'
+        && after?.token === '('
+        && namedFunctionExpressionBody === null
+      const declarationStack = namedFunctionExpressionBody !== null
+        ? [
             ...openingBraceStackAt(tokens, namedFunctionExpressionBody),
             namedFunctionExpressionBody,
           ]
+        : namedFunctionDeclaration
+          ? (() => {
+              const stack = openingBraceStackAt(tokens, tokenIndex)
+              const classScoped = stack.some((braceIndex) =>
+                statementPrefix(tokens, braceIndex).includes('class'))
+              if (classScoped) return stack
+              for (let index = stack.length - 1; index >= 0; index -= 1) {
+                const containerPrefix = statementPrefix(tokens, stack[index])
+                  .filter((candidate) => candidate !== '\n')
+                const arrowBody = containerPrefix.some((candidate, candidateIndex) =>
+                  candidate === '=' && containerPrefix[candidateIndex + 1] === '>')
+                const closeIndex = containerPrefix.length - 1
+                const openIndex = containerPrefix.at(-1) === ')'
+                  ? matchingOpenParenthesis(containerPrefix, closeIndex)
+                  : null
+                const beforeOpen = openIndex === null
+                  ? null
+                  : previousRelationshipTokenIndex(containerPrefix, openIndex)
+                const controlBody = beforeOpen !== null
+                  && new Set([
+                    'catch', 'for', 'if', 'switch', 'while', 'with',
+                  ]).has(containerPrefix[beforeOpen])
+                const functionBody = containerPrefix.at(-1) === ')'
+                  && !controlBody
+                if (arrowBody || functionBody) return stack.slice(0, index + 1)
+              }
+              return []
+            })()
+          : openingBraceStackAt(tokens, tokenIndex)
       return declaration
         && stackIsPrefix(
           declarationStack,
