@@ -2761,6 +2761,9 @@ function commonJsImportContains(
           if (
             new Set(['class', 'function']).has(candidate)
             && previous !== '.'
+            && parentheses === 0
+            && brackets === 0
+            && braces === 0
           ) {
             pendingNestedBodies += 1
           } else if (candidate === '(') {
