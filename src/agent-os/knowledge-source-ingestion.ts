@@ -1970,9 +1970,9 @@ function declarationContainerNamesAt(
       if (
         prefix[index] === 'class'
         && index === prefix.length - 1
-        && prefix[index - 3] === 'static'
         && CODE_IDENTIFIER.test(prefix[index - 2] ?? '')
         && prefix[index - 1] === '='
+        && prefix.slice(0, index - 2).includes('static')
       ) {
         name = prefix[index - 2]
       }
@@ -1994,9 +1994,35 @@ function callablePropertyDeclarationAt(
   const bounds = statementBoundsAt(tokens, identifierIndex)
   const suffix = tokens.slice(identifierIndex + 1, bounds.end)
     .filter((token) => token !== '\n')
+  let colonIndex = 0
+  let getter = false
+  if (before === 'get') {
+    if (suffix[0] !== '(') return false
+    const close = matchingParenthesis(suffix, 0)
+    if (close === null || suffix[close + 1] !== ':') return false
+    colonIndex = close + 1
+    getter = true
+  } else if (suffix[0] !== ':') {
+    return false
+  }
+
+  const typeStart = colonIndex + 1
   let depth = 0
-  for (let index = 0; index < suffix.length; index += 1) {
+  let typeEnd = suffix.length
+  for (let index = typeStart; index < suffix.length; index += 1) {
     const token = suffix[index]
+    if (
+      depth === 0
+      && token === '='
+      && suffix[index + 1] !== '>'
+    ) {
+      typeEnd = index
+      break
+    }
+    if (getter && depth === 0 && token === '{' && index > typeStart) {
+      typeEnd = index
+      break
+    }
     if (token === '(' || token === '[' || token === '{') {
       depth += 1
       continue
@@ -2006,11 +2032,33 @@ function callablePropertyDeclarationAt(
       if (depth < 0) return false
       continue
     }
-    if (token !== '=' || depth !== 0) continue
-    if (suffix[index + 1] === '>') return true
-    return false
   }
-  return false
+  if (depth !== 0 && typeEnd === suffix.length) return false
+
+  const callableType = (rawType: readonly string[]): boolean => {
+    let type = [...rawType]
+    while (type[0] === '(') {
+      const close = matchingParenthesis(type, 0)
+      if (close !== type.length - 1) break
+      type = type.slice(1, -1)
+    }
+    if (type[0] === '(') {
+      const close = matchingParenthesis(type, 0)
+      return close !== null
+        && close + 2 < type.length
+        && type[close + 1] === '='
+        && type[close + 2] === '>'
+    }
+    if (type[0] !== '{') return false
+    const close = closingBrace(type, 0)
+    if (close !== type.length - 1) return false
+    const signature = type.slice(1, -1)
+    if (signature[0] !== '(') return false
+    const parametersClose = matchingParenthesis(signature, 0)
+    return parametersClose !== null
+      && signature[parametersClose + 1] === ':'
+  }
+  return callableType(suffix.slice(typeStart, typeEnd))
 }
 
 function executableContainerAt(
@@ -2056,7 +2104,28 @@ function declarationLikeCall(
   if (declarationTokens.has(previous) || previous === '~') return true
 
   const after = significantTokenAfter(tokens, closeIndex)
-  if (after?.token === '{' || after?.token === ':') return true
+  if (after?.token === '{') return true
+  if (after?.token === ':') {
+    const prefix = statementPrefix(tokens, identifierIndex)
+    let depth = 0
+    const depths = prefix.map((token) => {
+      const current = depth
+      if (token === '(' || token === '[' || token === '{') depth += 1
+      if (token === ')' || token === ']' || token === '}') depth -= 1
+      return current
+    })
+    const callDepth = depth
+    let ternaries = 0
+    for (let index = 0; index < prefix.length; index += 1) {
+      if (depths[index] !== callDepth) continue
+      if (prefix[index] === '?' && prefix[index + 1] !== '.') {
+        ternaries += 1
+      } else if (prefix[index] === ':' && ternaries > 0) {
+        ternaries -= 1
+      }
+    }
+    if (ternaries === 0) return true
+  }
   if (
     after?.token === '='
     && significantTokenAfter(tokens, after.index)?.token === '>'
@@ -2107,13 +2176,30 @@ function targetDeclarationContains(
 ): boolean {
   const qualifiedParts = symbol.qualified_name.split(/[.:/#]/u)
   const identifier = targetIdentifier(symbol.qualified_name)
-  const owners = qualifiedParts.slice(0, -1)
-  const owner = owners.at(-1) ?? null
   const tokens = relationshipTokens(
     targetEvidence,
     symbol.language,
     symbol.path,
   )
+  const javaClassPart = javaLanguage(symbol.language, symbol.path)
+    ? javaTargetClassPartIndex(qualifiedParts, symbol.path)
+    : 0
+  if (javaClassPart > 0) {
+    const declaredPackage = javaPackageComponents(tokens)
+    const qualifiedPackage = qualifiedParts.slice(0, javaClassPart)
+    if (
+      declaredPackage.length !== qualifiedPackage.length
+      || !declaredPackage.every(
+        (component, index) => component === qualifiedPackage[index],
+      )
+    ) {
+      return false
+    }
+  }
+  const owners = javaLanguage(symbol.language, symbol.path)
+    ? qualifiedParts.slice(javaClassPart, -1)
+    : qualifiedParts.slice(0, -1)
+  const owner = owners.at(-1) ?? null
   const normalizedKind =
     /^[A-Za-z]+/u.exec(symbol.symbol_kind)?.[0]?.toLowerCase() ?? ''
   const callableDeclarationKeywords = new Set([
@@ -2130,8 +2216,9 @@ function targetDeclarationContains(
     ['trait', 'trait'],
     ['type', 'type'],
   ])
-  const ownerRequired = owner !== null
-    && new Set(['field', 'method', 'property']).has(normalizedKind)
+  const memberKind = new Set(['field', 'method', 'property'])
+    .has(normalizedKind)
+  const ownerRequired = owner !== null && memberKind
   const pythonOwnerMatches = ownerRequired
     && pythonLanguage(symbol.language, symbol.path)
     && pythonClassOwnsDeclaration(
@@ -2141,16 +2228,20 @@ function targetDeclarationContains(
       normalizedKind,
     )
   const ownerMatches = (identifierIndex: number): boolean =>
-    !ownerRequired
-    || (
-      pythonLanguage(symbol.language, symbol.path)
-        ? pythonOwnerMatches
-        : declarationContainerNamesAt(tokens, identifierIndex).length
-            === owners.length
-          && declarationContainerNamesAt(tokens, identifierIndex).every(
-            (name, index) => name === owners[owners.length - index - 1],
+    pythonLanguage(symbol.language, symbol.path)
+      ? !ownerRequired || pythonOwnerMatches
+      : (() => {
+          const containers = declarationContainerNamesAt(
+            tokens,
+            identifierIndex,
           )
-    )
+          if (!ownerRequired && memberKind) return true
+          if (!ownerRequired && containers.length === 0) return true
+          return containers.length === owners.length
+            && containers.every(
+              (name, index) => name === owners[owners.length - index - 1],
+            )
+        })()
   const callableKindMatches = (identifierIndex: number): boolean =>
     normalizedKind === 'method'
       ? ownerMatches(identifierIndex)
@@ -2159,7 +2250,10 @@ function targetDeclarationContains(
           || declarationContainerAt(tokens, identifierIndex)
         )
       : normalizedKind === 'function'
-        && !declarationContainerAt(tokens, identifierIndex)
+        && (
+          !declarationContainerAt(tokens, identifierIndex)
+          || (owners.length > 0 && ownerMatches(identifierIndex))
+        )
   const declared = tokens.some((token, index) => {
     if (token !== identifier) return false
     if (!ownerMatches(index)) return false
@@ -2543,14 +2637,42 @@ function commonJsImportContains(
     ) {
       continue
     }
+    const referenceStack = openingBraceStackAt(tokens, requireIndex)
     const shadowed = tokens.some((token, tokenIndex) => {
       if (token !== 'require' || tokenIndex === requireIndex) return false
+      if (parameterBindingShadowsReference(
+        tokens,
+        tokenIndex,
+        requireIndex,
+        'javascript',
+        sourcePath,
+      )) {
+        return true
+      }
       const before = significantTokenBefore(tokens, tokenIndex)
       const after = significantTokenAfter(tokens, tokenIndex)
       if (before?.token === '.') return false
-      return new Set(['class', 'def', 'fn', 'function']).has(
-        before?.token ?? '',
-      ) || after?.token !== '('
+      const bounds = statementBoundsAt(tokens, tokenIndex)
+      const prefix = tokens.slice(bounds.start, tokenIndex)
+        .filter((candidate) => candidate !== '\n')
+      const declaration = new Set([
+        'class', 'const', 'def', 'fn', 'function', 'let', 'var',
+      ]).has(before?.token ?? '')
+        || (
+          prefix.some((candidate) =>
+            new Set(['const', 'let', 'var']).has(candidate))
+          && tokens.slice(tokenIndex + 1, bounds.end).includes('=')
+        )
+        || (
+          after?.token === '='
+          && prefix.some((candidate) =>
+            new Set(['const', 'let', 'var']).has(candidate))
+        )
+      return declaration
+        && stackIsPrefix(
+          openingBraceStackAt(tokens, tokenIndex),
+          referenceStack,
+        )
     })
     if (shadowed) continue
     const open = significantTokenAfter(tokens, requireIndex)
@@ -2810,6 +2932,36 @@ function javaModuleTargets(
   return targetPath === expected || targetPath.endsWith(`/${expected}`)
 }
 
+function javaTargetClassPartIndex(
+  qualifiedParts: readonly string[],
+  targetPath: string,
+): number {
+  for (let index = 0; index < qualifiedParts.length; index += 1) {
+    if (javaModuleTargets(qualifiedParts.slice(0, index + 1), targetPath)) {
+      return index
+    }
+  }
+  return 0
+}
+
+function javaPackageComponents(tokens: readonly string[]): string[] {
+  const packageIndex = tokens.indexOf('package')
+  if (packageIndex < 0) return []
+  const clause: string[] = []
+  for (let index = packageIndex + 1; index < tokens.length; index += 1) {
+    if (tokens[index] === ';') break
+    if (tokens[index] !== '\n') clause.push(tokens[index])
+  }
+  if (
+    clause.length % 2 !== 1
+    || !clause.every((token, index) =>
+      index % 2 === 0 ? CODE_IDENTIFIER.test(token) : token === '.')
+  ) {
+    return []
+  }
+  return clause.filter((_, index) => index % 2 === 0)
+}
+
 function javaImportContains(
   tokens: readonly string[],
   identifier: string,
@@ -2860,22 +3012,8 @@ function javaQualifiedReferenceContains(
   sourcePath: string,
   targetPath: string,
 ): boolean {
-  let packageComponents: string[] = []
+  const packageComponents = javaPackageComponents(tokens)
   const packageIndex = tokens.indexOf('package')
-  if (packageIndex >= 0) {
-    const clause: string[] = []
-    for (let index = packageIndex + 1; index < tokens.length; index += 1) {
-      if (tokens[index] === ';') break
-      if (tokens[index] !== '\n') clause.push(tokens[index])
-    }
-    if (
-      clause.length % 2 === 1
-      && clause.every((token, index) =>
-        index % 2 === 0 ? CODE_IDENTIFIER.test(token) : token === '.')
-    ) {
-      packageComponents = clause.filter((_, index) => index % 2 === 0)
-    }
-  }
   return tokens.some((token, index) => {
     if (token !== identifier) return false
     const components = [identifier]
@@ -3565,6 +3703,12 @@ function pythonFunctionShadowsReference(
     referenceToken >= statement.startToken
     && referenceToken < statement.endToken)
   if (referenceStatement < 0) return true
+  if (
+    referenceLine < statements[referenceStatement].startLine
+    || referenceLine > statements[referenceStatement].endLine
+  ) {
+    return true
+  }
   if (pythonExpressionBindsIdentifier(
     statements[referenceStatement].tokens,
     identifier,
@@ -3596,9 +3740,55 @@ function pythonFunctionShadowsReference(
       .filter((token) => token !== '\n')
     return tokens[0] === keyword && tokens.includes(identifier)
   })
+  type ExecutionBoundary = { statementIndex: number; token: number }
+  const headerBoundary = (statementIndex: number): ExecutionBoundary => ({
+    statementIndex,
+    token: statements[statementIndex].startToken,
+  })
+  const invocationBoundary = (
+    headerIndex: number | null,
+    invokedHeaderIndex: number,
+  ): ExecutionBoundary | null => {
+    const invoked = pythonFunctionHeader(
+      statements[invokedHeaderIndex].tokens,
+    )
+    if (invoked === null) return null
+    const indices = pythonDirectScopeStatements(statements, headerIndex)
+    for (const index of indices) {
+      if (index === invokedHeaderIndex) continue
+      const statementTokens = statements[index].tokens
+      for (
+        let tokenIndex = 0;
+        tokenIndex < statementTokens.length;
+        tokenIndex += 1
+      ) {
+        if (statementTokens[tokenIndex] !== invoked.name) continue
+        const before = significantTokenBefore(statementTokens, tokenIndex)
+        const after = significantTokenAfter(statementTokens, tokenIndex)
+        if (
+          after?.token === '('
+          && !new Set(['class', 'def']).has(before?.token ?? '')
+        ) {
+          return {
+            statementIndex: index,
+            token: statements[index].startToken + tokenIndex,
+          }
+        }
+        if (before?.token === 'return') {
+          return {
+            statementIndex: index,
+            token: statements[index].startToken + tokenIndex,
+          }
+        }
+      }
+    }
+    return null
+  }
   const resolveScope = (
     indices: readonly number[],
     headerIndex: number | null,
+    boundary: ExecutionBoundary,
+    laterBindingShadows: boolean,
   ): 'none' | 'shadow' | 'target' => {
     if (headerIndex !== null) {
       const header = pythonFunctionHeader(statements[headerIndex].tokens)
@@ -3609,15 +3799,22 @@ function pythonFunctionShadowsReference(
         return 'shadow'
       }
     }
-    let targetBinding = false
+    let resolution: 'none' | 'shadow' | 'target' = 'none'
+    let bindingFound = false
     for (const index of indices) {
       const statement = statements[index]
       const tokens = statement.tokens.filter((token) => token !== '\n')
+      if (!pythonLineBindsIdentifier(tokens, identifier, false)) continue
+      bindingFound = true
+      const beforeBoundary = index < boundary.statementIndex
+        || (
+          index === boundary.statementIndex
+          && statement.endToken <= boundary.token
+        )
+      if (!beforeBoundary) continue
       if (tokens.includes('import')) {
-        if (!pythonLineBindsIdentifier(tokens, identifier, false)) continue
         if (
-          statement.endLine > referenceLine
-          || !staticImportContains(
+          !staticImportContains(
             statement.tokens,
             exportedIdentifier,
             'python',
@@ -3629,48 +3826,85 @@ function pythonFunctionShadowsReference(
             identifier,
           )
         ) {
-          return 'shadow'
+          resolution = 'shadow'
+        } else {
+          resolution = 'target'
         }
-        targetBinding = true
         continue
       }
-      if (!pythonLineBindsIdentifier(tokens, identifier, false)) continue
       if (
         targetRange !== null
         && statement.startLine + 1 >= targetRange.startLine
         && statement.endLine + 1 <= targetRange.endLine
       ) {
-        targetBinding = true
+        resolution = 'target'
         continue
       }
-      return 'shadow'
+      resolution = 'shadow'
     }
-    return targetBinding ? 'target' : 'none'
+    return resolution === 'none' && bindingFound && laterBindingShadows
+      ? 'shadow'
+      : resolution
   }
 
   let seekNonlocal = false
+  let childHeaderIndex: number | null = null
+  let scopeBoundary: ExecutionBoundary = {
+    statementIndex: referenceStatement,
+    token: referenceToken,
+  }
   for (const candidate of enclosingFunctions) {
+    if (childHeaderIndex !== null) {
+      scopeBoundary = invocationBoundary(
+        candidate.index,
+        childHeaderIndex,
+      ) ?? headerBoundary(childHeaderIndex)
+    }
     const indices = pythonDirectScopeStatements(statements, candidate.index)
     if (!seekNonlocal && directive(indices, 'global')) {
-      const globalResolution = resolveScope(indices, candidate.index)
+      const globalResolution = resolveScope(
+        indices,
+        candidate.index,
+        scopeBoundary,
+        false,
+      )
       if (globalResolution === 'shadow') return true
       if (globalResolution === 'target') return false
+      const outermostHeader = enclosingFunctions.at(-1)?.index
+        ?? candidate.index
+      const moduleBoundary = invocationBoundary(null, outermostHeader)
+        ?? headerBoundary(outermostHeader)
       const moduleResolution = resolveScope(
         pythonDirectScopeStatements(statements, null),
         null,
+        moduleBoundary,
+        false,
       )
       return moduleResolution !== 'target'
     }
     const declaredNonlocal = directive(indices, 'nonlocal')
     if (declaredNonlocal) seekNonlocal = true
-    const resolution = resolveScope(indices, candidate.index)
+    const resolution = resolveScope(
+      indices,
+      candidate.index,
+      scopeBoundary,
+      !declaredNonlocal,
+    )
     if (resolution === 'target') return false
     if (resolution === 'shadow') return true
+    childHeaderIndex = candidate.index
     if (seekNonlocal || declaredNonlocal) continue
   }
+  const outermostHeader = enclosingFunctions.at(-1)?.index ?? null
+  const moduleBoundary = outermostHeader === null
+    ? scopeBoundary
+    : invocationBoundary(null, outermostHeader)
+      ?? headerBoundary(outermostHeader)
   const moduleResolution = resolveScope(
     pythonDirectScopeStatements(statements, null),
     null,
+    moduleBoundary,
+    false,
   )
   return moduleResolution !== 'target'
 }
@@ -3864,9 +4098,17 @@ function relationshipReferenceAt(
   tokens: readonly string[],
   terminalIndex: number,
   targetParts: readonly string[],
+  bindingPartIndex = 0,
 ): RelationshipReference | null {
   const terminal = tokens[terminalIndex]
-  if (!CODE_IDENTIFIER.test(terminal) || targetParts.length === 0) return null
+  if (
+    !CODE_IDENTIFIER.test(terminal)
+    || targetParts.length === 0
+    || bindingPartIndex < 0
+    || bindingPartIndex >= targetParts.length
+  ) {
+    return null
+  }
   if (targetParts.length === 1) {
     return {
       exported: targetParts[0],
@@ -3894,9 +4136,9 @@ function relationshipReferenceAt(
     if (components[index].name !== targetParts[index]) return null
   }
   return {
-    exported: targetParts[0],
-    local: components[0].name,
-    localIndex: components[0].index,
+    exported: targetParts[bindingPartIndex],
+    local: components[bindingPartIndex].name,
+    localIndex: components[bindingPartIndex].index,
     terminal,
   }
 }
@@ -3930,17 +4172,34 @@ function assertSyntacticRelationship(
   const contextualTokens = [...prefixTokens, ...tokens]
   const relationshipTokenOffset = prefixTokens.length
   const qualifiedParts = targetQualifiedName.split(/[.:/#]/u)
+  const javaTargetClassPart = javaLanguage(sourceLanguage, sourcePath)
+    ? javaTargetClassPartIndex(qualifiedParts, targetPath)
+    : 0
+  const referenceShapes: Array<{
+    bindingPartIndex: number
+    parts: string[]
+  }> = [{
+    bindingPartIndex: javaTargetClassPart,
+    parts: qualifiedParts,
+  }]
+  if (javaTargetClassPart > 0) {
+    referenceShapes.push({
+      bindingPartIndex: 0,
+      parts: qualifiedParts.slice(javaTargetClassPart),
+    })
+  }
   let sourceTokens: string[] | null = null
   const referencesAt = (
     contextualIndex: number,
-  ): RelationshipReference[] => {
+  ): RelationshipReference[] => referenceShapes.flatMap((shape) => {
     const reference = relationshipReferenceAt(
       contextualTokens,
       contextualIndex,
-      qualifiedParts,
+      shape.parts,
+      shape.bindingPartIndex,
     )
     return reference === null ? [] : [reference]
-  }
+  })
   const pathBoundReference = (
     contextualIndex?: number,
     rejectShadow = false,
