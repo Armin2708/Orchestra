@@ -2734,10 +2734,8 @@ function commonJsImportContains(
         if (before?.token !== 'function' || after?.token !== '(') return null
         const functionPrefix = statementPrefix(tokens, before.index)
           .filter((candidate) => candidate !== '\n')
-        if (
-          !functionPrefix.includes('=')
-          && !new Set(['(', 'return']).has(functionPrefix.at(-1) ?? '')
-        ) {
+        if (functionPrefix.every((candidate) =>
+          new Set(['async', 'default', 'export']).has(candidate))) {
           return null
         }
         const parametersClose = matchingParenthesis(tokens, after.index)
