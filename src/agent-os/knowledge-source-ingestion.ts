@@ -2736,7 +2736,7 @@ function commonJsImportContains(
           .filter((candidate) => candidate !== '\n')
         if (
           !functionPrefix.includes('=')
-          && functionPrefix.at(-1) !== '('
+          && !new Set(['(', 'return']).has(functionPrefix.at(-1) ?? '')
         ) {
           return null
         }
