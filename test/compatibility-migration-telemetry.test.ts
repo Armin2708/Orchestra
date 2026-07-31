@@ -443,13 +443,13 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     const today = new Date().toISOString().slice(0, 10)
     const first = openApplicationDb(file)
     expect(first.prepare(`
-      SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({
+      SELECT id FROM os_schema_migrations WHERE id=?
+    `).get(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID)).toEqual({
       id: AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
     })
     expect(first.prepare(`
       SELECT COUNT(*) AS count FROM os_schema_migrations
-    `).get()).toEqual({ count: 23 })
+    `).get()).toEqual({ count: 24 })
     expect(schemaObjectCount(first))
       .toBe(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES.length)
     const before = first.prepare(`

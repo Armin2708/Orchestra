@@ -7,6 +7,10 @@ import {
   applyCompatibilityMigrationTelemetryMigration,
   refreshCompatibilityMigrationTelemetryCollectorEpoch,
 } from './compatibility-migration-telemetry.js'
+import {
+  AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID,
+  applyCompatibilityMigrationFailureJournalMigration,
+} from './compatibility-migration-failure-journal.js'
 import { conversationEventContentHash } from './conversation-event-integrity.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
@@ -7379,6 +7383,12 @@ const migrations: Migration[] = [
     id: AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
     apply(db) {
       applyCompatibilityMigrationTelemetryMigration(db)
+    },
+  },
+  {
+    id: AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID,
+    apply(db) {
+      applyCompatibilityMigrationFailureJournalMigration(db)
     },
   },
 ]

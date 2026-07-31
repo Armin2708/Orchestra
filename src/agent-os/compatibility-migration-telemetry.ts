@@ -6,6 +6,9 @@ import {
   AGENT_OS_LEGACY_COMPATIBILITY_TABLES,
   type AgentOsLegacyCompatibilityTable,
 } from './compatibility-projection-contract.js'
+import type {
+  CompatibilityMigrationFailureJournalBinding,
+} from './compatibility-migration-failure-journal.js'
 
 export const AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID =
   '023-compatibility-migration-telemetry'
@@ -1297,12 +1300,14 @@ function totalsForRows(
 export function queryCompatibilityMigrationTelemetryDaily(
   db: Database.Database,
   query: CompatibilityMigrationTelemetryDailyQuery,
+  failureJournal?: CompatibilityMigrationFailureJournalBinding,
 ): CompatibilityMigrationTelemetryDailyResult {
   assertExactKeys(query, ['from_day', 'through_day'], ['table'])
   assertDayRange(query.from_day, query.through_day)
   if (query.table !== undefined) {
     assertEnum('table', query.table, AGENT_OS_LEGACY_COMPATIBILITY_TABLES)
   }
+  failureJournal?.drain()
   assertCompatibilityMigrationTelemetrySchemaCompatible(db)
 
   const rows = (query.table === undefined
@@ -1352,7 +1357,9 @@ function dayBounds(
 
 export function queryCompatibilityMigrationTelemetrySummary(
   db: Database.Database,
+  failureJournal?: CompatibilityMigrationFailureJournalBinding,
 ): CompatibilityMigrationTelemetrySummaryResult {
+  failureJournal?.drain()
   return runReadSnapshot(db, () => {
     assertCompatibilityMigrationTelemetrySchemaCompatible(db)
     const rows = db.prepare(`
@@ -1736,12 +1743,14 @@ export function refreshCompatibilityMigrationTelemetryCollectorEpoch(
 export function sealCompletedCompatibilityMigrationTelemetryDay(
   db: Database.Database,
   day: string,
+  failureJournal?: CompatibilityMigrationFailureJournalBinding,
 ): void {
   assertUtcDay('day', day)
   const today = utcDay(new Date())
   if (day >= today) {
     throw new RangeError('only a completed UTC day can be sealed')
   }
+  const failureJournalSeal = failureJournal?.prepareDaySeal(day)
 
   withTelemetryMutationGuard(db, 'seal', () => {
     const guardState = ensureTelemetryGuardState(db)
@@ -1774,6 +1783,9 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
           assertSafeCount('coverage failure_count', row.failure_count)
         }
         assertCompatibilityMigrationTelemetryCollectorEpochCurrent(db)
+        if (failureJournal && failureJournalSeal) {
+          failureJournal.writeDaySealReceipt(failureJournalSeal)
+        }
         return
       }
       if (day <= epoch.valid_from_day) {
@@ -1873,6 +1885,9 @@ export function sealCompletedCompatibilityMigrationTelemetryDay(
         )
       }
       assertCompatibilityMigrationTelemetryCollectorEpochCurrent(db)
+      if (failureJournal && failureJournalSeal) {
+        failureJournal.writeDaySealReceipt(failureJournalSeal)
+      }
     })
   })
 }
@@ -1938,6 +1953,7 @@ function assertCompatibilityMigrationTelemetryConserved(
 export function rollupCompatibilityMigrationTelemetry(
   db: Database.Database,
   input: CompatibilityMigrationTelemetryRollupInput,
+  failureJournal?: CompatibilityMigrationFailureJournalBinding,
 ): CompatibilityMigrationTelemetryRollupResult {
   assertExactKeys(input, ['now'], ['retain_days'])
   assertValidDate('now', input.now)
@@ -1955,6 +1971,8 @@ export function rollupCompatibilityMigrationTelemetry(
     )
   }
   const retainFromDay = addUtcDays(utcDay(input.now), -(retainDays - 1))
+  failureJournal?.drain()
+  failureJournal?.assertRollupReady(retainFromDay)
   const eligibleDaysSql = `
     SELECT day
     FROM ${TELEMETRY_COVERAGE_TABLE}
@@ -2056,11 +2074,17 @@ export function rollupCompatibilityMigrationTelemetry(
 export function queryCompatibilityMigrationWriterObservation(
   db: Database.Database,
   query: CompatibilityMigrationWriterObservationQuery,
+  failureJournal?: CompatibilityMigrationFailureJournalBinding,
 ): CompatibilityMigrationWriterObservationResult {
   assertExactKeys(query, ['table', 'from_day', 'through_day'])
   assertEnum('table', query.table, AGENT_OS_LEGACY_COMPATIBILITY_TABLES)
   assertDayRange(query.from_day, query.through_day)
   const calendarDays = calendarDayCount(query.from_day, query.through_day)
+  failureJournal?.drain()
+  failureJournal?.assertCoverageReceipts(
+    query.from_day,
+    query.through_day,
+  )
 
   return runReadSnapshot(db, () => {
     const epoch =
