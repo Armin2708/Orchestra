@@ -2061,7 +2061,12 @@ function callablePropertyDeclarationAt(
         let genericClose: number | null = null
         for (let index = open; index < candidate.length; index += 1) {
           if (candidate[index] === '<') genericDepth += 1
-          if (candidate[index] !== '>') continue
+          if (
+            candidate[index] !== '>'
+            || candidate[index - 1] === '='
+          ) {
+            continue
+          }
           genericDepth -= 1
           if (genericDepth === 0) {
             genericClose = index
@@ -2729,7 +2734,12 @@ function commonJsImportContains(
         if (before?.token !== 'function' || after?.token !== '(') return null
         const functionPrefix = statementPrefix(tokens, before.index)
           .filter((candidate) => candidate !== '\n')
-        if (!functionPrefix.includes('=')) return null
+        if (
+          !functionPrefix.includes('=')
+          && functionPrefix.at(-1) !== '('
+        ) {
+          return null
+        }
         const parametersClose = matchingParenthesis(tokens, after.index)
         if (parametersClose === null) return null
         const body = significantTokenAfter(tokens, parametersClose)
@@ -3931,10 +3941,14 @@ function pythonFunctionShadowsReference(
       }
       const significant = statementTokens
         .filter((token) => token !== '\n')
+      for (const alias of aliases) {
+        if (pythonAssignmentBindsIdentifier(statementTokens, alias)) {
+          aliases.delete(alias)
+        }
+      }
       const equalsIndex = significant.indexOf('=')
       const alias = equalsIndex === 1 ? significant[0] : ''
       if (!CODE_IDENTIFIER.test(alias)) continue
-      aliases.delete(alias)
       if (
         significant[equalsIndex + 1] === invoked.name
         && significant[equalsIndex + 2] !== '('
@@ -4370,7 +4384,10 @@ function assertSyntacticRelationship(
     let cursor = terminalIndex
     for (let index = parts.length - 1; index >= 0; index -= 1) {
       if (contextualTokens[cursor] !== parts[index]) return false
-      if (index === 0) return true
+      if (index === 0) {
+        return parts.length === qualifiedParts.length
+          || significantTokenBefore(contextualTokens, cursor)?.token !== '.'
+      }
       const dot = significantTokenBefore(contextualTokens, cursor)
       if (dot?.token !== '.') return false
       const component = significantTokenBefore(contextualTokens, dot.index)
