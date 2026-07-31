@@ -2089,7 +2089,8 @@ describe('knowledge source ingestion security', () => {
     extraFiles?: readonly { content: string; path: string }[]
     label: string
     language: string
-    proof: 'java' | 'none' | 'python' | 'typescript'
+    proof: 'java' | 'node' | 'none' | 'python' | 'typescript'
+    proofOutput?: string
     relationshipEndOffset: number
     relationshipKind: 'calls' | 'extends' | 'implements'
     relationshipStartOffset: number
@@ -3607,6 +3608,254 @@ describe('knowledge source ingestion security', () => {
       relationshipEndOffset: 3,
       proof: 'none',
     },
+    {
+      label: 'retains a nested interface beneath a synthetic namespace prefix',
+      retain: true,
+      language: 'typescript',
+      targetPath: 'src/synthetic-interface-target.ts',
+      targetExcerpt: [
+        'export namespace Outer {',
+        '  export interface Contract {}',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Namespace.Outer.Contract',
+      targetKind: 'interface',
+      sourcePath: 'src/synthetic-interface-source.ts',
+      sourceExcerpt: [
+        "import type * as ns from './synthetic-interface-target.js'",
+        'export class Implementation implements ns.Outer.Contract {}',
+      ].join('\n'),
+      relationshipKind: 'implements',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'typescript',
+    },
+    {
+      label: 'rejects an unknown synthetic namespace prefix',
+      retain: false,
+      language: 'typescript',
+      targetPath: 'src/unknown-synthetic-interface-target.ts',
+      targetExcerpt: [
+        'export namespace Outer {',
+        '  export interface Contract {}',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Unknown.Outer.Contract',
+      targetKind: 'interface',
+      sourcePath: 'src/unknown-synthetic-interface-source.ts',
+      sourceExcerpt: [
+        "import type * as ns from './unknown-synthetic-interface-target.js'",
+        'export class Implementation implements ns.Outer.Contract {}',
+      ].join('\n'),
+      relationshipKind: 'implements',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'typescript',
+    },
+    {
+      label: 'retains a nested function beneath a synthetic namespace prefix',
+      retain: true,
+      language: 'typescript',
+      targetPath: 'src/synthetic-function-target.ts',
+      targetExcerpt: [
+        'export namespace Outer {',
+        '  export function helper(): number { return 1 }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Namespace.Outer.helper',
+      targetKind: 'function',
+      sourcePath: 'src/synthetic-function-source.ts',
+      sourceExcerpt: [
+        "import * as ns from './synthetic-function-target.js'",
+        'export const value = ns.Outer.helper()',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'typescript',
+    },
+    {
+      label: 'retains a generic callable TypeScript property',
+      retain: true,
+      language: 'typescript',
+      targetPath: 'src/generic-callable-property-target.ts',
+      targetExcerpt: [
+        'export class Container {',
+        '  static helper: <T>(value: T) => T =',
+        '    <T>(value: T): T => value',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Container.helper',
+      targetKind: 'property',
+      sourcePath: 'src/generic-callable-property-source.ts',
+      sourceExcerpt: [
+        "import { Container } from './generic-callable-property-target.js'",
+        'export const value = Container.helper(1)',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'typescript',
+    },
+    {
+      label: 'retains a statically imported nested Java method call',
+      retain: true,
+      language: 'java',
+      targetPath: 'src/example/Outer.java',
+      targetExcerpt: [
+        'package example;',
+        'public final class Outer {',
+        '  public static final class Inner {',
+        '    public static int method() { return 1; }',
+        '  }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'example.Outer.Inner.method',
+      targetKind: 'method',
+      sourcePath: 'src/consumer/StaticNestedCaller.java',
+      sourceExcerpt: [
+        'package consumer;',
+        'import static example.Outer.Inner.method;',
+        'public final class StaticNestedCaller {',
+        '  public static int value() { return method(); }',
+        '  public static void main(String[] args) { System.out.print(value()); }',
+        '}',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'java',
+      proofOutput: '1',
+    },
+    {
+      label: 'retains an imported nested Java class call',
+      retain: true,
+      language: 'java',
+      targetPath: 'src/example/Outer.java',
+      targetExcerpt: [
+        'package example;',
+        'public final class Outer {',
+        '  public static final class Inner {',
+        '    public static int method() { return 1; }',
+        '  }',
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'example.Outer.Inner.method',
+      targetKind: 'method',
+      sourcePath: 'src/consumer/ImportedInnerCaller.java',
+      sourceExcerpt: [
+        'package consumer;',
+        'import example.Outer.Inner;',
+        'public final class ImportedInnerCaller {',
+        '  public static int value() { return Inner.method(); }',
+        '  public static void main(String[] args) { System.out.print(value()); }',
+        '}',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'java',
+      proofOutput: '1',
+    },
+    {
+      label: 'retains a nonlocal Python closure through a one-level alias',
+      retain: true,
+      language: 'python',
+      targetPath: 'src/alias_escape_target.py',
+      targetExcerpt: 'def helper():\n    return 1',
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/alias_escape_source.py',
+      sourceExcerpt: [
+        'def outer():',
+        '    def caller():',
+        '        nonlocal helper',
+        '        return helper()',
+        '    from .alias_escape_target import helper',
+        '    alias = caller',
+        '    return alias',
+        'value = outer()()',
+        'print(value)',
+      ].join('\n'),
+      extraFiles: [{ content: '', path: 'src/__init__.py' }],
+      relationshipKind: 'calls',
+      relationshipStartOffset: 3,
+      relationshipEndOffset: 3,
+      proof: 'python',
+      proofOutput: '1',
+    },
+    {
+      label: 'retains top-level CJS require beside a named function expression',
+      retain: true,
+      language: 'cjs',
+      targetPath: 'src/named-expression-target.cjs',
+      targetExcerpt: [
+        'function helper() { return 1 }',
+        'module.exports = { helper }',
+      ].join('\n'),
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/named-expression-source.cjs',
+      sourceExcerpt: [
+        'const wrapper = function require(value) { return value }',
+        "const { helper } = require('./named-expression-target.cjs')",
+        'const value = helper()',
+        'console.log(value)',
+        'module.exports = { value, wrapper }',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'node',
+      proofOutput: '1',
+    },
+    {
+      label: 'rejects CJS require inside its named function expression',
+      retain: false,
+      language: 'cjs',
+      targetPath: 'src/named-expression-shadow-target.cjs',
+      targetExcerpt: [
+        'function helper() { return 1 }',
+        'module.exports = { helper }',
+      ].join('\n'),
+      targetQualifiedName: 'helper',
+      targetKind: 'function',
+      sourcePath: 'src/named-expression-shadow-source.cjs',
+      sourceExcerpt: [
+        'const wrapper = function require(value) {',
+        "  const { helper } = require('./named-expression-shadow-target.cjs')",
+        '  return helper()',
+        '}',
+        'module.exports = wrapper',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 2,
+      relationshipEndOffset: 2,
+      proof: 'none',
+    },
+    {
+      label: 'retains a callable object type after a data member',
+      retain: true,
+      language: 'typescript',
+      targetPath: 'src/mixed-call-signature-target.ts',
+      targetExcerpt: [
+        'export class Container {',
+        '  static helper: { label: string; (): number } =',
+        "    Object.assign(() => 1, { label: 'helper' })",
+        '}',
+      ].join('\n'),
+      targetQualifiedName: 'Container.helper',
+      targetKind: 'property',
+      sourcePath: 'src/mixed-call-signature-source.ts',
+      sourceExcerpt: [
+        "import { Container } from './mixed-call-signature-target.js'",
+        'export const value = Container.helper()',
+      ].join('\n'),
+      relationshipKind: 'calls',
+      relationshipStartOffset: 1,
+      relationshipEndOffset: 1,
+      proof: 'typescript',
+    },
   ] satisfies readonly AdvancedStructuralCase[]
 
   it.each(advancedStructuralCases)(
@@ -3616,6 +3865,7 @@ describe('knowledge source ingestion security', () => {
       label,
       language,
       proof,
+      proofOutput,
       relationshipEndOffset,
       relationshipKind,
       relationshipStartOffset,
@@ -3680,20 +3930,55 @@ describe('knowledge source ingestion security', () => {
             encoding: 'utf8',
           },
         )).not.toThrow()
+        if (proofOutput !== undefined) {
+          const packageName = /^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*);/mu
+            .exec(sourceExcerpt)?.[1]
+          const className = path.posix.basename(sourcePath, '.java')
+          const mainClass = packageName === undefined
+            ? className
+            : `${packageName}.${className}`
+          const output = execFileSync(
+            'java',
+            ['-cp', fixture.root, mainClass],
+            {
+              cwd: fixture.root,
+              encoding: 'utf8',
+            },
+          )
+          expect(output.trim()).toBe(proofOutput)
+        }
       }
       if (proof === 'python') {
         const moduleName = sourcePath
           .replace(/\.py$/u, '')
           .split('/')
           .join('.')
-        expect(() => execFileSync(
+        const run = () => execFileSync(
           'python3',
           ['-B', '-m', moduleName],
           {
             cwd: fixture.root,
             encoding: 'utf8',
           },
-        )).not.toThrow()
+        )
+        if (proofOutput === undefined) {
+          expect(run).not.toThrow()
+        } else {
+          expect(run().trim()).toBe(proofOutput)
+        }
+      }
+      if (proof === 'node') {
+        const output = execFileSync(
+          process.execPath,
+          [path.join(fixture.root, sourcePath)],
+          {
+            cwd: fixture.root,
+            encoding: 'utf8',
+          },
+        )
+        if (proofOutput !== undefined) {
+          expect(output.trim()).toBe(proofOutput)
+        }
       }
       const sourceLines = sourceExcerpt.split('\n')
       const relationshipEvidence = sourceLines
