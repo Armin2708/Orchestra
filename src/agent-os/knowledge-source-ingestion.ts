@@ -1433,10 +1433,8 @@ function relationshipLiteralValue(token: string): string | null {
 function tryRegexLiteralEnd(
   value: string,
   start: number,
-  failOnAmbiguousComment: boolean,
 ): number | null {
   let index = start + 1
-  let lastSlash: number | null = null
   let inCharacterClass = false
   while (index < value.length) {
     const current = value[index]
@@ -1451,32 +1449,34 @@ function tryRegexLiteralEnd(
     } else if (current === ']' && inCharacterClass) {
       inCharacterClass = false
     } else if (!inCharacterClass && current === '/') {
-      const next = value[index + 1] ?? ''
-      if (next === '/' || next === '*') {
-        if (failOnAmbiguousComment) fail('evidence_mismatch')
-        if (next === '*') {
-          const commentEnd = value.indexOf('*/', index + 2)
-          if (commentEnd < 0) fail('evidence_mismatch')
-          return commentEnd + 2
-        }
-        const lineEnd = value.indexOf('\n', index + 2)
-        return lineEnd < 0 ? value.length : lineEnd
-      }
-      lastSlash = index
+      let end = index + 1
+      while (end < value.length && /[A-Za-z]/u.test(value[end])) end += 1
+      return end
     }
     index += 1
   }
-  if (lastSlash === null) return null
-  let end = lastSlash + 1
-  while (end < value.length && /[A-Za-z]/u.test(value[end])) end += 1
-  return end
+  return null
+}
+
+function regexLiteralMayStart(tokens: readonly string[]): boolean {
+  const previousIndex = previousRelationshipTokenIndex(tokens)
+  if (previousIndex === null) return true
+  const previous = tokens[previousIndex]
+  if (previous === ')') {
+    return closesStatementControlCondition(tokens, previousIndex)
+  }
+  return new Set([
+    '!', '%', '&', '(', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=',
+    '>', '?', '[', '^', '{', '|', '}', '~',
+    'await', 'case', 'debugger', 'default', 'delete', 'export', 'in', 'new',
+    'of', 'return', 'throw', 'typeof', 'void', 'yield',
+  ]).has(previous)
 }
 
 function relationshipTokens(
   value: string,
   language: string,
   repositoryPath: string,
-  failOnAmbiguousComment = true,
 ): string[] {
   const tokens: string[] = []
   const hashComments = /^(?:bash|perl|python|r|ruby|sh|shell|zsh)$/u
@@ -1507,17 +1507,16 @@ function relationshipTokens(
       index = end + 2
       continue
     }
-    if (current === '/' && regexLiterals) {
-      const regexEnd = tryRegexLiteralEnd(
-        value,
-        index,
-        failOnAmbiguousComment,
-      )
-      if (regexEnd !== null) {
-        index = regexEnd
-        tokens.push(RELATIONSHIP_REGEX_TOKEN)
-        continue
-      }
+    if (
+      current === '/'
+      && regexLiterals
+      && regexLiteralMayStart(tokens)
+    ) {
+      const regexEnd = tryRegexLiteralEnd(value, index)
+      if (regexEnd === null) fail('evidence_mismatch')
+      index = regexEnd
+      tokens.push(RELATIONSHIP_REGEX_TOKEN)
+      continue
     }
     if (hashComments && current === '#') {
       const end = value.indexOf('\n', index + 1)
@@ -1580,10 +1579,43 @@ function hasTokenPair(
   first: string,
   second: string,
 ): boolean {
-  return tokens.some((token, index) => {
-    if (token !== first) return false
-    return significantTokenAfter(tokens, index)?.token === second
-  })
+  for (let firstIndex = 0; firstIndex < tokens.length; firstIndex += 1) {
+    if (tokens[firstIndex] !== first) continue
+    const segments: string[][] = [[]]
+    let genericDepth = 0
+    for (let index = firstIndex + 1; index < tokens.length; index += 1) {
+      const token = tokens[index]
+      if (token === '\n') continue
+      if (
+        genericDepth === 0
+        && new Set([';', '{', 'extends', 'implements']).has(token)
+      ) {
+        break
+      }
+      if (token === '<') genericDepth += 1
+      if (token === '>' && genericDepth > 0) genericDepth -= 1
+      if (token === ',' && genericDepth === 0) {
+        segments.push([])
+        continue
+      }
+      segments.at(-1)!.push(token)
+    }
+    if (segments.some((segment) => {
+      const genericStart = segment.indexOf('<')
+      const reference = genericStart < 0
+        ? segment
+        : segment.slice(0, genericStart)
+      return reference.length % 2 === 1
+        && reference.every((token, index) =>
+          index % 2 === 0
+            ? CODE_IDENTIFIER.test(token)
+            : token === '.')
+        && reference.at(-1) === second
+    })) {
+      return true
+    }
+  }
+  return false
 }
 
 function matchingParenthesis(
@@ -1617,6 +1649,73 @@ function significantTokenBefore(
 ): { token: string; index: number } | null {
   const cursor = previousRelationshipTokenIndex(tokens, index)
   return cursor === null ? null : { token: tokens[cursor], index: cursor }
+}
+
+function optionalCallOpenAt(
+  tokens: readonly string[],
+  afterIndex: number,
+): number | null {
+  const next = significantTokenAfter(tokens, afterIndex)
+  if (next?.token === '(') return next.index
+  if (next?.token !== '?') return null
+  const dot = significantTokenAfter(tokens, next.index)
+  if (dot?.token !== '.') return null
+  const open = significantTokenAfter(tokens, dot.index)
+  return open?.token === '(' ? open.index : null
+}
+
+function groupingDepthBefore(
+  tokens: readonly string[],
+  beforeIndex: number,
+): number {
+  let depth = 0
+  for (let index = 0; index < beforeIndex; index += 1) {
+    if (new Set(['(', '[', '{']).has(tokens[index])) depth += 1
+    if (new Set([')', ']', '}']).has(tokens[index]) && depth > 0) depth -= 1
+  }
+  return depth
+}
+
+function relationshipCallOpenAfter(
+  tokens: readonly string[],
+  identifierIndex: number,
+  sourceLanguage: string,
+  sourcePath: string,
+): number | null {
+  let anchorIndex = identifierIndex
+  const before = significantTokenBefore(tokens, identifierIndex)
+  const after = significantTokenAfter(tokens, identifierIndex)
+  if (
+    before?.token === '('
+    && after?.token === ')'
+    && matchingParenthesis(tokens, before.index) === after.index
+  ) {
+    anchorIndex = after.index
+  }
+  let scanAnchorIndex = anchorIndex
+  if (pythonLanguage(sourceLanguage, sourcePath)) {
+    while (true) {
+      const continuation = significantTokenAfter(tokens, scanAnchorIndex)
+      if (
+        continuation?.token !== '\\'
+        || tokens[continuation.index + 1] !== '\n'
+      ) {
+        break
+      }
+      scanAnchorIndex = continuation.index + 1
+    }
+  }
+  const openIndex = optionalCallOpenAt(tokens, scanAnchorIndex)
+  if (openIndex === null) return null
+  if (!pythonLanguage(sourceLanguage, sourcePath)) return openIndex
+  const between = tokens.slice(anchorIndex + 1, openIndex)
+  if (!between.includes('\n')) return openIndex
+  if (groupingDepthBefore(tokens, anchorIndex) > 0) return openIndex
+  for (let index = 0; index < between.length; index += 1) {
+    if (between[index] !== '\n') continue
+    if (between[index - 1] !== '\\') return null
+  }
+  return openIndex
 }
 
 function statementPrefix(tokens: readonly string[], index: number): string[] {
@@ -1767,41 +1866,80 @@ function targetDeclarationContains(
     targetEvidence,
     symbol.language,
     symbol.path,
-    false,
   )
-  const declarationKeywords = new Set([
-    'class', 'const', 'def', 'enum', 'fn', 'func', 'function', 'interface',
-    'let', 'namespace', 'proc', 'record', 'struct', 'sub', 'trait', 'type',
-    'var',
+  const normalizedKind =
+    /^[A-Za-z]+/u.exec(symbol.symbol_kind)?.[0]?.toLowerCase() ?? ''
+  const callableDeclarationKeywords = new Set([
+    'def', 'fn', 'func', 'function', 'fun', 'proc', 'sub',
   ])
+  const variableDeclarationKeywords = new Set(['const', 'let', 'var'])
+  const keywordKinds = new Map([
+    ['class', 'class'],
+    ['enum', 'enum'],
+    ['interface', 'interface'],
+    ['namespace', 'namespace'],
+    ['record', 'record'],
+    ['struct', 'struct'],
+    ['trait', 'trait'],
+    ['type', 'type'],
+  ])
+  const callableKindMatches = (identifierIndex: number): boolean =>
+    normalizedKind === 'method'
+      ? owner !== null || declarationContainerAt(tokens, identifierIndex)
+      : normalizedKind === 'function'
+        && !declarationContainerAt(tokens, identifierIndex)
   const declared = tokens.some((token, index) => {
     if (token !== identifier) return false
     const before = significantTokenBefore(tokens, index)
-    if (declarationKeywords.has(before?.token ?? '')) return true
+    const beforeToken = before?.token ?? ''
+    if (keywordKinds.get(beforeToken) === normalizedKind) return true
+    if (
+      callableKindMatches(index)
+      && callableDeclarationKeywords.has(beforeToken)
+    ) {
+      return true
+    }
+    if (
+      new Set(['constant', 'field', 'property', 'variable'])
+        .has(normalizedKind)
+      && variableDeclarationKeywords.has(beforeToken)
+    ) {
+      return true
+    }
     const after = significantTokenAfter(tokens, index)
     if (after?.token === '(') {
       const close = matchingParenthesis(tokens, after.index)
-      return close !== null && declarationLikeCall(
-        tokens,
-        index,
-        close,
-        symbol.language,
-        symbol.path,
-      )
+      return callableKindMatches(index)
+        && close !== null
+        && declarationLikeCall(
+          tokens,
+          index,
+          close,
+          symbol.language,
+          symbol.path,
+        )
     }
     if (
       after?.token === '='
-      && (
-        pythonLanguage(symbol.language, symbol.path)
-        || /^(?:constant|field|property|variable)$/iu.test(symbol.symbol_kind)
-        || before?.token === '.'
-      )
+      && new Set(['constant', 'field', 'property', 'variable'])
+        .has(normalizedKind)
+    ) {
+      return true
+    }
+    if (
+      after?.token === ';'
+      && normalizedKind === 'field'
+      && statementPrefix(tokens, index).some((prefixToken) =>
+        CODE_IDENTIFIER.test(prefixToken))
     ) {
       return true
     }
     const prefix = statementPrefix(tokens, index)
       .filter((prefixToken) => prefixToken !== '\n')
-    return prefix.includes('export') && prefix.includes('{')
+    return prefix.includes('export')
+      && prefix.includes('{')
+      && new Set(['constant', 'field', 'property', 'variable'])
+        .has(normalizedKind)
   })
   if (
     !declared
@@ -1832,6 +1970,32 @@ function targetDeclarationContains(
   )
   return exported(identifier)
     || (owner !== null && CODE_IDENTIFIER.test(owner) && exported(owner))
+}
+
+function targetDefaultExportContains(
+  symbol: StructuralSymbolInput,
+  targetEvidence: string,
+): boolean {
+  if (!ecmaScriptLanguage(symbol.language, symbol.path)) return false
+  const identifier = targetIdentifier(symbol.qualified_name)
+  const tokens = relationshipTokens(
+    targetEvidence,
+    symbol.language,
+    symbol.path,
+  )
+  return tokens.some((token, index) => {
+    if (token !== identifier) return false
+    const prefix = statementPrefix(tokens, index)
+      .filter((prefixToken) => prefixToken !== '\n')
+    if (prefix.includes('export') && prefix.includes('default')) return true
+    const asToken = significantTokenAfter(tokens, index)
+    const defaultToken = asToken?.token === 'as'
+      ? significantTokenAfter(tokens, asToken.index)
+      : null
+    return prefix.includes('export')
+      && prefix.includes('{')
+      && defaultToken?.token === 'default'
+  })
 }
 
 function relationshipSegments(tokens: readonly string[]): string[][] {
@@ -1886,11 +2050,31 @@ function openingBrace(
 function namedImportExports(
   bindingTokens: readonly string[],
   identifier: string,
+  targetHasDefaultExport: boolean,
   requiredLocalIdentifier?: string,
 ): boolean {
   const binding = bindingTokens.filter((token) => token !== '\n')
+  const requiredLocal = requiredLocalIdentifier ?? identifier
+  const namespacePrefix = binding[0] === 'type'
+    ? binding.slice(1)
+    : binding
+  if (
+    namespacePrefix.length === 3
+    && namespacePrefix[0] === '*'
+    && namespacePrefix[1] === 'as'
+    && namespacePrefix[2] === requiredLocal
+  ) {
+    return true
+  }
   const openIndex = binding.indexOf('{')
-  if (openIndex < 0) return false
+  if (openIndex < 0) {
+    const defaultBinding = binding[0] === 'type'
+      ? binding.slice(1)
+      : binding
+    return targetHasDefaultExport
+      && defaultBinding.length === 1
+      && defaultBinding[0] === requiredLocal
+  }
   const closeIndex = closingBrace(binding, openIndex)
   if (closeIndex === null || closeIndex !== binding.length - 1) return false
   const prefix = binding.slice(0, openIndex)
@@ -1902,6 +2086,13 @@ function namedImportExports(
       && prefix[1] === ','
     )
   if (!validPrefix) return false
+  if (
+    targetHasDefaultExport
+    && prefix.length === 2
+    && prefix[0] === requiredLocal
+  ) {
+    return true
+  }
   const segments = relationshipSegments(
     binding.slice(openIndex + 1, closeIndex),
   )
@@ -1951,15 +2142,7 @@ function ecmaScriptModuleTargets(
     path.posix.join(path.posix.dirname(sourcePath), specifier),
   )
   if (resolved === null) return false
-  const candidates = new Set([resolved])
   const extension = path.posix.extname(resolved).toLowerCase()
-  if (
-    extension.length > 0
-    && resolved !== targetPath
-    && exactPathExists(resolved)
-  ) {
-    return false
-  }
   const withoutExtension = extension.length > 0
     ? resolved.slice(0, -extension.length)
     : resolved
@@ -1969,19 +2152,18 @@ function ecmaScriptModuleTargets(
     '.jsx': ['.jsx', '.tsx'],
     '.mjs': ['.mjs', '.mts'],
   }
-  for (const mapped of mappedExtensions[extension] ?? []) {
-    candidates.add(withoutExtension + mapped)
-  }
-  if (extension.length === 0) {
-    for (
-      const candidateExtension
-      of ['.cjs', '.cts', '.js', '.jsx', '.mjs', '.mts', '.ts', '.tsx']
-    ) {
-      candidates.add(resolved + candidateExtension)
-      candidates.add(`${resolved}/index${candidateExtension}`)
-    }
-  }
-  return candidates.has(targetPath)
+  const candidateExtensions =
+    ['.cjs', '.cts', '.js', '.jsx', '.mjs', '.mts', '.ts', '.tsx'] as const
+  const candidates = extension.length > 0
+    ? (mappedExtensions[extension] ?? [extension])
+      .map((mapped) => withoutExtension + mapped)
+    : [
+        ...candidateExtensions.map((candidate) => resolved + candidate),
+        ...candidateExtensions.map(
+          (candidate) => `${resolved}/index${candidate}`,
+        ),
+      ]
+  return candidates.find(exactPathExists) === targetPath
 }
 
 function ecmaScriptImportContains(
@@ -1990,6 +2172,7 @@ function ecmaScriptImportContains(
   sourcePath: string,
   targetPath: string,
   exactPathExists: (repositoryPath: string) => boolean,
+  targetHasDefaultExport: boolean,
   requiredLocalIdentifier?: string,
 ): boolean {
   for (let importIndex = 0; importIndex < tokens.length; importIndex += 1) {
@@ -2030,6 +2213,7 @@ function ecmaScriptImportContains(
         && namedImportExports(
           tokens.slice(importIndex + 1, cursor),
           identifier,
+          targetHasDefaultExport,
           requiredLocalIdentifier,
         )
       ) {
@@ -2180,6 +2364,7 @@ function pythonModuleTargets(
   moduleTokens: readonly string[],
   sourcePath: string,
   targetPath: string,
+  exactPathExists: (repositoryPath: string) => boolean,
 ): boolean {
   const module = moduleTokens.filter((token) => token !== '\n')
   let leadingDots = 0
@@ -2209,8 +2394,23 @@ function pythonModuleTargets(
     resolved = path.posix.join(resolved, modulePath)
   }
   const safe = safeResolvedImportPath(resolved)
-  return safe !== null
-    && (targetPath === `${safe}.py` || targetPath === `${safe}/__init__.py`)
+  if (safe === null) return false
+  return [`${safe}/__init__.py`, `${safe}.py`]
+    .find(exactPathExists) === targetPath
+}
+
+function withoutPythonLineContinuations(
+  tokens: readonly string[],
+): string[] {
+  const output: string[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] === '\\' && tokens[index + 1] === '\n') {
+      index += 1
+      continue
+    }
+    output.push(tokens[index])
+  }
+  return output
 }
 
 function pythonImportContains(
@@ -2218,35 +2418,49 @@ function pythonImportContains(
   identifier: string,
   sourcePath: string,
   targetPath: string,
+  exactPathExists: (repositoryPath: string) => boolean,
   requiredLocalIdentifier?: string,
 ): boolean {
-  for (let fromIndex = 0; fromIndex < tokens.length; fromIndex += 1) {
-    if (tokens[fromIndex] !== 'from') continue
+  const continuedTokens = withoutPythonLineContinuations(tokens)
+  for (
+    let fromIndex = 0;
+    fromIndex < continuedTokens.length;
+    fromIndex += 1
+  ) {
+    if (continuedTokens[fromIndex] !== 'from') continue
     let importIndex = fromIndex + 1
-    while (importIndex < tokens.length && tokens[importIndex] !== 'import') {
+    while (
+      importIndex < continuedTokens.length
+      && continuedTokens[importIndex] !== 'import'
+    ) {
       if (
-        tokens[importIndex] === ';'
-        || tokens[importIndex] === '\n'
+        continuedTokens[importIndex] === ';'
+        || continuedTokens[importIndex] === '\n'
       ) {
         break
       }
       importIndex += 1
     }
     if (
-      importIndex >= tokens.length
-      || tokens[importIndex] !== 'import'
+      importIndex >= continuedTokens.length
+      || continuedTokens[importIndex] !== 'import'
       || !pythonModuleTargets(
-        tokens.slice(fromIndex + 1, importIndex),
+        continuedTokens.slice(fromIndex + 1, importIndex),
         sourcePath,
         targetPath,
+        exactPathExists,
       )
     ) {
       continue
     }
     const imported: string[] = []
     let depth = 0
-    for (let cursor = importIndex + 1; cursor < tokens.length; cursor += 1) {
-      const token = tokens[cursor]
+    for (
+      let cursor = importIndex + 1;
+      cursor < continuedTokens.length;
+      cursor += 1
+    ) {
+      const token = continuedTokens[cursor]
       if (token === '(') {
         depth += 1
         if (depth === 1) continue
@@ -2316,14 +2530,24 @@ function javaImportContains(
     }
     const isStatic = clause[0] === 'static'
     const qualified = isStatic ? clause.slice(1) : clause
+    const wildcard = qualified.length >= 2
+      && qualified.at(-2) === '.'
+      && qualified.at(-1) === '*'
+    const namedQualified = wildcard ? qualified.slice(0, -2) : qualified
     if (
-      qualified.length < 1
-      || qualified.some((token, index) =>
+      namedQualified.length < 1
+      || namedQualified.some((token, index) =>
         index % 2 === 0 ? !CODE_IDENTIFIER.test(token) : token !== '.')
     ) {
       continue
     }
-    const components = qualified.filter((_, index) => index % 2 === 0)
+    const components = namedQualified
+      .filter((_, index) => index % 2 === 0)
+    if (wildcard) {
+      const module = isStatic ? components : [...components, identifier]
+      if (javaModuleTargets(module, targetPath)) return true
+      continue
+    }
     const imported = components.at(-1)
     const module = isStatic ? components.slice(0, -1) : components
     if (
@@ -2336,6 +2560,29 @@ function javaImportContains(
   return false
 }
 
+function javaQualifiedReferenceContains(
+  tokens: readonly string[],
+  identifier: string,
+  targetPath: string,
+): boolean {
+  return tokens.some((token, index) => {
+    if (token !== identifier) return false
+    const components = [identifier]
+    let cursor = index
+    while (true) {
+      const dot = significantTokenBefore(tokens, cursor)
+      if (dot?.token !== '.') break
+      const component = significantTokenBefore(tokens, dot.index)
+      if (component === null || !CODE_IDENTIFIER.test(component.token)) break
+      components.unshift(component.token)
+      cursor = component.index
+    }
+    if (components.length < 2) return false
+    return javaModuleTargets(components, targetPath)
+      || javaModuleTargets(components.slice(0, -1), targetPath)
+  })
+}
+
 function staticImportContains(
   tokens: readonly string[],
   identifier: string,
@@ -2343,6 +2590,8 @@ function staticImportContains(
   sourcePath: string,
   targetPath: string,
   exactPathExists: (repositoryPath: string) => boolean,
+  targetHasDefaultExport: boolean,
+  allowJavaQualifiedReference: boolean,
   requiredLocalIdentifier?: string,
 ): boolean {
   if (ecmaScriptLanguage(sourceLanguage, sourcePath)) {
@@ -2352,6 +2601,7 @@ function staticImportContains(
       sourcePath,
       targetPath,
       exactPathExists,
+      targetHasDefaultExport,
       requiredLocalIdentifier,
     )
   }
@@ -2361,11 +2611,176 @@ function staticImportContains(
       identifier,
       sourcePath,
       targetPath,
+      exactPathExists,
       requiredLocalIdentifier,
     )
   }
   if (javaLanguage(sourceLanguage, sourcePath)) {
     return javaImportContains(tokens, identifier, targetPath)
+      || (
+        allowJavaQualifiedReference
+        && javaQualifiedReferenceContains(tokens, identifier, targetPath)
+      )
+  }
+  return false
+}
+
+function openingBraceStackAt(
+  tokens: readonly string[],
+  beforeIndex: number,
+): number[] {
+  const stack: number[] = []
+  for (let index = 0; index < beforeIndex; index += 1) {
+    if (tokens[index] === '{') {
+      stack.push(index)
+    } else if (tokens[index] === '}') {
+      stack.pop()
+    }
+  }
+  return stack
+}
+
+function stackIsPrefix(
+  prefix: readonly number[],
+  stack: readonly number[],
+): boolean {
+  return prefix.length <= stack.length
+    && prefix.every((value, index) => stack[index] === value)
+}
+
+function statementBoundsAt(
+  tokens: readonly string[],
+  index: number,
+): { start: number; end: number } {
+  let start = index
+  while (
+    start > 0
+    && tokens[start - 1] !== '\n'
+    && tokens[start - 1] !== ';'
+  ) {
+    start -= 1
+  }
+  let end = index + 1
+  while (
+    end < tokens.length
+    && tokens[end] !== '\n'
+    && tokens[end] !== ';'
+  ) {
+    end += 1
+  }
+  return { start, end }
+}
+
+function importedBindingAt(
+  tokens: readonly string[],
+  identifierIndex: number,
+): boolean {
+  const bounds = statementBoundsAt(tokens, identifierIndex)
+  const statement = tokens.slice(bounds.start, bounds.end)
+  return statement.includes('import') || statement.includes('require')
+}
+
+function parameterBindingShadowsReference(
+  tokens: readonly string[],
+  identifierIndex: number,
+  referenceIndex: number,
+  sourceLanguage: string,
+  sourcePath: string,
+): boolean {
+  let openIndex: number | null = null
+  let depth = 0
+  for (let index = identifierIndex - 1; index >= 0; index -= 1) {
+    if (tokens[index] === ')') {
+      depth += 1
+      continue
+    }
+    if (tokens[index] !== '(') continue
+    if (depth > 0) {
+      depth -= 1
+      continue
+    }
+    const closeIndex = matchingParenthesis(tokens, index)
+    if (closeIndex !== null && closeIndex > identifierIndex) {
+      openIndex = index
+    }
+    break
+  }
+  if (openIndex === null) return false
+  const beforeOpen = significantTokenBefore(tokens, openIndex)
+  if (
+    beforeOpen !== null
+    && new Set(['for', 'if', 'switch', 'while', 'with'])
+      .has(beforeOpen.token)
+  ) {
+    return false
+  }
+  const closeIndex = matchingParenthesis(tokens, openIndex)
+  if (closeIndex === null) return false
+  const callStack = openingBraceStackAt(tokens, referenceIndex)
+  for (let index = closeIndex + 1; index < referenceIndex; index += 1) {
+    if (tokens[index] === ';') return false
+    if (tokens[index] === '{') return callStack.includes(index)
+    if (
+      tokens[index] === '='
+      && significantTokenAfter(tokens, index)?.token === '>'
+    ) {
+      const arrow = significantTokenAfter(tokens, index)
+      const body = arrow === null
+        ? null
+        : significantTokenAfter(tokens, arrow.index)
+      return body?.token === '{'
+        ? callStack.includes(body.index)
+        : true
+    }
+    if (
+      tokens[index] === ':'
+      && pythonLanguage(sourceLanguage, sourcePath)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function referenceBindingShadowed(
+  tokens: readonly string[],
+  referenceIndex: number,
+  localIdentifier: string,
+  sourceLanguage: string,
+  sourcePath: string,
+): boolean {
+  const referenceStack = openingBraceStackAt(tokens, referenceIndex)
+  const declarations = new Set([
+    'class', 'const', 'def', 'enum', 'fn', 'func', 'function', 'interface',
+    'let', 'namespace', 'record', 'struct', 'trait', 'type', 'var',
+  ])
+  for (let index = 0; index < referenceIndex; index += 1) {
+    if (tokens[index] !== localIdentifier || importedBindingAt(tokens, index)) {
+      continue
+    }
+    const before = significantTokenBefore(tokens, index)
+    if (before?.token === '.') continue
+    if (parameterBindingShadowsReference(
+      tokens,
+      index,
+      referenceIndex,
+      sourceLanguage,
+      sourcePath,
+    )) {
+      return true
+    }
+    const declarationStack = openingBraceStackAt(tokens, index)
+    if (!stackIsPrefix(declarationStack, referenceStack)) continue
+    if (declarations.has(before?.token ?? '')) return true
+    const after = significantTokenAfter(tokens, index)
+    if (after?.token === '=') return true
+    const bounds = statementBoundsAt(tokens, index)
+    if (
+      tokens.slice(bounds.start, index)
+        .some((token) => new Set(['const', 'let', 'var']).has(token))
+    ) {
+      return true
+    }
   }
   return false
 }
@@ -2379,6 +2794,7 @@ function assertSyntacticRelationship(
   relationshipEvidence: string,
   targetQualifiedName: string,
   targetPath: string,
+  targetHasDefaultExport: boolean,
   exactPathExists: (repositoryPath: string) => boolean,
 ): void {
   if (relationship.kind === 'contains') return
@@ -2392,80 +2808,93 @@ function assertSyntacticRelationship(
     sourcePrefixEvidence,
     sourceLanguage,
     sourcePath,
-    false,
   )
   const contextualTokens = [...prefixTokens, ...tokens]
   const relationshipTokenOffset = prefixTokens.length
-  const assertPathBoundReference = (): void => {
-    if (sourcePath === targetPath) return
-    const sourceTokens = relationshipTokens(
-      sourceFileEvidence,
-      sourceLanguage,
-      sourcePath,
-      false,
-    )
-    const references = [{
-      exported: identifier,
-      local: identifier,
-    }]
-    const qualifiedParts = targetQualifiedName.split(/[.:/#]/u)
-    const owner = qualifiedParts.length > 1
-      ? qualifiedParts.at(-2) ?? null
-      : null
+  const qualifiedParts = targetQualifiedName.split(/[.:/#]/u)
+  const owner = qualifiedParts.length > 1
+    ? qualifiedParts.at(-2) ?? null
+    : null
+  let sourceTokens: string[] | null = null
+  const referencesAt = (
+    contextualIndex: number,
+  ): Array<{ exported: string; local: string; localIndex: number }> => {
     if (owner !== null && CODE_IDENTIFIER.test(owner)) {
-      for (let index = 0; index < tokens.length; index += 1) {
-        if (tokens[index] !== identifier) continue
-        const dot = significantTokenBefore(tokens, index)
-        if (dot?.token !== '.') continue
-        const qualifier = significantTokenBefore(tokens, dot.index)
+      const dot = significantTokenBefore(contextualTokens, contextualIndex)
+      if (dot?.token === '.') {
+        const qualifier = significantTokenBefore(contextualTokens, dot.index)
         if (qualifier !== null && CODE_IDENTIFIER.test(qualifier.token)) {
-          references.push({ exported: owner, local: qualifier.token })
+          return [{
+            exported: owner,
+            local: qualifier.token,
+            localIndex: qualifier.index,
+          }]
         }
       }
     }
-    if (
-      !references.some((reference) =>
-        staticImportContains(
-          sourceTokens,
-          reference.exported,
+    return [{
+      exported: identifier,
+      local: identifier,
+      localIndex: contextualIndex,
+    }]
+  }
+  const pathBoundReference = (
+    contextualIndex?: number,
+    rejectShadow = false,
+  ): boolean => {
+    if (sourcePath === targetPath) return true
+    if (sourceTokens === null) {
+      sourceTokens = relationshipTokens(
+        sourceFileEvidence,
+        sourceLanguage,
+        sourcePath,
+      )
+    }
+    const references = contextualIndex === undefined
+      ? tokens.flatMap((token, index) =>
+          token === identifier
+            ? referencesAt(relationshipTokenOffset + index)
+            : [])
+      : referencesAt(contextualIndex)
+    return references.some((reference) =>
+      !(
+        rejectShadow
+        && referenceBindingShadowed(
+          contextualTokens,
+          reference.localIndex,
+          reference.local,
           sourceLanguage,
           sourcePath,
-          targetPath,
-          exactPathExists,
-          reference.local,
-        ))
-    ) {
-      fail('evidence_mismatch')
-    }
+        )
+      )
+      && staticImportContains(
+        sourceTokens!,
+        reference.exported,
+        sourceLanguage,
+        sourcePath,
+        targetPath,
+        exactPathExists,
+        targetHasDefaultExport,
+        true,
+        reference.local,
+      ))
+  }
+  const assertPathBoundReference = (): void => {
+    if (!pathBoundReference()) fail('evidence_mismatch')
   }
   switch (relationship.kind) {
     case 'calls': {
-      assertPathBoundReference()
       const proved = tokens.some((token, index) => {
         if (token !== identifier) return false
         const contextualIndex = relationshipTokenOffset + index
-        const open = significantTokenAfter(contextualTokens, contextualIndex)
-        if (open?.token !== '(') return false
-        if (
-          pythonLanguage(sourceLanguage, sourcePath)
-          && contextualTokens
-            .slice(contextualIndex + 1, open.index)
-            .includes('\n')
-        ) {
-          let groupingDepth = 0
-          for (let cursor = 0; cursor < contextualIndex; cursor += 1) {
-            if (new Set(['(', '[', '{']).has(contextualTokens[cursor])) {
-              groupingDepth += 1
-            } else if (
-              new Set([')', ']', '}']).has(contextualTokens[cursor])
-              && groupingDepth > 0
-            ) {
-              groupingDepth -= 1
-            }
-          }
-          if (groupingDepth === 0) return false
-        }
-        const close = matchingParenthesis(contextualTokens, open.index)
+        const open = relationshipCallOpenAfter(
+          contextualTokens,
+          contextualIndex,
+          sourceLanguage,
+          sourcePath,
+        )
+        if (open === null) return false
+        const close = matchingParenthesis(contextualTokens, open)
         if (close === null) return false
         return !declarationLikeCall(
           contextualTokens,
@@ -2473,7 +2902,7 @@ function assertSyntacticRelationship(
           close,
           sourceLanguage,
           sourcePath,
-        )
+        ) && pathBoundReference(contextualIndex, true)
       })
       if (!proved) fail('evidence_mismatch')
       return
@@ -2497,6 +2926,8 @@ function assertSyntacticRelationship(
           sourcePath,
           targetPath,
           exactPathExists,
+          targetHasDefaultExport,
+          false,
         )
       ) {
         fail('evidence_mismatch')
@@ -2589,12 +3020,8 @@ function structuralPlans(
         ) {
           fail('evidence_mismatch')
         }
-        if (
-          relationship.kind !== 'contains'
-          && !attestedTargets.has(
-            `${target.key}\u0000${symbol.path !== target.path}`,
-          )
-        ) {
+        let targetExcerpt: Excerpt | null = null
+        if (relationship.kind !== 'contains') {
           let targetEvidence = evidenceCache.get(target.path)
           if (!targetEvidence) {
             targetEvidence = loadEvidence(
@@ -2608,24 +3035,26 @@ function structuralPlans(
             }
             evidenceCache.set(target.path, targetEvidence)
           }
-          const targetExcerpt = excerpt(
+          targetExcerpt = excerpt(
             targetEvidence,
             target.start_line,
             target.end_line,
           )
-          if (
-            sha256(targetExcerpt.raw) !== target.expected_source_sha256
-            || !targetDeclarationContains(
-              target,
-              targetExcerpt.raw,
-              symbol.path !== target.path,
-            )
-          ) {
-            fail('evidence_mismatch')
+          const attestationKey =
+            `${target.key}\u0000${symbol.path !== target.path}`
+          if (!attestedTargets.has(attestationKey)) {
+            if (
+              sha256(targetExcerpt.raw) !== target.expected_source_sha256
+              || !targetDeclarationContains(
+                target,
+                targetExcerpt.raw,
+                symbol.path !== target.path,
+              )
+            ) {
+              fail('evidence_mismatch')
+            }
+            attestedTargets.add(attestationKey)
           }
-          attestedTargets.add(
-            `${target.key}\u0000${symbol.path !== target.path}`,
-          )
         }
         if (relationship.kind === 'contains') {
           if (
@@ -2648,6 +3077,7 @@ function structuralPlans(
             relationshipExcerpt.raw,
             target.qualified_name,
             target.path,
+            targetDefaultExportContains(target, targetExcerpt!.raw),
             committedPathExists,
           )
         }
