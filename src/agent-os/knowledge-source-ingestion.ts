@@ -1992,7 +1992,16 @@ function callablePropertyDeclarationAt(
   const after = significantTokenAfter(tokens, identifierIndex)
   if (before !== 'get' && after?.token !== ':') return false
   const bounds = statementBoundsAt(tokens, identifierIndex)
-  const suffix = tokens.slice(identifierIndex + 1, bounds.end)
+  const typeOpen = after?.token === ':'
+    ? significantTokenAfter(tokens, after.index)
+    : null
+  const objectTypeClose = typeOpen?.token === '{'
+    ? closingBrace(tokens, typeOpen.index)
+    : null
+  const suffixEnd = objectTypeClose === null
+    ? bounds.end
+    : Math.max(bounds.end, objectTypeClose + 1)
+  const suffix = tokens.slice(identifierIndex + 1, suffixEnd)
     .filter((token) => token !== '\n')
   let colonIndex = 0
   let getter = false
@@ -2042,21 +2051,61 @@ function callablePropertyDeclarationAt(
       if (close !== type.length - 1) break
       type = type.slice(1, -1)
     }
-    if (type[0] === '(') {
-      const close = matchingParenthesis(type, 0)
-      return close !== null
-        && close + 2 < type.length
-        && type[close + 1] === '='
-        && type[close + 2] === '>'
+    const signatureParameters = (
+      candidate: readonly string[],
+      start: number,
+    ): { close: number; open: number } | null => {
+      let open = start
+      if (candidate[open] === '<') {
+        let genericDepth = 0
+        let genericClose: number | null = null
+        for (let index = open; index < candidate.length; index += 1) {
+          if (candidate[index] === '<') genericDepth += 1
+          if (candidate[index] !== '>') continue
+          genericDepth -= 1
+          if (genericDepth === 0) {
+            genericClose = index
+            break
+          }
+          if (genericDepth < 0) return null
+        }
+        if (genericClose === null) return null
+        open = genericClose + 1
+      }
+      if (candidate[open] !== '(') return null
+      const close = matchingParenthesis(candidate, open)
+      return close === null ? null : { close, open }
+    }
+    const arrowParameters = signatureParameters(type, 0)
+    if (arrowParameters !== null) {
+      return type[arrowParameters.close + 1] === '='
+        && type[arrowParameters.close + 2] === '>'
     }
     if (type[0] !== '{') return false
     const close = closingBrace(type, 0)
     if (close !== type.length - 1) return false
-    const signature = type.slice(1, -1)
-    if (signature[0] !== '(') return false
-    const parametersClose = matchingParenthesis(signature, 0)
-    return parametersClose !== null
-      && signature[parametersClose + 1] === ':'
+    const members = type.slice(1, -1)
+    let memberStart = 0
+    let depth = 0
+    for (let index = 0; index <= members.length; index += 1) {
+      if (index === memberStart) {
+        const parameters = signatureParameters(members, memberStart)
+        if (
+          parameters !== null
+          && members[parameters.close + 1] === ':'
+        ) {
+          return true
+        }
+      }
+      const token = members[index]
+      if (token === '(' || token === '[' || token === '{') depth += 1
+      if (token === ')' || token === ']' || token === '}') depth -= 1
+      if (depth < 0) return false
+      if (depth === 0 && (token === ';' || token === ',')) {
+        memberStart = index + 1
+      }
+    }
+    return false
   }
   return callableType(suffix.slice(typeStart, typeEnd))
 }
@@ -2237,7 +2286,15 @@ function targetDeclarationContains(
           )
           if (!ownerRequired && memberKind) return true
           if (!ownerRequired && containers.length === 0) return true
-          return containers.length === owners.length
+          const syntheticPrefix =
+            ecmaScriptLanguage(symbol.language, symbol.path)
+            && containers.length > 0
+            && owners.length === containers.length + 1
+            && owners[0] === 'Namespace'
+          return (
+            containers.length === owners.length
+            || syntheticPrefix
+          )
             && containers.every(
               (name, index) => name === owners[owners.length - index - 1],
             )
@@ -2668,9 +2725,25 @@ function commonJsImportContains(
           && prefix.some((candidate) =>
             new Set(['const', 'let', 'var']).has(candidate))
         )
+      const namedFunctionExpressionBody = (() => {
+        if (before?.token !== 'function' || after?.token !== '(') return null
+        const functionPrefix = statementPrefix(tokens, before.index)
+          .filter((candidate) => candidate !== '\n')
+        if (!functionPrefix.includes('=')) return null
+        const parametersClose = matchingParenthesis(tokens, after.index)
+        if (parametersClose === null) return null
+        const body = significantTokenAfter(tokens, parametersClose)
+        return body?.token === '{' ? body.index : null
+      })()
+      const declarationStack = namedFunctionExpressionBody === null
+        ? openingBraceStackAt(tokens, tokenIndex)
+        : [
+            ...openingBraceStackAt(tokens, namedFunctionExpressionBody),
+            namedFunctionExpressionBody,
+          ]
       return declaration
         && stackIsPrefix(
-          openingBraceStackAt(tokens, tokenIndex),
+          declarationStack,
           referenceStack,
         )
     })
@@ -2966,7 +3039,62 @@ function javaImportContains(
   tokens: readonly string[],
   identifier: string,
   targetPath: string,
+  targetQualifiedParts?: readonly string[],
 ): boolean {
+  const targetClassPart = targetQualifiedParts === undefined
+    ? null
+    : javaTargetClassPartIndex(targetQualifiedParts, targetPath)
+  const qualifiedTargetAnchored =
+    targetQualifiedParts !== undefined
+    && targetClassPart !== null
+    && javaModuleTargets(
+      targetQualifiedParts.slice(0, targetClassPart + 1),
+      targetPath,
+    )
+  const exactQualifiedImport = (
+    components: readonly string[],
+    isStatic: boolean,
+    wildcard: boolean,
+  ): boolean => {
+    if (
+      targetQualifiedParts === undefined
+      || targetClassPart === null
+      || !qualifiedTargetAnchored
+    ) {
+      return false
+    }
+    return targetQualifiedParts.some((part, index) => {
+      if (part !== identifier || index < targetClassPart) return false
+      if (!isStatic && wildcard && index !== targetClassPart) return false
+      const expected = targetQualifiedParts.slice(0, index + 1)
+      const boundComponents = wildcard
+        ? [...components, identifier]
+        : [...components]
+      if (targetClassPart > 0) {
+        return boundComponents.length === expected.length
+          && boundComponents.every(
+            (component, componentIndex) =>
+              component === expected[componentIndex],
+          )
+      }
+      if (
+        boundComponents.length < expected.length
+        || !expected.every(
+          (component, componentIndex) => component
+            === boundComponents[
+              boundComponents.length - expected.length + componentIndex
+            ],
+        )
+      ) {
+        return false
+      }
+      const packageLength = boundComponents.length - expected.length
+      return javaModuleTargets(
+        boundComponents.slice(0, packageLength + 1),
+        targetPath,
+      )
+    })
+  }
   for (let importIndex = 0; importIndex < tokens.length; importIndex += 1) {
     if (tokens[importIndex] !== 'import') continue
     const clause: string[] = []
@@ -2990,11 +3118,19 @@ function javaImportContains(
     const components = namedQualified
       .filter((_, index) => index % 2 === 0)
     if (wildcard) {
+      if (qualifiedTargetAnchored) {
+        if (exactQualifiedImport(components, isStatic, true)) return true
+        continue
+      }
       const module = isStatic ? components : [...components, identifier]
       if (javaModuleTargets(module, targetPath)) return true
       continue
     }
     const imported = components.at(-1)
+    if (imported === identifier && qualifiedTargetAnchored) {
+      if (exactQualifiedImport(components, isStatic, false)) return true
+      continue
+    }
     const module = isStatic ? components.slice(0, -1) : components
     if (
       imported === identifier
@@ -3052,6 +3188,7 @@ function staticImportContains(
   targetHasDefaultExport: boolean,
   allowJavaQualifiedReference: boolean,
   requiredLocalIdentifier?: string,
+  targetQualifiedParts?: readonly string[],
 ): boolean {
   if (ecmaScriptLanguage(sourceLanguage, sourcePath)) {
     return ecmaScriptImportContains(
@@ -3075,7 +3212,12 @@ function staticImportContains(
     )
   }
   if (javaLanguage(sourceLanguage, sourcePath)) {
-    return javaImportContains(tokens, identifier, targetPath)
+    return javaImportContains(
+      tokens,
+      identifier,
+      targetPath,
+      targetQualifiedParts,
+    )
       || (
         allowJavaQualifiedReference
         && javaQualifiedReferenceContains(
@@ -3754,6 +3896,7 @@ function pythonFunctionShadowsReference(
     )
     if (invoked === null) return null
     const indices = pythonDirectScopeStatements(statements, headerIndex)
+    const aliases = new Set<string>()
     for (const index of indices) {
       if (index === invokedHeaderIndex) continue
       const statementTokens = statements[index].tokens
@@ -3762,7 +3905,12 @@ function pythonFunctionShadowsReference(
         tokenIndex < statementTokens.length;
         tokenIndex += 1
       ) {
-        if (statementTokens[tokenIndex] !== invoked.name) continue
+        if (
+          statementTokens[tokenIndex] !== invoked.name
+          && !aliases.has(statementTokens[tokenIndex])
+        ) {
+          continue
+        }
         const before = significantTokenBefore(statementTokens, tokenIndex)
         const after = significantTokenAfter(statementTokens, tokenIndex)
         if (
@@ -3780,6 +3928,18 @@ function pythonFunctionShadowsReference(
             token: statements[index].startToken + tokenIndex,
           }
         }
+      }
+      const significant = statementTokens
+        .filter((token) => token !== '\n')
+      const equalsIndex = significant.indexOf('=')
+      const alias = equalsIndex === 1 ? significant[0] : ''
+      if (!CODE_IDENTIFIER.test(alias)) continue
+      aliases.delete(alias)
+      if (
+        significant[equalsIndex + 1] === invoked.name
+        && significant[equalsIndex + 2] !== '('
+      ) {
+        aliases.add(alias)
       }
     }
     return null
@@ -3979,6 +4139,7 @@ function referenceBindingShadowed(
   sourceText: string,
   referenceLine: number,
   targetRange: { endLine: number; startLine: number } | null,
+  targetQualifiedParts?: readonly string[],
 ): boolean {
   if (pythonLanguage(sourceLanguage, sourcePath)) {
     return pythonFunctionShadowsReference(
@@ -4040,6 +4201,7 @@ function referenceBindingShadowed(
         targetHasDefaultExport,
         false,
         localIdentifier,
+        targetQualifiedParts,
       )) {
         if (
           bindingStatement.includes('require')
@@ -4183,15 +4345,50 @@ function assertSyntacticRelationship(
     parts: qualifiedParts,
   }]
   if (javaTargetClassPart > 0) {
-    referenceShapes.push({
-      bindingPartIndex: 0,
-      parts: qualifiedParts.slice(javaTargetClassPart),
-    })
+    for (
+      let start = javaTargetClassPart;
+      start < qualifiedParts.length;
+      start += 1
+    ) {
+      referenceShapes.push({
+        bindingPartIndex: 0,
+        parts: qualifiedParts.slice(start),
+      })
+    }
+  } else if (javaLanguage(sourceLanguage, sourcePath)) {
+    for (let start = 1; start < qualifiedParts.length; start += 1) {
+      referenceShapes.push({
+        bindingPartIndex: 0,
+        parts: qualifiedParts.slice(start),
+      })
+    }
+  }
+  const exactJavaReferenceAt = (
+    terminalIndex: number,
+    parts: readonly string[],
+  ): boolean => {
+    let cursor = terminalIndex
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      if (contextualTokens[cursor] !== parts[index]) return false
+      if (index === 0) return true
+      const dot = significantTokenBefore(contextualTokens, cursor)
+      if (dot?.token !== '.') return false
+      const component = significantTokenBefore(contextualTokens, dot.index)
+      if (component === null) return false
+      cursor = component.index
+    }
+    return false
   }
   let sourceTokens: string[] | null = null
   const referencesAt = (
     contextualIndex: number,
   ): RelationshipReference[] => referenceShapes.flatMap((shape) => {
+    if (
+      javaLanguage(sourceLanguage, sourcePath)
+      && !exactJavaReferenceAt(contextualIndex, shape.parts)
+    ) {
+      return []
+    }
     const reference = relationshipReferenceAt(
       contextualTokens,
       contextualIndex,
@@ -4231,6 +4428,7 @@ function assertSyntacticRelationship(
             targetHasDefaultExport,
             true,
             reference.local,
+            qualifiedParts,
           )
       const shadowed = rejectShadow && referenceBindingShadowed(
         sourceTokens!,
@@ -4247,6 +4445,7 @@ function assertSyntacticRelationship(
         sourcePath === targetPath
           ? { endLine: targetEndLine, startLine: targetStartLine }
           : null,
+        qualifiedParts,
       )
       return targetBound && !shadowed
     })
@@ -4308,6 +4507,8 @@ function assertSyntacticRelationship(
           exactPathExists,
           targetHasDefaultExport,
           false,
+          undefined,
+          qualifiedParts,
         )
       ) {
         fail('evidence_mismatch')
