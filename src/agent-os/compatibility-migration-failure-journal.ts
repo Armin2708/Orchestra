@@ -1827,7 +1827,6 @@ implements CompatibilityMigrationFailureJournalBinding {
           'receipt_mismatch',
         )
       }
-      this.#markOperationReturned(reservation)
       const existing = this.#main.prepare(`
         SELECT journal_generation, sequence, envelope_hash
         FROM ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE}
@@ -1842,26 +1841,29 @@ implements CompatibilityMigrationFailureJournalBinding {
             'receipt_mismatch',
           )
         }
-        return
-      }
-      const inserted = withMainGuard(
-        this.#main,
-        'success-receipt',
-        () => this.#main.prepare(`
-          INSERT INTO ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE} (
-            journal_generation, sequence, envelope_hash
-          ) VALUES (?, ?, ?)
-        `).run(
-          this.journal_generation,
-          attempt.sequence,
-          attempt.envelope_hash,
-        ),
-      )
-      if (inserted.changes !== 1) {
-        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
-          'receipt_mismatch',
+      } else {
+        const inserted = withMainGuard(
+          this.#main,
+          'success-receipt',
+          () => this.#main.prepare(`
+            INSERT INTO ${
+              AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE
+            } (
+              journal_generation, sequence, envelope_hash
+            ) VALUES (?, ?, ?)
+          `).run(
+            this.journal_generation,
+            attempt.sequence,
+            attempt.envelope_hash,
+          ),
         )
+        if (inserted.changes !== 1) {
+          throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+            'receipt_mismatch',
+          )
+        }
       }
+      this.#markOperationReturned(reservation)
     })
   }
 
