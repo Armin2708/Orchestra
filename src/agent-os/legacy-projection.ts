@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3'
 import { pathsIntersect } from '../overlap.js'
 import { AttentionService } from './attention.js'
+import type {
+  CompatibilityMigrationFailureJournal,
+} from './compatibility-migration-failure-journal.js'
+import {
+  runCompatibilityMigrationOperation,
+} from './compatibility-migration-instrumentation.js'
 import { EventStore } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
 
@@ -15,7 +21,11 @@ export class LegacyEventProjection {
   private readonly events: EventStore
   private readonly attention: AttentionService
 
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly compatibilityFailureJournal?:
+      CompatibilityMigrationFailureJournal,
+  ) {
     this.events = new EventStore(db)
     this.attention = new AttentionService(db)
   }
@@ -25,10 +35,31 @@ export class LegacyEventProjection {
     const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
     const cardId = numberOrNull(data.card_id ?? (event.type === 'card' ? data.id : null))
     const agentId = numberOrNull(data.agent_id ?? data.from_agent_id)
-    const workspaceId = this.workspaceFor(event.board_id, cardId, agentId)
-    this.events.append({ boardId: event.board_id, workspaceId, cardId, kind: `legacy.${event.type}`,
-      source: 'legacy_bus', payload: event.data })
-    this.projectAttention(event, data, cardId, agentId, workspaceId)
+    const operation = () => {
+      const workspaceId = this.workspaceFor(event.board_id, cardId, agentId)
+      this.events.append({ boardId: event.board_id, workspaceId, cardId, kind: `legacy.${event.type}`,
+        source: 'legacy_bus', payload: event.data })
+      this.projectAttention(event, data, cardId, agentId, workspaceId)
+    }
+    if (!this.compatibilityFailureJournal) {
+      operation()
+      return
+    }
+    // A live bus payload has no authenticated DOM-017 source-row identity. Even an id-shaped
+    // payload field is caller/provider-controlled, so it cannot select a linked cohort.
+    runCompatibilityMigrationOperation(
+      this.db,
+      this.compatibilityFailureJournal,
+      {
+        subject: { table: 'card_events' },
+        success_observations: [
+          { operation: 'adapter_translation' },
+          { operation: 'canonical_write' },
+        ],
+        failure_diagnostic: 'translation_rejected',
+      },
+      operation,
+    )
   }
 
   private projectAttention(event: LegacyBusEvent, data: Record<string, unknown>, cardId: number | null,

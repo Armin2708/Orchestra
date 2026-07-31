@@ -62,6 +62,9 @@ import {
   AGENT_OS_LEGACY_COMPATIBILITY_TABLES,
   type AgentOsLegacyCompatibilityTable,
 } from './compatibility-projection-contract.js'
+import type {
+  CompatibilityMigrationFailureJournal,
+} from './compatibility-migration-failure-journal.js'
 
 export interface ProcessRecord {
   id: string
@@ -134,6 +137,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
   isOperator?: (request: FastifyRequest) => boolean
+  compatibilityFailureJournal?: CompatibilityMigrationFailureJournal
 }
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
@@ -198,7 +202,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   }
   const checkpoints = new CheckpointService(db, options.runtime?.forkCheckpoint)
   const evidence = new EvidenceService(db)
-  const projection = new LegacyEventProjection(db)
+  const projection = new LegacyEventProjection(
+    db,
+    options.compatibilityFailureJournal,
+  )
   const bus = (app as FastifyInstance & { bus?: { on(event: string, listener: (event: LegacyBusEvent) => void): unknown; off(event: string, listener: (event: LegacyBusEvent) => void): unknown } }).bus
   const onLegacyEvent = (event: LegacyBusEvent) => { try { projection.project(event) } catch { /* compatibility bridge stays fail-soft */ } }
   bus?.on('event', onLegacyEvent)
@@ -243,7 +250,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       requireCompatibilityTelemetryOperator(request)
       compatibilityTelemetryInput(request.query, [], [], 'query')
       return {
-        telemetry: queryCompatibilityMigrationTelemetrySummary(db),
+        telemetry: queryCompatibilityMigrationTelemetrySummary(
+          db,
+          options.compatibilityFailureJournal,
+        ),
         diagnostics: {
           mismatch: AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
           failure: AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
@@ -272,12 +282,19 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const table = query.table === undefined
         ? undefined
         : compatibilityTelemetryTable(query.table)
-      const telemetry = queryCompatibilityMigrationTelemetryDaily(db, {
-        from_day: fromDay,
-        through_day: throughDay,
-        ...(table === undefined ? {} : { table }),
-      })
-      const summary = queryCompatibilityMigrationTelemetrySummary(db)
+      const telemetry = queryCompatibilityMigrationTelemetryDaily(
+        db,
+        {
+          from_day: fromDay,
+          through_day: throughDay,
+          ...(table === undefined ? {} : { table }),
+        },
+        options.compatibilityFailureJournal,
+      )
+      const summary = queryCompatibilityMigrationTelemetrySummary(
+        db,
+        options.compatibilityFailureJournal,
+      )
       if (
         summary.historical_first_day !== null
         && summary.historical_through_day !== null
@@ -310,11 +327,15 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
         compatibilityTelemetryDay(query.through_day, 'through_day')
       compatibilityTelemetryDayRange(fromDay, throughDay)
       return {
-        observation: queryCompatibilityMigrationWriterObservation(db, {
-          table: compatibilityTelemetryTable(query.table),
-          from_day: fromDay,
-          through_day: throughDay,
-        }),
+        observation: queryCompatibilityMigrationWriterObservation(
+          db,
+          {
+            table: compatibilityTelemetryTable(query.table),
+            from_day: fromDay,
+            through_day: throughDay,
+          },
+          options.compatibilityFailureJournal,
+        ),
       }
     },
   )
@@ -331,7 +352,11 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       )
       const day = compatibilityTelemetryDay(body.day, 'day')
       try {
-        sealCompletedCompatibilityMigrationTelemetryDay(db, day)
+        sealCompletedCompatibilityMigrationTelemetryDay(
+          db,
+          day,
+          options.compatibilityFailureJournal,
+        )
       } catch (error) {
         if (error instanceof TypeError || error instanceof RangeError) {
           throw new ValidationError(error.message)
@@ -355,10 +380,14 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       const retainDays =
         compatibilityTelemetryRetentionDays(body.retain_days)
       return {
-        rollup: rollupCompatibilityMigrationTelemetry(db, {
-          now: new Date(),
-          retain_days: retainDays,
-        }),
+        rollup: rollupCompatibilityMigrationTelemetry(
+          db,
+          {
+            now: new Date(),
+            retain_days: retainDays,
+          },
+          options.compatibilityFailureJournal,
+        ),
       }
     },
   )

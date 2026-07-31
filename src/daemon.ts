@@ -15,6 +15,9 @@ import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
 import { OrchestrationService } from './agent-os/orchestration-service.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
+import {
+  openCompatibilityMigrationFailureJournal,
+} from './agent-os/compatibility-migration-failure-journal.js'
 import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
 import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
@@ -199,10 +202,13 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   // an exposed daemon is remote code execution for anyone who can reach the port
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
-  const db = openDb(path.join(dataDir(), 'orchestra.db'))
+  const orchestraDataDir = dataDir()
+  const db = openDb(path.join(orchestraDataDir, 'orchestra.db'))
   const token = authDisabled() ? undefined : ensureToken()
   const agentToken = authDisabled() ? undefined : ensureAgentToken()
   const lease = acquireDaemonLease(db)
+  let compatibilityFailureJournal:
+    ReturnType<typeof openCompatibilityMigrationFailureJournal> | undefined
   let maestro: Conductor | undefined
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
@@ -288,10 +294,20 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     codexDriver.dispose()
     codexProvider.dispose()
     await codexSupervisor.stop().catch(() => undefined)
+    compatibilityFailureJournal?.close()
   }
   let codexReady = false
   let server: ReturnType<typeof buildServer>
   try {
+    compatibilityFailureJournal = openCompatibilityMigrationFailureJournal(
+      db,
+      {
+        journal_path: path.join(
+          orchestraDataDir,
+          'compatibility-migration-failures.sqlite',
+        ),
+      },
+    )
     codexReady = await codexProvider.initialize()
     if (contractRouting.enabled) {
       if (!codexReady) {
@@ -320,6 +336,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         jobExecutor: agentOs.jobExecutor,
         scheduler,
         orchestration,
+        compatibilityFailureJournal,
         drivers: () => agentOs.descriptors(),
       },
     })
