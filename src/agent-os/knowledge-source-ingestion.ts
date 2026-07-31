@@ -2801,6 +2801,15 @@ function commonJsImportContains(
               if (classScoped) return stack
               const strictDirectiveAt = (braceIndex: number | null): boolean => {
                 let cursor = braceIndex === null ? 0 : braceIndex + 1
+                if (
+                  braceIndex === null
+                  && tokens[cursor] === '#'
+                  && tokens[cursor + 1] === '!'
+                ) {
+                  while (cursor < tokens.length && tokens[cursor] !== '\n') {
+                    cursor += 1
+                  }
+                }
                 while (cursor < tokens.length) {
                   while (
                     cursor < tokens.length
