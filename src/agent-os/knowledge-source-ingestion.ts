@@ -2775,16 +2775,19 @@ function commonJsImportContains(
           } else if (candidate === ']') {
             brackets = Math.max(0, brackets - 1)
           } else if (candidate === '{') {
-            if (
-              parentheses === 0
+            const topLevelHeritageBrace = parentheses === 0
               && brackets === 0
               && braces === 0
+            if (
+              topLevelHeritageBrace
               && pendingNestedBodies === 0
             ) {
               return cursor
             }
             braces += 1
-            pendingNestedBodies = Math.max(0, pendingNestedBodies - 1)
+            if (topLevelHeritageBrace) {
+              pendingNestedBodies = Math.max(0, pendingNestedBodies - 1)
+            }
           } else if (candidate === '}') {
             braces = Math.max(0, braces - 1)
           }
