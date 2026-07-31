@@ -26,7 +26,6 @@ export class LegacyEventProjection {
     const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
     const cardId = numberOrNull(data.card_id ?? (event.type === 'card' ? data.id : null))
     const agentId = numberOrNull(data.agent_id ?? data.from_agent_id)
-    const workspaceId = this.workspaceFor(event.board_id, cardId, agentId)
     // A live bus payload has no authenticated DOM-017 source-row identity. Even an id-shaped
     // payload field is caller/provider-controlled, so it cannot select a linked cohort.
     runCompatibilityMigrationOperation(this.db, {
@@ -34,6 +33,7 @@ export class LegacyEventProjection {
       success_operations: ['adapter_translation', 'canonical_write'],
       failure_diagnostic: 'translation_rejected',
     }, () => {
+      const workspaceId = this.workspaceFor(event.board_id, cardId, agentId)
       this.events.append({
         boardId: event.board_id,
         workspaceId,

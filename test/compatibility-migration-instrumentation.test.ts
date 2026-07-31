@@ -215,6 +215,30 @@ describe('DOM-019 real compatibility instrumentation', () => {
       .not.toContain(privateFailureDetail)
   })
 
+  it('records schema failure when workspace resolution cannot run', () => {
+    const db = database()
+    const { boardId, cardId } = boardAndCard(db)
+    db.exec('DROP TABLE workspaces')
+
+    expect(() => new LegacyEventProjection(db).project({
+      board_id: boardId,
+      type: 'launch',
+      data: { card_id: cardId, status: 'started' },
+    })).toThrow(/no such table/i)
+
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM os_events WHERE source='legacy_bus'
+    `).get()).toEqual({ count: 0 })
+    expect(cardEventTelemetry(db)).toEqual([
+      {
+        operation: 'failure',
+        cohort: 'canonical_unlinked',
+        diagnostic_code: 'schema_incompatible',
+        count: 1,
+      },
+    ])
+  })
+
   it('does not fabricate counters for ignored or structurally invalid bus events', () => {
     const db = database()
     const { boardId } = boardAndCard(db)
@@ -282,6 +306,23 @@ describe('DOM-019 real compatibility instrumentation', () => {
       db,
       { table: 'milestones' },
     )).toBe('deferred_replacement')
+  })
+
+  it('treats malformed agent-usage days as unlinked instead of throwing', () => {
+    const db = database()
+
+    expect(resolveCompatibilityMigrationTelemetryCohort(db, {
+      table: 'agent_usage',
+      board_id: 1,
+      agent_id: 1,
+      day: '2026-99-99',
+    })).toBe('canonical_unlinked')
+    expect(resolveCompatibilityMigrationTelemetryCohort(db, {
+      table: 'agent_usage',
+      board_id: 1,
+      agent_id: 1,
+      day: '2026-02-30',
+    })).toBe('canonical_unlinked')
   })
 
   it('aggregates exact adapter evidence across a clean database restart', () => {
