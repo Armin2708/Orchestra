@@ -1503,7 +1503,7 @@ function relationshipTokens(
     if (current === '/' && next === '*') {
       const end = value.indexOf('*/', index + 2)
       if (end < 0) fail('evidence_mismatch')
-      if (value.slice(index, end + 2).includes('\n')) tokens.push('\n')
+      tokens.push(...(value.slice(index, end + 2).match(/\n/gu) ?? []))
       index = end + 2
       continue
     }
@@ -1550,7 +1550,7 @@ function relationshipTokens(
         value.slice(start + delimiter.length, index - delimiter.length),
         delimiter,
       ))
-      if (value.slice(start, index).includes('\n')) tokens.push('\n')
+      tokens.push(...(value.slice(start, index).match(/\n/gu) ?? []))
       continue
     }
     if (/[A-Za-z_$]/u.test(current)) {
@@ -1765,6 +1765,24 @@ function declarationContainerAt(
   return prefix.includes('type') && prefix.includes('=')
 }
 
+function namedDeclarationContainerAt(
+  tokens: readonly string[],
+  identifierIndex: number,
+  owner: string,
+): boolean {
+  const declarationKeywords = new Set([
+    'class', 'enum', 'interface', 'namespace', 'protocol', 'record', 'struct',
+    'trait', 'type',
+  ])
+  const openIndex = nearestUnmatchedOpeningBrace(tokens, identifierIndex)
+  if (openIndex === null) return false
+  const prefix = statementPrefix(tokens, openIndex)
+    .filter((token) => token !== '\n')
+  return prefix.some((token, index) =>
+    token === owner
+    && declarationKeywords.has(prefix[index - 1] ?? ''))
+}
+
 function executableContainerAt(
   tokens: readonly string[],
   identifierIndex: number,
@@ -1883,13 +1901,35 @@ function targetDeclarationContains(
     ['trait', 'trait'],
     ['type', 'type'],
   ])
+  const ownerRequired = owner !== null
+    && new Set(['field', 'method', 'property']).has(normalizedKind)
+  const pythonOwnerMatches = ownerRequired
+    && pythonLanguage(symbol.language, symbol.path)
+    && pythonClassOwnsDeclaration(
+      targetEvidence,
+      owner!,
+      identifier,
+      normalizedKind,
+    )
+  const ownerMatches = (identifierIndex: number): boolean =>
+    !ownerRequired
+    || (
+      pythonLanguage(symbol.language, symbol.path)
+        ? pythonOwnerMatches
+        : namedDeclarationContainerAt(tokens, identifierIndex, owner!)
+    )
   const callableKindMatches = (identifierIndex: number): boolean =>
     normalizedKind === 'method'
-      ? owner !== null || declarationContainerAt(tokens, identifierIndex)
+      ? ownerMatches(identifierIndex)
+        && (
+          owner !== null
+          || declarationContainerAt(tokens, identifierIndex)
+        )
       : normalizedKind === 'function'
         && !declarationContainerAt(tokens, identifierIndex)
   const declared = tokens.some((token, index) => {
     if (token !== identifier) return false
+    if (!ownerMatches(index)) return false
     const before = significantTokenBefore(tokens, index)
     const beforeToken = before?.token ?? ''
     if (keywordKinds.get(beforeToken) === normalizedKind) return true
@@ -1919,25 +1959,33 @@ function targetDeclarationContains(
           symbol.path,
         )
     }
+    const declarationPrefix = statementPrefix(tokens, index)
+      .filter((prefixToken) => prefixToken !== '\n')
     if (
       after?.token === '='
       && new Set(['constant', 'field', 'property', 'variable'])
         .has(normalizedKind)
+      && beforeToken !== '.'
+      && !declarationPrefix.includes('=')
+      && !declarationPrefix.includes('(')
     ) {
       return true
     }
     if (
       after?.token === ';'
       && normalizedKind === 'field'
-      && statementPrefix(tokens, index).some((prefixToken) =>
+      && beforeToken !== '.'
+      && !declarationPrefix.includes('=')
+      && !declarationPrefix.includes('(')
+      && !declarationPrefix.some((prefixToken) =>
+        new Set(['case', 'return', 'throw', 'yield']).has(prefixToken))
+      && declarationPrefix.some((prefixToken) =>
         CODE_IDENTIFIER.test(prefixToken))
     ) {
       return true
     }
-    const prefix = statementPrefix(tokens, index)
-      .filter((prefixToken) => prefixToken !== '\n')
-    return prefix.includes('export')
-      && prefix.includes('{')
+    return declarationPrefix.includes('export')
+      && declarationPrefix.includes('{')
       && new Set(['constant', 'field', 'property', 'variable'])
         .has(normalizedKind)
   })
@@ -2680,6 +2728,230 @@ function importedBindingAt(
   return statement.includes('import') || statement.includes('require')
 }
 
+function pythonIndentation(line: string): number {
+  let indentation = 0
+  for (const character of line) {
+    if (character === ' ') {
+      indentation += 1
+    } else if (character === '\t') {
+      indentation += 8 - (indentation % 8)
+    } else {
+      break
+    }
+  }
+  return indentation
+}
+
+function pythonSuiteEnd(
+  lines: readonly string[],
+  headerLine: number,
+  headerIndentation: number,
+): number {
+  for (let line = headerLine + 1; line < lines.length; line += 1) {
+    const trimmed = lines[line].trim()
+    if (trimmed.length === 0 || trimmed.startsWith('#')) continue
+    if (pythonIndentation(lines[line]) <= headerIndentation) return line
+  }
+  return lines.length
+}
+
+function pythonFunctionHeader(
+  line: string,
+): { name: string; parameters: string[][] } | null {
+  const tokens = relationshipTokens(line, 'python', 'scope.py')
+    .filter((token) => token !== '\n')
+  const defIndex = tokens[0] === 'async' ? 1 : 0
+  if (tokens[defIndex] !== 'def') return null
+  const name = tokens[defIndex + 1] ?? ''
+  const openIndex = defIndex + 2
+  if (!CODE_IDENTIFIER.test(name) || tokens[openIndex] !== '(') return null
+  const closeIndex = matchingParenthesis(tokens, openIndex)
+  if (closeIndex === null) return null
+  return {
+    name,
+    parameters: relationshipSegments(
+      tokens.slice(openIndex + 1, closeIndex),
+    ),
+  }
+}
+
+function pythonParametersContain(
+  parameters: readonly string[][],
+  identifier: string,
+): boolean {
+  return parameters.some((rawParameter) => {
+    let start = 0
+    while (rawParameter[start] === '*') start += 1
+    return rawParameter[start] === identifier
+  })
+}
+
+function pythonLineBindsIdentifier(
+  line: string,
+  identifier: string,
+): boolean {
+  const tokens = relationshipTokens(line, 'python', 'scope.py')
+    .filter((token) => token !== '\n')
+  if (tokens.length === 0) return false
+  const importIndex = tokens.indexOf('import')
+  if (importIndex >= 0) {
+    const imported = tokens.slice(importIndex + 1)
+    if (tokens[0] === 'from' && imported.includes('*')) return true
+    return imported.some((token, index) =>
+      token === identifier
+      && imported[index - 1] !== '.'
+      && imported[index + 1] !== 'as')
+  }
+  const header = pythonFunctionHeader(line)
+  if (header?.name === identifier) return true
+  if (tokens[0] === 'class' && tokens[1] === identifier) return true
+  if (
+    tokens[0] === identifier
+    && (
+      tokens[1] === '='
+      || tokens[1] === ':'
+      || (
+        tokens.includes('=')
+        && tokens.slice(1, tokens.indexOf('=')).includes(',')
+      )
+    )
+  ) {
+    return true
+  }
+  if (tokens[0] === 'for' && tokens[1] === identifier) return true
+  return tokens.some((token, index) =>
+    token === 'as' && tokens[index + 1] === identifier)
+}
+
+function pythonContainerHeader(
+  line: string,
+): { kind: 'class' | 'function'; name: string } | null {
+  const functionHeader = pythonFunctionHeader(line)
+  if (functionHeader !== null) {
+    return { kind: 'function', name: functionHeader.name }
+  }
+  const tokens = relationshipTokens(line, 'python', 'scope.py')
+    .filter((token) => token !== '\n')
+  if (tokens[0] !== 'class' || !CODE_IDENTIFIER.test(tokens[1] ?? '')) {
+    return null
+  }
+  return { kind: 'class', name: tokens[1] }
+}
+
+function pythonClassOwnsDeclaration(
+  sourceText: string,
+  owner: string,
+  identifier: string,
+  normalizedKind: string,
+): boolean {
+  const lines = sourceText.split(/\r?\n/u)
+  for (let declarationLine = 0; declarationLine < lines.length; declarationLine += 1) {
+    const functionHeader = pythonFunctionHeader(lines[declarationLine])
+    const declaresIdentifier = normalizedKind === 'method'
+      ? functionHeader?.name === identifier
+      : functionHeader === null
+        && pythonLineBindsIdentifier(lines[declarationLine], identifier)
+    if (!declaresIdentifier) continue
+
+    const declarationIndentation =
+      pythonIndentation(lines[declarationLine])
+    let nearest:
+      | {
+        indentation: number
+        kind: 'class' | 'function'
+        line: number
+        name: string
+      }
+      | null = null
+    for (let headerLine = 0; headerLine < declarationLine; headerLine += 1) {
+      const header = pythonContainerHeader(lines[headerLine])
+      if (header === null) continue
+      const headerIndentation = pythonIndentation(lines[headerLine])
+      if (headerIndentation >= declarationIndentation) continue
+      if (
+        declarationLine >= pythonSuiteEnd(
+          lines,
+          headerLine,
+          headerIndentation,
+        )
+      ) {
+        continue
+      }
+      if (
+        nearest === null
+        || headerIndentation > nearest.indentation
+        || (
+          headerIndentation === nearest.indentation
+          && headerLine > nearest.line
+        )
+      ) {
+        nearest = {
+          ...header,
+          indentation: headerIndentation,
+          line: headerLine,
+        }
+      }
+    }
+    if (nearest?.kind === 'class' && nearest.name === owner) return true
+  }
+  return false
+}
+
+function pythonFunctionShadowsReference(
+  sourceText: string,
+  referenceLine: number,
+  identifier: string,
+): boolean {
+  const lines = sourceText.split(/\r?\n/u)
+  if (referenceLine < 0 || referenceLine >= lines.length) return true
+  const referenceIndentation = pythonIndentation(lines[referenceLine])
+  for (let headerLine = 0; headerLine < referenceLine; headerLine += 1) {
+    const header = pythonFunctionHeader(lines[headerLine])
+    if (header === null) continue
+    const headerIndentation = pythonIndentation(lines[headerLine])
+    if (referenceIndentation <= headerIndentation) continue
+    const suiteEnd = pythonSuiteEnd(
+      lines,
+      headerLine,
+      headerIndentation,
+    )
+    if (referenceLine >= suiteEnd) continue
+
+    const scopeLines: number[] = []
+    for (let line = headerLine + 1; line < suiteEnd; line += 1) {
+      const nestedHeader = pythonFunctionHeader(lines[line])
+      const tokens = relationshipTokens(lines[line], 'python', 'scope.py')
+        .filter((token) => token !== '\n')
+      const nestedContainer = nestedHeader !== null || tokens[0] === 'class'
+      scopeLines.push(line)
+      if (
+        nestedContainer
+        && pythonIndentation(lines[line]) > headerIndentation
+      ) {
+        line = pythonSuiteEnd(
+          lines,
+          line,
+          pythonIndentation(lines[line]),
+        ) - 1
+      }
+    }
+    const declaresGlobal = scopeLines.some((line) => {
+      const tokens = relationshipTokens(lines[line], 'python', 'scope.py')
+        .filter((token) => token !== '\n')
+      return tokens[0] === 'global' && tokens.includes(identifier)
+    })
+    const bindsIdentifier = scopeLines.some((line) =>
+      pythonLineBindsIdentifier(lines[line], identifier))
+    if (declaresGlobal) {
+      if (bindsIdentifier) return true
+      continue
+    }
+    if (pythonParametersContain(header.parameters, identifier)) return true
+    if (bindsIdentifier) return true
+  }
+  return false
+}
+
 function parameterBindingShadowsReference(
   tokens: readonly string[],
   identifierIndex: number,
@@ -2687,6 +2959,7 @@ function parameterBindingShadowsReference(
   sourceLanguage: string,
   sourcePath: string,
 ): boolean {
+  if (pythonLanguage(sourceLanguage, sourcePath)) return false
   let openIndex: number | null = null
   let depth = 0
   for (let index = identifierIndex - 1; index >= 0; index -= 1) {
@@ -2732,12 +3005,6 @@ function parameterBindingShadowsReference(
         ? callStack.includes(body.index)
         : true
     }
-    if (
-      tokens[index] === ':'
-      && pythonLanguage(sourceLanguage, sourcePath)
-    ) {
-      return true
-    }
   }
   return false
 }
@@ -2746,18 +3013,39 @@ function referenceBindingShadowed(
   tokens: readonly string[],
   referenceIndex: number,
   localIdentifier: string,
+  exportedIdentifier: string,
   sourceLanguage: string,
   sourcePath: string,
+  targetPath: string,
+  exactPathExists: (repositoryPath: string) => boolean,
+  targetHasDefaultExport: boolean,
+  sourceText: string,
+  referenceLine: number,
+  targetRange: { endLine: number; startLine: number } | null,
 ): boolean {
+  if (pythonLanguage(sourceLanguage, sourcePath)) {
+    return pythonFunctionShadowsReference(
+      sourceText,
+      referenceLine,
+      localIdentifier,
+    )
+  }
   const referenceStack = openingBraceStackAt(tokens, referenceIndex)
   const declarations = new Set([
     'class', 'const', 'def', 'enum', 'fn', 'func', 'function', 'interface',
     'let', 'namespace', 'record', 'struct', 'trait', 'type', 'var',
   ])
-  for (let index = 0; index < referenceIndex; index += 1) {
-    if (tokens[index] !== localIdentifier || importedBindingAt(tokens, index)) {
+  let sourceLine = 1
+  let targetBindingExempted = false
+  let targetImportInScope = false
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] === '\n') {
+      sourceLine += 1
       continue
     }
+    if (index === referenceIndex) continue
+    if (tokens[index] !== localIdentifier) continue
+    const importedBinding = importedBindingAt(tokens, index)
     const before = significantTokenBefore(tokens, index)
     if (before?.token === '.') continue
     if (parameterBindingShadowsReference(
@@ -2769,20 +3057,71 @@ function referenceBindingShadowed(
     )) {
       return true
     }
-    const declarationStack = openingBraceStackAt(tokens, index)
+    const declarationStack = openingBraceStackAt(
+      tokens,
+      importedBinding
+        ? statementBoundsAt(tokens, index).start
+        : index,
+    )
     if (!stackIsPrefix(declarationStack, referenceStack)) continue
-    if (declarations.has(before?.token ?? '')) return true
+    if (importedBinding) {
+      const bounds = statementBoundsAt(tokens, index)
+      const bindingStatement = tokens.slice(bounds.start, bounds.end)
+      if (staticImportContains(
+        bindingStatement,
+        exportedIdentifier,
+        sourceLanguage,
+        sourcePath,
+        targetPath,
+        exactPathExists,
+        targetHasDefaultExport,
+        false,
+        localIdentifier,
+      )) {
+        if (
+          bindingStatement.includes('require')
+          && index > referenceIndex
+        ) {
+          return true
+        }
+        targetImportInScope = true
+        continue
+      }
+      return true
+    }
+    const exemptTargetBinding = (): boolean => {
+      if (
+        targetBindingExempted
+        || targetRange === null
+        || sourceLine < targetRange.startLine
+        || sourceLine > targetRange.endLine
+      ) {
+        return false
+      }
+      targetBindingExempted = true
+      return true
+    }
+    if (declarations.has(before?.token ?? '')) {
+      if (exemptTargetBinding()) continue
+      return true
+    }
     const after = significantTokenAfter(tokens, index)
-    if (after?.token === '=') return true
+    if (after?.token === '=') {
+      if (exemptTargetBinding()) continue
+      return true
+    }
     const bounds = statementBoundsAt(tokens, index)
     if (
       tokens.slice(bounds.start, index)
         .some((token) => new Set(['const', 'let', 'var']).has(token))
     ) {
+      if (exemptTargetBinding()) continue
       return true
     }
   }
-  return false
+  return targetRange === null
+    && ecmaScriptLanguage(sourceLanguage, sourcePath)
+    && !targetImportInScope
 }
 
 function assertSyntacticRelationship(
@@ -2794,6 +3133,8 @@ function assertSyntacticRelationship(
   relationshipEvidence: string,
   targetQualifiedName: string,
   targetPath: string,
+  targetStartLine: number,
+  targetEndLine: number,
   targetHasDefaultExport: boolean,
   exactPathExists: (repositoryPath: string) => boolean,
 ): void {
@@ -2841,8 +3182,8 @@ function assertSyntacticRelationship(
   const pathBoundReference = (
     contextualIndex?: number,
     rejectShadow = false,
+    referenceLine = 0,
   ): boolean => {
-    if (sourcePath === targetPath) return true
     if (sourceTokens === null) {
       sourceTokens = relationshipTokens(
         sourceFileEvidence,
@@ -2860,23 +3201,35 @@ function assertSyntacticRelationship(
       !(
         rejectShadow
         && referenceBindingShadowed(
-          contextualTokens,
+          sourceTokens!,
           reference.localIndex,
           reference.local,
+          reference.exported,
           sourceLanguage,
           sourcePath,
+          targetPath,
+          exactPathExists,
+          targetHasDefaultExport,
+          sourceFileEvidence,
+          referenceLine,
+          sourcePath === targetPath
+            ? { endLine: targetEndLine, startLine: targetStartLine }
+            : null,
         )
       )
-      && staticImportContains(
-        sourceTokens!,
-        reference.exported,
-        sourceLanguage,
-        sourcePath,
-        targetPath,
-        exactPathExists,
-        targetHasDefaultExport,
-        true,
-        reference.local,
+      && (
+        sourcePath === targetPath
+        || staticImportContains(
+          sourceTokens!,
+          reference.exported,
+          sourceLanguage,
+          sourcePath,
+          targetPath,
+          exactPathExists,
+          targetHasDefaultExport,
+          true,
+          reference.local,
+        )
       ))
   }
   const assertPathBoundReference = (): void => {
@@ -2887,6 +3240,10 @@ function assertSyntacticRelationship(
       const proved = tokens.some((token, index) => {
         if (token !== identifier) return false
         const contextualIndex = relationshipTokenOffset + index
+        const referenceLine =
+          (sourcePrefixEvidence.match(/\n/gu)?.length ?? 0)
+          + tokens.slice(0, index)
+            .filter((candidate) => candidate === '\n').length
         const open = relationshipCallOpenAfter(
           contextualTokens,
           contextualIndex,
@@ -2902,7 +3259,7 @@ function assertSyntacticRelationship(
           close,
           sourceLanguage,
           sourcePath,
-        ) && pathBoundReference(contextualIndex, true)
+        ) && pathBoundReference(contextualIndex, true, referenceLine)
       })
       if (!proved) fail('evidence_mismatch')
       return
@@ -3077,6 +3434,8 @@ function structuralPlans(
             relationshipExcerpt.raw,
             target.qualified_name,
             target.path,
+            target.start_line,
+            target.end_line,
             targetDefaultExportContains(target, targetExcerpt!.raw),
             committedPathExists,
           )
