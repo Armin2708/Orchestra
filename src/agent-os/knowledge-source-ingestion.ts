@@ -2739,6 +2739,17 @@ function commonJsImportContains(
           && prefix.some((candidate) =>
             new Set(['const', 'let', 'var']).has(candidate))
         )
+      const namedClassExpressionBody = (() => {
+        if (before?.token !== 'class') return null
+        const classPrefix = statementPrefix(tokens, before.index)
+          .filter((candidate) => candidate !== '\n')
+        const declarationModifiers = new Set(['abstract', 'declare', 'default', 'export'])
+        const statementContext = classPrefix.filter((candidate) =>
+          !declarationModifiers.has(candidate))
+        if (statementContext.length === 0) return null
+        const body = significantTokenAfter(tokens, tokenIndex)
+        return body?.token === '{' ? body.index : null
+      })()
       const namedFunctionExpressionBody = (() => {
         if (functionKeyword === null || after?.token !== '(') return null
         const functionPrefix = statementPrefix(tokens, functionKeyword.index)
@@ -2802,6 +2813,11 @@ function commonJsImportContains(
             ...openingBraceStackAt(tokens, namedFunctionExpressionBody),
             namedFunctionExpressionBody,
           ]
+        : namedClassExpressionBody !== null
+          ? [
+              ...openingBraceStackAt(tokens, namedClassExpressionBody),
+              namedClassExpressionBody,
+            ]
         : namedFunctionDeclaration
           ? (() => {
               const stack = openingBraceStackAt(tokens, tokenIndex)
