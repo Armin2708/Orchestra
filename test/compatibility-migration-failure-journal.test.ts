@@ -748,6 +748,111 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
       .toMatchObject({ failure_count: 0 })
   })
 
+  it('[rereview P1] locks main before publishing the returned-success marker', () => {
+    const files = tempFiles('orchestra-dom019-journal-return-marker-race-')
+    const writerDb = trackedDb(files.main)
+    const drainerDb = trackedDb(files.main)
+    writerDb.pragma('busy_timeout = 25')
+    drainerDb.pragma('busy_timeout = 25')
+    const writer = trackedJournal(writerDb, files.journal)
+    const drainer = trackedJournal(drainerDb, files.journal)
+    const reservation = writer.reserve(failureInput())
+    const originalPrepare = Database.prototype.prepare
+    let interleavedResult:
+      ReturnType<CompatibilityMigrationFailureJournal['drain']> | undefined
+    let interleavedError: unknown
+
+    Database.prototype.prepare = function (
+      this: Database.Database,
+      source: string,
+    ) {
+      const statement = originalPrepare.call(this, source)
+      const normalized = source.replace(/\s+/g, ' ').trim()
+      if (
+        normalized !==
+          'UPDATE compatibility_failure_journal_attempts'
+          + ' SET operation_returned_at=?, return_marker_hash=?'
+          + ' WHERE sequence=?'
+          + ' AND envelope_hash=?'
+          + ' AND operation_returned_at IS NULL'
+          + ' AND return_marker_hash IS NULL'
+      ) {
+        return statement
+      }
+      const mutable = statement as unknown as {
+        run: (...parameters: unknown[]) => unknown
+      }
+      const originalRun = mutable.run.bind(mutable)
+      mutable.run = (...parameters: unknown[]) => {
+        const result = originalRun(...parameters)
+        try {
+          interleavedResult = drainer.drain()
+        } catch (error) {
+          interleavedError = error
+        }
+        return result
+      }
+      return statement
+    } as typeof Database.prototype.prepare
+
+    try {
+      writer.recordSuccessReceipt(reservation)
+    } finally {
+      Database.prototype.prepare = originalPrepare
+    }
+
+    expect(interleavedResult).toBeUndefined()
+    expect(interleavedError).toEqual(expect.objectContaining({
+      code: 'evidence_incomplete',
+      reason: 'reconcile_blocked',
+    }))
+    expect(drainer.drain()).toMatchObject({
+      applied_through_sequence: reservation.sequence,
+      failures_imported: 0,
+      successes_reconciled: 1,
+      attempts_pruned: 1,
+    })
+    expect(queryCompatibilityMigrationTelemetrySummary(drainerDb, drainer))
+      .toMatchObject({ failure_count: 0 })
+    expect(writerDb.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE}
+    `).get()).toEqual({ count: 0 })
+  })
+
+  it('[rereview P1] rejects orphan success receipts at applied high water', () => {
+    const files = tempFiles('orchestra-dom019-journal-orphan-receipt-')
+    const db = trackedDb(files.main)
+    const journal = trackedJournal(db, files.journal)
+    const reservation = journal.reserve(failureInput())
+    journal.recordSuccessReceipt(reservation)
+    expect(journal.drain()).toMatchObject({
+      applied_through_sequence: reservation.sequence,
+      successes_reconciled: 1,
+    })
+
+    db.function(
+      'orchestra_compatibility_failure_journal_guard',
+      () => 'success-receipt',
+    )
+    db.prepare(`
+      INSERT INTO ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE} (
+        journal_generation, sequence, envelope_hash
+      ) VALUES (?, ?, ?)
+    `).run(
+      journal.journal_generation,
+      reservation.sequence,
+      reservation.envelope_hash,
+    )
+
+    expect(() => journal.drain()).toThrow(
+      expect.objectContaining({
+        code: 'evidence_incomplete',
+        reason: 'receipt_mismatch',
+      }),
+    )
+  })
+
   it('[review P1] refuses receipts for coverage sealed before journal activation', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2025-02-02T12:00:00.000Z'))

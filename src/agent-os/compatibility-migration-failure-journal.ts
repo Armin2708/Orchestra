@@ -1438,7 +1438,7 @@ implements CompatibilityMigrationFailureJournalBinding {
         'binding_uninitialized',
       )
     }
-    const foreignReceipts = this.#main.prepare(`
+    const receiptIntegrity = this.#main.prepare(`
       SELECT (
         SELECT COUNT(*)
         FROM ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE}
@@ -1447,14 +1447,40 @@ implements CompatibilityMigrationFailureJournalBinding {
         SELECT COUNT(*)
         FROM ${AGENT_OS_COMPATIBILITY_FAILURE_DAY_SEAL_RECEIPTS_TABLE}
         WHERE journal_generation<>?
-      ) AS count
+      ) AS foreign_count,
+      (
+        SELECT COUNT(*)
+        FROM ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE}
+        WHERE journal_generation=?
+          AND sequence<=?
+      ) AS applied_success_count
     `).get(
       this.journal_generation,
       this.journal_generation,
-    ) as { count: number }
-    if (assertSafeInteger('foreign receipt count', foreignReceipts.count) > 0) {
+      this.journal_generation,
+      main.applied_through_sequence,
+    ) as {
+      foreign_count: number
+      applied_success_count: number
+    }
+    if (
+      assertSafeInteger(
+        'foreign receipt count',
+        receiptIntegrity.foreign_count,
+      ) > 0
+    ) {
       throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
         'generation_mismatch',
+      )
+    }
+    if (
+      assertSafeInteger(
+        'applied success receipt count',
+        receiptIntegrity.applied_success_count,
+      ) > 0
+    ) {
+      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+        'receipt_mismatch',
       )
     }
     return { main, sidecar }
@@ -1791,18 +1817,17 @@ implements CompatibilityMigrationFailureJournalBinding {
     reservation: CompatibilityMigrationFailureReservation,
   ): void {
     const attempt = this.#assertReservation(reservation)
-    const failure = this.#sidecar.prepare(`
-      SELECT 1 FROM ${SIDECAR_FAILURES_TABLE} WHERE sequence=?
-    `).get(attempt.sequence)
-    if (failure) {
-      throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
-        'receipt_mismatch',
-      )
-    }
-    this.#markOperationReturned(reservation)
-
     runAtomically(this.#main, () => {
       this.#assertBinding()
+      const failure = this.#sidecar.prepare(`
+        SELECT 1 FROM ${SIDECAR_FAILURES_TABLE} WHERE sequence=?
+      `).get(attempt.sequence)
+      if (failure) {
+        throw new CompatibilityMigrationTelemetryEvidenceIncompleteError(
+          'receipt_mismatch',
+        )
+      }
+      this.#markOperationReturned(reservation)
       const existing = this.#main.prepare(`
         SELECT journal_generation, sequence, envelope_hash
         FROM ${AGENT_OS_COMPATIBILITY_FAILURE_SUCCESS_RECEIPTS_TABLE}
