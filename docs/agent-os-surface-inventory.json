@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "74d632f46bfeaaead1c7a52ced8a317915baacbf",
+  "observed_at_commit": "fe2ef17f26bbab857ef735e611a3ad5243cc6be3",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -110,7 +110,9 @@
   "table_sources": [
     "src/db.ts",
     "src/agent-os/migrations.ts",
-    "src/agent-os/compatibility-forward-migration.ts"
+    "src/agent-os/compatibility-forward-migration.ts",
+    "src/agent-os/compatibility-migration-telemetry.ts",
+    "src/agent-os/compatibility-migration-failure-journal.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -173,7 +175,14 @@
     ],
     "infrastructure": [
       "kv",
+      "os_compatibility_failure_day_seal_receipts",
+      "os_compatibility_failure_journal_state",
+      "os_compatibility_failure_success_receipts",
       "os_compatibility_migration_checks",
+      "os_compatibility_migration_telemetry_coverage",
+      "os_compatibility_migration_telemetry_daily",
+      "os_compatibility_migration_telemetry_history",
+      "os_compatibility_migration_telemetry_state",
       "os_compatibility_projection_links",
       "os_compatibility_projection_quarantine",
       "os_schema_migrations"
@@ -235,6 +244,9 @@
       "GET /api/v1/os/cards/:id/contract/validate",
       "GET /api/v1/os/cards/:id/deliveries",
       "GET /api/v1/os/cards/:id/evidence",
+      "GET /api/v1/os/compatibility-migration-telemetry/daily",
+      "GET /api/v1/os/compatibility-migration-telemetry/summary",
+      "GET /api/v1/os/compatibility-migration-telemetry/writer-observation",
       "GET /api/v1/os/contract-templates",
       "GET /api/v1/os/conversations/:id",
       "GET /api/v1/os/conversations/:id/events",
@@ -277,6 +289,8 @@
       "POST /api/v1/os/cards/:id/contract/transition",
       "POST /api/v1/os/cards/:id/evidence",
       "POST /api/v1/os/checkpoints/:id/fork",
+      "POST /api/v1/os/compatibility-migration-telemetry/rollup",
+      "POST /api/v1/os/compatibility-migration-telemetry/seal",
       "POST /api/v1/os/contract-templates/:templateId/preview",
       "POST /api/v1/os/conversations/:id/archive",
       "POST /api/v1/os/conversations/:id/export",

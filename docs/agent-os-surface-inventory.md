@@ -2,8 +2,9 @@
 
 Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
-legacy projection contract plus DOM-017's physical forward migration, observed at exact code head
-`74d632f46bfeaaead1c7a52ced8a317915baacbf`.
+legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
+telemetry and failure evidence, observed at exact code head
+`fe2ef17f26bbab857ef735e611a3ad5243cc6be3`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -14,8 +15,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 38 | 3 | 10 | 5 | 56 |
-| Registered HTTP routes | 94 | 29 | 25 | 9 | 157 |
+| SQLite application tables | 39 | 3 | 10 | 12 | 64 |
+| Registered HTTP routes | 99 | 29 | 25 | 9 | 162 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -119,7 +120,9 @@ offline restore boundary are in
 The exact live schema is obtained by opening a fresh database, applying every migration, and
 reading `sqlite_master`. Base tables are defined in `src/db.ts`; Agent OS migrations and their
 transactional ledger are defined in `src/agent-os/migrations.ts`; DOM-017's evidence schema is
-defined in `src/agent-os/compatibility-forward-migration.ts`.
+defined in `src/agent-os/compatibility-forward-migration.ts`; DOM-019 telemetry and failure
+evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
+`src/agent-os/compatibility-migration-failure-journal.ts`.
 
 ### Canonical
 
@@ -162,8 +165,10 @@ defined in `src/agent-os/compatibility-forward-migration.ts`.
 `kv` stores daemon settings/cache values. `os_schema_migrations` records applied Agent OS
 migrations. `os_compatibility_projection_links` records deterministic source-to-canonical
 identity, `os_compatibility_projection_quarantine` records rows that cannot be migrated without
-guessing, and `os_compatibility_migration_checks` records the five validation categories.
-SQLite's own internal tables are intentionally excluded.
+guessing, and `os_compatibility_migration_checks` records the five validation categories. The
+four `os_compatibility_migration_telemetry_*` tables hold privacy-safe observation, rollup, and
+coverage state. The three `os_compatibility_failure_*` tables preserve crash-safe failure,
+success-receipt, and day-seal evidence. SQLite's own internal tables are intentionally excluded.
 
 ## HTTP APIs
 
@@ -198,6 +203,9 @@ GET /api/v1/os/cards/:id/contract
 GET /api/v1/os/cards/:id/contract/validate
 GET /api/v1/os/cards/:id/deliveries
 GET /api/v1/os/cards/:id/evidence
+GET /api/v1/os/compatibility-migration-telemetry/daily
+GET /api/v1/os/compatibility-migration-telemetry/summary
+GET /api/v1/os/compatibility-migration-telemetry/writer-observation
 GET /api/v1/os/contract-templates
 GET /api/v1/os/conversations/:id
 GET /api/v1/os/conversations/:id/events
@@ -240,6 +248,8 @@ POST /api/v1/os/cards/:id/contract/publish
 POST /api/v1/os/cards/:id/contract/transition
 POST /api/v1/os/cards/:id/evidence
 POST /api/v1/os/checkpoints/:id/fork
+POST /api/v1/os/compatibility-migration-telemetry/rollup
+POST /api/v1/os/compatibility-migration-telemetry/seal
 POST /api/v1/os/contract-templates/:templateId/preview
 POST /api/v1/os/conversations/:id/archive
 POST /api/v1/os/conversations/:id/export
@@ -459,7 +469,7 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 157 signatures;
+   actions, and exact-compares all 162 signatures;
 3. extracts every Commander root/subcommand and exact-compares all 120 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;

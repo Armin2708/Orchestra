@@ -29,6 +29,7 @@ type ForwardMigrationInventory = {
 }
 
 const CODE_HEAD = '74d632f46bfeaaead1c7a52ced8a317915baacbf'
+const INVENTORY_HEAD = 'fe2ef17f26bbab857ef735e611a3ad5243cc6be3'
 const VALIDATION_CATEGORIES = ['count', 'key', 'scope', 'lifecycle', 'hash']
 const EVIDENCE_TABLES = [
   'os_compatibility_projection_links',
@@ -45,7 +46,7 @@ describe('Agent OS compatibility forward-migration documentation', () => {
     ) as ForwardMigrationInventory
     const coverage = compatibilityForwardPlanCoverage()
 
-    expect(inventory.observed_at_commit).toBe(CODE_HEAD)
+    expect(inventory.observed_at_commit).toBe(INVENTORY_HEAD)
     expect(inventory.compatibility_forward_migration).toEqual({
       schema_version: AGENT_OS_COMPATIBILITY_FORWARD_PLAN.schema_version,
       backlog_item: AGENT_OS_COMPATIBILITY_FORWARD_PLAN.backlog_item,
