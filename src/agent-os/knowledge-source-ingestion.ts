@@ -1606,11 +1606,13 @@ function ecmaTemplateTokens(
     tokens.push(...(
       value.slice(literalStart, index).match(/\n/gu) ?? []
     ))
+    tokens.push('(')
     tokens.push(...relationshipTokens(
       value.slice(index + 2, expressionEnd - 1),
       language,
       repositoryPath,
     ))
+    tokens.push(')')
     literalStart = expressionEnd
     index = expressionEnd
   }
