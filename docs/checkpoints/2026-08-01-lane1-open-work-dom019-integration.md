@@ -46,8 +46,8 @@ Environment: Node `22.20.0`, npm `10.9.3`; no repository or web `.env` file exis
 | Web TypeScript and production build | passed; lazy Open Work JS/CSS chunks emitted |
 | Package dry-run | passed; 43 entries and Open Work chunks included |
 | Migration/config stability | required double-hash checks matched |
-| GitNexus | refreshed to 12,372 nodes / 33,331 edges / 735 clusters / 287 flows |
-| Graphify structural index | refreshed to 7,049 nodes / 16,567 edges / 276 communities |
+| GitNexus | refreshed at the branch head; status is up to date |
+| Graphify structural and semantic index | refreshed at the branch head; generated output remains untracked |
 
 Gitleaks finds one historical synthetic test fixture (`delivery-accept-1` under an
 `idempotencyKey` property in commit `085b180`) when scanning the 90-commit integration range. It
