@@ -4,7 +4,7 @@ Date: 2026-08-01
 
 ## Bottom line
 
-Exact verified code head `f9fde2c75fdfadde49362cef27231fb3c907b872` integrates Lane 3,
+Exact verified code head `091fb8ff2f1708969d60f046fb4ae8a7d4e7a8d3` integrates Lane 3,
 the Lane 2 provider candidates, and Lane 4 Open Work into the central Agent OS composition.
 It closes `DOM-019`, `JOB-008`, `JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`.
 `JOB-012`, `TOOL-014`, and `BASE-010` remain open.
@@ -22,10 +22,12 @@ It closes `DOM-019`, `JOB-008`, `JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`.
   capacity, and per-profile capacity. Dependency blockers and critical paths remain explicit.
 - Confirmed dispatch is replay-safe and creates exactly one exclusive assignment, job, delivery,
   session, and start. Collaborative Team assignment remains deliberately out of scope.
-- DOM-019 observes writes on all 13 compatibility/legacy tables, records bounded operations on
-  the two real production projection seams, and keeps failure admission/reconciliation durable
-  across rollback, lock, restart, and UTC-day boundaries. No cutover flag or writer retirement is
-  implied by closing the telemetry implementation item.
+- DOM-019 observes real legacy reads and writes across all 13 compatibility/legacy tables,
+  resolves identity-bearing reads into their linked, quarantined, or unlinked cohorts, records
+  canonical reads on supported replacement surfaces, and compares exact retained links for
+  missing or stale projections. Failure admission/reconciliation remains durable across rollback,
+  lock, restart, and UTC-day boundaries. No cutover flag or writer retirement is implied by
+  closing the telemetry implementation item.
 - Claude, Qwen, and Kimi remain fail-closed candidates. No provider support label is promoted;
   ambiguous version evidence, interactive-only automation, and unproved overage behavior remain
   blockers owned by `TOOL-014` and `BASE-010`.
@@ -36,10 +38,10 @@ Environment: Node `22.20.0`, npm `10.9.3`; no repository or web `.env` file exis
 
 | Gate | Exact result |
 |---|---|
-| Complete one-worker repository suite | 175 files / 1,659 tests passed |
-| Complete default-parallel repository suite | 175 files / 1,659 tests passed |
-| DOM-019 focused gate | 6 files / 101 tests passed |
-| Open Work/inventory focused gate | 7 files / 47 tests passed |
+| Complete one-worker repository suite | 175 files / 1,663 tests passed |
+| Complete default-parallel repository suite | 175 files / 1,663 tests passed |
+| DOM-019 focused gate | 6 files / 109 tests passed |
+| Open Work exact-brief gate | 5 files / 52 tests passed |
 | Root TypeScript and production build | passed |
 | Web TypeScript and production build | passed; lazy Open Work JS/CSS chunks emitted |
 | Package dry-run | passed; 43 entries and Open Work chunks included |
