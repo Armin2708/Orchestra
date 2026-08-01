@@ -1,7 +1,5 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { classifyVersion } from '../../environment-compatibility.js'
 import {
   defineProviderEventV1,
   type ProviderApprovalDecisionV1,
@@ -26,6 +24,7 @@ import {
   type AgentDriverProviderSessionContextV1,
   type AgentDriverProviderSessionEvidenceV1,
 } from './provider-adapter.js'
+import { fingerprintExecutableFileV1 } from './executable-fingerprint.js'
 import type {
   AgentDriver,
   DriverEvent,
@@ -73,6 +72,7 @@ export type ClaudeProviderAdapterOptionsV1 = {
   now?: () => Date
   resolveBundledExecutable?(): string | null
   readExecutable?(resolvedPath: string): Uint8Array
+  fingerprintExecutable?(resolvedPath: string): string
   readVersion?(
     resolvedPath: string,
     minimalEnvironment: NodeJS.ProcessEnv,
@@ -131,6 +131,19 @@ const readVersion = (
   } catch {
     return null
   }
+}
+
+const CLAUDE_VERSION_PATTERN = /\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/g
+const CLAUDE_VERSION_OUTPUT_LIMIT = 200
+
+const exactClaudeVersion = (value: string | null): string | null => {
+  if (value === null || value.length > CLAUDE_VERSION_OUTPUT_LIMIT) return null
+  const matches = new Set<string>()
+  for (const match of value.matchAll(CLAUDE_VERSION_PATTERN)) {
+    const version = match[1]
+    if (version) matches.add(version)
+  }
+  return matches.size === 1 ? [...matches][0] ?? null : null
 }
 
 const minimalVersionEnvironment = (
@@ -411,7 +424,10 @@ export function createClaudeProviderAdapterV1(
   const now = options.now ?? (() => new Date())
   const executableResolver = options.resolveBundledExecutable
     ?? resolveClaudeBundledCliCommand
-  const executableReader = options.readExecutable ?? readFileSync
+  const executableFingerprinter = options.fingerprintExecutable
+    ?? (options.readExecutable
+      ? (resolvedPath: string) => sha256(options.readExecutable!(resolvedPath))
+      : fingerprintExecutableFileV1)
   const versionReader = options.readVersion ?? readVersion
   const authenticationProbe = options.probeAuthentication
     ?? probeAuthentication
@@ -454,17 +470,13 @@ export function createClaudeProviderAdapterV1(
           // A version-probe failure is unknown, not evidence of incompatibility.
         }
       }
-      const compatibility = classifyVersion(
-        rawVersion,
-        {
-          validated_versions:
-            CLAUDE_PROVIDER_MANIFEST_V1.executable.validated_versions,
-        },
-        'SDK-bundled Claude CLI',
-      )
+      const exactVersion = exactClaudeVersion(rawVersion)
+      const versionValidated = exactVersion !== null
+        && CLAUDE_PROVIDER_MANIFEST_V1.executable.validated_versions
+          .includes(exactVersion)
       let executableFingerprint = sha256([
         'claude-sdk-bundled-executable-v1',
-        compatibility.actual ?? 'unknown',
+        exactVersion ?? 'unknown',
         platform,
         resolvedPath ? 'resolved' : 'missing',
       ].join('\u0000'))
@@ -475,14 +487,14 @@ export function createClaudeProviderAdapterV1(
         ? 'missing'
         : !platformSupported
           ? 'incompatible'
-          : compatibility.actual === null
+          : exactVersion === null
             ? 'unknown'
-            : compatibility.status === 'validated'
+            : versionValidated
               ? 'validated'
               : 'incompatible'
       if (resolvedPath) {
         try {
-          executableFingerprint = sha256(executableReader(resolvedPath))
+          executableFingerprint = executableFingerprinter(resolvedPath)
         } catch {
           status = 'untrusted'
         }
@@ -497,7 +509,7 @@ export function createClaudeProviderAdapterV1(
         adapter_id: CLAUDE_PROVIDER_MANIFEST_V1.adapter_id,
         status,
         source: 'sdk_bundled',
-        version: compatibility.actual,
+        version: exactVersion,
         platform,
         resolved_path: null,
         executable_fingerprint: executableFingerprint,

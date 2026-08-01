@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import {
   accessSync,
   constants,
-  readFileSync,
   realpathSync,
   statSync,
 } from 'node:fs'
@@ -29,6 +28,7 @@ import type {
   ProviderManifestV1,
   ProviderReadinessV1,
 } from '../../provider-contract.js'
+import { fingerprintExecutableFileV1 } from './executable-fingerprint.js'
 
 const VERSION_PATTERN = /\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/g
 const VERSION_OUTPUT_LIMIT = 512
@@ -39,6 +39,7 @@ export type TerminalProviderDiscoveryDependenciesV1 = {
     environment: NodeJS.ProcessEnv,
   ): string | null
   readExecutable?(resolvedPath: string): Uint8Array
+  fingerprintExecutable?(resolvedPath: string): string
   readVersion?(
     resolvedPath: string,
     environment: NodeJS.ProcessEnv,
@@ -212,7 +213,10 @@ export function discoverTerminalProviderExecutableV1(
       : 'environment_override'
   const platform = options.platform ?? `${process.platform}-${process.arch}`
   const executableResolver = options.resolveExecutable ?? resolveExecutable
-  const executableReader = options.readExecutable ?? readFileSync
+  const executableFingerprinter = options.fingerprintExecutable
+    ?? (options.readExecutable
+      ? (resolvedPath: string) => sha256(options.readExecutable!(resolvedPath))
+      : fingerprintExecutableFileV1)
   const versionReader = options.readVersion ?? readVersion
 
   let resolutionFailed = false
@@ -268,7 +272,7 @@ export function discoverTerminalProviderExecutableV1(
   let executableReadable = false
   if (resolvedPath !== null) {
     try {
-      executableFingerprint = sha256(executableReader(resolvedPath))
+      executableFingerprint = executableFingerprinter(resolvedPath)
       executableReadable = true
     } catch {
       executableReadable = false

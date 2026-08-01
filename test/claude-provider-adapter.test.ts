@@ -665,4 +665,19 @@ describe('Claude TOOL-014 provider adapter candidate', () => {
     expect(observed.readiness.auth_status).toBe('unknown')
     expect(authProbes).toBe(0)
   })
+
+  it('fails closed when the bundled version output is ambiguous', async () => {
+    const observed = await readiness(createAdapter(calls(), {
+      readVersion: () => 'claude 2.1.212; embedded helper 2.1.213',
+    }))
+
+    expect(observed.discovery).toMatchObject({
+      status: 'unknown',
+      version: null,
+    })
+    expect(observed.readiness).toMatchObject({
+      auth_status: 'unknown',
+      executable_status: 'unknown',
+    })
+  })
 })
