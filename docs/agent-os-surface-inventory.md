@@ -3,8 +3,8 @@
 Status: current runtime inventory plus KNO-003 through KNO-010's verified ingestion and deterministic retrieval boundary,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
-telemetry and failure evidence, observed at exact code head
-`b603cae851a922050865180c7fe53aeb83aa179c`.
+telemetry and failure evidence, plus the integrated Open Work surface, observed at exact code head
+`11c1691654094e74dbe9fc53f073aa602e5ae7bb`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -16,7 +16,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 48 | 3 | 10 | 12 | 73 |
-| Registered HTTP routes | 99 | 29 | 25 | 9 | 162 |
+| Registered HTTP routes | 103 | 29 | 25 | 9 | 166 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -177,7 +177,7 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/agent-os/routes.ts`, `src/agent-os/contract-template-routes.ts`,
 `src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`, and
-`src/agent-os/job-assignment-routes.ts`. The seven session action routes are expanded from
+`src/agent-os/job-assignment-routes.ts`, and `src/agent-os/open-work-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
@@ -215,6 +215,7 @@ GET /api/v1/os/conversations/:id/search
 GET /api/v1/os/deliveries/:id/export
 GET /api/v1/os/drivers
 GET /api/v1/os/jobs/:id
+GET /api/v1/os/open-work
 GET /api/v1/os/plugins
 GET /api/v1/os/processes/:id
 GET /api/v1/os/processes/:id/output
@@ -244,6 +245,9 @@ POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release
 POST /api/v1/os/cards/:cardId/assignments/assign
 POST /api/v1/os/cards/:cardId/assignments/claim
 POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply
+POST /api/v1/os/cards/:cardId/contract/brief-preview
+POST /api/v1/os/cards/:cardId/open-work/dispatch
+POST /api/v1/os/cards/:cardId/open-work/match
 POST /api/v1/os/cards/:id/contract/publish
 POST /api/v1/os/cards/:id/contract/transition
 POST /api/v1/os/cards/:id/evidence

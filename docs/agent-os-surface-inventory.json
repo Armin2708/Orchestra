@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "b603cae851a922050865180c7fe53aeb83aa179c",
+  "observed_at_commit": "11c1691654094e74dbe9fc53f073aa602e5ae7bb",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -230,6 +230,10 @@
     {
       "file": "src/agent-os/job-assignment-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/open-work-routes.ts",
+      "prefix": "/api/v1/os"
     }
   ],
   "http_routes": {
@@ -266,6 +270,7 @@
       "GET /api/v1/os/deliveries/:id/export",
       "GET /api/v1/os/drivers",
       "GET /api/v1/os/jobs/:id",
+      "GET /api/v1/os/open-work",
       "GET /api/v1/os/plugins",
       "GET /api/v1/os/processes/:id",
       "GET /api/v1/os/processes/:id/output",
@@ -295,6 +300,9 @@
       "POST /api/v1/os/cards/:cardId/assignments/assign",
       "POST /api/v1/os/cards/:cardId/assignments/claim",
       "POST /api/v1/os/cards/:cardId/contract/templates/:templateId/apply",
+      "POST /api/v1/os/cards/:cardId/contract/brief-preview",
+      "POST /api/v1/os/cards/:cardId/open-work/dispatch",
+      "POST /api/v1/os/cards/:cardId/open-work/match",
       "POST /api/v1/os/cards/:id/contract/publish",
       "POST /api/v1/os/cards/:id/contract/transition",
       "POST /api/v1/os/cards/:id/evidence",
@@ -660,6 +668,12 @@
       "classification": "legacy",
       "file": "web/src/App.tsx",
       "evidence": ">Roadmap</button>"
+    },
+    {
+      "id": "primary.open-work",
+      "classification": "canonical",
+      "file": "web/src/App.tsx",
+      "evidence": ">Open Work</button>"
     },
     {
       "id": "primary.settings",
