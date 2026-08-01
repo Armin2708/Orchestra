@@ -25,6 +25,10 @@ import {
   type ProjectedTextRedactionState,
 } from './projected-text-redaction.js'
 import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
+import {
+  AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID,
+  installOrganizationCoreSchema,
+} from './organization-migration.js'
 
 interface Migration {
   id: string
@@ -7464,6 +7468,20 @@ const migrations: Migration[] = [
           SELECT RAISE(ABORT, 'job agent brief evidence is invalid or immutable');
         END;
       `)
+    },
+  },
+  {
+    id: AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID,
+    apply(db) {
+      const hasAgentBrief = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id='026-job-agent-brief'`).get()
+      if (!hasAgentBrief) {
+        throw new Error(
+          `migration ${AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID}`
+          + ' requires 026-job-agent-brief',
+        )
+      }
+      installOrganizationCoreSchema(db)
     },
   },
 ]

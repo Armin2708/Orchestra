@@ -8,6 +8,7 @@ import { DeliveryReportService } from './delivery-reports.js'
 import { KnowledgeService } from './knowledge-service.js'
 import { KnowledgeStore } from './knowledge-store.js'
 import { OrchestrationService } from './orchestration-service.js'
+import { OrganizationService } from './organization.js'
 import type { JobScheduler } from './scheduler.js'
 
 export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
@@ -16,6 +17,7 @@ export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
   'deliveries',
   'discussions',
   'knowledge',
+  'organization',
   'conflicts',
   'device_pairing',
 ] as const)
@@ -101,6 +103,25 @@ export type KnowledgeServiceBoundary = Pick<
   | 'retrieve'
 >
 
+export type OrganizationServiceBoundary = Pick<
+  OrganizationService,
+  | 'createOrganization'
+  | 'createProductArea'
+  | 'createTeam'
+  | 'createPosition'
+  | 'createMembership'
+  | 'transitionMembership'
+  | 'createRoleDefinition'
+  | 'assignRole'
+  | 'attestCapability'
+  | 'activateRole'
+  | 'createAuthorityPolicy'
+  | 'evaluateAuthority'
+  | 'assignOwnership'
+  | 'organizationSnapshot'
+  | 'listBoardOrganizations'
+>
+
 interface AgentOsServiceBoundaryBase<
   Name extends AgentOsDomainServiceName,
   State extends AgentOsDomainServiceImplementationState,
@@ -148,6 +169,11 @@ export interface AgentOsDomainServiceBoundaries {
     'canonical',
     KnowledgeServiceBoundary
   >
+  readonly organization: AgentOsActiveServiceBoundary<
+    'organization',
+    'canonical',
+    OrganizationServiceBoundary
+  >
   readonly conflicts: AgentOsActiveServiceBoundary<
     'conflicts',
     'compatibility_only',
@@ -162,6 +188,7 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   conversations?: ConversationServiceBoundary
   deliveries?: DeliveryServiceBoundary
   knowledge?: KnowledgeServiceBoundary
+  organization?: OrganizationServiceBoundary
   conflicts?: ConflictDetectionServiceBoundary
 }
 
@@ -254,6 +281,22 @@ export function createAgentOsDomainServiceBoundaries(
         'automatic freshness or promotion',
       ],
       'Canonical bounded Knowledge ingestion and retrieval boundary.',
+    ),
+    organization: activeBoundary(
+      'organization',
+      'canonical',
+      options.organization ?? new OrganizationService(db),
+      [
+        'organization hierarchy and accountable ownership',
+        'membership lifecycle and authority revocation',
+        'versioned role, capability, activation, and authority policy',
+      ],
+      [
+        'work assignment identity',
+        'provider runtime identity',
+        'implicit authority from capability or seniority labels',
+      ],
+      'Canonical organization, membership, role, ownership, and authority boundary.',
     ),
     conflicts: activeBoundary(
       'conflicts',
