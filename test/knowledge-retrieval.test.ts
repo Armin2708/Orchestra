@@ -90,6 +90,16 @@ function database(
   return db
 }
 
+function removeRegisteredRetrievalSchema(db: Database.Database): void {
+  db.exec(`
+    DROP TABLE knowledge_retrieval_fts;
+    DROP TABLE knowledge_retrieval_index_state;
+    DROP TABLE knowledge_retrieval_documents;
+    DROP TABLE knowledge_retrieval_schema;
+    DELETE FROM os_schema_migrations WHERE id='025-knowledge-retrieval';
+  `)
+}
+
 function sourceFixture(
   boardId: number,
   key: string,
@@ -353,6 +363,7 @@ describe('knowledge retrieval schema and synchronization', () => {
       FROM knowledge_retrieval_schema`).get()).toEqual(first)
 
     const partial = database(':memory:', 2, false)
+    removeRegisteredRetrievalSchema(partial)
     partial.exec('CREATE TABLE knowledge_retrieval_schema (dummy INTEGER)')
     expect(caughtRuntime(() => installKnowledgeRetrievalSchema(partial)).code)
       .toBe('retrieval_schema_invalid')

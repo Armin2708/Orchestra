@@ -3,7 +3,7 @@ import { openDb } from '../src/db.js'
 import { ComputedWorkspaceConflictService } from '../src/agent-os/conflict-service.js'
 import { ConversationService } from '../src/agent-os/conversations.js'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
-import { KnowledgeStore } from '../src/agent-os/knowledge-store.js'
+import { KnowledgeService } from '../src/agent-os/knowledge-service.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { JobScheduler } from '../src/agent-os/scheduler.js'
 import {
@@ -41,14 +41,14 @@ describe('Agent OS domain service boundaries', () => {
         'canonical',
         'canonical',
         'reserved',
-        'persistence_only',
+        'canonical',
         'compatibility_only',
         'reserved',
       ])
     expect(boundaries.orchestration.service).toBeInstanceOf(OrchestrationService)
     expect(boundaries.conversations.service).toBeInstanceOf(ConversationService)
     expect(boundaries.deliveries.service).toBeInstanceOf(DeliveryReportService)
-    expect(boundaries.knowledge.service).toBeInstanceOf(KnowledgeStore)
+    expect(boundaries.knowledge.service).toBeInstanceOf(KnowledgeService)
     expect(boundaries.conflicts.service).toBeInstanceOf(ComputedWorkspaceConflictService)
     expect(boundaries.discussions.service).toBeNull()
     expect(boundaries.device_pairing.service).toBeNull()
@@ -63,8 +63,8 @@ describe('Agent OS domain service boundaries', () => {
     expect(boundaries.discussions.excludes).toContain('messages wake transport')
     expect(boundaries.discussions.detail).toMatch(/messages remain transport/i)
     expect(boundaries.knowledge.excludes).toEqual(expect.arrayContaining([
-      'retrieval and ranking',
       'managed prompt injection',
+      'automatic freshness or promotion',
     ]))
     expect(boundaries.conflicts.excludes).toEqual(expect.arrayContaining([
       'durable Conflict lifecycle',
@@ -112,7 +112,7 @@ describe('Agent OS domain service boundaries', () => {
     const orchestration = new OrchestrationService(db, scheduler)
     const conversations = new ConversationService(db)
     const deliveries = new DeliveryReportService(db)
-    const knowledge = new KnowledgeStore(db)
+    const knowledge = new KnowledgeService(db)
     const conflicts = new ComputedWorkspaceConflictService(db)
 
     const boundaries = createAgentOsDomainServiceBoundaries(db, {

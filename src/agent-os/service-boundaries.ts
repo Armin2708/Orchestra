@@ -5,6 +5,7 @@ import {
 } from './conflict-service.js'
 import { ConversationService } from './conversations.js'
 import { DeliveryReportService } from './delivery-reports.js'
+import { KnowledgeService } from './knowledge-service.js'
 import { KnowledgeStore } from './knowledge-store.js'
 import { OrchestrationService } from './orchestration-service.js'
 import type { JobScheduler } from './scheduler.js'
@@ -89,6 +90,17 @@ export type KnowledgePersistenceServiceBoundary = Pick<
   | 'finishContextUse'
 >
 
+export type KnowledgeServiceBoundary = Pick<
+  KnowledgeService,
+  | keyof KnowledgePersistenceServiceBoundary
+  | 'ingestStructural'
+  | 'ingestGitContext'
+  | 'ingestVerifiedDelivery'
+  | 'synchronizeRetrievalIndex'
+  | 'rebuildRetrievalIndex'
+  | 'retrieve'
+>
+
 interface AgentOsServiceBoundaryBase<
   Name extends AgentOsDomainServiceName,
   State extends AgentOsDomainServiceImplementationState,
@@ -133,8 +145,8 @@ export interface AgentOsDomainServiceBoundaries {
   readonly discussions: AgentOsReservedServiceBoundary<'discussions'>
   readonly knowledge: AgentOsActiveServiceBoundary<
     'knowledge',
-    'persistence_only',
-    KnowledgePersistenceServiceBoundary
+    'canonical',
+    KnowledgeServiceBoundary
   >
   readonly conflicts: AgentOsActiveServiceBoundary<
     'conflicts',
@@ -149,7 +161,7 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   orchestration?: OrchestrationServiceBoundary
   conversations?: ConversationServiceBoundary
   deliveries?: DeliveryServiceBoundary
-  knowledge?: KnowledgePersistenceServiceBoundary
+  knowledge?: KnowledgeServiceBoundary
   conflicts?: ConflictDetectionServiceBoundary
 }
 
@@ -227,19 +239,20 @@ export function createAgentOsDomainServiceBoundaries(
     ),
     knowledge: activeBoundary(
       'knowledge',
-      'persistence_only',
-      options.knowledge ?? new KnowledgeStore(db),
+      'canonical',
+      options.knowledge ?? new KnowledgeService(db),
       [
         'knowledge source and chunk persistence',
         'context build manifests',
         'context use accounting',
+        'verified repository evidence ingestion',
+        'deterministic retrieval synchronization and query',
       ],
       [
-        'retrieval and ranking',
         'managed prompt injection',
         'automatic freshness or promotion',
       ],
-      'Durable Knowledge persistence boundary; the Knowledge Compiler remains open.',
+      'Canonical bounded Knowledge ingestion and retrieval boundary.',
     ),
     conflicts: activeBoundary(
       'conflicts',

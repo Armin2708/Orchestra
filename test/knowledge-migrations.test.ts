@@ -416,12 +416,17 @@ function insertContextUse(
 
 function removeMigration018(db: Database.Database): void {
   db.exec(`
+    DROP TABLE IF EXISTS knowledge_retrieval_fts;
+    DROP TABLE IF EXISTS knowledge_retrieval_index_state;
+    DROP TABLE IF EXISTS knowledge_retrieval_documents;
+    DROP TABLE IF EXISTS knowledge_retrieval_schema;
     DROP TABLE IF EXISTS context_uses;
     DROP TABLE IF EXISTS context_build_entries;
     DROP TABLE IF EXISTS context_build_sources;
     DROP TABLE IF EXISTS context_builds;
     DROP TABLE IF EXISTS knowledge_chunks;
     DROP TABLE IF EXISTS knowledge_sources;
+    DELETE FROM os_schema_migrations WHERE id='025-knowledge-retrieval';
     DELETE FROM os_schema_migrations WHERE id='018-knowledge-persistence';
   `)
 }
@@ -520,7 +525,7 @@ describe('knowledge persistence migration 018', () => {
     `).get(MIGRATION_ID)).toEqual({ id: MIGRATION_ID })
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '024-compatibility-migration-failure-journal' })
+    `).get()).toEqual({ id: '025-knowledge-retrieval' })
     const tables = (db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
@@ -538,7 +543,7 @@ describe('knowledge persistence migration 018', () => {
     ])
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get() as { count: number }).count).toBe(24)
+    ).get() as { count: number }).count).toBe(25)
     db.close()
   })
 

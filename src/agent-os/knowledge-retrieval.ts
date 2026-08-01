@@ -19,6 +19,9 @@ import {
   sourceVisibleToKnowledgeRetrievalRequest,
   validateKnowledgeRetrievalRequest,
 } from './knowledge-retrieval-contracts.js'
+
+export const AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID =
+  '025-knowledge-retrieval'
 import type {
   KnowledgeRetrievalCitation,
   KnowledgeRetrievalRequest,
@@ -302,8 +305,8 @@ function assertRetrievalSchema(db: Database.Database): void {
 }
 
 /**
- * Installs the additive KNO-010 schema. It is deliberately not a numbered
- * Agent OS migration so Lane 1 can place it at the correct integration point.
+ * Installs the additive KNO-010 schema. The Agent OS migration registry calls
+ * this at the integration-owned migration 025 boundary.
  * Creation is transactional; partial or incompatible pre-existing objects are
  * rejected rather than adopted.
  */

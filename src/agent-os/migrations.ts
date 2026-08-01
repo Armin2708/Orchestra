@@ -11,6 +11,10 @@ import {
   AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID,
   applyCompatibilityMigrationFailureJournalMigration,
 } from './compatibility-migration-failure-journal.js'
+import {
+  AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID,
+  installKnowledgeRetrievalSchema,
+} from './knowledge-retrieval.js'
 import { conversationEventContentHash } from './conversation-event-integrity.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
@@ -7389,6 +7393,20 @@ const migrations: Migration[] = [
     id: AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID,
     apply(db) {
       applyCompatibilityMigrationFailureJournalMigration(db)
+    },
+  },
+  {
+    id: AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID,
+    apply(db) {
+      const hasFailureJournal = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID)
+      if (!hasFailureJournal) {
+        throw new Error(
+          `migration ${AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID}`,
+        )
+      }
+      installKnowledgeRetrievalSchema(db)
     },
   },
 ]
