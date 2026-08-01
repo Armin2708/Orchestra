@@ -89,7 +89,7 @@ describe('Agent OS compatibility projection documentation', () => {
     expect(agentOs).toContain('[legacy projection and compatibility-view contract]')
     expect(domain).toContain('[legacy projection contract]')
     expect(inventory).toContain('## Legacy projection and compatibility-view contract')
-    expect(program).toContain('151 / 400 checklist boxes delivered; 249 remain open')
+    expect(program).toContain('176 / 400 checklist boxes delivered; 224 remain open')
     expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 20 / 20 | 0 |')
     expect(checkpoint).toContain('136 / 375 delivered; 239 open')
     expect(checkpoint).toContain('DOM-017 and DOM-019 remain open')

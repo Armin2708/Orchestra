@@ -1,7 +1,11 @@
 # Agent Team Operating Model
 
-Status: **planned, not implemented**. This document defines the research-backed operating model
-and acceptance contract for backlog items `ORG-001` through `ORG-024` and `ORG-GATE`.
+Status: **implemented and acceptance-verified**. This document is the research-backed operating
+model and delivered contract for backlog items `ORG-001` through `ORG-024` and `ORG-GATE`.
+
+Implementation lineage: organization core `fd80d02`, coordination `479e67a`, assurance and
+learning `37f7ce2`, API/CLI/web control center `45d29b1`, restart-safe system gate `d68d4f8`, and
+focused governance coverage `cbfa636`.
 
 ## Bottom line
 
@@ -319,6 +323,30 @@ The UI/API/CLI should provide:
 - organizational dashboard for outcome, quality, reliability, flow, cost, access, and risk;
 - Needs You queue for decisions whose authority or judgment cannot safely be delegated;
 - redacted audit export with retention and legal/policy boundaries.
+
+## Delivered evidence
+
+The implementation is additive and migration-backed. Migrations 027–029 create the organization,
+coordination, assurance, measurement, access, incident, and learning records. The API exposes a
+server-authorized organization control center, the CLI exposes organization list/create/show/
+command operations, and the web application exposes the organization map, Needs You queue,
+quality gates, trace, provenance, scorecards, incidents, postmortems, corrective actions, and
+knowledge promotion.
+
+| Backlog | Authoritative implementation evidence | Behavioral proof |
+|---|---|---|
+| ORG-001 | this operating model and its enforced anti-surveillance/authority invariants | `organization-presentation.test.ts`, `organization-assurance.test.ts` |
+| ORG-002–005 | `organization-migration.ts`, `organization.ts` | `organization-core-migration.test.ts`, `organization-service.test.ts`, `organization-governance.test.ts` |
+| ORG-006–010 | `organization-coordination-migration.ts`, `organization-coordination.ts` | `organization-coordination.test.ts`, `organization-governance.test.ts` |
+| ORG-011–017 | objective, goal, capacity, message, decision, escalation, risk, participation, and approval records in `organization-coordination.ts` | `organization-coordination.test.ts`, `organization-gate.test.ts` |
+| ORG-018–020 | trace, provenance, and risk-selected gate records in `organization-assurance.ts` | `organization-assurance.test.ts`, `organization-gate.test.ts` |
+| ORG-021–023 | contextual metric/scorecard, calibration, access certification, remediation, and appeal records in `organization-assurance.ts` | `organization-assurance.test.ts`, `organization-governance.test.ts`, `organization-gate.test.ts` |
+| ORG-024 | Incident, timeline, reviewed Postmortem, verified corrective action, and Knowledge promotion in `organization-assurance.ts` | `organization-assurance.test.ts`, `organization-gate.test.ts` |
+| ORG-GATE | two-team product/service delivery under an SLO, R2 independent review, exact trace/provenance, incident learning, SQLite restart, and idempotent replay | `organization-gate.test.ts` |
+
+The product surfaces are covered by `organization-api.test.ts`, `organization-cli.test.ts`,
+`organization-presentation.test.ts`, and navigation/inventory/security tests. Repository-wide
+verification must remain green before the checkbox mirror is reconciled.
 
 ## Delivery sequence and dependencies
 

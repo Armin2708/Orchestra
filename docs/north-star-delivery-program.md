@@ -424,8 +424,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   implementing the remaining Claude/Qwen/Kimi adapters. The exact supported-provider/version
   matrix under reopened `BASE-010` remains open, while current default managed behavior remains
   Claude/Codex-only and prior support/policy labels are unchanged;
-- Discussions/Q&A, bounded Teams/conflicts, the cross-cutting Agent Organization Operating System,
-  secure DeviceSessions/phone control, token/outcome analytics, operations hardening,
+- Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control,
+  token/outcome analytics, operations hardening,
   clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
   every state machine or the intended desktop/tablet/phone Browser matrix;
@@ -439,11 +439,14 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **151 / 400 checklist boxes delivered; 249 remain open**.
-The 25 newly planned `ORG-*` boxes are all open and do not change the delivered numerator.
+The strict master reconciliation is **176 / 400 checklist boxes delivered; 224 remain open**.
+The 25 `ORG-*` boxes are implemented and acceptance-verified through organization core,
+coordination, assurance/learning, API/CLI/web control surfaces, the restart-safe two-team gate,
+and focused governance coverage.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002` through `KNO-010`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-019`, plus `JOB-008`, `JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`;
+`DOM-013` through `DOM-019`, `ORG-001` through `ORG-024`, and `ORG-GATE`, plus `JOB-008`,
+`JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`;
 it keeps `JOB-012` and `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
@@ -461,7 +464,7 @@ plug-and-play release.
 | Phase 7 — Knowledge Compiler | 10 / 28 | 18 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
-| Cross-cutting — Agent organization operating system | 0 / 25 | 25 |
+| Cross-cutting — Agent organization operating system | 25 / 25 | 0 |
 | Phase 10 — Tools/permissions | 3 / 15 | 12 |
 | Phase 11 — Visual command center | 1 / 18 | 17 |
 | Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
@@ -473,9 +476,9 @@ plug-and-play release.
 | Phase 18 — Deferred | 0 / 10 | 10 deferred |
 | Release milestone summaries | 2 / 15 | 13 |
 
-The current organization-program contract is the
-[Agent Team Operating Model](./agent-team-operating-model.md). The current implemented-code
-continuation point remains the
+The delivered organization-program contract and current implementation evidence are in the
+[Agent Team Operating Model](./agent-team-operating-model.md). The earlier Lane 1 integration
+baseline remains recorded in the
 [Lane 1 integrated Open Work and DOM-019 checkpoint](./checkpoints/2026-08-01-lane1-open-work-dom019-integration.md).
 The
 [DOM-017 forward-migration checkpoint](./checkpoints/2026-07-29-agent-os-dom017-forward-migrations.md)

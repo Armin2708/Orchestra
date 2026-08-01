@@ -16,21 +16,27 @@ describe('Agent Team Operating Model documentation', () => {
     expect(readme).toContain('[Agent Team Operating Model]')
     expect(agentOs).toContain('[Agent Team Operating Model]')
     expect(program).toContain('[Agent Team Operating Model]')
-    expect(program).toContain('151 / 400 checklist boxes delivered; 249 remain open')
-    expect(program).toContain('| Cross-cutting — Agent organization operating system | 0 / 25 | 25 |')
+    expect(program).toContain('176 / 400 checklist boxes delivered; 224 remain open')
+    expect(program).toContain('| Cross-cutting — Agent organization operating system | 25 / 25 | 0 |')
   })
 
-  it('defines the complete ORG backlog without claiming implementation', () => {
+  it('defines the complete delivered ORG contract and its acceptance evidence', () => {
     const model = read('docs/agent-team-operating-model.md')
 
-    expect(model).toContain('Status: **planned, not implemented**')
+    expect(model).toContain('Status: **implemented and acceptance-verified**')
     expect(model).toContain('`ORG-001` through `ORG-024` and `ORG-GATE`')
+    expect(model).toContain('## Delivered evidence')
+    expect(model).toContain('restart-safe system gate `d68d4f8`')
+    expect(model).toContain('focused governance coverage `cbfa636`')
     expect(model).toContain('Identity is not role and role is not authority')
     expect(model).toContain('author and final approver are distinct principals and sessions')
     expect(model).toContain('Raw thoughts, keystrokes, hours online, lines of')
     expect(model).toContain('INSUFFICIENT_EVIDENCE')
     expect(model).toContain('## `ORG-GATE` acceptance scenario')
-    const ids = [...model.matchAll(/^\| (ORG-(?:\d{3}|GATE)) \|/gm)]
+    expect(model).toContain('`organization-gate.test.ts`')
+    const backlogMirror = model.split('### Source-controlled ORG backlog mirror')[1]
+      ?.split('### Implementation stages')[0] ?? ''
+    const ids = [...backlogMirror.matchAll(/^\| (ORG-(?:\d{3}|GATE)) \|/gm)]
       .map((match) => match[1])
     expect(ids).toEqual([
       ...Array.from({ length: 24 }, (_, index) =>
