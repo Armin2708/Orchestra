@@ -6,9 +6,10 @@ search/export, retention, native fork reconciliation, CLI parity, the responsive
 and the integrated privacy/audit blocker closure; its daemon-to-browser restart and current mobile
 acceptance gates remain open. Milestone C has typed Job Market contracts, built-in templates, and
 an explicit assignment lifecycle bound through jobs, sessions, execution, retry, recovery, and
-control projections, the durable Knowledge Compiler persistence foundation, and bounded
-repository-document ingestion; Open Work, matching, the complete Job Market gate, and Knowledge
-retrieval, compilation, and injection remain open. The product is not yet public plug-and-play.
+control projections, integrated Open Work, deterministic matching, and the complete exclusive-job
+gate, plus the durable Knowledge Compiler persistence foundation and bounded repository-document
+ingestion; collaborative Team assignment and Knowledge compilation/injection remain open. The
+product is not yet public plug-and-play.
 The versioned subscription-first terminal-agent contract is delivered and its first
 capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
 append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
@@ -30,7 +31,8 @@ boundary and delegates Agent OS option assembly plus focused route registration 
 module. DOM-016 now assigns every compatibility/legacy table one non-competing authority and
 cutover contract. DOM-017 now implements its idempotent physical migration, deterministic
 backfill/quarantine evidence, five validation categories, compatibility range, and forward-only
-rollback plan while leaving usage/mismatch telemetry to DOM-019.
+rollback plan. DOM-019 now adds privacy-safe compatibility usage, mismatch, and durable failure
+evidence without enabling a cutover or disabling a legacy writer.
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -179,6 +181,13 @@ carrying a canonical request through accepted evidence into exact cited reuse by
   TaskContract adoption, collision-free Agent Home adoption, historical event import, all five
   count/key/scope/lifecycle/hash validators, marker-loss replay, an explicit compatibility range,
   and a backup-backed forward-only rollback contract with no automatic down migration;
+- DOM-019 instruments all 13 compatibility/legacy tables for bounded write evidence, binds a
+  crash-safe daemon failure journal, and records atomic adapter/projection evidence on the real
+  legacy-event and provider-usage bridges without storing payloads, identifiers, or secrets;
+- JOB-008, JOB-009, JOB-014, JOB-015, and JOB-GATE deliver the integrated Open Work queue,
+  dependency/critical-path graph, typed contract editor, exact runtime brief preview, atomic
+  market-version compare-and-set, deterministic capability/capacity matching, and replay-safe
+  exactly-one assignment/job/session/start dispatch;
 - migrations `007-agent-home-domain` and `008-agent-home-controls` provide durable profiles,
   conversations, managed/ambient sessions, ordered events, replay conflict evidence, lineage,
   persisted control state, and idempotent lifecycle actions;
@@ -393,13 +402,11 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
 
 ### Remaining
 
-- DOM-019 old-versus-canonical read/write and mismatch telemetry remains open; DOM-017 does not
-  advance a reserved control, disable legacy writers, or claim telemetry/cutover completion;
 - a real daemon-mid-session to browser-continuation E2E gate;
 - combined desktop/phone acceptance in the intended in-app Browser surface when that backend is
   available;
-- Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
-  capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
+- intentional collaborative assignment through the future Team domain (`JOB-012`); exclusive
+  Open Work dispatch remains exactly-one by design;
 - `KNO-011` through `KNO-027` and `KNO-GATE`, including budgeted injection, freshness, review
   controls, UI, and benchmarks;
 - complete `TOOL-014` by passing and persisting the real exact-source Codex matrix, reconciling its
@@ -421,10 +428,11 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **145 / 375 checklist boxes delivered; 230 remain open**.
+The strict master reconciliation is **151 / 375 checklist boxes delivered; 224 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002` through `KNO-010`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-017`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
+`DOM-013` through `DOM-019`, plus `JOB-008`, `JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`;
+it keeps `JOB-012` and `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
 plug-and-play release.
@@ -432,11 +440,11 @@ plug-and-play release.
 | Area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
-| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |
+| Phase 1 — Canonical domain/event ledger | 20 / 20 | 0 |
 | Phase 2 — Canonical orchestration | 19 / 21 | 2 |
 | Phase 3 — Agent Home/conversations | 20 / 21 | 1 |
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
-| Phase 5 — Contracts/job market | 12 / 18 | 6 |
+| Phase 5 — Contracts/job market | 17 / 18 | 1 |
 | Phase 6 — Delivery Trackbook | 14 / 21 | 7 |
 | Phase 7 — Knowledge Compiler | 10 / 28 | 18 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
@@ -453,7 +461,10 @@ plug-and-play release.
 | Release milestone summaries | 2 / 15 | 13 |
 
 The current continuation point is the
-[DOM-017 forward-migration checkpoint](./checkpoints/2026-07-29-agent-os-dom017-forward-migrations.md).
+[Lane 1 integrated Open Work and DOM-019 checkpoint](./checkpoints/2026-08-01-lane1-open-work-dom019-integration.md).
+The
+[DOM-017 forward-migration checkpoint](./checkpoints/2026-07-29-agent-os-dom017-forward-migrations.md)
+is retained as the preceding Phase 1 migration checkpoint.
 The
 [DOM-016 legacy-projection checkpoint](./checkpoints/2026-07-29-agent-os-dom016-legacy-projections.md)
 is retained as the preceding domain checkpoint.

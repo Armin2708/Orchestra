@@ -60,9 +60,9 @@ describe('Agent OS server composition documentation', () => {
     expect(checkpoint).toContain('135 / 375 delivered; 240 open')
     expect(checkpoint).toContain('DOM-016, DOM-017, and DOM-019 remain open')
     expect(checkpoint).toContain('DOM-016 is the next independent dependency-ready item')
-    expect(program).toContain('145 / 375 checklist boxes delivered; 230 remain open')
-    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |')
-    expect(program).toContain('DOM-013` through `DOM-017`')
+    expect(program).toContain('151 / 375 checklist boxes delivered; 224 remain open')
+    expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 20 / 20 | 0 |')
+    expect(program).toContain('DOM-013` through `DOM-019`')
   })
 
   it('keeps the human inventory explicit about composition ownership and exclusions', () => {

@@ -18,7 +18,7 @@ tables without treating similarly named legacy concepts as canonical domains.
 | Ambiguity | quarantine safe hashes and reason codes; never guess a canonical identity or write |
 | Restart | replay is idempotent; deleting only the migration marker safely revalidates without duplicating links or events |
 | Rollback | keep the additive schema and canonical writes; no automatic down migration |
-| Cutover | no writer or reserved Phase 1 control is enabled by DOM-017; DOM-019 telemetry remains open |
+| Cutover | no writer or reserved Phase 1 control is enabled by DOM-017; delivered DOM-019 telemetry supplies evidence but does not authorize cutover |
 
 The executable source of truth is
 `src/agent-os/compatibility-forward-migration.ts`. The exact migration wrapper is
