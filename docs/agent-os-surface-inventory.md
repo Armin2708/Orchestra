@@ -430,6 +430,7 @@ in `web/src/BoardSection.tsx`.
 | Board → Workspace | canonical | `web/src/WorkspaceCockpit.tsx` |
 | Board → Timeline | legacy | `web/src/TimelineView.tsx` |
 | Board → Shipped | compatibility | `web/src/ShippedView.tsx` |
+| Open Work | canonical | `web/src/OpenWorkView.tsx` |
 | Roadmap | legacy | `web/src/RoadmapView.tsx` |
 | Settings | infrastructure | `web/src/SettingsView.tsx` |
 | Needs You | canonical | `web/src/NeedsYou.tsx` |
@@ -473,7 +474,7 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 162 signatures;
+   actions, and exact-compares all 166 signatures;
 3. extracts every Commander root/subcommand and exact-compares all 120 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
