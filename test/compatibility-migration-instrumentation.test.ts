@@ -319,6 +319,58 @@ describe('DOM-019 real compatibility instrumentation', () => {
       WHERE table_name='boards' AND operation='mismatch'`).get()).toEqual({ count: 0 })
   })
 
+  it('retains source scope when linked canonical event or review targets are missing', async () => {
+    const resource = fixture()
+    const { boardId, cardId } = boardAndCard(resource.db)
+    const eventId = Number(resource.db.prepare(`INSERT INTO card_events
+      (card_id, type, payload) VALUES (?, 'commented', '{}')`)
+      .run(cardId).lastInsertRowid)
+    const decisionId = Number(resource.db.prepare(`INSERT INTO review_decisions
+      (board_id, card_id, decision) VALUES (?, ?, 'approve')`)
+      .run(boardId, cardId).lastInsertRowid)
+    const placeholderHash = '0'.repeat(64)
+    const insertLink = resource.db.prepare(`INSERT INTO os_compatibility_projection_links (
+      migration_id, source_table, source_key, source_hash,
+      target_table, target_key, target_hash, disposition
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'test-missing-target')`)
+    insertLink.run(
+      AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
+      'card_events',
+      String(eventId),
+      placeholderHash,
+      'os_events',
+      'missing-event',
+      placeholderHash,
+    )
+    insertLink.run(
+      AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
+      'review_decisions',
+      String(decisionId),
+      placeholderHash,
+      'delivery_reports',
+      'missing-delivery',
+      placeholderHash,
+    )
+    bindJournal(resource)
+    const server = buildServer(resource.db)
+    servers.add(server)
+    await server.ready()
+
+    for (const url of [
+      `/api/v1/os/boards/${boardId}/events`,
+      `/api/v1/os/cards/${cardId}/deliveries`,
+    ]) {
+      const response = await server.inject({ method: 'GET', url })
+      expect(response.statusCode, `${url}: ${response.body}`).toBe(200)
+    }
+    expect(resource.db.prepare(`SELECT table_name, diagnostic_code
+      FROM os_compatibility_migration_telemetry_daily
+      WHERE operation='mismatch' ORDER BY table_name`).all()).toEqual([
+      { table_name: 'card_events', diagnostic_code: 'missing_canonical_row' },
+      { table_name: 'review_decisions', diagnostic_code: 'missing_canonical_row' },
+    ])
+  })
+
   it('records the real provider-usage translation and projection refresh atomically', () => {
     const resource = fixture()
     const { boardId, agentId } = agentUsageFixture(resource)

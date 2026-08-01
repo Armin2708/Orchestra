@@ -312,9 +312,10 @@ function linkedCardEventsForBoard(
 ): CompatibilityTelemetrySubject[] {
   const rows = db.prepare(`SELECT link.source_key AS id
     FROM os_compatibility_projection_links link
-    JOIN os_events event ON event.id=link.target_key
+    JOIN card_events event ON event.id=CAST(link.source_key AS INTEGER)
+    JOIN cards card ON card.id=event.card_id
     WHERE link.migration_id=? AND link.source_table='card_events'
-      AND link.target_table='os_events' AND event.board_id=?
+      AND link.target_table='os_events' AND card.board_id=?
     ORDER BY CAST(link.source_key AS INTEGER)`).all(
     AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
     boardId,
@@ -328,9 +329,9 @@ function linkedReviewsForCard(
 ): CompatibilityTelemetrySubject[] {
   const rows = db.prepare(`SELECT link.source_key AS id
     FROM os_compatibility_projection_links link
-    JOIN delivery_reports report ON report.id=link.target_key
+    JOIN review_decisions decision ON decision.id=CAST(link.source_key AS INTEGER)
     WHERE link.migration_id=? AND link.source_table='review_decisions'
-      AND link.target_table='delivery_reports' AND report.card_id=?
+      AND link.target_table='delivery_reports' AND decision.card_id=?
     ORDER BY CAST(link.source_key AS INTEGER)`).all(
     AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
     cardId,
