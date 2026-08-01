@@ -195,6 +195,9 @@ function releaseAssignment(
 
 function removeMigration018Schema(db: Database.Database): void {
   db.exec(`
+    DROP TRIGGER IF EXISTS os_knowledge_promotion_scope_insert;
+    DROP TABLE IF EXISTS os_knowledge_promotions;
+    DELETE FROM os_schema_migrations WHERE id='029-agent-organization-assurance';
     DROP TABLE IF EXISTS context_uses;
     DROP TABLE IF EXISTS context_build_entries;
     DROP TABLE IF EXISTS context_build_sources;
@@ -278,7 +281,8 @@ describe('job assignment migration 016', () => {
       WHERE id IN (
         '016-job-market-assignment-lifecycle',
         '017-job-assignment-runtime-binding',
-        '018-knowledge-persistence'
+        '018-knowledge-persistence',
+        '029-agent-organization-assurance'
       )
     `).all()).toEqual([])
     expect(db.prepare(`
@@ -296,13 +300,15 @@ describe('job assignment migration 016', () => {
       WHERE id IN (
         '016-job-market-assignment-lifecycle',
         '017-job-assignment-runtime-binding',
-        '018-knowledge-persistence'
+        '018-knowledge-persistence',
+        '029-agent-organization-assurance'
       )
       ORDER BY id
     `).all()).toEqual([
       { id: '016-job-market-assignment-lifecycle' },
       { id: '017-job-assignment-runtime-binding' },
       { id: '018-knowledge-persistence' },
+      { id: '029-agent-organization-assurance' },
     ])
     expect(db.prepare(`
       SELECT name, sql FROM sqlite_master

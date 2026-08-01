@@ -293,6 +293,10 @@
     {
       "file": "src/agent-os/open-work-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/organization-routes.ts",
+      "prefix": "/api/v1/os"
     }
   ],
   "http_routes": {
@@ -311,6 +315,7 @@
       "GET /api/v1/os/boards/:id/retention",
       "GET /api/v1/os/boards/:id/workspaces",
       "GET /api/v1/os/boards/:boardId/assignments",
+      "GET /api/v1/os/boards/:boardId/organizations",
       "GET /api/v1/os/cards/:cardId/assignments",
       "GET /api/v1/os/cards/:cardId/assignments/current",
       "GET /api/v1/os/cards/:id/contract",
@@ -330,6 +335,7 @@
       "GET /api/v1/os/drivers",
       "GET /api/v1/os/jobs/:id",
       "GET /api/v1/os/open-work",
+      "GET /api/v1/os/organizations/:organizationId/control-center",
       "GET /api/v1/os/plugins",
       "GET /api/v1/os/processes/:id",
       "GET /api/v1/os/processes/:id/output",
@@ -354,6 +360,7 @@
       "POST /api/v1/os/boards/:id/policies",
       "POST /api/v1/os/boards/:id/retention/run",
       "POST /api/v1/os/boards/:id/workspaces",
+      "POST /api/v1/os/boards/:boardId/organizations",
       "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign",
       "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release",
       "POST /api/v1/os/cards/:cardId/assignments/assign",
@@ -378,6 +385,9 @@
       "POST /api/v1/os/jobs/:id/cancel",
       "POST /api/v1/os/jobs/:id/deliveries/prepare",
       "POST /api/v1/os/jobs/:id/deliveries/submit",
+      "POST /api/v1/os/organizations/:organizationId/assurance/:command",
+      "POST /api/v1/os/organizations/:organizationId/coordination/:command",
+      "POST /api/v1/os/organizations/:organizationId/core/:command",
       "POST /api/v1/os/policies/:id/evaluate",
       "POST /api/v1/os/processes/:id/input",
       "POST /api/v1/os/processes/:id/resize",
@@ -530,6 +540,11 @@
       "job cancel",
       "job create",
       "job list",
+      "organization",
+      "organization command",
+      "organization create",
+      "organization list",
+      "organization show",
       "plugins",
       "policy",
       "policy create",
@@ -733,6 +748,12 @@
       "classification": "canonical",
       "file": "web/src/App.tsx",
       "evidence": ">Open Work</button>"
+    },
+    {
+      "id": "primary.organization",
+      "classification": "canonical",
+      "file": "web/src/App.tsx",
+      "evidence": ">Organization</button>"
     },
     {
       "id": "primary.settings",

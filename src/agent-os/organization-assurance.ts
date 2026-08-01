@@ -271,8 +271,20 @@ export interface GateEvaluation {
 
 export interface OrganizationDashboard {
   organization_id: string
+  trace_nodes: Record<string, unknown>[]
+  trace_edges: Record<string, unknown>[]
+  provenance_attestations: Record<string, unknown>[]
+  quality_gate_definitions: Record<string, unknown>[]
+  quality_gate_runs: Record<string, unknown>[]
+  metric_definitions: Record<string, unknown>[]
   scorecards: Record<string, unknown>[]
+  metric_observations: Record<string, unknown>[]
+  access_certifications: Record<string, unknown>[]
+  appeals: Record<string, unknown>[]
   incidents: Record<string, unknown>[]
+  postmortems: Record<string, unknown>[]
+  corrective_actions: Record<string, unknown>[]
+  knowledge_promotions: Record<string, unknown>[]
   overdue_corrective_actions: Record<string, unknown>[]
   stale_metric_observations: number
   overdue_access_certifications: number
@@ -1631,14 +1643,29 @@ export class OrganizationAssuranceService {
   dashboard(organizationId: string): OrganizationDashboard {
     const organization = this.organization.requireOrganization(organizationId)
     const now = timestamp()
+    const rows = (table: string): Record<string, unknown>[] => this.db
+      .prepare(`SELECT * FROM ${table} WHERE organization_id=? ORDER BY rowid`)
+      .all(organization.id) as Record<string, unknown>[]
     const count = (sql: string): number => Number((this.db.prepare(sql)
       .get(organization.id, now) as { count: number }).count)
     return {
       organization_id: organization.id,
+      trace_nodes: rows('os_trace_nodes'),
+      trace_edges: rows('os_trace_edges'),
+      provenance_attestations: rows('os_provenance_attestations'),
+      quality_gate_definitions: rows('os_quality_gate_definitions'),
+      quality_gate_runs: rows('os_quality_gate_runs'),
+      metric_definitions: rows('os_metric_definitions'),
       scorecards: this.db.prepare(`SELECT * FROM os_scorecards
         WHERE organization_id=? ORDER BY window_end DESC`).all(organization.id) as Record<string, unknown>[],
+      metric_observations: rows('os_metric_observations'),
+      access_certifications: rows('os_access_certifications'),
+      appeals: rows('os_review_appeals'),
       incidents: this.db.prepare(`SELECT * FROM os_incidents
         WHERE organization_id=? ORDER BY started_at DESC`).all(organization.id) as Record<string, unknown>[],
+      postmortems: rows('os_postmortems'),
+      corrective_actions: rows('os_corrective_actions'),
+      knowledge_promotions: rows('os_knowledge_promotions'),
       overdue_corrective_actions: this.db.prepare(`SELECT * FROM os_corrective_actions
         WHERE organization_id=? AND status='open' AND due_at<? ORDER BY due_at`)
         .all(organization.id, now) as Record<string, unknown>[],

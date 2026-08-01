@@ -461,6 +461,60 @@ export type PluginDescriptor = {
   [key: string]: unknown
 }
 
+export type OrganizationRecord = {
+  id: string
+  board_id: number
+  organization_key: string
+  name: string
+  mission: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type OrganizationControlCenter = {
+  organization: {
+    organization: OrganizationRecord
+    product_areas: JsonObject[]
+    teams: JsonObject[]
+    memberships: JsonObject[]
+    roles: JsonObject[]
+    assignments: JsonObject[]
+    ownerships: JsonObject[]
+  }
+  coordination: {
+    interactions: JsonObject[]
+    responsibilities: JsonObject[]
+    objectives: JsonObject[]
+    goals: JsonObject[]
+    capacity: JsonObject[]
+    decisions: JsonObject[]
+    escalations: JsonObject[]
+  }
+  assurance: {
+    organization_id: string
+    trace_nodes: JsonObject[]
+    trace_edges: JsonObject[]
+    provenance_attestations: JsonObject[]
+    quality_gate_definitions: JsonObject[]
+    quality_gate_runs: JsonObject[]
+    metric_definitions: JsonObject[]
+    scorecards: JsonObject[]
+    metric_observations: JsonObject[]
+    access_certifications: JsonObject[]
+    appeals: JsonObject[]
+    incidents: JsonObject[]
+    postmortems: JsonObject[]
+    corrective_actions: JsonObject[]
+    knowledge_promotions: JsonObject[]
+    overdue_corrective_actions: JsonObject[]
+    stale_metric_observations: number
+    overdue_access_certifications: number
+    open_appeals: number
+    insufficient_evidence_observations: number
+  }
+}
+
 export const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type AgentEffort = string
 export type AgentDefaultProfile = { provider: string; model: string | null; effort: AgentEffort | null }
@@ -1328,6 +1382,37 @@ export const normalizeCanonicalLifecycleRecord = (value: unknown): CanonicalLife
 }
 
 export const osApi = {
+  listOrganizations: async (boardId: number) =>
+    unwrapList<OrganizationRecord>(
+      await api('GET', `/os/boards/${boardId}/organizations`),
+      ['organizations'],
+    ),
+  createOrganization: async (boardId: number, input: {
+    key: string
+    name: string
+    mission: string
+    idempotency_key: string
+  }) => unwrapEntity<OrganizationRecord>(
+    await api('POST', `/os/boards/${boardId}/organizations`, input),
+    ['result'],
+  ),
+  getOrganizationControlCenter: async (organizationId: string) =>
+    api(
+      'GET',
+      `/os/organizations/${encodeURIComponent(organizationId)}/control-center`,
+    ) as Promise<OrganizationControlCenter>,
+  runOrganizationCommand: async (
+    organizationId: string,
+    layer: 'core' | 'coordination' | 'assurance',
+    command: string,
+    input: JsonObject,
+    idempotencyKey: string,
+  ) => unwrapEntity<JsonObject>(await api(
+    'POST',
+    `/os/organizations/${encodeURIComponent(organizationId)}/${layer}/${encodeURIComponent(command)}`,
+    { ...input, idempotency_key: idempotencyKey },
+  ), ['result']),
+
   listWorkspaces: async (boardId: number) =>
     unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/workspaces`), ['workspaces']).map(normalizeWorkspace),
   createWorkspace: async (boardId: number, input: Partial<Workspace> & { name: string }) =>

@@ -1003,6 +1003,73 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
       print(await deps.api('POST', `/os/policies/${segment(id)}/evaluate`, { kind, value }), options.json)
     })
 
+  const organization = program.command('organization')
+    .description('manage agent-team organization, coordination, and assurance controls')
+  organization.command('list')
+    .option('--board <id>', 'board id', integer)
+    .option('--json', 'print the complete response')
+    .action(async (options) => {
+      const id = await boardId(options.board)
+      print(
+        await deps.api('GET', `/os/boards/${id}/organizations`),
+        options.json,
+        ['organizations'],
+      )
+    })
+  organization.command('create <key> <name>')
+    .requiredOption('--mission <text>', 'organization mission')
+    .option('--board <id>', 'board id', integer)
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (key, name, options) => {
+      const id = await boardId(options.board)
+      print(await deps.api('POST', `/os/boards/${id}/organizations`, {
+        key,
+        name,
+        mission: options.mission,
+        idempotency_key: commandKey(
+          `organization-create:${id}:${key}`,
+          options.idempotency,
+        ),
+      }), options.json, ['result'])
+    })
+  organization.command('show <id>')
+    .description('show the organization control center and unresolved assurance state')
+    .option('--json', 'print the complete response')
+    .action(async (id, options) => {
+      await ready()
+      print(
+        await deps.api('GET', `/os/organizations/${segment(id)}/control-center`),
+        options.json,
+      )
+    })
+  organization.command('command <id> <layer> <command>')
+    .description('run a whitelisted core, coordination, or assurance command')
+    .requiredOption('--body <json>', 'JSON command body')
+    .option('--idempotency <key>')
+    .option('--json', 'print the complete response')
+    .action(async (id, layer, command, options) => {
+      await ready()
+      if (!['core', 'coordination', 'assurance'].includes(layer)) {
+        throw new Error('layer must be core, coordination, or assurance')
+      }
+      const parsed = parseJsonOption<unknown>(options.body, 'body')
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('body must be a JSON object')
+      }
+      print(await deps.api(
+        'POST',
+        `/os/organizations/${segment(id)}/${layer}/${segment(command)}`,
+        {
+          ...parsed,
+          idempotency_key: commandKey(
+            `organization-command:${id}:${layer}:${command}`,
+            options.idempotency,
+          ),
+        },
+      ), options.json, ['result'])
+    })
+
   program.command('events')
     .description('read the append-only Agent OS event stream')
     .option('--board <id>', 'board id', integer)

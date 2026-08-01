@@ -13,6 +13,7 @@ import './agentOs.css'
 
 const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
 const OpenWorkView = React.lazy(() => import('./OpenWorkView').then((module) => ({ default: module.OpenWorkView })))
+const OrganizationCenter = React.lazy(() => import('./OrganizationCenter').then((module) => ({ default: module.OrganizationCenter })))
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
     <rect width="32" height="32" rx="8" fill="#111"/>
@@ -128,6 +129,7 @@ export function App() {
           <nav className="view-tabs">
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
             <button className={view === 'open-work' ? 'tab active' : 'tab'} onClick={() => pickView('open-work')}>Open Work</button>
+            <button className={view === 'organization' ? 'tab active' : 'tab'} onClick={() => pickView('organization')}>Organization</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
             <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
@@ -147,6 +149,10 @@ export function App() {
         : view === 'open-work'
           ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Open Work"><span /><span /><span /></div>}>
               <OpenWorkView />
+            </React.Suspense>
+        : view === 'organization'
+          ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading organization"><span /><span /><span /></div>}>
+              <OrganizationCenter boards={shown.map((snapshot) => snapshot.board)} />
             </React.Suspense>
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />

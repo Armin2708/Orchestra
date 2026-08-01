@@ -16,8 +16,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 89 | 3 | 10 | 12 | 114 |
-| Registered HTTP routes | 103 | 29 | 25 | 9 | 166 |
-| CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
+| Registered HTTP routes | 109 | 29 | 25 | 9 | 172 |
+| CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -187,7 +187,8 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/agent-os/routes.ts`, `src/agent-os/contract-template-routes.ts`,
 `src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`, and
-`src/agent-os/job-assignment-routes.ts`, and `src/agent-os/open-work-routes.ts`. The seven session action routes are expanded from
+`src/agent-os/job-assignment-routes.ts`, `src/agent-os/open-work-routes.ts`, and
+`src/agent-os/organization-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
@@ -207,6 +208,7 @@ GET /api/v1/os/boards/:id/policies
 GET /api/v1/os/boards/:id/retention
 GET /api/v1/os/boards/:id/workspaces
 GET /api/v1/os/boards/:boardId/assignments
+GET /api/v1/os/boards/:boardId/organizations
 GET /api/v1/os/cards/:cardId/assignments
 GET /api/v1/os/cards/:cardId/assignments/current
 GET /api/v1/os/cards/:id/contract
@@ -226,6 +228,7 @@ GET /api/v1/os/deliveries/:id/export
 GET /api/v1/os/drivers
 GET /api/v1/os/jobs/:id
 GET /api/v1/os/open-work
+GET /api/v1/os/organizations/:organizationId/control-center
 GET /api/v1/os/plugins
 GET /api/v1/os/processes/:id
 GET /api/v1/os/processes/:id/output
@@ -250,6 +253,7 @@ POST /api/v1/os/boards/:id/jobs
 POST /api/v1/os/boards/:id/policies
 POST /api/v1/os/boards/:id/retention/run
 POST /api/v1/os/boards/:id/workspaces
+POST /api/v1/os/boards/:boardId/organizations
 POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign
 POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release
 POST /api/v1/os/cards/:cardId/assignments/assign
@@ -274,6 +278,9 @@ POST /api/v1/os/deliveries/:id/verify
 POST /api/v1/os/jobs/:id/cancel
 POST /api/v1/os/jobs/:id/deliveries/prepare
 POST /api/v1/os/jobs/:id/deliveries/submit
+POST /api/v1/os/organizations/:organizationId/assurance/:command
+POST /api/v1/os/organizations/:organizationId/coordination/:command
+POST /api/v1/os/organizations/:organizationId/core/:command
 POST /api/v1/os/policies/:id/evaluate
 POST /api/v1/os/processes/:id/input
 POST /api/v1/os/processes/:id/resize
@@ -390,12 +397,12 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 120 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
+The exact 125 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
 `src/job-assignment-cli.ts`. The compact human map is:
 
 | Class | Command surface |
 |---|---|
-| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
+| Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `organization {list,create,show,command}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
 | Infrastructure | `serve`; `stop`; `restart`; `token`; `remote`; `hook`; `install`; `uninstall` |
@@ -441,6 +448,7 @@ in `web/src/BoardSection.tsx`.
 | Board → Timeline | legacy | `web/src/TimelineView.tsx` |
 | Board → Shipped | compatibility | `web/src/ShippedView.tsx` |
 | Open Work | canonical | `web/src/OpenWorkView.tsx` |
+| Organization control center | canonical | `web/src/OrganizationCenter.tsx` |
 | Roadmap | legacy | `web/src/RoadmapView.tsx` |
 | Settings | infrastructure | `web/src/SettingsView.tsx` |
 | Needs You | canonical | `web/src/NeedsYou.tsx` |
@@ -484,8 +492,8 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 166 signatures;
-3. extracts every Commander root/subcommand and exact-compares all 120 command paths;
+   actions, and exact-compares all 172 signatures;
+3. extracts every Commander root/subcommand and exact-compares all 125 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;
