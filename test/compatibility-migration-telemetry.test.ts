@@ -449,7 +449,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     })
     expect(first.prepare(`
       SELECT COUNT(*) AS count FROM os_schema_migrations
-    `).get()).toEqual({ count: 26 })
+    `).get()).toEqual({ count: 28 })
     expect(schemaObjectCount(first))
       .toBe(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES.length)
     const before = first.prepare(`

@@ -34,6 +34,16 @@
       "source": "src/agent-os/knowledge-service.ts"
     },
     {
+      "name": "organization",
+      "implementation_state": "canonical",
+      "source": "src/agent-os/organization.ts"
+    },
+    {
+      "name": "coordination",
+      "implementation_state": "canonical",
+      "source": "src/agent-os/organization-coordination.ts"
+    },
+    {
       "name": "conflicts",
       "implementation_state": "compatibility_only",
       "source": "src/agent-os/conflict-service.ts"
@@ -113,7 +123,9 @@
     "src/agent-os/compatibility-forward-migration.ts",
     "src/agent-os/compatibility-migration-telemetry.ts",
     "src/agent-os/compatibility-migration-failure-journal.ts",
-    "src/agent-os/knowledge-retrieval.ts"
+    "src/agent-os/knowledge-retrieval.ts",
+    "src/agent-os/organization-migration.ts",
+    "src/agent-os/organization-coordination-migration.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -157,8 +169,31 @@
       "knowledge_retrieval_index_state",
       "knowledge_retrieval_schema",
       "knowledge_sources",
+      "os_authority_policies",
+      "os_capability_attestations",
+      "os_capacity_snapshots",
       "os_command_receipts",
+      "os_control_approvals",
+      "os_decision_records",
+      "os_escalations",
       "os_events",
+      "os_membership_transitions",
+      "os_message_envelopes",
+      "os_objectives",
+      "os_organizations",
+      "os_participation_history",
+      "os_positions",
+      "os_product_areas",
+      "os_responsibility_assignments",
+      "os_risk_evaluations",
+      "os_role_activations",
+      "os_role_assignments",
+      "os_role_definitions",
+      "os_team_goals",
+      "os_team_interactions",
+      "os_team_memberships",
+      "os_team_ownerships",
+      "os_teams",
       "policies",
       "process_output",
       "processes",

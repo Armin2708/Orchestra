@@ -34,6 +34,8 @@ describe('Agent OS service boundary documentation', () => {
       'canonical',
       'reserved',
       'canonical',
+      'canonical',
+      'canonical',
       'compatibility_only',
       'reserved',
     ])

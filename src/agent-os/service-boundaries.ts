@@ -9,6 +9,7 @@ import { KnowledgeService } from './knowledge-service.js'
 import { KnowledgeStore } from './knowledge-store.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { OrganizationService } from './organization.js'
+import { OrganizationCoordinationService } from './organization-coordination.js'
 import type { JobScheduler } from './scheduler.js'
 
 export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
@@ -18,6 +19,7 @@ export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
   'discussions',
   'knowledge',
   'organization',
+  'coordination',
   'conflicts',
   'device_pairing',
 ] as const)
@@ -122,6 +124,24 @@ export type OrganizationServiceBoundary = Pick<
   | 'listBoardOrganizations'
 >
 
+export type OrganizationCoordinationServiceBoundary = Pick<
+  OrganizationCoordinationService,
+  | 'createTeamInteraction'
+  | 'assignResponsibility'
+  | 'createObjective'
+  | 'createTeamGoal'
+  | 'captureCapacity'
+  | 'sendMessage'
+  | 'recordDecision'
+  | 'createEscalation'
+  | 'resolveEscalation'
+  | 'assessRisk'
+  | 'recordParticipation'
+  | 'recordControlApproval'
+  | 'controlStatus'
+  | 'coordinationSnapshot'
+>
+
 interface AgentOsServiceBoundaryBase<
   Name extends AgentOsDomainServiceName,
   State extends AgentOsDomainServiceImplementationState,
@@ -174,6 +194,11 @@ export interface AgentOsDomainServiceBoundaries {
     'canonical',
     OrganizationServiceBoundary
   >
+  readonly coordination: AgentOsActiveServiceBoundary<
+    'coordination',
+    'canonical',
+    OrganizationCoordinationServiceBoundary
+  >
   readonly conflicts: AgentOsActiveServiceBoundary<
     'conflicts',
     'compatibility_only',
@@ -189,6 +214,7 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   deliveries?: DeliveryServiceBoundary
   knowledge?: KnowledgeServiceBoundary
   organization?: OrganizationServiceBoundary
+  coordination?: OrganizationCoordinationServiceBoundary
   conflicts?: ConflictDetectionServiceBoundary
 }
 
@@ -297,6 +323,22 @@ export function createAgentOsDomainServiceBoundaries(
         'implicit authority from capability or seniority labels',
       ],
       'Canonical organization, membership, role, ownership, and authority boundary.',
+    ),
+    coordination: activeBoundary(
+      'coordination',
+      'canonical',
+      options.coordination ?? new OrganizationCoordinationService(db),
+      [
+        'team interaction modes and responsibility tuples',
+        'objectives, team goals, capacity, typed messages, and decisions',
+        'risk selection, escalation, participation history, and control approvals',
+      ],
+      [
+        'transport-only wake delivery',
+        'implicit broadcast or model-generated acknowledgement loops',
+        'self-approval or authority inferred from capability labels',
+      ],
+      'Canonical cross-team coordination, decision, escalation, and risk-control boundary.',
     ),
     conflicts: activeBoundary(
       'conflicts',

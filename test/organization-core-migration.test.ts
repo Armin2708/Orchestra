@@ -16,8 +16,8 @@ describe('organization core migration', () => {
     for (const table of AGENT_OS_ORGANIZATION_CORE_TABLES) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((db.prepare(`SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1`)
-      .get() as { id: string }).id).toBe(AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID)
+    expect(db.prepare(`SELECT id FROM os_schema_migrations WHERE id=?`)
+      .get(AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID)).toBeTruthy()
 
     db.prepare('DELETE FROM os_schema_migrations WHERE id=?')
       .run(AGENT_OS_ORGANIZATION_CORE_MIGRATION_ID)

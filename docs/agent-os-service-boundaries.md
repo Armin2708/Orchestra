@@ -5,7 +5,7 @@ Status: DOM-014 delivered at exact code head
 
 ## TL;DR
 
-Agent OS now exposes one typed seven-domain composition catalog. The catalog names the real
+Agent OS now exposes one typed nine-domain composition catalog. The catalog names the real
 canonical services, labels partial foundations precisely, and leaves unimplemented domains
 explicitly reserved with `service: null`. It does not turn legacy messages into Discussions,
 computed overlaps into durable Conflict resolution, bounded Knowledge ingestion/retrieval into
@@ -18,6 +18,8 @@ managed prompt injection, or the operator-token QR into secure device pairing.
 | `deliveries` | `canonical` | `DeliveryReportService` | job scheduling, legacy review controls, Knowledge promotion |
 | `discussions` | `reserved` | none | `messages` remain low-level targeted transport, not a durable Q&A domain |
 | `knowledge` | `canonical` | `KnowledgeService` | managed prompt injection, freshness automation, review, promotion, API/UI |
+| `organization` | `canonical` | `OrganizationService` | work assignment identity, provider runtime identity, implicit authority from capability or seniority labels |
+| `coordination` | `canonical` | `OrganizationCoordinationService` | wake transport, implicit broadcast, acknowledgement loops, self-approval |
 | `conflicts` | `compatibility_only` | `ComputedWorkspaceConflictService` | durable negotiation, arbitration, enforcement, resolution |
 | `device_pairing` | `reserved` | none | the reusable operator-token QR is not a PairingTicket or DeviceSession |
 

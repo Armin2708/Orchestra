@@ -15,7 +15,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 48 | 3 | 10 | 12 | 73 |
+| SQLite application tables | 71 | 3 | 10 | 12 | 96 |
 | Registered HTTP routes | 103 | 29 | 25 | 9 | 166 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -47,6 +47,8 @@ which partial foundation exists.
 | `deliveries` | `canonical` | `src/agent-os/delivery-reports.ts` |
 | `discussions` | `reserved` | `src/agent-os/service-boundaries.ts` |
 | `knowledge` | `canonical` | `src/agent-os/knowledge-service.ts` |
+| `organization` | `canonical` | `src/agent-os/organization.ts` |
+| `coordination` | `canonical` | `src/agent-os/organization-coordination.ts` |
 | `conflicts` | `compatibility_only` | `src/agent-os/conflict-service.ts` |
 | `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
 
@@ -122,7 +124,9 @@ reading `sqlite_master`. Base tables are defined in `src/db.ts`; Agent OS migrat
 transactional ledger are defined in `src/agent-os/migrations.ts`; DOM-017's evidence schema is
 defined in `src/agent-os/compatibility-forward-migration.ts`; DOM-019 telemetry and failure
 evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
-`src/agent-os/compatibility-migration-failure-journal.ts`.
+`src/agent-os/compatibility-migration-failure-journal.ts`. Organization and coordination records
+are defined in `src/agent-os/organization-migration.ts` and
+`src/agent-os/organization-coordination-migration.ts`.
 
 ### Canonical
 
@@ -136,6 +140,8 @@ evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
 | Provider acceptance | `provider_acceptance_evidence` |
 | Control plane | `os_command_receipts`, `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
 | Knowledge persistence and retrieval | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses`, `knowledge_retrieval_schema`, `knowledge_retrieval_documents`, `knowledge_retrieval_index_state`, and the `knowledge_retrieval_fts*` virtual-table family |
+| Organization and authority | `os_organizations`, `os_product_areas`, `os_teams`, `os_positions`, `os_team_memberships`, `os_membership_transitions`, `os_role_definitions`, `os_role_assignments`, `os_role_activations`, `os_capability_attestations`, `os_authority_policies`, `os_team_ownerships` |
+| Coordination and risk control | `os_team_interactions`, `os_responsibility_assignments`, `os_objectives`, `os_team_goals`, `os_capacity_snapshots`, `os_message_envelopes`, `os_decision_records`, `os_escalations`, `os_risk_evaluations`, `os_participation_history`, `os_control_approvals` |
 
 ### Compatibility
 
