@@ -10,6 +10,10 @@ control projections, integrated Open Work, deterministic matching, and the compl
 gate, plus the durable Knowledge Compiler persistence foundation and bounded repository-document
 ingestion; collaborative Team assignment and Knowledge compilation/injection remain open. The
 product is not yet public plug-and-play.
+The researched [Agent Team Operating Model](./agent-team-operating-model.md) now defines the
+cross-cutting organization, authority, communication, quality, traceability, performance, and
+incident-learning contract as 25 open `ORG-*` backlog items. It is a delivery plan, not a claim
+that the organization control plane is implemented.
 The versioned subscription-first terminal-agent contract is delivered and its first
 capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
 append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
@@ -48,6 +52,12 @@ subscription cannot power background orchestration without permission, and meter
 be explicitly visible and consented.
 The source-controlled acceptance contract is
 [Subscription-first terminal-agent strategy](./provider-subscription-strategy.md).
+
+The organizational acceptance contract is the
+[Agent Team Operating Model](./agent-team-operating-model.md). It keeps persistent identity,
+membership, role assignment, short-lived role activation, execution session, work assignment,
+review authority, and approval authority distinct. It also prohibits individual productivity
+ranking from raw activity volume.
 
 ## Handoff contract
 
@@ -414,8 +424,9 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   implementing the remaining Claude/Qwen/Kimi adapters. The exact supported-provider/version
   matrix under reopened `BASE-010` remains open, while current default managed behavior remains
   Claude/Codex-only and prior support/policy labels are unchanged;
-- Discussions/Q&A, bounded Teams/conflicts, secure DeviceSessions/phone control, token/outcome
-  analytics, operations hardening, clean-machine packaging, and release;
+- Discussions/Q&A, bounded Teams/conflicts, the cross-cutting Agent Organization Operating System,
+  secure DeviceSessions/phone control, token/outcome analytics, operations hardening,
+  clean-machine packaging, and release;
 - `QA-001` and `QA-013`; the added state-transition tests and Playwright fallback do not cover
   every state machine or the intended desktop/tablet/phone Browser matrix;
 - `TOOL-010`; the readiness doctor covers provider compatibility and login but does not yet verify
@@ -428,7 +439,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **151 / 375 checklist boxes delivered; 224 remain open**.
+The strict master reconciliation is **151 / 400 checklist boxes delivered; 249 remain open**.
+The 25 newly planned `ORG-*` boxes are all open and do not change the delivered numerator.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
 program state closes `KNO-002` through `KNO-010`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
 `DOM-013` through `DOM-019`, plus `JOB-008`, `JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`;
@@ -449,6 +461,7 @@ plug-and-play release.
 | Phase 7 — Knowledge Compiler | 10 / 28 | 18 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
+| Cross-cutting — Agent organization operating system | 0 / 25 | 25 |
 | Phase 10 — Tools/permissions | 3 / 15 | 12 |
 | Phase 11 — Visual command center | 1 / 18 | 17 |
 | Phase 12 — Token/outcome analytics | 1 / 17 | 16 |
@@ -460,7 +473,9 @@ plug-and-play release.
 | Phase 18 — Deferred | 0 / 10 | 10 deferred |
 | Release milestone summaries | 2 / 15 | 13 |
 
-The current continuation point is the
+The current organization-program contract is the
+[Agent Team Operating Model](./agent-team-operating-model.md). The current implemented-code
+continuation point remains the
 [Lane 1 integrated Open Work and DOM-019 checkpoint](./checkpoints/2026-08-01-lane1-open-work-dom019-integration.md).
 The
 [DOM-017 forward-migration checkpoint](./checkpoints/2026-07-29-agent-os-dom017-forward-migrations.md)

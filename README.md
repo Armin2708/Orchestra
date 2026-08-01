@@ -20,6 +20,9 @@ every phase control, activation boundary, and fail-closed rollback point without
 controls are implemented. The [exact current engineering baseline](docs/agent-os-current-baseline.md)
 records tests, builds, package/install smoke, startup, memory, loopback latency, and deterministic
 injected-context token usage together with the limits on interpreting those measurements.
+The planned [Agent Team Operating Model](docs/agent-team-operating-model.md) translates practices
+from large engineering organizations into bounded agent teams, explicit authority, typed durable
+communication, independent assurance, end-to-end traceability, and non-surveillance measurement.
 
 The provider strategy is **personal subscription through the vendor's native terminal CLI first**.
 Direct provider-API execution and usage-priced API credentials are optional, explicit secondary

@@ -67,3 +67,11 @@ The authoritative checklist is 151 / 375 delivered and 224 open:
 - `TOOL-014` and reopened `BASE-010` remain open. Claude/Codex are the current managed runtimes;
   Qwen/Kimi candidate code does not constitute support evidence.
 - KNO-003 through KNO-010 remain globally closed from the reviewed Lane 3 integration.
+
+## Later planning addendum — 2026-08-01
+
+This section preserves the checkpoint's exact historical 375-item reconciliation while avoiding a
+stale current-state claim. The later
+[Agent Team Operating Model](../agent-team-operating-model.md) added 25 open `ORG-*` planning
+items without changing delivered work. The current master reconciliation is therefore 151 / 400
+delivered and 249 open.

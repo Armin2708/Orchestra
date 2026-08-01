@@ -22,6 +22,10 @@ isolated legacy domains before physical migration.
 The [compatibility forward-migration and rollback contract](./agent-os-forward-migrations.md)
 defines DOM-017's exact migration order, deterministic backfills/quarantine, five validation
 categories, backup checkpoint, compatibility range, and forward-only recovery procedure.
+The planned [Agent Team Operating Model](./agent-team-operating-model.md) defines the professional
+organization layer: bounded teams, role and decision authority, typed communication, independent
+quality gates, artifact traceability, contextual performance measurement, and incident learning.
+Its `ORG-*` backlog remains open.
 
 ## Open the cockpit
 

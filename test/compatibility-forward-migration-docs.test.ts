@@ -115,7 +115,7 @@ describe('Agent OS compatibility forward-migration documentation', () => {
     expect(agentOs).toContain('[compatibility forward-migration and rollback contract]')
     expect(domain).toContain('[compatibility forward-migration contract]')
     expect(inventory).toContain('## Compatibility forward migration')
-    expect(program).toContain('151 / 375 checklist boxes delivered; 224 remain open')
+    expect(program).toContain('151 / 400 checklist boxes delivered; 249 remain open')
     expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 20 / 20 | 0 |')
     expect(program).toContain('DOM-013` through `DOM-019`')
     expect(checkpoint).toContain('137 / 375 delivered; 238 open')
