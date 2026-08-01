@@ -326,7 +326,10 @@ describe('Agent OS CLI', () => {
   })
 
   it('writes structured task contracts through the compatibility card bridge', async () => {
-    const { calls, run } = setup({ card_id: 2 })
+    const { calls, run } = setup({
+      card_id: 2,
+      job_market: { market_version: 4 },
+    })
 
     await run(
       'contract', 'set', '2',
@@ -340,7 +343,11 @@ describe('Agent OS CLI', () => {
       '--tokens', '5000',
     )
 
-    expect(calls[0]).toEqual({
+    expect(calls).toEqual([{
+      method: 'GET',
+      path: '/os/cards/2/contract',
+      body: undefined,
+    }, {
       method: 'PUT',
       path: '/os/cards/2/contract',
       body: {
@@ -352,8 +359,9 @@ describe('Agent OS CLI', () => {
         dependencies: [1, 3],
         verify_commands: ['npm test'],
         budget_tokens: 5000,
+        expected_market_version: 4,
       },
-    })
+    }])
   })
 
   it('exposes driver discovery through the same authenticated API', async () => {

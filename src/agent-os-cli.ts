@@ -574,8 +574,12 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (cardId, options) => {
       await ready()
+      const normalizedCardId = integer(cardId)
+      const current = await deps.api('GET', `/os/cards/${normalizedCardId}/contract`) as {
+        job_market: { market_version: number }
+      }
       const dependencies = csv(options.depends)?.map(integer)
-      print(await deps.api('PUT', `/os/cards/${integer(cardId)}/contract`, compact({
+      print(await deps.api('PUT', `/os/cards/${normalizedCardId}/contract`, compact({
         objective: options.objective,
         deliverables: parseJsonOption<unknown[]>(options.deliverables, '--deliverables'),
         acceptance_criteria: parseJsonOption<unknown[]>(options.accept, '--accept'),
@@ -599,6 +603,7 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
         policy_id: options.policy,
         workspace_id: options.workspace,
         actor: options.actor,
+        expected_market_version: current.job_market.market_version,
       })), options.json)
     })
   contract.command('validate <card>')
@@ -623,8 +628,15 @@ export function registerAgentOsCommands(program: Command, deps: AgentOsCliDeps):
     .option('--json', 'print the complete response')
     .action(async (cardId, options) => {
       await ready()
+      const normalizedCardId = integer(cardId)
+      const current = await deps.api('GET', `/os/cards/${normalizedCardId}/contract`) as {
+        job_market: { market_version: number }
+      }
       print(
-        await deps.api('POST', `/os/cards/${integer(cardId)}/contract/publish`, { actor: options.actor }),
+        await deps.api('POST', `/os/cards/${normalizedCardId}/contract/publish`, {
+          actor: options.actor,
+          expected_market_version: current.job_market.market_version,
+        }),
         options.json,
       )
     })

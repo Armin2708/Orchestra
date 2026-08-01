@@ -15,7 +15,7 @@ describe('Lane 3 Knowledge Compiler central integration', () => {
       expect(AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID)
         .toBe('025-knowledge-retrieval')
       expect(db.prepare(`SELECT id FROM os_schema_migrations
-        ORDER BY rowid DESC LIMIT 1`).get()).toEqual({
+        WHERE id=?`).get(AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID)).toEqual({
         id: AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID,
       })
       const objects = db.prepare(`SELECT type, name FROM sqlite_master

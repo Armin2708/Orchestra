@@ -242,7 +242,10 @@ describe('task contract template API', () => {
         method: 'PUT',
         url: `/api/v1/os/cards/${cardId}/contract`,
         headers: auth,
-        payload: { objective: 'Objective written by the second client' },
+        payload: {
+          objective: 'Objective written by the second client',
+          expected_market_version: staleExpectedState.market_version,
+        },
       })
       expect(concurrentUpdate.statusCode).toBe(200)
       const concurrentState = concurrentUpdate.json().job_market

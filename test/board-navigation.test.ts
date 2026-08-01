@@ -25,6 +25,7 @@ describe('board-local navigation', () => {
     expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'timeline' })
     expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'shipped' })
     expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'roadmap', boardTab: 'workspace' })
+    expect(resolveStoredNavigation('open-work', 'overview')).toEqual({ view: 'open-work', boardTab: 'overview' })
     expect(resolveStoredNavigation('settings', 'overview')).toEqual({ view: 'settings', boardTab: 'overview' })
     expect(resolveStoredNavigation('unknown', 'unknown')).toEqual({ view: 'board', boardTab: 'overview' })
   })

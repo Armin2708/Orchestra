@@ -33,6 +33,8 @@ export interface Job {
   job_assignment_id: string | null
   assigned_profile_id: string | null
   assignment_market_version: number | null
+  agent_brief: string | null
+  agent_brief_sha256: string | null
   priority: number
   status: JobStatus
   attempts: number
@@ -680,6 +682,10 @@ function mapJob(row: Record<string, unknown>): Job {
     job_assignment_id: assignment?.jobAssignmentId ?? null,
     assigned_profile_id: assignment?.assignedProfileId ?? null,
     assignment_market_version: assignment?.assignmentMarketVersion ?? null,
+    agent_brief: row.agent_brief == null ? null : String(row.agent_brief),
+    agent_brief_sha256: row.agent_brief_sha256 == null
+      ? null
+      : String(row.agent_brief_sha256),
     priority: Number(row.priority), status: String(row.status) as JobStatus,
     attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
     budget_tokens: optionalInteger(row.budget_tokens, 'budget_tokens'), budget_cents: optionalInteger(row.budget_cents, 'budget_cents'),

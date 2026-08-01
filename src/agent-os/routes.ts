@@ -47,6 +47,7 @@ import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
 import { registerTaskContractTemplateRoutes } from './contract-template-routes.js'
 import { jobAssignmentPlugin } from './job-assignment-routes.js'
+import { openWorkPlugin } from './open-work-routes.js'
 import {
   AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
   AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
@@ -138,17 +139,26 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
   isOperator?: (request: FastifyRequest) => boolean
   compatibilityFailureJournal?: CompatibilityMigrationFailureJournal
+  supportedProviders?: readonly string[]
+  globalCapacity?: number
+  perProfileCapacity?: number
 }
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
-  server.register(agentOsPlugin, { ...options, prefix: '/api/v1/os' })
+  const scheduler = options.scheduler ?? new JobScheduler(options.db, options.jobExecutor)
+  const orchestration = options.orchestration
+    ?? new OrchestrationService(options.db, scheduler)
+  const canonicalOptions = options.orchestration && !options.scheduler
+    ? options
+    : { ...options, scheduler, orchestration }
+  server.register(agentOsPlugin, { ...canonicalOptions, prefix: '/api/v1/os' })
   server.register(agentHomePlugin, {
     db: options.db,
     isOperator: options.isOperator,
     lifecycleRuntime: options.agentHomeLifecycle
       ?? (isAgentHomeRuntimeControl(options.jobExecutor) ? options.jobExecutor : undefined),
-    orchestration: options.orchestration,
-    scheduler: options.scheduler,
+    orchestration,
+    scheduler,
     prefix: '/api/v1/os',
   })
   server.register(agentHomeRetentionPlugin, {
@@ -158,6 +168,17 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   })
   server.register(jobAssignmentPlugin, {
     db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(openWorkPlugin, {
+    db: options.db,
+    orchestration,
+    supportedProviders: options.supportedProviders
+      ?? options.jobExecutor?.supportedProviders()
+      ?? [],
+    globalCapacity: options.globalCapacity,
+    perProfileCapacity: options.perProfileCapacity,
     isOperator: options.isOperator,
     prefix: '/api/v1/os',
   })
@@ -637,11 +658,13 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { contract: market.contract, job_market: market }
   })
   app.put<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract', (request) => {
+    requireOperator(request)
     const body = objectBody(request.body)
     const market = jobMarket.update(
       positiveId(request.params.id),
       body,
-      stringValue(body.actor) ?? 'human',
+      request.orchestraPrincipal ?? 'operator',
+      positiveId(body.expected_market_version, 'expected market version'),
     )
     return { contract: market.contract, job_market: market }
   })
@@ -669,7 +692,11 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/publish', (request) => {
     requireOperator(request)
     const body = request.body == null ? {} : objectBody(request.body)
-    const market = jobMarket.publish(positiveId(request.params.id), stringValue(body.actor) ?? 'human')
+    const market = jobMarket.publish(
+      positiveId(request.params.id),
+      request.orchestraPrincipal ?? 'operator',
+      positiveId(body.expected_market_version, 'expected market version'),
+    )
     return { contract: market.contract, job_market: market }
   })
   app.post<{ Params: { id: string }; Body: unknown }>('/cards/:id/contract/transition', (request) => {
@@ -678,7 +705,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const market = jobMarket.transition(
       positiveId(request.params.id),
       requiredString(body.status, 'status') as JobMarketStatus,
-      stringValue(body.actor) ?? 'human',
+      request.orchestraPrincipal ?? 'operator',
       stringValue(body.reason),
     )
     return { contract: market.contract, job_market: market }

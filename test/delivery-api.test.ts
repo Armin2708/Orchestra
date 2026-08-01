@@ -32,11 +32,17 @@ async function fixture() {
 }
 
 async function preparedReport(server: FastifyInstance, boardId: number, cardId: number) {
+  const current = (await server.inject({
+    method: 'GET',
+    url: `/api/v1/os/cards/${cardId}/contract`,
+    headers: auth,
+  })).json()
   const contract = await server.inject({
     method: 'PUT',
     url: `/api/v1/os/cards/${cardId}/contract`,
     headers: auth,
     payload: {
+      expected_market_version: current.job_market.market_version,
       deliverables: [{ id: 'deliverable-api', text: 'Expose the delivery API', required: true }],
       acceptance_criteria: [{
         id: 'criterion-api',

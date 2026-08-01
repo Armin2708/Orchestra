@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
+import { JobMarketService } from '../src/agent-os/job-market.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
@@ -251,7 +253,11 @@ describe('Agent OS daemon runtime integration', () => {
     const contract = await server.inject({
       method: 'PUT',
       url: `/api/v1/os/cards/${cardId}/contract`,
-      payload: { workspace_id: workspace.id, verify_commands: [commandText] },
+      payload: {
+        workspace_id: workspace.id,
+        verify_commands: [commandText],
+        expected_market_version: new JobMarketService(db).get(cardId).market_version,
+      },
     })
     expect(contract.statusCode).toBe(200)
 
@@ -283,7 +289,10 @@ describe('Agent OS daemon runtime integration', () => {
     const { boardId, cardId, db, server } = await fixture()
     const commandText = `${quote(process.execPath)} -e ${quote(`process.stdout.write('runtime scope\\n')`)}`
     expect((await server.inject({
-      method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, payload: { verify_commands: [commandText] },
+      method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, payload: {
+        verify_commands: [commandText],
+        expected_market_version: new JobMarketService(db).get(cardId).market_version,
+      },
     })).statusCode).toBe(200)
 
     const response = await server.inject({
@@ -1106,6 +1115,7 @@ describe('Agent OS daemon runtime integration', () => {
     const contract = await server.inject({
       method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`,
       payload: {
+        expected_market_version: new JobMarketService(db).get(cardId).market_version,
         workspace_id: workspace.id,
         deliverables: [{ id: 'deliverable-stable', text: 'Implement the runtime bridge', required: true }],
         acceptance_criteria: [{
@@ -1132,6 +1142,17 @@ describe('Agent OS daemon runtime integration', () => {
     expect(requests[0].prompt).toContain('Required verification commands:\n- npm test')
     expect(requests[0].prompt).toContain('Delivery summary:')
     expect(requests[0].prompt).toContain('Evidence:')
+    const persistedBrief = db.prepare(`SELECT agent_brief, agent_brief_sha256
+      FROM jobs WHERE id=?`).get(jobId) as {
+        agent_brief: string
+        agent_brief_sha256: string
+      }
+    expect(requests[0].prompt).toBe(persistedBrief.agent_brief)
+    expect(persistedBrief.agent_brief_sha256).toBe(
+      createHash('sha256').update(requests[0].prompt!).digest('hex'),
+    )
+    expect(() => db.prepare(`UPDATE jobs SET agent_brief='forged'
+      WHERE id=?`).run(jobId)).toThrow(/immutable/)
 
     const reports = new DeliveryReportService(db)
     const delivery = reports.currentForCard(cardId)!

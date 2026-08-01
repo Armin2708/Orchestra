@@ -12,6 +12,7 @@ import './messages.css'
 import './agentOs.css'
 
 const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
+const OpenWorkView = React.lazy(() => import('./OpenWorkView').then((module) => ({ default: module.OpenWorkView })))
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
     <rect width="32" height="32" rx="8" fill="#111"/>
@@ -89,7 +90,7 @@ export function App() {
   }, [refresh, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
-  if (loaded && snaps.length === 0 && view !== 'settings')
+  if (loaded && snaps.length === 0 && view !== 'settings' && view !== 'open-work')
     return <GettingStarted onSettings={() => pickView('settings')} />
 
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
@@ -129,6 +130,7 @@ export function App() {
           <SystemMeter boards={snaps.map((s) => s.board.id)} />
           <nav className="view-tabs">
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
+            <button className={view === 'open-work' ? 'tab active' : 'tab'} onClick={() => pickView('open-work')}>Open Work</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
             <NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
@@ -143,6 +145,10 @@ export function App() {
       {view === 'board'
         ? <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && visible.length === 1}
             openMessages={openMessages} onTabChange={pickBoardTab} onChange={refresh} />
+        : view === 'open-work'
+          ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Open Work"><span /><span /><span /></div>}>
+              <OpenWorkView />
+            </React.Suspense>
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>

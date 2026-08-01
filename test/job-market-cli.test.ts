@@ -9,7 +9,7 @@ function fixture() {
   const deps: AgentOsCliDeps = {
     api: vi.fn(async (method: string, path: string, body?: unknown) => {
       calls.push({ method, path, body })
-      return { job_market: { card_id: 7, status: 'open' } }
+      return { job_market: { card_id: 7, status: 'open', market_version: 9 } }
     }),
     ensureReady: vi.fn(async () => {}),
     resolveBoard: vi.fn(async () => ({ id: 1 })),
@@ -54,6 +54,10 @@ describe('Job Market CLI', () => {
     )
 
     expect(calls).toEqual([{
+      method: 'GET',
+      path: '/os/cards/7/contract',
+      body: undefined,
+    }, {
       method: 'PUT',
       path: '/os/cards/7/contract',
       body: {
@@ -80,6 +84,7 @@ describe('Job Market CLI', () => {
         budget_coordination_tokens: 1000,
         budget_coordination_messages: 12,
         actor: 'agent:planner',
+        expected_market_version: 9,
       },
     }])
   })
@@ -109,9 +114,14 @@ describe('Job Market CLI', () => {
         body: undefined,
       },
       {
+        method: 'GET',
+        path: '/os/cards/7/contract',
+        body: undefined,
+      },
+      {
         method: 'POST',
         path: '/os/cards/7/contract/publish',
-        body: { actor: 'human' },
+        body: { actor: 'human', expected_market_version: 9 },
       },
       {
         method: 'POST',

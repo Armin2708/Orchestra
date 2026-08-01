@@ -497,9 +497,14 @@ describe('operator and agent API principals', () => {
     servers.push(server)
     await server.ready()
 
+    const currentContract = (await server.inject({
+      method: 'GET', url: `/api/v1/os/cards/${cardId}/contract`, headers: operator,
+    })).json()
+
     expect((await server.inject({
       method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, headers: operator,
       payload: {
+        expected_market_version: currentContract.job_market.market_version,
         deliverables: [{ id: 'output', text: 'Create the output', required: true }],
         acceptance_criteria: [{ id: 'tested', text: 'The output is tested', required: true }],
       },

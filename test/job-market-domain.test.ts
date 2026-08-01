@@ -438,6 +438,7 @@ describe('typed Job Market domain', () => {
     const server = buildServer(db, undefined, { token })
     await server.ready()
     try {
+      const initialVersion = new JobMarketService(db).get(cardId).market_version
       const updated = await server.inject({
         method: 'PUT',
         url: `/api/v1/os/cards/${cardId}/contract`,
@@ -455,8 +456,26 @@ describe('typed Job Market domain', () => {
           providers: ['ignored'],
           provider_constraints: ['codex'],
           actor: 'agent:planner',
+          expected_market_version: initialVersion,
         },
       })
+
+      const stale = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/os/cards/${cardId}/contract`,
+        headers,
+        payload: {
+          objective: 'forged stale update',
+          actor: 'forged-agent',
+          expected_market_version: initialVersion,
+        },
+      })
+      expect(stale.statusCode).toBe(409)
+      expect(stale.json().error).toMatch(/stale/)
+      const updateEvent = db.prepare(`SELECT payload FROM os_events
+        WHERE card_id=? AND kind LIKE 'job_market.%'
+        ORDER BY rowid DESC LIMIT 1`).get(cardId) as { payload: string }
+      expect(JSON.parse(updateEvent.payload).actor).toBe('operator')
       expect(updated.statusCode).toBe(200)
       expect(updated.json()).toMatchObject({
         contract: { card_id: cardId },
@@ -496,9 +515,16 @@ describe('typed Job Market domain', () => {
         method: 'POST',
         url: `/api/v1/os/cards/${cardId}/contract/publish`,
         headers,
-        payload: { actor: 'human' },
+        payload: {
+          actor: 'forged-agent',
+          expected_market_version: drafted.json().job_market.market_version,
+        },
       })
       expect(published.json().job_market.status).toBe('open')
+      const publishEvent = db.prepare(`SELECT payload FROM os_events
+        WHERE card_id=? AND kind='job_market.lifecycle_changed'
+        ORDER BY rowid DESC LIMIT 1`).get(cardId) as { payload: string }
+      expect(JSON.parse(publishEvent.payload).actor).toBe('operator')
       expect(
         (db.prepare('SELECT COUNT(*) AS count FROM os_events WHERE board_id=? AND kind LIKE ?')
           .get(boardId, 'job_market.%') as { count: number }).count,

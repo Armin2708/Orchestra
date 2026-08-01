@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -28,6 +28,7 @@ import { ConversationService, type AgentSessionRecord } from './conversations.js
 import { parseJson } from './json.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
+import { OpenWorkService } from './open-work.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
 import { TaskContractService, type TaskContract } from './task-contracts.js'
 import type { AgentOsRuntimeAdapter, DriverDescriptor, ProcessRecord as ApiProcessRecord } from './routes.js'
@@ -1907,6 +1908,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         throw error
       }
     }
+    const agentBrief = job.provider === 'shell'
+      ? null
+      : this.prompt(job, contract, delivery)
     const request = job.provider === 'shell'
       ? this.shellRequest(effectiveJob, workspace, contract, cwd)
       : {
@@ -1914,7 +1918,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           boardId: job.board_id,
           cwd,
           name: agentName,
-          prompt: this.prompt(job, contract, delivery),
+          prompt: agentBrief!,
           ...(job.model ? { model: job.model } : {}),
           ...(job.effort ? { effort: job.effort } : {}),
           accessProfile: job.access_profile,
@@ -2239,26 +2243,46 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     if (!contract || !delivery) {
       return `Execute Agent OS job ${job.id} in this workspace. Finish with a concise Delivery summary and Evidence.`
     }
-    const asked = delivery.asked as DeliveryReport['asked'] & {
-      objective?: string
-      deliverables?: Array<{ id: string; text?: string; description?: string; required?: boolean }>
-      acceptance_criteria?: Array<{ id: string; text?: string; description?: string; required?: boolean }>
-      verify_commands?: string[]
+    if (!job.card_id) {
+      throw new Error('card-backed contract is required for an Agent OS delivery brief')
     }
-    const row = (item: { id: string; text?: string; description?: string; required?: boolean }) =>
-      `- [${item.id}] ${item.text ?? item.description ?? '(unspecified)'}${item.required === false ? ' (optional)' : ''}`
-    const deliverables = (asked.deliverables ?? []).map(row).join('\n')
-    const acceptance = (asked.acceptance_criteria ?? []).map(row).join('\n')
-    const verification = (asked.verify_commands ?? contract.verify_commands).map((command) => `- ${command}`).join('\n')
-    return [
-      `Delivery ${delivery.id} for Agent OS job ${job.id}`,
-      `Objective: ${asked.objective ?? contract.objective}`,
-      deliverables ? `Promised deliverables (stable IDs):\n${deliverables}` : 'Promised deliverables: none recorded.',
-      acceptance ? `Acceptance criteria (stable IDs):\n${acceptance}` : 'Acceptance criteria: none recorded.',
-      verification ? `Required verification commands:\n${verification}` : 'Required verification commands: none recorded.',
-      `Before stopping, submit the structured report with "orchestra delivery submit ${job.id}" when that command is available. Claims are not verification evidence.`,
-      'Your final response MUST end with two concise sections: "Delivery summary:" describing what changed, and "Evidence:" listing the exact commands, artifacts, commits, or observed results. Do not move the card to done; the daemon parks a complete report in review.',
-    ].filter(Boolean).join('\n\n')
+    const rendered = new OpenWorkService(this.db).renderBrief(job.card_id, {
+      job_id: job.id,
+      delivery_id: delivery.id,
+      workspace_id: job.workspace_id,
+      contract,
+      selection: job.assigned_profile_id ? {
+        profile_id: job.assigned_profile_id,
+        provider: job.provider,
+        model: job.model,
+        access_profile: job.access_profile,
+      } : null,
+    })
+    const digest = createHash('sha256').update(rendered.agent_brief).digest('hex')
+    if (digest !== rendered.agent_brief_sha256) {
+      throw new Error('rendered Agent OS brief digest is inconsistent')
+    }
+    const stored = this.db.prepare(`SELECT agent_brief, agent_brief_sha256
+      FROM jobs WHERE id=?`).get(job.id) as {
+        agent_brief: string | null
+        agent_brief_sha256: string | null
+      } | undefined
+    if (!stored) throw new Error('job disappeared before Agent OS brief persistence')
+    if (stored.agent_brief !== null || stored.agent_brief_sha256 !== null) {
+      if (stored.agent_brief !== rendered.agent_brief
+        || stored.agent_brief_sha256 !== rendered.agent_brief_sha256) {
+        throw new Error('persisted Agent OS brief differs from current render')
+      }
+      return stored.agent_brief
+    }
+    const persisted = this.db.prepare(`UPDATE jobs
+      SET agent_brief=?, agent_brief_sha256=?
+      WHERE id=? AND agent_brief IS NULL AND agent_brief_sha256 IS NULL`)
+      .run(rendered.agent_brief, rendered.agent_brief_sha256, job.id)
+    if (persisted.changes !== 1) {
+      throw new Error('Agent OS brief persistence raced; retry from the stored job')
+    }
+    return rendered.agent_brief
   }
 
   private claimCard(job: Job, agentId: number): void {
@@ -3126,6 +3150,10 @@ const mapRuntimeJob = (row: Record<string, unknown>): Job => {
     job_assignment_id: assignment?.jobAssignmentId ?? null,
     assigned_profile_id: assignment?.assignedProfileId ?? null,
     assignment_market_version: assignment?.assignmentMarketVersion ?? null,
+    agent_brief: row.agent_brief == null ? null : String(row.agent_brief),
+    agent_brief_sha256: row.agent_brief_sha256 == null
+      ? null
+      : String(row.agent_brief_sha256),
     priority: Number(row.priority), status: String(row.status) as Job['status'],
     attempts: Number(row.attempts), max_attempts: Number(row.max_attempts),
     budget_tokens: row.budget_tokens == null ? null : Number(row.budget_tokens),

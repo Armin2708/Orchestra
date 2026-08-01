@@ -187,12 +187,18 @@ export class JobMarketService {
     return this.read(contract)
   }
 
-  update(cardId: number, input: Record<string, unknown>, actor = 'human'): JobMarketContract {
+  update(
+    cardId: number,
+    input: Record<string, unknown>,
+    actor = 'human',
+    expectedMarketVersion?: number,
+  ): JobMarketContract {
     const save = this.db.transaction(() => {
       if (input.status !== undefined) {
         throw new ValidationError('status is lifecycle-controlled; use the contract transition endpoint')
       }
       const before = this.get(cardId)
+      assertExpectedMarketVersion(before, expectedMarketVersion)
       const dependencyRules = input.dependency_rules === undefined && input.dependencyRules === undefined
         ? null
         : normalizeDependencyRules(input.dependency_rules ?? input.dependencyRules)
@@ -328,9 +334,14 @@ export class JobMarketService {
     }
   }
 
-  publish(cardId: number, actor = 'human'): JobMarketContract {
+  publish(
+    cardId: number,
+    actor = 'human',
+    expectedMarketVersion?: number,
+  ): JobMarketContract {
     const publish = this.db.transaction(() => {
       const current = this.get(cardId)
+      assertExpectedMarketVersion(current, expectedMarketVersion)
       const validation = this.validate(cardId, 'publish')
       if (!validation.valid) {
         throw new ValidationError(`job contract is not publishable: ${validation.errors.join('; ')}`)
@@ -736,6 +747,21 @@ export class JobMarketService {
         after,
       },
     })
+  }
+}
+
+function assertExpectedMarketVersion(
+  current: JobMarketContract,
+  expected: number | undefined,
+): void {
+  if (expected === undefined) return
+  if (!Number.isSafeInteger(expected) || expected <= 0) {
+    throw new ValidationError('expected market version must be a positive integer')
+  }
+  if (current.market_version !== expected) {
+    throw new ConflictError(
+      `job market version is stale; expected ${expected}, current ${current.market_version}`,
+    )
   }
 }
 

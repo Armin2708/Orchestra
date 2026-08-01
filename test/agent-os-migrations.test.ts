@@ -128,7 +128,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(25)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(26)
     first.close()
 
     const second = openDb(file)
@@ -150,11 +150,11 @@ describe('Agent OS migrations', () => {
       'os_compatibility_migration_checks']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(25)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(26)
     const migrationIds = (second.prepare(
       'SELECT id FROM os_schema_migrations ORDER BY rowid',
     ).all() as Array<{ id: string }>).map((row) => row.id)
-    expect(migrationIds.slice(-14)).toEqual([
+    expect(migrationIds.slice(-15)).toEqual([
       '012-agent-home-retention',
       '013-agent-home-structured-metadata-redaction',
       '014-agent-home-native-fork-lifecycle',
@@ -169,9 +169,10 @@ describe('Agent OS migrations', () => {
       '023-compatibility-migration-telemetry',
       '024-compatibility-migration-failure-journal',
       '025-knowledge-retrieval',
+      '026-job-agent-brief',
     ])
     expect(migrationIds.at(-1))
-      .toBe('025-knowledge-retrieval')
+      .toBe('026-job-agent-brief')
     expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
@@ -222,7 +223,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(25)
+    }).count).toBe(26)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -939,7 +940,7 @@ describe('Agent OS migrations', () => {
       .get() as { count: number }).count).toBe(1)
     const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
       .all() as Array<{ id: string }>).map((row) => row.id)
-    expect(ids.slice(-9)).toEqual([
+    expect(ids.slice(-10)).toEqual([
       '019-provider-acceptance-evidence',
       '020-causal-event-metadata',
       '021-command-idempotency-coverage',
@@ -947,6 +948,7 @@ describe('Agent OS migrations', () => {
       '023-compatibility-migration-telemetry',
       '024-compatibility-migration-failure-journal',
       '025-knowledge-retrieval',
+      '026-job-agent-brief',
       '014-agent-home-native-fork-lifecycle',
       '015-agent-home-action-command-scope',
     ])
@@ -1082,7 +1084,7 @@ describe('Agent OS migrations', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
       WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 1 })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations')
-      .get() as { count: number }).count).toBe(25)
+      .get() as { count: number }).count).toBe(26)
     const requestLookupPlan = db.prepare(`EXPLAIN QUERY PLAN
       SELECT id, board_id, kind, source, workspace_id, card_id, session_id,
         process_id, job_id, contract_id, correlation_id, causation_id,
@@ -1310,7 +1312,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(25)
+      .toBe(26)
     db.close()
   })
 
@@ -1462,7 +1464,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(25)
+      .toBe(26)
     db.close()
   })
 
@@ -1535,7 +1537,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(25)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(26)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1643,7 +1645,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(25)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(26)
     db.close()
   })
 

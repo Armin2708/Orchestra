@@ -37,6 +37,7 @@ import type {
   ContractDeliverable,
   TaskContract,
 } from './task-contracts.js'
+import type { RenderedAgentBrief } from './agent-brief.js'
 
 export type DependencyReadiness = 'ready' | 'blocked'
 
@@ -453,21 +454,17 @@ export class OpenWorkService {
         assignmentMarketVersion: assignment.assigned_market_version,
       },
     })
-    const loaded = this.requireMarket(match.card_id)
-    const graph = this.graphState([loaded.scope.board_id])
-    const rendered = renderAgentBrief({
-      job_market: {
-        ...loaded.market,
-        contract: launched.contract,
-      },
-      repository: loaded.scope.repository,
-      job_id: launched.job.id,
-      delivery_id: launched.delivery.id,
-      workspace_id: launched.workspace?.id ?? match.workspace_id,
-      selection: selectionFromMatch(match),
-      dependencies: this.dependencies(match.card_id, graph),
-      critical_path: criticalPaths(match.card_id, graph),
-    })
+    const rendered = launched.job.agent_brief && launched.job.agent_brief_sha256
+      ? {
+          agent_brief: launched.job.agent_brief,
+          agent_brief_sha256: launched.job.agent_brief_sha256,
+        }
+      : this.renderBrief(match.card_id, {
+          job_id: launched.job.id,
+          delivery_id: launched.delivery.id,
+          workspace_id: launched.workspace?.id ?? match.workspace_id,
+          selection: selectionFromMatch(match),
+        })
     return {
       replayed: assignmentResult.replayed,
       match,
@@ -479,6 +476,69 @@ export class OpenWorkService {
       },
       ...rendered,
     }
+  }
+
+  renderBrief(
+    cardId: number,
+    input: {
+      job_id: string
+      delivery_id: string
+      workspace_id: string | null
+      selection: AgentBriefSelection | null
+      contract?: TaskContract
+    },
+  ): RenderedAgentBrief {
+    const normalizedCardId = positiveInteger(cardId, 'card id')
+    const currentMarket = this.market.get(normalizedCardId)
+    const loaded = input.contract
+      ? {
+          scope: this.cardScope(normalizedCardId),
+          market: currentMarket,
+        }
+      : this.requireMarket(normalizedCardId)
+    const graph = this.graphState([loaded.scope.board_id])
+    const frozenContract = input.contract
+    const criteriaById = new Map(
+      loaded.market.criteria.map((criterion) => [criterion.id, criterion]),
+    )
+    const jobMarket = frozenContract ? {
+      ...loaded.market,
+      contract: frozenContract,
+      criteria: frozenContract.acceptance_criteria.map((criterion) => {
+        const extension = criteriaById.get(criterion.id)
+        return {
+          ...criterion,
+          description: extension?.description ?? criterion.text,
+          verifier: extension?.verifier ?? { kind: 'human' as const },
+          required_artifacts: extension?.required_artifacts ?? [],
+          priority: extension?.priority ?? 0,
+          owner: extension?.owner ?? null,
+        }
+      }),
+      dependency_rules: loaded.market.dependency_rules.filter((rule) =>
+        frozenContract.dependencies.includes(rule.card_id)),
+      budgets: {
+        ...loaded.market.budgets,
+        tokens: frozenContract.budget_tokens,
+        cost_cents: frozenContract.budget_cents,
+      },
+    } : loaded.market
+    return renderAgentBrief({
+      job_market: jobMarket,
+      repository: loaded.scope.repository,
+      ...input,
+      dependencies: this.dependencies(cardId, graph),
+      critical_path: criticalPaths(cardId, graph),
+    })
+  }
+
+  private cardScope(cardId: number): CardScope {
+    const scope = this.db.prepare(`SELECT card.id AS card_id, card.board_id, card.title,
+      card.column_name AS state, card.owner_agent_id, board.project_path AS repository
+      FROM cards card JOIN boards board ON board.id=card.board_id WHERE card.id=?`)
+      .get(cardId) as CardScope | undefined
+    if (!scope) throw new NotFoundError('card not found')
+    return scope
   }
 
   private resolveBoardScope(
@@ -547,11 +607,7 @@ export class OpenWorkService {
   }
 
   private loadMarket(cardId: number): LoadedMarket {
-    const scope = this.db.prepare(`SELECT card.id AS card_id, card.board_id, card.title,
-      card.column_name AS state, card.owner_agent_id, board.project_path AS repository
-      FROM cards card JOIN boards board ON board.id=card.board_id WHERE card.id=?`)
-      .get(cardId) as CardScope | undefined
-    if (!scope) throw new NotFoundError('card not found')
+    const scope = this.cardScope(cardId)
     const contractRow = this.db.prepare('SELECT * FROM task_contracts WHERE card_id=?')
       .get(cardId) as Record<string, unknown> | undefined
     const marketRow = this.db.prepare('SELECT * FROM job_market_contracts WHERE card_id=?')

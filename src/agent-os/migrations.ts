@@ -7409,6 +7409,63 @@ const migrations: Migration[] = [
       installKnowledgeRetrievalSchema(db)
     },
   },
+  {
+    id: '026-job-agent-brief',
+    apply(db) {
+      const hasKnowledgeRetrieval = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_KNOWLEDGE_RETRIEVAL_MIGRATION_ID)
+      if (!hasKnowledgeRetrieval) {
+        throw new Error(
+          'migration 026-job-agent-brief requires 025-knowledge-retrieval',
+        )
+      }
+      const columns = new Set(
+        (db.prepare(`SELECT name FROM pragma_table_info('jobs')`).all() as Array<{
+          name: string
+        }>).map((column) => column.name),
+      )
+      const hasBrief = columns.has('agent_brief')
+      const hasDigest = columns.has('agent_brief_sha256')
+      if (hasBrief !== hasDigest) {
+        throw new Error(
+          'migration 026-job-agent-brief found incomplete brief columns',
+        )
+      }
+      if (!hasBrief) {
+        db.exec(`
+          ALTER TABLE jobs ADD COLUMN agent_brief TEXT;
+          ALTER TABLE jobs ADD COLUMN agent_brief_sha256 TEXT;
+        `)
+      }
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS jobs_agent_brief_insert
+        BEFORE INSERT ON jobs
+        WHEN (NEW.agent_brief IS NULL) != (NEW.agent_brief_sha256 IS NULL)
+          OR (NEW.agent_brief_sha256 IS NOT NULL AND (
+            length(NEW.agent_brief_sha256) != 64
+            OR NEW.agent_brief_sha256 GLOB '*[^0-9a-f]*'
+          ))
+        BEGIN
+          SELECT RAISE(ABORT, 'job agent brief evidence is invalid');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS jobs_agent_brief_update
+        BEFORE UPDATE OF agent_brief, agent_brief_sha256 ON jobs
+        WHEN (NEW.agent_brief IS NULL) != (NEW.agent_brief_sha256 IS NULL)
+          OR (NEW.agent_brief_sha256 IS NOT NULL AND (
+            length(NEW.agent_brief_sha256) != 64
+            OR NEW.agent_brief_sha256 GLOB '*[^0-9a-f]*'
+          ))
+          OR (OLD.agent_brief IS NOT NULL AND (
+            NEW.agent_brief IS NOT OLD.agent_brief
+            OR NEW.agent_brief_sha256 IS NOT OLD.agent_brief_sha256
+          ))
+        BEGIN
+          SELECT RAISE(ABORT, 'job agent brief evidence is invalid or immutable');
+        END;
+      `)
+    },
+  },
 ]
 
 /** Apply each Agent OS migration exactly once and atomically without deleting legacy tables. */

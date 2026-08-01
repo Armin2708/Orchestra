@@ -127,13 +127,23 @@ describe('Agent OS API', () => {
     expect(contextPut.statusCode).toBe(200)
     expect(contextPut.json().context[0]).toMatchObject({ source: 'README.md', pinned: true })
 
-    expect((await server.inject({ method: 'GET', url: `/api/v1/os/cards/${cardId}/contract`, headers: auth })).json().contract.objective)
-      .toBe('Exercise OS routes')
+    const currentContract = (await server.inject({
+      method: 'GET', url: `/api/v1/os/cards/${cardId}/contract`, headers: auth,
+    })).json()
+    expect(currentContract.contract.objective).toBe('Exercise OS routes')
     const isolated = await server.inject({ method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, headers: auth,
-      payload: { dependencies: [otherCardId] } })
+      payload: {
+        dependencies: [otherCardId],
+        expected_market_version: currentContract.job_market.market_version,
+      } })
     expect(isolated.statusCode).toBe(400)
     const contract = await server.inject({ method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`, headers: auth,
-      payload: { workspace_id: workspace.id, verify_commands: ['npm test'], acceptance_criteria: ['green'] } })
+      payload: {
+        workspace_id: workspace.id,
+        verify_commands: ['npm test'],
+        acceptance_criteria: ['green'],
+        expected_market_version: currentContract.job_market.market_version,
+      } })
     expect(contract.statusCode).toBe(200)
 
     const attached = await server.inject({ method: 'POST', url: `/api/v1/os/cards/${cardId}/evidence`, headers: auth,
