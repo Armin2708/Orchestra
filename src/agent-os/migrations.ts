@@ -33,6 +33,10 @@ import {
   AGENT_OS_ORGANIZATION_COORDINATION_MIGRATION_ID,
   installOrganizationCoordinationSchema,
 } from './organization-coordination-migration.js'
+import {
+  AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID,
+  installOrganizationAssuranceSchema,
+} from './organization-assurance-migration.js'
 
 interface Migration {
   id: string
@@ -7500,6 +7504,20 @@ const migrations: Migration[] = [
         )
       }
       installOrganizationCoordinationSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID,
+    apply(db) {
+      const hasCoordination = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_ORGANIZATION_COORDINATION_MIGRATION_ID)
+      if (!hasCoordination) {
+        throw new Error(
+          `migration ${AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_ORGANIZATION_COORDINATION_MIGRATION_ID}`,
+        )
+      }
+      installOrganizationAssuranceSchema(db)
     },
   },
 ]

@@ -10,6 +10,7 @@ import { KnowledgeStore } from './knowledge-store.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { OrganizationService } from './organization.js'
 import { OrganizationCoordinationService } from './organization-coordination.js'
+import { OrganizationAssuranceService } from './organization-assurance.js'
 import type { JobScheduler } from './scheduler.js'
 
 export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
@@ -20,6 +21,7 @@ export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
   'knowledge',
   'organization',
   'coordination',
+  'assurance',
   'conflicts',
   'device_pairing',
 ] as const)
@@ -142,6 +144,37 @@ export type OrganizationCoordinationServiceBoundary = Pick<
   | 'coordinationSnapshot'
 >
 
+export type OrganizationAssuranceServiceBoundary = Pick<
+  OrganizationAssuranceService,
+  | 'addTraceNode'
+  | 'linkTraceNodes'
+  | 'verifyTrace'
+  | 'attestProvenance'
+  | 'verifyProvenance'
+  | 'createQualityGateDefinition'
+  | 'startQualityGate'
+  | 'recordQualityGateResult'
+  | 'overrideQualityGate'
+  | 'evaluateQualityGate'
+  | 'createMetricDefinition'
+  | 'createScorecard'
+  | 'recordMetricObservation'
+  | 'calibrateScorecard'
+  | 'createCalibrationReview'
+  | 'certifyAccess'
+  | 'fileReviewAppeal'
+  | 'resolveReviewAppeal'
+  | 'openIncident'
+  | 'addIncidentTimeline'
+  | 'resolveIncident'
+  | 'createPostmortem'
+  | 'reviewPostmortem'
+  | 'createCorrectiveAction'
+  | 'verifyCorrectiveAction'
+  | 'promotePostmortemLesson'
+  | 'dashboard'
+>
+
 interface AgentOsServiceBoundaryBase<
   Name extends AgentOsDomainServiceName,
   State extends AgentOsDomainServiceImplementationState,
@@ -199,6 +232,11 @@ export interface AgentOsDomainServiceBoundaries {
     'canonical',
     OrganizationCoordinationServiceBoundary
   >
+  readonly assurance: AgentOsActiveServiceBoundary<
+    'assurance',
+    'canonical',
+    OrganizationAssuranceServiceBoundary
+  >
   readonly conflicts: AgentOsActiveServiceBoundary<
     'conflicts',
     'compatibility_only',
@@ -215,6 +253,7 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   knowledge?: KnowledgeServiceBoundary
   organization?: OrganizationServiceBoundary
   coordination?: OrganizationCoordinationServiceBoundary
+  assurance?: OrganizationAssuranceServiceBoundary
   conflicts?: ConflictDetectionServiceBoundary
 }
 
@@ -339,6 +378,22 @@ export function createAgentOsDomainServiceBoundaries(
         'self-approval or authority inferred from capability labels',
       ],
       'Canonical cross-team coordination, decision, escalation, and risk-control boundary.',
+    ),
+    assurance: activeBoundary(
+      'assurance',
+      'canonical',
+      options.assurance ?? new OrganizationAssuranceService(db),
+      [
+        'digest-verifiable trace and artifact provenance',
+        'risk-selected gate graphs and contextual scorecards',
+        'calibration, access certification, appeal, incident, CAPA, and learning',
+      ],
+      [
+        'raw activity-volume individual ranking',
+        'self-review or hidden quality overrides',
+        'blame attribution from incident learning records',
+      ],
+      'Canonical traceability, quality, measurement, access-review, and learning boundary.',
     ),
     conflicts: activeBoundary(
       'conflicts',

@@ -15,7 +15,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 71 | 3 | 10 | 12 | 96 |
+| SQLite application tables | 89 | 3 | 10 | 12 | 114 |
 | Registered HTTP routes | 103 | 29 | 25 | 9 | 166 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -49,6 +49,7 @@ which partial foundation exists.
 | `knowledge` | `canonical` | `src/agent-os/knowledge-service.ts` |
 | `organization` | `canonical` | `src/agent-os/organization.ts` |
 | `coordination` | `canonical` | `src/agent-os/organization-coordination.ts` |
+| `assurance` | `canonical` | `src/agent-os/organization-assurance.ts` |
 | `conflicts` | `compatibility_only` | `src/agent-os/conflict-service.ts` |
 | `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
 
@@ -127,6 +128,8 @@ evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
 `src/agent-os/compatibility-migration-failure-journal.ts`. Organization and coordination records
 are defined in `src/agent-os/organization-migration.ts` and
 `src/agent-os/organization-coordination-migration.ts`.
+The assurance evidence graph is defined in
+`src/agent-os/organization-assurance-migration.ts`.
 
 ### Canonical
 
@@ -142,6 +145,7 @@ are defined in `src/agent-os/organization-migration.ts` and
 | Knowledge persistence and retrieval | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses`, `knowledge_retrieval_schema`, `knowledge_retrieval_documents`, `knowledge_retrieval_index_state`, and the `knowledge_retrieval_fts*` virtual-table family |
 | Organization and authority | `os_organizations`, `os_product_areas`, `os_teams`, `os_positions`, `os_team_memberships`, `os_membership_transitions`, `os_role_definitions`, `os_role_assignments`, `os_role_activations`, `os_capability_attestations`, `os_authority_policies`, `os_team_ownerships` |
 | Coordination and risk control | `os_team_interactions`, `os_responsibility_assignments`, `os_objectives`, `os_team_goals`, `os_capacity_snapshots`, `os_message_envelopes`, `os_decision_records`, `os_escalations`, `os_risk_evaluations`, `os_participation_history`, `os_control_approvals` |
+| Assurance and learning | `os_trace_nodes`, `os_trace_edges`, `os_provenance_attestations`, `os_quality_gate_definitions`, `os_quality_gate_runs`, `os_quality_gate_results`, `os_quality_gate_overrides`, `os_metric_definitions`, `os_scorecards`, `os_metric_observations`, `os_calibration_reviews`, `os_access_certifications`, `os_review_appeals`, `os_incidents`, `os_incident_timeline`, `os_postmortems`, `os_corrective_actions`, `os_knowledge_promotions` |
 
 ### Compatibility
 

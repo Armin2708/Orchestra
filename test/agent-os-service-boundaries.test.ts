@@ -7,6 +7,7 @@ import { KnowledgeService } from '../src/agent-os/knowledge-service.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { OrganizationService } from '../src/agent-os/organization.js'
 import { OrganizationCoordinationService } from '../src/agent-os/organization-coordination.js'
+import { OrganizationAssuranceService } from '../src/agent-os/organization-assurance.js'
 import { JobScheduler } from '../src/agent-os/scheduler.js'
 import {
   AGENT_OS_DOMAIN_SERVICE_NAMES,
@@ -32,7 +33,7 @@ function fixture() {
 }
 
 describe('Agent OS domain service boundaries', () => {
-  it('publishes exactly nine focused boundaries with honest implementation states', () => {
+  it('publishes exactly ten focused boundaries with honest implementation states', () => {
     const { db, scheduler } = fixture()
     const boundaries = createAgentOsDomainServiceBoundaries(db, { scheduler })
 
@@ -46,6 +47,7 @@ describe('Agent OS domain service boundaries', () => {
         'canonical',
         'canonical',
         'canonical',
+        'canonical',
         'compatibility_only',
         'reserved',
       ])
@@ -55,6 +57,7 @@ describe('Agent OS domain service boundaries', () => {
     expect(boundaries.knowledge.service).toBeInstanceOf(KnowledgeService)
     expect(boundaries.organization.service).toBeInstanceOf(OrganizationService)
     expect(boundaries.coordination.service).toBeInstanceOf(OrganizationCoordinationService)
+    expect(boundaries.assurance.service).toBeInstanceOf(OrganizationAssuranceService)
     expect(boundaries.conflicts.service).toBeInstanceOf(ComputedWorkspaceConflictService)
     expect(boundaries.discussions.service).toBeNull()
     expect(boundaries.device_pairing.service).toBeNull()
@@ -121,6 +124,7 @@ describe('Agent OS domain service boundaries', () => {
     const knowledge = new KnowledgeService(db)
     const organization = new OrganizationService(db)
     const coordination = new OrganizationCoordinationService(db)
+    const assurance = new OrganizationAssuranceService(db)
     const conflicts = new ComputedWorkspaceConflictService(db)
 
     const boundaries = createAgentOsDomainServiceBoundaries(db, {
@@ -131,6 +135,7 @@ describe('Agent OS domain service boundaries', () => {
       knowledge,
       organization,
       coordination,
+      assurance,
       conflicts,
     })
 
@@ -140,6 +145,7 @@ describe('Agent OS domain service boundaries', () => {
     expect(boundaries.knowledge.service).toBe(knowledge)
     expect(boundaries.organization.service).toBe(organization)
     expect(boundaries.coordination.service).toBe(coordination)
+    expect(boundaries.assurance.service).toBe(assurance)
     expect(boundaries.conflicts.service).toBe(conflicts)
   })
 })
