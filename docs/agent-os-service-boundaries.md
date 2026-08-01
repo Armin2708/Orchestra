@@ -8,8 +8,8 @@ Status: DOM-014 delivered at exact code head
 Agent OS now exposes one typed seven-domain composition catalog. The catalog names the real
 canonical services, labels partial foundations precisely, and leaves unimplemented domains
 explicitly reserved with `service: null`. It does not turn legacy messages into Discussions,
-computed overlaps into durable Conflict resolution, Knowledge persistence into a compiler, or the
-operator-token QR into secure device pairing.
+computed overlaps into durable Conflict resolution, bounded Knowledge ingestion/retrieval into
+managed prompt injection, or the operator-token QR into secure device pairing.
 
 | Boundary | Implementation state | Current service | Explicitly not claimed |
 |---|---|---|---|
@@ -17,7 +17,7 @@ operator-token QR into secure device pairing.
 | `conversations` | `canonical` | `ConversationService` | wake transport, provider process control, Discussion lifecycle |
 | `deliveries` | `canonical` | `DeliveryReportService` | job scheduling, legacy review controls, Knowledge promotion |
 | `discussions` | `reserved` | none | `messages` remain low-level targeted transport, not a durable Q&A domain |
-| `knowledge` | `persistence_only` | `KnowledgeStore` | retrieval, ranking, managed injection, freshness automation, promotion |
+| `knowledge` | `canonical` | `KnowledgeService` | managed prompt injection, freshness automation, review, promotion, API/UI |
 | `conflicts` | `compatibility_only` | `ComputedWorkspaceConflictService` | durable negotiation, arbitration, enforcement, resolution |
 | `device_pairing` | `reserved` | none | the reusable operator-token QR is not a PairingTicket or DeviceSession |
 
@@ -38,7 +38,9 @@ Reserved boundaries cannot silently accept a compatibility implementation. Their
 ## Current runtime use
 
 The existing canonical orchestration, Agent Home conversation, Delivery Trackbook, and Knowledge
-persistence implementations remain authoritative in their existing modules. DOM-014 does not move
+implementations remain authoritative in their existing modules. The Knowledge boundary composes
+durable persistence with verified repository evidence ingestion and deterministic bounded FTS
+retrieval. DOM-014 does not move
 their domain behavior into `buildServer` or a route plugin.
 
 The existing `GET /api/v1/os/boards/:id/conflicts` response now passes through
@@ -56,8 +58,7 @@ No schema, route, CLI, rendered UI, response shape, or conflict-enforcement beha
   8 work.
 - Durable Conflict records, proposals, arbiter decisions, rationale, and resolution remain Phase 9
   work.
-- Knowledge retrieval, compilation, managed injection, freshness, review, and product surfaces
-  remain KNO-003 onward.
+- Knowledge managed injection, freshness, review, and product surfaces remain KNO-011 onward.
 - PairingTicket, DeviceSession, scoped credentials, expiry, revocation, step-up, and device audit
   remain Phase 13/security work.
 - Moving construction and compatibility routing out of `buildServer` is DOM-015.

@@ -24,7 +24,7 @@ describe('Agent OS service boundary documentation', () => {
     const contract = read('docs/agent-os-service-boundaries.md')
 
     expect(inventory.observed_at_commit)
-      .toBe('fe2ef17f26bbab857ef735e611a3ad5243cc6be3')
+      .toBe('9c8d8dec5755c78233a9a5963f7f1579e49e91bf')
     expect(inventory.service_boundaries.map(({ name }) => name))
       .toEqual(AGENT_OS_DOMAIN_SERVICE_NAMES)
     expect(inventory.service_boundaries.map(({ implementation_state }) =>
@@ -33,7 +33,7 @@ describe('Agent OS service boundary documentation', () => {
       'canonical',
       'canonical',
       'reserved',
-      'persistence_only',
+      'canonical',
       'compatibility_only',
       'reserved',
     ])
@@ -56,8 +56,8 @@ describe('Agent OS service boundary documentation', () => {
 
     expect(planned.get('Discussion and DiscussionPost')).toMatch(/not a durable searchable Q&A/)
     expect(planned.get('Conflict')).toMatch(/not a durable resolution lifecycle/)
-    expect(planned.get('Knowledge ingestion, retrieval, compilation, and operator surfaces'))
-      .toMatch(/retrieval, managed injection/)
+    expect(planned.get('Knowledge compilation and operator surfaces'))
+      .toMatch(/managed prompt injection/)
     expect(planned.get('DeviceSession')).toMatch(/credentials do not exist/)
   })
 })

@@ -15,7 +15,7 @@ type CompositionInventory = {
   }
 }
 
-const INVENTORY_HEAD = 'fe2ef17f26bbab857ef735e611a3ad5243cc6be3'
+const INVENTORY_HEAD = '9c8d8dec5755c78233a9a5963f7f1579e49e91bf'
 const DOM015_CODE_HEAD = '98c722f10357311d5c1dfdb4ca8e83228adc2b8c'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
@@ -60,7 +60,7 @@ describe('Agent OS server composition documentation', () => {
     expect(checkpoint).toContain('135 / 375 delivered; 240 open')
     expect(checkpoint).toContain('DOM-016, DOM-017, and DOM-019 remain open')
     expect(checkpoint).toContain('DOM-016 is the next independent dependency-ready item')
-    expect(program).toContain('137 / 375 checklist boxes delivered; 238 remain open')
+    expect(program).toContain('145 / 375 checklist boxes delivered; 230 remain open')
     expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |')
     expect(program).toContain('DOM-013` through `DOM-017`')
   })

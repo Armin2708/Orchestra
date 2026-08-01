@@ -22,7 +22,7 @@ type ProjectionInventory = {
   }
 }
 
-const INVENTORY_HEAD = 'fe2ef17f26bbab857ef735e611a3ad5243cc6be3'
+const INVENTORY_HEAD = '9c8d8dec5755c78233a9a5963f7f1579e49e91bf'
 const CODE_HEAD = 'f5df13666ccdfdf552e423a379faf60463fc6643'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
@@ -89,7 +89,7 @@ describe('Agent OS compatibility projection documentation', () => {
     expect(agentOs).toContain('[legacy projection and compatibility-view contract]')
     expect(domain).toContain('[legacy projection contract]')
     expect(inventory).toContain('## Legacy projection and compatibility-view contract')
-    expect(program).toContain('137 / 375 checklist boxes delivered; 238 remain open')
+    expect(program).toContain('145 / 375 checklist boxes delivered; 230 remain open')
     expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |')
     expect(checkpoint).toContain('136 / 375 delivered; 239 open')
     expect(checkpoint).toContain('DOM-017 and DOM-019 remain open')

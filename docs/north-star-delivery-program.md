@@ -400,8 +400,8 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   available;
 - Open Work filters, dependency/critical-path UI, editor/brief preview, collaborative assignment,
   capability/capacity matching, and the complete publish-to-exactly-one-job acceptance gate;
-- `KNO-003` through `KNO-027` and `KNO-GATE`, including structural/history/social/graph ingestion,
-  retrieval, budgeted injection, freshness, review controls, UI, and benchmarks;
+- `KNO-011` through `KNO-027` and `KNO-GATE`, including budgeted injection, freshness, review
+  controls, UI, and benchmarks;
 - complete `TOOL-014` by passing and persisting the real exact-source Codex matrix, reconciling its
   candidate manifest only from that evidence, and
   implementing the remaining Claude/Qwen/Kimi adapters. The exact supported-provider/version
@@ -421,9 +421,9 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **137 / 375 checklist boxes delivered; 238 remain open**.
+The strict master reconciliation is **145 / 375 checklist boxes delivered; 230 remain open**.
 The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
+program state closes `KNO-002` through `KNO-010`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
 `DOM-013` through `DOM-017`, keeps `TOOL-014` open, and keeps `BASE-010` reopened because the
 expanded provider target does not yet have an exact compatibility matrix.
 The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
@@ -438,7 +438,7 @@ plug-and-play release.
 | Phase 4 — Terminal/workspace parity | 11 / 16 | 5 |
 | Phase 5 — Contracts/job market | 12 / 18 | 6 |
 | Phase 6 — Delivery Trackbook | 14 / 21 | 7 |
-| Phase 7 — Knowledge Compiler | 2 / 28 | 26 |
+| Phase 7 — Knowledge Compiler | 10 / 28 | 18 |
 | Phase 8 — Discussions/Q&A | 4 / 20 | 16 |
 | Phase 9 — Teams/conflicts | 0 / 21 | 21 |
 | Phase 10 — Tools/permissions | 3 / 15 | 12 |

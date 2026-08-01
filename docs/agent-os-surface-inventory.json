@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "fe2ef17f26bbab857ef735e611a3ad5243cc6be3",
+  "observed_at_commit": "9c8d8dec5755c78233a9a5963f7f1579e49e91bf",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -30,8 +30,8 @@
     },
     {
       "name": "knowledge",
-      "implementation_state": "persistence_only",
-      "source": "src/agent-os/knowledge-store.ts"
+      "implementation_state": "canonical",
+      "source": "src/agent-os/knowledge-service.ts"
     },
     {
       "name": "conflicts",
@@ -112,7 +112,8 @@
     "src/agent-os/migrations.ts",
     "src/agent-os/compatibility-forward-migration.ts",
     "src/agent-os/compatibility-migration-telemetry.ts",
-    "src/agent-os/compatibility-migration-failure-journal.ts"
+    "src/agent-os/compatibility-migration-failure-journal.ts",
+    "src/agent-os/knowledge-retrieval.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -146,6 +147,15 @@
       "job_market_dependencies",
       "jobs",
       "knowledge_chunks",
+      "knowledge_retrieval_documents",
+      "knowledge_retrieval_fts",
+      "knowledge_retrieval_fts_config",
+      "knowledge_retrieval_fts_content",
+      "knowledge_retrieval_fts_data",
+      "knowledge_retrieval_fts_docsize",
+      "knowledge_retrieval_fts_idx",
+      "knowledge_retrieval_index_state",
+      "knowledge_retrieval_schema",
       "knowledge_sources",
       "os_command_receipts",
       "os_events",
@@ -816,8 +826,8 @@
       "reason": "A compatibility-only detection service exists, but current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
     },
     {
-      "noun": "Knowledge ingestion, retrieval, compilation, and operator surfaces",
-      "reason": "Durable KnowledgeSource, KnowledgeChunk, ContextBuild, and ContextUse persistence plus bounded repository-document ingestion exist, but code/history/discussion/delivery/graph adapters, retrieval, managed injection, freshness automation, review controls, API, and UI do not."
+      "noun": "Knowledge compilation and operator surfaces",
+      "reason": "Durable persistence, verified structural/history/delivery ingestion, and deterministic bounded FTS retrieval exist, but managed prompt injection, freshness automation, review controls, API, UI, and benchmarks do not."
     },
     {
       "noun": "DeviceSession",

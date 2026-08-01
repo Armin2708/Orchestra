@@ -29,7 +29,7 @@ type ForwardMigrationInventory = {
 }
 
 const CODE_HEAD = '74d632f46bfeaaead1c7a52ced8a317915baacbf'
-const INVENTORY_HEAD = 'fe2ef17f26bbab857ef735e611a3ad5243cc6be3'
+const INVENTORY_HEAD = '9c8d8dec5755c78233a9a5963f7f1579e49e91bf'
 const VALIDATION_CATEGORIES = ['count', 'key', 'scope', 'lifecycle', 'hash']
 const EVIDENCE_TABLES = [
   'os_compatibility_projection_links',
@@ -115,7 +115,7 @@ describe('Agent OS compatibility forward-migration documentation', () => {
     expect(agentOs).toContain('[compatibility forward-migration and rollback contract]')
     expect(domain).toContain('[compatibility forward-migration contract]')
     expect(inventory).toContain('## Compatibility forward migration')
-    expect(program).toContain('137 / 375 checklist boxes delivered; 238 remain open')
+    expect(program).toContain('145 / 375 checklist boxes delivered; 230 remain open')
     expect(program).toContain('| Phase 1 — Canonical domain/event ledger | 19 / 20 | 1 |')
     expect(program).toContain('DOM-013` through `DOM-017`')
     expect(checkpoint).toContain('137 / 375 delivered; 238 open')

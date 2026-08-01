@@ -1,10 +1,10 @@
 # Agent OS surface inventory
 
-Status: current runtime inventory plus KNO-002's standalone repository-document ingestion boundary,
+Status: current runtime inventory plus KNO-003 through KNO-010's verified ingestion and deterministic retrieval boundary,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, observed at exact code head
-`fe2ef17f26bbab857ef735e611a3ad5243cc6be3`.
+`9c8d8dec5755c78233a9a5963f7f1579e49e91bf`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -15,7 +15,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 39 | 3 | 10 | 12 | 64 |
+| SQLite application tables | 48 | 3 | 10 | 12 | 73 |
 | Registered HTTP routes | 99 | 29 | 25 | 9 | 162 |
 | CLI command families/subcommands | 89 | 5 | 18 | 8 | 120 |
 
@@ -37,7 +37,7 @@ The source contract is `docs/agent-os-domain.md:102`; Agent OS route registratio
 ## Focused service boundaries
 
 Implementation state is separate from the future domain target. `reserved` means the boundary is
-named and fail-closed but has no service; `persistence_only` and `compatibility_only` name exactly
+named and fail-closed but has no service; partial implementation states name exactly
 which partial foundation exists.
 
 | Boundary | Implementation state | Source |
@@ -46,7 +46,7 @@ which partial foundation exists.
 | `conversations` | `canonical` | `src/agent-os/conversations.ts` |
 | `deliveries` | `canonical` | `src/agent-os/delivery-reports.ts` |
 | `discussions` | `reserved` | `src/agent-os/service-boundaries.ts` |
-| `knowledge` | `persistence_only` | `src/agent-os/knowledge-store.ts` |
+| `knowledge` | `canonical` | `src/agent-os/knowledge-service.ts` |
 | `conflicts` | `compatibility_only` | `src/agent-os/conflict-service.ts` |
 | `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
 
@@ -135,7 +135,7 @@ evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
 | Provider acceptance | `provider_acceptance_evidence` |
 | Control plane | `os_command_receipts`, `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
-| Knowledge persistence | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses` |
+| Knowledge persistence and retrieval | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses`, `knowledge_retrieval_schema`, `knowledge_retrieval_documents`, `knowledge_retrieval_index_state`, and the `knowledge_retrieval_fts*` virtual-table family |
 
 ### Compatibility
 
@@ -441,15 +441,15 @@ markers are listed in the JSON inventory and fail the drift test if removed or r
 ## Planned domains without complete current surfaces
 
 The canonical domain document names the target. A reserved service slot is not an implementation.
-Knowledge has durable persistence and a standalone repository-document ingestor, but not the
-surrounding retrieval or product surfaces:
+Knowledge has durable persistence, verified repository evidence ingestion, and deterministic
+bounded retrieval, but not the remaining compilation or product surfaces:
 
 | Planned domain | Current nearest surface | Missing canonical boundary |
 |---|---|---|
 | Discussion / DiscussionPost | reserved boundary; `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
 | Team / PlanningSession | explicit `swarm` transport | bounded participants/roles/budgets/rounds/proposals/synthesis |
 | Conflict | compatibility-only computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
-| Knowledge ingestion, retrieval, compilation, and operator surfaces | durable `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, and `context_uses` persistence; bounded `RepositoryDocumentIngestor` for AGENTS/README/docs/convention/architecture files; current `context_items` manifest | code/history/discussion/delivery/graph adapters, FTS/retrieval, managed injection, freshness automation, review controls, API/UI, benchmarks |
+| Knowledge compilation and operator surfaces | durable Knowledge persistence; verified structural, Git history/blame, delivery-summary, and gotcha ingestion; deterministic board-scoped FTS synchronization, rebuild, query, citation, and attestation | managed prompt injection, freshness automation, review controls, API/UI, benchmarks |
 | DeviceSession | reserved boundary; `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
 
 These rows identify incomplete product boundaries, not necessarily total absence. Existing
