@@ -10,6 +10,7 @@ import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runti
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import { JobMarketService } from '../src/agent-os/job-market.js'
+import { OpenWorkService, dispatchMatch } from '../src/agent-os/open-work.js'
 import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
@@ -1110,7 +1111,13 @@ describe('Agent OS daemon runtime integration', () => {
     runtime.registerDriver(driver)
     const workspace = (await server.inject({
       method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
-      payload: { name: 'delivery-runtime', kind: 'shared', card_id: cardId, root_path: repo },
+      payload: {
+        name: 'delivery-runtime',
+        kind: 'worktree',
+        card_id: cardId,
+        root_path: repo,
+        branch: 'test/runtime-open-work-brief',
+      },
     })).json().workspace
     const contract = await server.inject({
       method: 'PUT', url: `/api/v1/os/cards/${cardId}/contract`,
@@ -1127,12 +1134,33 @@ describe('Agent OS daemon runtime integration', () => {
     })
     expect(contract.statusCode).toBe(200)
 
-    const response = await server.inject({
-      method: 'POST', url: `/api/v1/os/boards/${boardId}/jobs`,
-      payload: { card_id: cardId, workspace_id: workspace.id, provider: 'test-agent' },
+    new AgentProfileService(db).create({
+      boardId,
+      name: 'Open Work runtime agent',
+      defaultProvider: 'test-agent',
+      defaultModel: 'test-model',
+      defaultAccessProfile: 'workspace_write',
+      capabilities: [],
+      actor: { type: 'operator', id: 'runtime-open-work-test' },
+      idempotencyKey: 'runtime-open-work:profile',
     })
-    expect(response.statusCode).toBe(201)
-    const jobId = response.json().job.id as string
+    const markets = new JobMarketService(db)
+    const published = markets.publish(cardId, 'runtime-open-work-test')
+    const openWork = new OpenWorkService(db, {
+      orchestration: new OrchestrationService(db, runtime.scheduler),
+      supportedProviders: ['test-agent'],
+    })
+    const preview = openWork.preview(cardId, {}, published.market_version)
+    const matched = openWork.matchCard(cardId, published.market_version)
+    expect(matched.selected_agent, JSON.stringify(matched)).not.toBeNull()
+    const match = dispatchMatch(matched)
+    const dispatched = await openWork.dispatch({
+      match,
+      confirm: true,
+      actor: { type: 'operator', id: 'runtime-open-work-test' },
+      idempotencyKey: 'runtime-open-work:dispatch',
+    })
+    const jobId = dispatched.job.id
     await until(() => (db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string }).status === 'succeeded')
     await until(() => (db.prepare('SELECT column_name FROM cards WHERE id=?').get(cardId) as { column_name: string }).column_name === 'review')
 
@@ -1142,6 +1170,9 @@ describe('Agent OS daemon runtime integration', () => {
     expect(requests[0].prompt).toContain('Required verification commands:\n- npm test')
     expect(requests[0].prompt).toContain('Delivery summary:')
     expect(requests[0].prompt).toContain('Evidence:')
+    expect(dispatched.agent_brief).toBe(preview.agent_brief)
+    expect(dispatched.agent_brief_sha256).toBe(preview.agent_brief_sha256)
+    expect(requests[0].prompt).toBe(preview.agent_brief)
     const persistedBrief = db.prepare(`SELECT agent_brief, agent_brief_sha256
       FROM jobs WHERE id=?`).get(jobId) as {
         agent_brief: string

@@ -49,15 +49,12 @@ export interface RenderedAgentBrief {
 /**
  * One deterministic brief for preview and realized dispatch.
  *
- * The leading sections deliberately preserve the current AgentOsJobExecutor prompt
- * structure. Runtime-only identities are explicit in previews instead of guessing
- * the eventual job or delivery IDs.
+ * The bytes intentionally exclude runtime-only identities so the preview digest can
+ * be bound to matching, dispatch, persistence, retries, and the provider prompt.
  */
 export function renderAgentBrief(input: RenderAgentBriefInput): RenderedAgentBrief {
   const market = input.job_market
   const contract = market.contract
-  const jobId = runtimeIdentity(input.job_id, 'job')
-  const deliveryId = runtimeIdentity(input.delivery_id, 'delivery')
   const deliverables = [...contract.deliverables]
     .sort((left, right) => compareText(left.id, right.id))
     .map((item) =>
@@ -89,11 +86,6 @@ export function renderAgentBrief(input: RenderAgentBriefInput): RenderedAgentBri
     `- Allowed providers: ${list(market.constraints.provider_constraints)}`,
     `- Allowed models: ${list(market.constraints.model_constraints)}`,
     `- Required access: ${list(market.constraints.access_needs)}`,
-    input.selection
-      ? `- Selected profile/provider/model/access: ${input.selection.profile_id}`
-        + ` / ${input.selection.provider} / ${input.selection.model ?? '<provider default>'}`
-        + ` / ${input.selection.access_profile}`
-      : '- Selected profile/provider/model/access: <unknown until dispatch>',
   ].join('\n')
   const budgets = [
     `- Tokens: ${budget(market.budgets.tokens)}`,
@@ -107,7 +99,7 @@ export function renderAgentBrief(input: RenderAgentBriefInput): RenderedAgentBri
   const nonGoals = contract.non_goals.map((nonGoal) => `- ${nonGoal}`).join('\n')
 
   const agentBrief = [
-    `Delivery ${deliveryId} for Agent OS job ${jobId}`,
+    'Agent OS delivery brief',
     `Objective: ${contract.objective}`,
     deliverables
       ? `Promised deliverables (stable IDs):\n${deliverables}`
@@ -130,13 +122,10 @@ export function renderAgentBrief(input: RenderAgentBriefInput): RenderedAgentBri
     nonGoals ? `Non-goals:\n${nonGoals}` : 'Non-goals: none recorded.',
     [
       `Repository: ${input.repository}`,
-      `Workspace: ${input.workspace_id ?? contract.workspace_id ?? '<unknown until dispatch>'}`,
       `Base ref: ${contract.base_ref ?? '<not declared>'}`,
       `Policy: ${contract.policy_id ?? '<not declared>'}`,
-      `Contract version: ${contract.version}`,
-      `Job Market version: ${market.market_version}`,
     ].join('\n'),
-    `Before stopping, submit the structured report with "orchestra delivery submit ${jobId}"`
+    'Before stopping, submit the structured report with "orchestra delivery submit <job-id>"'
       + ' when that command is available. Claims are not verification evidence.',
     'Your final response MUST end with two concise sections: "Delivery summary:" describing what changed,'
       + ' and "Evidence:" listing the exact commands, artifacts, commits, or observed results.'
@@ -177,11 +166,6 @@ function verifier(criterion: JobMarketCriterion): string {
     value.artifact_kind ? `artifact_kind=${value.artifact_kind}` : null,
     value.instructions ? `instructions=${value.instructions}` : null,
   ].filter((part): part is string => part !== null).join('; ')
-}
-
-function runtimeIdentity(value: string | null | undefined, kind: 'job' | 'delivery'): string {
-  const normalized = value?.trim()
-  return normalized || `<unknown ${kind} id until dispatch>`
 }
 
 function list(values: readonly string[]): string {

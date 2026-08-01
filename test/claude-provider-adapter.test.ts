@@ -129,6 +129,9 @@ const createAdapter = (
     CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'must-not-reach-any-probe',
     CLAUDE_CODE_USE_BEDROCK: '1',
     ORCHESTRA_CLAUDE_COMMAND: '/ambient/claude',
+    GITHUB_TOKEN: 'must-not-reach-auth-probe',
+    AWS_SECRET_ACCESS_KEY: 'must-not-reach-auth-probe',
+    DATABASE_URL: 'must-not-reach-auth-probe',
   },
   platform: 'darwin-arm64',
   now: () => new Date(),
@@ -136,11 +139,11 @@ const createAdapter = (
   readExecutable: () => EXECUTABLE_BYTES,
   readVersion: () => '2.1.212 (Claude Code)',
   probeAuthentication: (_resolvedPath, environment) => {
-    expect(environment.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(environment.OPENAI_API_KEY).toBeUndefined()
-    expect(environment.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
-    expect(environment.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined()
-    expect(environment.CLAUDE_CODE_USE_BEDROCK).toBeUndefined()
+    expect(environment).toEqual({
+      HOME: '/safe/home',
+      PATH: '/ambient/bin',
+      LANG: 'en_US.UTF-8',
+    })
     return 'ready'
   },
   listModels: () => [{

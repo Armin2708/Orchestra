@@ -34,6 +34,7 @@ import {
   registerAgentOsServerComposition,
   type AgentOsServerRouteOptions,
 } from './server-composition.js'
+import { registerCompatibilityReadObserver } from './agent-os/compatibility-read-observer.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -1426,6 +1427,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     agentOs: opts.agentOs,
     isOperator: (request) => request.orchestraPrincipal === 'operator',
   })
+  registerCompatibilityReadObserver(server, db)
 
   // static web UI (built by Task 13; 404s harmlessly before that)
   const webDist = fileURLToPath(new URL('../web/dist', import.meta.url))

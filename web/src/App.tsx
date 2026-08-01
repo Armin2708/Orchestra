@@ -90,9 +90,6 @@ export function App() {
   }, [refresh, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
-  if (loaded && snaps.length === 0 && view !== 'settings' && view !== 'open-work')
-    return <GettingStarted onSettings={() => pickView('settings')} />
-
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
   const cards = snaps.flatMap((s) => s.cards)
   const visible = focus === 'all' ? snaps : snaps.filter((s) => s.board.id === focus)
@@ -143,8 +140,10 @@ export function App() {
         </div>
       </header>
       {view === 'board'
-        ? <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && visible.length === 1}
-            openMessages={openMessages} onTabChange={pickBoardTab} onChange={refresh} />
+        ? loaded && snaps.length === 0
+          ? <GettingStarted onSettings={() => pickView('settings')} />
+          : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && visible.length === 1}
+              openMessages={openMessages} onTabChange={pickBoardTab} onChange={refresh} />
         : view === 'open-work'
           ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Open Work"><span /><span /><span /></div>}>
               <OpenWorkView />

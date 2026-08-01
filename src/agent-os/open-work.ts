@@ -106,6 +106,7 @@ export interface OpenWorkMatch {
   selected_agent: OpenWorkAgentCandidate | null
   candidates: OpenWorkAgentCandidate[]
   global_capacity: CapacityEvidence
+  agent_brief_sha256: string | null
   decision_sha256: string | null
 }
 
@@ -117,6 +118,7 @@ export interface OpenWorkDispatchMatch {
   model: string
   access_profile: ContractAccessNeed
   workspace_id: string
+  agent_brief_sha256: string
   decision_sha256: string
 }
 
@@ -371,6 +373,7 @@ export class OpenWorkService {
     const launchKey = derivedKey('launch', idempotencyKey)
     const assignmentReason = 'deterministic Open Work dispatch'
     let assignmentResult: JobAssignmentCommandResult | undefined
+    let reservedBrief: RenderedAgentBrief | undefined
 
     const reserve = this.db.transaction(() => {
       const replay = this.assignmentReplay(match.card_id, assignmentKey)
@@ -419,7 +422,7 @@ export class OpenWorkService {
       }
 
       const assignment = assignmentResult.assignment
-      this.orchestration!.createCardJob({
+      const created = this.orchestration!.createCardJob({
         cardId: match.card_id,
         expectedBoardId: assignment.board_id,
         requireLaunchable: true,
@@ -434,6 +437,39 @@ export class OpenWorkService {
           assignmentMarketVersion: assignment.assigned_market_version,
         },
       })
+      const storedBrief = created.job.agent_brief
+        && created.job.agent_brief_sha256
+        ? {
+            agent_brief: created.job.agent_brief,
+            agent_brief_sha256: created.job.agent_brief_sha256,
+          }
+        : null
+      if (storedBrief) {
+        if (storedBrief.agent_brief_sha256 !== match.agent_brief_sha256
+          || createHash('sha256').update(storedBrief.agent_brief).digest('hex')
+            !== storedBrief.agent_brief_sha256) {
+          throw new ConflictError('persisted Agent OS brief does not match dispatch evidence')
+        }
+        reservedBrief = storedBrief
+      } else {
+        const rendered = this.renderBrief(match.card_id, {
+          job_id: created.job.id,
+          delivery_id: created.delivery.id,
+          workspace_id: created.workspace?.id ?? match.workspace_id,
+          selection: selectionFromMatch(match),
+        })
+        if (rendered.agent_brief_sha256 !== match.agent_brief_sha256) {
+          throw new ConflictError('Open Work brief preview is stale')
+        }
+        const persisted = this.db.prepare(`UPDATE jobs
+          SET agent_brief=?, agent_brief_sha256=?
+          WHERE id=? AND agent_brief IS NULL AND agent_brief_sha256 IS NULL`)
+          .run(rendered.agent_brief, rendered.agent_brief_sha256, created.job.id)
+        if (persisted.changes !== 1) {
+          throw new ConflictError('Open Work brief persistence raced')
+        }
+        reservedBrief = rendered
+      }
     })
     reserve.immediate()
     if (!assignmentResult) throw new ConflictError('Open Work assignment reservation failed')
@@ -459,7 +495,7 @@ export class OpenWorkService {
           agent_brief: launched.job.agent_brief,
           agent_brief_sha256: launched.job.agent_brief_sha256,
         }
-      : this.renderBrief(match.card_id, {
+      : reservedBrief ?? this.renderBrief(match.card_id, {
           job_id: launched.job.id,
           delivery_id: launched.delivery.id,
           workspace_id: launched.workspace?.id ?? match.workspace_id,
@@ -498,37 +534,54 @@ export class OpenWorkService {
       : this.requireMarket(normalizedCardId)
     const graph = this.graphState([loaded.scope.board_id])
     const frozenContract = input.contract
-    const criteriaById = new Map(
-      loaded.market.criteria.map((criterion) => [criterion.id, criterion]),
-    )
     const jobMarket = frozenContract ? {
       ...loaded.market,
       contract: frozenContract,
       criteria: frozenContract.acceptance_criteria.map((criterion) => {
-        const extension = criteriaById.get(criterion.id)
         return {
           ...criterion,
-          description: extension?.description ?? criterion.text,
-          verifier: extension?.verifier ?? { kind: 'human' as const },
-          required_artifacts: extension?.required_artifacts ?? [],
-          priority: extension?.priority ?? 0,
-          owner: extension?.owner ?? null,
+          description: criterion.text,
+          verifier: { kind: 'human' as const },
+          required_artifacts: [],
+          priority: 0,
+          owner: null,
         }
       }),
-      dependency_rules: loaded.market.dependency_rules.filter((rule) =>
-        frozenContract.dependencies.includes(rule.card_id)),
+      dependency_rules: frozenContract.dependencies.map((dependency) => ({
+        card_id: dependency,
+        blocking_reason: 'Declared frozen dependency',
+        completion_condition: 'card_done' as const,
+      })),
+      constraints: {
+        required_capabilities: [],
+        provider_constraints: [],
+        model_constraints: [],
+        access_needs: [],
+      },
       budgets: {
-        ...loaded.market.budgets,
         tokens: frozenContract.budget_tokens,
         cost_cents: frozenContract.budget_cents,
+        time_seconds: null,
+        retries: null,
+        coordination_tokens: null,
+        coordination_messages: null,
       },
     } : loaded.market
+    const dependencies = frozenContract
+      ? frozenContract.dependencies.map((dependency) => ({
+          card_id: dependency,
+          title: `Card ${dependency}`,
+          state: 'frozen',
+          blocking_reason: 'Declared frozen dependency',
+          readiness: 'blocked' as const,
+        }))
+      : this.dependencies(cardId, graph)
     return renderAgentBrief({
       job_market: jobMarket,
       repository: loaded.scope.repository,
       ...input,
-      dependencies: this.dependencies(cardId, graph),
-      critical_path: criticalPaths(cardId, graph),
+      dependencies,
+      critical_path: frozenContract ? [] : criticalPaths(cardId, graph),
     })
   }
 
@@ -785,6 +838,12 @@ export class OpenWorkService {
           model: selected.model!,
           access_profile: selected.access_profile!,
           workspace_id: selected.workspace_id!,
+          agent_brief_sha256: renderAgentBrief({
+            job_market: loaded.market,
+            repository: loaded.scope.repository,
+            dependencies: this.dependencies(loaded.scope.card_id, graph),
+            critical_path: criticalPaths(loaded.scope.card_id, graph),
+          }).agent_brief_sha256,
         }
       : null
     return {
@@ -796,6 +855,7 @@ export class OpenWorkService {
       selected_agent: selected,
       candidates,
       global_capacity: globalCapacity,
+      agent_brief_sha256: compact?.agent_brief_sha256 ?? null,
       decision_sha256: compact ? decisionDigest(compact) : null,
     }
   }
@@ -957,6 +1017,7 @@ export function dispatchMatch(match: OpenWorkMatch): OpenWorkDispatchMatch {
     model: selected.model,
     access_profile: selected.access_profile,
     workspace_id: selected.workspace_id,
+    agent_brief_sha256: match.agent_brief_sha256!,
     decision_sha256: match.decision_sha256,
   }
 }
@@ -1269,6 +1330,10 @@ function normalizeDispatchMatch(value: OpenWorkDispatchMatch): OpenWorkDispatchM
   if (!/^[0-9a-f]{64}$/.test(decision)) {
     throw new ValidationError('match decision_sha256 must be a lowercase SHA-256 digest')
   }
+  const brief = boundedText(value.agent_brief_sha256, 'match agent_brief_sha256', 64)
+  if (!/^[0-9a-f]{64}$/.test(brief)) {
+    throw new ValidationError('match agent_brief_sha256 must be a lowercase SHA-256 digest')
+  }
   return {
     card_id: positiveInteger(value.card_id, 'match card_id'),
     market_version: positiveInteger(value.market_version, 'match market_version'),
@@ -1277,6 +1342,7 @@ function normalizeDispatchMatch(value: OpenWorkDispatchMatch): OpenWorkDispatchM
     model: boundedText(value.model, 'match model', 200),
     access_profile: access,
     workspace_id: boundedText(value.workspace_id, 'match workspace_id', 200),
+    agent_brief_sha256: brief,
     decision_sha256: decision,
   }
 }

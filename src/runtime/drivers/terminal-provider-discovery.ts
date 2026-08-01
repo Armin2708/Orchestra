@@ -160,8 +160,9 @@ const readVersion = (
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 3_000,
       windowsHide: true,
+      maxBuffer: VERSION_OUTPUT_LIMIT,
     }).trim()
-    return output ? output.slice(0, VERSION_OUTPUT_LIMIT) : null
+    return output || null
   } catch {
     return null
   }

@@ -232,6 +232,7 @@ describe('Job Market Open Work gate', () => {
     })
     expect(preview.agent_brief).toBe(expectedPreview.agent_brief)
     expect(preview.agent_brief_sha256).toBe(expectedPreview.agent_brief_sha256)
+    expect(compact.agent_brief_sha256).toBe(preview.agent_brief_sha256)
 
     const [first, second] = await Promise.all([
       firstClient.dispatch(dispatchInput(compact, 'gate:dispatch-once')),
@@ -243,6 +244,8 @@ describe('Job Market Open Work gate', () => {
     expect(second.job.id).toBe(first.job.id)
     expect(second.agent_brief).toBe(first.agent_brief)
     expect(second.agent_brief_sha256).toBe(first.agent_brief_sha256)
+    expect(first.agent_brief).toBe(preview.agent_brief)
+    expect(first.agent_brief_sha256).toBe(preview.agent_brief_sha256)
     expect(executor.executed).toEqual([first.job.id])
     expect(first.dispatch).toMatchObject({
       started: [first.job.id],
@@ -290,6 +293,22 @@ describe('Job Market Open Work gate', () => {
     })
     expect(first.agent_brief).toBe(expectedDispatch.agent_brief)
     expect(first.agent_brief_sha256).toBe(expectedDispatch.agent_brief_sha256)
+
+    db.prepare(`UPDATE job_market_criteria
+      SET description='mutable live description', verifier_json='{"kind":"human"}',
+        required_artifacts_json='[]', priority=99
+      WHERE card_id=?`).run(cardId)
+    db.prepare(`UPDATE job_market_contracts
+      SET required_capabilities_json='["drifted"]', budget_time_seconds=1,
+        budget_retries=99 WHERE card_id=?`).run(cardId)
+    db.prepare(`UPDATE job_market_dependencies
+      SET blocking_reason='mutable live dependency reason' WHERE card_id=?`).run(cardId)
+    const replayAfterLiveDrift = await firstClient.dispatch(
+      dispatchInput(compact, 'gate:dispatch-once'),
+    )
+    expect(replayAfterLiveDrift.replayed).toBe(true)
+    expect(replayAfterLiveDrift.agent_brief).toBe(preview.agent_brief)
+    expect(replayAfterLiveDrift.agent_brief_sha256).toBe(preview.agent_brief_sha256)
   })
 
   it('rejects stale or tampered match decisions before any reservation', async () => {

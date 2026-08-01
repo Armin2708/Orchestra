@@ -2246,6 +2246,20 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     if (!job.card_id) {
       throw new Error('card-backed contract is required for an Agent OS delivery brief')
     }
+    const stored = this.db.prepare(`SELECT agent_brief, agent_brief_sha256
+      FROM jobs WHERE id=?`).get(job.id) as {
+        agent_brief: string | null
+        agent_brief_sha256: string | null
+      } | undefined
+    if (!stored) throw new Error('job disappeared before Agent OS brief persistence')
+    if (stored.agent_brief !== null || stored.agent_brief_sha256 !== null) {
+      if (stored.agent_brief === null || stored.agent_brief_sha256 === null
+        || createHash('sha256').update(stored.agent_brief).digest('hex')
+          !== stored.agent_brief_sha256) {
+        throw new Error('persisted Agent OS brief evidence is invalid')
+      }
+      return stored.agent_brief
+    }
     const rendered = new OpenWorkService(this.db).renderBrief(job.card_id, {
       job_id: job.id,
       delivery_id: delivery.id,
@@ -2261,19 +2275,6 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     const digest = createHash('sha256').update(rendered.agent_brief).digest('hex')
     if (digest !== rendered.agent_brief_sha256) {
       throw new Error('rendered Agent OS brief digest is inconsistent')
-    }
-    const stored = this.db.prepare(`SELECT agent_brief, agent_brief_sha256
-      FROM jobs WHERE id=?`).get(job.id) as {
-        agent_brief: string | null
-        agent_brief_sha256: string | null
-      } | undefined
-    if (!stored) throw new Error('job disappeared before Agent OS brief persistence')
-    if (stored.agent_brief !== null || stored.agent_brief_sha256 !== null) {
-      if (stored.agent_brief !== rendered.agent_brief
-        || stored.agent_brief_sha256 !== rendered.agent_brief_sha256) {
-        throw new Error('persisted Agent OS brief differs from current render')
-      }
-      return stored.agent_brief
     }
     const persisted = this.db.prepare(`UPDATE jobs
       SET agent_brief=?, agent_brief_sha256=?

@@ -250,6 +250,7 @@ export type OpenWorkMatch = {
   selected_agent: OpenWorkAgent | null
   candidates: OpenWorkAgent[]
   global_capacity: OpenWorkAgentCapacity
+  agent_brief_sha256: string | null
   decision_sha256: string | null
 }
 
@@ -261,6 +262,7 @@ export type DispatchMatchInput = {
   model: string
   access_profile: ContractAccessNeed
   workspace_id: string
+  agent_brief_sha256: string
   decision_sha256: string
 }
 
@@ -766,6 +768,7 @@ const parseMatch = (value: unknown, label: string): OpenWorkMatch => {
     candidates: array(row.candidates, `${label}.candidates`).map((item, index) =>
       parseAgent(item, `${label}.candidates[${index}]`)),
     global_capacity: parseCapacity(row.global_capacity, `${label}.global_capacity`),
+    agent_brief_sha256: nullableSha256(row.agent_brief_sha256, `${label}.agent_brief_sha256`),
     decision_sha256: nullableSha256(row.decision_sha256, `${label}.decision_sha256`),
   }
 }
@@ -840,7 +843,7 @@ export const dispatchInputFromMatch = (match: OpenWorkMatch): DispatchMatchInput
   const selected = match.selected_agent
   if (!match.eligible || !selected || !selected.eligible
     || !selected.provider || !selected.model || !selected.access_profile || !selected.workspace_id
-    || !match.decision_sha256) {
+    || !match.agent_brief_sha256 || !match.decision_sha256) {
     throw new Error('A dispatch requires one explicitly selected eligible agent with complete provider, access, workspace, and decision evidence.')
   }
   return {
@@ -851,6 +854,7 @@ export const dispatchInputFromMatch = (match: OpenWorkMatch): DispatchMatchInput
     model: selected.model,
     access_profile: selected.access_profile,
     workspace_id: selected.workspace_id,
+    agent_brief_sha256: match.agent_brief_sha256,
     decision_sha256: match.decision_sha256,
   }
 }

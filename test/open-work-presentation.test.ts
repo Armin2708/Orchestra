@@ -258,6 +258,7 @@ const matchFixture = (): OpenWorkMatch => ({
   selected_agent: selectedAgent,
   candidates: [selectedAgent],
   global_capacity: { active: 2, limit: 6, available: 4 },
+  agent_brief_sha256: 'b'.repeat(64),
   decision_sha256: 'd'.repeat(64),
 })
 
@@ -448,6 +449,7 @@ describe('Open Work query and protocol', () => {
       model: 'gpt-5.4',
       access_profile: 'workspace_write',
       workspace_id: 'workspace-river',
+      agent_brief_sha256: 'b'.repeat(64),
       decision_sha256: 'd'.repeat(64),
     })
     expect(createDispatchIdempotencyKey(42, match.decision_sha256!, 'fixed-nonce'))

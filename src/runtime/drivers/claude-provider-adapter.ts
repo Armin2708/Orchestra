@@ -126,8 +126,9 @@ const readVersion = (
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 3_000,
       windowsHide: true,
+      maxBuffer: CLAUDE_VERSION_OUTPUT_LIMIT,
     }).trim()
-    return output ? output.slice(0, 200) : null
+    return output || null
   } catch {
     return null
   }
@@ -170,9 +171,30 @@ const minimalVersionEnvironment = (
 const credentialFreeEnvironment = (
   source: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv => {
-  const environment = { ...source }
-  for (const rule of CLAUDE_PROVIDER_MANIFEST_V1.environment.conflict_rules) {
-    delete environment[rule.variable]
+  const environment: NodeJS.ProcessEnv = {}
+  for (const variable of [
+    'HOME',
+    'USERPROFILE',
+    'XDG_CONFIG_HOME',
+    'XDG_DATA_HOME',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'CLAUDE_CONFIG_DIR',
+    'PATH',
+    'PATHEXT',
+    'SystemRoot',
+    'SYSTEMROOT',
+    'WINDIR',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+  ]) {
+    if (typeof source[variable] === 'string') {
+      environment[variable] = source[variable]
+    }
   }
   return environment
 }

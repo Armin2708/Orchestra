@@ -849,6 +849,36 @@ export function validateCompatibilityForwardMigration(
   return results
 }
 
+/**
+ * Compare retained migration links for one compatibility table without returning
+ * source keys, target keys, payloads, or row content to the telemetry caller.
+ */
+export function compatibilityProjectionMismatchDiagnostic(
+  db: Database.Database,
+  table: AgentOsLegacyCompatibilityTable,
+): 'missing_legacy_row' | 'missing_canonical_row' | 'value_mismatch' | null {
+  const links = db.prepare(`
+    SELECT source_table, source_key, source_hash, target_table, target_key,
+      target_hash, disposition
+    FROM os_compatibility_projection_links
+    WHERE migration_id=? AND source_table=?
+    ORDER BY source_key
+  `).all(
+    AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
+    table,
+  ) as StoredLink[]
+  for (const link of links) {
+    const source = sourceSnapshot(db, link.source_table, link.source_key)
+    if (source === null) return 'missing_legacy_row'
+    const target = targetSnapshot(db, link.target_table, link.target_key)
+    if (target === null) return 'missing_canonical_row'
+    if (hash(source) !== link.source_hash || hash(target) !== link.target_hash) {
+      return 'value_mismatch'
+    }
+  }
+  return null
+}
+
 function assertCompatibilityPrerequisites(db: Database.Database): void {
   const prior = db.prepare(
     'SELECT 1 FROM os_schema_migrations WHERE id=?',
