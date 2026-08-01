@@ -179,16 +179,21 @@ export interface VerifiedDeliveryKnowledgeIngestionInput {
 }
 
 export interface AcceptedKnowledgeEntryInput {
-  kind: 'discussion_answer' | 'decision'
-  key: string
   path: string
   start_line: number
   end_line: number
-  title: string
-  accepted_at: string
-  accepted_by: string
   /** SHA-256 of the exact committed line slice before redaction. */
   expected_source_sha256: string
+}
+
+export interface AcceptedKnowledgeArtifact {
+  schema_version: 1
+  kind: 'discussion_answer' | 'decision'
+  key: string
+  title: string
+  content: string
+  accepted_at: string
+  accepted_by: string
 }
 
 export interface AcceptedKnowledgeIngestionInput {
@@ -5643,46 +5648,75 @@ function validateAcceptedKnowledgeInput(
     MAX_KNOWLEDGE_SOURCE_ACCEPTED_ENTRIES,
   ).map((item): AcceptedKnowledgeEntryInput => {
     const entry = safeRecord(item, [
-      'kind',
-      'key',
       'path',
       'start_line',
       'end_line',
-      'title',
-      'accepted_at',
-      'accepted_by',
       'expected_source_sha256',
     ])
-    const kind = safeText(entry.kind, 32)
-    if (kind !== 'discussion_answer' && kind !== 'decision') {
-      fail('invalid_input')
-    }
-    const key = safeText(entry.key, 256)
-    if (!SAFE_KEY.test(key)) fail('invalid_input')
     const startLine = positiveInteger(entry.start_line)
     const endLine = positiveInteger(entry.end_line)
     if (endLine < startLine) fail('invalid_input')
     const expectedHash = safeText(entry.expected_source_sha256, 64)
     if (!SHA256.test(expectedHash)) fail('invalid_input')
     return {
-      kind,
-      key,
       path: safeRepositoryPath(entry.path),
       start_line: startLine,
       end_line: endLine,
-      title: safeText(entry.title, 500),
-      accepted_at: safeTimestamp(entry.accepted_at),
-      accepted_by: safeText(entry.accepted_by, 500),
       expected_source_sha256: expectedHash,
     }
   })
   const identities = new Set<string>()
   for (const entry of entries) {
-    const identity = `${entry.kind}\u0000${entry.key}`
+    const identity = `${entry.path}\u0000${entry.start_line}\u0000${entry.end_line}`
     if (identities.has(identity)) fail('contradictory_evidence')
     identities.add(identity)
   }
   return { common: commonInput(record), entries }
+}
+
+function acceptedKnowledgeArtifact(raw: string): AcceptedKnowledgeArtifact {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    const record = safeRecord(parsed, [
+      'schema_version',
+      'kind',
+      'key',
+      'title',
+      'content',
+      'accepted_at',
+      'accepted_by',
+    ])
+    if (record.schema_version !== 1) fail('evidence_mismatch')
+    const kind = safeText(record.kind, 32)
+    if (kind !== 'discussion_answer' && kind !== 'decision') {
+      fail('evidence_mismatch')
+    }
+    const key = safeText(record.key, 256)
+    if (!SAFE_KEY.test(key)) fail('evidence_mismatch')
+    const content = record.content
+    if (
+      typeof content !== 'string'
+      || content.length === 0
+      || content.length > MAX_KNOWLEDGE_SOURCE_FILE_BYTES
+      || content !== content.trim()
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(content)
+    ) {
+      fail('evidence_mismatch')
+    }
+    const artifact: AcceptedKnowledgeArtifact = {
+      schema_version: 1,
+      kind,
+      key,
+      title: safeText(record.title, 500),
+      content,
+      accepted_at: safeTimestamp(record.accepted_at),
+      accepted_by: safeText(record.accepted_by, 500),
+    }
+    if (canonicalKnowledgeJson(artifact) !== raw) fail('evidence_mismatch')
+    return artifact
+  } catch {
+    fail('evidence_mismatch')
+  }
 }
 
 function acceptedKnowledgePlans(
@@ -5693,9 +5727,11 @@ function acceptedKnowledgePlans(
   const evidenceByPath = new Map<string, LoadedEvidence>()
   let evidenceBytes = 0
   const plans: PlannedKnowledge[] = []
+  const acceptedIdentities = new Set<string>()
   for (const entry of [...entries].sort((left, right) =>
-    compareText(left.kind, right.kind)
-      || compareText(left.key, right.key))) {
+    compareText(left.path, right.path)
+      || left.start_line - right.start_line
+      || left.end_line - right.end_line)) {
     let evidence = evidenceByPath.get(entry.path)
     if (!evidence) {
       evidence = loadEvidence(root, common.base_commit_sha, entry.path)
@@ -5709,6 +5745,12 @@ function acceptedKnowledgePlans(
     if (sha256(cited.raw) !== entry.expected_source_sha256) {
       fail('evidence_mismatch')
     }
+    const artifact = acceptedKnowledgeArtifact(cited.raw)
+    const acceptedIdentity = `${artifact.kind}\u0000${artifact.key}`
+    if (acceptedIdentities.has(acceptedIdentity)) {
+      fail('contradictory_evidence')
+    }
+    acceptedIdentities.add(acceptedIdentity)
     const authors = uniqueAuthors(parseBlame(
       root,
       common.base_commit_sha,
@@ -5716,12 +5758,12 @@ function acceptedKnowledgePlans(
       entry.start_line,
       entry.end_line,
     ))
-    const title = redactSensitiveText(entry.title)
+    const title = redactSensitiveText(artifact.title)
     if (title.value === null || title.value.length === 0) fail('invalid_input')
     const envelope = redactEnvelope({
       acceptance_basis: 'committed_source',
-      accepted_at: entry.accepted_at,
-      accepted_by: entry.accepted_by,
+      accepted_at: artifact.accepted_at,
+      accepted_by: artifact.accepted_by,
       authors,
       citation: {
         commit_sha: common.base_commit_sha,
@@ -5737,16 +5779,16 @@ function acceptedKnowledgePlans(
         text: cited.redacted,
       },
       interpretation: 'data_only',
-      kind: entry.kind,
+      kind: artifact.kind,
       schema_version: 1,
     })
     plans.push(planKnowledge({
       common,
-      kind: entry.kind,
+      kind: artifact.kind,
       trust: 'evidence',
       title: title.value,
       locator:
-        `accepted/${entry.kind}/${sha256(entry.key)}/${entry.path}`
+        `accepted/${artifact.kind}/${sha256(artifact.key)}/${entry.path}`
         + `/lines-${entry.start_line}-${entry.end_line}.json`,
       source_revision: common.base_commit_sha,
       content: envelope.content,

@@ -6,6 +6,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
+import { canonicalKnowledgeJson } from '../src/agent-os/knowledge-contracts.js'
 import {
   KnowledgeSourceIngestor,
   type AcceptedKnowledgeIngestionInput,
@@ -195,10 +196,23 @@ function acceptedDelivery(
 describe('knowledge source ingestion', () => {
   it('ingests committed accepted discussion answers and durable decisions', () => {
     const fixture = repositoryFixture()
-    const accepted = [
-      'Decision: Keep knowledge ingestion repository-scoped.',
-      'Accepted answer: Use exact committed citations and redact ghp_12345678901234567890.',
-    ].join('\n')
+    const accepted = [{
+      schema_version: 1 as const,
+      kind: 'decision' as const,
+      key: 'decision:repository-scope',
+      title: 'Repository-scoped knowledge ingestion',
+      content: 'Keep knowledge ingestion repository-scoped.',
+      accepted_at: OBSERVED_AT,
+      accepted_by: 'release-reviewer',
+    }, {
+      schema_version: 1 as const,
+      kind: 'discussion_answer' as const,
+      key: 'discussion:knowledge-ingestion',
+      title: 'Accepted knowledge ingestion answer',
+      content: 'Use exact committed citations and redact ghp_12345678901234567890.',
+      accepted_at: OBSERVED_AT,
+      accepted_by: 'release-reviewer',
+    }].map((artifact) => canonicalKnowledgeJson(artifact)).join('\n')
     write(fixture.root, 'docs/accepted-knowledge.md', `${accepted}\n`)
     const head = commit(fixture.root, 'record accepted knowledge')
     const { db, boardId } = boardDb(fixture.root)
@@ -209,24 +223,14 @@ describe('knowledge source ingestion', () => {
       base_commit_sha: head,
       observed_at: OBSERVED_AT,
       entries: [{
-        kind: 'discussion_answer',
-        key: 'discussion:knowledge-ingestion',
         path: 'docs/accepted-knowledge.md',
         start_line: 2,
         end_line: 2,
-        title: 'Accepted knowledge ingestion answer',
-        accepted_at: OBSERVED_AT,
-        accepted_by: 'release-reviewer',
         expected_source_sha256: sha256(accepted.split('\n')[1]),
       }, {
-        kind: 'decision',
-        key: 'decision:repository-scope',
         path: 'docs/accepted-knowledge.md',
         start_line: 1,
         end_line: 1,
-        title: 'Repository-scoped knowledge ingestion',
-        accepted_at: OBSERVED_AT,
-        accepted_by: 'release-reviewer',
         expected_source_sha256: sha256(accepted.split('\n')[0]),
       }],
     }
@@ -270,12 +274,12 @@ describe('knowledge source ingestion', () => {
     expect(() => new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge({
       ...input,
       entries: [{
-        ...input.entries[0],
-        key: 'discussion:uncommitted-copy',
+        path: 'src/service.ts',
+        start_line: 1,
+        end_line: 1,
+        expected_source_sha256: sha256(fixture.source.split('\n')[0]),
       }, {
-        ...input.entries[1],
-        key: 'decision:forged-citation',
-        expected_source_sha256: '0'.repeat(64),
+        ...input.entries[0],
       }],
     })).toThrow(expect.objectContaining({ code: 'evidence_mismatch' }))
     expect(db.prepare('SELECT COUNT(*) AS count FROM knowledge_sources').get())
