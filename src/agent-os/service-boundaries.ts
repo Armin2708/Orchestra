@@ -245,6 +245,7 @@ export function createAgentOsDomainServiceBoundaries(
         'knowledge source and chunk persistence',
         'context build manifests',
         'context use accounting',
+        'accepted discussion and decision evidence ingestion',
         'verified repository evidence ingestion',
         'deterministic retrieval synchronization and query',
       ],

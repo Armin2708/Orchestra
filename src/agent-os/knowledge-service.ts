@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import {
   KnowledgeSourceIngestor,
+  type AcceptedKnowledgeIngestionInput,
   type GitContextKnowledgeIngestionInput,
   type KnowledgeSourceIngestionReport,
   type StructuralKnowledgeIngestionInput,
@@ -30,6 +31,12 @@ export class KnowledgeService extends KnowledgeStore {
   constructor(private readonly knowledgeDb: Database.Database) {
     super(knowledgeDb)
     this.ingestor = new KnowledgeSourceIngestor(knowledgeDb)
+  }
+
+  ingestAcceptedKnowledge(
+    request: AcceptedKnowledgeIngestionInput,
+  ): KnowledgeSourceIngestionReport {
+    return this.ingestor.ingestAcceptedKnowledge(request)
   }
 
   ingestStructural(

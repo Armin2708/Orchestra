@@ -48,6 +48,7 @@ describe('Lane 3 Knowledge Compiler central integration', () => {
       expect(boundaries.knowledge.implementation_state).toBe('canonical')
       expect(boundaries.knowledge.service).toBeInstanceOf(KnowledgeService)
       expect(boundaries.knowledge.owns).toEqual(expect.arrayContaining([
+        'accepted discussion and decision evidence ingestion',
         'verified repository evidence ingestion',
         'deterministic retrieval synchronization and query',
       ]))
@@ -58,6 +59,7 @@ describe('Lane 3 Knowledge Compiler central integration', () => {
       expect(boundaries.knowledge.excludes).not.toContain('retrieval and ranking')
       expect(boundaries.knowledge.service.ingestStructural).toBeTypeOf('function')
       expect(boundaries.knowledge.service.ingestGitContext).toBeTypeOf('function')
+      expect(boundaries.knowledge.service.ingestAcceptedKnowledge).toBeTypeOf('function')
       expect(boundaries.knowledge.service.ingestVerifiedDelivery).toBeTypeOf('function')
       expect(boundaries.knowledge.service.synchronizeRetrievalIndex).toBeTypeOf('function')
       expect(boundaries.knowledge.service.rebuildRetrievalIndex).toBeTypeOf('function')

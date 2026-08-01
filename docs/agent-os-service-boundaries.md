@@ -39,8 +39,9 @@ Reserved boundaries cannot silently accept a compatibility implementation. Their
 
 The existing canonical orchestration, Agent Home conversation, Delivery Trackbook, and Knowledge
 implementations remain authoritative in their existing modules. The Knowledge boundary composes
-durable persistence with verified repository evidence ingestion and deterministic bounded FTS
-retrieval. DOM-014 does not move
+durable persistence with exact committed accepted-answer/decision evidence, verified repository
+evidence ingestion, and deterministic bounded FTS retrieval. The accepted-evidence adapter does
+not create a Discussion lifecycle or promotion authority. DOM-014 does not move
 their domain behavior into `buildServer` or a route plugin.
 
 The existing `GET /api/v1/os/boards/:id/conflicts` response now passes through
@@ -54,8 +55,9 @@ No schema, route, CLI, rendered UI, response shape, or conflict-enforcement beha
 
 ## Deliberate non-goals
 
-- Discussion/Post persistence, accepted answers, subscriptions, search, and promotion remain Phase
-  8 work.
+- Discussion/Post persistence, answer acceptance, subscriptions, search, and promotion remain
+  Phase 8 work; Knowledge can ingest an already-accepted answer only from an exact committed
+  citation.
 - Durable Conflict records, proposals, arbiter decisions, rationale, and resolution remain Phase 9
   work.
 - Knowledge managed injection, freshness, review, and product surfaces remain KNO-011 onward.

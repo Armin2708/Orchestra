@@ -40,6 +40,7 @@ export const MAX_KNOWLEDGE_SOURCE_HISTORY_COMMITS = 50
 export const MAX_KNOWLEDGE_SOURCE_BLAME_LINES = 500
 export const MAX_KNOWLEDGE_SOURCE_GOTCHAS = 32
 export const MAX_KNOWLEDGE_SOURCE_DELIVERY_PATHS = 200
+export const MAX_KNOWLEDGE_SOURCE_ACCEPTED_ENTRIES = 64
 export const MAX_KNOWLEDGE_SOURCE_FILE_BYTES = 2_000_000
 export const MAX_KNOWLEDGE_SOURCE_TOTAL_BYTES = 16_000_000
 
@@ -175,6 +176,28 @@ export interface VerifiedDeliveryKnowledgeIngestionInput {
   report_id: string
   source_commit_sha: string
   gotchas?: VerifiedGotchaInput[]
+}
+
+export interface AcceptedKnowledgeEntryInput {
+  kind: 'discussion_answer' | 'decision'
+  key: string
+  path: string
+  start_line: number
+  end_line: number
+  title: string
+  accepted_at: string
+  accepted_by: string
+  /** SHA-256 of the exact committed line slice before redaction. */
+  expected_source_sha256: string
+}
+
+export interface AcceptedKnowledgeIngestionInput {
+  board_id: number
+  repository_key: string
+  repository_root: string
+  base_commit_sha: string
+  observed_at: string
+  entries: AcceptedKnowledgeEntryInput[]
 }
 
 export interface KnowledgeSourceIngestionReport {
@@ -5604,13 +5627,167 @@ function deliveryPlans(
   return plans
 }
 
+function validateAcceptedKnowledgeInput(
+  value: AcceptedKnowledgeIngestionInput,
+): { common: CommonInput; entries: AcceptedKnowledgeEntryInput[] } {
+  const record = safeRecord(value, [
+    'board_id',
+    'repository_key',
+    'repository_root',
+    'base_commit_sha',
+    'observed_at',
+    'entries',
+  ])
+  const entries = safeArray(
+    record.entries,
+    MAX_KNOWLEDGE_SOURCE_ACCEPTED_ENTRIES,
+  ).map((item): AcceptedKnowledgeEntryInput => {
+    const entry = safeRecord(item, [
+      'kind',
+      'key',
+      'path',
+      'start_line',
+      'end_line',
+      'title',
+      'accepted_at',
+      'accepted_by',
+      'expected_source_sha256',
+    ])
+    const kind = safeText(entry.kind, 32)
+    if (kind !== 'discussion_answer' && kind !== 'decision') {
+      fail('invalid_input')
+    }
+    const key = safeText(entry.key, 256)
+    if (!SAFE_KEY.test(key)) fail('invalid_input')
+    const startLine = positiveInteger(entry.start_line)
+    const endLine = positiveInteger(entry.end_line)
+    if (endLine < startLine) fail('invalid_input')
+    const expectedHash = safeText(entry.expected_source_sha256, 64)
+    if (!SHA256.test(expectedHash)) fail('invalid_input')
+    return {
+      kind,
+      key,
+      path: safeRepositoryPath(entry.path),
+      start_line: startLine,
+      end_line: endLine,
+      title: safeText(entry.title, 500),
+      accepted_at: safeTimestamp(entry.accepted_at),
+      accepted_by: safeText(entry.accepted_by, 500),
+      expected_source_sha256: expectedHash,
+    }
+  })
+  const identities = new Set<string>()
+  for (const entry of entries) {
+    const identity = `${entry.kind}\u0000${entry.key}`
+    if (identities.has(identity)) fail('contradictory_evidence')
+    identities.add(identity)
+  }
+  return { common: commonInput(record), entries }
+}
+
+function acceptedKnowledgePlans(
+  common: CommonInput,
+  root: string,
+  entries: readonly AcceptedKnowledgeEntryInput[],
+): PlannedKnowledge[] {
+  const evidenceByPath = new Map<string, LoadedEvidence>()
+  let evidenceBytes = 0
+  const plans: PlannedKnowledge[] = []
+  for (const entry of [...entries].sort((left, right) =>
+    compareText(left.kind, right.kind)
+      || compareText(left.key, right.key))) {
+    let evidence = evidenceByPath.get(entry.path)
+    if (!evidence) {
+      evidence = loadEvidence(root, common.base_commit_sha, entry.path)
+      evidenceByPath.set(entry.path, evidence)
+      evidenceBytes += Buffer.byteLength(evidence.text, 'utf8')
+      if (evidenceBytes > MAX_KNOWLEDGE_SOURCE_TOTAL_BYTES) {
+        fail('invalid_input')
+      }
+    }
+    const cited = excerpt(evidence, entry.start_line, entry.end_line)
+    if (sha256(cited.raw) !== entry.expected_source_sha256) {
+      fail('evidence_mismatch')
+    }
+    const authors = uniqueAuthors(parseBlame(
+      root,
+      common.base_commit_sha,
+      entry.path,
+      entry.start_line,
+      entry.end_line,
+    ))
+    const title = redactSensitiveText(entry.title)
+    if (title.value === null || title.value.length === 0) fail('invalid_input')
+    const envelope = redactEnvelope({
+      acceptance_basis: 'committed_source',
+      accepted_at: entry.accepted_at,
+      accepted_by: entry.accepted_by,
+      authors,
+      citation: {
+        commit_sha: common.base_commit_sha,
+        end_line: entry.end_line,
+        path: entry.path,
+        repository_key: common.repository_key,
+        start_line: entry.start_line,
+      },
+      confidence_micros: 1_000_000,
+      evidence: {
+        persisted_evidence_sha256: sha256(cited.redacted),
+        source_sha256: entry.expected_source_sha256,
+        text: cited.redacted,
+      },
+      interpretation: 'data_only',
+      kind: entry.kind,
+      schema_version: 1,
+    })
+    plans.push(planKnowledge({
+      common,
+      kind: entry.kind,
+      trust: 'evidence',
+      title: title.value,
+      locator:
+        `accepted/${entry.kind}/${sha256(entry.key)}/${entry.path}`
+        + `/lines-${entry.start_line}-${entry.end_line}.json`,
+      source_revision: common.base_commit_sha,
+      content: envelope.content,
+      redacted: envelope.redacted || cited.changed || title.changed,
+      source_range: range(entry.start_line, entry.end_line),
+      symbol: null,
+      targets: boardTargets(common.board_id),
+    }))
+  }
+  return plans
+}
+
 /**
  * Ingests adapter-neutral structural evidence, selectively scoped Git
- * history/blame, and accepted delivery evidence. Every method re-verifies
- * repository and database scope inside the atomic persistence transaction.
+ * history/blame, committed accepted answers/decisions, and accepted delivery
+ * evidence. Every method re-verifies repository and database scope inside the
+ * atomic persistence transaction.
  */
 export class KnowledgeSourceIngestor {
   constructor(private readonly db: Database.Database) {}
+
+  ingestAcceptedKnowledge(
+    value: AcceptedKnowledgeIngestionInput,
+  ): KnowledgeSourceIngestionReport {
+    try {
+      const input = validateAcceptedKnowledgeInput(value)
+      const verified = verifyRepository(this.db, input.common)
+      assertRepositoryStable(this.db, input.common, verified)
+      const plans = acceptedKnowledgePlans(
+        input.common,
+        verified.root,
+        input.entries,
+      )
+      assertRepositoryStable(this.db, input.common, verified)
+      return persist(this.db, input.common, verified, plans)
+    } catch (error) {
+      throw new KnowledgeSourceIngestionError(
+        trustedCode(error) ?? 'persistence_failed',
+      )
+    }
+  }
 
   ingestStructural(
     value: StructuralKnowledgeIngestionInput,

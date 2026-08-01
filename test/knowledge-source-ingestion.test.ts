@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import {
   KnowledgeSourceIngestor,
+  type AcceptedKnowledgeIngestionInput,
   type StructuralKnowledgeIngestionInput,
 } from '../src/agent-os/knowledge-source-ingestion.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
@@ -192,6 +193,95 @@ function acceptedDelivery(
 }
 
 describe('knowledge source ingestion', () => {
+  it('ingests committed accepted discussion answers and durable decisions', () => {
+    const fixture = repositoryFixture()
+    const accepted = [
+      'Decision: Keep knowledge ingestion repository-scoped.',
+      'Accepted answer: Use exact committed citations and redact ghp_12345678901234567890.',
+    ].join('\n')
+    write(fixture.root, 'docs/accepted-knowledge.md', `${accepted}\n`)
+    const head = commit(fixture.root, 'record accepted knowledge')
+    const { db, boardId } = boardDb(fixture.root)
+    const input: AcceptedKnowledgeIngestionInput = {
+      board_id: boardId,
+      repository_key: 'example/knowledge-source',
+      repository_root: fixture.root,
+      base_commit_sha: head,
+      observed_at: OBSERVED_AT,
+      entries: [{
+        kind: 'discussion_answer',
+        key: 'discussion:knowledge-ingestion',
+        path: 'docs/accepted-knowledge.md',
+        start_line: 2,
+        end_line: 2,
+        title: 'Accepted knowledge ingestion answer',
+        accepted_at: OBSERVED_AT,
+        accepted_by: 'release-reviewer',
+        expected_source_sha256: sha256(accepted.split('\n')[1]),
+      }, {
+        kind: 'decision',
+        key: 'decision:repository-scope',
+        path: 'docs/accepted-knowledge.md',
+        start_line: 1,
+        end_line: 1,
+        title: 'Repository-scoped knowledge ingestion',
+        accepted_at: OBSERVED_AT,
+        accepted_by: 'release-reviewer',
+        expected_source_sha256: sha256(accepted.split('\n')[0]),
+      }],
+    }
+
+    const report = new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge(input)
+    expect(report.sources.map((source) => source.source_kind))
+      .toEqual(['decision', 'discussion_answer'])
+    expect(report.sources.every((source) =>
+      source.trust_class === 'evidence'
+      && source.source_revision === head
+      && source.freshness_policy === 'commit_exact')).toBe(true)
+    const envelopes = report.chunks.map((chunk) =>
+      JSON.parse(chunk.content) as Record<string, unknown>)
+    expect(envelopes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        accepted_by: 'release-reviewer',
+        confidence_micros: 1_000_000,
+        interpretation: 'data_only',
+        kind: 'decision',
+      }),
+      expect.objectContaining({
+        accepted_by: 'release-reviewer',
+        confidence_micros: 1_000_000,
+        interpretation: 'data_only',
+        kind: 'discussion_answer',
+      }),
+    ]))
+    expect(JSON.stringify(envelopes)).not.toContain('ghp_12345678901234567890')
+    expect(JSON.stringify(envelopes)).toContain('[REDACTED]')
+
+    const replay = new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge({
+      ...input,
+      observed_at: LATER_AT,
+      entries: [...input.entries].reverse(),
+    })
+    expect(replay.sources.map((source) => source.id))
+      .toEqual(report.sources.map((source) => source.id))
+    expect(replay.sources.every((source) => source.created_at === OBSERVED_AT))
+      .toBe(true)
+
+    expect(() => new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge({
+      ...input,
+      entries: [{
+        ...input.entries[0],
+        key: 'discussion:uncommitted-copy',
+      }, {
+        ...input.entries[1],
+        key: 'decision:forged-citation',
+        expected_source_sha256: '0'.repeat(64),
+      }],
+    })).toThrow(expect.objectContaining({ code: 'evidence_mismatch' }))
+    expect(db.prepare('SELECT COUNT(*) AS count FROM knowledge_sources').get())
+      .toEqual({ count: 2 })
+  })
+
   it('retains deterministic exact structural citations, authors, and relationships', () => {
     const fixture = repositoryFixture()
     const first = boardDb(fixture.root)
