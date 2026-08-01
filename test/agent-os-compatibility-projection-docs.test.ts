@@ -22,7 +22,7 @@ type ProjectionInventory = {
   }
 }
 
-const INVENTORY_HEAD = '9c8d8dec5755c78233a9a5963f7f1579e49e91bf'
+const INVENTORY_HEAD = 'b603cae851a922050865180c7fe53aeb83aa179c'
 const CODE_HEAD = 'f5df13666ccdfdf552e423a379faf60463fc6643'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')

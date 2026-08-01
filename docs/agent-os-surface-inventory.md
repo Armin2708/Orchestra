@@ -4,7 +4,7 @@ Status: current runtime inventory plus KNO-003 through KNO-010's verified ingest
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, observed at exact code head
-`9c8d8dec5755c78233a9a5963f7f1579e49e91bf`.
+`b603cae851a922050865180c7fe53aeb83aa179c`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
