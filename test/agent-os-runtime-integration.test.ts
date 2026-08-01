@@ -1128,6 +1128,10 @@ describe('Agent OS daemon runtime integration', () => {
         acceptance_criteria: [{
           id: 'criterion-stable', text: 'The report reaches review', required: true,
           deliverable_ids: ['deliverable-stable'],
+          description: 'Run the frozen runtime verifier',
+          verifier: { kind: 'command', command: 'npm test -- runtime-brief' },
+          required_artifacts: [{ kind: 'test-log', name: 'runtime-brief' }],
+          priority: 7,
         }],
         verify_commands: ['npm test'],
       },
@@ -1167,6 +1171,9 @@ describe('Agent OS daemon runtime integration', () => {
     expect(requests).toHaveLength(1)
     expect(requests[0].prompt).toContain('[deliverable-stable] Implement the runtime bridge')
     expect(requests[0].prompt).toContain('[criterion-stable] The report reaches review')
+    expect(requests[0].prompt).toContain('Description: Run the frozen runtime verifier')
+    expect(requests[0].prompt).toContain('Verifier: command; command=npm test -- runtime-brief')
+    expect(requests[0].prompt).toContain('Required artifacts: test-log:runtime-brief')
     expect(requests[0].prompt).toContain('Required verification commands:\n- npm test')
     expect(requests[0].prompt).toContain('Delivery summary:')
     expect(requests[0].prompt).toContain('Evidence:')

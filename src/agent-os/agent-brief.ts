@@ -125,8 +125,8 @@ export function renderAgentBrief(input: RenderAgentBriefInput): RenderedAgentBri
       `Base ref: ${contract.base_ref ?? '<not declared>'}`,
       `Policy: ${contract.policy_id ?? '<not declared>'}`,
     ].join('\n'),
-    'Before stopping, submit the structured report with "orchestra delivery submit <job-id>"'
-      + ' when that command is available. Claims are not verification evidence.',
+    'Return the structured report in your final response; the daemon submits it to the delivery'
+      + ' review. Claims are not verification evidence.',
     'Your final response MUST end with two concise sections: "Delivery summary:" describing what changed,'
       + ' and "Evidence:" listing the exact commands, artifacts, commits, or observed results.'
       + ' Do not move the card to done; the daemon parks a complete report in review.',

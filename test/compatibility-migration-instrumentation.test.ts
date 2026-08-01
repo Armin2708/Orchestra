@@ -19,6 +19,7 @@ import {
 } from '../src/agent-os/compatibility-migration-instrumentation.js'
 import {
   AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
+  applyCompatibilityForwardMigration,
 } from '../src/agent-os/compatibility-forward-migration.js'
 import { LegacyEventProjection } from '../src/agent-os/legacy-projection.js'
 import { recordProviderUsage } from '../src/usage.js'
@@ -202,7 +203,7 @@ function agentUsageTelemetry(resource: Fixture): Array<{
 describe('DOM-019 real compatibility instrumentation', () => {
   it('observes production legacy reads for all 13 compatibility tables without payloads', async () => {
     const resource = fixture()
-    const { boardId } = boardAndCard(resource.db)
+    const { boardId, cardId } = boardAndCard(resource.db)
     const agentId = Number(resource.db.prepare(`
       INSERT INTO agents (board_id, name, provider)
       VALUES (?, 'read-observer', 'codex')
@@ -217,7 +218,10 @@ describe('DOM-019 real compatibility instrumentation', () => {
       `/api/v1/boards/${boardId}/snapshot`,
       `/api/v1/boards/${boardId}/telemetry`,
       `/api/v1/boards/${boardId}/timeline`,
+      `/api/v1/boards/${boardId}/shipped`,
+      `/api/v1/cards/${cardId}/events`,
       `/api/v1/agents/${agentId}/inbox`,
+      `/api/v1/os/cards/${cardId}/contract`,
     ]) {
       const response = await server.inject({ method: 'GET', url })
       expect(response.statusCode, `${url}: ${response.body}`).toBe(200)
@@ -234,21 +238,45 @@ describe('DOM-019 real compatibility instrumentation', () => {
     ])
   })
 
-  it('binds canonical read routes and privacy-safe mismatch diagnostics to real responses', async () => {
+  it('attributes the legacy snapshot only to the tables its implementation reads', async () => {
     const resource = fixture()
     const { boardId } = boardAndCard(resource.db)
-    const staleHash = '0'.repeat(64)
-    resource.db.prepare(`
-      INSERT INTO os_compatibility_projection_links (
-        migration_id, source_table, source_key, source_hash,
-        target_table, target_key, target_hash, disposition
-      ) VALUES (?, 'boards', ?, ?, 'boards', ?, ?, 'test')
-    `).run(
+    bindJournal(resource)
+    const server = buildServer(resource.db)
+    servers.add(server)
+    await server.ready()
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/v1/boards/${boardId}/snapshot`,
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(resource.db.prepare(`SELECT table_name
+      FROM os_compatibility_migration_telemetry_daily
+      WHERE operation='legacy_read' ORDER BY table_name`).all()).toEqual([
+      { table_name: 'agents' },
+      { table_name: 'boards' },
+      { table_name: 'cards' },
+      { table_name: 'deliveries' },
+      { table_name: 'ideas' },
+      { table_name: 'message_targets' },
+      { table_name: 'messages' },
+      { table_name: 'milestones' },
+    ])
+  })
+
+  it('binds canonical read routes and privacy-safe mismatch diagnostics to real responses', async () => {
+    const resource = fixture()
+    const { boardId, cardId } = boardAndCard(resource.db)
+    const agentId = Number(resource.db.prepare(`INSERT INTO agents
+      (board_id, name, provider) VALUES (?, 'canonical-read', 'codex')`)
+      .run(boardId).lastInsertRowid)
+    applyCompatibilityForwardMigration(resource.db)
+    resource.db.prepare("UPDATE boards SET name='legitimate current name' WHERE id=?").run(boardId)
+    resource.db.prepare(`UPDATE os_compatibility_projection_links SET target_key='999999'
+      WHERE migration_id=? AND source_table='cards' AND source_key=?`).run(
       AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
-      String(boardId),
-      staleHash,
-      String(boardId),
-      staleHash,
+      String(cardId),
     )
     bindJournal(resource)
     const server = buildServer(resource.db)
@@ -262,6 +290,16 @@ describe('DOM-019 real compatibility instrumentation', () => {
     expect(events.statusCode, events.body).toBe(200)
     const openWork = await server.inject({ method: 'GET', url: '/api/v1/os/open-work' })
     expect(openWork.statusCode, openWork.body).toBe(200)
+    const contract = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/cards/${cardId}/contract`,
+    })
+    expect(contract.statusCode, contract.body).toBe(200)
+    const profile = await server.inject({
+      method: 'GET',
+      url: `/api/v1/os/agent-profiles/legacy-agent:${agentId}`,
+    })
+    expect(profile.statusCode, profile.body).toBe(200)
 
     expect(resource.db.prepare(`
       SELECT table_name, operation, diagnostic_code
@@ -270,12 +308,15 @@ describe('DOM-019 real compatibility instrumentation', () => {
       ORDER BY table_name, operation
     `).all()).toEqual(expect.arrayContaining([
       { table_name: 'boards', operation: 'canonical_read', diagnostic_code: 'none' },
-      { table_name: 'boards', operation: 'mismatch', diagnostic_code: 'value_mismatch' },
       { table_name: 'card_events', operation: 'canonical_read', diagnostic_code: 'none' },
       { table_name: 'cards', operation: 'canonical_read', diagnostic_code: 'none' },
+      { table_name: 'cards', operation: 'mismatch', diagnostic_code: 'missing_canonical_row' },
       { table_name: 'task_contracts', operation: 'canonical_read', diagnostic_code: 'none' },
       { table_name: 'agents', operation: 'canonical_read', diagnostic_code: 'none' },
     ]))
+    expect(resource.db.prepare(`SELECT COUNT(*) AS count
+      FROM os_compatibility_migration_telemetry_daily
+      WHERE table_name='boards' AND operation='mismatch'`).get()).toEqual({ count: 0 })
   })
 
   it('records the real provider-usage translation and projection refresh atomically', () => {

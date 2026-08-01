@@ -856,27 +856,29 @@ export function validateCompatibilityForwardMigration(
 export function compatibilityProjectionMismatchDiagnostic(
   db: Database.Database,
   table: AgentOsLegacyCompatibilityTable,
-): 'missing_legacy_row' | 'missing_canonical_row' | 'value_mismatch' | null {
-  const links = db.prepare(`
+  sourceKey: string,
+): 'missing_legacy_row' | 'missing_canonical_row' | 'projection_stale' | null {
+  const link = db.prepare(`
     SELECT source_table, source_key, source_hash, target_table, target_key,
       target_hash, disposition
     FROM os_compatibility_projection_links
-    WHERE migration_id=? AND source_table=?
-    ORDER BY source_key
-  `).all(
+    WHERE migration_id=? AND source_table=? AND source_key=?
+  `).get(
     AGENT_OS_COMPATIBILITY_FORWARD_MIGRATION_ID,
     table,
-  ) as StoredLink[]
-  for (const link of links) {
-    const source = sourceSnapshot(db, link.source_table, link.source_key)
-    if (source === null) return 'missing_legacy_row'
-    const target = targetSnapshot(db, link.target_table, link.target_key)
-    if (target === null) return 'missing_canonical_row'
-    if (hash(source) !== link.source_hash || hash(target) !== link.target_hash) {
-      return 'value_mismatch'
-    }
+    sourceKey,
+  ) as StoredLink | undefined
+  if (!link) return null
+  const source = sourceSnapshot(db, link.source_table, link.source_key)
+  if (source === null) return 'missing_legacy_row'
+  const target = targetSnapshot(db, link.target_table, link.target_key)
+  if (target === null) return 'missing_canonical_row'
+  if (link.source_table === link.target_table && link.source_key === link.target_key) {
+    return hash(source) === hash(target) ? null : 'projection_stale'
   }
-  return null
+  return hash(source) === link.source_hash && hash(target) === link.target_hash
+    ? null
+    : 'projection_stale'
 }
 
 function assertCompatibilityPrerequisites(db: Database.Database): void {

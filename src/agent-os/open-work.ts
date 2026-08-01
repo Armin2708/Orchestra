@@ -538,50 +538,44 @@ export class OpenWorkService {
       ...loaded.market,
       contract: frozenContract,
       criteria: frozenContract.acceptance_criteria.map((criterion) => {
+        const extension = currentMarket.criteria.find((candidate) =>
+          candidate.id === criterion.id)
         return {
           ...criterion,
-          description: criterion.text,
-          verifier: { kind: 'human' as const },
-          required_artifacts: [],
-          priority: 0,
-          owner: null,
+          description: extension?.description ?? criterion.text,
+          verifier: extension?.verifier ?? { kind: 'human' as const },
+          required_artifacts: extension?.required_artifacts ?? [],
+          priority: extension?.priority ?? 0,
+          owner: extension?.owner ?? null,
         }
       }),
-      dependency_rules: frozenContract.dependencies.map((dependency) => ({
-        card_id: dependency,
-        blocking_reason: 'Declared frozen dependency',
-        completion_condition: 'card_done' as const,
-      })),
-      constraints: {
-        required_capabilities: [],
-        provider_constraints: [],
-        model_constraints: [],
-        access_needs: [],
-      },
+      dependency_rules: frozenContract.dependencies.map((dependency) =>
+        currentMarket.dependency_rules.find((candidate) =>
+          candidate.card_id === dependency) ?? {
+          card_id: dependency,
+          blocking_reason: 'Declared frozen dependency',
+          completion_condition: 'card_done' as const,
+        }),
+      constraints: currentMarket.constraints,
       budgets: {
         tokens: frozenContract.budget_tokens,
         cost_cents: frozenContract.budget_cents,
-        time_seconds: null,
-        retries: null,
-        coordination_tokens: null,
-        coordination_messages: null,
+        time_seconds: currentMarket.budgets.time_seconds,
+        retries: currentMarket.budgets.retries,
+        coordination_tokens: currentMarket.budgets.coordination_tokens,
+        coordination_messages: currentMarket.budgets.coordination_messages,
       },
     } : loaded.market
     const dependencies = frozenContract
-      ? frozenContract.dependencies.map((dependency) => ({
-          card_id: dependency,
-          title: `Card ${dependency}`,
-          state: 'frozen',
-          blocking_reason: 'Declared frozen dependency',
-          readiness: 'blocked' as const,
-        }))
+      ? this.dependencies(cardId, graph).filter((dependency) =>
+          frozenContract.dependencies.includes(dependency.card_id))
       : this.dependencies(cardId, graph)
     return renderAgentBrief({
       job_market: jobMarket,
       repository: loaded.scope.repository,
       ...input,
       dependencies,
-      critical_path: frozenContract ? [] : criticalPaths(cardId, graph),
+      critical_path: criticalPaths(cardId, graph),
     })
   }
 

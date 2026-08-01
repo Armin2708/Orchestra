@@ -456,7 +456,7 @@ describe('OpenWorkService', () => {
     expect(first.agent_brief).toContain(`- [criterion-${cardId}] Card ${cardId} is verified`)
     expect(first.agent_brief).toContain(`Description: Run the focused verifier for card ${cardId}`)
     expect(first.agent_brief).toContain('Agent OS delivery brief')
-    expect(first.agent_brief).toContain('orchestra delivery submit <job-id>')
+    expect(first.agent_brief).toContain('the daemon submits it to the delivery review')
     expect(first.agent_brief).not.toContain('unknown job id')
     expect(first.agent_brief).not.toContain('unknown delivery id')
     expect(first.agent_brief_sha256).toMatch(/^[a-f0-9]{64}$/)
