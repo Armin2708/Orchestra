@@ -13,6 +13,8 @@ import {
   parseSavedCommandCenterViews,
   projectScopedJobs,
   readCommandCenterPreferences,
+  normalizeCommandCenterFocus,
+  resolveCommandCenterProjectFocus,
   searchCommandCenter,
   DEFAULT_COMMAND_CENTER_VIEWS,
 } from '../web/src/commandCenterModel.js'
@@ -104,7 +106,7 @@ describe('command center navigation and presentation contracts', () => {
     expect(legacyCommandCenterRedirect('review')).toEqual({ section: 'work', legacy: 'review' })
     expect(legacyCommandCenterRedirect('card-drawer')).toEqual({ section: 'work', legacy: 'card-drawer' })
     expect(DEFAULT_COMMAND_CENTER_VIEWS.map((view) => view.name)).toEqual([
-      'Active work', 'Blocked work', 'Needs review', 'Unanswered', 'Conflicts',
+      'Ready work', 'Blocked work',
     ])
   })
 
@@ -142,7 +144,7 @@ describe('command center navigation and presentation contracts', () => {
 })
 
 describe('command center global search and dependency truth', () => {
-  it('keeps jobs project-scoped and makes built-in saved-view filters control real records', () => {
+  it('keeps jobs and global search project-scoped without narrowing search to the active collection view', () => {
     const jobs = [
       {
         id: 'job-7', board_id: 7, card_id: 41, workspace_id: null, provider: 'codex',
@@ -159,15 +161,29 @@ describe('command center global search and dependency truth', () => {
     ]
     expect(projectScopedJobs(snapshots, jobs).map((job) => job.id)).toEqual(['job-7'])
 
-    const active = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-active-work')!
-    const projection = commandCenterProjectProjection({ snapshots, agentProfiles, jobs, savedView: active })
+    const projection = commandCenterProjectProjection({ snapshots, agentProfiles, jobs })
     expect(projection.jobs.map((job) => job.id)).toEqual(['job-7'])
     const records = commandCenterSearchRecords({ snapshots, agentProfiles, jobs: projection.jobs })
     expect(records.some((record) => record.id === 'job:job-8')).toBe(false)
-    expect(projection.searchRecords.map((record) => record.id)).toEqual(['job:job-7'])
-    const review = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-needs-review')!
-    expect(filterCommandCenterSearchRecords(records, review.filters)).toEqual([])
+    expect(projection.searchRecords.map((record) => record.id)).toEqual([
+      'agent:7:managed-codex-profile:opaque-7f', 'work:7:41', 'job:job-7',
+    ])
+    const blocked = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-blocked-work')!
+    expect(filterCommandCenterSearchRecords(records, blocked.filters)).toEqual([])
     expect(filterCommandCenterSearchRecords(records, { invented: 'value' })).toEqual([])
+  })
+
+  it('normalizes invalid stored focus and never falls back to unrelated projects for a missing id', () => {
+    expect(normalizeCommandCenterFocus('7')).toBe(7)
+    for (const invalid of [null, '', 'all', 'NaN', '-1', '1.5', '0']) {
+      expect(normalizeCommandCenterFocus(invalid)).toBe('all')
+    }
+    expect(resolveCommandCenterProjectFocus(snapshots, 7)).toMatchObject({
+      kind: 'project', projectId: 7, snapshots,
+    })
+    expect(resolveCommandCenterProjectFocus(snapshots, 999)).toEqual({
+      kind: 'missing', projectId: 999, snapshots: [],
+    })
   })
 
   it('searches agents, work, discussions, knowledge, and deliveries without enabling unavailable records', () => {

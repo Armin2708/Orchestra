@@ -48,7 +48,9 @@ import {
   prepareContractDraft,
   reconcileRequiredArtifacts,
   repositoryOptions,
+  openWorkFiltersFromSavedView,
   safeRecordValue,
+  savedViewFiltersFromOpenWork,
   splitListInput,
 } from './openWorkPresentation'
 import './openWork.css'
@@ -61,6 +63,7 @@ type OpenWorkViewProps = {
   boardId?: number | null
   collectionQuery?: string
   collectionFilters?: Readonly<Record<string, string>>
+  onCollectionStateChange?: (state: { query: string; filters: Record<string, string> }) => void
   readOnly?: boolean
 }
 
@@ -123,12 +126,7 @@ const defaultFiltersForView = (
   boardId: number | null,
   collectionFilters: Readonly<Record<string, string>>,
 ) => {
-  const filters = defaultOpenWorkFilters(boardId)
-  const statuses = new Set((collectionFilters.status ?? '')
-    .split(',').map((value) => value.trim().toLocaleLowerCase()).filter(Boolean))
-  if (statuses.size === 1 && statuses.has('blocked')) filters.dependencyReadiness = 'blocked'
-  if (statuses.size === 1 && statuses.has('ready')) filters.dependencyReadiness = 'ready'
-  return filters
+  return openWorkFiltersFromSavedView(boardId, collectionFilters)
 }
 
 export function OpenWorkView({
@@ -139,12 +137,14 @@ export function OpenWorkView({
   boardId = null,
   collectionQuery = '',
   collectionFilters = EMPTY_COLLECTION_FILTERS,
+  onCollectionStateChange,
   readOnly = false,
 }: OpenWorkViewProps) {
+  const initialFilters = defaultFiltersForView(boardId, collectionFilters)
   const initialResponse = initialData === undefined ? undefined : filterOpenWorkResponse(initialData, {
     boardId,
     query: collectionQuery,
-    filters: collectionFilters,
+    filters: savedViewFiltersFromOpenWork(initialFilters),
   })
   const [remote, dispatchRemote] = useReducer(
     openWorkReducer,
@@ -152,8 +152,9 @@ export function OpenWorkView({
     initialOpenWorkState,
   )
   const [appliedFilters, setAppliedFilters] = useState<OpenWorkFilters>(
-    () => defaultFiltersForView(boardId, collectionFilters),
+    () => initialFilters,
   )
+  const [appliedQuery, setAppliedQuery] = useState(collectionQuery)
   const [filterForm, setFilterForm] = useState<FilterFormState>(() =>
     filterFormFromFilters(defaultFiltersForView(boardId, collectionFilters)))
   const [selectedCardId, setSelectedCardId] = useState<number | null>(
@@ -167,8 +168,8 @@ export function OpenWorkView({
     try {
       const response = filterOpenWorkResponse(await client.list(filters), {
         boardId,
-        query: collectionQuery,
-        filters: collectionFilters,
+        query: appliedQuery,
+        filters: savedViewFiltersFromOpenWork(filters),
       })
       if (sequence === loadSequence.current) dispatchRemote({ type: 'loaded', response })
     } catch (error) {
@@ -176,13 +177,21 @@ export function OpenWorkView({
         dispatchRemote({ type: 'failed', error: messageFor(error) })
       }
     }
-  }, [boardId, client, collectionFilters, collectionQuery])
+  }, [appliedQuery, boardId, client])
 
   useEffect(() => {
     const next = defaultFiltersForView(boardId, collectionFilters)
     setFilterForm(filterFormFromFilters(next))
     setAppliedFilters(next)
-  }, [boardId, collectionFilters])
+    setAppliedQuery(collectionQuery)
+  }, [boardId, collectionFilters, collectionQuery])
+
+  useEffect(() => {
+    onCollectionStateChange?.({
+      query: appliedQuery,
+      filters: savedViewFiltersFromOpenWork(appliedFilters),
+    })
+  }, [appliedFilters, appliedQuery, onCollectionStateChange])
 
   useEffect(() => {
     void load(appliedFilters)
@@ -210,9 +219,10 @@ export function OpenWorkView({
   }
 
   const clearFilters = () => {
-    const cleared = defaultFiltersForView(boardId, collectionFilters)
+    const cleared = defaultOpenWorkFilters(boardId)
     setFilterForm(filterFormFromFilters(cleared))
     setAppliedFilters(cleared)
+    setAppliedQuery('')
   }
 
   return (

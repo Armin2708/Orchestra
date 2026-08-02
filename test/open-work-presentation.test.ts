@@ -25,8 +25,10 @@ import {
   nextStableId,
   openWorkCounts,
   openWorkReducer,
+  openWorkFiltersFromSavedView,
   reconcileRequiredArtifacts,
   splitListInput,
+  savedViewFiltersFromOpenWork,
   stableOpenWorkItems,
   validateContractDraft,
 } from '../web/src/openWorkPresentation.js'
@@ -297,6 +299,28 @@ describe('Open Work query and protocol', () => {
     expect(() => serializeOpenWorkFilters(defaultOpenWorkFilters(0))).toThrow(/boardId/)
   })
 
+  it('round-trips every visible Open Work filter through a saved collection view', () => {
+    const filters = {
+      boardId: 7,
+      repository: '/work/orchestra',
+      capabilities: ['ui', 'typescript'],
+      priority: -2,
+      dependencyReadiness: 'ready' as const,
+      maxTokens: 20_000,
+      maxCostCents: 500,
+      maxTimeSeconds: 7_200,
+    }
+    const saved = savedViewFiltersFromOpenWork(filters)
+    expect(saved).toEqual({
+      repository: '/work/orchestra', capabilities: 'typescript,ui', priority: '-2', status: 'ready',
+      maxTokens: '20000', maxCostCents: '500', maxTimeSeconds: '7200',
+    })
+    expect(openWorkFiltersFromSavedView(7, saved)).toEqual({
+      ...filters,
+      capabilities: ['typescript', 'ui'],
+    })
+  })
+
   it('fails closed on invalid fields instead of coercing them', () => {
     const valid = openWorkFixture()
     expect(parseOpenWorkResponse(valid)).toEqual(valid)
@@ -536,6 +560,13 @@ describe('deterministic Open Work presentation', () => {
       boardId: 7,
       filters: { status: 'running,assigned' },
     }).items).toEqual([])
+    expect(filterOpenWorkResponse(mixed, {
+      boardId: 7,
+      filters: {
+        repository: '/work/orchestra', capabilities: 'typescript,ui', priority: '-2',
+        status: 'ready', maxTokens: '18500', maxCostCents: '475', maxTimeSeconds: '5400',
+      },
+    }).items.map((item) => item.card_id)).toEqual([42])
   })
 
   it('retains previous results as explicitly stale after a refresh failure', () => {

@@ -63,10 +63,11 @@ export function CommandCenterState({
   )
 }
 
-export function CanonicalAgentHome({ snaps, onChange, locationSearch = browserSearch() }: {
+export function CanonicalAgentHome({ snaps, onChange, locationSearch = browserSearch(), readOnly = false }: {
   snaps: Snapshot[]
   onChange: () => void
   locationSearch?: string
+  readOnly?: boolean
 }) {
   const workspaceId = new URLSearchParams(locationSearch).get('workspace')
   if (workspaceId) {
@@ -77,7 +78,7 @@ export function CanonicalAgentHome({ snaps, onChange, locationSearch = browserSe
           <div><p>Canonical surface</p><h2>Workspace</h2></div>
           <span>Exact PTY · durable process · provider session</span>
         </header>
-        <WorkspaceCockpit snaps={snaps} onChange={onChange} />
+        <WorkspaceCockpit snaps={snaps} onChange={onChange} readOnly={readOnly} />
       </section>
     )
   }
@@ -87,7 +88,7 @@ export function CanonicalAgentHome({ snaps, onChange, locationSearch = browserSe
         <div><p>Canonical surface</p><h2>Agent Home</h2></div>
         <span>Durable identity · provider session · exact PTY</span>
       </header>
-      <AgentHome snaps={snaps} onChange={onChange} />
+      <AgentHome snaps={snaps} onChange={onChange} readOnly={readOnly} />
     </section>
   )
 }

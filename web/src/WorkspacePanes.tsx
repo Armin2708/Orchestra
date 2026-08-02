@@ -103,11 +103,12 @@ export function PaneSkeleton() {
   )
 }
 
-export function ConversationPane({ events, workspace, snapshot, agent, onOpenAgent }: {
+export function ConversationPane({ events, workspace, snapshot, agent, onOpenAgent, readOnly = false }: {
   events: Resource<OsEvent[]>
   workspace: Workspace
   snapshot: Snapshot | undefined
   agent: Agent | null
+  readOnly?: boolean
   onOpenAgent: (agent: Agent) => void
 }) {
   const conversation = useMemo(() => events.data
@@ -117,7 +118,7 @@ export function ConversationPane({ events, workspace, snapshot, agent, onOpenAge
 
   return (
     <PaneFrame title="Agent conversation" eyebrow="Driver-neutral event stream" action={agent && (
-      <button className="os-secondary-button" onClick={() => onOpenAgent(agent)}>
+      <button className="os-secondary-button" disabled={readOnly} onClick={() => onOpenAgent(agent)}>
         <OsIcon name="message" /> Open live agent
       </button>
     )}>
@@ -359,8 +360,9 @@ function EvidenceRecord({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-export function ContextPane({ context, onTogglePin }: {
+export function ContextPane({ context, onTogglePin, readOnly = false }: {
   context: Resource<ContextItem[]>
+  readOnly?: boolean
   onTogglePin: (item: ContextItem) => Promise<void>
 }) {
   const total = context.data.reduce((sum, item) => sum + (item.tokens || 0), 0)
@@ -375,7 +377,7 @@ export function ContextPane({ context, onTogglePin }: {
               <header>
                 <span className="os-context-kind">{item.kind}</span>
                 <code>{item.tokens.toLocaleString()} tok</code>
-                <button className="os-text-button" onClick={() => onTogglePin(item)}>
+                <button className="os-text-button" disabled={readOnly} onClick={() => onTogglePin(item)}>
                   {item.pinned ? 'Unpin' : 'Pin'}
                 </button>
               </header>
@@ -489,9 +491,10 @@ function PolicyRules({ label, values, redacted = false }: { label: string; value
   )
 }
 
-export function ProcessesPane({ processes, activeId, onAttach, onSignal, onRestart }: {
+export function ProcessesPane({ processes, activeId, onAttach, onSignal, onRestart, readOnly = false }: {
   processes: Resource<WorkspaceProcess[]>
   activeId: string | null
+  readOnly?: boolean
   onAttach: (process: WorkspaceProcess) => void
   onSignal: (process: WorkspaceProcess, signal: string) => Promise<void>
   onRestart: (process: WorkspaceProcess) => Promise<void>
@@ -535,8 +538,8 @@ export function ProcessesPane({ processes, activeId, onAttach, onSignal, onResta
                 )}
                 <footer>
                   {running ? (
-                    <><button onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button><button onClick={() => onSignal(process, 'SIGTERM')}>Terminate</button></>
-                  ) : process.restartable ? <button onClick={() => onRestart(process)}>Restart recipe</button> : null}
+                    <><button disabled={readOnly} onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button><button disabled={readOnly} onClick={() => onSignal(process, 'SIGTERM')}>Terminate</button></>
+                  ) : process.restartable ? <button disabled={readOnly} onClick={() => onRestart(process)}>Restart recipe</button> : null}
                 </footer>
               </article>
             )

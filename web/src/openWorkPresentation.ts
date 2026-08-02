@@ -124,6 +124,44 @@ const savedViewValues = (value: string | undefined) => new Set(
   (value ?? '').split(',').map((item) => item.trim().toLocaleLowerCase()).filter(Boolean),
 )
 
+const savedViewNumber = (value: string | undefined): number | null => {
+  if (!value?.trim()) return null
+  return Number(value)
+}
+
+export const openWorkFiltersFromSavedView = (
+  boardId: number | null,
+  filters: Readonly<Record<string, string>>,
+): OpenWorkFilters => {
+  const statuses = savedViewValues(filters.status)
+  return {
+    boardId,
+    repository: filters.repository?.trim() ?? '',
+    capabilities: [...savedViewValues(filters.capabilities)],
+    priority: savedViewNumber(filters.priority),
+    dependencyReadiness: statuses.size === 1 && statuses.has('ready')
+      ? 'ready'
+      : statuses.size === 1 && statuses.has('blocked')
+        ? 'blocked'
+        : null,
+    maxTokens: savedViewNumber(filters.maxTokens),
+    maxCostCents: savedViewNumber(filters.maxCostCents),
+    maxTimeSeconds: savedViewNumber(filters.maxTimeSeconds),
+  }
+}
+
+export const savedViewFiltersFromOpenWork = (
+  filters: OpenWorkFilters,
+): Record<string, string> => Object.fromEntries([
+  ['repository', filters.repository.trim()],
+  ['capabilities', [...new Set(filters.capabilities.map((value) => value.trim()).filter(Boolean))].sort(compareText).join(',')],
+  ['priority', filters.priority === null ? '' : String(filters.priority)],
+  ['status', filters.dependencyReadiness ?? ''],
+  ['maxTokens', filters.maxTokens === null ? '' : String(filters.maxTokens)],
+  ['maxCostCents', filters.maxCostCents === null ? '' : String(filters.maxCostCents)],
+  ['maxTimeSeconds', filters.maxTimeSeconds === null ? '' : String(filters.maxTimeSeconds)],
+].filter(([, value]) => value))
+
 export const filterOpenWorkResponse = (
   response: OpenWorkResponse,
   options: {
@@ -152,15 +190,32 @@ export const filterOpenWorkResponse = (
   }))
   const terms = (options.query ?? '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
   const filters = options.filters ?? {}
-  const supportedFilterKeys = new Set(['status'])
+  const supportedFilterKeys = new Set([
+    'status', 'repository', 'capabilities', 'priority', 'maxTokens', 'maxCostCents', 'maxTimeSeconds',
+  ])
   const unknownFilter = Object.entries(filters)
     .some(([key, value]) => value.trim() && !supportedFilterKeys.has(key))
   const statuses = savedViewValues(filters.status)
-  const items = unknownFilter ? [] : safeItems.filter((item) => {
+  const capabilities = savedViewValues(filters.capabilities)
+  const priority = savedViewNumber(filters.priority)
+  const maxTokens = savedViewNumber(filters.maxTokens)
+  const maxCostCents = savedViewNumber(filters.maxCostCents)
+  const maxTimeSeconds = savedViewNumber(filters.maxTimeSeconds)
+  const invalidNumber = [
+    ['priority', priority], ['maxTokens', maxTokens], ['maxCostCents', maxCostCents], ['maxTimeSeconds', maxTimeSeconds],
+  ].some(([key, value]) => Boolean(filters[String(key)]?.trim()) && !Number.isSafeInteger(value))
+  const items = unknownFilter || invalidNumber ? [] : safeItems.filter((item) => {
     const matchesStatus = statuses.size === 0
       || statuses.has(item.status)
       || statuses.has(item.dependency_readiness)
     if (!matchesStatus) return false
+    if (filters.repository?.trim() && item.repository !== filters.repository.trim()) return false
+    if ([...capabilities].some((capability) =>
+      !item.constraints.required_capabilities.map((value) => value.toLocaleLowerCase()).includes(capability))) return false
+    if (priority !== null && item.priority !== priority) return false
+    if (maxTokens !== null && (item.budgets.tokens === null || item.budgets.tokens > maxTokens)) return false
+    if (maxCostCents !== null && (item.budgets.cost_cents === null || item.budgets.cost_cents > maxCostCents)) return false
+    if (maxTimeSeconds !== null && (item.budgets.time_seconds === null || item.budgets.time_seconds > maxTimeSeconds)) return false
     if (terms.length === 0) return true
     const haystack = [
       item.title,
