@@ -243,7 +243,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       'desktop has horizontal overflow',
       'desktop failed keyboard_focus',
       'desktop is missing search performance evidence',
-      'tablet graph_view is missing quality-linked performance status',
+      'phone graph_view is missing quality-linked performance status',
       'evidence contains secret-shaped fields or values',
     ]))
   })

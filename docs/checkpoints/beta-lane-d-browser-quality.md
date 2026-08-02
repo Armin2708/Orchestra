@@ -1,6 +1,6 @@
 # Beta Lane D browser quality checkpoint
 
-Marker: `[beta-lane-d-browser-final-remediated]`
+Marker: `[beta-lane-d-browser-p1-remediated]`
 
 Status: **QA-015 evidence gate implemented; QA-013 and QA-014 remain open**
 
@@ -25,6 +25,15 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   own readiness assertion and result. DOM fallback is labeled `counts_toward_pass: false` and can
   never make a failed pointer or keyboard journey pass. The new observations truthfully retain the
   independent failures under QA-014.
+- User-journey performance samples are taken only from the pointer mode. DOM fallback is explicitly
+  `diagnostic_only` and `performance_eligible: false`; changing its elapsed time cannot affect a
+  retained sample, p95 or budget. Each performance record separately retains
+  `quality_gate_passed`, so a fast failed pointer attempt is never presented as a quality pass.
+- Conversation search acquires keyboard focus by bounded Tab navigation and records the Tab-event
+  count. Its keyboard branch contains no pointer activation or programmatic focus acquisition.
+- Interaction readiness requires two consecutive observations with a 4-second bound, while async
+  render/page readiness has a separate 10-second bound. All three retained runs completed with the
+  same 55 honest quality findings instead of flaking on the former 750 ms deadline.
 - Navigation attempts hit-tested mouse/touch and keyboard activation before its deterministic DOM
   fallback. Search types through DevTools keyboard events and exercises the real React form/search
   flow. The interaction method and any fallback remain visible in source and evidence.
@@ -65,27 +74,28 @@ slow run:
 
 Each checked budget is the lower of its experience ceiling and the regression bound
 `max(2 × observed p95, observed p95 + 150 ms)`. The retained baseline digest is
-`113aa164fbfd59c60e24f31034fe61ba7961d1333e73affeed502e98390a59fb`.
+`aed64e9907f0059ac5f7cf817e07e4fc53eac04d8323d45a6434da52bf06cb0b`.
 
 Retained observation evidence/file digests:
 
 | Observation | Evidence SHA-256 | File SHA-256 |
 |---|---|---|
-| 1 | `97d2029c4aa02265121b6baef121f13c2712c6975e6b0d9c6e28fca9ae343b3b` | `d34a3b5fdf24bde18d36470d571b124e04d9c1c1a16a20c1885c99ae69183332` |
-| 2 | `7b998236dca0d9fccc953c448caa120812841cff20c0c2294944171fc74cb9a2` | `97f224d4605511c13d3400e5beab8ca301d766f1ee105ca10d1eabfc34324b51` |
-| 3 | `b31800a70b3244bda7d9d0a2f2dbb193e784d0428e16e24d3f635761b6951625` | `64b8d9d7cb271211ccfdfc0214735e183785ab989ab75fe328e8aee340a0f978` |
+| 1 | `f2301fe15e0d2aa6e785aa1dde22abf6fbaaf4ce74f04625e06fc52514adfbbf` | `57787b833431618227b97132a6a4fac6743b096eb0aee11b982ecf480eb704bc` |
+| 2 | `10afd56e73dbdf38c20677a5bc121f0b039ce509353bcccb245dc87d65cb7f29` | `bd5599328ad62d043c7dd2b75a62e9b02e177d2d290391344961a4d54a0cf79a` |
+| 3 | `594d6556d5b3c2def5d02a2dd75da9a79701d302ddbf04aed9faf59f4cfe8413` | `055560f61a92c5a253431074e3d495cb3388a0d10a1d538e4d5ad159f5bc281d` |
 
-The checked rerun used those budgets and passed all 15 performance comparisons:
+The regenerated baseline recomputes these p95/budget pairs directly from the three retained runs:
 
 | Viewport | Startup | Snapshot | Transcript | Graph | Search |
 |---|---:|---:|---:|---:|---:|
-| Desktop | 80 / 229 ms | 416 / 725 ms | 2,813 / 3,500 ms | 363 / 703 ms | 190 / 411 ms |
-| Tablet | 81 / 235 ms | 466 / 1,352 ms | 2,874 / 3,500 ms | 355 / 1,000 ms | 186 / 513 ms |
-| Phone | 217 / 1,198 ms | 696 / 1,963 ms | 2,699 / 3,500 ms | 348 / 790 ms | 196 / 366 ms |
+| Desktop | 90 / 241 ms | 395 / 791 ms | 530 / 1,061 ms | 423 / 847 ms | 616 / 750 ms |
+| Tablet | 260 / 520 ms | 574 / 1,148 ms | 616 / 1,232 ms | 460 / 920 ms | 917 / 750 ms |
+| Phone | 76 / 226 ms | 913 / 1,826 ms | 574 / 1,149 ms | 600 / 1,000 ms | 180 / 361 ms |
 
-The pre-ready checked evidence digest was
-`3258be974c8e2a60a8ddbb184a4602259cde644c33da27c8fd380824779af123`.
-The final integrator must regenerate the build manifest and evidence at the exact integrated HEAD.
+The tablet search observation exceeded the 750 ms product ceiling in one retained run; the checked
+exact-head reruns therefore remain authoritative for the current-run performance result, while the
+baseline preserves that outlier rather than normalizing it away. The final integrator must
+regenerate the build manifest and evidence at the exact integrated HEAD.
 
 ## Honest accessibility/browser findings
 
