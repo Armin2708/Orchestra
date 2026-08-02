@@ -16,6 +16,9 @@ import {
   type KnowledgeSource,
 } from '../src/agent-os/index.js'
 import { createAgentOsRuntime, type AgentOsRuntime } from '../src/agent-os/runtime-integration.js'
+import {
+  installKnowledgeContextUseActualEvidenceSchema,
+} from '../src/agent-os/knowledge-context-use-actual-migration.js'
 import { openDb } from '../src/db.js'
 import {
   CodexManagedAgentRuntime,
@@ -263,9 +266,10 @@ async function until(condition: () => boolean, timeoutMs = 10_000): Promise<void
 }
 
 describe('knowledge runtime production wiring', () => {
-  it('recompiles managed retries at live HEAD, closes launch failures, injects follow-ups, and records context-only usage', async () => {
+  it('recompiles at live HEAD and attributes initial and follow-up contexts from provider input deltas', async () => {
     const repositoryState = await repository()
     const db = openDb(':memory:')
+    installKnowledgeContextUseActualEvidenceSchema(db)
     databases.push(db)
     const boardId = Number(db.prepare('INSERT INTO boards (project_path, name) VALUES (?, ?)')
       .run(repositoryState.root, 'Knowledge runtime').lastInsertRowid)
@@ -332,6 +336,30 @@ describe('knowledge runtime production wiring', () => {
       .map((row) => row.max_tokens)
     expect(buildBudgets).toEqual([1_000, 1_000])
 
+    const liveSession = driver.sessions.values().next().value as DriverSession
+    const sessionContext = () => JSON.parse((db.prepare(
+      'SELECT context_json FROM agent_sessions WHERE job_id=?',
+    ).get(job.id) as { context_json: string }).context_json) as Record<string, unknown>
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_tokens')
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_source')
+    driver.emit(liveSession.id, {
+      type: 'output',
+      data: 'Initial turn reports authoritative provider input.',
+      metadata: {
+        tokenUsage: {
+          total: {
+            total_tokens: 150,
+            input_tokens: 120,
+            cached_input_tokens: 0,
+            output_tokens: 30,
+            reasoning_output_tokens: 0,
+          },
+        },
+      },
+    })
+    await until(() => sessionContext().knowledge_context_input_tokens === 120)
+    expect(sessionContext().knowledge_context_input_source).toBe('provider_input_delta')
+
     putKnowledge(db, boardId, secondHead, 'follow-up',
       'Inspect the new followup delta FOLLOW_UP_ONLY with exact source evidence.')
     const agent = db.prepare('SELECT id FROM agents WHERE session_id=?').get(`agent-os:${job.id}`) as
@@ -340,11 +368,12 @@ describe('knowledge runtime production wiring', () => {
     await until(() => driver.sends.length === 1)
     expect(driver.sends[0][1]).toContain('WORKING_MEMORY_DELTA')
     expect(driver.sends[0][1]).toContain('FOLLOW_UP_ONLY')
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_tokens')
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_source')
 
-    const liveSession = driver.sessions.values().next().value as DriverSession
     driver.emit(liveSession.id, {
       type: 'output',
-      data: 'Delivery summary with intentionally large provider totals.',
+      data: 'Delivery summary with cumulative provider totals.',
       metadata: {
         tokenUsage: {
           total: {
@@ -370,12 +399,83 @@ describe('knowledge runtime production wiring', () => {
       }>
     expect(uses).toHaveLength(3)
     expect(uses.map((use) => use.outcome)).toEqual(['failed', 'completed', 'completed'])
-    expect(uses[0].actual_tokens).toBeNull()
-    for (const use of uses.slice(1)) {
-      expect(use.actual_tokens).toBe(use.estimated_tokens)
-      expect(use.actual_tokens).toBeLessThan(3_500)
-    }
+    expect(uses.map((use) => use.actual_tokens)).toEqual([null, 120, 3_380])
+    expect(uses[1].actual_tokens).not.toBe(uses[1].estimated_tokens)
+    expect(uses[2].actual_tokens).not.toBe(uses[2].estimated_tokens)
+    expect(runtime.scheduler.get(job.id)?.spent_tokens).toBe(4_000)
+    expect(db.prepare(`SELECT total_tokens, input_tokens, output_tokens
+      FROM agent_usage`).get()).toEqual({
+      total_tokens: 4_000,
+      input_tokens: 3_500,
+      output_tokens: 500,
+    })
   }, 20_000)
+
+  it('leaves a completed ContextUse actual token count null without provider input evidence', async () => {
+    const repositoryState = await repository()
+    const db = openDb(':memory:')
+    installKnowledgeContextUseActualEvidenceSchema(db)
+    databases.push(db)
+    const boardId = Number(db.prepare('INSERT INTO boards (project_path, name) VALUES (?, ?)')
+      .run(repositoryState.root, 'Knowledge actual usage').lastInsertRowid)
+    const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
+      VALUES (?, 'Do not infer actual tokens', 'Do not infer actual tokens')`)
+      .run(boardId).lastInsertRowid)
+    const contract = new TaskContractService(db).put(cardId, {
+      objective: 'Do not infer actual tokens',
+      acceptance_criteria: ['Keep actual usage null without provider evidence'],
+      verify_commands: ['npm test'],
+      budget_tokens: 5_000,
+    })
+    const workspace = new WorkspaceStore(db).create({
+      boardId,
+      cardId,
+      name: 'Knowledge actual usage',
+      kind: 'shared',
+      rootPath: repositoryState.root,
+      status: 'active',
+    })
+    putKnowledge(db, boardId, repositoryState.head, 'no-actual',
+      'This compiled context has an estimate but no provider token evidence.')
+
+    const driver = new RuntimeDriver()
+    const runtime = createAgentOsRuntime(db)
+    runtimes.push(runtime)
+    runtime.registerDriver(driver)
+    const job = runtime.scheduler.create({
+      boardId,
+      cardId,
+      workspaceId: workspace.id,
+      provider: 'codex',
+      driverId: 'codex',
+      contractVersion: contract.version,
+      budgetTokens: 5_000,
+    })
+    await runtime.scheduler.tick()
+    const sessionContext = JSON.parse((db.prepare(
+      'SELECT context_json FROM agent_sessions WHERE job_id=?',
+    ).get(job.id) as { context_json: string }).context_json) as Record<string, unknown>
+    expect(sessionContext.knowledge_context_estimated_tokens).toEqual(expect.any(Number))
+    expect(sessionContext).not.toHaveProperty('knowledge_context_input_tokens')
+    expect(sessionContext).not.toHaveProperty('knowledge_context_input_source')
+
+    const liveSession = driver.sessions.values().next().value as DriverSession
+    driver.emit(liveSession.id, {
+      type: 'output',
+      data: 'Completed without token metadata.',
+      metadata: { turnCompleted: true },
+    })
+    await until(() => runtime.scheduler.get(job.id)?.status === 'succeeded'
+      && (db.prepare('SELECT outcome FROM context_uses').get() as { outcome: string }).outcome
+        === 'completed')
+    expect(db.prepare(`SELECT estimated_tokens, actual_tokens, outcome
+      FROM context_uses`).get()).toEqual({
+      estimated_tokens: expect.any(Number),
+      actual_tokens: null,
+      outcome: 'completed',
+    })
+    expect(runtime.scheduler.get(job.id)?.spent_tokens).toBe(0)
+  })
 
   it('injects ambient SessionStart context through the live Codex provider path without a managed ContextUse', async () => {
     const repositoryState = await repository()

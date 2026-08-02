@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
+import {
+  AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+  installKnowledgeContextUseActualEvidenceSchema,
+} from '../src/agent-os/knowledge-context-use-actual-migration.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { openDb } from '../src/db.js'
 
@@ -564,6 +568,32 @@ describe('knowledge persistence migration 018', () => {
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
     ).get() as { count: number }).count).toBe(34)
+    db.close()
+  })
+
+  it('upgrades populated ContextUse evidence and reapplies migration 036 idempotently', () => {
+    expect(AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID)
+      .toBe('036-knowledge-context-use-actual-evidence')
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'actual-evidence-replay')
+    completeBuild(db, boardId)
+    const runtime = insertRuntime(db, boardId, 'actual-evidence-replay')
+    insertContextUse(db, boardId, runtime)
+    const running = db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)
+
+    installKnowledgeContextUseActualEvidenceSchema(db)
+    expect(db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)).toEqual(running)
+    db.prepare(`UPDATE context_uses
+      SET outcome='completed', actual_tokens=NULL, completed_at=?
+      WHERE board_id=? AND id=?`).run(at, boardId, useId)
+    const retained = db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)
+
+    installKnowledgeContextUseActualEvidenceSchema(db)
+    expect(db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)).toEqual(retained)
     db.close()
   })
 

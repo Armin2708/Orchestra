@@ -668,10 +668,7 @@ export class KnowledgeStore {
     }
     const outcome = fields.outcome
     const actualTokens = integer(fields.actual_tokens, true)
-    if (
-      (outcome === 'completed' && actualTokens === null)
-      || (actualTokens !== null && actualTokens > MAX_CONTEXT_BUDGET_TOKENS)
-    ) {
+    if (actualTokens !== null && actualTokens > MAX_CONTEXT_BUDGET_TOKENS) {
       inputFailure()
     }
     const suppliedCompletedAt = Object.prototype.hasOwnProperty.call(fields, 'completed_at')

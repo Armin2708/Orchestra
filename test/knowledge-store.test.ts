@@ -5,6 +5,9 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import {
+  installKnowledgeContextUseActualEvidenceSchema,
+} from '../src/agent-os/knowledge-context-use-actual-migration.js'
+import {
   MAX_CONTEXT_BUDGET_TOKENS,
   contextBuildId,
   contextManifestFingerprint,
@@ -871,6 +874,7 @@ describe('KnowledgeStore', () => {
 
   it('accepts the terminal token ceiling and rejects values beyond it atomically', () => {
     const db = openDb(':memory:')
+    installKnowledgeContextUseActualEvidenceSchema(db)
     addBoard(db, 1)
     const runtime = addRuntime(db, 1, 'token-ceiling')
     const store = new KnowledgeStore(db)
@@ -907,6 +911,20 @@ describe('KnowledgeStore', () => {
       outcome: 'running',
       actual_tokens: null,
       completed_at: null,
+    })
+
+    const unmeasuredUse = useFixture(build.build, runtime, { injection_ordinal: 2 })
+    store.putContextUse(unmeasuredUse)
+    expect(store.finishContextUse({
+      board_id: 1,
+      context_use_id: unmeasuredUse.id,
+      outcome: 'completed',
+      actual_tokens: null,
+      completed_at: COMPLETE,
+    })).toMatchObject({
+      outcome: 'completed',
+      actual_tokens: null,
+      completed_at: COMPLETE,
     })
     db.close()
   })

@@ -1492,7 +1492,8 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     context.knowledge_context_use_id = knowledge.context_use_id
     context.knowledge_context_build_id = knowledge.context_build_id
     context.knowledge_context_estimated_tokens = knowledge.estimated_tokens
-    context.knowledge_context_input_tokens = knowledge.estimated_tokens
+    delete context.knowledge_context_input_tokens
+    delete context.knowledge_context_input_source
     context.knowledge_context_manifest_fingerprint = knowledge.manifest_fingerprint
     this.db.prepare("UPDATE agent_sessions SET context_json=?, updated_at=datetime('now') WHERE id=?")
       .run(JSON.stringify(context), sessionId)
@@ -2007,7 +2008,6 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       sessionContext.knowledge_context_use_id = agentBrief.knowledge.context_use_id
       sessionContext.knowledge_context_build_id = agentBrief.knowledge.context_build_id
       sessionContext.knowledge_context_estimated_tokens = agentBrief.knowledge.estimated_tokens
-      sessionContext.knowledge_context_input_tokens = agentBrief.knowledge.estimated_tokens
       sessionContext.knowledge_context_manifest_fingerprint = agentBrief.knowledge.manifest_fingerprint
     }
     const request = job.provider === 'shell'
@@ -2633,9 +2633,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       { context_json: string } | undefined
     const context = parseJson<Record<string, unknown>>(row?.context_json, {})
     if (typeof context.knowledge_context_use_id !== 'string') return
-    const contextTokens = Number(
-      context.knowledge_context_input_tokens ?? context.knowledge_context_estimated_tokens,
-    )
+    const contextTokens = context.knowledge_context_input_source === 'provider_input_delta'
+      ? Number(context.knowledge_context_input_tokens)
+      : Number.NaN
     this.finishKnowledgeUse(
       job,
       context.knowledge_context_use_id,
@@ -2885,6 +2885,13 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       cost_cents: null,
     }
     if (delta.total_tokens > 0 && row.board_id) recordProviderUsage(this.db, row.board_id, row.agent_id, delta)
+    if (delta.input_tokens > 0 && typeof context.knowledge_context_use_id === 'string') {
+      const recorded = Number(context.knowledge_context_input_tokens)
+      context.knowledge_context_input_tokens = (
+        Number.isSafeInteger(recorded) && recorded >= 0 ? recorded : 0
+      ) + delta.input_tokens
+      context.knowledge_context_input_source = 'provider_input_delta'
+    }
     context.usage_total = total
     this.db.prepare('UPDATE agent_sessions SET context_json=?, updated_at=datetime(\'now\') WHERE id=?')
       .run(JSON.stringify(context), sessionId)
