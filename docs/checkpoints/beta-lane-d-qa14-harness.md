@@ -1,6 +1,6 @@
 # Beta Lane D QA-014 harness remediation checkpoint
 
-Marker: `[beta-lane-d-qa14-harness-ready]`
+Marker: `[beta-lane-d-qa14-harness-review-ready]`
 
 Status: **harness remediation ready for integration; QA-014 remains open**
 
@@ -21,30 +21,49 @@ validation, and report remaining product failures separately.
   Setup failures are retained per mode instead of aborting the complete run.
 - Composited translucent foreground and solid ancestor backgrounds over the opaque canvas. Opacity
   and background-image cases remain unsupported and fail closed.
-- Separated visible viewport overflow from document extent. Nonvisual `.sr-only` content and
-  content contained by an explicit horizontal scroller/clip remain visible in provenance without
-  becoming false viewport-overflow failures.
+- Separated visible viewport overflow from document extent. Content contained by an explicit
+  horizontal scroller/clip remains visible in provenance without becoming false viewport-overflow
+  failures. `aria-hidden` and `.sr-only` no longer suppress visually rendered overflow; computed
+  rendering and clipping state decide whether a candidate is visible.
 - Bound overflow and contrast work with cached style/layout data and bounded diagnostic arrays.
   Exact maximum overflow is still computed across every candidate.
-- Bound every CDP evaluation failure to a redacted expression label, and retain fatal run evidence
-  at the requested output path with exact commit, source-tree digest, artifact digests, manifest
-  digest, active viewport, completed viewports, bounded diagnostics, and a verifiable digest.
-- Avoided heavyweight Agent Home as a reset for lightweight Command Center tabs. Journey groups
-  use two lifecycle isolation boundaries; per-mode reloads were rejected because they exposed a
-  daemon listener leak and changed the test into a connection stress test.
-- Evidence validation now rejects missing exact source status/tree/manifest binding, missing
-  visible-overflow provenance, and keyboard journeys without real Tab-navigation evidence.
+- Every pointer, keyboard and DOM fallback mode begins with a fresh same-artifact `Page.navigate`.
+  The evidence retains a digest of each new CDP loader, and validation requires three unique loader
+  digests per journey. An unstable per-mode navigation fails the run instead of falling back to
+  sequential DOM state.
+- Bound every CDP evaluation failure to a redacted expression label. Console, page, network and
+  process diagnostics retain only bounded labels/digests; response bodies and page text are never
+  retained. Recursive string, array, depth and total-byte limits are enforced before atomic write.
+- Manifest and evidence paths are confined to the canonical browser-quality artifact root,
+  reject symlink components/targets, and use create-fsync-rename replacement. Missing or stale
+  manifests are inside the fatal evidence boundary and produce a bounded failure artifact without
+  claiming unavailable artifact identity. Capture output and retained build-manifest paths must
+  resolve to distinct regular files, preventing provenance from being overwritten through aliases.
+- Source and both build artifacts are revalidated immediately before complete evidence is written.
+  Repository identity comes from Git's common directory, so linked worktree names cannot alter it.
+- Complete and fatal artifacts bind their gate status, retained error count, and exact retained
+  error-list digest into the verifiable document digest.
+- Evidence validation now requires the exact ordered, unique 12-journey inventory, nonnegative
+  integer overflow provenance, final source/artifact binding, unique mode loaders, and keyboard-only
+  activation evidence.
 
 ## Evidence
 
-- `npx vitest run test/qa-browser-quality.test.ts`: 11/11 passed.
+- `npx vitest run test/qa-browser-quality.test.ts`: 25/25 passed, including missing/stale manifest,
+  symlink/atomic-write, duplicate/missing/reordered journey, negative/non-finite/fractional overflow,
+  retained-size/redaction, current worktree identity, 36 distinct mode loaders, final artifact
+  mutation rejection, gate-result tampering, output/manifest aliases, and a real-Chromium overflow
+  fixture covering visible `aria-hidden` and clipped `.sr-only` elements.
 - Root and web `tsc --noEmit`: passed.
 - Root and web production builds: passed; Vite reports only its existing chunk-size warning.
 - Node/npm environment: Node `22.20.0`, npm `10.9.3`; no repository `.env` files were present to
   source.
-- GitNexus pre-edit impact was LOW/MEDIUM for the affected harness symbols except the shared
-  `evaluate` helper, which was HIGH (16 direct callers, 25 total) and received diagnostics-only
-  error context. Slice-level `detect_changes` found no product execution-flow impact.
+- The shared `evaluate` helper was previously rated HIGH (16 direct callers, 25 total); this review
+  preserves its nonsemantic bounded context only. The current function-level GitNexus index was
+  degraded before edits, so pre-edit impact remains UNKNOWN rather than a no-impact claim. A clean
+  final rebuild indexed 13,784 nodes / 39,016 edges / 258 flows; exact uncommitted detection rated
+  the four-file change MEDIUM and identified one affected `Main → Delay` flow.
+- Independent adversarial review finished at **P0=0, P1=0, P2=0** after three remediation loops.
 - Standalone Chromium CDP is the only surface exercised. The in-app Browser was not available in
   this worktree, so this checkpoint cannot close QA-013.
 - Final reproduction uses one retained manifest/artifact pair and writes either complete evidence

@@ -4,27 +4,38 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, rmSync, statSync, writeFileSync,
+  chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync,
+  readdirSync, rmSync, statSync,
 } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ACCESSIBILITY_GATES,
+  BROWSER_OVERFLOW_AUDIT_EXPRESSION,
   BROWSER_BUILD_SCHEMA_VERSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  assertFinalBuildManifest,
+  assertDistinctArtifactPaths,
+  canonicalRepositoryName,
+  finalizeBrowserEvidence,
+  finalizeValidatedBrowserEvidence,
+  navigateFreshInteractionMode,
   performanceSampleForJourney,
   redactEvidence,
+  redactText,
+  resolveApprovedArtifactPath,
   resolveApprovedEvidencePath,
+  validateArtifactIdentity,
   validateBaselineAgainstCaptures,
   validateBuildSourceIdentity,
   validatePerformanceBaseline,
   validateBrowserQualityEvidence,
   verifiableDocumentDigest,
+  writeBrowserArtifact,
 } from './lib/browser-quality.mjs'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -51,13 +62,27 @@ const parseArgs = (argv) => {
       continue
     }
     if (key === '--chrome' && value) options.chrome = resolve(value)
-    else if (key === '--output' && value) options.output = resolve(value)
+    else if (key === '--output' && value) {
+      if (isAbsolute(value)) throw new Error('--output must be repository-relative')
+      options.output = resolve(value)
+    }
     else if (key === '--baseline' && value) options.baseline = resolve(value)
-    else if (key === '--artifact-manifest' && value) options.artifactManifest = resolve(value)
-    else if (key === '--write-artifact-manifest' && value) options.writeArtifactManifest = resolve(value)
+    else if (key === '--artifact-manifest' && value) {
+      if (isAbsolute(value)) throw new Error('--artifact-manifest must be repository-relative')
+      options.artifactManifest = resolve(value)
+    } else if (key === '--write-artifact-manifest' && value) {
+      if (isAbsolute(value)) throw new Error('--write-artifact-manifest must be repository-relative')
+      options.writeArtifactManifest = resolve(value)
+    }
     else throw new Error(`unknown or incomplete argument: ${key}`)
     index += 1
   }
+  options.output = resolveApprovedArtifactPath(repositoryRoot, options.output)
+  options.artifactManifest = resolveApprovedArtifactPath(repositoryRoot, options.artifactManifest)
+  if (options.writeArtifactManifest) {
+    options.writeArtifactManifest = resolveApprovedArtifactPath(repositoryRoot, options.writeArtifactManifest)
+  }
+  assertDistinctArtifactPaths(options.output, options.writeArtifactManifest ?? options.artifactManifest)
   return options
 }
 
@@ -77,10 +102,28 @@ const unusedPort = async () => {
 
 const boundedText = (chunks) => Buffer.concat(chunks).toString('utf8').slice(-16_000)
 
+const retainChunk = (chunks, chunk, { maxChunks = 25, maxChunkBytes = 1_024 } = {}) => {
+  const bounded = Buffer.from(chunk).subarray(-maxChunkBytes)
+  chunks.push(bounded)
+  if (chunks.length > maxChunks) chunks.shift()
+}
+
+const safeMessage = (value) => redactEvidence(value instanceof Error ? value.message : String(value))
+
+const diagnosticFingerprint = (label, value) => ({
+  label,
+  sha256: createHash('sha256').update(redactText(String(value))).digest('hex'),
+})
+
+const retainEvidenceEntry = (entries, value) => {
+  entries.push(redactEvidence(value))
+  if (entries.length > 25) entries.shift()
+}
+
 const gitHead = async () => new Promise((resolveCommit, reject) => {
   const child = spawn('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'] })
   const chunks = []
-  child.stdout.on('data', (chunk) => chunks.push(chunk))
+  child.stdout.on('data', (chunk) => retainChunk(chunks, chunk))
   child.once('error', reject)
   child.once('close', (code) => code === 0
     ? resolveCommit(boundedText(chunks).trim())
@@ -90,8 +133,8 @@ const gitHead = async () => new Promise((resolveCommit, reject) => {
 const collectCommand = (command, args) => new Promise((resolveOutput, reject) => {
   const child = spawn(command, args, { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'] })
   const stdout = [], stderr = []
-  child.stdout.on('data', (chunk) => stdout.push(chunk))
-  child.stderr.on('data', (chunk) => stderr.push(chunk))
+  child.stdout.on('data', (chunk) => retainChunk(stdout, chunk, { maxChunks: 256, maxChunkBytes: 65_536 }))
+  child.stderr.on('data', (chunk) => retainChunk(stderr, chunk, { maxChunks: 32, maxChunkBytes: 16_384 }))
   child.once('error', reject)
   child.once('close', (code) => code === 0
     ? resolveOutput(Buffer.concat(stdout))
@@ -104,7 +147,9 @@ const trackedSourceState = async () => {
   const files = String(listed).split('\0').filter(Boolean).sort()
   const hash = createHash('sha256')
   for (const file of files) hash.update(file).update('\0').update(readFileSync(join(repositoryRoot, file))).update('\0')
+  const gitCommonDirectory = String(await collectCommand('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
   return {
+    repository: canonicalRepositoryName(gitCommonDirectory),
     source_commit: await gitHead(),
     source_tree_sha256: hash.digest('hex'),
     source_status: status ? 'dirty' : 'clean',
@@ -148,13 +193,25 @@ const writeBuildManifest = async (path) => {
   const sourceCheckedAt = new Date().toISOString()
   await runBuild(['run', 'build'])
   await runBuild(['--prefix', 'web', 'run', 'build'])
+  const artifactsBuiltAt = new Date().toISOString()
+  const finalSource = await trackedSourceState()
+  const sourceErrors = validateBuildSourceIdentity({
+    repository: source.repository,
+    source_status: source.source_status,
+    source_commit: source.source_commit,
+    source_tree_sha256: source.source_tree_sha256,
+    source_checked_at: sourceCheckedAt,
+    artifacts_built_at: artifactsBuiltAt,
+  }, finalSource)
+  if (sourceErrors.length) throw new Error(`source changed while building artifacts: ${sourceErrors.join('; ')}`)
   const manifest = {
     schema_version: BROWSER_BUILD_SCHEMA_VERSION,
+    repository: source.repository,
     source_commit: source.source_commit,
     source_tree_sha256: source.source_tree_sha256,
     source_status: source.source_status,
     source_checked_at: sourceCheckedAt,
-    artifacts_built_at: new Date().toISOString(),
+    artifacts_built_at: artifactsBuiltAt,
     untracked_exclusions: [
       'artifacts/qa/browser-quality/**', 'dist/**', 'web/dist/**',
       'node_modules/**', 'web/node_modules/**',
@@ -163,8 +220,7 @@ const writeBuildManifest = async (path) => {
     generated_by: 'scripts/qa-browser-gates.mjs --write-artifact-manifest',
   }
   manifest.sha256 = verifiableDocumentDigest(manifest)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
+  writeBrowserArtifact(repositoryRoot, path, manifest)
   return manifest
 }
 
@@ -177,9 +233,8 @@ const loadBuildManifest = async (path) => {
   const sourceErrors = validateBuildSourceIdentity(manifest, currentSource)
   if (sourceErrors.length) throw new Error(`stale build manifest: ${sourceErrors.join('; ')}`)
   const actual = currentArtifactIdentity()
-  for (const key of Object.keys(actual)) {
-    if (manifest.artifact_identity?.[key] !== actual[key]) throw new Error(`stale build artifact: ${key} digest changed`)
-  }
+  const artifactErrors = validateArtifactIdentity(manifest, actual)
+  if (artifactErrors.length) throw new Error(`stale build artifact: ${artifactErrors.join('; ')}`)
   return manifest
 }
 
@@ -207,7 +262,10 @@ const jsonRequest = async (baseUrl, method, path, body, headers = {}) => {
   const text = await response.text()
   let parsed
   try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
-  if (!response.ok) throw new Error(`${method} ${path} returned ${response.status}: ${String(text).slice(0, 300)}`)
+  if (!response.ok) {
+    const responseSha256 = createHash('sha256').update(text).digest('hex')
+    throw new Error(`${method} ${path} returned ${response.status}; response_sha256=${responseSha256}`)
+  }
   return parsed
 }
 
@@ -334,11 +392,12 @@ const evaluate = async (client, expression) => {
     })
   } catch (error) {
     const expressionLabel = String(expression).replace(/\s+/g, ' ').trim().slice(0, 160)
-    const message = error instanceof Error ? error.message : String(error)
+    const message = safeMessage(error)
     throw new Error(`${message}; evaluate=${expressionLabel}`)
   }
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'browser evaluation failed')
+    throw new Error(safeMessage(result.exceptionDetails.exception?.description
+      || result.exceptionDetails.text || 'browser evaluation failed'))
   }
   return result.result?.value
 }
@@ -403,7 +462,7 @@ const activeFocusProbe = (client, targetSelector = null) => evaluate(client, `((
   const focusSurface = xtermProxy ? element.closest('.xterm') : element;
   const rect = focusSurface.getBoundingClientRect(), style = getComputedStyle(focusSurface);
   return {
-    key: xtermProxy ? 'Terminal input' : element.id || element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.tagName,
+    key: xtermProxy ? 'Terminal input' : element.id || element.getAttribute('role') || element.tagName,
     interactive: true,
     target: element === target,
     xterm_proxy: xtermProxy,
@@ -505,69 +564,7 @@ const typeText = async (client, value) => {
   }
 }
 
-const overflowAudit = (client) => evaluate(client, `(() => {
-  const viewportLeft = visualViewport?.offsetLeft ?? 0;
-  const viewportWidth = visualViewport?.width ?? document.documentElement.clientWidth;
-  const viewportRight = viewportLeft + viewportWidth;
-  const documentExtent = Math.max(
-    0,
-    document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    (document.body?.scrollWidth ?? 0) - document.documentElement.clientWidth,
-  );
-  const ancestorCache = new WeakMap();
-  const clippedByAncestor = (element, rect) => {
-    for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-      let ancestor = ancestorCache.get(parent);
-      if (!ancestor) {
-        ancestor = { overflow_x: getComputedStyle(parent).overflowX, rect: parent.getBoundingClientRect() };
-        ancestorCache.set(parent, ancestor);
-      }
-      if (!['auto', 'scroll', 'hidden', 'clip'].includes(ancestor.overflow_x)) continue;
-      if (rect.right > ancestor.rect.right + .5 || rect.left < ancestor.rect.left - .5) return true;
-    }
-    return false;
-  };
-  const offenders = [], excluded = [];
-  let visibleOverflow = 0, offenderCount = 0, excludedCount = 0;
-  for (const element of document.querySelectorAll('body *')) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
-    if (rect.right <= viewportRight + .5 && rect.left >= viewportLeft - .5) continue;
-    const rendered = typeof element.checkVisibility === 'function'
-      ? element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
-      : (() => {
-          const style = getComputedStyle(element);
-          return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
-        })();
-    if (!rendered) continue;
-    const row = {
-      tag: element.tagName.toLowerCase(), id: element.id || null,
-      class_name: String(element.className || '').slice(0, 120),
-      left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
-    };
-    if (element.closest('[aria-hidden="true"],.sr-only')) {
-      excludedCount += 1;
-      if (excluded.length < 25) excluded.push({ ...row, reason: 'nonvisual_accessibility_content' });
-      continue;
-    }
-    if (clippedByAncestor(element, rect)) {
-      excludedCount += 1;
-      if (excluded.length < 25) excluded.push({ ...row, reason: 'contained_horizontal_scroller_or_clip' });
-      continue;
-    }
-    offenderCount += 1;
-    visibleOverflow = Math.max(visibleOverflow, row.right - viewportRight, viewportLeft - row.left);
-    if (offenders.length < 25) offenders.push(row);
-  }
-  return {
-    visible_overflow_px: Math.max(0, Math.ceil(visibleOverflow)),
-    document_extent_overflow_px: Math.ceil(documentExtent),
-    offender_count: offenderCount,
-    excluded_count: excludedCount,
-    offenders,
-    excluded_nonvisual_or_contained: excluded,
-  };
-})()`)
+const overflowAudit = (client) => evaluate(client, BROWSER_OVERFLOW_AUDIT_EXPRESSION)
 
 const accessibleNameAudit = (client) => evaluate(client, `(() => {
   const visible = (element) => {
@@ -654,7 +651,7 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     const required = large ? 3 : 4.5;
     if (ratio + .01 < required) rows.push({
       tag: element.tagName.toLowerCase(), class_name: String(element.className || '').slice(0, 100),
-      text: text.slice(0, 80), ratio: Math.round(ratio * 100) / 100, required,
+      text_length: text.length, ratio: Math.round(ratio * 100) / 100, required,
     });
   }
   return {
@@ -695,7 +692,7 @@ const keyboardAudit = async (client) => {
   const reverseOrder = []
   for (let index = 0; index < 3; index += 1) {
     await dispatchKey(client, 'Tab', { shift: true })
-    reverseOrder.push(await evaluate(client, `document.activeElement?.id || document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent?.trim().slice(0, 80) || null`))
+    reverseOrder.push(await evaluate(client, `document.activeElement?.id || document.activeElement?.getAttribute('role') || document.activeElement?.tagName || null`))
   }
   const selectedTab = await evaluate(client, `(() => {
     const tab = document.querySelector('.board-section-tabs [aria-selected="true"], .board-section-tabs .active');
@@ -709,7 +706,7 @@ const keyboardAudit = async (client) => {
       activation.remained_selected = await evaluate(client, `document.activeElement?.id === ${JSON.stringify(selectedTab.id)} && (document.activeElement?.getAttribute('aria-selected') === 'true' || document.activeElement?.classList.contains('active'))`)
       if (!activation.remained_selected) violations.push({ reason: 'Enter activation did not preserve selected tab and focus' })
     } catch (error) {
-      activation.error = error instanceof Error ? error.message : String(error)
+      activation.error = safeMessage(error)
       violations.push({ reason: activation.error })
     }
   }
@@ -729,7 +726,7 @@ const modalFocusAudit = async (client, mobile) => {
   let activation
   await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
   try { activation = await keyboardActivate(client, selector, 'Create durable agent') }
-  catch (error) { return { supported: true, passed: false, reason: error instanceof Error ? error.message : String(error) } }
+  catch (error) { return { supported: true, passed: false, reason: safeMessage(error) } }
   await delay(150)
   if (!await evaluate(client, `Boolean(document.querySelector('.ah-dialog[role="dialog"][aria-modal="true"]'))`)) {
     return { supported: true, passed: false, activation, reason: 'Enter did not open the create-agent modal' }
@@ -784,7 +781,7 @@ const loadBaseline = (path, artifactIdentity) => {
     let capturePath
     try { capturePath = resolveApprovedEvidencePath(repositoryRoot, capture.path) }
     catch (error) {
-      errors.push(`baseline capture path rejected: ${error instanceof Error ? error.message : String(error)}`)
+      errors.push(`baseline capture path rejected: ${safeMessage(error)}`)
       continue
     }
     if (fileDigest(capturePath) !== capture.file_sha256) errors.push(`baseline capture file digest changed: ${capture.path}`)
@@ -823,17 +820,31 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const pageErrors = []
   const failedRequests = []
   client.on('Runtime.consoleAPICalled', (event) => {
-    if (event.type === 'error') consoleErrors.push(event.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '))
+    if (event.type === 'error') {
+      retainEvidenceEntry(consoleErrors, diagnosticFingerprint(
+        'console_error',
+        event.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '),
+      ))
+    }
   })
-  client.on('Runtime.exceptionThrown', (event) => pageErrors.push(event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception'))
+  client.on('Runtime.exceptionThrown', (event) => retainEvidenceEntry(pageErrors, diagnosticFingerprint(
+    'page_exception',
+    event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception',
+  )))
   client.on('Network.responseReceived', (event) => {
     const { response } = event
     if (response?.url?.startsWith(baseUrl) && response.status >= 400) {
-      failedRequests.push({ url: response.url, status: response.status })
+      retainEvidenceEntry(failedRequests, {
+        label: 'http_failure',
+        status: response.status,
+        endpoint_sha256: createHash('sha256').update(new URL(response.url).pathname).digest('hex'),
+      })
     }
   })
   client.on('Network.loadingFailed', (event) => {
-    if (!event.canceled && !String(event.errorText).includes('ERR_ABORTED')) failedRequests.push({ error: event.errorText })
+    if (!event.canceled && !String(event.errorText).includes('ERR_ABORTED')) {
+      retainEvidenceEntry(failedRequests, diagnosticFingerprint('network_loading_failed', event.errorText))
+    }
   })
 
   await client.send('Emulation.setDeviceMetricsOverride', {
@@ -868,11 +879,17 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
-    await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
-  }
-  const reloadViewportPage = async (label) => {
-    await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}&group=${encodeURIComponent(label)}` })
-    await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`, label)
+    return navigateFreshInteractionMode({
+      client,
+      url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
+      name,
+      mode,
+      waitForReady: () => waitFor(
+        client,
+        `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`,
+        `${name} ${mode} fresh navigation`,
+      ),
+    })
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
     const deadline = performance.now() + readinessTimeoutMs
@@ -894,14 +911,14 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const recordJourney = async (name, action, ready, prepare = async () => {}) => {
     const interactionModes = {}
     for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
-      await resetJourney(name, mode)
+      const reset = await resetJourney(name, mode)
       let setupError = null
       try {
         await prepare(mode)
         if (mode === 'keyboard') {
           await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
         }
-      } catch (caught) { setupError = caught instanceof Error ? caught.message : String(caught) }
+      } catch (caught) { setupError = safeMessage(caught) }
       const started = performance.now()
       let error = setupError
       let actionEvidence = null
@@ -909,7 +926,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         try {
           actionEvidence = await action(mode) ?? null
           if (actionEvidence?.error) error = actionEvidence.error
-        } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
+        } catch (caught) { error = safeMessage(caught) }
       }
       const passed = !error && await modeReady(ready)
       const modeElapsed = performance.now() - started
@@ -925,7 +942,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         counts_toward_pass: mode !== 'dom_fallback',
         performance_eligible: mode === 'pointer',
         diagnostic_only: mode === 'dom_fallback',
-        reset: 'separate DOM setup state; setup never counts toward mode success',
+        reset,
       }
     }
     const retainsPerformance = ['graph overview', 'durable transcript', 'conversation search'].includes(name)
@@ -1075,7 +1092,6 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   )
   const searchMatchesRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
 
-  await reloadViewportPage('command center section isolation')
   for (const section of ['work', 'discussions', 'knowledge', 'outcomes', 'activity']) {
     const resetSection = section === 'work' ? 'activity' : 'work'
     await recordJourney(
@@ -1088,7 +1104,6 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       },
     )
   }
-  await reloadViewportPage('primary view isolation')
   for (const view of ['Organization', 'Roadmap', 'Settings', 'Command center']) {
     await recordJourney(
       `${view} primary view`,
@@ -1182,56 +1197,72 @@ const stopChild = async (child) => {
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
 }
 
+const sourceEvidence = (manifest, currentSource, bindingStatus) => ({
+  repository: manifest?.repository ?? currentSource?.repository ?? null,
+  commit: manifest?.source_commit ?? currentSource?.source_commit ?? null,
+  source_status: manifest?.source_status ?? currentSource?.source_status ?? 'unavailable',
+  source_tree_sha256: manifest?.source_tree_sha256 ?? currentSource?.source_tree_sha256 ?? null,
+  node: process.versions.node,
+  artifact_identity: manifest?.artifact_identity ?? null,
+  build_manifest_sha256: manifest?.sha256 ?? null,
+  binding_status: bindingStatus,
+})
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
-  if (process.versions.node !== '22.20.0') throw new Error(`QA browser gates require Node 22.20.0, received ${process.versions.node}`)
-  for (const required of ['dist/cli.js', 'web/dist/index.html']) {
-    if (!existsSync(join(repositoryRoot, required))) throw new Error(`missing ${required}; build root and web before this gate`)
-  }
-  if (options.writeArtifactManifest) {
-    const manifest = await writeBuildManifest(options.writeArtifactManifest)
-    console.log(`QA build manifest: ${options.writeArtifactManifest}`)
-    console.log(`manifest sha256: ${manifest.sha256}`)
-    return
-  }
-  if (!existsSync(options.chrome)) throw new Error(`Chrome executable not found: ${options.chrome}`)
-  const buildManifest = await loadBuildManifest(options.artifactManifest)
-  const baseline = options.captureOnly ? null : loadBaseline(options.baseline, buildManifest.artifact_identity)
-  const runRoot = mkdtempSync(join(tmpdir(), 'orchestra-browser-quality-'))
-  const orchestraHome = join(runRoot, 'orchestra-home')
-  const chromeProfile = join(runRoot, 'chrome-profile')
-  const fakeCodex = join(runRoot, 'fake-codex')
-  const fakeCodexState = join(runRoot, 'fake-codex-state.json')
-  copyFileSync(join(repositoryRoot, 'test', 'fixtures', 'fake-codex-app-server.mjs'), fakeCodex)
-  chmodSync(fakeCodex, 0o755)
-  const daemonPort = await unusedPort()
-  const chromePort = await unusedPort()
-  const baseUrl = `http://127.0.0.1:${daemonPort}`
-  const environment = {
-    ...process.env,
-    ORCHESTRA_AUTOSHIP: '0',
-    ORCHESTRA_AUTOWAKE: '0',
-    ORCHESTRA_CODEX_PROVIDER_CONTRACT: '0',
-    ORCHESTRA_CANONICAL_LAUNCH: '1',
-    ORCHESTRA_CODEX_COMMAND: fakeCodex,
-    ORCHESTRA_CODEX_FORWARD_ENV: 'FAKE_CODEX_STATE',
-    ORCHESTRA_HOME: orchestraHome,
-    ORCHESTRA_MAX_LAUNCHED: '1',
-    ORCHESTRA_PORT: String(daemonPort),
-    FAKE_CODEX_STATE: fakeCodexState,
-  }
   const daemonStdout = [], daemonStderr = [], chromeStderr = []
   let daemon, chrome, client, operatorToken = ''
+  let buildManifest = null
+  let runRoot = null
   let activeViewport = null
+  let completeEvidenceWritten = false
   const completedViewports = []
   try {
+    if (process.versions.node !== '22.20.0') {
+      throw new Error(`QA browser gates require Node 22.20.0, received ${process.versions.node}`)
+    }
+    if (options.writeArtifactManifest) {
+      const manifest = await writeBuildManifest(options.writeArtifactManifest)
+      console.log(`QA build manifest: ${options.writeArtifactManifest}`)
+      console.log(`manifest sha256: ${manifest.sha256}`)
+      return
+    }
+    buildManifest = await loadBuildManifest(options.artifactManifest)
+    for (const required of ['dist/cli.js', 'web/dist/index.html']) {
+      if (!existsSync(join(repositoryRoot, required))) throw new Error(`missing ${required}; build root and web before this gate`)
+    }
+    if (!existsSync(options.chrome)) throw new Error(`Chrome executable not found: ${options.chrome}`)
+    const baseline = options.captureOnly ? null : loadBaseline(options.baseline, buildManifest.artifact_identity)
+    runRoot = mkdtempSync(join(tmpdir(), 'orchestra-browser-quality-'))
+    const orchestraHome = join(runRoot, 'orchestra-home')
+    const chromeProfile = join(runRoot, 'chrome-profile')
+    const fakeCodex = join(runRoot, 'fake-codex')
+    const fakeCodexState = join(runRoot, 'fake-codex-state.json')
+    copyFileSync(join(repositoryRoot, 'test', 'fixtures', 'fake-codex-app-server.mjs'), fakeCodex)
+    chmodSync(fakeCodex, 0o755)
+    const daemonPort = await unusedPort()
+    const chromePort = await unusedPort()
+    const baseUrl = `http://127.0.0.1:${daemonPort}`
+    const environment = {
+      ...process.env,
+      ORCHESTRA_AUTOSHIP: '0',
+      ORCHESTRA_AUTOWAKE: '0',
+      ORCHESTRA_CODEX_PROVIDER_CONTRACT: '0',
+      ORCHESTRA_CANONICAL_LAUNCH: '1',
+      ORCHESTRA_CODEX_COMMAND: fakeCodex,
+      ORCHESTRA_CODEX_FORWARD_ENV: 'FAKE_CODEX_STATE',
+      ORCHESTRA_HOME: orchestraHome,
+      ORCHESTRA_MAX_LAUNCHED: '1',
+      ORCHESTRA_PORT: String(daemonPort),
+      FAKE_CODEX_STATE: fakeCodexState,
+    }
     daemon = spawn(process.execPath, [join(repositoryRoot, 'dist/cli.js'), 'serve'], {
       cwd: repositoryRoot,
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    daemon.stdout.on('data', (chunk) => daemonStdout.push(chunk))
-    daemon.stderr.on('data', (chunk) => daemonStderr.push(chunk))
+    daemon.stdout.on('data', (chunk) => retainChunk(daemonStdout, chunk))
+    daemon.stderr.on('data', (chunk) => retainChunk(daemonStderr, chunk))
     await waitForJson(`${baseUrl}/health`, (body) => body.ok === true)
     const tokenPath = join(orchestraHome, 'token')
     const tokenDeadline = Date.now() + timeoutMs
@@ -1257,7 +1288,7 @@ const main = async () => {
       '--safebrowsing-disable-auto-update',
       'about:blank',
     ], { stdio: ['ignore', 'ignore', 'pipe'] })
-    chrome.stderr.on('data', (chunk) => chromeStderr.push(chunk))
+    chrome.stderr.on('data', (chunk) => retainChunk(chromeStderr, chunk))
     await waitForJson(`http://127.0.0.1:${chromePort}/json/version`, (body) => Boolean(body.webSocketDebuggerUrl))
     const page = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent('about:blank')}`, {
       method: 'PUT', signal: AbortSignal.timeout(5_000),
@@ -1287,6 +1318,9 @@ const main = async () => {
       viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario }))
     }
     activeViewport = null
+    const finalManifest = await loadBuildManifest(options.artifactManifest)
+    assertFinalBuildManifest(buildManifest, finalManifest)
+    buildManifest = finalManifest
     const evidence = redactEvidence({
       schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
       captured_at: new Date().toISOString(),
@@ -1297,18 +1331,10 @@ const main = async () => {
         surface: 'standalone_chromium_cdp_fallback',
         qa_013_closure_permitted: false,
       },
-      source: {
-        repository: basename(repositoryRoot),
-        commit: buildManifest.source_commit,
-        source_status: buildManifest.source_status,
-        source_tree_sha256: buildManifest.source_tree_sha256,
-        node: process.versions.node,
-        artifact_identity: buildManifest.artifact_identity,
-        build_manifest_sha256: buildManifest.sha256,
-      },
+      source: sourceEvidence(buildManifest, null, 'passed_preflight_and_final'),
       scenario,
       methodology: {
-        isolation: 'disposable Orchestra home and Chrome profile on loopback with token authentication enabled',
+        isolation: 'disposable Orchestra home and Chrome profile; every pointer, keyboard, and DOM fallback mode starts with a unique same-artifact Page.navigate loader',
         fixture_transport: 'board, agents, card, workspace, canonical job/session, profile, conversation, and events created through authenticated public APIs',
         failure_artifacts: 'bounded redacted JSON only; no page HTML, response body, transcript, storage, or screenshot capture',
         interaction_readiness: `two consecutive 40ms observations; ${interactionReadinessTimeoutMs}ms interaction bound and ${asynchronousReadinessTimeoutMs}ms asynchronous render bound`,
@@ -1319,25 +1345,40 @@ const main = async () => {
       },
       viewports,
     })
-    evidence.sha256 = verifiableDocumentDigest(evidence)
-    const errors = validateBrowserQualityEvidence(evidence, { requireBudgets: !options.captureOnly })
+    const finalEvidence = finalizeValidatedBrowserEvidence(
+      evidence,
+      (document) => validateBrowserQualityEvidence(document, { requireBudgets: !options.captureOnly }),
+    )
+    const errors = finalEvidence.validation_errors
     const output = options.output
-    mkdirSync(dirname(output), { recursive: true })
-    writeFileSync(output, `${JSON.stringify({ ...evidence, validation_errors: errors }, null, 2)}\n`, { mode: 0o600 })
+    writeBrowserArtifact(repositoryRoot, output, finalEvidence)
+    completeEvidenceWritten = true
     console.log(`QA browser evidence: ${output}`)
     console.log(`viewports: ${viewports.map((viewport) => `${viewport.id}=${viewport.journeys.length} journeys`).join(', ')}`)
-    console.log(`evidence sha256: ${evidence.sha256}`)
+    console.log(`evidence sha256: ${finalEvidence.sha256}`)
     if (errors.length && !options.captureOnly) {
       throw new Error(`browser quality gates failed: ${errors.join('; ')}`)
     }
     if (errors.length) console.warn(`capture-only observed ${errors.length} failing gate(s)`)
   } catch (error) {
     const stripRunToken = (value) => operatorToken ? String(value).split(operatorToken).join('[REDACTED]') : value
+    let currentSource = null
+    let finalManifest = null
+    let manifestError = null
+    try { currentSource = await trackedSourceState() } catch (sourceError) {
+      manifestError = `source identity unavailable: ${safeMessage(sourceError)}`
+    }
+    if (!options.writeArtifactManifest) {
+      try { finalManifest = await loadBuildManifest(options.artifactManifest) } catch (caught) {
+        manifestError = safeMessage(caught)
+      }
+    }
     const diagnostics = redactEvidence({
-      error: error instanceof Error ? error.message : String(error),
-      daemon_stdout: stripRunToken(boundedText(daemonStdout)),
-      daemon_stderr: stripRunToken(boundedText(daemonStderr)),
-      chrome_stderr: stripRunToken(boundedText(chromeStderr)),
+      error: safeMessage(error),
+      manifest_error: manifestError,
+      daemon_stdout: diagnosticFingerprint('daemon_stdout', stripRunToken(boundedText(daemonStdout))),
+      daemon_stderr: diagnosticFingerprint('daemon_stderr', stripRunToken(boundedText(daemonStderr))),
+      chrome_stderr: diagnosticFingerprint('chrome_stderr', stripRunToken(boundedText(chromeStderr))),
     })
     const failureEvidence = redactEvidence({
       schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
@@ -1349,33 +1390,28 @@ const main = async () => {
         surface: 'standalone_chromium_cdp_fallback',
         qa_013_closure_permitted: false,
       },
-      source: {
-        repository: basename(repositoryRoot),
-        commit: buildManifest.source_commit,
-        source_status: buildManifest.source_status,
-        source_tree_sha256: buildManifest.source_tree_sha256,
-        node: process.versions.node,
-        artifact_identity: buildManifest.artifact_identity,
-        build_manifest_sha256: buildManifest.sha256,
-      },
+      source: sourceEvidence(
+        finalManifest,
+        currentSource,
+        finalManifest ? 'passed_at_failure' : 'failed_or_unavailable',
+      ),
       active_viewport: activeViewport,
       completed_viewports: completedViewports,
       diagnostics,
     })
-    failureEvidence.sha256 = verifiableDocumentDigest(failureEvidence)
-    mkdirSync(dirname(options.output), { recursive: true })
-    writeFileSync(options.output, `${JSON.stringify(failureEvidence, null, 2)}\n`, { mode: 0o600 })
+    const fatalEvidence = finalizeBrowserEvidence(failureEvidence, [safeMessage(error)], 'fatal')
+    if (!completeEvidenceWritten) writeBrowserArtifact(repositoryRoot, options.output, fatalEvidence)
     console.error(JSON.stringify(diagnostics, null, 2))
     throw error
   } finally {
     client?.close()
     await stopChild(chrome)
     await stopChild(daemon)
-    rmSync(runRoot, { recursive: true, force: true })
+    if (runRoot) rmSync(runRoot, { recursive: true, force: true })
   }
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
+  console.error(safeMessage(error))
   process.exitCode = 1
 })

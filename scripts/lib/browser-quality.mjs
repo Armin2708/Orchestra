@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto'
-import { lstatSync, realpathSync } from 'node:fs'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import {
+  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync,
+  renameSync, rmSync, statSync, writeFileSync,
+} from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export const BROWSER_QUALITY_SCHEMA_VERSION = 4
 export const BROWSER_BASELINE_SCHEMA_VERSION = 3
-export const BROWSER_BUILD_SCHEMA_VERSION = 2
+export const BROWSER_BUILD_SCHEMA_VERSION = 3
 
 export const RESPONSIVE_VIEWPORTS = Object.freeze([
   Object.freeze({ id: 'desktop', width: 1440, height: 1000, mobile: false }),
@@ -27,6 +30,26 @@ export const PERFORMANCE_SURFACES = Object.freeze([
   'search',
 ])
 
+export const BROWSER_JOURNEYS = Object.freeze([
+  'graph overview',
+  'durable transcript',
+  'conversation search',
+  'work command center view',
+  'discussions command center view',
+  'knowledge command center view',
+  'outcomes command center view',
+  'activity command center view',
+  'Organization primary view',
+  'Roadmap primary view',
+  'Settings primary view',
+  'Command center primary view',
+])
+
+export const EVIDENCE_MAX_STRING_LENGTH = 1_024
+export const EVIDENCE_MAX_ARRAY_LENGTH = 25
+export const EVIDENCE_MAX_DEPTH = 12
+export const EVIDENCE_MAX_BYTES = 512 * 1_024
+
 export const BETA_EXPERIENCE_BUDGETS_MS = Object.freeze({
   startup: 1_500,
   snapshot_loading: 3_000,
@@ -37,23 +60,38 @@ export const BETA_EXPERIENCE_BUDGETS_MS = Object.freeze({
 
 const secretKey = /(?:authorization|cookie|password|secret|token|credential|session[_-]?token|api[_-]?key)/i
 const bearer = /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi
-const secretAssignment = /\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY))\s*=\s*([^\s,;]+)/gi
+const secretAssignment = /\b((?:[A-Z][A-Z0-9_-]*_)?(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API[_-]?KEY|COOKIE|AUTHORIZATION))\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&#]+)/gi
 const urlCredential = /([?&](?:token|key|secret|password|credential)=)[^&#\s]*/gi
+const urlUserInfo = /\b(https?:\/\/)[^@\s/]+@/gi
 
 export const redactText = (value) => String(value)
   .replace(bearer, 'Bearer [REDACTED]')
   .replace(secretAssignment, '$1=[REDACTED]')
   .replace(urlCredential, '$1[REDACTED]')
+  .replace(urlUserInfo, '$1[REDACTED]@')
 
-export const redactEvidence = (value, key = '') => {
+export const redactEvidence = (value, key = '', depth = 0) => {
   if (secretKey.test(key)) return '[REDACTED]'
-  if (typeof value === 'string') return redactText(value)
-  if (Array.isArray(value)) return value.map((item) => redactEvidence(item))
+  if (depth > EVIDENCE_MAX_DEPTH) return '[TRUNCATED]'
+  if (typeof value === 'string') return redactText(value).slice(0, EVIDENCE_MAX_STRING_LENGTH)
+  if (Array.isArray(value)) return value.slice(0, EVIDENCE_MAX_ARRAY_LENGTH)
+    .map((item) => redactEvidence(item, '', depth + 1))
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [
     entryKey,
-    redactEvidence(entryValue, entryKey),
+    redactEvidence(entryValue, entryKey, depth + 1),
   ]))
+}
+
+const evidenceBoundaryViolations = (value, depth = 0) => {
+  if (depth > EVIDENCE_MAX_DEPTH) return true
+  if (typeof value === 'string') return value.length > EVIDENCE_MAX_STRING_LENGTH
+  if (Array.isArray(value)) {
+    return value.length > EVIDENCE_MAX_ARRAY_LENGTH
+      || value.some((item) => evidenceBoundaryViolations(item, depth + 1))
+  }
+  return Boolean(value && typeof value === 'object'
+    && Object.values(value).some((item) => evidenceBoundaryViolations(item, depth + 1)))
 }
 
 export const canonicalJson = (value) => {
@@ -71,8 +109,53 @@ export const evidenceDigest = (value) => createHash('sha256')
 export const verifiableDocumentDigest = (value) => {
   const document = structuredClone(value)
   delete document.sha256
-  delete document.validation_errors
+  // Historical schema-3 observations excluded their diagnostic error list.
+  // Schema-4 evidence binds the exact gate outcome and retained errors.
+  if (document.schema_version === 3) delete document.validation_errors
   return evidenceDigest(document)
+}
+
+export const finalizeBrowserEvidence = (value, validationErrors, status) => {
+  const document = structuredClone(value)
+  const errors = redactEvidence(Array.isArray(validationErrors) ? validationErrors : [])
+  document.validation_errors = errors
+  document.gate_result = {
+    status: status ?? (errors.length ? 'failed' : 'passed'),
+    validation_error_count: errors.length,
+    validation_errors_sha256: evidenceDigest(errors),
+  }
+  document.sha256 = verifiableDocumentDigest(document)
+  return document
+}
+
+export const finalizeValidatedBrowserEvidence = (value, validator) => {
+  const draft = finalizeBrowserEvidence(value, [])
+  const errors = validator(draft)
+  const document = finalizeBrowserEvidence(value, errors)
+  const consistencyErrors = validator(document)
+  if (canonicalJson(consistencyErrors) !== canonicalJson(errors)) {
+    throw new Error('browser evidence validation changed during gate-result finalization')
+  }
+  return document
+}
+
+export const assertFinalBuildManifest = (initial, final) => {
+  if (!initial || !final || initial.sha256 !== final.sha256
+    || canonicalJson(initial.artifact_identity) !== canonicalJson(final.artifact_identity)) {
+    throw new Error('build manifest or artifact identity changed during browser verification')
+  }
+}
+
+export const navigateFreshInteractionMode = async ({ client, url, waitForReady, name, mode }) => {
+  const navigation = await client.send('Page.navigate', { url })
+  if (navigation?.errorText || !navigation?.loaderId) {
+    throw new Error(`${name} ${mode} fresh navigation did not create a loader`)
+  }
+  await waitForReady()
+  return {
+    strategy: 'fresh_page_navigation',
+    loader_sha256: createHash('sha256').update(navigation.loaderId).digest('hex'),
+  }
 }
 
 export const percentile = (samples, quantile) => {
@@ -136,6 +219,8 @@ export const performanceSampleForJourney = (interactionModes) => {
 
 export const validateBuildSourceIdentity = (manifest, current) => {
   const errors = []
+  if (typeof manifest?.repository !== 'string' || !manifest.repository
+    || manifest.repository !== current?.repository) errors.push('build manifest repository identity is stale')
   if (manifest?.source_status !== 'clean') errors.push('build manifest source status is not clean')
   if (current?.source_status !== 'clean') errors.push('tracked source tree is dirty')
   if (manifest?.source_commit !== current?.source_commit) errors.push('build manifest source commit is stale')
@@ -145,6 +230,22 @@ export const validateBuildSourceIdentity = (manifest, current) => {
     errors.push('build artifacts were not produced after the clean-source check')
   }
   return errors
+}
+
+export const validateArtifactIdentity = (manifest, actual) => {
+  const errors = []
+  for (const key of ['root_dist_sha256', 'web_dist_sha256']) {
+    if (!/^[a-f0-9]{64}$/.test(String(manifest?.artifact_identity?.[key] ?? ''))
+      || manifest.artifact_identity[key] !== actual?.[key]) {
+      errors.push(`build artifact ${key} digest is stale`)
+    }
+  }
+  return errors
+}
+
+export const canonicalRepositoryName = (gitCommonDirectory) => {
+  const canonical = resolve(gitCommonDirectory)
+  return basename(canonical) === '.git' ? basename(dirname(canonical)) : basename(canonical)
 }
 
 export const resolveApprovedEvidencePath = (repositoryRoot, value) => {
@@ -160,6 +261,155 @@ export const resolveApprovedEvidencePath = (repositoryRoot, value) => {
   }
   return actual
 }
+
+export const resolveApprovedArtifactPath = (repositoryRoot, value) => {
+  if (typeof value !== 'string' || !value) throw new Error('artifact path is required')
+  const lexicalRepository = resolve(repositoryRoot)
+  const realRepository = realpathSync(repositoryRoot)
+  const approved = resolve(realRepository, 'artifacts', 'qa', 'browser-quality')
+  const requested = resolve(lexicalRepository, value)
+  const canonicalChild = relative(realRepository, requested)
+  const requestedChild = isAbsolute(value)
+    && canonicalChild !== '..' && !canonicalChild.startsWith(`..${sep}`) && !isAbsolute(canonicalChild)
+    ? canonicalChild
+    : relative(lexicalRepository, requested)
+  if (requestedChild === '..' || requestedChild.startsWith(`..${sep}`) || isAbsolute(requestedChild)) {
+    throw new Error('artifact path is outside the repository')
+  }
+  const lexical = resolve(realRepository, requestedChild)
+  const child = relative(approved, lexical)
+  if (!child || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('artifact path is outside the approved browser-quality directory')
+  }
+  const repositoryChild = relative(realRepository, lexical)
+  let current = realRepository
+  for (const component of repositoryChild.split(sep)) {
+    current = resolve(current, component)
+    if (!existsSync(current)) continue
+    const stat = lstatSync(current)
+    if (stat.isSymbolicLink()) throw new Error('artifact path may not use symlink components')
+    if (current !== lexical && !stat.isDirectory()) throw new Error('artifact path parent is not a directory')
+    if (current === lexical && !stat.isFile()) throw new Error('existing artifact target is not a regular file')
+  }
+  if (existsSync(approved) && realpathSync(approved) !== approved) {
+    throw new Error('approved artifact directory is not canonical')
+  }
+  return lexical
+}
+
+export const assertDistinctArtifactPaths = (left, right) => {
+  const leftPath = resolve(left)
+  const rightPath = resolve(right)
+  const caseFoldAlias = leftPath.toLocaleLowerCase('en-US') === rightPath.toLocaleLowerCase('en-US')
+  const fileIdentityAlias = existsSync(leftPath) && existsSync(rightPath)
+    && (() => {
+      const leftStat = statSync(leftPath)
+      const rightStat = statSync(rightPath)
+      return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino
+    })()
+  if (leftPath === rightPath || caseFoldAlias || fileIdentityAlias) {
+    throw new Error('browser evidence output and build manifest must resolve to distinct files')
+  }
+}
+
+export const writeBrowserArtifact = (repositoryRoot, value, document) => {
+  let target = resolveApprovedArtifactPath(repositoryRoot, value)
+  mkdirSync(dirname(target), { recursive: true })
+  target = resolveApprovedArtifactPath(repositoryRoot, target)
+  if (realpathSync(dirname(target)) !== dirname(target)) {
+    throw new Error('artifact parent directory is not canonical')
+  }
+  const temporary = join(
+    dirname(target),
+    `.${basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  )
+  let descriptor
+  try {
+    const serialized = `${JSON.stringify(redactEvidence(document), null, 2)}\n`
+    if (Buffer.byteLength(serialized) > EVIDENCE_MAX_BYTES) {
+      throw new Error('browser artifact exceeds bounded retention size')
+    }
+    descriptor = openSync(temporary, 'wx', 0o600)
+    writeFileSync(descriptor, serialized)
+    fsyncSync(descriptor)
+    closeSync(descriptor)
+    descriptor = undefined
+    resolveApprovedArtifactPath(repositoryRoot, target)
+    renameSync(temporary, target)
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor)
+    if (existsSync(temporary)) rmSync(temporary)
+  }
+  return target
+}
+
+export const BROWSER_OVERFLOW_AUDIT_EXPRESSION = `(() => {
+  const viewportLeft = visualViewport?.offsetLeft ?? 0;
+  const viewportWidth = visualViewport?.width ?? document.documentElement.clientWidth;
+  const viewportRight = viewportLeft + viewportWidth;
+  const documentExtent = Math.max(
+    0,
+    document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    (document.body?.scrollWidth ?? 0) - document.documentElement.clientWidth,
+  );
+  const ancestorCache = new WeakMap();
+  const clippedByAncestor = (element, rect) => {
+    for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      let ancestor = ancestorCache.get(parent);
+      if (!ancestor) {
+        ancestor = { overflow_x: getComputedStyle(parent).overflowX, rect: parent.getBoundingClientRect() };
+        ancestorCache.set(parent, ancestor);
+      }
+      if (!['auto', 'scroll', 'hidden', 'clip'].includes(ancestor.overflow_x)) continue;
+      if (rect.right > ancestor.rect.right + .5 || rect.left < ancestor.rect.left - .5) return true;
+    }
+    return false;
+  };
+  const clippedByOwnPaint = (style) => {
+    const clip = String(style.clip || '').replace(/\\s+/g, '').toLowerCase();
+    const clipPath = String(style.clipPath || '').replace(/\\s+/g, '').toLowerCase();
+    return clip === 'rect(0px,0px,0px,0px)' || clip === 'rect(0,0,0,0)'
+      || clipPath === 'inset(50%)' || clipPath === 'inset(100%)';
+  };
+  const offenders = [], excluded = [];
+  let visibleOverflow = 0, offenderCount = 0, excludedCount = 0;
+  for (const element of document.querySelectorAll('body *')) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+    if (rect.right <= viewportRight + .5 && rect.left >= viewportLeft - .5) continue;
+    const style = getComputedStyle(element);
+    const rendered = typeof element.checkVisibility === 'function'
+      ? element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      : style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+    if (!rendered) continue;
+    const row = {
+      tag: element.tagName.toLowerCase(), id: element.id || null,
+      class_name: String(element.className || '').slice(0, 120),
+      left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
+    };
+    if (clippedByOwnPaint(style)) {
+      excludedCount += 1;
+      if (excluded.length < 25) excluded.push({ ...row, reason: 'own_zero_area_paint_clip' });
+      continue;
+    }
+    if (clippedByAncestor(element, rect)) {
+      excludedCount += 1;
+      if (excluded.length < 25) excluded.push({ ...row, reason: 'contained_horizontal_scroller_or_clip' });
+      continue;
+    }
+    offenderCount += 1;
+    visibleOverflow = Math.max(visibleOverflow, row.right - viewportRight, viewportLeft - row.left);
+    if (offenders.length < 25) offenders.push(row);
+  }
+  return {
+    visible_overflow_px: Math.max(0, Math.ceil(visibleOverflow)),
+    document_extent_overflow_px: Math.ceil(documentExtent),
+    offender_count: offenderCount,
+    excluded_count: excludedCount,
+    offenders,
+    excluded_nonvisual_or_contained: excluded,
+  };
+})()`
 
 export const parseRgb = (value) => {
   const match = String(value).match(/^rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i)
@@ -303,6 +553,12 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
   const errors = []
   if (evidence?.schema_version !== BROWSER_QUALITY_SCHEMA_VERSION) errors.push('schema version is invalid')
   const viewports = Array.isArray(evidence?.viewports) ? evidence.viewports : []
+  const viewportIds = viewports.map((viewport) => viewport?.id)
+  if (viewportIds.length !== RESPONSIVE_VIEWPORTS.length
+    || new Set(viewportIds).size !== viewportIds.length
+    || RESPONSIVE_VIEWPORTS.some((viewport) => !viewportIds.includes(viewport.id))) {
+    errors.push('viewport inventory is not exact and unique')
+  }
   for (const expected of RESPONSIVE_VIEWPORTS) {
     const actual = viewports.find((viewport) => viewport.id === expected.id)
     if (!actual) {
@@ -312,8 +568,11 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     if (actual.width !== expected.width || actual.height !== expected.height) {
       errors.push(`${expected.id} viewport dimensions changed`)
     }
-    if (actual.overflow_measurement?.visible_overflow_px !== actual.horizontal_overflow_px
-      || !Number.isFinite(actual.overflow_measurement?.document_extent_overflow_px)
+    if (!Number.isInteger(actual.horizontal_overflow_px) || actual.horizontal_overflow_px < 0
+      || !Number.isInteger(actual.overflow_measurement?.visible_overflow_px)
+      || actual.overflow_measurement.visible_overflow_px < 0
+      || actual.overflow_measurement.visible_overflow_px !== actual.horizontal_overflow_px
+      || !Number.isInteger(actual.overflow_measurement?.document_extent_overflow_px)
       || actual.overflow_measurement.document_extent_overflow_px < 0) {
       errors.push(`${expected.id} has invalid overflow measurement provenance`)
     }
@@ -330,12 +589,32 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     }
     if (actual.readiness?.transcript_events_rendered < 250) errors.push(`${expected.id} did not render 250 transcript events`)
     if (actual.readiness?.search_matches_rendered !== 5) errors.push(`${expected.id} did not render the five expected search matches`)
-    if (actual.journeys?.length !== 12 || actual.journeys.some((journey) => !journey.accessibility)) {
+    const journeys = Array.isArray(actual.journeys) ? actual.journeys : []
+    const journeyNames = journeys.map((journey) => journey?.name)
+    if (journeyNames.length !== BROWSER_JOURNEYS.length
+      || new Set(journeyNames).size !== journeyNames.length
+      || canonicalJson(journeyNames) !== canonicalJson(BROWSER_JOURNEYS)) {
+      errors.push(`${expected.id} journey inventory is not exact and unique`)
+    }
+    if (journeys.length !== BROWSER_JOURNEYS.length || journeys.some((journey) => !journey.accessibility)) {
       errors.push(`${expected.id} is missing per-journey accessibility evidence`)
     }
-    for (const journey of actual.journeys ?? []) {
-      for (const mode of ['pointer', 'keyboard']) {
-        if (journey.interaction_modes?.[mode]?.passed !== true) errors.push(`${expected.id} ${journey.name} failed independent ${mode} interaction`)
+    for (const journey of journeys) {
+      const isolationIds = []
+      for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
+        if (mode !== 'dom_fallback' && journey.interaction_modes?.[mode]?.passed !== true) {
+          errors.push(`${expected.id} ${journey.name} failed independent ${mode} interaction`)
+        }
+        const reset = journey.interaction_modes?.[mode]?.reset
+        if (reset?.strategy !== 'fresh_page_navigation'
+          || !/^[a-f0-9]{64}$/.test(String(reset?.loader_sha256 ?? ''))) {
+          errors.push(`${expected.id} ${journey.name} ${mode} lacks fresh navigation isolation`)
+        } else {
+          isolationIds.push(reset.loader_sha256)
+        }
+      }
+      if (new Set(isolationIds).size !== 3) {
+        errors.push(`${expected.id} ${journey.name} interaction modes do not have unique page lifecycles`)
       }
       const keyboardEvidence = journey.interaction_modes?.keyboard?.action_evidence
       if (keyboardEvidence?.focus_acquisition !== 'tab_navigation'
@@ -389,7 +668,9 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     errors.push('evidence is missing build artifact identity')
   }
   if (!/^[a-f0-9]{40}$/.test(String(evidence?.source?.commit ?? ''))) errors.push('evidence source commit is invalid')
-  if (evidence?.source?.source_status !== 'clean'
+  if (typeof evidence?.source?.repository !== 'string' || !evidence.source.repository
+    || evidence?.source?.binding_status !== 'passed_preflight_and_final'
+    || evidence?.source?.source_status !== 'clean'
     || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.source_tree_sha256 ?? ''))
     || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.build_manifest_sha256 ?? ''))) {
     errors.push('evidence source binding is incomplete')
@@ -397,8 +678,26 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
   if (!/^[a-f0-9]{64}$/.test(String(evidence?.sha256 ?? '')) || evidence.sha256 !== verifiableDocumentDigest(evidence)) {
     errors.push('evidence digest is invalid')
   }
+  if (evidence?.schema_version === BROWSER_QUALITY_SCHEMA_VERSION) {
+    const retainedErrors = Array.isArray(evidence.validation_errors) ? evidence.validation_errors : null
+    if (!retainedErrors || !evidence?.gate_result) {
+      errors.push('evidence gate result binding is missing')
+    } else {
+      const expectedStatus = retainedErrors.length ? 'failed' : 'passed'
+      if (!['passed', 'failed'].includes(evidence.gate_result.status)
+        || evidence.gate_result.status !== expectedStatus
+        || evidence.gate_result.validation_error_count !== retainedErrors.length
+        || evidence.gate_result.validation_errors_sha256 !== evidenceDigest(retainedErrors)) {
+        errors.push('evidence gate result binding is invalid')
+      }
+    }
+  }
   if (canonicalJson(evidence) !== canonicalJson(redactEvidence(evidence))) {
     errors.push('evidence contains secret-shaped fields or values')
+  }
+  if (evidenceBoundaryViolations(evidence)
+    || Buffer.byteLength(canonicalJson(evidence)) > EVIDENCE_MAX_BYTES) {
+    errors.push('evidence exceeds bounded retention limits')
   }
   return errors
 }
