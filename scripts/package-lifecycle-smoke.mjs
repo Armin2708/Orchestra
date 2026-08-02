@@ -343,6 +343,58 @@ const assertPreservedDomainData = (evidence, expected) => {
   invariant(evidence.active_card_count > 0, 'preserved Orchestra active work is missing')
 }
 
+const exercisePackagedBackup = (
+  consumerDirectory,
+  stateDirectory,
+  lifecycleRoot,
+  environment,
+  expected,
+) => {
+  const backupScript = join(
+    consumerDirectory,
+    'node_modules',
+    packageName,
+    'scripts',
+    'backup-orchestra-state.sh',
+  )
+  const scriptStat = lstatSync(backupScript)
+  invariant(
+    scriptStat.isFile() && !scriptStat.isSymbolicLink(),
+    'installed package backup script is not one regular file',
+  )
+  const backupDirectory = join(lifecycleRoot, 'backup')
+  mkdirSync(backupDirectory, { mode: 0o700 })
+  const backupPath = join(backupDirectory, 'orchestra.backup.db')
+  const backupRun = run('bash', [backupScript, backupPath], { env: environment })
+  const checksumPath = `${backupPath}.sha256`
+  const backupStat = lstatSync(backupPath)
+  const checksumStat = lstatSync(checksumPath)
+  invariant(
+    backupStat.isFile() && !backupStat.isSymbolicLink() &&
+    checksumStat.isFile() && !checksumStat.isSymbolicLink(),
+    'packaged backup did not create regular database and checksum files',
+  )
+  invariant(
+    (backupStat.mode & 0o777) === 0o600 && (checksumStat.mode & 0o777) === 0o600,
+    'packaged backup database and checksum modes are not 600',
+  )
+  const backupSha256 = sha256(readFileSync(backupPath))
+  invariant(
+    readFileSync(checksumPath, 'utf8') === `${backupSha256}  ${backupPath}\n`,
+    'packaged backup checksum does not bind the retained backup path and bytes',
+  )
+  const evidence = captureDatabaseEvidence(backupPath)
+  assertPreservedDomainData(evidence, expected)
+  return {
+    script_path: `node_modules/${packageName}/scripts/backup-orchestra-state.sh`,
+    database_sha256: backupSha256,
+    integrity_check: evidence.integrity_check,
+    active_work_preserved: evidence.active_card_count > 0,
+    output_contract: backupRun.stdout.trim().split(/\r?\n/).sort(),
+    passed: true,
+  }
+}
+
 const snapshotDomainData = (executable, projectDirectory, environment) =>
   JSON.parse(run(executable, ['snapshot', '--full'], {
     cwd: projectDirectory,
@@ -577,6 +629,13 @@ export async function runPackageLifecycle({
       'candidate upgrade reduced the Orchestra schema version',
     )
     invariant(readFileSync(artifactMarkerPath, 'utf8') === artifactMarker, 'artifact changed during upgrade')
+    const packagedBackup = exercisePackagedBackup(
+      consumerDirectory,
+      stateDirectory,
+      root,
+      isolatedEnvironment,
+      expected,
+    )
 
     let rollback = {
       observed: false,
@@ -710,6 +769,7 @@ export async function runPackageLifecycle({
       provider_hooks_reversible: true,
       data_preservation: {
         actual_orchestra_database: true,
+        packaged_backup: packagedBackup,
         schema_before: beforeUpgrade,
         schema_after_upgrade: afterUpgrade,
         schema_after_uninstall: afterUninstall,

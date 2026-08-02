@@ -28,6 +28,15 @@ const requiredPackageFiles = [
   'hooks/hooks.json',
   'package.json',
   'docs/beta-release-operations.md',
+  'docs/api-event-schema-v1.md',
+  'docs/data-recovery.md',
+  'docs/getting-started.md',
+  'docs/lifecycle-demo.md',
+  'docs/remote-access-security.md',
+  'docs/telemetry-support.md',
+  'docs/troubleshooting.md',
+  'docs/upgrade-compatibility.md',
+  'scripts/backup-orchestra-state.sh',
   'web/dist/index.html',
 ]
 

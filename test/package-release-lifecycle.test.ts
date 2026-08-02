@@ -52,6 +52,12 @@ else if(args[0]==='serve'){const db=database();ensureBoard(db);db.close();const 
 else process.exitCode=1;
 `)
   fs.chmodSync(path.join(directory, 'cli.js'), 0o755)
+  fs.mkdirSync(path.join(directory, 'scripts'))
+  fs.copyFileSync(
+    path.join(root, 'scripts', 'backup-orchestra-state.sh'),
+    path.join(directory, 'scripts', 'backup-orchestra-state.sh'),
+  )
+  fs.chmodSync(path.join(directory, 'scripts', 'backup-orchestra-state.sh'), 0o755)
   const output = execFileSync(
     'npm',
     ['pack', '--ignore-scripts', '--silent', '--json'],
@@ -201,7 +207,16 @@ describe('QA-017 package lifecycle harness', () => {
       idempotency_reinstall: { observed: true, passed: true, explicitly_not_upgrade_evidence: true },
       upgrade: { observed: false, passed: false, mode: 'same-artifact-idempotency' },
       rollback: { observed: false, passed: false },
-      data_preservation: { actual_orchestra_database: true, active_work_preserved: true },
+      data_preservation: {
+        actual_orchestra_database: true,
+        active_work_preserved: true,
+        packaged_backup: {
+          script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
+          integrity_check: 'ok',
+          active_work_preserved: true,
+          passed: true,
+        },
+      },
       state_preserved_after_upgrade: true,
       state_preserved_after_uninstall: true,
       project_preserved_after_uninstall: true,
