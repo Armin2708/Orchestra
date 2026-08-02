@@ -17,6 +17,7 @@ import {
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  performanceSampleForJourney,
   redactEvidence,
   resolveApprovedEvidencePath,
   validateBaselineAgainstCaptures,
@@ -29,6 +30,8 @@ import {
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const defaultChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const timeoutMs = 20_000
+const asynchronousReadinessTimeoutMs = 10_000
+const interactionReadinessTimeoutMs = 4_000
 const defaultArtifactRoot = join(repositoryRoot, 'artifacts', 'qa', 'browser-quality')
 
 const parseArgs = (argv) => {
@@ -400,6 +403,24 @@ const keyboardActivate = async (client, selector, label) => {
   await dispatchKey(client, 'Enter')
 }
 
+const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) => {
+  const isFocused = () => evaluate(client, `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    return target instanceof HTMLElement && document.activeElement === target;
+  })()`)
+  let tabEvents = 0
+  if (await isFocused()) {
+    await dispatchKey(client, 'Tab', { shift: true })
+    tabEvents += 1
+  }
+  for (let index = 0; index < maximumTabs; index += 1) {
+    await dispatchKey(client, 'Tab')
+    tabEvents += 1
+    if (await isFocused()) return tabEvents
+  }
+  throw new Error(`could not reach ${label} through keyboard navigation`)
+}
+
 const robustActivate = async (client, selector, label, mobile = false) => {
   await pointerClick(client, selector, label, mobile)
   await keyboardActivate(client, selector, label)
@@ -730,38 +751,47 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const resetJourney = async (name, mode) => {
     await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
   }
-  const modeReady = async (expression) => {
-    const deadline = Date.now() + 750
-    while (Date.now() < deadline) {
-      if (await evaluate(client, expression)) return true
+  const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
+    const deadline = performance.now() + readinessTimeoutMs
+    let consecutiveMatches = 0
+    while (performance.now() < deadline) {
+      if (await evaluate(client, expression)) {
+        consecutiveMatches += 1
+        if (consecutiveMatches >= 2) return true
+      } else {
+        consecutiveMatches = 0
+      }
       await delay(40)
     }
     return false
   }
-  const assertModeReady = async (expression, label) => {
-    if (!await modeReady(expression)) throw new Error(`${label} readiness did not pass`)
+  const assertModeReady = async (expression, label, readinessTimeoutMs = asynchronousReadinessTimeoutMs) => {
+    if (!await modeReady(expression, readinessTimeoutMs)) throw new Error(`${label} readiness did not pass`)
   }
   const recordJourney = async (name, action, ready, prepare = async () => {}) => {
     const interactionModes = {}
-    let elapsed = 0
     for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
       await resetJourney(name, mode)
       await prepare(mode)
       const started = performance.now()
       let error = null
-      try { await action(mode) } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
+      let actionEvidence = null
+      try { actionEvidence = await action(mode) ?? null } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
       const passed = !error && await modeReady(ready)
       const modeElapsed = performance.now() - started
-      if (mode === 'dom_fallback') elapsed = modeElapsed
       interactionModes[mode] = {
         passed,
         readiness_asserted: ready,
         elapsed_ms: modeElapsed,
         error,
+        action_evidence: actionEvidence,
         counts_toward_pass: mode !== 'dom_fallback',
+        performance_eligible: mode === 'pointer',
+        diagnostic_only: mode === 'dom_fallback',
         reset: 'separate DOM setup state; setup never counts toward mode success',
       }
     }
+    const elapsed = performanceSampleForJourney(interactionModes)
     const overflow = await horizontalOverflow(client)
     overflowSamples.push(overflow)
     const accessibility = await auditSurface(client)
@@ -769,6 +799,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       name,
       passed: interactionModes.pointer.passed && interactionModes.keyboard.passed,
       elapsed_ms: elapsed,
+      performance_sample_mode: 'pointer',
       horizontal_overflow_px: overflow,
       interaction_modes: interactionModes,
       accessibility,
@@ -803,19 +834,34 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const search = await recordJourney(
     'conversation search',
     async (mode) => {
-      await pointerClick(client, '.ah-search input', 'conversation search input', viewport.mobile)
-      const focused = await evaluate(client, `(() => {
-        const input = document.querySelector('.ah-search input');
-        if (!(input instanceof HTMLInputElement)) return false;
-        if (document.activeElement !== input) input.focus();
-        return document.activeElement === input;
-      })()`)
+      if (mode === 'pointer') {
+        await pointerClick(client, '.ah-search input', 'conversation search input', viewport.mobile)
+      } else if (mode === 'keyboard') {
+        const tabEvents = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
+        await typeText(client, 'quality')
+        await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
+        await delay(50)
+        await dispatchKey(client, 'Enter')
+        await assertModeReady(`(() => {
+          const events = [...document.querySelectorAll('.ah-event')];
+          return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'));
+        })()`, 'five rendered search results')
+        return { focus_acquisition: 'tab_navigation', tab_events: tabEvents }
+      } else {
+        const focusedByFallback = await evaluate(client, `(() => {
+          const input = document.querySelector('.ah-search input');
+          if (!(input instanceof HTMLInputElement)) return false;
+          input.focus();
+          return document.activeElement === input;
+        })()`)
+        if (!focusedByFallback) throw new Error('DOM fallback could not focus conversation search input')
+      }
+      const focused = await evaluate(client, `document.activeElement === document.querySelector('.ah-search input')`)
       if (!focused) throw new Error('conversation search input could not receive focus')
       await typeText(client, 'quality')
       await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
       await delay(50)
       if (mode === 'pointer') await pointerClick(client, '.ah-search button[type="submit"]', 'Search', viewport.mobile)
-      else if (mode === 'keyboard') await dispatchKey(client, 'Enter')
       else {
         const submitted = await evaluate(client, `(() => {
           const form = document.querySelector('.ah-search');
@@ -828,6 +874,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         const events = [...document.querySelectorAll('.ah-event')];
         return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'));
       })()`, 'five rendered search results')
+      return mode === 'pointer'
+        ? { focus_acquisition: 'pointer' }
+        : { focus_acquisition: 'dom_fallback' }
     },
     `(() => {
       const events = [...document.querySelectorAll('.ah-event')];
@@ -894,7 +943,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const metrics = { startup, snapshot_loading: snapshot, transcript_loading: transcript, graph_view: graph, search }
   const performanceEvidence = Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => {
     const observed = surface === 'startup' ? metrics.startup : metrics[surface]
-    return [surface, { observed_ms: observed, ...budgetFor(baseline, viewport.id, surface) }]
+    const measurementMode = surface === 'startup' ? 'navigation_timing'
+      : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
+    return [surface, {
+      observed_ms: observed,
+      measurement_mode: measurementMode,
+      ...budgetFor(baseline, viewport.id, surface),
+    }]
   }))
   const maximumOverflow = Math.max(0, ...overflowSamples, await horizontalOverflow(client))
   return redactEvidence({
@@ -1039,6 +1094,7 @@ const main = async () => {
         isolation: 'disposable Orchestra home and Chrome profile on loopback with token authentication enabled',
         fixture_transport: 'board, agents, card, workspace, canonical job/session, profile, conversation, and events created through authenticated public APIs',
         failure_artifacts: 'bounded redacted JSON only; no page HTML, response body, transcript, storage, or screenshot capture',
+        interaction_readiness: `two consecutive 40ms observations; ${interactionReadinessTimeoutMs}ms interaction bound and ${asynchronousReadinessTimeoutMs}ms asynchronous render bound`,
         budgets: options.captureOnly
           ? 'observation-only: no budget is derived from this run'
           : 'explicit beta experience ceilings bounded by a checked three-run regression baseline',

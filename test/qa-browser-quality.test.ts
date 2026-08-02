@@ -17,6 +17,7 @@ import {
   checkedBudget,
   deriveRegressionBudgetMs,
   evidenceDigest,
+  performanceSampleForJourney,
   redactEvidence,
   resolveApprovedEvidencePath,
   validateBaselineAgainstCaptures,
@@ -42,16 +43,23 @@ const passingEvidence = () => {
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     readiness: { graph_agents_rendered: 18, transcript_events_rendered: 250, search_matches_rendered: 5 },
     journeys: Array.from({ length: 12 }, (_, index) => ({
-      name: `journey-${index}`,
+      name: index === 0 ? 'conversation search' : `journey-${index}`,
       interaction_modes: {
-        pointer: { passed: true, counts_toward_pass: true },
-        keyboard: { passed: true, counts_toward_pass: true },
-        dom_fallback: { passed: true, counts_toward_pass: false },
+        pointer: { passed: true, counts_toward_pass: true, elapsed_ms: 10, performance_eligible: true, diagnostic_only: false },
+        keyboard: {
+          passed: true, counts_toward_pass: true, elapsed_ms: 20, performance_eligible: false, diagnostic_only: false,
+          action_evidence: index === 0 ? { focus_acquisition: 'tab_navigation', tab_events: 3 } : null,
+        },
+        dom_fallback: { passed: true, counts_toward_pass: false, elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
       },
+      elapsed_ms: 10,
+      performance_sample_mode: 'pointer',
       accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
       observed_ms: 10,
+      measurement_mode: surface === 'startup' ? 'navigation_timing'
+        : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
       budget_ms: 100,
       budget_source: 'checked_observation',
     }])),
@@ -148,6 +156,19 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       'baseline desktop search samples do not match captures',
       'baseline desktop search p95 does not match captures',
     ]))
+  })
+
+  it('never permits DOM fallback timing to enter retained performance samples', () => {
+    const interactionModes = {
+      pointer: { elapsed_ms: 137, performance_eligible: true },
+      keyboard: { elapsed_ms: 211, performance_eligible: false },
+      dom_fallback: { elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
+    }
+    expect(performanceSampleForJourney(interactionModes)).toBe(137)
+    interactionModes.dom_fallback.elapsed_ms = 99_999
+    expect(performanceSampleForJourney(interactionModes)).toBe(137)
+    interactionModes.dom_fallback.performance_eligible = true
+    expect(() => performanceSampleForJourney(interactionModes)).toThrow(/diagnostic-only/)
   })
 
   it('rejects dirty or stale source identity before trusting build artifacts', () => {

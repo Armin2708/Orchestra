@@ -51,8 +51,11 @@ const loadObservation = (path) => {
     }
     for (const surface of PERFORMANCE_SURFACES) {
       const metric = viewport.performance?.[surface]
+      const expectedMode = surface === 'startup' ? 'navigation_timing'
+        : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
       if (!Number.isFinite(metric?.observed_ms) || metric.observed_ms < 0
-        || metric.budget_ms !== null || metric.budget_source !== 'observation_only') {
+        || metric.budget_ms !== null || metric.budget_source !== 'observation_only'
+        || metric.measurement_mode !== expectedMode) {
         throw new Error(`${approvedPath}: ${viewport.id} ${surface} is not an unbiased observation`)
       }
     }
@@ -85,6 +88,8 @@ const main = () => {
       return [surface, {
         samples_ms: samples,
         observed_p95_ms: observedP95,
+        measurement_mode: surface === 'startup' ? 'navigation_timing'
+          : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
         ...checkedBudget(surface, observedP95),
       }]
     })),
@@ -104,6 +109,7 @@ const main = () => {
       runs: captures.length,
       scenario: 'authenticated public-API fixture; 18 rendered graph agents; 250 seeded events plus provider lifecycle; exactly five rendered search matches',
       budget_policy: 'minimum of explicit beta experience ceiling and max(2x observed p95, observed p95 + 150ms)',
+      performance_attribution: 'navigation startup, authenticated snapshot fetch, and pointer-only user journeys; DOM fallback is diagnostic-only and excluded',
       scope: 'single-host engineering regression baseline; QA-013/QA-014 remain open',
     },
     capture_artifacts: captures.map((capture) => ({

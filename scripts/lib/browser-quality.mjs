@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import { lstatSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 2
-export const BROWSER_BASELINE_SCHEMA_VERSION = 2
+export const BROWSER_QUALITY_SCHEMA_VERSION = 3
+export const BROWSER_BASELINE_SCHEMA_VERSION = 3
 export const BROWSER_BUILD_SCHEMA_VERSION = 2
 
 export const RESPONSIVE_VIEWPORTS = Object.freeze([
@@ -116,6 +116,21 @@ export const checkedBudget = (surface, observedP95Ms) => {
   }
 }
 
+export const performanceSampleForJourney = (interactionModes) => {
+  const pointer = interactionModes?.pointer
+  const fallback = interactionModes?.dom_fallback
+  if (!Number.isFinite(pointer?.elapsed_ms) || pointer.elapsed_ms < 0) {
+    throw new Error('pointer interaction is missing a finite performance sample')
+  }
+  if (pointer.performance_eligible !== true) {
+    throw new Error('pointer interaction is not performance eligible')
+  }
+  if (fallback?.performance_eligible !== false || fallback?.diagnostic_only !== true) {
+    throw new Error('DOM fallback must remain diagnostic-only and performance-ineligible')
+  }
+  return pointer.elapsed_ms
+}
+
 export const validateBuildSourceIdentity = (manifest, current) => {
   const errors = []
   if (manifest?.source_status !== 'clean') errors.push('build manifest source status is not clean')
@@ -215,6 +230,11 @@ export const validatePerformanceBaseline = (baseline) => {
       if (metric.budget_source !== 'checked_observation') {
         errors.push(`baseline ${expected.id} ${surface} budget source is invalid`)
       }
+      const expectedMode = surface === 'startup' ? 'navigation_timing'
+        : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
+      if (metric.measurement_mode !== expectedMode) {
+        errors.push(`baseline ${expected.id} ${surface} measurement mode is invalid`)
+      }
       const expectedBudget = checkedBudget(surface, metric.observed_p95_ms)
       for (const key of ['budget_ms', 'experience_budget_ms', 'regression_budget_ms']) {
         if (metric[key] !== expectedBudget[key]) errors.push(`baseline ${expected.id} ${surface} ${key} is invalid`)
@@ -247,8 +267,11 @@ export const validateBaselineAgainstCaptures = (baseline, captures) => {
       const recomputedP95 = percentile(samples, 0.95)
       const recomputedBudget = checkedBudget(surface, recomputedP95)
       const metric = claimed?.performance?.[surface]
+      const expectedMode = surface === 'startup' ? 'navigation_timing'
+        : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
       if (canonicalJson(metric?.samples_ms) !== canonicalJson(samples)) errors.push(`baseline ${viewport.id} ${surface} samples do not match captures`)
       if (metric?.observed_p95_ms !== recomputedP95) errors.push(`baseline ${viewport.id} ${surface} p95 does not match captures`)
+      if (metric?.measurement_mode !== expectedMode) errors.push(`baseline ${viewport.id} ${surface} measurement mode does not match captures`)
       for (const key of ['budget_ms', 'experience_budget_ms', 'regression_budget_ms', 'budget_source']) {
         if (metric?.[key] !== recomputedBudget[key]) errors.push(`baseline ${viewport.id} ${surface} ${key} does not match captures`)
       }
@@ -290,6 +313,27 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
         errors.push(`${expected.id} ${journey.name} is missing separately labeled DOM fallback evidence`)
       }
+      if (journey.performance_sample_mode !== 'pointer'
+        || journey.elapsed_ms !== journey.interaction_modes?.pointer?.elapsed_ms
+        || journey.interaction_modes?.pointer?.performance_eligible !== true
+        || journey.interaction_modes?.keyboard?.performance_eligible !== false
+        || journey.interaction_modes?.dom_fallback?.performance_eligible !== false
+        || journey.interaction_modes?.dom_fallback?.diagnostic_only !== true) {
+        errors.push(`${expected.id} ${journey.name} has invalid performance-mode attribution`)
+      }
+      if (journey.name === 'conversation search'
+        && (journey.interaction_modes?.keyboard?.action_evidence?.focus_acquisition !== 'tab_navigation'
+          || !Number.isInteger(journey.interaction_modes.keyboard.action_evidence.tab_events)
+          || journey.interaction_modes.keyboard.action_evidence.tab_events < 1)) {
+        errors.push(`${expected.id} conversation search lacks keyboard-only focus acquisition evidence`)
+      }
+    }
+    const expectedMeasurementModes = {
+      startup: 'navigation_timing',
+      snapshot_loading: 'authenticated_fetch',
+      transcript_loading: 'pointer',
+      graph_view: 'pointer',
+      search: 'pointer',
     }
     for (const surface of PERFORMANCE_SURFACES) {
       const result = actual.performance?.[surface]
@@ -300,6 +344,9 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         errors.push(`${expected.id} has invalid ${surface} budget provenance`)
       } else if (requireBudgets && result.observed_ms > result.budget_ms) {
         errors.push(`${expected.id} exceeded ${surface} budget`)
+      }
+      if (result?.measurement_mode !== expectedMeasurementModes[surface]) {
+        errors.push(`${expected.id} ${surface} has invalid performance measurement mode`)
       }
     }
   }
