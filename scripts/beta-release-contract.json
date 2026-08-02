@@ -7,6 +7,25 @@
     "stable_promotion_allowed": false,
     "public_action_requires_human_approval": true
   },
+  "toolchain": {
+    "node": "22.20.0",
+    "npm": "10.9.3",
+    "exact_match_required_for_release_evidence": true
+  },
+  "publication_approval": {
+    "github_environment": "npm-beta",
+    "required_reviewers_minimum": 1,
+    "required_reviewers_verified": false,
+    "external_check": "GitHub environment lookup returned 404 on 2026-08-02; protection is absent or not observable",
+    "workflow_publish_enabled": false,
+    "tag_triggered_publish": false,
+    "enablement_requires": [
+      "observe_npm_beta_environment",
+      "verify_at_least_one_required_reviewer",
+      "review_source_change_enabling_manual_publication",
+      "human_approval_with_exact_commit_digest_evidence_and_rollback"
+    ]
+  },
   "versioning": {
     "semver_prerelease_required": true,
     "tag_must_equal_v_plus_package_version": true,
@@ -33,7 +52,7 @@
       "exact_commit",
       "byte_reproducibility",
       "clean_consumer_lifecycle",
-      "dependency_audit_high_critical_zero",
+      "dependency_audit_moderate_high_critical_zero",
       "artifact_secret_scan",
       "publish_boundary_receipt"
     ]

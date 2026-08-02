@@ -16,8 +16,10 @@ hooks, Claude and Codex plugin manifests, and the environment compatibility cont
 - the source commit, package filename, byte count, SHA-256, npm shasum and npm integrity;
 - the complete npm file inventory and required runtime assets;
 - a second, scripts-disabled pack whose bytes must match exactly;
-- an isolated install/upgrade/uninstall report with data-preservation evidence; and
-- a high/critical dependency audit of the installed artifact.
+- an isolated install/upgrade/uninstall report that queries the real Orchestra SQLite schema,
+  active card, agent and retained artifact before and after the lifecycle; and
+- a moderate/high/critical-zero dependency audit of the clean consumer's resolved production
+  graph, bound to the consumer lockfile digest.
 
 The artifact secret scan runs against the extracted retained package. The publish boundary then
 checks the uploaded artifact identity, exact workflow run, tag/version, complete CI evidence and
@@ -35,11 +37,13 @@ npm run package:artifact
 ```
 
 The command builds once, retains one tarball, proves byte reproducibility, installs it into a new
-consumer, installs and removes both providers' hooks, reinstalls/upgrades, audits dependencies,
-uninstalls the package, and proves that state, unrelated provider configuration and project files
-survive. To exercise a real cross-version upgrade, set `ORCHESTRA_PREVIOUS_PACKAGE` to a retained,
-previously verified tarball. Without it, the harness explicitly reports
-`same-artifact-reinstall`; that is an idempotency rehearsal, not cross-version evidence.
+consumer, installs and removes Claude and Codex hooks independently with provider-specific content,
+reinstalls/upgrades, audits dependencies, uninstalls the package, and proves that the SQLite schema,
+active work, retained artifacts, unrelated provider configuration and project files survive. To
+exercise a real cross-version upgrade and rollback, set `ORCHESTRA_PREVIOUS_PACKAGE` to a retained,
+previously verified tarball with a different version and digest. Without it, the harness reports a
+same-artifact idempotency rehearsal; both the upgrade and rollback gates remain open, and the
+publication verifier rejects the evidence.
 
 The Orchestra package is required to define no `preinstall`, `install`, or `postinstall` script.
 Reviewed native dependencies such as SQLite and PTY bindings still require their own install
@@ -56,11 +60,15 @@ The machine-readable contract is `scripts/beta-release-contract.json`. Promotion
 All migration controls remain off by default until their own gates pass. `stable` is intentionally
 disabled and remains outside this beta task.
 
-The beta package version must be an explicit SemVer prerelease such as `0.1.0-beta.1`, and its Git
-tag must be the exact `v`-prefixed package version. A stable-looking `0.1.0`/`v0.1.0` pair is not a
-beta candidate and the publish job rejects tags without a prerelease suffix. Publication uses
-`npm publish --tag beta`; it must never write the default `latest` tag. The source version remains
-`0.1.0` during preparation because changing it is itself a release action requiring human approval.
+The beta package version must be an explicit SemVer prerelease such as `0.1.0-beta.1`, and any
+approved Git tag must be the exact `v`-prefixed package version. A stable-looking
+`0.1.0`/`v0.1.0` pair is not a beta candidate. The `npm-beta` GitHub environment lookup returned
+404 on 2026-08-02, so required-reviewer protection is absent or unobservable. The publish job is
+therefore unconditionally disabled: neither a prerelease tag nor any other event publishes. After
+an operator verifies at least one required reviewer and approves an explicit source change, the
+retained artifact path is prepared to use `npm publish --tag beta`; it must never write the default
+`latest` tag. The source version remains `0.1.0` during preparation because changing it is itself a
+release action requiring human approval.
 
 Before changing cohorts, retain the exact artifact and evidence, name the cohort, record the one
 control delta, verify backup/restore, and observe install, provider, recovery, token and migration
@@ -100,5 +108,7 @@ for explicit human approval.
 ## Evidence still requiring external systems
 
 Local disposable consumers do not prove public npm/npx availability, npm provenance, a clean Linux
-host, every supported macOS tuple, or credentialed native-provider journeys. Those remain final
-release gates and must cite the retained artifact digest rather than a rebuilt equivalent.
+host, every supported macOS tuple, credentialed native-provider journeys, protected `npm-beta`
+review approval, or cross-version upgrade/rollback unless a distinct retained prior artifact is
+provided. Those remain final release gates and must cite the retained artifact digest rather than a
+rebuilt equivalent.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "evidence_as_of": "2026-07-25",
+  "evidence_as_of": "2026-08-02",
   "fail_closed": true,
   "validated_toolchains": [
     {
@@ -15,43 +15,41 @@
       "npm": "10.9.3"
     },
     {
-      "id": "ubuntu-24.04-x64-node-22.12",
+      "id": "ubuntu-24.04-x64-node-22.20",
       "platform": "linux",
       "arch": "x64",
       "platform_release": null,
       "platform_variant": "ubuntu-24.04",
       "libc": "glibc",
       "evidence_profile": null,
-      "node": "22.12.0",
-      "npm": "10.9.0"
+      "node": "22.20.0",
+      "npm": "10.9.3"
     }
   ],
   "runtime": {
     "node": {
       "validated_versions": [
-        "22.12.0",
         "22.20.0"
       ],
       "experimental_range": {
-        "min_inclusive": "22.12.0",
+        "min_inclusive": "22.20.0",
         "max_exclusive": "23.0.0"
       },
       "evidence": [
-        "2026-07-25 compatibility-container verification: Node 22.12.0 on Ubuntu 24.04 x64/glibc",
+        "Beta exact-toolchain gate: Node 22.20.0 on Ubuntu 24.04 x64/glibc",
         "2026-07-25 host verification: Node 22.20.0 on macOS 26.5.1 (Darwin 25.5.0) arm64"
       ]
     },
     "npm": {
       "validated_versions": [
-        "10.9.0",
         "10.9.3"
       ],
       "experimental_range": {
-        "min_inclusive": "10.9.0",
+        "min_inclusive": "10.9.3",
         "max_exclusive": "11.0.0"
       },
       "evidence": [
-        "https://nodejs.org/en/download/archive/v22.12.0: Node 22.12.0 bundles npm 10.9.0",
+        "Beta exact-toolchain gate: npm 10.9.3 with Node 22.20.0",
         "2026-07-25 host verification: npm 10.9.3 with Node 22.20.0 on macOS 26.5.1"
       ]
     }

@@ -3,8 +3,8 @@
   "backlog_item": "QA-019",
   "workflow": ".github/workflows/ci.yml",
   "runner": "ubuntu-24.04",
-  "node_version": "22.12.0",
-  "npm_version": "10.9.0",
+  "node_version": "22.20.0",
+  "npm_version": "10.9.3",
   "codex_cli_version": "0.144.6",
   "artifact_retention_days": 30,
   "gitleaks": {

@@ -71,7 +71,32 @@ const requiredFiles = [
 for (const required of requiredFiles) {
   if (!packedFiles.has(required)) throw new Error(`package artifact is missing ${required}`)
 }
-const markdownLinks = verifyPackagedMarkdownLinks({ root: process.cwd(), files: packedFiles })
+const extractionDirectory = mkdtempSync(join(tmpdir(), 'orchestra-package-extracted-'))
+let markdownLinks
+try {
+  const inventory = spawnSync('tar', ['-tzf', packagePath], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  if (inventory.status !== 0) throw new Error(inventory.stderr.trim() || 'package inventory failed')
+  const entries = inventory.stdout.split(/\r?\n/).filter(Boolean)
+  if (!entries.every((entry) =>
+    entry === 'package' || entry === 'package/' ||
+    (entry.startsWith('package/') && !entry.split('/').includes('..')))) {
+    throw new Error('package artifact inventory contains an unsafe path')
+  }
+  const extracted = spawnSync('tar', ['-xzf', packagePath, '-C', extractionDirectory], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  if (extracted.status !== 0) throw new Error(extracted.stderr.trim() || 'package extraction failed')
+  markdownLinks = verifyPackagedMarkdownLinks({
+    root: join(extractionDirectory, 'package'),
+    files: packedFiles,
+  })
+} finally {
+  rmSync(extractionDirectory, { recursive: true, force: true })
+}
 
 const reproductionDirectory = mkdtempSync(join(tmpdir(), 'orchestra-package-reproduction-'))
 let reproduction
@@ -127,7 +152,7 @@ try {
   rmSync(reproductionDirectory, { recursive: true, force: true })
 }
 
-const lifecycle = runPackageLifecycle({
+const lifecycle = await runPackageLifecycle({
   artifactPath: packagePath,
   previousArtifactPath: process.env.ORCHESTRA_PREVIOUS_PACKAGE?.trim() || undefined,
 })

@@ -16,13 +16,14 @@ Labels mean:
 
 | Component | Validated | Experimental | Unsupported |
 |---|---|---|---|
-| Node.js | `22.12.0` in the Ubuntu 24.04 x64 compatibility gate; `22.20.0` on Darwin arm64 | other `>=22.12.0 <23` versions | `<22.12.0`, `>=23`, missing, or unparseable |
-| npm | `10.9.0` with the Ubuntu gate's Node release; `10.9.3` on the observed Darwin host | other `>=10.9.0 <11` versions | `<10.9.0`, `>=11`, missing, or unparseable |
+| Node.js | exact `22.20.0` on Ubuntu 24.04 x64 and Darwin arm64 | other `>=22.20.0 <23` versions | `<22.20.0`, `>=23`, missing, or unparseable |
+| npm | exact `10.9.3` with Node `22.20.0` | other `>=10.9.3 <11` versions | `<10.9.3`, `>=11`, missing, or unparseable |
 | Git | functional readiness range `>=2.30.0 <3.0.0`; host-observed with `2.50.1` on Darwin | none | `<2.30.0`, `>=3.0.0`, missing, or unparseable |
 
-Node's official `22.12.0` archive records npm `10.9.0`. The package engines admit the evaluation
-range, while the doctor remains fail-closed unless an exact observed platform + Node + npm tuple
-matches. Known component versions are not combined into untested Cartesian products.
+Release evidence and package lifecycle tests use exact Node `22.20.0` and npm `10.9.3`. The package
+engines admit only later versions in the same major evaluation range, while the doctor remains
+fail-closed unless an exact observed platform + Node + npm tuple matches. Known component versions
+are not combined into untested Cartesian products.
 
 ## Managed providers
 
@@ -98,7 +99,7 @@ evidence.
 |---|---|---|
 | macOS `26.5.1` (Darwin `25.5.0`) / arm64 + Node `22.20.0` + npm `10.9.3` | Validated | focused/full tests, TypeScript, production builds, exact provider doctor on the 2026-07-25 host |
 | Other macOS releases/architectures/toolchain combinations | Experimental | dependency artifacts or individual component evidence only |
-| Ubuntu `24.04` x64/glibc + Node `22.12.0` + npm `10.9.0` | Validated | exact linux/amd64 compatibility-container gate; the repository CI is pinned to the same operating system and toolchain |
+| Ubuntu `24.04` x64/glibc + Node `22.20.0` + npm `10.9.3` | Validated | repository CI is pinned to this exact operating system and toolchain |
 | WSL/WSL2, including Ubuntu `24.04` | Experimental | upstream provider support only; no observed Orchestra terminal/browser/provider gate |
 | Other Linux distributions, musl, arm64, or another toolchain combination | Experimental | dependency artifacts or individual component evidence only |
 | Windows | Unsupported | no clean-machine, native PTY, browser, or managed-provider acceptance gate |

@@ -18,8 +18,8 @@ const validatedProbe = (overrides: Partial<EnvironmentProbe> = {}): EnvironmentP
   platformVariant: 'ubuntu-24.04',
   libc: 'glibc',
   evidenceProfile: null,
-  nodeVersion: 'v22.12.0',
-  npmVersion: '10.9.0',
+  nodeVersion: 'v22.20.0',
+  npmVersion: '10.9.3',
   codexVersion: 'codex-cli 0.144.6',
   claudeSdkVersion: '0.3.212',
   claudeNativePackageVersion: '0.3.212',
@@ -163,8 +163,8 @@ describe('environment compatibility contract', () => {
 
   it('labels unobserved in-range tooling experimental and does not call it ready', () => {
     const report = evaluateEnvironmentCompatibility(validatedProbe({
-      nodeVersion: '22.19.0',
-      npmVersion: '10.9.2',
+      nodeVersion: '22.21.0',
+      npmVersion: '10.9.4',
     }), 'claude')
 
     expect(report.ready).toBe(false)
@@ -173,7 +173,7 @@ describe('environment compatibility contract', () => {
       .toEqual(['node', 'npm', 'toolchain'])
   })
 
-  it('does not validate an unobserved Cartesian product of known component versions', () => {
+  it('validates the one exact release tuple across its observed Darwin evidence', () => {
     const report = evaluateEnvironmentCompatibility(validatedProbe({
       platform: 'darwin',
       arch: 'arm64',
@@ -181,18 +181,18 @@ describe('environment compatibility contract', () => {
       platformVariant: 'darwin-25.5.0',
       libc: null,
       evidenceProfile: null,
-      nodeVersion: '22.12.0',
-      npmVersion: '10.9.0',
+      nodeVersion: '22.20.0',
+      npmVersion: '10.9.3',
     }), 'both')
 
     expect(report.checks.find((check) => check.id === 'platform')?.status).toBe('validated')
     expect(report.checks.find((check) => check.id === 'node')?.status).toBe('validated')
     expect(report.checks.find((check) => check.id === 'npm')?.status).toBe('validated')
     expect(report.checks.find((check) => check.id === 'toolchain')).toMatchObject({
-      status: 'experimental',
+      status: 'validated',
     })
-    expect(report.ready).toBe(false)
-    expect(report.status).toBe('experimental')
+    expect(report.ready).toBe(true)
+    expect(report.status).toBe('validated')
   })
 
   it('keeps other Linux variants and musl experimental outside the observed Ubuntu tuple', () => {
@@ -234,7 +234,7 @@ describe('environment compatibility contract', () => {
   it('proves omitted optional dependencies cannot pass from base SDK metadata alone', () => {
     const collected = collectEnvironmentProbe(process.env, 'claude', {
       probeVersion: (command) => command === 'npm'
-        ? process.versions.node === '22.12.0' ? '10.9.0' : '10.9.3'
+        ? '10.9.3'
         : null,
       readClaudeSdkDescriptor: () => ({
         version: '0.3.212',

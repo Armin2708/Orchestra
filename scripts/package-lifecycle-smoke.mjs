@@ -13,13 +13,17 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
 
 const packageName = 'orchestra-board'
 const sha256Pattern = /^[0-9a-f]{64}$/
+const waitArray = new Int32Array(new SharedArrayBuffer(4))
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message)
 }
+
+const sleep = (milliseconds) => Atomics.wait(waitArray, 0, 0, milliseconds)
 
 const run = (executable, args, options = {}) => {
   const result = spawnSync(executable, args, {
@@ -36,6 +40,9 @@ const run = (executable, args, options = {}) => {
   return result
 }
 
+const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
+
 const artifactIdentity = (artifactPath) => {
   const resolved = resolve(artifactPath)
   const stat = lstatSync(resolved)
@@ -45,45 +52,111 @@ const artifactIdentity = (artifactPath) => {
     path: resolved,
     filename: basename(resolved),
     bytes: stat.size,
-    sha256: createHash('sha256').update(readFileSync(resolved)).digest('hex'),
+    sha256: sha256(readFileSync(resolved)),
   }
 }
-
-const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
-
-const assertPreservedConfiguration = (profileDirectory, codexDirectory, expectHooks) => {
-  const claude = readJson(join(profileDirectory, '.claude', 'settings.json'))
-  const codex = readJson(join(codexDirectory, 'hooks.json'))
-  invariant(claude.keep === 'claude-user-setting', 'Claude user configuration was not preserved')
-  invariant(codex.keep === 'codex-user-setting', 'Codex user configuration was not preserved')
-  const encoded = JSON.stringify({ claude, codex })
-  invariant(
-    encoded.includes('orchestra hook') === expectHooks,
-    expectHooks ? 'provider hooks were not installed' : 'provider hooks were not removed',
-  )
-}
-
-const installArtifact = (consumerDirectory, artifactPath) => run(
-  'npm',
-  [
-    'install',
-    '--no-audit',
-    '--no-fund',
-    '--loglevel=error',
-    artifactPath,
-  ],
-  { cwd: consumerDirectory },
-)
 
 const artifactPackageManifest = (artifactPath) => {
   const extracted = run('tar', ['-xOf', artifactPath, 'package/package.json'])
   const manifest = JSON.parse(extracted.stdout)
   invariant(manifest.name === packageName, 'package artifact has an unexpected package name')
-  invariant(manifest.bin?.orchestra === './dist/cli.js' || manifest.bin?.orchestra === './cli.js', 'package artifact has no orchestra executable')
+  invariant(
+    manifest.bin?.orchestra === './dist/cli.js' || manifest.bin?.orchestra === './cli.js',
+    'package artifact has no orchestra executable',
+  )
+  invariant(
+    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/.test(String(manifest.version ?? '')),
+    'package artifact version is not supported SemVer',
+  )
   for (const lifecycle of ['preinstall', 'install', 'postinstall']) {
     invariant(!manifest.scripts?.[lifecycle], `package artifact defines forbidden ${lifecycle} script`)
   }
   return manifest
+}
+
+const installArtifact = (consumerDirectory, artifactPath) => run(
+  'npm',
+  ['install', '--no-audit', '--no-fund', '--loglevel=error', artifactPath],
+  { cwd: consumerDirectory },
+)
+
+const executablePath = (consumerDirectory) =>
+  join(consumerDirectory, 'node_modules', '.bin', 'orchestra')
+
+const installedVersion = (executable, projectDirectory, environment) =>
+  run(executable, ['--version'], { cwd: projectDirectory, env: environment }).stdout.trim()
+
+const providerHookState = (profileDirectory, codexDirectory) => {
+  const claude = readJson(join(profileDirectory, '.claude', 'settings.json'))
+  const codex = readJson(join(codexDirectory, 'hooks.json'))
+  invariant(claude.keep === 'claude-user-setting', 'Claude user configuration was not preserved')
+  invariant(codex.keep === 'codex-user-setting', 'Codex user configuration was not preserved')
+  const claudeHooks = JSON.stringify(claude.hooks ?? {})
+  const codexHooks = JSON.stringify(codex.hooks ?? {})
+  return {
+    claude: {
+      installed: claudeHooks.includes('orchestra hook'),
+      own_provider: claudeHooks.includes('--provider claude'),
+      cross_provider: claudeHooks.includes('--provider codex'),
+    },
+    codex: {
+      installed: codexHooks.includes('orchestra hook'),
+      own_provider: codexHooks.includes('--provider codex'),
+      cross_provider: codexHooks.includes('--provider claude'),
+    },
+  }
+}
+
+const assertHookState = (profileDirectory, codexDirectory, expected) => {
+  const observed = providerHookState(profileDirectory, codexDirectory)
+  for (const provider of ['claude', 'codex']) {
+    invariant(
+      observed[provider].installed === expected[provider],
+      `${provider} hook installation state is incorrect`,
+    )
+    invariant(
+      observed[provider].cross_provider === false,
+      `${provider} hook configuration contains the other provider`,
+    )
+    invariant(
+      observed[provider].own_provider === expected[provider],
+      `${provider} hook configuration does not contain exact provider content`,
+    )
+  }
+  return observed
+}
+
+const exerciseProviderHooks = (executable, projectDirectory, environment, profileDirectory, codexDirectory) => {
+  run(executable, ['install', '--provider', 'claude'], { cwd: projectDirectory, env: environment })
+  const claudeOnly = assertHookState(profileDirectory, codexDirectory, {
+    claude: true,
+    codex: false,
+  })
+  run(executable, ['install', '--provider', 'codex'], { cwd: projectDirectory, env: environment })
+  const bothIndependent = assertHookState(profileDirectory, codexDirectory, {
+    claude: true,
+    codex: true,
+  })
+  run(executable, ['uninstall', '--provider', 'claude'], { cwd: projectDirectory, env: environment })
+  const codexOnly = assertHookState(profileDirectory, codexDirectory, {
+    claude: false,
+    codex: true,
+  })
+  return { claudeOnly, bothIndependent, codexOnly, passed: true }
+}
+
+const removeRemainingProviderHooks = (
+  executable,
+  projectDirectory,
+  environment,
+  profileDirectory,
+  codexDirectory,
+) => {
+  run(executable, ['uninstall', '--provider', 'codex'], {
+    cwd: projectDirectory,
+    env: environment,
+  })
+  assertHookState(profileDirectory, codexDirectory, { claude: false, codex: false })
 }
 
 const availablePort = () => {
@@ -96,21 +169,96 @@ const availablePort = () => {
   return selected
 }
 
-const waitForHttp = (url, expectedPattern, exited) => {
+const waitForHttp = async (url, expectedPattern, exited) => {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     if (exited()) throw new Error(`installed runtime exited before serving ${url}`)
-    const response = spawnSync(
-      'curl',
-      ['--fail', '--silent', '--show-error', '--max-time', '1', url],
-      { encoding: 'utf8' },
-    )
-    if (response.status === 0 && expectedPattern.test(response.stdout)) return response.stdout
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(1_000) })
+      const body = await response.text()
+      if (response.ok && expectedPattern.test(body)) return body
+    } catch {
+      // The retained runtime has not accepted the handed-off port yet.
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100))
   }
   throw new Error(`installed runtime did not serve ${url}`)
 }
 
-const exerciseInstalledRuntime = (executable, projectDirectory, environment) => {
+const processIsAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false
+    throw error
+  }
+}
+
+const stopDaemonAndWait = async (daemon) => {
+  if (!daemon.pid || daemon.exitCode !== null || daemon.signalCode !== null) return
+  const exited = new Promise((resolveExit) => daemon.once('exit', resolveExit))
+  invariant(daemon.kill('SIGTERM'), `could not send SIGTERM to installed daemon ${daemon.pid}`)
+  const result = await Promise.race([
+    exited.then(() => 'exited'),
+    new Promise((resolveTimeout) => setTimeout(() => resolveTimeout('timeout'), 10_000)),
+  ])
+  invariant(result === 'exited', `installed daemon ${daemon.pid} did not exit after SIGTERM`)
+  invariant(!processIsAlive(daemon.pid), `installed daemon ${daemon.pid} was not reaped after exit`)
+}
+
+const exerciseInstalledRuntimeOnce = async (
+  executable,
+  projectDirectory,
+  environment,
+  onReady,
+) => {
+  const port = availablePort()
+  const runtimeEnvironment = { ...environment, ORCHESTRA_PORT: String(port) }
+  const daemon = spawn(executable, ['serve'], {
+    cwd: projectDirectory,
+    env: runtimeEnvironment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let daemonError = ''
+  let daemonOutput = ''
+  daemon.stderr.on('data', (chunk) => { daemonError += String(chunk) })
+  daemon.stdout.on('data', (chunk) => { daemonOutput += String(chunk) })
+  try {
+    const exited = () => daemon.exitCode !== null || daemon.signalCode !== null
+    const health = await waitForHttp(
+      `http://127.0.0.1:${port}/health`,
+      /"ok"\s*:\s*true/,
+      exited,
+    )
+    const web = await waitForHttp(
+      `http://127.0.0.1:${port}/`,
+      /<html|<!doctype html/i,
+      exited,
+    )
+    const callbackEvidence = onReady?.(runtimeEnvironment)
+    return {
+      doctor_contract: true,
+      daemon_health: JSON.parse(health).ok === true,
+      web_index_served: /<html|<!doctype html/i.test(web),
+      callback_evidence: callbackEvidence ?? null,
+      port_handoff_attempts: 1,
+      graceful_shutdown: true,
+    }
+  } catch (error) {
+    const diagnostics = [daemonError.trim(), daemonOutput.trim()].filter(Boolean).join(' | ')
+    const wrapped = new Error(
+      `${error instanceof Error ? error.message : String(error)}` +
+      `${diagnostics ? `: ${diagnostics}` : ''}` +
+      ` (exit=${daemon.exitCode ?? 'running'}, signal=${daemon.signalCode ?? 'none'})`,
+    )
+    wrapped.cause = diagnostics
+    throw wrapped
+  } finally {
+    await stopDaemonAndWait(daemon)
+  }
+}
+
+const exerciseInstalledRuntime = async (executable, projectDirectory, environment, onReady) => {
   const doctor = run(executable, ['doctor', '--contract'], {
     cwd: projectDirectory,
     env: environment,
@@ -126,47 +274,153 @@ const exerciseInstalledRuntime = (executable, projectDirectory, environment) => 
     'installed doctor returned an invalid environment contract',
   )
 
-  const port = availablePort()
-  const runtimeEnvironment = { ...environment, ORCHESTRA_PORT: String(port) }
-  const daemon = spawn(executable, ['serve'], {
-    cwd: projectDirectory,
-    env: runtimeEnvironment,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  let daemonError = ''
-  let daemonOutput = ''
-  daemon.stderr.on('data', (chunk) => { daemonError += String(chunk) })
-  daemon.stdout.on('data', (chunk) => { daemonOutput += String(chunk) })
-  try {
-    const exited = () => daemon.exitCode !== null || daemon.signalCode !== null
-    const health = waitForHttp(
-      `http://127.0.0.1:${port}/health`,
-      /"ok"\s*:\s*true/,
-      exited,
-    )
-    const web = waitForHttp(
-      `http://127.0.0.1:${port}/`,
-      /<html|<!doctype html/i,
-      exited,
-    )
-    return {
-      doctor_contract: true,
-      daemon_health: JSON.parse(health).ok === true,
-      web_index_served: /<html|<!doctype html/i.test(web),
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const evidence = await exerciseInstalledRuntimeOnce(
+        executable,
+        projectDirectory,
+        environment,
+        onReady,
+      )
+      evidence.port_handoff_attempts = attempt
+      return evidence
+    } catch (error) {
+      lastError = error
+      if (!String(error?.cause ?? '').includes('EADDRINUSE') || attempt === 3) throw error
     }
-  } catch (error) {
-    const diagnostics = [daemonError.trim(), daemonOutput.trim()].filter(Boolean).join(' | ')
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}` +
-      `${diagnostics ? `: ${diagnostics}` : ''}` +
-      ` (exit=${daemon.exitCode ?? 'running'}, signal=${daemon.signalCode ?? 'none'})`,
-    )
+  }
+  throw lastError
+}
+
+const captureDatabaseEvidence = (databasePath) => {
+  invariant(existsSync(databasePath), 'Orchestra database is missing')
+  const database = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try {
+    const schema = database.prepare(`
+      SELECT type, name, COALESCE(sql, '') AS sql
+      FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'
+      ORDER BY type, name
+    `).all()
+    const boards = database.prepare('SELECT id, name FROM boards ORDER BY id').all()
+    const cards = database.prepare(
+      'SELECT id, title, column_name AS column_name FROM cards ORDER BY id',
+    ).all()
+    const agents = database.prepare('SELECT id, name, status FROM agents ORDER BY id').all()
+    return {
+      user_version: Number(database.pragma('user_version', { simple: true })),
+      schema_object_count: schema.length,
+      schema_sha256: sha256(JSON.stringify(schema)),
+      boards,
+      cards,
+      agents,
+      active_card_count: cards.filter((card) => card.column_name !== 'done').length,
+      integrity_check: database.pragma('integrity_check', { simple: true }),
+    }
   } finally {
-    daemon.kill('SIGTERM')
+    database.close()
   }
 }
 
-export function runPackageLifecycle({
+const assertPreservedDomainData = (evidence, expected) => {
+  invariant(evidence.integrity_check === 'ok', 'Orchestra database integrity check failed')
+  invariant(evidence.schema_object_count > 0, 'Orchestra database schema is empty')
+  invariant(
+    evidence.boards.some((board) => board.name === expected.boardName),
+    'preserved Orchestra board is missing',
+  )
+  invariant(
+    evidence.cards.some((card) =>
+      card.title === expected.cardTitle && card.column_name === 'in_progress'),
+    'preserved active Orchestra card is missing',
+  )
+  invariant(
+    evidence.agents.some((agent) => agent.name === expected.agentName),
+    'preserved Orchestra agent is missing',
+  )
+  invariant(evidence.active_card_count > 0, 'preserved Orchestra active work is missing')
+}
+
+const snapshotDomainData = (executable, projectDirectory, environment) =>
+  JSON.parse(run(executable, ['snapshot', '--full'], {
+    cwd: projectDirectory,
+    env: environment,
+  }).stdout)
+
+const assertSnapshot = (snapshot, expected) => {
+  invariant(snapshot.board?.name === expected.boardName, 'runtime snapshot lost the lifecycle board')
+  invariant(
+    snapshot.cards?.some((card) =>
+      card.title === expected.cardTitle && card.column === 'in_progress'),
+    'runtime snapshot lost active work',
+  )
+  invariant(
+    snapshot.agents?.some((agent) => agent.name === expected.agentName),
+    'runtime snapshot lost the lifecycle agent',
+  )
+  return {
+    board_id: snapshot.board.id,
+    card_id: snapshot.cards.find((card) => card.title === expected.cardTitle).id,
+    agent_id: snapshot.agents.find((agent) => agent.name === expected.agentName).id,
+    active_work: true,
+  }
+}
+
+const auditInstalledArtifact = (consumerDirectory, runAudit) => {
+  if (!runAudit) {
+    return {
+      executed: false,
+      info: 0,
+      low: 0,
+      moderate: 0,
+      high: 0,
+      critical: 0,
+      total: 0,
+      resolved_lock_sha256: null,
+      threshold: 'moderate',
+      passed: false,
+    }
+  }
+  const lockPath = join(consumerDirectory, 'package-lock.json')
+  invariant(existsSync(lockPath), 'clean consumer install did not produce a resolved lockfile')
+  const auditRun = spawnSync(
+    'npm',
+    ['audit', '--omit=dev', '--audit-level=moderate', '--json'],
+    {
+      cwd: consumerDirectory,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    },
+  )
+  let report
+  try {
+    report = JSON.parse(auditRun.stdout)
+  } catch {
+    throw new Error(auditRun.stderr.trim() || 'package artifact audit did not return JSON')
+  }
+  const vulnerabilities = report.metadata?.vulnerabilities ?? {}
+  const audit = {
+    executed: true,
+    info: Number(vulnerabilities.info ?? 0),
+    low: Number(vulnerabilities.low ?? 0),
+    moderate: Number(vulnerabilities.moderate ?? 0),
+    high: Number(vulnerabilities.high ?? 0),
+    critical: Number(vulnerabilities.critical ?? 0),
+    total: Number(vulnerabilities.total ?? 0),
+    resolved_lock_sha256: sha256(readFileSync(lockPath)),
+    threshold: 'moderate',
+    passed: auditRun.status === 0,
+  }
+  invariant(
+    audit.moderate === 0 && audit.high === 0 && audit.critical === 0 && auditRun.status === 0,
+    `package artifact audit found ${audit.moderate} moderate, ${audit.high} high, and ${audit.critical} critical vulnerabilities`,
+  )
+  invariant(sha256Pattern.test(audit.resolved_lock_sha256), 'resolved consumer lock digest is invalid')
+  return audit
+}
+
+export async function runPackageLifecycle({
   artifactPath,
   previousArtifactPath,
   reportPath,
@@ -174,29 +428,34 @@ export function runPackageLifecycle({
   runAudit = true,
 } = {}) {
   const artifact = artifactIdentity(artifactPath)
-  artifactPackageManifest(artifact.path)
-  const previous = previousArtifactPath
-    ? artifactIdentity(previousArtifactPath)
-    : artifact
-  artifactPackageManifest(previous.path)
+  const artifactManifest = artifactPackageManifest(artifact.path)
+  const previous = previousArtifactPath ? artifactIdentity(previousArtifactPath) : artifact
+  const previousManifest = artifactPackageManifest(previous.path)
+  const crossVersion =
+    previous.path !== artifact.path &&
+    previous.sha256 !== artifact.sha256 &&
+    previousManifest.version !== artifactManifest.version
+
   const root = mkdtempSync(join(tmpdir(), 'orchestra-package-lifecycle-'))
   const consumerDirectory = join(root, 'consumer')
   const profileDirectory = join(root, 'profile')
   const codexDirectory = join(root, 'codex-profile')
   const stateDirectory = join(root, 'orchestra-state')
   const projectDirectory = join(root, 'project')
-  const stateMarkerPath = join(stateDirectory, 'data-preservation-marker.json')
+  const databasePath = join(stateDirectory, 'orchestra.db')
+  const artifactMarkerPath = join(stateDirectory, 'artifacts', 'lifecycle', 'retained.txt')
   const projectMarkerPath = join(projectDirectory, 'user-project-marker.txt')
-  const marker = {
-    schema_version: 1,
-    owner: 'clean-consumer-fixture',
-    contents: 'must survive package upgrade and uninstall',
+  const expected = {
+    boardName: basename(projectDirectory),
+    cardTitle: 'Preserve active package lifecycle work',
+    agentName: 'lifecycle-agent',
   }
+  const artifactMarker = 'preserve this Orchestra artifact across upgrade, rollback, and uninstall\n'
 
   mkdirSync(consumerDirectory, { recursive: true })
   mkdirSync(join(profileDirectory, '.claude'), { recursive: true })
   mkdirSync(codexDirectory, { recursive: true })
-  mkdirSync(stateDirectory, { recursive: true })
+  mkdirSync(join(stateDirectory, 'artifacts', 'lifecycle'), { recursive: true })
   mkdirSync(projectDirectory, { recursive: true })
   writeFileSync(
     join(consumerDirectory, 'package.json'),
@@ -210,7 +469,7 @@ export function runPackageLifecycle({
     join(codexDirectory, 'hooks.json'),
     '{"keep":"codex-user-setting","hooks":{}}\n',
   )
-  writeFileSync(stateMarkerPath, `${JSON.stringify(marker, null, 2)}\n`)
+  writeFileSync(artifactMarkerPath, artifactMarker)
   writeFileSync(projectMarkerPath, 'preserve this project file\n')
 
   const isolatedEnvironment = {
@@ -223,106 +482,221 @@ export function runPackageLifecycle({
 
   try {
     installArtifact(consumerDirectory, previous.path)
-    const executable = join(consumerDirectory, 'node_modules', '.bin', 'orchestra')
+    const executable = executablePath(consumerDirectory)
     invariant(existsSync(executable), 'clean install did not expose the orchestra executable')
-    const installedVersion = run(executable, ['--version'], {
-      cwd: projectDirectory,
-      env: isolatedEnvironment,
-    }).stdout.trim()
-    const runtime = exerciseInstalledRuntime(executable, projectDirectory, isolatedEnvironment)
-    run(executable, ['install', '--provider', 'both'], {
-      cwd: projectDirectory,
-      env: isolatedEnvironment,
-    })
-    assertPreservedConfiguration(profileDirectory, codexDirectory, true)
-
-    installArtifact(consumerDirectory, artifact.path)
-    const upgradedVersion = run(executable, ['--version'], {
-      cwd: projectDirectory,
-      env: isolatedEnvironment,
-    }).stdout.trim()
+    const priorInstalledVersion = installedVersion(executable, projectDirectory, isolatedEnvironment)
     invariant(
-      JSON.stringify(readJson(stateMarkerPath)) === JSON.stringify(marker),
-      'state data changed during package upgrade',
+      priorInstalledVersion === previousManifest.version,
+      'prior installed version does not match the prior artifact manifest',
     )
 
-    let audit = { executed: false, high: 0, critical: 0, passed: false }
-    if (runAudit) {
-      const auditRun = spawnSync(
-        'npm',
-        ['audit', '--omit=dev', '--audit-level=high', '--json'],
-        {
-          cwd: consumerDirectory,
-          encoding: 'utf8',
-          maxBuffer: 32 * 1024 * 1024,
-        },
+    const initialRuntime = await exerciseInstalledRuntime(
+      executable,
+      projectDirectory,
+      isolatedEnvironment,
+      (runtimeEnvironment) => {
+        run(executable, ['join', '--force', '--name', expected.agentName], {
+          cwd: projectDirectory,
+          env: runtimeEnvironment,
+        })
+        run(executable, [
+          'card', 'create', expected.cardTitle,
+          '--paths', 'docs/beta-release-operations.md',
+          '--column', 'in_progress',
+          '--agent', expected.agentName,
+        ], { cwd: projectDirectory, env: runtimeEnvironment })
+        return assertSnapshot(
+          snapshotDomainData(executable, projectDirectory, runtimeEnvironment),
+          expected,
+        )
+      },
+    )
+    const hooks = exerciseProviderHooks(
+      executable,
+      projectDirectory,
+      isolatedEnvironment,
+      profileDirectory,
+      codexDirectory,
+    )
+    const beforeUpgrade = captureDatabaseEvidence(databasePath)
+    assertPreservedDomainData(beforeUpgrade, expected)
+
+    installArtifact(consumerDirectory, artifact.path)
+    const candidateExecutable = executablePath(consumerDirectory)
+    const candidateInstalledVersion = installedVersion(
+      candidateExecutable,
+      projectDirectory,
+      isolatedEnvironment,
+    )
+    invariant(
+      candidateInstalledVersion === artifactManifest.version,
+      'candidate installed version does not match the candidate artifact manifest',
+    )
+    const candidateRuntime = await exerciseInstalledRuntime(
+      candidateExecutable,
+      projectDirectory,
+      isolatedEnvironment,
+      (runtimeEnvironment) => assertSnapshot(
+        snapshotDomainData(candidateExecutable, projectDirectory, runtimeEnvironment),
+        expected,
+      ),
+    )
+    const afterUpgrade = captureDatabaseEvidence(databasePath)
+    assertPreservedDomainData(afterUpgrade, expected)
+    invariant(
+      afterUpgrade.user_version >= beforeUpgrade.user_version,
+      'candidate upgrade reduced the Orchestra schema version',
+    )
+    invariant(readFileSync(artifactMarkerPath, 'utf8') === artifactMarker, 'artifact changed during upgrade')
+
+    let rollback = {
+      observed: false,
+      passed: false,
+      prior_artifact_restored: false,
+      prior_runtime_started: false,
+      data_preserved: false,
+      active_work_preserved: false,
+      artifact_preserved: false,
+      blocker: 'retained prior artifact with a different digest and version was not supplied',
+    }
+    if (crossVersion) {
+      installArtifact(consumerDirectory, previous.path)
+      const rollbackExecutable = executablePath(consumerDirectory)
+      const rollbackVersion = installedVersion(
+        rollbackExecutable,
+        projectDirectory,
+        isolatedEnvironment,
       )
-      let auditReport
-      try {
-        auditReport = JSON.parse(auditRun.stdout)
-      } catch {
-        throw new Error(auditRun.stderr.trim() || 'package artifact audit did not return JSON')
-      }
-      const vulnerabilities = auditReport.metadata?.vulnerabilities ?? {}
-      audit = {
-        executed: true,
-        high: Number(vulnerabilities.high ?? 0),
-        critical: Number(vulnerabilities.critical ?? 0),
-        passed: auditRun.status === 0,
-      }
+      invariant(rollbackVersion === previousManifest.version, 'rollback did not restore prior version')
+      await exerciseInstalledRuntime(
+        rollbackExecutable,
+        projectDirectory,
+        isolatedEnvironment,
+        (runtimeEnvironment) => assertSnapshot(
+          snapshotDomainData(rollbackExecutable, projectDirectory, runtimeEnvironment),
+          expected,
+        ),
+      )
+      const afterRollback = captureDatabaseEvidence(databasePath)
+      assertPreservedDomainData(afterRollback, expected)
       invariant(
-        audit.high === 0 && audit.critical === 0 && auditRun.status === 0,
-        `package artifact audit found ${audit.high} high and ${audit.critical} critical vulnerabilities`,
+        afterRollback.user_version === afterUpgrade.user_version,
+        'application rollback attempted to reverse the forward-only schema',
+      )
+      invariant(
+        readFileSync(artifactMarkerPath, 'utf8') === artifactMarker,
+        'artifact changed during rollback',
+      )
+      rollback = {
+        observed: true,
+        passed: true,
+        prior_artifact_restored: true,
+        prior_runtime_started: true,
+        data_preserved: true,
+        active_work_preserved: true,
+        artifact_preserved: true,
+        blocker: null,
+      }
+      installArtifact(consumerDirectory, artifact.path)
+      invariant(
+        installedVersion(executablePath(consumerDirectory), projectDirectory, isolatedEnvironment) ===
+          artifactManifest.version,
+        'candidate artifact was not restored after rollback rehearsal',
       )
     }
 
-    run(executable, ['uninstall', '--provider', 'both'], {
-      cwd: projectDirectory,
-      env: isolatedEnvironment,
-    })
-    assertPreservedConfiguration(profileDirectory, codexDirectory, false)
+    const audit = auditInstalledArtifact(consumerDirectory, runAudit)
+    const finalExecutable = executablePath(consumerDirectory)
+    removeRemainingProviderHooks(
+      finalExecutable,
+      projectDirectory,
+      isolatedEnvironment,
+      profileDirectory,
+      codexDirectory,
+    )
     run(
       'npm',
       ['uninstall', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error', packageName],
       { cwd: consumerDirectory },
     )
-
-    invariant(!existsSync(executable), 'npm uninstall left the orchestra executable installed')
+    invariant(!existsSync(finalExecutable), 'npm uninstall left the orchestra executable installed')
     invariant(
       !existsSync(join(consumerDirectory, 'node_modules', packageName)),
       'npm uninstall left the package installed',
     )
+    const afterUninstall = captureDatabaseEvidence(databasePath)
+    assertPreservedDomainData(afterUninstall, expected)
     invariant(
-      JSON.stringify(readJson(stateMarkerPath)) === JSON.stringify(marker),
-      'state data was deleted or changed during uninstall',
+      readFileSync(artifactMarkerPath, 'utf8') === artifactMarker,
+      'Orchestra artifact was deleted or changed during uninstall',
     )
     invariant(
       readFileSync(projectMarkerPath, 'utf8') === 'preserve this project file\n',
       'project data was deleted or changed during uninstall',
     )
 
+    const upgrade = {
+      observed: crossVersion,
+      passed: crossVersion,
+      mode: crossVersion ? 'prior-artifact-upgrade' : 'same-artifact-idempotency',
+      prior_version: previousManifest.version,
+      candidate_version: artifactManifest.version,
+      prior_sha256: previous.sha256,
+      candidate_sha256: artifact.sha256,
+      digests_differ: previous.sha256 !== artifact.sha256,
+      versions_differ: previousManifest.version !== artifactManifest.version,
+      candidate_installed_version: candidateInstalledVersion,
+      blocker: crossVersion
+        ? null
+        : 'cross-version upgrade requires a retained prior artifact with a different digest and version',
+    }
     const report = {
-      schema_version: 1,
+      schema_version: 2,
       package_name: packageName,
       artifact: {
         filename: artifact.filename,
         bytes: artifact.bytes,
         sha256: artifact.sha256,
+        version: artifactManifest.version,
       },
       previous_artifact: {
         filename: previous.filename,
         sha256: previous.sha256,
-        mode: previous.path === artifact.path ? 'same-artifact-reinstall' : 'prior-artifact-upgrade',
+        version: previousManifest.version,
       },
-      installed_version: installedVersion,
-      upgraded_version: upgradedVersion,
+      idempotency_reinstall: {
+        observed: !crossVersion,
+        passed: !crossVersion,
+        explicitly_not_upgrade_evidence: true,
+      },
+      upgrade,
+      rollback,
+      installed_version: priorInstalledVersion,
+      upgraded_version: candidateInstalledVersion,
       package_install_scripts_absent: true,
       dependency_install_scripts_allowed: true,
+      provider_hooks: hooks,
       provider_hooks_reversible: true,
+      data_preservation: {
+        actual_orchestra_database: true,
+        schema_before: beforeUpgrade,
+        schema_after_upgrade: afterUpgrade,
+        schema_after_uninstall: afterUninstall,
+        active_work_preserved: true,
+        artifact_preserved: true,
+        project_preserved: true,
+      },
       state_preserved_after_upgrade: true,
       state_preserved_after_uninstall: true,
       project_preserved_after_uninstall: true,
-      runtime,
+      runtime: {
+        initial: initialRuntime,
+        candidate: candidateRuntime,
+        doctor_contract: true,
+        daemon_health: true,
+        web_index_served: true,
+        graceful_shutdown: true,
+      },
       package_removed: true,
       audit,
       passed: true,
@@ -344,14 +718,16 @@ if (isCli) {
       process.argv.length === 3 || process.argv.length === 4,
       'usage: package-lifecycle-smoke.mjs <package.tgz> [previous-package.tgz]',
     )
-    const report = runPackageLifecycle({
+    const report = await runPackageLifecycle({
       artifactPath: process.argv[2],
       previousArtifactPath: process.argv[3],
       reportPath: process.env.ORCHESTRA_PACKAGE_LIFECYCLE_REPORT,
       keepTemporary: process.env.ORCHESTRA_KEEP_LIFECYCLE_TEMP === '1',
     })
     console.log(
-      `package lifecycle passed for ${report.artifact.filename} ` +
+      `package lifecycle passed for ${report.artifact.filename}; ` +
+      `upgrade=${report.upgrade.observed ? 'observed' : 'open'}; ` +
+      `rollback=${report.rollback.observed ? 'observed' : 'open'} ` +
       `(${report.artifact.sha256})`,
     )
   } catch (error) {

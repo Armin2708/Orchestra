@@ -126,8 +126,9 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(contract.schema_version).toBe(1)
     expect(contract.backlog_item).toBe('QA-019')
     expect(contract.runner).toBe('ubuntu-24.04')
-    expect(contract.node_version).toBe('22.12.0')
-    expect(contract.npm_version).toBe('10.9.0')
+    expect(contract.node_version).toBe('22.20.0')
+    expect(contract.npm_version).toBe('10.9.3')
+    expect(workflow.match(/node-version: 22\.20\.0/g)).toHaveLength(2)
     expect(contract.codex_cli_version).toBe('0.144.6')
     expect(contract.artifact_retention_days).toBe(30)
     expect(contract.accepted_moderate_packages_by_gate).toEqual({
@@ -180,7 +181,7 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(publishVerifier).not.toContain('process.env.ANTHROPIC_API_KEY')
   })
 
-  it('publishes the retained tested tarball without rebuilding source', () => {
+  it('keeps publication disabled until npm-beta reviewer protection is externally verified', () => {
     const publishJob = workflow.slice(workflow.indexOf('\n  publish:'))
     expect(publishJob).toContain(
       'uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1',
@@ -195,7 +196,9 @@ describe('QA-019 exact-commit CI contract', () => {
     )
     expect(publishJob).toContain('--ignore-scripts --provenance --access public')
     expect(publishJob).toContain('--tag beta')
-    expect(publishJob).toContain("contains(github.ref_name, '-')")
+    expect(publishJob).toContain('if: ${{ false }}')
+    expect(publishJob).not.toContain("contains(github.ref_name, '-')")
+    expect(publishJob).not.toContain("startsWith(github.ref, 'refs/tags/v')")
     expect(publishJob).toContain('environment: npm-beta')
     expect(publishJob).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
     expect(publishJob).not.toContain('npm ci')

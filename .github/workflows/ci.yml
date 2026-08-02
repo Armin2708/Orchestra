@@ -39,7 +39,7 @@ jobs:
       - name: Use the validated Node toolchain
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 22.20.0
 
       - name: Verify the exact checked-out commit
         continue-on-error: true
@@ -194,7 +194,10 @@ jobs:
           test "$EVIDENCE_UPLOAD_OUTCOME" = "success"
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')
+    # Fail closed: the npm-beta environment currently has no externally verified
+    # required reviewer. Human enablement must be a reviewed source change after
+    # environment protection is observed; a prerelease tag never publishes by itself.
+    if: ${{ false }}
     needs: test
     runs-on: ubuntu-24.04
     permissions:
@@ -211,7 +214,7 @@ jobs:
       - name: Use the validated Node toolchain
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.12.0
+          node-version: 22.20.0
           registry-url: https://registry.npmjs.org
 
       - name: Assert the publish checkout identity

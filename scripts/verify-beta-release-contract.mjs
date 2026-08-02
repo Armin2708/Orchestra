@@ -24,6 +24,20 @@ invariant(
   contract.channel?.public_action_requires_human_approval === true,
   'public release actions must require human approval',
 )
+invariant(
+  contract.toolchain?.node === '22.20.0' &&
+    contract.toolchain?.npm === '10.9.3' &&
+    contract.toolchain?.exact_match_required_for_release_evidence === true,
+  'release evidence requires exact Node 22.20.0 and npm 10.9.3',
+)
+invariant(
+  contract.publication_approval?.github_environment === 'npm-beta' &&
+    contract.publication_approval?.required_reviewers_minimum >= 1 &&
+    contract.publication_approval?.required_reviewers_verified === false &&
+    contract.publication_approval?.workflow_publish_enabled === false &&
+    contract.publication_approval?.tag_triggered_publish === false,
+  'publication must remain fail-closed until npm-beta required reviewers are verified',
+)
 invariant(contract.versioning?.semver_prerelease_required === true, 'beta requires a prerelease version')
 invariant(
   contract.versioning?.tag_must_equal_v_plus_package_version === true,

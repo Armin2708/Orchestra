@@ -249,11 +249,45 @@ export function verifyPublishArtifact({
     'package byte reproducibility evidence is incomplete',
   )
   invariant(
-    metadata.lifecycle?.passed === true &&
+    metadata.lifecycle?.schema_version === 2 &&
+      metadata.lifecycle?.passed === true &&
       metadata.lifecycle?.artifact?.sha256 === actualSha256 &&
+      metadata.lifecycle?.artifact?.version === metadata.package_version &&
+      metadata.lifecycle?.previous_artifact?.sha256 !== actualSha256 &&
+      metadata.lifecycle?.previous_artifact?.version !== metadata.package_version &&
+      metadata.lifecycle?.upgrade?.observed === true &&
+      metadata.lifecycle?.upgrade?.passed === true &&
+      metadata.lifecycle?.upgrade?.mode === 'prior-artifact-upgrade' &&
+      metadata.lifecycle?.upgrade?.digests_differ === true &&
+      metadata.lifecycle?.upgrade?.versions_differ === true &&
+      metadata.lifecycle?.upgrade?.candidate_sha256 === actualSha256 &&
+      metadata.lifecycle?.upgrade?.candidate_version === metadata.package_version &&
+      metadata.lifecycle?.upgrade?.candidate_installed_version === metadata.package_version &&
+      metadata.lifecycle?.upgrade?.prior_sha256 === metadata.lifecycle?.previous_artifact?.sha256 &&
+      metadata.lifecycle?.upgrade?.prior_version === metadata.lifecycle?.previous_artifact?.version &&
+      metadata.lifecycle?.rollback?.observed === true &&
+      metadata.lifecycle?.rollback?.passed === true &&
+      metadata.lifecycle?.rollback?.prior_artifact_restored === true &&
+      metadata.lifecycle?.rollback?.prior_runtime_started === true &&
+      metadata.lifecycle?.rollback?.data_preserved === true &&
+      metadata.lifecycle?.rollback?.active_work_preserved === true &&
+      metadata.lifecycle?.rollback?.artifact_preserved === true &&
       metadata.lifecycle?.package_install_scripts_absent === true &&
       metadata.lifecycle?.dependency_install_scripts_allowed === true &&
       metadata.lifecycle?.provider_hooks_reversible === true &&
+      metadata.lifecycle?.provider_hooks?.passed === true &&
+      metadata.lifecycle?.provider_hooks?.claudeOnly?.claude?.own_provider === true &&
+      metadata.lifecycle?.provider_hooks?.claudeOnly?.codex?.installed === false &&
+      metadata.lifecycle?.provider_hooks?.bothIndependent?.claude?.cross_provider === false &&
+      metadata.lifecycle?.provider_hooks?.bothIndependent?.codex?.cross_provider === false &&
+      metadata.lifecycle?.provider_hooks?.codexOnly?.claude?.installed === false &&
+      metadata.lifecycle?.provider_hooks?.codexOnly?.codex?.own_provider === true &&
+      metadata.lifecycle?.data_preservation?.actual_orchestra_database === true &&
+      metadata.lifecycle?.data_preservation?.active_work_preserved === true &&
+      metadata.lifecycle?.data_preservation?.artifact_preserved === true &&
+      metadata.lifecycle?.data_preservation?.schema_before?.integrity_check === 'ok' &&
+      metadata.lifecycle?.data_preservation?.schema_after_upgrade?.integrity_check === 'ok' &&
+      metadata.lifecycle?.data_preservation?.schema_after_uninstall?.integrity_check === 'ok' &&
       metadata.lifecycle?.state_preserved_after_upgrade === true &&
       metadata.lifecycle?.state_preserved_after_uninstall === true &&
       metadata.lifecycle?.project_preserved_after_uninstall === true &&
@@ -261,9 +295,13 @@ export function verifyPublishArtifact({
       metadata.lifecycle?.runtime?.doctor_contract === true &&
       metadata.lifecycle?.runtime?.daemon_health === true &&
       metadata.lifecycle?.runtime?.web_index_served === true &&
+      metadata.lifecycle?.runtime?.graceful_shutdown === true &&
       metadata.lifecycle?.audit?.executed === true &&
+      metadata.lifecycle?.audit?.threshold === 'moderate' &&
+      metadata.lifecycle?.audit?.moderate === 0 &&
       metadata.lifecycle?.audit?.high === 0 &&
       metadata.lifecycle?.audit?.critical === 0 &&
+      sha256Pattern.test(String(metadata.lifecycle?.audit?.resolved_lock_sha256 ?? '')) &&
       metadata.lifecycle?.audit?.passed === true,
     'package clean-consumer lifecycle evidence is incomplete',
   )

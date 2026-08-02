@@ -81,6 +81,12 @@ describe('packaging documentation truthfulness', () => {
     const manifest = JSON.parse(read('package.json')) as { files?: string[] }
     const packaged = new Set(manifest.files ?? [])
 
+    expect(packaged).not.toContain('docs')
+    expect([...packaged].some((entry) => entry.startsWith('docs/checkpoints/'))).toBe(false)
+    expect([...packaged].some((entry) => entry.includes('competitor-teardown'))).toBe(false)
+    expect([...packaged].some((entry) => entry.includes('value-audit'))).toBe(false)
+    expect([...packaged].some((entry) => entry.includes('north-star-delivery-program'))).toBe(false)
+
     for (const relativePath of [
       'docs/agent-os.md',
       'docs/codex.md',

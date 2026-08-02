@@ -115,17 +115,76 @@ const fixture = () => {
       scripts_disabled_for_second_pack: true,
     },
     lifecycle: {
+      schema_version: 2,
       passed: true,
-      artifact: { sha256: packageSha256 },
+      artifact: { sha256: packageSha256, version: sourcePackage.version },
+      previous_artifact: { sha256: 'd'.repeat(64), version: '0.1.0-beta.0' },
+      upgrade: {
+        observed: true,
+        passed: true,
+        mode: 'prior-artifact-upgrade',
+        prior_version: '0.1.0-beta.0',
+        candidate_version: sourcePackage.version,
+        prior_sha256: 'd'.repeat(64),
+        candidate_sha256: packageSha256,
+        digests_differ: true,
+        versions_differ: true,
+        candidate_installed_version: sourcePackage.version,
+      },
+      rollback: {
+        observed: true,
+        passed: true,
+        prior_artifact_restored: true,
+        prior_runtime_started: true,
+        data_preserved: true,
+        active_work_preserved: true,
+        artifact_preserved: true,
+      },
       package_install_scripts_absent: true,
       dependency_install_scripts_allowed: true,
       provider_hooks_reversible: true,
+      provider_hooks: {
+        passed: true,
+        claudeOnly: {
+          claude: { installed: true, own_provider: true, cross_provider: false },
+          codex: { installed: false, own_provider: false, cross_provider: false },
+        },
+        bothIndependent: {
+          claude: { installed: true, own_provider: true, cross_provider: false },
+          codex: { installed: true, own_provider: true, cross_provider: false },
+        },
+        codexOnly: {
+          claude: { installed: false, own_provider: false, cross_provider: false },
+          codex: { installed: true, own_provider: true, cross_provider: false },
+        },
+      },
+      data_preservation: {
+        actual_orchestra_database: true,
+        active_work_preserved: true,
+        artifact_preserved: true,
+        schema_before: { integrity_check: 'ok' },
+        schema_after_upgrade: { integrity_check: 'ok' },
+        schema_after_uninstall: { integrity_check: 'ok' },
+      },
       state_preserved_after_upgrade: true,
       state_preserved_after_uninstall: true,
       project_preserved_after_uninstall: true,
       package_removed: true,
-      runtime: { doctor_contract: true, daemon_health: true, web_index_served: true },
-      audit: { executed: true, high: 0, critical: 0, passed: true },
+      runtime: {
+        doctor_contract: true,
+        daemon_health: true,
+        web_index_served: true,
+        graceful_shutdown: true,
+      },
+      audit: {
+        executed: true,
+        threshold: 'moderate',
+        moderate: 0,
+        high: 0,
+        critical: 0,
+        resolved_lock_sha256: 'e'.repeat(64),
+        passed: true,
+      },
     },
     markdown_links: { markdown_files: 2, local_links_checked: 0, passed: true },
     install_smoke: {
@@ -223,6 +282,12 @@ const fixture = () => {
       evidenceArtifactDigest,
     },
   }
+}
+
+const rewriteMetadata = (sample: ReturnType<typeof fixture>) => {
+  writeJson(path.join(sample.packageDirectory, 'package-metadata.json'), sample.metadata)
+  sample.manifest.package_artifact = sample.metadata
+  writeJson(sample.manifestPath, sample.manifest)
 }
 
 describe('exact package publish verification', () => {
@@ -348,5 +413,39 @@ describe('exact package publish verification', () => {
 
     expect(() => verifyPublishArtifact(sample.arguments))
       .toThrow('evidence manifest did not pass')
+  })
+
+  it('rejects same-artifact reinstall presented as upgrade evidence', () => {
+    const sample = fixture()
+    sample.metadata.lifecycle.previous_artifact.sha256 = sample.metadata.sha256
+    sample.metadata.lifecycle.previous_artifact.version = sample.metadata.package_version
+    sample.metadata.lifecycle.upgrade.prior_sha256 = sample.metadata.sha256
+    sample.metadata.lifecycle.upgrade.prior_version = sample.metadata.package_version
+    sample.metadata.lifecycle.upgrade.digests_differ = false
+    sample.metadata.lifecycle.upgrade.versions_differ = false
+    rewriteMetadata(sample)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+  })
+
+  it('rejects missing rollback, wrong installed version, or moderate vulnerabilities', () => {
+    const sample = fixture()
+    sample.metadata.lifecycle.rollback.observed = false
+    rewriteMetadata(sample)
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+
+    sample.metadata.lifecycle.rollback.observed = true
+    sample.metadata.lifecycle.upgrade.candidate_installed_version = '0.1.0-beta.0'
+    rewriteMetadata(sample)
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+
+    sample.metadata.lifecycle.upgrade.candidate_installed_version = sample.metadata.package_version
+    sample.metadata.lifecycle.audit.moderate = 1
+    rewriteMetadata(sample)
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
   })
 })
