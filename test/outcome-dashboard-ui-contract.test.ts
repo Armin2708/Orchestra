@@ -1,9 +1,26 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { createSingleFlightRefresh } from '../web/src/singleFlightRefresh'
 
 const component = readFileSync(new URL('../web/src/OutcomeDashboard.tsx', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../web/src/outcome-dashboard.css', import.meta.url), 'utf8')
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept
+    reject = decline
+  })
+  return { promise, reject, resolve }
+}
+
+const flushPromises = async () => {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
 
 describe('outcome dashboard UI contract', () => {
   it('presents usage beside verified quality and accepted-delivery attribution', () => {
@@ -25,44 +42,80 @@ describe('outcome dashboard UI contract', () => {
     expect(component).toContain('stream.close()')
     expect(component).toContain("payload.board_id !== boardId || payload.type !== 'outcome_analytics'")
     expect(component).toContain('setDashboard(null)')
-    expect(component).toContain('activeBoard.current !== requestedBoard')
     expect(component).toContain('dashboard.board_id !== boardId')
     const dashboardSetup = component.slice(
       component.indexOf('useEffect(() => {'),
       component.indexOf('const qualityTone'),
     )
     expect(dashboardSetup.indexOf('new EventSource(streamUrl())'))
-      .toBeLessThan(dashboardSetup.indexOf('void requestRefresh()'))
+      .toBeLessThan(dashboardSetup.indexOf('requestRefresh()'))
     expect(dashboardSetup).toContain('stream.onopen = () =>')
-    expect(dashboardSetup).toContain('refreshQueued = true')
-    expect(dashboardSetup).toContain('if (!succeeded && retry === undefined)')
+    expect(dashboardSetup).toContain('createSingleFlightRefresh({')
+    expect(dashboardSetup).toContain('if (!succeeded && !queued && retry === undefined)')
     expect(dashboardSetup).toContain('let disposed = false')
     expect(dashboardSetup).toContain('disposed = true')
-    const dashboardAfterLoad = dashboardSetup.slice(
-      dashboardSetup.indexOf('const succeeded = await load(!initialRequest)'),
-    )
-    expect(dashboardAfterLoad.indexOf('if (disposed) return'))
-      .toBeLessThan(dashboardAfterLoad.indexOf('if (!succeeded && retry === undefined)'))
+    expect(dashboardSetup).toContain('controller.dispose()')
+    expect(dashboardSetup).toContain('refreshRequest.current = (visible = true) => controller.request(visible)')
     expect(dashboardSetup).toContain('window.clearTimeout(initialFallback)')
     expect(dashboardSetup).toContain('if (retry !== undefined) window.clearTimeout(retry)')
+    expect(component).toContain('onClick={() => refreshRequest.current(true)}')
+    expect(component).not.toContain('onClick={() => void load()}')
     expect(app).toContain('new EventSource(streamUrl())')
     expect(app).not.toContain('setInterval(refresh, 30_000)')
     const setup = app.slice(app.indexOf('// a single stream for everything'), app.indexOf('if (needsAuth) return <Login'))
     expect(setup.indexOf('new EventSource(streamUrl())'))
-      .toBeLessThan(setup.indexOf('void requestRefresh()'))
+      .toBeLessThan(setup.indexOf('requestRefresh()'))
     expect(setup).toContain('es.onopen = () =>')
-    expect(setup).toContain('void requestRefresh()')
-    expect(setup).toContain('if (!succeeded && retry === undefined)')
+    expect(setup).toContain('requestRefresh()')
+    expect(setup).toContain('if (!succeeded && !queued && retry === undefined)')
     expect(setup).toContain('retry = window.setTimeout(() =>')
-    expect(setup).toContain('refreshQueued = true')
+    expect(setup).toContain('createSingleFlightRefresh({')
     expect(setup).toContain('let disposed = false')
     expect(setup).toContain('disposed = true')
-    const afterRefresh = setup.slice(setup.indexOf('const succeeded = await refresh()'))
-    expect(afterRefresh.indexOf('if (disposed) return'))
-      .toBeLessThan(afterRefresh.indexOf('if (!succeeded && retry === undefined)'))
-    expect(setup).toContain('refreshQueued = false')
+    expect(setup).toContain('controller.dispose()')
     expect(setup).toContain('clearTimeout(initialFallback)')
     expect(setup).toContain('if (retry !== undefined) clearTimeout(retry)')
+  })
+
+  it('serializes deferred refreshes and applies responses in request order', async () => {
+    const requests = [deferred<number>(), deferred<number>()]
+    const applied: number[] = []
+    let started = 0
+    const controller = createSingleFlightRefresh({
+      load: () => requests[started++].promise,
+      onSuccess: (value) => applied.push(value),
+      onFailure: () => undefined,
+    })
+
+    controller.request()
+    controller.request(true)
+    expect(started).toBe(1)
+    requests[0].resolve(1)
+    await flushPromises()
+    expect(started).toBe(2)
+    expect(applied).toEqual([1])
+    requests[1].resolve(2)
+    await flushPromises()
+    expect(applied).toEqual([1, 2])
+  })
+
+  it('suppresses every callback after disposal during a deferred refresh', async () => {
+    const request = deferred<number>()
+    const callbacks: string[] = []
+    const controller = createSingleFlightRefresh({
+      load: () => request.promise,
+      onSuccess: () => callbacks.push('success'),
+      onFailure: () => callbacks.push('failure'),
+      onSettled: () => callbacks.push('settled'),
+      onCycle: () => callbacks.push('cycle'),
+    })
+
+    controller.request()
+    controller.request()
+    controller.dispose()
+    request.resolve(1)
+    await flushPromises()
+    expect(callbacks).toEqual([])
   })
 
   it('has responsive, focus-visible and reduced-motion behavior', () => {

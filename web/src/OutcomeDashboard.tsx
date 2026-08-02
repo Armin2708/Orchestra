@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, streamUrl } from './api'
+import { createSingleFlightRefresh } from './singleFlightRefresh'
 import './outcome-dashboard.css'
 
 type Dashboard = {
@@ -80,26 +81,13 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const activeBoard = useRef(boardId)
-  activeBoard.current = boardId
+  const refreshRequest = useRef<(visible?: boolean) => void>(() => {})
 
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async () => {
     const requestedBoard = boardId
-    if (!quiet) setLoading(true)
-    try {
-      const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
-      if (activeBoard.current !== requestedBoard) return false
-      if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
-      setDashboard(next)
-      setError(null)
-      return true
-    } catch (reason) {
-      if (activeBoard.current !== requestedBoard) return false
-      setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
-      return false
-    } finally {
-      if (!quiet && activeBoard.current === requestedBoard) setLoading(false)
-    }
+    const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
+    if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
+    return next
   }, [boardId])
 
   useEffect(() => {
@@ -109,43 +97,48 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
     const stream = new EventSource(streamUrl())
     let pending: number | undefined
     let retry: number | undefined
-    let refreshing = false
-    let refreshQueued = false
     let initialRequest = true
     let disposed = false
-    const requestRefresh = async () => {
-      if (disposed) return
-      if (refreshing) {
-        refreshQueued = true
-        return
-      }
-      refreshing = true
-      const succeeded = await load(!initialRequest)
+    const controller = createSingleFlightRefresh({
+      load,
+      onStart: (visible) => {
+        if (visible) setLoading(true)
+      },
+      onSuccess: (next) => {
+        setDashboard(next)
+        setError(null)
+      },
+      onFailure: (reason) => {
+        setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
+      },
+      onSettled: (visible) => {
+        if (visible) setLoading(false)
+      },
+      onCycle: ({ succeeded, queued }) => {
+        if (!succeeded && !queued && retry === undefined) {
+          retry = window.setTimeout(() => {
+            if (disposed) return
+            retry = undefined
+            controller.request()
+          }, 1_000)
+        }
+      },
+    })
+    const requestRefresh = () => {
+      const visible = initialRequest
       initialRequest = false
-      if (disposed) return
-      refreshing = false
-      if (refreshQueued) {
-        refreshQueued = false
-        void requestRefresh()
-        return
-      }
-      if (!succeeded && retry === undefined) {
-        retry = window.setTimeout(() => {
-          if (disposed) return
-          retry = undefined
-          void requestRefresh()
-        }, 1_000)
-      }
+      controller.request(visible)
     }
+    refreshRequest.current = (visible = true) => controller.request(visible)
     stream.onopen = () => {
       if (disposed) return
       if (retry !== undefined) {
         window.clearTimeout(retry)
         retry = undefined
       }
-      void requestRefresh()
+      requestRefresh()
     }
-    const initialFallback = window.setTimeout(() => void requestRefresh(), 1_000)
+    const initialFallback = window.setTimeout(requestRefresh, 1_000)
     stream.onmessage = (event) => {
       if (disposed) return
       let payload: { board_id?: number; type?: string }
@@ -155,12 +148,13 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
       pending = window.setTimeout(() => {
         if (disposed) return
         pending = undefined
-        void requestRefresh()
+        controller.request()
       }, 250)
     }
     return () => {
       disposed = true
-      refreshQueued = false
+      controller.dispose()
+      refreshRequest.current = () => {}
       stream.close()
       window.clearTimeout(initialFallback)
       if (retry !== undefined) window.clearTimeout(retry)
@@ -192,7 +186,7 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
             receipts, accepted-delivery timing, and Claude-native Read receipts. Exact context-token
             injection, model acknowledgement, and provider-native high-fanout preflight remain unavailable.</p>
         </div>
-        <button type="button" onClick={() => void load()} disabled={loading}>
+        <button type="button" onClick={() => refreshRequest.current(true)} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh evidence'}
         </button>
       </header>

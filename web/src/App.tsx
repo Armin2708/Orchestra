@@ -29,6 +29,7 @@ import { wakeMeter } from './wake'
 import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
 import { osApi, type Job } from './osApi'
 import { agentHomeApi, type AgentProfile } from './agentHomeApi'
+import { createSingleFlightRefresh } from './singleFlightRefresh'
 import './messages.css'
 import './agentOs.css'
 
@@ -50,6 +51,8 @@ export function App() {
   const [loaded, setLoaded] = useState(false)
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
   const hasConnectedRef = useRef(false)
+  const refreshRequest = useRef<() => void>(() => {})
+  const refresh = useCallback(() => refreshRequest.current(), [])
   const [jobs, setJobs] = useState<Job[]>([])
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
   const [activeSavedView, setActiveSavedView] = useState<SavedCommandCenterView | null>(null)
@@ -187,28 +190,14 @@ export function App() {
     if (focus === 'all' && !localStorage.getItem('orchestra-focus') && snaps[0]) pick(snaps[0].board.id)
   }, [snaps.length])
 
-  const refresh = useCallback(async () => {
-    try {
-      const boards = await api('GET', '/boards')
-      const [all, nextJobs, nextProfiles] = await Promise.all([
-        Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`))),
-        Promise.all(boards.map((board: any) => osApi.listJobs(Number(board.id)).catch(() => []))),
-        Promise.all(boards.map((board: any) => agentHomeApi.listProfiles(Number(board.id)).catch(() => []))),
-      ])
-      setSnaps(all)
-      hasConnectedRef.current = true
-      setConnectionState('live')
-      setJobs(nextJobs.flat())
-      setAgentProfiles(nextProfiles.flat())
-      setNeedsAuth(false)
-      return true
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setNeedsAuth(true)
-      setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
-      return false
-    } finally {
-      setLoaded(true)
-    }
+  const loadSnapshots = useCallback(async () => {
+    const boards = await api('GET', '/boards')
+    const [all, nextJobs, nextProfiles] = await Promise.all([
+      Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`))),
+      Promise.all(boards.map((board: any) => osApi.listJobs(Number(board.id)).catch(() => []))),
+      Promise.all(boards.map((board: any) => agentHomeApi.listProfiles(Number(board.id)).catch(() => []))),
+    ])
+    return { all, nextJobs, nextProfiles }
   }, [])
 
   useEffect(() => {
@@ -217,32 +206,34 @@ export function App() {
     const es = new EventSource(streamUrl())
     let pending: number | undefined
     let retry: number | undefined
-    let refreshing = false
-    let refreshQueued = false
     let disposed = false
-    const requestRefresh = async () => {
-      if (disposed) return
-      if (refreshing) {
-        refreshQueued = true
-        return
-      }
-      refreshing = true
-      const succeeded = await refresh()
-      if (disposed) return
-      refreshing = false
-      if (refreshQueued) {
-        refreshQueued = false
-        void requestRefresh()
-        return
-      }
-      if (!succeeded && retry === undefined) {
-        retry = window.setTimeout(() => {
-          if (disposed) return
-          retry = undefined
-          void requestRefresh()
-        }, 1_000)
-      }
-    }
+    const controller = createSingleFlightRefresh({
+      load: loadSnapshots,
+      onSuccess: ({ all, nextJobs, nextProfiles }) => {
+        setSnaps(all)
+        hasConnectedRef.current = true
+        setConnectionState('live')
+        setJobs(nextJobs.flat())
+        setAgentProfiles(nextProfiles.flat())
+        setNeedsAuth(false)
+      },
+      onFailure: (reason) => {
+        if (reason instanceof ApiError && reason.status === 401) setNeedsAuth(true)
+        setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
+      },
+      onSettled: () => setLoaded(true),
+      onCycle: ({ succeeded, queued }) => {
+        if (!succeeded && !queued && retry === undefined) {
+          retry = window.setTimeout(() => {
+            if (disposed) return
+            retry = undefined
+            controller.request()
+          }, 1_000)
+        }
+      },
+    })
+    const requestRefresh = () => controller.request()
+    refreshRequest.current = requestRefresh
     // Subscribe before the first snapshot. Once open, the refresh covers every event that
     // preceded it. Every reconnect refreshes again; failed snapshots retry until REST recovers.
     es.onopen = () => {
@@ -251,9 +242,9 @@ export function App() {
         clearTimeout(retry)
         retry = undefined
       }
-      void requestRefresh()
+      requestRefresh()
     }
-    const initialFallback = window.setTimeout(() => void requestRefresh(), 1_000)
+    const initialFallback = window.setTimeout(requestRefresh, 1_000)
     es.onmessage = () => {
       if (disposed) return
       // debounce bursts of events into one refresh
@@ -261,7 +252,7 @@ export function App() {
       pending = window.setTimeout(() => {
         if (disposed) return
         pending = undefined
-        void requestRefresh()
+        requestRefresh()
       }, 300)
     }
     es.onerror = () => {
@@ -269,13 +260,14 @@ export function App() {
     }
     return () => {
       disposed = true
-      refreshQueued = false
+      controller.dispose()
+      if (refreshRequest.current === requestRefresh) refreshRequest.current = () => {}
       es.close()
       clearTimeout(initialFallback)
       if (retry !== undefined) clearTimeout(retry)
       if (pending) clearTimeout(pending)
     }
-  }, [refresh, needsAuth])
+  }, [loadSnapshots, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
