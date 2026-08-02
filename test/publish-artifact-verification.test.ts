@@ -317,6 +317,11 @@ const fixture = () => {
         actual_orchestra_database: true,
         active_work_preserved: true,
         artifact_preserved: true,
+        database_continuity: {
+          after_upgrade: { passed: true },
+          after_rollback: { passed: true },
+          after_uninstall: { passed: true },
+        },
         packaged_backup: {
           script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
           database_sha256: 'b'.repeat(64),

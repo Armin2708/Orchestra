@@ -14,6 +14,7 @@ import { basename, join, resolve } from 'node:path'
 import { runPackageLifecycle } from './package-lifecycle-smoke.mjs'
 import { verifyPackagedMarkdownLinks } from './package-link-integrity.mjs'
 import { verifyPackageSourceIdentity } from './package-source-identity.mjs'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const shaPattern = /^[0-9a-f]{40}$/
 const expectedSha = String(process.env.CI_EVIDENCE_SHA ?? process.env.GITHUB_SHA ?? '')
@@ -92,6 +93,7 @@ for (const required of requiredFiles) {
 const extractionDirectory = mkdtempSync(join(tmpdir(), 'orchestra-package-extracted-'))
 let markdownLinks
 try {
+  assertTarRegularEntries(packagePath)
   const inventory = spawnSync('tar', ['-tzf', packagePath], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,

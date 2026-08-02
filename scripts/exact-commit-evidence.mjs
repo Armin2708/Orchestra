@@ -10,6 +10,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { manifestContractBinding } from './exact-commit-contract.mjs'
+import { verifyPackageSourceIdentity } from './package-source-identity.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -123,7 +124,7 @@ export async function runEvidenceGate(gateIdInput, command, args) {
   return exitCode
 }
 
-export function verifyExactCommit(gateIdInput, expectedShaInput) {
+export function verifyExactCommit(gateIdInput, expectedShaInput, cwdInput = process.cwd()) {
   const gateId = requireGateId(gateIdInput)
   const expectedSha = evidenceSha(expectedShaInput)
   const directory = evidenceDirectory()
@@ -138,19 +139,33 @@ export function verifyExactCommit(gateIdInput, expectedShaInput) {
   writeJsonAtomic(outputPath, record)
 
   const result = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd: process.cwd(),
+    cwd: cwdInput,
     encoding: 'utf8',
   })
   const observedSha = String(result.stdout ?? '').trim().toLowerCase()
-  const passed = result.status === 0 && observedSha === expectedSha
+  let sourceIdentity = null
+  let sourceIdentityError = null
+  if (result.status === 0 && observedSha === expectedSha) {
+    try {
+      sourceIdentity = verifyPackageSourceIdentity({ cwd: cwdInput, expectedSha })
+    } catch (error) {
+      sourceIdentityError = error instanceof Error ? error.message : String(error)
+    }
+  }
+  const passed = result.status === 0 && observedSha === expectedSha && sourceIdentity !== null
   const details = {
     expected_sha: expectedSha,
     observed_sha: shaPattern.test(observedSha) ? observedSha : null,
+    tracked_source_clean: sourceIdentity?.tracked_source_clean === true,
+    source_identity_error: sourceIdentityError,
   }
   writeJsonAtomic(outputPath, completedRecord(record, passed ? 0 : 1, details))
 
   if (!passed) {
-    console.error(`checkout mismatch: expected ${expectedSha}, observed ${observedSha || 'unavailable'}`)
+    console.error(
+      sourceIdentityError ??
+      `checkout mismatch: expected ${expectedSha}, observed ${observedSha || 'unavailable'}`,
+    )
   } else {
     console.log(`exact checkout verified at ${expectedSha}`)
   }

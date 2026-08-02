@@ -15,6 +15,7 @@ import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const packageName = 'orchestra-board'
 const sha256Pattern = /^[0-9a-f]{64}$/
@@ -49,6 +50,7 @@ const artifactIdentity = (artifactPath) => {
   const stat = lstatSync(resolved)
   invariant(stat.isFile() && !stat.isSymbolicLink(), 'package artifact must be one regular file')
   invariant(stat.size > 0 && resolved.endsWith('.tgz'), 'package artifact must be a non-empty .tgz')
+  assertTarRegularEntries(resolved)
   return {
     path: resolved,
     filename: basename(resolved),
@@ -324,6 +326,104 @@ const captureDatabaseEvidence = (databasePath) => {
   }
 }
 
+const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`
+
+const canonicalSqlValue = (value) => {
+  if (Buffer.isBuffer(value)) return { type: 'blob', hex: value.toString('hex') }
+  if (typeof value === 'bigint') return { type: 'bigint', value: value.toString() }
+  return value
+}
+
+const canonicalPrimaryKey = (row, columns) => JSON.stringify(
+  columns.map((column) => canonicalSqlValue(row[column])),
+)
+
+export const captureDatabasePreservation = (databasePath) => {
+  invariant(existsSync(databasePath), 'Orchestra database is missing')
+  const database = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try {
+    const tableNames = database.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type='table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all().map((row) => row.name)
+    const tables = tableNames.map((name) => {
+      const columns = database.prepare(`
+        SELECT name, pk
+        FROM pragma_table_info(?)
+        ORDER BY cid
+      `).all(name)
+      const primaryKeyColumns = columns
+        .filter((column) => Number(column.pk) > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk))
+        .map((column) => column.name)
+      const table = quoteIdentifier(name)
+      const rowCount = Number(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count)
+      let primaryKeys = []
+      if (primaryKeyColumns.length > 0) {
+        const selected = primaryKeyColumns.map(quoteIdentifier).join(', ')
+        const ordered = primaryKeyColumns.map(quoteIdentifier).join(', ')
+        primaryKeys = database.prepare(
+          `SELECT ${selected} FROM ${table} ORDER BY ${ordered}`,
+        ).all().map((row) => canonicalPrimaryKey(row, primaryKeyColumns))
+      }
+      return {
+        name,
+        row_count: rowCount,
+        primary_key_columns: primaryKeyColumns,
+        primary_keys: primaryKeys,
+      }
+    })
+    return { tables }
+  } finally {
+    database.close()
+  }
+}
+
+const preservationSummary = (snapshot) => ({
+  table_count: snapshot.tables.length,
+  row_count: snapshot.tables.reduce((total, table) => total + table.row_count, 0),
+  primary_key_count: snapshot.tables.reduce(
+    (total, table) => total + table.primary_keys.length,
+    0,
+  ),
+  snapshot_sha256: sha256(JSON.stringify(snapshot)),
+})
+
+export const verifyDatabasePreservation = (databasePath, baseline, label) => {
+  const observed = captureDatabasePreservation(databasePath)
+  const observedTables = new Map(observed.tables.map((table) => [table.name, table]))
+  for (const expectedTable of baseline.tables) {
+    const observedTable = observedTables.get(expectedTable.name)
+    invariant(observedTable, `${label} dropped Orchestra table ${expectedTable.name}`)
+    invariant(
+      JSON.stringify(observedTable.primary_key_columns) ===
+        JSON.stringify(expectedTable.primary_key_columns),
+      `${label} changed the primary key of Orchestra table ${expectedTable.name}`,
+    )
+    invariant(
+      observedTable.row_count >= expectedTable.row_count,
+      `${label} removed rows from Orchestra table ${expectedTable.name}`,
+    )
+    const observedKeys = new Set(observedTable.primary_keys)
+    for (const key of expectedTable.primary_keys) {
+      invariant(
+        observedKeys.has(key),
+        `${label} removed or replaced a primary-key identity in Orchestra table ${expectedTable.name}`,
+      )
+    }
+  }
+  return {
+    ...preservationSummary(observed),
+    baseline_snapshot_sha256: preservationSummary(baseline).snapshot_sha256,
+    all_prior_tables_present: true,
+    all_prior_primary_keys_present: true,
+    row_counts_non_decreasing: true,
+    passed: true,
+  }
+}
+
 const assertPreservedDomainData = (evidence, expected) => {
   invariant(evidence.integrity_check === 'ok', 'Orchestra database integrity check failed')
   invariant(evidence.schema_object_count > 0, 'Orchestra database schema is empty')
@@ -341,6 +441,18 @@ const assertPreservedDomainData = (evidence, expected) => {
     'preserved Orchestra agent is missing',
   )
   invariant(evidence.active_card_count > 0, 'preserved Orchestra active work is missing')
+}
+
+const assertExactCoreRowsPreserved = (evidence, baseline, label) => {
+  for (const collection of ['boards', 'cards', 'agents']) {
+    const observedRows = new Set(evidence[collection].map((row) => JSON.stringify(row)))
+    for (const row of baseline[collection]) {
+      invariant(
+        observedRows.has(JSON.stringify(row)),
+        `${label} changed or replaced a retained Orchestra ${collection} row`,
+      )
+    }
+  }
 }
 
 const exercisePackagedBackup = (
@@ -601,6 +713,7 @@ export async function runPackageLifecycle({
     )
     const beforeUpgrade = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(beforeUpgrade, expected)
+    const preservationBaseline = captureDatabasePreservation(databasePath)
 
     installArtifact(consumerDirectory, artifact.path)
     const candidateExecutable = executablePath(consumerDirectory)
@@ -624,6 +737,12 @@ export async function runPackageLifecycle({
     )
     const afterUpgrade = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(afterUpgrade, expected)
+    assertExactCoreRowsPreserved(afterUpgrade, beforeUpgrade, 'candidate upgrade')
+    const preservationAfterUpgrade = verifyDatabasePreservation(
+      databasePath,
+      preservationBaseline,
+      'candidate upgrade',
+    )
     invariant(
       afterUpgrade.user_version >= beforeUpgrade.user_version,
       'candidate upgrade reduced the Orchestra schema version',
@@ -647,6 +766,7 @@ export async function runPackageLifecycle({
       artifact_preserved: false,
       blocker: 'retained prior artifact with a different digest and version was not supplied',
     }
+    let preservationAfterRollback = null
     if (crossVersion) {
       installArtifact(consumerDirectory, previous.path)
       const rollbackExecutable = executablePath(consumerDirectory)
@@ -667,6 +787,12 @@ export async function runPackageLifecycle({
       )
       const afterRollback = captureDatabaseEvidence(databasePath)
       assertPreservedDomainData(afterRollback, expected)
+      assertExactCoreRowsPreserved(afterRollback, beforeUpgrade, 'application rollback')
+      preservationAfterRollback = verifyDatabasePreservation(
+        databasePath,
+        preservationBaseline,
+        'application rollback',
+      )
       invariant(
         afterRollback.user_version === afterUpgrade.user_version,
         'application rollback attempted to reverse the forward-only schema',
@@ -714,6 +840,12 @@ export async function runPackageLifecycle({
     )
     const afterUninstall = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(afterUninstall, expected)
+    assertExactCoreRowsPreserved(afterUninstall, beforeUpgrade, 'package uninstall')
+    const preservationAfterUninstall = verifyDatabasePreservation(
+      databasePath,
+      preservationBaseline,
+      'package uninstall',
+    )
     invariant(
       readFileSync(artifactMarkerPath, 'utf8') === artifactMarker,
       'Orchestra artifact was deleted or changed during uninstall',
@@ -773,6 +905,12 @@ export async function runPackageLifecycle({
         schema_before: beforeUpgrade,
         schema_after_upgrade: afterUpgrade,
         schema_after_uninstall: afterUninstall,
+        database_continuity: {
+          baseline: preservationSummary(preservationBaseline),
+          after_upgrade: preservationAfterUpgrade,
+          after_rollback: preservationAfterRollback,
+          after_uninstall: preservationAfterUninstall,
+        },
         active_work_preserved: true,
         artifact_preserved: true,
         project_preserved: true,

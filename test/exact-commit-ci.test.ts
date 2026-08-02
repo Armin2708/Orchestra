@@ -3,7 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createEvidenceManifest } from '../scripts/exact-commit-evidence.mjs'
+import {
+  createEvidenceManifest,
+  verifyExactCommit,
+} from '../scripts/exact-commit-evidence.mjs'
 import { manifestContractBinding } from '../scripts/exact-commit-contract.mjs'
 
 type ActionPin = {
@@ -87,6 +90,40 @@ const passedRecord = (
 })
 
 describe('QA-019 exact-commit CI contract', () => {
+  it('rejects tracked changes even when HEAD still matches the claimed commit', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-exact-source-'))
+    temporaryDirectories.push(directory)
+    git(directory, 'init', '-q')
+    git(directory, 'config', 'user.name', 'Exact Commit Test')
+    git(directory, 'config', 'user.email', 'exact@example.invalid')
+    fs.writeFileSync(path.join(directory, 'README.md'), '# clean\n')
+    git(directory, 'add', 'README.md')
+    git(directory, 'commit', '-qm', 'fixture')
+    const sha = git(directory, 'rev-parse', 'HEAD').trim()
+    const evidenceDirectory = path.join(directory, 'evidence')
+    const priorDirectory = process.env.CI_EVIDENCE_DIR
+    const priorSha = process.env.CI_EVIDENCE_SHA
+    process.env.CI_EVIDENCE_DIR = evidenceDirectory
+    process.env.CI_EVIDENCE_SHA = sha
+    try {
+      expect(verifyExactCommit('exact-commit', sha, directory)).toBe(0)
+      fs.appendFileSync(path.join(directory, 'README.md'), 'dirty\n')
+      expect(verifyExactCommit('exact-commit', sha, directory)).toBe(1)
+      const record = JSON.parse(
+        fs.readFileSync(path.join(evidenceDirectory, 'records', 'exact-commit.json'), 'utf8'),
+      )
+      expect(record).toMatchObject({
+        status: 'failed',
+        details: { tracked_source_clean: false },
+      })
+    } finally {
+      if (priorDirectory === undefined) delete process.env.CI_EVIDENCE_DIR
+      else process.env.CI_EVIDENCE_DIR = priorDirectory
+      if (priorSha === undefined) delete process.env.CI_EVIDENCE_SHA
+      else process.env.CI_EVIDENCE_SHA = priorSha
+    }
+  })
+
   it('pins every third-party action to a reviewed immutable commit', () => {
     const usesLines = workflow.split(/\r?\n/).filter((line) => line.includes('uses:'))
     expect(usesLines.length).toBeGreaterThan(0)

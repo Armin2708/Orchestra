@@ -4,6 +4,7 @@ import { lstatSync, readFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, manifestContractBinding } from './exact-commit-contract.mjs'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -68,6 +69,7 @@ const tarballManifest = (artifactPath) => {
 }
 
 const tarballInventory = (artifactPath) => {
+  assertTarRegularEntries(artifactPath)
   const listed = spawnSync('tar', ['-tzf', artifactPath], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
