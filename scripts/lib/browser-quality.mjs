@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 1
+export const BROWSER_QUALITY_SCHEMA_VERSION = 2
+export const BROWSER_BASELINE_SCHEMA_VERSION = 2
+export const BROWSER_BUILD_SCHEMA_VERSION = 1
 
 export const RESPONSIVE_VIEWPORTS = Object.freeze([
   Object.freeze({ id: 'desktop', width: 1440, height: 1000, mobile: false }),
@@ -22,6 +24,14 @@ export const PERFORMANCE_SURFACES = Object.freeze([
   'graph_view',
   'search',
 ])
+
+export const BETA_EXPERIENCE_BUDGETS_MS = Object.freeze({
+  startup: 1_500,
+  snapshot_loading: 3_000,
+  transcript_loading: 3_500,
+  graph_view: 1_000,
+  search: 750,
+})
 
 const secretKey = /(?:authorization|cookie|password|secret|token|credential|session[_-]?token|api[_-]?key)/i
 const bearer = /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi
@@ -56,6 +66,13 @@ export const evidenceDigest = (value) => createHash('sha256')
   .update(canonicalJson(redactEvidence(value)))
   .digest('hex')
 
+export const verifiableDocumentDigest = (value) => {
+  const document = structuredClone(value)
+  delete document.sha256
+  delete document.validation_errors
+  return evidenceDigest(document)
+}
+
 export const percentile = (samples, quantile) => {
   if (!Array.isArray(samples) || samples.length === 0) throw new Error('samples must not be empty')
   const sorted = samples.map(Number).filter(Number.isFinite).sort((left, right) => left - right)
@@ -76,13 +93,25 @@ export const summarizeSamples = (samples) => {
   }
 }
 
-// Budgets are deliberately derived from a checked observation. The additive floor
-// absorbs timer/CI scheduling noise; the multiplier catches material regressions.
-export const deriveBudgetMs = (observedP95Ms, { multiplier = 4, additiveMs = 100 } = {}) => {
+// A checked observation provides a regression bound, while the explicit beta
+// experience ceiling prevents a slow observation from normalizing poor UX.
+export const deriveRegressionBudgetMs = (observedP95Ms, { multiplier = 2, additiveMs = 150 } = {}) => {
   if (!Number.isFinite(observedP95Ms) || observedP95Ms <= 0) {
     throw new Error('observed p95 must be a positive finite number')
   }
   return Math.ceil(Math.max(observedP95Ms * multiplier, observedP95Ms + additiveMs))
+}
+
+export const checkedBudget = (surface, observedP95Ms) => {
+  const experienceBudget = BETA_EXPERIENCE_BUDGETS_MS[surface]
+  if (!Number.isFinite(experienceBudget)) throw new Error(`unknown performance surface: ${surface}`)
+  const regressionBudget = deriveRegressionBudgetMs(observedP95Ms)
+  return {
+    budget_ms: Math.min(experienceBudget, regressionBudget),
+    experience_budget_ms: experienceBudget,
+    regression_budget_ms: regressionBudget,
+    budget_source: 'checked_observation',
+  }
 }
 
 const parseRgb = (value) => {
@@ -113,7 +142,60 @@ export const contrastRatio = (foreground, background) => {
   return (light + 0.05) / (dark + 0.05)
 }
 
-export const validateBrowserQualityEvidence = (evidence) => {
+export const validatePerformanceBaseline = (baseline) => {
+  const errors = []
+  if (baseline?.schema_version !== BROWSER_BASELINE_SCHEMA_VERSION) errors.push('baseline schema version is invalid')
+  if (baseline?.status !== 'checked_observation') errors.push('baseline status must be checked_observation')
+  if (baseline?.budget_source !== 'checked_observation') errors.push('baseline budget_source must be checked_observation')
+  if (!/^[a-f0-9]{40}$/.test(String(baseline?.source?.commit ?? ''))) errors.push('baseline source commit is invalid')
+  for (const key of ['root_dist_sha256', 'web_dist_sha256']) {
+    if (!/^[a-f0-9]{64}$/.test(String(baseline?.source?.artifact_identity?.[key] ?? ''))) {
+      errors.push(`baseline artifact identity ${key} is invalid`)
+    }
+  }
+  if (!/^[a-f0-9]{64}$/.test(String(baseline?.sha256 ?? '')) || baseline.sha256 !== verifiableDocumentDigest(baseline)) {
+    errors.push('baseline digest is invalid')
+  }
+  const captures = Array.isArray(baseline?.capture_artifacts) ? baseline.capture_artifacts : []
+  if (captures.length < 3) errors.push('baseline requires at least three retained capture artifacts')
+  for (const capture of captures) {
+    if (typeof capture?.path !== 'string' || !capture.path || !/^[a-f0-9]{64}$/.test(String(capture?.sha256 ?? ''))) {
+      errors.push('baseline capture artifact identity is invalid')
+    }
+  }
+  const viewports = Array.isArray(baseline?.viewports) ? baseline.viewports : []
+  for (const expected of RESPONSIVE_VIEWPORTS) {
+    const actual = viewports.find((viewport) => viewport.id === expected.id)
+    if (!actual || actual.width !== expected.width || actual.height !== expected.height) {
+      errors.push(`baseline is missing exact ${expected.id} viewport`)
+      continue
+    }
+    for (const surface of PERFORMANCE_SURFACES) {
+      const metric = actual.performance?.[surface]
+      if (!metric || !Array.isArray(metric.samples_ms) || metric.samples_ms.length < 3
+        || metric.samples_ms.some((sample) => !Number.isFinite(sample) || sample < 0)) {
+        errors.push(`baseline ${expected.id} ${surface} samples are invalid`)
+        continue
+      }
+      if (!Number.isFinite(metric.observed_p95_ms) || metric.observed_p95_ms <= 0) {
+        errors.push(`baseline ${expected.id} ${surface} p95 is invalid`)
+      }
+      if (!Number.isFinite(metric.budget_ms) || metric.budget_ms <= 0) {
+        errors.push(`baseline ${expected.id} ${surface} budget_ms is invalid`)
+      }
+      if (metric.budget_source !== 'checked_observation') {
+        errors.push(`baseline ${expected.id} ${surface} budget source is invalid`)
+      }
+      const expectedBudget = checkedBudget(surface, metric.observed_p95_ms)
+      for (const key of ['budget_ms', 'experience_budget_ms', 'regression_budget_ms']) {
+        if (metric[key] !== expectedBudget[key]) errors.push(`baseline ${expected.id} ${surface} ${key} is invalid`)
+      }
+    }
+  }
+  return errors
+}
+
+export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true } = {}) => {
   const errors = []
   if (evidence?.schema_version !== BROWSER_QUALITY_SCHEMA_VERSION) errors.push('schema version is invalid')
   const viewports = Array.isArray(evidence?.viewports) ? evidence.viewports : []
@@ -133,14 +215,31 @@ export const validateBrowserQualityEvidence = (evidence) => {
     for (const gate of ACCESSIBILITY_GATES) {
       if (actual.accessibility?.[gate]?.passed !== true) errors.push(`${expected.id} failed ${gate}`)
     }
+    if (actual.readiness?.graph_agents_rendered !== 18) errors.push(`${expected.id} did not render all 18 graph agents`)
+    if (actual.readiness?.transcript_events_rendered < 250) errors.push(`${expected.id} did not render 250 transcript events`)
+    if (actual.readiness?.search_matches_rendered !== 5) errors.push(`${expected.id} did not render the five expected search matches`)
+    if (actual.journeys?.length !== 12 || actual.journeys.some((journey) => !journey.accessibility)) {
+      errors.push(`${expected.id} is missing per-journey accessibility evidence`)
+    }
     for (const surface of PERFORMANCE_SURFACES) {
       const result = actual.performance?.[surface]
       if (!result || !Number.isFinite(result.observed_ms) || result.observed_ms < 0) {
         errors.push(`${expected.id} is missing ${surface} performance evidence`)
-      } else if (Number.isFinite(result.budget_ms) && result.observed_ms > result.budget_ms) {
+      } else if (requireBudgets && (!Number.isFinite(result.budget_ms) || result.budget_ms <= 0
+        || result.budget_source !== 'checked_observation')) {
+        errors.push(`${expected.id} has invalid ${surface} budget provenance`)
+      } else if (requireBudgets && result.observed_ms > result.budget_ms) {
         errors.push(`${expected.id} exceeded ${surface} budget`)
       }
     }
+  }
+  if (!/^[a-f0-9]{64}$/.test(String(evidence?.source?.artifact_identity?.root_dist_sha256 ?? ''))
+    || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.artifact_identity?.web_dist_sha256 ?? ''))) {
+    errors.push('evidence is missing build artifact identity')
+  }
+  if (!/^[a-f0-9]{40}$/.test(String(evidence?.source?.commit ?? ''))) errors.push('evidence source commit is invalid')
+  if (!/^[a-f0-9]{64}$/.test(String(evidence?.sha256 ?? '')) || evidence.sha256 !== verifiableDocumentDigest(evidence)) {
+    errors.push('evidence digest is invalid')
   }
   if (canonicalJson(evidence) !== canonicalJson(redactEvidence(evidence))) {
     errors.push('evidence contains secret-shaped fields or values')

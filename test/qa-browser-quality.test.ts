@@ -2,18 +2,28 @@ import { describe, expect, it } from 'vitest'
 import baseline from '../docs/qa-browser-performance-baseline.json'
 import {
   ACCESSIBILITY_GATES,
+  BETA_EXPERIENCE_BUDGETS_MS,
+  BROWSER_BASELINE_SCHEMA_VERSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
   contrastRatio,
-  deriveBudgetMs,
+  checkedBudget,
+  deriveRegressionBudgetMs,
   evidenceDigest,
   redactEvidence,
+  validatePerformanceBaseline,
   validateBrowserQualityEvidence,
+  verifiableDocumentDigest,
 } from '../scripts/lib/browser-quality.mjs'
 
-const passingEvidence = () => ({
+const passingEvidence = () => {
+  const evidence: any = {
   schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
+  source: {
+    commit: 'a'.repeat(40),
+    artifact_identity: { root_dist_sha256: 'b'.repeat(64), web_dist_sha256: 'c'.repeat(64) },
+  },
   viewports: RESPONSIVE_VIEWPORTS.map((viewport) => ({
     ...viewport,
     horizontal_overflow_px: 0,
@@ -21,12 +31,21 @@ const passingEvidence = () => ({
     page_errors: [],
     failed_requests: [],
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
+    readiness: { graph_agents_rendered: 18, transcript_events_rendered: 250, search_matches_rendered: 5 },
+    journeys: Array.from({ length: 12 }, (_, index) => ({
+      name: `journey-${index}`,
+      accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
+    })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
       observed_ms: 10,
       budget_ms: 100,
+      budget_source: 'checked_observation',
     }])),
   })),
-})
+  }
+  evidence.sha256 = verifiableDocumentDigest(evidence)
+  return evidence
+}
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
   it('freezes the desktop, tablet, and phone matrix and all required quality surfaces', () => {
@@ -43,25 +62,62 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     ])
   })
 
-  it('derives budgets from observed p95 values instead of embedding unexplained limits', () => {
-    expect(deriveBudgetMs(25)).toBe(125)
-    expect(deriveBudgetMs(80)).toBe(320)
-    expect(deriveBudgetMs(80, { multiplier: 2, additiveMs: 300 })).toBe(380)
-    expect(() => deriveBudgetMs(0)).toThrow(/positive finite/)
+  it('caps checked regression bounds with explicit beta experience ceilings', () => {
+    expect(BETA_EXPERIENCE_BUDGETS_MS).toEqual({
+      startup: 1500, snapshot_loading: 3000, transcript_loading: 3500, graph_view: 1000, search: 750,
+    })
+    expect(deriveRegressionBudgetMs(25)).toBe(175)
+    expect(deriveRegressionBudgetMs(80)).toBe(230)
+    expect(deriveRegressionBudgetMs(80, { multiplier: 2, additiveMs: 300 })).toBe(380)
+    expect(checkedBudget('snapshot_loading', 2_000)).toEqual({
+      budget_ms: 3_000,
+      experience_budget_ms: 3_000,
+      regression_budget_ms: 4_000,
+      budget_source: 'checked_observation',
+    })
+    expect(() => deriveRegressionBudgetMs(0)).toThrow(/positive finite/)
   })
 
   it('binds every performance budget to the maximum of three retained observations', () => {
+    expect(baseline.schema_version).toBe(BROWSER_BASELINE_SCHEMA_VERSION)
     expect(baseline.methodology.runs).toBe(3)
-    expect(baseline.capture_digests).toHaveLength(3)
+    expect(baseline.capture_artifacts).toHaveLength(3)
+    expect(validatePerformanceBaseline(baseline)).toEqual([])
     for (const viewport of baseline.viewports) {
       expect(RESPONSIVE_VIEWPORTS.some((candidate) => candidate.id === viewport.id)).toBe(true)
       for (const surface of PERFORMANCE_SURFACES) {
         const metric = viewport.performance[surface as keyof typeof viewport.performance]
         expect(metric.samples_ms).toHaveLength(3)
-        expect(metric.observed_ms).toBe(Math.max(...metric.samples_ms))
-        expect(metric.budget_ms).toBe(deriveBudgetMs(metric.observed_ms))
+        expect(metric.observed_p95_ms).toBe(Math.max(...metric.samples_ms))
+        expect(metric).toMatchObject(checkedBudget(surface, metric.observed_p95_ms))
       }
     }
+  })
+
+  it('rejects missing, non-finite, self-derived, or digest-tampered checked budgets', () => {
+    const missing = structuredClone(baseline) as any
+    delete missing.viewports[0].performance.search.budget_ms
+    missing.sha256 = verifiableDocumentDigest(missing)
+    expect(validatePerformanceBaseline(missing)).toContain('baseline desktop search budget_ms is invalid')
+
+    const nonFinite = structuredClone(baseline) as any
+    nonFinite.viewports[0].performance.search.budget_ms = Number.POSITIVE_INFINITY
+    nonFinite.sha256 = verifiableDocumentDigest(nonFinite)
+    expect(validatePerformanceBaseline(nonFinite)).toContain('baseline desktop search budget_ms is invalid')
+
+    const selfDerived = structuredClone(baseline) as any
+    selfDerived.viewports[0].performance.search.budget_source = 'capture_only'
+    selfDerived.sha256 = verifiableDocumentDigest(selfDerived)
+    expect(validatePerformanceBaseline(selfDerived)).toContain('baseline desktop search budget source is invalid')
+
+    const tampered = structuredClone(baseline) as any
+    tampered.methodology.runs = 99
+    expect(validatePerformanceBaseline(tampered)).toContain('baseline digest is invalid')
+
+    const evidence = passingEvidence()
+    delete evidence.viewports[0].performance.search.budget_ms
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence)).toContain('desktop has invalid search budget provenance')
   })
 
   it('redacts nested credentials, bearer values, assignments, and URL credentials before artifacts', () => {
@@ -98,6 +154,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     incomplete.viewports[0].accessibility.keyboard_focus.passed = false
     delete incomplete.viewports[0].performance.search
     ;(incomplete as any).token = 'unsafe'
+    incomplete.sha256 = verifiableDocumentDigest(incomplete)
 
     expect(validateBrowserQualityEvidence(incomplete)).toEqual(expect.arrayContaining([
       'missing tablet viewport',

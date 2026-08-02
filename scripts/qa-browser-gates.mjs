@@ -1,33 +1,40 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
+  readdirSync, rmSync, statSync, writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import Database from 'better-sqlite3'
 import {
   ACCESSIBILITY_GATES,
+  BROWSER_BUILD_SCHEMA_VERSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
-  deriveBudgetMs,
-  evidenceDigest,
   redactEvidence,
+  validatePerformanceBaseline,
   validateBrowserQualityEvidence,
+  verifiableDocumentDigest,
 } from './lib/browser-quality.mjs'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const defaultChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const timeoutMs = 20_000
+const defaultArtifactRoot = join(repositoryRoot, 'artifacts', 'qa', 'browser-quality')
 
 const parseArgs = (argv) => {
   const options = {
     chrome: process.env.ORCHESTRA_QA_CHROME || defaultChrome,
-    output: null,
+    output: join(defaultArtifactRoot, 'evidence.json'),
     baseline: null,
+    artifactManifest: join(defaultArtifactRoot, 'build-manifest.json'),
+    writeArtifactManifest: null,
     captureOnly: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -40,6 +47,8 @@ const parseArgs = (argv) => {
     if (key === '--chrome' && value) options.chrome = resolve(value)
     else if (key === '--output' && value) options.output = resolve(value)
     else if (key === '--baseline' && value) options.baseline = resolve(value)
+    else if (key === '--artifact-manifest' && value) options.artifactManifest = resolve(value)
+    else if (key === '--write-artifact-manifest' && value) options.writeArtifactManifest = resolve(value)
     else throw new Error(`unknown or incomplete argument: ${key}`)
     index += 1
   }
@@ -61,6 +70,65 @@ const unusedPort = async () => {
 }
 
 const boundedText = (chunks) => Buffer.concat(chunks).toString('utf8').slice(-16_000)
+
+const gitHead = async () => new Promise((resolveCommit, reject) => {
+  const child = spawn('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+  const chunks = []
+  child.stdout.on('data', (chunk) => chunks.push(chunk))
+  child.once('error', reject)
+  child.once('close', (code) => code === 0
+    ? resolveCommit(boundedText(chunks).trim())
+    : reject(new Error('git rev-parse failed')))
+})
+
+const directoryDigest = (root) => {
+  const hash = createHash('sha256')
+  const visit = (path, relative = '') => {
+    for (const name of readdirSync(path).sort()) {
+      const absolute = join(path, name)
+      const childRelative = relative ? `${relative}/${name}` : name
+      const stat = statSync(absolute)
+      if (stat.isDirectory()) visit(absolute, childRelative)
+      else if (stat.isFile()) {
+        hash.update(childRelative).update('\0').update(readFileSync(absolute)).update('\0')
+      }
+    }
+  }
+  visit(root)
+  return hash.digest('hex')
+}
+
+const currentArtifactIdentity = () => ({
+  root_dist_sha256: directoryDigest(join(repositoryRoot, 'dist')),
+  web_dist_sha256: directoryDigest(join(repositoryRoot, 'web', 'dist')),
+})
+
+const writeBuildManifest = async (path) => {
+  const manifest = {
+    schema_version: BROWSER_BUILD_SCHEMA_VERSION,
+    source_commit: await gitHead(),
+    artifact_identity: currentArtifactIdentity(),
+    generated_by: 'scripts/qa-browser-gates.mjs --write-artifact-manifest',
+  }
+  manifest.sha256 = verifiableDocumentDigest(manifest)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
+  return manifest
+}
+
+const loadBuildManifest = async (path) => {
+  if (!existsSync(path)) throw new Error(`missing build manifest: ${path}`)
+  const manifest = JSON.parse(readFileSync(path, 'utf8'))
+  if (manifest.schema_version !== BROWSER_BUILD_SCHEMA_VERSION) throw new Error('build manifest schema version is invalid')
+  if (manifest.sha256 !== verifiableDocumentDigest(manifest)) throw new Error('build manifest digest is invalid')
+  const head = await gitHead()
+  if (manifest.source_commit !== head) throw new Error(`stale build manifest: expected HEAD ${head}, received ${manifest.source_commit}`)
+  const actual = currentArtifactIdentity()
+  for (const key of Object.keys(actual)) {
+    if (manifest.artifact_identity?.[key] !== actual[key]) throw new Error(`stale build artifact: ${key} digest changed`)
+  }
+  return manifest
+}
 
 const waitForJson = async (url, predicate = () => true) => {
   const deadline = Date.now() + timeoutMs
@@ -90,46 +158,34 @@ const jsonRequest = async (baseUrl, method, path, body, headers = {}) => {
   return parsed
 }
 
-const seedScenario = async (baseUrl, orchestraHome) => {
+const seedScenario = async (baseUrl, authHeaders) => {
   const board = await jsonRequest(baseUrl, 'POST', '/api/v1/boards/resolve', {
     project_path: repositoryRoot,
-  })
-  await Promise.all(Array.from({ length: 18 }, (_, index) => jsonRequest(
+  }, authHeaders)
+  await Promise.all(Array.from({ length: 17 }, (_, index) => jsonRequest(
     baseUrl,
     'POST',
     '/api/v1/agents/register',
     { board_id: board.id, name: `qa-agent-${String(index + 1).padStart(2, '0')}` },
+    authHeaders,
   )))
-  const profileResponse = await jsonRequest(
-    baseUrl,
-    'POST',
-    `/api/v1/os/boards/${board.id}/agent-profiles`,
-    { name: 'QA Browser Agent', default_provider: 'codex', role: 'quality' },
-    { 'idempotency-key': 'qa-browser-profile' },
-  )
-  const profileId = profileResponse.profile.id
-  const home = await jsonRequest(baseUrl, 'GET', `/api/v1/os/agent-profiles/${profileId}/home`)
-  const conversationId = home.home.conversations[0].id
-  const workspaceId = 'qa-browser-workspace'
-  const sessionId = 'qa-browser-session'
-  const db = new Database(join(orchestraHome, 'orchestra.db'))
-  db.pragma('foreign_keys = ON')
-  try {
-    db.prepare(`INSERT INTO workspaces
-      (id, board_id, name, kind, root_path, status)
-      VALUES (?, ?, 'QA browser workspace', 'shared', ?, 'active')`)
-      .run(workspaceId, board.id, repositoryRoot)
-    db.prepare(`INSERT INTO agent_sessions
-      (id, workspace_id, provider, external_id, model, status, context_json)
-      VALUES (?, ?, 'codex', 'qa-browser-thread', 'qa-browser-model', 'idle', '{}')`)
-      .run(sessionId, workspaceId)
-  } finally { db.close() }
-  await jsonRequest(baseUrl, 'POST', `/api/v1/os/sessions/${sessionId}/link`, {
-    profile_id: profileId,
-    conversation_id: conversationId,
-    mode: 'ambient',
-    driver_id: 'qa-browser-fixture',
-  }, { 'idempotency-key': 'qa-browser-session-link' })
+  const card = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+    board_id: board.id,
+    title: 'QA browser evidence fixture',
+    description: 'Public-API-only fixture for browser quality evidence.',
+    paths: [],
+  }, authHeaders)).card
+  const workspace = (await jsonRequest(baseUrl, 'POST', `/api/v1/os/boards/${board.id}/workspaces`, {
+    name: 'QA browser workspace', kind: 'shared', root_path: repositoryRoot,
+  }, { ...authHeaders, 'idempotency-key': 'qa-browser-workspace' })).workspace
+  const launch = await jsonRequest(baseUrl, 'POST', `/api/v1/os/boards/${board.id}/jobs`, {
+    card_id: card.id,
+    workspace_id: workspace.id,
+    provider: 'codex',
+    model: 'qa-browser-model',
+    idempotency_key: 'qa-browser-job',
+  }, { ...authHeaders, 'idempotency-key': 'qa-browser-job' })
+  const sessionId = launch.session.id
   const events = Array.from({ length: 250 }, (_, index) => ({
     index,
     body: {
@@ -147,15 +203,16 @@ const seedScenario = async (baseUrl, orchestraHome) => {
       'POST',
       `/api/v1/os/sessions/${sessionId}/events`,
       body,
-      { 'idempotency-key': `qa-browser-event-${index}` },
+      { ...authHeaders, 'idempotency-key': `qa-browser-event-${index}` },
     )))
   }
   return {
     board_id: board.id,
-    profile_id: profileId,
+    profile_id: launch.session.profile_id,
     session_id: sessionId,
     transcript_events: events.length,
     graph_agents: 18,
+    fixture_transport: 'authenticated public APIs only',
   }
 }
 
@@ -235,24 +292,77 @@ const waitFor = async (client, expression, label) => {
   throw new Error(`timed out waiting for ${label}`)
 }
 
-const click = async (client, selector, label) => {
-  const clicked = await evaluate(client, `(() => {
+const hitTestPoint = async (client, selector, label) => {
+  const point = await evaluate(client, `(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof HTMLElement)) return false;
-    element.click();
-    return true;
+    if (!(element instanceof HTMLElement)) return null;
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !(hit === element || element.contains(hit))) return null;
+    return { x, y };
   })()`)
-  if (!clicked) throw new Error(`could not click ${label}`)
+  if (!point) throw new Error(`could not hit-test ${label}`)
+  return point
 }
 
-const clickButtonText = async (client, text) => {
-  const clicked = await evaluate(client, `(() => {
+const pointerClick = async (client, selector, label, mobile = false) => {
+  const point = await hitTestPoint(client, selector, label)
+  if (mobile) {
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y }] })
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  } else {
+    await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+  }
+}
+
+const pointerClickButtonText = async (client, text, mobile = false) => {
+  const selector = await evaluate(client, `(() => {
     const element = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === ${JSON.stringify(text)});
-    if (!element) return false;
-    element.click();
-    return true;
+    if (!element) return null;
+    if (!element.dataset.qaPointerId) element.dataset.qaPointerId = 'qa-' + Math.random().toString(16).slice(2);
+    return '[data-qa-pointer-id="' + element.dataset.qaPointerId + '"]';
   })()`)
-  if (!clicked) throw new Error(`could not click ${text}`)
+  if (!selector) throw new Error(`could not find ${text}`)
+  await pointerClick(client, selector, text, mobile)
+  await keyboardActivate(client, selector, text)
+  await evaluate(client, `document.querySelector(${JSON.stringify(selector)})?.click()`)
+}
+
+const dispatchKey = async (client, key, { shift = false } = {}) => {
+  const code = key === 'Tab' ? 'Tab' : key === 'Enter' ? 'Enter' : key === 'Escape' ? 'Escape' : key === ' ' ? 'Space' : key
+  const windowsVirtualKeyCode = key === 'Tab' ? 9 : key === 'Enter' ? 13 : key === 'Escape' ? 27 : key === ' ' ? 32 : 0
+  const modifiers = shift ? 8 : 0
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers })
+}
+
+const keyboardActivate = async (client, selector, label) => {
+  const focused = await evaluate(client, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!(element instanceof HTMLElement)) return false;
+    element.focus();
+    return document.activeElement === element;
+  })()`)
+  if (!focused) throw new Error(`could not focus ${label}`)
+  await dispatchKey(client, 'Enter')
+}
+
+const robustActivate = async (client, selector, label, mobile = false) => {
+  await pointerClick(client, selector, label, mobile)
+  await keyboardActivate(client, selector, label)
+  await evaluate(client, `document.querySelector(${JSON.stringify(selector)})?.click()`)
+}
+
+const typeText = async (client, value) => {
+  for (const character of value) {
+    await client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown', key: character, text: character, unmodifiedText: character,
+    })
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: character })
+  }
 }
 
 const horizontalOverflow = (client) => evaluate(client, `Math.max(
@@ -310,12 +420,17 @@ const contrastAudit = (client) => evaluate(client, `(() => {
   const lum = (color) => .2126 * channel(color.r) + .7152 * channel(color.g) + .0722 * channel(color.b);
   const background = (element) => {
     for (let current = element; current; current = current.parentElement) {
-      const parsed = parse(getComputedStyle(current).backgroundColor);
+      const currentStyle = getComputedStyle(current);
+      if (Number(currentStyle.opacity) !== 1 || currentStyle.backgroundImage !== 'none') {
+        return { supported: false, reason: 'opacity_or_background_image' };
+      }
+      const parsed = parse(currentStyle.backgroundColor);
+      if (parsed && parsed.a > 0 && parsed.a < 1) return { supported: false, reason: 'translucent_background' };
       if (parsed && parsed.a === 1) return parsed;
     }
-    return { r: 255, g: 255, b: 255, a: 1 };
+    return { supported: false, reason: 'no_opaque_background' };
   };
-  const rows = [];
+  const rows = [], unsupported = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const text = walker.currentNode.textContent?.trim();
@@ -326,7 +441,10 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0 || rect.width === 0 || rect.height === 0) continue;
     if (element.closest('button:disabled,input:disabled,select:disabled,textarea:disabled')) continue;
     const foreground = parse(style.color), bg = background(element);
-    if (!foreground || foreground.a !== 1) continue;
+    if (!foreground || foreground.a !== 1 || bg.supported === false) {
+      unsupported.push({ tag: element.tagName.toLowerCase(), class_name: String(element.className || '').slice(0, 100), reason: bg.reason || 'translucent_foreground' });
+      continue;
+    }
     const ratio = (Math.max(lum(foreground), lum(bg)) + .05) / (Math.min(lum(foreground), lum(bg)) + .05);
     const large = parseFloat(style.fontSize) >= (Number(style.fontWeight) >= 700 ? 18.66 : 24);
     const required = large ? 3 : 4.5;
@@ -335,16 +453,22 @@ const contrastAudit = (client) => evaluate(client, `(() => {
       text: text.slice(0, 80), ratio: Math.round(ratio * 100) / 100, required,
     });
   }
-  return { passed: rows.length === 0, checked: true, violations: rows.slice(0, 25) };
+  return {
+    passed: rows.length === 0 && unsupported.length === 0,
+    checked: true,
+    scope: 'opaque text on opaque solid computed backgrounds',
+    unsupported_count: unsupported.length,
+    unsupported: unsupported.slice(0, 25),
+    violations: rows.slice(0, 25),
+  };
 })()`)
 
 const keyboardAudit = async (client) => {
   await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
   const focusOrder = []
   const violations = []
-  for (let index = 0; index < 12; index += 1) {
-    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
-    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  for (let index = 0; index < 8; index += 1) {
+    await dispatchKey(client, 'Tab')
     const focused = await evaluate(client, `(() => {
       const element = document.activeElement;
       if (!(element instanceof HTMLElement) || element === document.body) return null;
@@ -367,7 +491,49 @@ const keyboardAudit = async (client) => {
     }
   }
   if (new Set(focusOrder).size < 5) violations.push({ reason: 'keyboard traversal reached fewer than five unique controls' })
-  return { passed: violations.length === 0, checked: focusOrder.length, focus_order: focusOrder, violations }
+  const reverseOrder = []
+  for (let index = 0; index < 3; index += 1) {
+    await dispatchKey(client, 'Tab', { shift: true })
+    reverseOrder.push(await evaluate(client, `document.activeElement?.id || document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent?.trim().slice(0, 80) || null`))
+  }
+  const activation = await evaluate(client, `(() => {
+    const tab = document.querySelector('.board-section-tabs [aria-selected="true"], .board-section-tabs .active');
+    if (!(tab instanceof HTMLElement)) return { supported: false };
+    tab.focus();
+    return { supported: true, id: tab.id, selected: tab.getAttribute('aria-selected') };
+  })()`)
+  if (activation.supported) {
+    await dispatchKey(client, 'Enter')
+    activation.remained_selected = await evaluate(client, `document.activeElement?.id === ${JSON.stringify(activation.id)} && (document.activeElement?.getAttribute('aria-selected') === 'true' || document.activeElement?.classList.contains('active'))`)
+    if (!activation.remained_selected) violations.push({ reason: 'Enter activation did not preserve selected tab and focus' })
+  }
+  return {
+    passed: violations.length === 0,
+    checked: focusOrder.length + reverseOrder.length,
+    focus_order: focusOrder,
+    reverse_focus_order: reverseOrder,
+    activation,
+    violations,
+  }
+}
+
+const modalFocusAudit = async (client, mobile) => {
+  const selector = '[aria-label="Create durable agent"]'
+  if (!await evaluate(client, `Boolean(document.querySelector(${JSON.stringify(selector)}))`)) return { supported: false, passed: true }
+  try { await keyboardActivate(client, selector, 'Create durable agent') }
+  catch (error) { return { supported: true, passed: false, reason: error instanceof Error ? error.message : String(error) } }
+  await delay(150)
+  if (!await evaluate(client, `Boolean(document.querySelector('.ah-dialog[role="dialog"][aria-modal="true"]'))`)) {
+    return { supported: true, passed: false, reason: 'Enter did not open the create-agent modal' }
+  }
+  const initial = await evaluate(client, `document.querySelector('.ah-dialog')?.contains(document.activeElement) === true`)
+  await dispatchKey(client, 'Tab', { shift: true })
+  const reverseTrapped = await evaluate(client, `document.querySelector('.ah-dialog')?.contains(document.activeElement) === true`)
+  await dispatchKey(client, 'Escape')
+  await delay(150)
+  const closed = await evaluate(client, `!document.querySelector('.ah-dialog[role="dialog"]')`)
+  const restored = await evaluate(client, `document.activeElement?.getAttribute('aria-label') === 'Create durable agent'`)
+  return { supported: true, passed: initial && reverseTrapped && closed && restored, initial_focus_inside: initial, reverse_focus_trapped: reverseTrapped, escape_closed: closed, focus_restored: restored }
 }
 
 const screenReaderAudit = async (client) => {
@@ -387,18 +553,60 @@ const screenReaderAudit = async (client) => {
   }
 }
 
-const loadBaseline = (path) => path ? JSON.parse(readFileSync(path, 'utf8')) : null
+const auditSurface = async (client) => ({
+  accessible_names: await accessibleNameAudit(client),
+  keyboard_focus: await keyboardAudit(client),
+  screen_reader_tree: await screenReaderAudit(client),
+  text_contrast: await contrastAudit(client),
+})
 
-const budgetFor = (baseline, viewportId, surface, observed) => {
+const fileDigest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex')
+
+const loadBaseline = (path, artifactIdentity) => {
+  if (!path) throw new Error('normal browser quality gate requires an explicit --baseline')
+  const baseline = JSON.parse(readFileSync(path, 'utf8'))
+  const errors = validatePerformanceBaseline(baseline)
+  for (const key of Object.keys(artifactIdentity)) {
+    if (baseline.source?.artifact_identity?.[key] !== artifactIdentity[key]) {
+      errors.push(`baseline artifact identity does not match tested ${key}`)
+    }
+  }
+  for (const capture of baseline.capture_artifacts ?? []) {
+    const capturePath = resolve(repositoryRoot, capture.path)
+    if (!existsSync(capturePath)) {
+      errors.push(`baseline capture artifact is missing: ${capture.path}`)
+      continue
+    }
+    if (fileDigest(capturePath) !== capture.file_sha256) errors.push(`baseline capture file digest changed: ${capture.path}`)
+    const document = JSON.parse(readFileSync(capturePath, 'utf8'))
+    if (document.sha256 !== capture.sha256 || document.sha256 !== verifiableDocumentDigest(document)) {
+      errors.push(`baseline capture evidence digest changed: ${capture.path}`)
+    }
+    for (const key of Object.keys(artifactIdentity)) {
+      if (document.source?.artifact_identity?.[key] !== artifactIdentity[key]) {
+        errors.push(`baseline capture artifact identity changed: ${capture.path}`)
+      }
+    }
+  }
+  if (errors.length) throw new Error(`invalid checked baseline: ${errors.join('; ')}`)
+  return baseline
+}
+
+const budgetFor = (baseline, viewportId, surface) => {
   const baselineMetric = baseline?.viewports?.find((viewport) => viewport.id === viewportId)?.performance?.[surface]
-  const source = Number(baselineMetric?.observed_ms)
+  if (!baseline) return { budget_ms: null, budget_source: 'observation_only' }
+  if (!Number.isFinite(baselineMetric?.budget_ms) || baselineMetric.budget_source !== 'checked_observation') {
+    throw new Error(`missing checked budget for ${viewportId} ${surface}`)
+  }
   return {
-    budget_ms: deriveBudgetMs(Number.isFinite(source) && source > 0 ? source : Math.max(observed, 0.01)),
-    budget_source: Number.isFinite(source) && source > 0 ? 'checked_observation' : 'capture_only',
+    budget_ms: baselineMetric.budget_ms,
+    experience_budget_ms: baselineMetric.experience_budget_ms,
+    regression_budget_ms: baselineMetric.regression_budget_ms,
+    budget_source: 'checked_observation',
   }
 }
 
-const measureViewport = async ({ client, viewport, baseUrl, baseline }) => {
+const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }) => {
   const consoleErrors = []
   const pageErrors = []
   const failedRequests = []
@@ -429,9 +637,11 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline }) => {
   await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.board-section-tabs'))`, 'initial board')
   const startup = await evaluate(client, `performance.now()`)
   const snapshot = await evaluate(client, `(async () => {
-    const boards = await fetch('/api/v1/boards').then((response) => response.json());
     const started = performance.now();
-    const response = await fetch('/api/v1/boards/' + boards[0].id + '/snapshot');
+    const token = localStorage.getItem('orchestra-token');
+    const response = await fetch('/api/v1/boards/${scenario.board_id}/snapshot', {
+      headers: token ? { authorization: 'Bearer ' + token } : {},
+    });
     if (!response.ok) throw new Error('snapshot request failed: ' + response.status);
     await response.json();
     return performance.now() - started;
@@ -446,68 +656,103 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline }) => {
     const elapsed = performance.now() - started
     const overflow = await horizontalOverflow(client)
     overflowSamples.push(overflow)
-    journeys.push({ name, passed: true, elapsed_ms: elapsed, horizontal_overflow_px: overflow })
+    const accessibility = await auditSurface(client)
+    journeys.push({ name, passed: true, elapsed_ms: elapsed, horizontal_overflow_px: overflow, accessibility })
     return elapsed
   }
 
   const graph = await recordJourney(
     'graph overview',
-    () => click(client, '#board-tab-overview', 'Overview'),
-    `Boolean(document.querySelector('.network .network-scene'))`,
+    () => robustActivate(client, '#board-tab-overview', 'Overview', viewport.mobile),
+    `document.querySelectorAll('.network .net-name').length === 18`,
   )
+  const graphAgentsRendered = await evaluate(client, `document.querySelectorAll('.network .net-name').length`)
   const transcript = await recordJourney(
     'durable transcript',
-    () => click(client, '#board-tab-agents', 'Agents'),
-    `Boolean(document.querySelector('.agent-home .ah-search input'))`,
+    async () => {
+      await robustActivate(client, '#board-tab-agents', 'Agents', viewport.mobile)
+      await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home')
+      for (let page = 0; page < 20; page += 1) {
+        const state = await evaluate(client, `({ count: document.querySelectorAll('.ah-event').length, more: Boolean(document.querySelector('.ah-load-more:not(:disabled)')) })`)
+        if (!state.more) break
+        await keyboardActivate(client, '.ah-load-more:not(:disabled)', 'Load more matching events')
+        await waitFor(client, `document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'additional transcript page')
+      }
+    },
+    `document.querySelectorAll('.ah-event').length >= 250`,
   )
+  const transcriptEventsRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
+  const modalFocus = await modalFocusAudit(client, viewport.mobile)
   const search = await recordJourney(
     'conversation search',
     async () => {
-      const prepared = await evaluate(client, `(() => {
+      await pointerClick(client, '.ah-search input', 'conversation search input', viewport.mobile)
+      const focused = await evaluate(client, `(() => {
         const input = document.querySelector('.ah-search input');
         if (!(input instanceof HTMLInputElement)) return false;
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        setter.call(input, 'quality');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        const form = input.closest('form');
-        if (!form) return false;
+        if (document.activeElement !== input) input.focus();
+        return document.activeElement === input;
+      })()`)
+      if (!focused) throw new Error('conversation search input could not receive focus')
+      await typeText(client, 'quality')
+      await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
+      await delay(50)
+      const submitted = await evaluate(client, `(() => {
+        const form = document.querySelector('.ah-search');
+        if (!(form instanceof HTMLFormElement)) return false;
         form.requestSubmit();
         return true;
       })()`)
-      if (!prepared) throw new Error('conversation search could not be submitted')
+      if (!submitted) throw new Error('conversation search form could not be submitted')
+      await waitFor(client, `(() => {
+        const events = [...document.querySelectorAll('.ah-event')];
+        return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'));
+      })()`, 'five rendered search results')
     },
-    `(() => { const button = document.querySelector('.ah-search button[type="submit"]'); return Boolean(button && button.textContent?.trim() === 'Search'); })()`,
+    `(() => {
+      const events = [...document.querySelectorAll('.ah-event')];
+      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))
+        && document.querySelector('.ah-search button[type="submit"]')?.textContent?.trim() === 'Search';
+    })()`,
   )
+  const searchMatchesRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
 
   for (const tab of ['messages', 'workspace', 'timeline', 'shipped']) {
     await recordJourney(
       `${tab} board view`,
-      () => click(client, `#board-tab-${tab}`, tab),
+      () => robustActivate(client, `#board-tab-${tab}`, tab, viewport.mobile),
       `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-${tab}'`,
     )
   }
   for (const view of ['Open Work', 'Organization', 'Roadmap', 'Settings', 'Board']) {
     await recordJourney(
       `${view} primary view`,
-      () => clickButtonText(client, view),
+      () => pointerClickButtonText(client, view, viewport.mobile),
       view === 'Board'
         ? `Boolean(document.querySelector('.board-section-tabs'))`
         : `Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === ${JSON.stringify(view)})?.classList.contains('active'))`,
     )
   }
-  await click(client, '#board-tab-agents', 'Agents')
+  await robustActivate(client, '#board-tab-agents', 'Agents', viewport.mobile)
   await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home for accessibility audit')
 
-  const accessibility = {
-    accessible_names: await accessibleNameAudit(client),
-    keyboard_focus: await keyboardAudit(client),
-    screen_reader_tree: await screenReaderAudit(client),
-    text_contrast: await contrastAudit(client),
-  }
+  const accessibility = Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => {
+    const results = journeys.map((journey) => journey.accessibility[gate])
+    return [gate, {
+      passed: results.every((result) => result.passed === true),
+      surfaces_checked: results.length,
+      failures: results.map((result, index) => result.passed === true ? null : {
+        journey: journeys[index].name,
+        violations: result.violations ?? result.unsupported ?? [],
+      }).filter(Boolean),
+    }]
+  }))
+  accessibility.keyboard_focus.modal_focus = modalFocus
+  if (modalFocus.supported && !modalFocus.passed) accessibility.keyboard_focus.passed = false
   const metrics = { startup, snapshot_loading: snapshot, transcript_loading: transcript, graph_view: graph, search }
   const performanceEvidence = Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => {
     const observed = surface === 'startup' ? metrics.startup : metrics[surface]
-    return [surface, { observed_ms: observed, ...budgetFor(baseline, viewport.id, surface, observed) }]
+    return [surface, { observed_ms: observed, ...budgetFor(baseline, viewport.id, surface) }]
   }))
   const maximumOverflow = Math.max(0, ...overflowSamples, await horizontalOverflow(client))
   return redactEvidence({
@@ -518,8 +763,15 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline }) => {
     overflow_offenders: maximumOverflow > 0 ? await overflowOffenders(client) : [],
     console_errors: consoleErrors,
     page_errors: pageErrors,
-    failed_requests: failedRequests.filter((request) => !String(request.url ?? '').includes('/events')),
+    failed_requests: failedRequests,
     accessibility,
+    readiness: {
+      graph_agents_rendered: graphAgentsRendered,
+      transcript_events_rendered: transcriptEventsRendered,
+      search_matches_rendered: searchMatchesRendered,
+      expected_search_matches: 5,
+      modal_focus: modalFocus,
+    },
     performance: performanceEvidence,
   })
 }
@@ -534,14 +786,25 @@ const stopChild = async (child) => {
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
   if (process.versions.node !== '22.20.0') throw new Error(`QA browser gates require Node 22.20.0, received ${process.versions.node}`)
-  if (!existsSync(options.chrome)) throw new Error(`Chrome executable not found: ${options.chrome}`)
   for (const required of ['dist/cli.js', 'web/dist/index.html']) {
     if (!existsSync(join(repositoryRoot, required))) throw new Error(`missing ${required}; build root and web before this gate`)
   }
-  const baseline = loadBaseline(options.baseline)
+  if (options.writeArtifactManifest) {
+    const manifest = await writeBuildManifest(options.writeArtifactManifest)
+    console.log(`QA build manifest: ${options.writeArtifactManifest}`)
+    console.log(`manifest sha256: ${manifest.sha256}`)
+    return
+  }
+  if (!existsSync(options.chrome)) throw new Error(`Chrome executable not found: ${options.chrome}`)
+  const buildManifest = await loadBuildManifest(options.artifactManifest)
+  const baseline = options.captureOnly ? null : loadBaseline(options.baseline, buildManifest.artifact_identity)
   const runRoot = mkdtempSync(join(tmpdir(), 'orchestra-browser-quality-'))
   const orchestraHome = join(runRoot, 'orchestra-home')
   const chromeProfile = join(runRoot, 'chrome-profile')
+  const fakeCodex = join(runRoot, 'fake-codex')
+  const fakeCodexState = join(runRoot, 'fake-codex-state.json')
+  copyFileSync(join(repositoryRoot, 'test', 'fixtures', 'fake-codex-app-server.mjs'), fakeCodex)
+  chmodSync(fakeCodex, 0o755)
   const daemonPort = await unusedPort()
   const chromePort = await unusedPort()
   const baseUrl = `http://127.0.0.1:${daemonPort}`
@@ -550,12 +813,16 @@ const main = async () => {
     ORCHESTRA_AUTOSHIP: '0',
     ORCHESTRA_AUTOWAKE: '0',
     ORCHESTRA_CODEX_PROVIDER_CONTRACT: '0',
+    ORCHESTRA_CANONICAL_LAUNCH: '1',
+    ORCHESTRA_CODEX_COMMAND: fakeCodex,
+    ORCHESTRA_CODEX_FORWARD_ENV: 'FAKE_CODEX_STATE',
     ORCHESTRA_HOME: orchestraHome,
-    ORCHESTRA_NO_AUTH: '1',
+    ORCHESTRA_MAX_LAUNCHED: '1',
     ORCHESTRA_PORT: String(daemonPort),
+    FAKE_CODEX_STATE: fakeCodexState,
   }
   const daemonStdout = [], daemonStderr = [], chromeStderr = []
-  let daemon, chrome, client
+  let daemon, chrome, client, operatorToken = ''
   try {
     daemon = spawn(process.execPath, [join(repositoryRoot, 'dist/cli.js'), 'serve'], {
       cwd: repositoryRoot,
@@ -565,7 +832,14 @@ const main = async () => {
     daemon.stdout.on('data', (chunk) => daemonStdout.push(chunk))
     daemon.stderr.on('data', (chunk) => daemonStderr.push(chunk))
     await waitForJson(`${baseUrl}/health`, (body) => body.ok === true)
-    const scenario = await seedScenario(baseUrl, orchestraHome)
+    const tokenPath = join(orchestraHome, 'token')
+    const tokenDeadline = Date.now() + timeoutMs
+    while (!existsSync(tokenPath) && Date.now() < tokenDeadline) await delay(40)
+    if (!existsSync(tokenPath)) throw new Error('operator token was not created')
+    operatorToken = readFileSync(tokenPath, 'utf8').trim()
+    if (!operatorToken) throw new Error('operator token is empty')
+    const authHeaders = { authorization: `Bearer ${operatorToken}` }
+    const scenario = await seedScenario(baseUrl, authHeaders)
 
     chrome = spawn(options.chrome, [
       '--headless=new',
@@ -584,7 +858,7 @@ const main = async () => {
     ], { stdio: ['ignore', 'ignore', 'pipe'] })
     chrome.stderr.on('data', (chunk) => chromeStderr.push(chunk))
     await waitForJson(`http://127.0.0.1:${chromePort}/json/version`, (body) => Boolean(body.webSocketDebuggerUrl))
-    const page = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(`${baseUrl}/`)}`, {
+    const page = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent('about:blank')}`, {
       method: 'PUT', signal: AbortSignal.timeout(5_000),
     }).then((response) => response.json())
     client = new CdpClient(page.webSocketDebuggerUrl)
@@ -593,10 +867,13 @@ const main = async () => {
       client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
       client.send('Log.enable'), client.send('Performance.enable'),
     ])
+    await client.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `localStorage.setItem('orchestra-token', ${JSON.stringify(operatorToken)})`,
+    })
 
     const viewports = []
     for (const viewport of RESPONSIVE_VIEWPORTS) {
-      viewports.push(await measureViewport({ client, viewport, baseUrl, baseline }))
+      viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario }))
     }
     const evidence = redactEvidence({
       schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
@@ -610,26 +887,25 @@ const main = async () => {
       },
       source: {
         repository: basename(repositoryRoot),
-        commit: await new Promise((resolveCommit, reject) => {
-          const child = spawn('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'] })
-          const chunks = []
-          child.stdout.on('data', (chunk) => chunks.push(chunk))
-          child.once('error', reject)
-          child.once('close', (code) => code === 0 ? resolveCommit(boundedText(chunks).trim()) : reject(new Error('git rev-parse failed')))
-        }),
+        commit: buildManifest.source_commit,
         node: process.versions.node,
+        artifact_identity: buildManifest.artifact_identity,
+        build_manifest_sha256: buildManifest.sha256,
       },
       scenario,
       methodology: {
-        isolation: 'disposable Orchestra home and Chrome profile on loopback with authentication disabled',
+        isolation: 'disposable Orchestra home and Chrome profile on loopback with token authentication enabled',
+        fixture_transport: 'board, agents, card, workspace, canonical job/session, profile, conversation, and events created through authenticated public APIs',
         failure_artifacts: 'bounded redacted JSON only; no page HTML, response body, transcript, storage, or screenshot capture',
-        budgets: options.baseline ? 'derived from checked observation p95 using max(4x, +100ms)' : 'capture-only budgets derived from this observation',
+        budgets: options.captureOnly
+          ? 'observation-only: no budget is derived from this run'
+          : 'explicit beta experience ceilings bounded by a checked three-run regression baseline',
       },
       viewports,
     })
-    evidence.sha256 = evidenceDigest(evidence)
-    const errors = validateBrowserQualityEvidence(evidence)
-    const output = options.output ?? join(runRoot, 'browser-quality-evidence.json')
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    const errors = validateBrowserQualityEvidence(evidence, { requireBudgets: !options.captureOnly })
+    const output = options.output
     mkdirSync(dirname(output), { recursive: true })
     writeFileSync(output, `${JSON.stringify({ ...evidence, validation_errors: errors }, null, 2)}\n`, { mode: 0o600 })
     console.log(`QA browser evidence: ${output}`)
@@ -640,11 +916,12 @@ const main = async () => {
     }
     if (errors.length) console.warn(`capture-only observed ${errors.length} failing gate(s)`)
   } catch (error) {
+    const stripRunToken = (value) => operatorToken ? String(value).split(operatorToken).join('[REDACTED]') : value
     const diagnostics = redactEvidence({
       error: error instanceof Error ? error.message : String(error),
-      daemon_stdout: boundedText(daemonStdout),
-      daemon_stderr: boundedText(daemonStderr),
-      chrome_stderr: boundedText(chromeStderr),
+      daemon_stdout: stripRunToken(boundedText(daemonStdout)),
+      daemon_stderr: stripRunToken(boundedText(daemonStderr)),
+      chrome_stderr: stripRunToken(boundedText(chromeStderr)),
     })
     console.error(JSON.stringify(diagnostics, null, 2))
     throw error

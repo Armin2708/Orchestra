@@ -1,25 +1,39 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "backlog_item": "QA-015",
-  "status": "observed_fallback_baseline",
-  "captured_on": "2026-08-02",
+  "status": "checked_observation",
+  "budget_source": "checked_observation",
   "source": {
-    "commit": "0dd3dd43b9f376370ee73a9e2fe4725974caaae8",
-    "application_source_modified_by_capture_lane": false,
+    "commit": "93cfec47f9c9ccce12583873328b86867ee975f7",
+    "artifact_identity": {
+      "root_dist_sha256": "24f5841f314b1b9240ff34c3519c568e76fbbce300a23ec43b371f29a36a8d84",
+      "web_dist_sha256": "9c73c5dac73fa0534b097e25201ec878774930d0efe406844ba1d4806a668112"
+    },
     "node": "22.20.0",
-    "npm": "10.9.3",
     "browser_surface": "standalone_chromium_cdp_fallback"
   },
   "methodology": {
     "runs": 3,
-    "scenario": "fresh disposable daemon and browser profile; 18 graph agents; one durable Agent Home session; 250 transcript events; real snapshot, graph, transcript, and search paths",
-    "budget_formula": "ceil(max(observed_p95_ms * 4, observed_p95_ms + 100))",
-    "scope": "single-host engineering regression baseline, not a public SLO or in-app Browser acceptance claim"
+    "scenario": "authenticated public-API fixture; 18 rendered graph agents; 250 seeded events plus provider lifecycle; exactly five rendered search matches",
+    "budget_policy": "minimum of explicit beta experience ceiling and max(2x observed p95, observed p95 + 150ms)",
+    "scope": "single-host engineering regression baseline; QA-013/QA-014 remain open"
   },
-  "capture_digests": [
-    "6b649c7a9ad24afd535bbe0307aed12de4a30011d8857ab3734de1cb6d454e47",
-    "c14d4b909c5720d8f3c3a8bc66522d64f946287075d754b0db43d03e368a4807",
-    "5d75f345537658959f3ebae82f4d5fe04b17d29b57b991e36452e81f7801dc33"
+  "capture_artifacts": [
+    {
+      "path": "docs/qa-evidence/browser-quality/observation-1.json",
+      "sha256": "0cb933e409c563086b028e4c41c135bf988277f60de414dd6aa85ac221267f45",
+      "file_sha256": "e40d13f8a2ec72be141a20455b2512331e23bd1b7c9e25ba8616d7fc957edf7d"
+    },
+    {
+      "path": "docs/qa-evidence/browser-quality/observation-2.json",
+      "sha256": "2b55c8cf1133bffa53397f40628fb4df7b66d6aa0ca4ec3848174707d8ca087a",
+      "file_sha256": "f9598978a367527b673a65dd1042f685db1ff8304fde3980331477ff9debd12d"
+    },
+    {
+      "path": "docs/qa-evidence/browser-quality/observation-3.json",
+      "sha256": "ac5c8208df18f719804cd90b44db0fbccc45c11640bbc49c555c45b2a1ef42ad",
+      "file_sha256": "88f0c8d054b1be9889501c4b85630efe444a87a911acca6ad74b3da1da355277"
+    }
   ],
   "viewports": [
     {
@@ -27,11 +41,66 @@
       "width": 1440,
       "height": 1000,
       "performance": {
-        "startup": { "samples_ms": [778.2, 769.2, 79], "observed_ms": 778.2, "budget_ms": 3113 },
-        "snapshot_loading": { "samples_ms": [2249.3, 920.7, 717.1], "observed_ms": 2249.3, "budget_ms": 8998 },
-        "transcript_loading": { "samples_ms": [453.755, 354.311, 502.59], "observed_ms": 502.59, "budget_ms": 2011 },
-        "graph_view": { "samples_ms": [4.189, 2.146, 2.108], "observed_ms": 4.189, "budget_ms": 105 },
-        "search": { "samples_ms": [130.32, 43.528, 46.294], "observed_ms": 130.32, "budget_ms": 522 }
+        "startup": {
+          "samples_ms": [
+            74.80000001192093,
+            78.59999999403954,
+            74.90000000596046
+          ],
+          "observed_p95_ms": 78.59999999403954,
+          "budget_ms": 229,
+          "experience_budget_ms": 1500,
+          "regression_budget_ms": 229,
+          "budget_source": "checked_observation"
+        },
+        "snapshot_loading": {
+          "samples_ms": [
+            362.29999999701977,
+            360.8999999910593,
+            361.5
+          ],
+          "observed_p95_ms": 362.29999999701977,
+          "budget_ms": 725,
+          "experience_budget_ms": 3000,
+          "regression_budget_ms": 725,
+          "budget_source": "checked_observation"
+        },
+        "transcript_loading": {
+          "samples_ms": [
+            2661.714709,
+            2797.6181249999995,
+            2776.883666
+          ],
+          "observed_p95_ms": 2797.6181249999995,
+          "budget_ms": 3500,
+          "experience_budget_ms": 3500,
+          "regression_budget_ms": 5596,
+          "budget_source": "checked_observation"
+        },
+        "graph_view": {
+          "samples_ms": [
+            351.0689170000005,
+            346.50541699999985,
+            347.37533299999996
+          ],
+          "observed_p95_ms": 351.0689170000005,
+          "budget_ms": 703,
+          "experience_budget_ms": 1000,
+          "regression_budget_ms": 703,
+          "budget_source": "checked_observation"
+        },
+        "search": {
+          "samples_ms": [
+            191.55454199999986,
+            205.35149999999976,
+            188.08449999999993
+          ],
+          "observed_p95_ms": 205.35149999999976,
+          "budget_ms": 411,
+          "experience_budget_ms": 750,
+          "regression_budget_ms": 411,
+          "budget_source": "checked_observation"
+        }
       }
     },
     {
@@ -39,11 +108,66 @@
       "width": 834,
       "height": 1194,
       "performance": {
-        "startup": { "samples_ms": [389.2, 85.6, 83.3], "observed_ms": 389.2, "budget_ms": 1557 },
-        "snapshot_loading": { "samples_ms": [1510, 953.5, 675], "observed_ms": 1510, "budget_ms": 6040 },
-        "transcript_loading": { "samples_ms": [317.284, 486.236, 465.269], "observed_ms": 486.236, "budget_ms": 1945 },
-        "graph_view": { "samples_ms": [12.003, 4.952, 5.047], "observed_ms": 12.003, "budget_ms": 113 },
-        "search": { "samples_ms": [59.164, 44.183, 44.232], "observed_ms": 59.164, "budget_ms": 237 }
+        "startup": {
+          "samples_ms": [
+            80.70000000298023,
+            84.8999999910593,
+            81.20000000298023
+          ],
+          "observed_p95_ms": 84.8999999910593,
+          "budget_ms": 235,
+          "experience_budget_ms": 1500,
+          "regression_budget_ms": 235,
+          "budget_source": "checked_observation"
+        },
+        "snapshot_loading": {
+          "samples_ms": [
+            449.5,
+            675.9000000059605,
+            468.5
+          ],
+          "observed_p95_ms": 675.9000000059605,
+          "budget_ms": 1352,
+          "experience_budget_ms": 3000,
+          "regression_budget_ms": 1352,
+          "budget_source": "checked_observation"
+        },
+        "transcript_loading": {
+          "samples_ms": [
+            2869.2604169999995,
+            2847.6984169999996,
+            2884.2261659999986
+          ],
+          "observed_p95_ms": 2884.2261659999986,
+          "budget_ms": 3500,
+          "experience_budget_ms": 3500,
+          "regression_budget_ms": 5769,
+          "budget_source": "checked_observation"
+        },
+        "graph_view": {
+          "samples_ms": [
+            568.554709,
+            350.9754580000008,
+            363.51037499999984
+          ],
+          "observed_p95_ms": 568.554709,
+          "budget_ms": 1000,
+          "experience_budget_ms": 1000,
+          "regression_budget_ms": 1138,
+          "budget_source": "checked_observation"
+        },
+        "search": {
+          "samples_ms": [
+            204.19074999999975,
+            197.43812500000058,
+            256.0987909999985
+          ],
+          "observed_p95_ms": 256.0987909999985,
+          "budget_ms": 513,
+          "experience_budget_ms": 750,
+          "regression_budget_ms": 513,
+          "budget_source": "checked_observation"
+        }
       }
     },
     {
@@ -51,12 +175,68 @@
       "width": 390,
       "height": 844,
       "performance": {
-        "startup": { "samples_ms": [281.3, 249.8, 122.9], "observed_ms": 281.3, "budget_ms": 1126 },
-        "snapshot_loading": { "samples_ms": [2037.8, 989.6, 703.9], "observed_ms": 2037.8, "budget_ms": 8152 },
-        "transcript_loading": { "samples_ms": [758.278, 352.11, 254.636], "observed_ms": 758.278, "budget_ms": 3034 },
-        "graph_view": { "samples_ms": [9.582, 4.411, 8.06], "observed_ms": 9.582, "budget_ms": 110 },
-        "search": { "samples_ms": [161.132, 44.084, 45.204], "observed_ms": 161.132, "budget_ms": 645 }
+        "startup": {
+          "samples_ms": [
+            328,
+            598.9000000059605,
+            190.80000001192093
+          ],
+          "observed_p95_ms": 598.9000000059605,
+          "budget_ms": 1198,
+          "experience_budget_ms": 1500,
+          "regression_budget_ms": 1198,
+          "budget_source": "checked_observation"
+        },
+        "snapshot_loading": {
+          "samples_ms": [
+            637,
+            981.2000000029802,
+            858.8999999910593
+          ],
+          "observed_p95_ms": 981.2000000029802,
+          "budget_ms": 1963,
+          "experience_budget_ms": 3000,
+          "regression_budget_ms": 1963,
+          "budget_source": "checked_observation"
+        },
+        "transcript_loading": {
+          "samples_ms": [
+            2648.7143749999996,
+            2654.5211249999993,
+            2675.144957999999
+          ],
+          "observed_p95_ms": 2675.144957999999,
+          "budget_ms": 3500,
+          "experience_budget_ms": 3500,
+          "regression_budget_ms": 5351,
+          "budget_source": "checked_observation"
+        },
+        "graph_view": {
+          "samples_ms": [
+            346.9985829999987,
+            350.9944579999992,
+            394.69487499999923
+          ],
+          "observed_p95_ms": 394.69487499999923,
+          "budget_ms": 790,
+          "experience_budget_ms": 1000,
+          "regression_budget_ms": 790,
+          "budget_source": "checked_observation"
+        },
+        "search": {
+          "samples_ms": [
+            182.92308400000184,
+            180.70116699999926,
+            177.90554199999679
+          ],
+          "observed_p95_ms": 182.92308400000184,
+          "budget_ms": 366,
+          "experience_budget_ms": 750,
+          "regression_budget_ms": 366,
+          "budget_source": "checked_observation"
+        }
       }
     }
-  ]
+  ],
+  "sha256": "1b3a04d54cb919fd716f9d64f65bba8f3585ba6f000a7c2ae0affc89831084ae"
 }
