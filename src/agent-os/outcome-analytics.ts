@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { applyOutcomeAnalyticsMigration } from './outcome-analytics-migration.js'
+import { ProviderAcceptanceEvidenceStoreV1 } from '../provider-acceptance-evidence-store.js'
 
 export type BillingMode = 'subscription' | 'api' | 'unknown'
 export type CachedInputSemantics = 'subset' | 'additive'
@@ -192,6 +193,17 @@ interface ProviderEvidenceBinding {
   evidence_sha256: string
 }
 
+interface OperationUsageReconciliation {
+  operation_id: string
+  provisional_provider_tokens: number
+  provisional_context_tokens: number
+  actual_provider_tokens: number
+  actual_context_tokens: number
+  provider_variance_tokens: number
+  context_variance_tokens: number
+  plan_overage_tokens: number
+}
+
 interface BudgetRow {
   id: string
   scope_kind: BudgetScopeKind
@@ -262,15 +274,19 @@ export class OutcomeAnalyticsService {
     if (providerTotal < minimumTotal) {
       throw new ValidationError('provider total tokens are inconsistent with the token split')
     }
-    const consumption = operationId === null ? null : this.operationUsageConsumption(
-      operationId, normalized.id, normalized.board_id, normalized.team_id, normalized.job_id,
-      providerTotal, normalized.context_injection_tokens, observedAt,
-    )
     const hash = requestHash({ ...normalized, provider_total_tokens: providerTotal })
     const prior = this.replayed('outcome_usage_observations', normalized.id, hash)
-    if (prior) return prior
+    if (prior) return this.usageResult(normalized.id)
     const createdAt = now()
     const transaction = this.db.transaction(() => {
+      const consumption = operationId === null
+        ? this.requireNoUnlinkedOperation(
+          normalized.board_id, normalized.team_id, normalized.job_id, observedAt,
+        )
+        : this.operationUsageConsumption(
+          operationId, normalized.id, normalized.board_id, normalized.team_id, normalized.job_id,
+          providerTotal, normalized.context_injection_tokens, observedAt,
+        )
       this.db.prepare(`INSERT INTO outcome_usage_observations
         (id, request_sha256, board_id, team_id, session_id, job_id, contract_ref,
          provider, billing_mode, cached_input_semantics, input_tokens, cached_input_tokens,
@@ -297,10 +313,18 @@ export class OutcomeAnalyticsService {
         this.db.prepare(`INSERT INTO outcome_operation_usage_links
           (operation_id, usage_id, linked_at) VALUES (?, ?, ?)`)
           .run(consumption.operation_id, normalized.id, createdAt)
+        this.db.prepare(`INSERT INTO outcome_operation_usage_reconciliations
+          (operation_id, provisional_provider_tokens, provisional_context_tokens,
+           actual_provider_tokens, actual_context_tokens, provider_variance_tokens,
+           context_variance_tokens, plan_overage_tokens, created_at)
+          VALUES (@operation_id, @provisional_provider_tokens, @provisional_context_tokens,
+           @actual_provider_tokens, @actual_context_tokens, @provider_variance_tokens,
+           @context_variance_tokens, @plan_overage_tokens, @created_at)`)
+          .run({ ...consumption, created_at: createdAt })
       }
     })
     transaction.immediate()
-    return this.row('outcome_usage_observations', normalized.id)
+    return this.usageResult(normalized.id)
   }
 
   recordActivity(input: ActivityObservationInput): Record<string, unknown> {
@@ -622,8 +646,11 @@ export class OutcomeAnalyticsService {
       return {
         ...row,
         execution_sha256: undefined,
-        consumption: this.db.prepare(`SELECT * FROM outcome_operation_consumptions
-          WHERE operation_id=?`).get(operationId),
+        consumption: {
+          ...(this.db.prepare(`SELECT * FROM outcome_operation_consumptions
+            WHERE operation_id=?`).get(operationId) as Record<string, unknown>),
+          provider_context_status: 'provisional_until_canonical_usage',
+        },
       }
     })
     return transaction.immediate()
@@ -841,6 +868,17 @@ export class OutcomeAnalyticsService {
       FROM outcome_usage_observations
       WHERE board_id=? AND observed_at>=? AND observed_at<? AND team_id IS NOT NULL
       GROUP BY team_id ORDER BY provider_tokens DESC, team_id`).all(boardId, since, until)
+    const reconciliation = this.db.prepare(`SELECT
+        COUNT(*) AS linked_operations,
+        COALESCE(SUM(reconciliation.provider_variance_tokens),0) AS provider_variance_tokens,
+        COALESCE(SUM(reconciliation.context_variance_tokens),0) AS context_variance_tokens,
+        COALESCE(SUM(reconciliation.plan_overage_tokens),0) AS plan_overage_tokens
+      FROM outcome_operation_usage_reconciliations reconciliation
+      JOIN outcome_operation_usage_links link
+        ON link.operation_id=reconciliation.operation_id
+      JOIN outcome_usage_observations usage ON usage.id=link.usage_id
+      WHERE usage.board_id=? AND usage.observed_at>=? AND usage.observed_at<?`)
+      .get(boardId, since, until) as Record<string, unknown>
     const budgetRows = this.db.prepare(`SELECT * FROM outcome_budget_policies
       WHERE board_id=? AND superseded_at IS NULL
       ORDER BY CASE scope_kind WHEN 'job' THEN 1 WHEN 'team' THEN 2 ELSE 3 END, scope_id`)
@@ -911,6 +949,12 @@ export class OutcomeAnalyticsService {
         average_ms_to_verified_delivery: verifiedDelivery,
       },
       quality: delivery,
+      operation_reconciliation: {
+        linked_operations: numberValue(reconciliation.linked_operations),
+        provider_variance_tokens: numberValue(reconciliation.provider_variance_tokens),
+        context_variance_tokens: numberValue(reconciliation.context_variance_tokens),
+        plan_overage_tokens: numberValue(reconciliation.plan_overage_tokens),
+      },
       budgets,
       by_job: byJob,
       by_team: byTeam,
@@ -990,20 +1034,16 @@ export class OutcomeAnalyticsService {
     }
     const tuple = declared as Record<string, unknown>
     const evidenceId = identifier(tuple.evidence_id, 'provider evidence id')
-    const evidence = this.db.prepare(`SELECT id, provider_id, adapter_id, mode_id,
-        runtime_mode, billing_mode, platform, source_commit, observed_at,
-        matrix_json, matrix_sha256, artifact_sha256
-      FROM provider_acceptance_evidence WHERE id=?`).get(evidenceId) as {
-        id: string; provider_id: string; adapter_id: string; mode_id: string
-        runtime_mode: string; billing_mode: string; platform: string; source_commit: string
-        observed_at: string; matrix_sha256: string; artifact_sha256: string
-        matrix_json: string
-      } | undefined
+    let evidence: ReturnType<ProviderAcceptanceEvidenceStoreV1['list']>[number] | undefined
+    try {
+      evidence = new ProviderAcceptanceEvidenceStoreV1(this.db).list()
+        .find((candidate) => candidate.id === evidenceId)
+    } catch {
+      throw new ValidationError('canonical provider acceptance evidence failed integrity verification')
+    }
     if (!evidence) throw new ValidationError('canonical provider acceptance evidence is missing')
-    let acceptanceMatrix: unknown
-    try { acceptanceMatrix = JSON.parse(evidence.matrix_json) } catch { acceptanceMatrix = null }
-    const gates = acceptanceMatrix && typeof acceptanceMatrix === 'object'
-      ? (acceptanceMatrix as Record<string, unknown>).gates : null
+    const acceptanceMatrix = evidence.matrix
+    const gates = acceptanceMatrix.gates
     if (!gates || typeof gates !== 'object' || Array.isArray(gates)
       || Object.values(gates as Record<string, unknown>).length === 0
       || Object.values(gates as Record<string, unknown>).some((gate) => {
@@ -1016,31 +1056,32 @@ export class OutcomeAnalyticsService {
     }
     const expected = {
       evidence_id: evidence.id,
-      provider_id: evidence.provider_id,
-      adapter_id: evidence.adapter_id,
-      mode_id: evidence.mode_id,
-      runtime_mode: evidence.runtime_mode,
-      platform: evidence.platform,
-      source_commit: evidence.source_commit,
+      provider_id: acceptanceMatrix.provider_id,
+      adapter_id: acceptanceMatrix.adapter_id,
+      mode_id: acceptanceMatrix.mode_id,
+      runtime_mode: acceptanceMatrix.runtime_mode,
+      platform: acceptanceMatrix.platform,
+      source_commit: acceptanceMatrix.source_commit,
     }
     if (canonical(tuple) !== canonical(expected)
-      || evidence.provider_id !== provider
-      || evidence.adapter_id !== scope.job_driver_id
-      || evidence.adapter_id !== scope.session_driver_id
-      || String(evidence.observed_at) > observedAt) {
+      || acceptanceMatrix.provider_id !== provider
+      || acceptanceMatrix.adapter_id !== scope.job_driver_id
+      || acceptanceMatrix.adapter_id !== scope.session_driver_id
+      || acceptanceMatrix.observed_at > observedAt) {
       throw new ValidationError('canonical provider acceptance tuple does not match the job and session')
     }
-    const nativeMode = evidence.billing_mode === 'personal_subscription'
-      ? 'subscription' : evidence.billing_mode === 'usage_priced_api' ? 'api' : null
+    const nativeMode = acceptanceMatrix.billing_mode === 'personal_subscription'
+      ? 'subscription' : acceptanceMatrix.billing_mode === 'usage_priced_api' ? 'api' : null
     if (!nativeMode) throw new ValidationError('canonical provider billing evidence is invalid')
     const binding: ProviderEvidenceBinding = {
       ...expected,
-      billing_mode: evidence.billing_mode as ProviderEvidenceBinding['billing_mode'],
+      billing_mode: acceptanceMatrix.billing_mode as ProviderEvidenceBinding['billing_mode'],
       evidence_sha256: requestHash({
-        ...expected,
-        billing_mode: evidence.billing_mode,
+        id: evidence.id,
         matrix_sha256: evidence.matrix_sha256,
+        artifact_ref: evidence.artifact_ref,
         artifact_sha256: evidence.artifact_sha256,
+        recorded_at: evidence.recorded_at,
       }),
     }
     return { mode: nativeMode, binding }
@@ -1194,10 +1235,12 @@ export class OutcomeAnalyticsService {
     providerTokens: number,
     contextTokens: number,
     observedAt: string,
-  ): { operation_id: string } {
+  ): OperationUsageReconciliation {
     const consumption = this.db.prepare(`SELECT consumption.*,
-        link.usage_id AS linked_usage_id
+        link.usage_id AS linked_usage_id, confirmation.estimated_tokens
       FROM outcome_operation_consumptions consumption
+      JOIN outcome_operation_confirmations confirmation
+        ON confirmation.id=consumption.operation_id
       LEFT JOIN outcome_operation_usage_links link ON link.operation_id=consumption.operation_id
       WHERE consumption.operation_id=?`).get(operationId) as Record<string, unknown> | undefined
     if (!consumption) throw new ValidationError('operation usage requires a consumed execution')
@@ -1209,14 +1252,56 @@ export class OutcomeAnalyticsService {
       || (consumption.team_id == null ? null : String(consumption.team_id)) !== teamId) {
       throw new ValidationError('operation usage scope does not match its consumed execution')
     }
-    if (Number(consumption.provider_tokens) !== providerTokens
-      || Number(consumption.context_tokens) !== contextTokens) {
-      throw new ValidationError('canonical usage does not match the consumed execution counters')
-    }
     if (String(consumption.consumed_at) > observedAt) {
       throw new ValidationError('canonical usage predates its consumed execution')
     }
-    return { operation_id: operationId }
+    const provisionalProvider = Number(consumption.provider_tokens)
+    const provisionalContext = Number(consumption.context_tokens)
+    return {
+      operation_id: operationId,
+      provisional_provider_tokens: provisionalProvider,
+      provisional_context_tokens: provisionalContext,
+      actual_provider_tokens: providerTokens,
+      actual_context_tokens: contextTokens,
+      provider_variance_tokens: providerTokens - provisionalProvider,
+      context_variance_tokens: contextTokens - provisionalContext,
+      plan_overage_tokens: Math.max(
+        0, providerTokens + contextTokens - Number(consumption.estimated_tokens),
+      ),
+    }
+  }
+
+  private requireNoUnlinkedOperation(
+    boardId: number,
+    teamId: string | null,
+    jobId: string,
+    observedAt: string,
+  ): null {
+    const unlinked = this.db.prepare(`SELECT consumption.operation_id
+      FROM outcome_operation_consumptions consumption
+      LEFT JOIN outcome_operation_usage_links link
+        ON link.operation_id=consumption.operation_id
+      WHERE consumption.board_id=? AND consumption.job_id=?
+        AND consumption.team_id IS ? AND consumption.consumed_at<=?
+        AND link.operation_id IS NULL
+      ORDER BY consumption.consumed_at, consumption.operation_id LIMIT 1`)
+      .get(boardId, jobId, teamId, observedAt) as { operation_id: string } | undefined
+    if (unlinked) {
+      throw new ValidationError(
+        'operation id is required for usage from an unlinked consumed execution',
+      )
+    }
+    return null
+  }
+
+  private usageResult(id: string): Record<string, unknown> {
+    const usage = this.row('outcome_usage_observations', id)
+    const reconciliation = this.db.prepare(`SELECT reconciliation.*
+      FROM outcome_operation_usage_links link
+      JOIN outcome_operation_usage_reconciliations reconciliation
+        ON reconciliation.operation_id=link.operation_id
+      WHERE link.usage_id=?`).get(id) as Record<string, unknown> | undefined
+    return reconciliation ? { ...usage, operation_reconciliation: reconciliation } : usage
   }
 
   private validateBudgetScope(boardId: number, kind: BudgetScopeKind, id: string): void {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
@@ -103,9 +104,33 @@ describe('outcome analytics migration and privacy boundary', () => {
     const { db } = fixture()
     expect(() => applyOutcomeAnalyticsMigration(db)).not.toThrow()
     expect(() => assertOutcomeAnalyticsSchema(db)).not.toThrow()
+    expect(() => db.prepare(`UPDATE outcome_analytics_schema
+      SET schema_sha256=? WHERE singleton=1`).run('0'.repeat(64))).toThrow(/immutable/)
+    expect(() => db.prepare(`DELETE FROM outcome_analytics_schema WHERE singleton=1`).run())
+      .toThrow(/marker is required/)
+
+    const markerTriggers = db.prepare(`SELECT name, sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (
+        'outcome_schema_immutable_update','outcome_schema_immutable_delete'
+      ) ORDER BY name`).all() as Array<{ name: string; sql: string }>
+    db.exec(`DROP TRIGGER outcome_schema_immutable_update;
+      DROP TRIGGER outcome_schema_immutable_delete;
+      ALTER TABLE outcome_analytics_schema ADD COLUMN forged_marker TEXT;`)
+    for (const trigger of markerTriggers) db.exec(trigger.sql)
+    const owned = (db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name LIKE 'outcome_%' ORDER BY type, name`).all() as Array<{
+        type: string; name: string; tbl_name: string; sql: string | null
+      }>).map((row) => ({
+      type: row.type, name: row.name, table: row.tbl_name,
+      sql: String(row.sql ?? '').replace(/\s+/gu, ' ').trim(),
+    }))
+    const forgedDigest = createHash('sha256').update(JSON.stringify(owned), 'utf8').digest('hex')
+    db.exec(`DROP TRIGGER outcome_schema_immutable_update;
+      DROP TRIGGER outcome_schema_immutable_delete;`)
     db.prepare(`UPDATE outcome_analytics_schema SET schema_sha256=? WHERE singleton=1`)
-      .run('0'.repeat(64))
-    expect(() => applyOutcomeAnalyticsMigration(db)).toThrow(/schema marker is incompatible/)
+      .run(forgedDigest)
+    for (const trigger of markerTriggers) db.exec(trigger.sql)
+    expect(() => assertOutcomeAnalyticsSchema(db)).toThrow(/outcome_analytics_schema/)
   })
 
   it('makes observations update-immutable, retention-deletable and HMAC pseudonymous', () => {
@@ -261,6 +286,24 @@ describe('durable scoped token and outcome attribution', () => {
     db.prepare(`UPDATE agent_sessions SET driver_id='other-adapter' WHERE id='session-1'`).run()
     expect(() => service.recordUsage(usage(boardId, { id: 'mismatched-driver' })))
       .toThrow(/drivers are missing or disagree/)
+    db.prepare(`UPDATE agent_sessions SET driver_id='codex-app-server', context_json=?
+      WHERE id='session-1'`).run(JSON.stringify({
+      provider_acceptance: {
+        evidence_id: retained.id,
+        provider_id: matrix.provider_id,
+        adapter_id: matrix.adapter_id,
+        mode_id: matrix.mode_id,
+        runtime_mode: matrix.runtime_mode,
+        platform: matrix.platform,
+        source_commit: matrix.source_commit,
+      },
+    }))
+    db.exec(`DROP TRIGGER provider_acceptance_evidence_update`)
+    db.prepare(`UPDATE provider_acceptance_evidence SET matrix_sha256=? WHERE id=?`)
+      .run('d'.repeat(64), retained.id)
+    expect(() => service.recordUsage(usage(boardId, {
+      id: 'forged-provider-evidence', billingMode: 'subscription',
+    }))).toThrow(/integrity verification/)
   })
 
   it('fails closed for cross-scope identity and inconsistent provider semantics', () => {
@@ -494,24 +537,42 @@ describe('budgets, confirmations and leader digests', () => {
       executionKey: 'reconcile-execution', jobId: 'job-1',
     })
     const observedAt = new Date().toISOString()
-    service.consumeOperationExecution({
+    expect(service.consumeOperationExecution({
       id: 'reconcile-operation', executionKey: 'reconcile-execution', actor: 'runner',
       providerTokens: 1_300, contextTokens: 200, fanout: 2, at: observedAt,
-    })
+    })).toMatchObject({ consumption: {
+      provider_context_status: 'provisional_until_canonical_usage',
+    } })
     const reserved = service.evaluateBudgets({ boardId, jobId: 'job-1' }) as any
     expect(reserved.policies[0].dimensions).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'provider_tokens', used: 1_300 }),
       expect.objectContaining({ name: 'context_tokens', used: 200 }),
     ]))
+    expect(() => service.recordUsage(usage(boardId, {
+      id: 'unlinked-operation-usage', observedAt,
+    }))).toThrow(/operation id is required/)
     const canonicalUsage = usage(boardId, {
       id: 'reconciled-usage', operationId: 'reconcile-operation', observedAt,
+      inputTokens: 900, cachedInputTokens: 600, outputTokens: 300,
+      providerTotalTokens: 1_200, contextInjectionTokens: 180,
     })
-    service.recordUsage(canonicalUsage)
-    expect(service.recordUsage(canonicalUsage).id).toBe('reconciled-usage')
+    expect(service.recordUsage(canonicalUsage)).toMatchObject({
+      id: 'reconciled-usage',
+      operation_reconciliation: {
+        provisional_provider_tokens: 1_300,
+        provisional_context_tokens: 200,
+        actual_provider_tokens: 1_200,
+        actual_context_tokens: 180,
+        provider_variance_tokens: -100,
+        context_variance_tokens: -20,
+        plan_overage_tokens: 0,
+      },
+    })
+    expect(service.recordUsage(canonicalUsage)).toMatchObject({ id: 'reconciled-usage' })
     const reconciled = service.evaluateBudgets({ boardId, jobId: 'job-1' }) as any
     expect(reconciled.policies[0].dimensions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'provider_tokens', used: 1_300 }),
-      expect.objectContaining({ name: 'context_tokens', used: 200 }),
+      expect.objectContaining({ name: 'provider_tokens', used: 1_200 }),
+      expect.objectContaining({ name: 'context_tokens', used: 180 }),
       expect.objectContaining({ name: 'fanout', used: 2 }),
     ]))
     expect(db.prepare(`SELECT operation_id, usage_id FROM outcome_operation_usage_links`).get())
@@ -519,6 +580,37 @@ describe('budgets, confirmations and leader digests', () => {
     expect(() => service.recordUsage(usage(boardId, {
       id: 'duplicate-operation-usage', operationId: 'reconcile-operation', observedAt,
     }))).toThrow(/already linked/)
+
+    service.planOperation({
+      id: 'overage-operation', boardId, operationKind: 'swarm', fanout: 1,
+      estimatedTokens: 500, reason: 'Reconcile actual overage', requestedBy: 'operator',
+      executionKey: 'overage-execution', jobId: 'job-1',
+    })
+    const overageAt = new Date().toISOString()
+    service.consumeOperationExecution({
+      id: 'overage-operation', executionKey: 'overage-execution', actor: 'runner',
+      providerTokens: 400, contextTokens: 50, fanout: 1, at: overageAt,
+    })
+    expect(service.recordUsage(usage(boardId, {
+      id: 'overage-usage', operationId: 'overage-operation', observedAt: overageAt,
+      inputTokens: 500, cachedInputTokens: 300, outputTokens: 100,
+      thinkingTokens: 50, providerTotalTokens: 600, contextInjectionTokens: 100,
+    }))).toMatchObject({ operation_reconciliation: {
+      provider_variance_tokens: 200,
+      context_variance_tokens: 50,
+      plan_overage_tokens: 200,
+    } })
+    expect(service.dashboard(boardId, {
+      until: new Date(Date.now() + 1_000).toISOString(),
+    }).operation_reconciliation).toEqual({
+      linked_operations: 2,
+      provider_variance_tokens: 100,
+      context_variance_tokens: 30,
+      plan_overage_tokens: 200,
+    })
+    expect(() => db.prepare(`UPDATE outcome_operation_usage_reconciliations
+      SET plan_overage_tokens=0 WHERE operation_id='overage-operation'`).run())
+      .toThrow(/immutable/)
   })
 
   it('creates a compact metrics-only team digest without activity payloads', () => {

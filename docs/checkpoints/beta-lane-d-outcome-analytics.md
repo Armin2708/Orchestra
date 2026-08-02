@@ -9,7 +9,8 @@ without observed representative evidence.
 
 ## Delivered
 
-- A focused, replay-safe schema-v3 migration with update-immutable but retention-deletable evidence,
+- A focused, replay-safe schema-v4 migration with an exact self-digested schema contract,
+  immutable marker guards, update-immutable but retention-deletable evidence,
   versioned project/team/job budgets, execution-bound one-shot confirmations, and compact team digests.
 - Exact input, cached-input, output, thinking, provider-total, and context-injection attribution to
   board, optional team, canonical session, job, and derived contract revision.
@@ -19,15 +20,18 @@ without observed representative evidence.
   refresh, coordination wake/fanout/model-ack, duplicate exploration, time-to-first-result,
   time-to-verified-delivery, evidence-gap/rejection/retry/override, and per-job/per-team views.
 - Soft/hard budgets with cumulative fanout/planning accounting and an atomic execution-time hard
-  budget recheck. Confirmation is bound to a native execution key and can be consumed once; actual
-  fanout and provider/context counters cannot exceed the confirmed plan, and actual warning
+  budget recheck. Confirmation is bound to a native execution key and can be consumed once;
+  provisional fanout and provider/context counters cannot exceed the confirmed plan, and warning
   thresholds are re-evaluated before consumption.
 - Canonical provider/session/job attribution, conservative billing derivation from retained
-  provider-acceptance evidence, active-membership team derivation, bounded timestamps, and
+  provider-acceptance evidence verified through the canonical content-addressed evidence store,
+  active-membership team derivation, bounded timestamps, and
   artifact-attested benchmark metrics. Provider evidence is bound by exact retained evidence ID,
   driver, adapter, mode, platform and source commit; unattested or ambiguous claims fail closed.
-- One-to-one execution→usage reconciliation replaces provisional provider/context counters with
-  canonical observations without double-counting, while fanout/planning counters remain durable.
+- One-to-one execution→usage reconciliation atomically replaces provisional provider/context
+  counters with canonical observations without double-counting, while fanout/planning counters
+  remain durable. Signed actual-versus-provisional variance and confirmed-plan overage are retained
+  and surfaced; an unlinked consumed execution makes `operationId` mandatory for canonical usage.
 - Benchmark evidence stores an immutable artifact digest, evidence version, verifier reference and
   provenance digest; every comparison revalidates the current artifact before it can pass.
 - Metrics-only team digests for leader update patterns.
@@ -51,7 +55,9 @@ without observed representative evidence.
    override seams, record the corresponding bounded activity observation with a deterministic ID.
 7. Pass a native execution key when planning work, then call `consumeOperationExecution` with the
    same key and actual projected usage immediately before execution. The transactional consume is
-   the authorization boundary and cannot be reused.
+   the authorization boundary and cannot be reused. The provider-native usage callback must pass
+   that operation's `operationId`; the first canonical observation atomically reconciles the
+   provisional provider/context reservation.
 
 ## Evidence
 
@@ -62,7 +68,8 @@ without observed representative evidence.
 
 ## Remaining
 
-- Central registration and live runtime/activity producers are deliberately left to the integrator.
+- Central registration and live runtime/activity producers are deliberately left to the integrator;
+  MET-015 and MET-GATE cannot close until the native callback proves `operationId` propagation.
 - Product navigation and visual browser acceptance require the final integrated App surface.
 - MET-013 is proven only for this analytics dashboard; broader avoidable snapshot polling remains
   a repository-wide integration concern.

@@ -1,9 +1,12 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type Database from 'better-sqlite3'
 
-export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 3
+export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 4
 
 const TABLE_COLUMNS = Object.freeze({
+  outcome_analytics_schema: [
+    'singleton', 'version', 'schema_sha256', 'applied_at',
+  ],
   outcome_usage_observations: [
     'id', 'request_sha256', 'board_id', 'team_id', 'session_id', 'job_id',
     'contract_ref', 'provider', 'billing_mode', 'cached_input_semantics',
@@ -46,6 +49,11 @@ const TABLE_COLUMNS = Object.freeze({
   outcome_operation_usage_links: [
     'operation_id', 'usage_id', 'linked_at',
   ],
+  outcome_operation_usage_reconciliations: [
+    'operation_id', 'provisional_provider_tokens', 'provisional_context_tokens',
+    'actual_provider_tokens', 'actual_context_tokens', 'provider_variance_tokens',
+    'context_variance_tokens', 'plan_overage_tokens', 'created_at',
+  ],
   outcome_usage_provider_bindings: [
     'usage_id', 'evidence_id', 'provider_id', 'adapter_id', 'mode_id',
     'runtime_mode', 'billing_mode', 'platform', 'source_commit',
@@ -58,6 +66,8 @@ const TABLE_COLUMNS = Object.freeze({
 } as const)
 
 const REQUIRED_TRIGGERS = Object.freeze([
+  'outcome_schema_immutable_update',
+  'outcome_schema_immutable_delete',
   'outcome_usage_immutable_update',
   'outcome_activity_immutable_update',
   'outcome_budget_update_guard',
@@ -69,6 +79,7 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'outcome_binding_immutable_update',
   'outcome_consumption_immutable_update',
   'outcome_operation_usage_link_immutable_update',
+  'outcome_operation_usage_reconciliation_immutable_update',
   'outcome_usage_provider_binding_immutable_update',
   'outcome_benchmark_evidence_binding_immutable_update',
 ] as const)
@@ -112,6 +123,11 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
     'REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE',
     'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
   ],
+  outcome_operation_usage_reconciliations: [
+    'REFERENCES outcome_operation_usage_links(operation_id) ON DELETE CASCADE',
+    'provider_variance_tokens BETWEEN -1000000000000 AND 1000000000000',
+    'plan_overage_tokens BETWEEN 0 AND 1000000000000',
+  ],
   outcome_usage_provider_bindings: [
     'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
     'REFERENCES provider_acceptance_evidence(id) ON DELETE RESTRICT',
@@ -125,6 +141,12 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   outcome_confirmation_update_guard: [
     'BEFORE UPDATE ON outcome_operation_confirmations',
     "NEW.status NOT IN ('confirmed','expired')",
+  ],
+  outcome_schema_immutable_update: [
+    'BEFORE UPDATE ON outcome_analytics_schema', 'outcome analytics schema marker is immutable',
+  ],
+  outcome_schema_immutable_delete: [
+    'BEFORE DELETE ON outcome_analytics_schema', 'outcome analytics schema marker is required',
   ],
   outcome_budget_update_guard: [
     'BEFORE UPDATE ON outcome_budget_policies',
@@ -156,6 +178,10 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   ],
   outcome_operation_usage_link_immutable_update: [
     'BEFORE UPDATE ON outcome_operation_usage_links', 'outcome operation usage link is immutable',
+  ],
+  outcome_operation_usage_reconciliation_immutable_update: [
+    'BEFORE UPDATE ON outcome_operation_usage_reconciliations',
+    'outcome operation usage reconciliation is immutable',
   ],
   outcome_usage_provider_binding_immutable_update: [
     'BEFORE UPDATE ON outcome_usage_provider_bindings', 'outcome provider evidence binding is immutable',
@@ -196,6 +222,9 @@ const EXPECTED_FOREIGN_KEYS: Readonly<Record<string, readonly string[]>> = Objec
   outcome_operation_usage_links: [
     'outcome_operation_consumptions:operation_id:operation_id:CASCADE',
     'outcome_usage_observations:usage_id:id:CASCADE',
+  ],
+  outcome_operation_usage_reconciliations: [
+    'outcome_operation_usage_links:operation_id:operation_id:CASCADE',
   ],
   outcome_usage_provider_bindings: [
     'outcome_usage_observations:usage_id:id:CASCADE',
@@ -241,7 +270,7 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       WHERE name LIKE 'outcome_%' LIMIT 1`).get()) {
       throw new Error('outcome analytics schema exists without an authoritative marker')
     }
-    if (current && ![1, 2, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
+    if (current && ![1, 2, 3, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
       throw new Error('outcome analytics schema marker is incompatible')
     }
     if (current && current.version >= 2 && current.schema_sha256 !== actualSchemaDigest(db)) {
@@ -454,6 +483,26 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_operation_usage_unique
         ON outcome_operation_usage_links(usage_id);
 
+      CREATE TABLE IF NOT EXISTS outcome_operation_usage_reconciliations (
+        operation_id TEXT PRIMARY KEY
+          REFERENCES outcome_operation_usage_links(operation_id) ON DELETE CASCADE,
+        provisional_provider_tokens INTEGER NOT NULL
+          CHECK(provisional_provider_tokens BETWEEN 0 AND 1000000000000),
+        provisional_context_tokens INTEGER NOT NULL
+          CHECK(provisional_context_tokens BETWEEN 0 AND 1000000000000),
+        actual_provider_tokens INTEGER NOT NULL
+          CHECK(actual_provider_tokens BETWEEN 0 AND 1000000000000),
+        actual_context_tokens INTEGER NOT NULL
+          CHECK(actual_context_tokens BETWEEN 0 AND 1000000000000),
+        provider_variance_tokens INTEGER NOT NULL
+          CHECK(provider_variance_tokens BETWEEN -1000000000000 AND 1000000000000),
+        context_variance_tokens INTEGER NOT NULL
+          CHECK(context_variance_tokens BETWEEN -1000000000000 AND 1000000000000),
+        plan_overage_tokens INTEGER NOT NULL
+          CHECK(plan_overage_tokens BETWEEN 0 AND 1000000000000),
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL)
+      );
+
       CREATE TABLE IF NOT EXISTS outcome_usage_provider_bindings (
         usage_id TEXT PRIMARY KEY REFERENCES outcome_usage_observations(id) ON DELETE CASCADE,
         evidence_id TEXT NOT NULL REFERENCES provider_acceptance_evidence(id) ON DELETE RESTRICT,
@@ -565,6 +614,10 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         BEFORE UPDATE ON outcome_operation_usage_links BEGIN
           SELECT RAISE(ABORT, 'outcome operation usage link is immutable');
         END;
+      CREATE TRIGGER IF NOT EXISTS outcome_operation_usage_reconciliation_immutable_update
+        BEFORE UPDATE ON outcome_operation_usage_reconciliations BEGIN
+          SELECT RAISE(ABORT, 'outcome operation usage reconciliation is immutable');
+        END;
       CREATE TRIGGER IF NOT EXISTS outcome_usage_provider_binding_immutable_update
         BEFORE UPDATE ON outcome_usage_provider_bindings BEGIN
           SELECT RAISE(ABORT, 'outcome provider evidence binding is immutable');
@@ -572,6 +625,15 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       CREATE TRIGGER IF NOT EXISTS outcome_benchmark_evidence_binding_immutable_update
         BEFORE UPDATE ON outcome_benchmark_evidence_bindings BEGIN
           SELECT RAISE(ABORT, 'outcome benchmark evidence binding is immutable');
+        END;
+
+      CREATE TRIGGER IF NOT EXISTS outcome_schema_immutable_update
+        BEFORE UPDATE ON outcome_analytics_schema BEGIN
+          SELECT RAISE(ABORT, 'outcome analytics schema marker is immutable');
+        END;
+      CREATE TRIGGER IF NOT EXISTS outcome_schema_immutable_delete
+        BEFORE DELETE ON outcome_analytics_schema BEGIN
+          SELECT RAISE(ABORT, 'outcome analytics schema marker is required');
         END;
 
       DROP TRIGGER IF EXISTS outcome_usage_immutable_delete;
@@ -608,9 +670,22 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         (singleton, version, schema_sha256, applied_at) VALUES (1, ?, ?, ?)`)
         .run(OUTCOME_ANALYTICS_SCHEMA_VERSION, schemaDigest, new Date().toISOString())
     } else if (current.version < OUTCOME_ANALYTICS_SCHEMA_VERSION) {
+      const markerTriggers = db.prepare(`SELECT name, sql FROM sqlite_master
+        WHERE type='trigger' AND name IN (
+          'outcome_schema_immutable_update','outcome_schema_immutable_delete'
+        ) ORDER BY name`).all() as Array<{ name: string; sql: string }>
+      if (markerTriggers.length !== 2) {
+        throw new Error('outcome analytics schema marker guards are incompatible')
+      }
+      db.exec(`DROP TRIGGER outcome_schema_immutable_update;
+        DROP TRIGGER outcome_schema_immutable_delete;`)
       db.prepare(`UPDATE outcome_analytics_schema
         SET version=?, schema_sha256=?, applied_at=? WHERE singleton=1`)
         .run(OUTCOME_ANALYTICS_SCHEMA_VERSION, schemaDigest, new Date().toISOString())
+      for (const trigger of markerTriggers) db.exec(trigger.sql)
+      if (actualSchemaDigest(db) !== schemaDigest) {
+        throw new Error('outcome analytics schema marker guards are incompatible')
+      }
     } else if (current.schema_sha256 !== schemaDigest) {
       throw new Error('outcome analytics schema marker is incompatible')
     }
