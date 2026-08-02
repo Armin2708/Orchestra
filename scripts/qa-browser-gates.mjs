@@ -863,17 +863,22 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     const interactionModes = {}
     for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
       await resetJourney(name, mode)
-      await prepare(mode)
-      if (mode === 'keyboard') {
-        await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
-      }
-      const started = performance.now()
-      let error = null
-      let actionEvidence = null
+      let setupError = null
       try {
-        actionEvidence = await action(mode) ?? null
-        if (actionEvidence?.error) error = actionEvidence.error
-      } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
+        await prepare(mode)
+        if (mode === 'keyboard') {
+          await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
+        }
+      } catch (caught) { setupError = caught instanceof Error ? caught.message : String(caught) }
+      const started = performance.now()
+      let error = setupError
+      let actionEvidence = null
+      if (!setupError) {
+        try {
+          actionEvidence = await action(mode) ?? null
+          if (actionEvidence?.error) error = actionEvidence.error
+        } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
+      }
       const passed = !error && await modeReady(ready)
       const modeElapsed = performance.now() - started
       interactionModes[mode] = {
@@ -882,6 +887,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         elapsed_ms: modeElapsed,
         error,
         action_evidence: actionEvidence,
+        setup_error: setupError,
         input_surface: mode === 'pointer' ? (viewport.mobile ? 'mouse_pointer_on_mobile_viewport' : 'mouse')
           : mode === 'keyboard' ? 'keyboard_tab_navigation' : 'dom',
         counts_toward_pass: mode !== 'dom_fallback',
@@ -1066,9 +1072,6 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       },
     )
   }
-  await domActivate(client, '#cc-section-tab-agents')
-  await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home for accessibility audit')
-
   const accessibility = Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => {
     const results = journeys.map((journey) => journey.accessibility[gate])
     return [gate, {
