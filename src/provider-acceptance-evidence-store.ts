@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   canonicalHash,
   stableJson,
@@ -49,6 +51,30 @@ type ProviderAcceptanceEvidenceRowV1 = {
 
 export type ProviderAcceptanceEvidenceStoreOptionsV1 = {
   now?: () => Date
+  loadArtifact?: (artifactRef: string) => string | Uint8Array
+}
+
+const defaultArtifactLoader = (artifactRef: string): Uint8Array => {
+  let url: URL
+  try {
+    url = new URL(artifactRef)
+  } catch {
+    throw new Error('provider acceptance artifact reference is not resolvable')
+  }
+  if (url.protocol !== 'file:') {
+    throw new Error('provider acceptance artifact reference is not resolvable')
+  }
+  return readFileSync(fileURLToPath(url))
+}
+
+const parseArtifact = (artifact: string | Uint8Array): unknown => {
+  try {
+    return JSON.parse(typeof artifact === 'string'
+      ? artifact
+      : Buffer.from(artifact).toString('utf8')) as unknown
+  } catch {
+    throw new Error('provider acceptance artifact is invalid')
+  }
 }
 
 const recordId = (
@@ -136,6 +162,7 @@ const evidenceRecord = (
 
 export class ProviderAcceptanceEvidenceStoreV1 {
   readonly #now: () => Date
+  readonly #loadArtifact: (artifactRef: string) => string | Uint8Array
   readonly #hydrated = new WeakSet<ProviderAdapterRegistryV1>()
 
   constructor(
@@ -143,6 +170,7 @@ export class ProviderAcceptanceEvidenceStoreV1 {
     options: ProviderAcceptanceEvidenceStoreOptionsV1 = {},
   ) {
     this.#now = options.now ?? (() => new Date())
+    this.#loadArtifact = options.loadArtifact ?? defaultArtifactLoader
   }
 
   record(
@@ -208,6 +236,19 @@ export class ProviderAcceptanceEvidenceStoreV1 {
         || Date.parse(left.recorded_at) - Date.parse(right.recorded_at)
         || left.id.localeCompare(right.id))
     for (const record of evidence) {
+      let artifact: unknown
+      try {
+        artifact = parseArtifact(this.#loadArtifact(record.artifact_ref))
+      } catch (error) {
+        throw new Error(
+          `provider acceptance artifact could not be verified: ${record.id}`,
+          { cause: error },
+        )
+      }
+      if (canonicalHash(artifact) !== record.artifact_sha256
+        || stableJson(artifact) !== stableJson(record.matrix)) {
+        throw new Error(`provider acceptance artifact digest mismatch: ${record.id}`)
+      }
       registry.recordAcceptance(
         record.matrix as DeclaredProviderAcceptanceMatrixV1,
       )

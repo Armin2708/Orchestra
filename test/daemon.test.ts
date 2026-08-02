@@ -2,10 +2,12 @@ import { expect, it } from 'vitest'
 import {
   codexTokenBudgetForThread,
   codexProviderContractRouting,
+  createDaemonProviderToolSurface,
   codexWorkspaceForThread,
   dataDir,
   port,
   sanitizedCodexEnvironment,
+  synchronizeDaemonProviderToolSurface,
   survivors,
 } from '../src/daemon.js'
 import { openDb } from '../src/db.js'
@@ -106,4 +108,59 @@ it('keeps Codex provider-contract routing opt-in and commit-exact', () => {
     ORCHESTRA_CODEX_PROVIDER_CONTRACT: '1',
     ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT: 'main',
   })).toThrow(/exact 40- or 64-character commit/)
+})
+
+it('composes and refreshes the daemon tool surface from verified provider evidence', async () => {
+  const checkedAt = '2026-08-02T09:00:00.000Z'
+  const doctor = (version: string) => ({
+    schema_version: 2 as const,
+    contract_schema_version: 1,
+    compatibility_schema_version: 1 as const,
+    checked_at: checkedAt,
+    provider: 'codex' as const,
+    mode: 'readiness' as const,
+    fail_closed: true as const,
+    ready: true,
+    status: 'validated' as const,
+    compatibility_ready: true,
+    compatibility_status: 'validated' as const,
+    checks: [{
+      id: 'codex_cli', label: 'Codex CLI', required: true,
+      status: 'validated' as const, actual: version, expected: version, detail: 'verified',
+      executable: {
+        source: 'path' as const,
+        display: '<$PATH>/codex',
+        path_fingerprint: 'sha256:0123456789abcdef',
+      },
+    }],
+  })
+  const discovery = (version: string) => ({
+    contract_version: 1 as const,
+    provider_id: 'codex',
+    adapter_id: 'codex-app-server',
+    status: 'validated' as const,
+    source: 'path' as const,
+    version,
+    platform: 'darwin-arm64',
+    resolved_path: '/opt/codex/bin/codex',
+    executable_fingerprint: `sha256:${'a'.repeat(64)}`,
+  })
+  const current = await createDaemonProviderToolSurface({
+    doctor: () => doctor('0.144.6'),
+    discoverCodex: async () => discovery('0.144.6'),
+    integrations: () => [],
+  })
+  expect(current.matrix.find((row) => row.provider_id === 'codex'))
+    .toMatchObject({ executable: { health: 'validated' } })
+
+  const changed = await createDaemonProviderToolSurface({
+    doctor: () => doctor('0.144.6'),
+    discoverCodex: async () => discovery('0.145.0'),
+    integrations: () => [],
+  })
+  synchronizeDaemonProviderToolSurface(current, changed)
+  expect(current.matrix.find((row) => row.provider_id === 'codex'))
+    .toMatchObject({ executable: { health: 'untrusted' } })
+  expect(current.registry.get('provider:codex:cli'))
+    .toMatchObject({ status: 'unsupported', direct_terminal_available: true })
 })

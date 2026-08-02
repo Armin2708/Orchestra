@@ -3,6 +3,7 @@ import {
 } from './provider-manifests.js'
 import {
   PROVIDER_CAPABILITY_IDS,
+  defineProviderExecutableDiscoveryV1,
   type ProviderCapabilityId,
   type ProviderExecutableDiscoveryV1,
   type ProviderManifestV1,
@@ -278,6 +279,14 @@ export class ToolCapabilityRegistry {
     return entry
   }
 
+  synchronize(inputs: readonly ToolCapability[]): void {
+    const next = new ToolCapabilityRegistry(inputs)
+    this.#entries.clear()
+    for (const entry of next.#entries.values()) {
+      this.#entries.set(entry.id, entry)
+    }
+  }
+
   get(id: string): Readonly<ToolCapability> | null {
     return this.#entries.get(id) ?? null
   }
@@ -301,6 +310,68 @@ const doctorCheck = (
   id: string,
 ): OperatorDoctorCheck | undefined => report?.checks.find((check) => check.id === id)
 
+const doctorProviders = (
+  provider: OperatorDoctorReport['provider'],
+): readonly string[] => provider === 'both' ? ['claude', 'codex'] : [provider]
+
+const verifiedEvidence = (
+  evidence: DeclaredProviderEvidence,
+): DeclaredProviderEvidence => {
+  const doctor = evidence.doctor
+  if (doctor !== undefined && doctor !== null) {
+    if (doctor.schema_version !== 2
+      || doctor.mode !== 'readiness'
+      || doctor.fail_closed !== true
+      || !['claude', 'codex', 'both'].includes(doctor.provider)
+      || !Number.isFinite(Date.parse(doctor.checked_at))
+      || Date.parse(doctor.checked_at) > Date.now() + 5_000) {
+      throw new Error('provider tool doctor evidence is invalid')
+    }
+    const checkIds = doctor.checks.map((check) => check.id)
+    if (new Set(checkIds).size !== checkIds.length) {
+      throw new Error('provider tool doctor evidence contains duplicate checks')
+    }
+  }
+
+  const discoveries = Object.fromEntries(Object.entries(evidence.discoveries ?? {})
+    .filter((entry): entry is [string, ProviderExecutableDiscoveryV1] => entry[1] !== undefined)
+    .map(([providerId, discovery]) => {
+      const manifest = FIRST_RELEASE_PROVIDER_MANIFESTS_V1.find((candidate) =>
+        candidate.provider_id === providerId)
+      if (!manifest) throw new Error(`provider tool discovery is undeclared: ${providerId}`)
+      const defined = defineProviderExecutableDiscoveryV1(discovery)
+      if (defined.provider_id !== manifest.provider_id
+        || defined.adapter_id !== manifest.adapter_id) {
+        throw new Error(`provider tool discovery does not match manifest: ${providerId}`)
+      }
+      if (doctor && doctorProviders(doctor.provider).includes(providerId)) {
+        const checkId = providerId === 'claude' ? 'claude_bundled_cli' : 'codex_cli'
+        const check = doctorCheck(doctor, checkId)
+        const doctorValidated = check?.status === 'validated'
+        const discoveryValidated = defined.status === 'validated'
+        if (!check
+          || doctorValidated !== discoveryValidated
+          || (doctorValidated && check.actual !== defined.version)) {
+          return [providerId, Object.freeze({ ...defined, status: 'untrusted' as const })]
+        }
+      }
+      return [providerId, defined]
+    }))
+
+  if (evidence.observedAt !== undefined && evidence.observedAt !== null) {
+    if (!Number.isFinite(Date.parse(evidence.observedAt))
+      || Date.parse(evidence.observedAt) > Date.now() + 5_000
+      || (doctor && evidence.observedAt !== doctor.checked_at)) {
+      throw new Error('provider tool observation timestamp is invalid')
+    }
+  }
+  return {
+    ...evidence,
+    doctor,
+    discoveries,
+  }
+}
+
 const executableFromDoctor = (
   manifest: ProviderManifestV1,
   report: OperatorDoctorReport | null | undefined,
@@ -319,19 +390,26 @@ const executableFromDoctor = (
   const probeFailure = 'probe_failure' in check
     ? check.probe_failure ?? null
     : null
+  const pathFingerprint = safeFingerprint(identity?.path_fingerprint)
+  const validatedIdentity = check.status !== 'validated'
+    || (identity !== undefined
+      && identity.source !== 'process'
+      && pathFingerprint !== null
+      && typeof check.actual === 'string'
+      && check.actual.trim().length > 0)
   return {
     source: identity?.source === 'process' ? 'unknown' : identity?.source ?? 'unknown',
     version: check.actual,
     platform: null,
     health: check.status === 'validated'
-      ? 'validated'
+      ? validatedIdentity ? 'validated' : 'untrusted'
       : probeFailure === 'missing'
         ? 'missing'
         : check.actual === null
           ? 'unknown'
           : 'incompatible',
     probe_failure: probeFailure,
-    path_fingerprint: safeFingerprint(identity?.path_fingerprint),
+    path_fingerprint: pathFingerprint,
     executable_fingerprint: null,
   }
 }
@@ -533,8 +611,9 @@ export function createDeclaredProviderToolRegistry(
   registry: ToolCapabilityRegistry
   matrix: DeclaredProviderCapabilityMatrixRow[]
 } {
-  const matrix = buildDeclaredProviderCapabilityMatrix(evidence)
-  const observedAt = evidence.observedAt ?? evidence.doctor?.checked_at ?? null
+  const verified = verifiedEvidence(evidence)
+  const matrix = buildDeclaredProviderCapabilityMatrix(verified)
+  const observedAt = verified.observedAt ?? verified.doctor?.checked_at ?? null
   return {
     matrix,
     registry: new ToolCapabilityRegistry([

@@ -90,7 +90,7 @@ describe('provider-neutral tool capabilities', () => {
         schema_version: 2,
         contract_schema_version: 1,
         compatibility_schema_version: 1,
-        checked_at: '2026-08-02T10:00:00.000Z',
+        checked_at: '2026-08-02T09:00:00.000Z',
         provider: 'both',
         mode: 'readiness',
         fail_closed: true,
@@ -128,6 +128,63 @@ describe('provider-neutral tool capabilities', () => {
     expect(serialized).toContain('sha256:0123456789abcdef')
     registry.register(nativeTool())
     expect(() => registry.register(nativeTool())).toThrow(/already registered/)
+    registry.synchronize([nativeTool({ id: 'native:replacement', name: 'Replacement' })])
+    expect(registry.get('native:workspace-editor')).toBeNull()
+    expect(registry.get('native:replacement')).toMatchObject({ name: 'Replacement' })
+  })
+
+  it('rejects mismatched doctor and executable discovery evidence', () => {
+    const doctor = {
+      schema_version: 2 as const,
+      contract_schema_version: 1,
+      compatibility_schema_version: 1 as const,
+      checked_at: '2026-08-02T09:00:00.000Z',
+      provider: 'codex' as const,
+      mode: 'readiness' as const,
+      fail_closed: true as const,
+      ready: true,
+      status: 'validated' as const,
+      compatibility_ready: true,
+      compatibility_status: 'validated' as const,
+      checks: [{
+        id: 'codex_cli', label: 'Codex CLI', required: true,
+        status: 'validated' as const, actual: '0.144.6', expected: '0.144.6', detail: 'ok',
+        executable: { source: 'path' as const, display: '<$PATH>/codex', path_fingerprint: 'sha256:0123456789abcdef' },
+      }],
+    }
+    const mismatched = createDeclaredProviderToolRegistry({
+      doctor,
+      discoveries: {
+        codex: {
+          contract_version: 1,
+          provider_id: 'codex',
+          adapter_id: 'codex-app-server',
+          status: 'validated',
+          source: 'path',
+          version: '0.145.0',
+          platform: 'darwin-arm64',
+          resolved_path: '/opt/codex/bin/codex',
+          executable_fingerprint: `sha256:${'a'.repeat(64)}`,
+        },
+      },
+    })
+    expect(mismatched.matrix.find((row) => row.provider_id === 'codex'))
+      .toMatchObject({ executable: { health: 'untrusted' } })
+
+    const absent = createDeclaredProviderToolRegistry()
+    expect(absent.matrix.every((row) =>
+      row.blockers.some((blocker) => blocker.startsWith('executable_')))).toBe(true)
+    expect(absent.registry.list().filter((tool) => tool.kind === 'cli')
+      .every((tool) => tool.status !== 'ready')).toBe(true)
+
+    const malformed = createDeclaredProviderToolRegistry({
+      doctor: {
+        ...doctor,
+        checks: [{ ...doctor.checks[0], executable: undefined }],
+      },
+    })
+    expect(malformed.matrix.find((row) => row.provider_id === 'codex'))
+      .toMatchObject({ executable: { health: 'untrusted' } })
   })
 })
 

@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   canonicalHash,
   stableJson,
@@ -359,7 +360,7 @@ export class ProviderAcceptanceRunV1 {
           registry,
           matrix as DeclaredProviderAcceptanceMatrixV1,
           {
-            artifact_ref: matrixRef,
+            artifact_ref: pathToFileURL(matrixPath).href,
             artifact_sha256: matrixWritten.sha256,
           },
         )
