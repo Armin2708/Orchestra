@@ -21,6 +21,11 @@ import {
   type AgentProviderCatalog,
 } from './agent-providers.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
+import {
+  issueManagedAgentLaunchBootstrap,
+  MANAGED_AGENT_BOOTSTRAP_ENV,
+  MANAGED_AGENT_HOME_SESSION_ENV,
+} from './agent-session-credential.js'
 import type {
   ClaudeAgentHomeBinding,
   ClaudeNativeEvent,
@@ -515,14 +520,16 @@ export class Conductor {
       do { name = generateName() } while (
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))
     }
+    const bootstrap = issueManagedAgentLaunchBootstrap()
     this.db.prepare(`
       INSERT INTO agents (
-        board_id, name, session_id, kind, role, provider, sdk_session, external_session_id
-      ) VALUES (?, ?, ?, 'hired', ?, 'claude', ?, ?)
+        board_id, name, session_id, kind, role, provider, sdk_session,
+        external_session_id, hook_token_hash
+      ) VALUES (?, ?, ?, 'hired', ?, 'claude', ?, ?, ?)
       ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'),
         session_id=excluded.session_id, kind='hired', role=excluded.role, provider='claude',
         sdk_session=excluded.sdk_session, external_session_id=excluded.external_session_id,
-        provider_state_json='{}', hook_token_hash=NULL
+        provider_state_json='{}', hook_token_hash=excluded.hook_token_hash
     `).run(
       opts.boardId,
       name,
@@ -530,6 +537,7 @@ export class Conductor {
       opts.role ?? null,
       opts.resumeSession ?? null,
       opts.resumeSession ?? null,
+      bootstrap.hash,
     )
     const agent = this.db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name) as any
 
@@ -707,8 +715,17 @@ export class Conductor {
       ORCHESTRA_AGENT: name,
       ORCHESTRA_NAME: name,
       ORCHESTRA_MANAGED_AGENT: '1',
-      ...(this.agentToken ? { ORCHESTRA_AGENT_TOKEN: this.agentToken } : {}),
+      ORCHESTRA_AGENT_ID: String(agent.id),
+      ORCHESTRA_BOARD_ID: String(opts.boardId),
+      [MANAGED_AGENT_BOOTSTRAP_ENV]: bootstrap.nonce,
+      ...(opts.agentHome
+        ? { [MANAGED_AGENT_HOME_SESSION_ENV]: opts.agentHome.agentHomeSessionId }
+        : {}),
     }
+    // A launch-bound nonce is the only pre-registration bearer available inside
+    // the provider. Ambient daemon/operator credentials never cross this boundary.
+    delete env.ORCHESTRA_AGENT_TOKEN
+    delete env.ORCHESTRA_TOKEN
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
     // cannot auto-claim ownership, so their cards are born unowned
     if (opts.role === 'auditor' || opts.role === 'verifier') delete env.ORCHESTRA_AGENT
