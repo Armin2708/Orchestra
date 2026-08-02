@@ -1138,6 +1138,24 @@ export class PlanningTeamService {
     if (!resolution) throw new ConflictError('resolved conflict is missing its exact resolution source')
     const summary = boundedText(input.summary, 'knowledge candidate summary', 4000)
     const actor = normalizeActor(input.actor)
+    if (actor.type === 'agent') {
+      const requester = this.db.prepare(`SELECT participant.agent_profile_id
+        FROM os_conflict_participants affected
+        JOIN os_team_plan_participants participant ON participant.id=affected.participant_id
+        WHERE affected.conflict_id=? AND participant.agent_profile_id=?
+          AND participant.status='active'`)
+        .get(conflict.id, actor.id) as { agent_profile_id: string } | undefined
+      if (!requester || requester.agent_profile_id !== actor.id) {
+        throw new ConflictError(
+          'conflict knowledge requester must be the exact affected participant profile',
+        )
+      }
+      if (requester.agent_profile_id === resolution.arbiter_id) {
+        throw new ConflictError(
+          'conflict knowledge requester must differ from the resolution arbiter',
+        )
+      }
+    }
     const source = this.conflictKnowledgeSource(conflict, resolution)
     const sourceSha256 = sha256(stableJson(source))
     const boardId = Number(conflict.board_id)

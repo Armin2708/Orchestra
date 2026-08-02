@@ -156,7 +156,7 @@ export const teamPlanningPlugin: FastifyPluginAsync<TeamPlanningRouteOptions> = 
     (request, reply) => {
       const body = mutationBody(request, request.body, options, {
         actorType: 'human',
-        operatorOnly: true,
+        conflictId: request.params.conflictId,
       })
       const result = service.requestConflictKnowledgePromotion({
         ...body,

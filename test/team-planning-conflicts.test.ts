@@ -540,6 +540,48 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
     }
   })
 
+  it('rejects a conflict Knowledge request from the exact profile that arbitrated resolution', () => {
+    const value = fixture()
+    const conflict = value.service.openConflict({
+      teamId: String(value.plan.id),
+      kind: 'path',
+      severity: 'medium',
+      summary: 'Reviewer arbitrates an overlap.',
+      participantMemberIds: [value.implementerMember.id, value.reviewerMember.id],
+      causalJobIds: [value.job.id],
+      affectedResources: [{ kind: 'path', key: 'src/agent-os/team-planning.ts' }],
+      detectionEvidence: { detector: 'arbiter-independence' },
+      actor: operator,
+      idempotencyKey: `arbiter-conflict-${value.boardId}`,
+    })
+    const proposal = value.service.addConflictProposal({
+      conflictId: String(conflict.id),
+      proposedByMemberId: value.implementerMember.id,
+      kind: 'serialize',
+      summary: 'Serialize exact changes.',
+      actor: operator,
+      idempotencyKey: `arbiter-proposal-${value.boardId}`,
+    })
+    value.service.resolveConflict({
+      conflictId: String(conflict.id),
+      proposalId: String(proposal.id),
+      arbiterMemberId: value.reviewerMember.id,
+      rationale: 'Reviewer arbitrates the exact ordering.',
+      followUpActions: [],
+      actor: { type: 'agent', id: value.reviewer.id },
+      idempotencyKey: `arbiter-resolution-${value.boardId}`,
+    })
+    expect(() => value.service.requestConflictKnowledgePromotion({
+      conflictId: String(conflict.id),
+      summary: 'The arbiter must not request its own promotion candidate.',
+      actor: { type: 'agent', id: value.reviewer.id },
+      idempotencyKey: `arbiter-candidate-${value.boardId}`,
+    })).toThrow(/differ from the resolution arbiter/)
+    expect(value.db.prepare(`SELECT COUNT(*) AS count FROM os_conflict_knowledge_candidates`).get())
+      .toEqual({ count: 0 })
+    value.db.close()
+  })
+
   it('enforces facilitator synthesis, digest fanout, budgets, deadlines, and human override', () => {
     const value = fixture()
     expect(() => value.service.recordArtifact({
@@ -945,5 +987,112 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
     expect(humanOverride.statusCode).toBe(403)
     await app.close()
     value.db.close()
+  })
+
+  it('composes an exact participant request with distinct operator review and promotion', async () => {
+    const repository = createRepository()
+    const value = fixture({ canonicalKnowledge: true, projectPath: repository.root })
+    const conflict = resolveConflictFixture(value, 'route-agent-request')
+    const app = Fastify()
+    app.addHook('preHandler', async (request) => {
+      request.orchestraPrincipal = request.headers.authorization === 'Bearer test'
+        ? 'knowledge-reviewer'
+        : 'agent'
+    })
+    await app.register(teamPlanningPlugin, {
+      prefix: '/api/v1/os',
+      db: value.db,
+      discussionAdapter: value.discussionAdapter,
+      isOperator: (request) => request.headers.authorization === 'Bearer test',
+      resolveAgentPrincipal: (request) => {
+        const profileId = request.headers['x-test-profile']
+        if (profileId !== value.implementer.id && profileId !== value.facilitator.id) return null
+        return {
+          agentId: profileId === value.implementer.id ? 42 : 43,
+          boardId: value.boardId,
+          profileId,
+          provider: 'codex',
+          providerSessionId: `provider-${profileId}`,
+          sessionId: `session-${profileId}`,
+          jobId: value.job.id,
+          jobAssignmentId: value.assignment.id,
+          assignmentMarketVersion: value.assignment.assigned_market_version,
+        }
+      },
+    })
+    try {
+      const requestUrl = `/api/v1/os/team-conflicts/${conflict.id}/knowledge-candidates`
+      const outsideConflict = await app.inject({
+        method: 'POST',
+        url: requestUrl,
+        headers: {
+          'x-test-profile': value.facilitator.id,
+          'idempotency-key': `route-candidate-outside-${value.boardId}`,
+        },
+        payload: { summary: 'A plan participant outside this conflict cannot request promotion.' },
+      })
+      expect(outsideConflict.statusCode).toBe(403)
+
+      const requested = await app.inject({
+        method: 'POST',
+        url: requestUrl,
+        headers: {
+          'x-test-profile': value.implementer.id,
+          'idempotency-key': `route-candidate-agent-${value.boardId}`,
+        },
+        payload: { summary: 'Request exact conflict evidence for independent human review.' },
+      })
+      expect(requested.statusCode, requested.body).toBe(201)
+      expect(requested.json().result).toMatchObject({
+        status: 'pending_review',
+        requested_by_type: 'agent',
+        requested_by_id: value.implementer.id,
+        review_required: true,
+      })
+      const candidateId = String(requested.json().result.id)
+
+      const agentReview = await app.inject({
+        method: 'POST',
+        url: `/api/v1/os/team-conflict-knowledge-candidates/${candidateId}/review`,
+        headers: {
+          'x-test-profile': value.implementer.id,
+          'idempotency-key': `route-candidate-agent-review-${value.boardId}`,
+        },
+        payload: { decision: 'accept', reason: 'Agents cannot review their candidates.' },
+      })
+      expect(agentReview.statusCode).toBe(403)
+
+      const reviewed = await app.inject({
+        method: 'POST',
+        url: `/api/v1/os/team-conflict-knowledge-candidates/${candidateId}/review`,
+        headers: {
+          authorization: 'Bearer test',
+          'idempotency-key': `route-candidate-human-review-${value.boardId}`,
+        },
+        payload: {
+          decision: 'accept',
+          reason: 'Distinct human reviewer verified the exact source and provenance.',
+        },
+      })
+      expect(reviewed.statusCode, reviewed.body).toBe(201)
+      expect(reviewed.json().result).toMatchObject({
+        id: candidateId,
+        status: 'accepted',
+        requested_by_id: value.implementer.id,
+        reviewed_by_type: 'human',
+        reviewed_by_id: 'knowledge-reviewer',
+        knowledge_source_id: expect.stringMatching(/^ks_[a-f0-9]{64}$/),
+        independently_reviewed: true,
+      })
+      expect(value.db.prepare(`SELECT source_kind FROM knowledge_sources
+        WHERE board_id=? AND id=?`).get(
+        value.boardId,
+        reviewed.json().result.knowledge_source_id,
+      )).toEqual({ source_kind: 'decision' })
+    } finally {
+      await app.close()
+      value.db.close()
+      repository.cleanup()
+    }
   })
 })
