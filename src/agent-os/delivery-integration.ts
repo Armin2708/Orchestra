@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { execFileSync } from 'node:child_process'
 import { DeliveryReportService, type DeliveryReport } from './delivery-reports.js'
 import { EvidenceService } from './evidence.js'
 import { ConflictError } from './errors.js'
@@ -124,6 +125,7 @@ export class DeliveryLifecycleIntegration {
   completeRuntime(input: RuntimeDeliveryInput): DeliveryReport {
     let delivery = this.reports.prepareForJob(input.jobId)
     const summary = concise(input.summary) || `Provider ${input.provider} completed job ${input.jobId}.`
+    const sourceCommit = this.citedBranchCommit(input.cardId)
 
     if (!this.runtimeEvidence(input.jobId)) {
       const capture = this.db.transaction(() => {
@@ -155,6 +157,7 @@ export class DeliveryLifecycleIntegration {
           claims: [summary],
           artifactIds: [capture.artifact.id],
           changedFiles: capture.evidence.changed_files,
+          commits: sourceCommit ? [sourceCommit] : [],
           gaps: [
             ...capture.evidence.gaps,
             'The provider did not submit a structured delivery report; its final output is retained as an unverified claim.',
@@ -168,6 +171,7 @@ export class DeliveryLifecycleIntegration {
         summary,
         claims: [summary],
         artifactIds: evidence.artifactId ? [evidence.artifactId] : [],
+        commits: sourceCommit ? [sourceCommit] : [],
         gaps: ['The provider did not submit a structured delivery report; its final output is retained as an unverified claim.'],
       })
     }
@@ -179,14 +183,41 @@ export class DeliveryLifecycleIntegration {
   private submitCompatibility(delivery: DeliveryReport, input: ReviewDeliveryInput): DeliveryReport {
     const persisted = this.evidence.persist(input.cardId)
     const summary = concise(input.summary) || 'Card was submitted through the compatibility review flow.'
+    const sourceCommit = this.citedBranchCommit(input.cardId)
     return this.reports.submit(delivery.id, {
       actor: input.actor,
       summary,
       claims: input.summary?.trim() ? [input.summary.trim()] : [],
       artifactIds: [persisted.artifact.id],
       changedFiles: persisted.evidence.changed_files,
+      commits: sourceCommit ? [sourceCommit] : [],
       gaps: persisted.evidence.gaps,
     })
+  }
+
+  private citedBranchCommit(cardId: number): string | null {
+    const row = this.db.prepare(`SELECT cards.branch, boards.project_path
+      FROM cards JOIN boards ON boards.id=cards.board_id
+      WHERE cards.id=?`).get(cardId) as {
+        branch: string | null
+        project_path: string
+      } | undefined
+    if (!row?.branch) return null
+    try {
+      execFileSync('git', ['check-ref-format', '--branch', row.branch], {
+        cwd: row.project_path,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      const commit = execFileSync(
+        'git',
+        ['rev-parse', '--verify', `refs/heads/${row.branch}^{commit}`],
+        { cwd: row.project_path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim()
+      return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) ? commit : null
+    } catch {
+      return null
+    }
   }
 
   private overrideOpenRows(delivery: DeliveryReport, actor: string, reason: string): DeliveryReport {

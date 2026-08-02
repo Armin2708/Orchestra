@@ -57,6 +57,15 @@ import {
   AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID,
   installTeamCollaborationReviewSchema,
 } from './team-collaboration-review-migration.js'
+import {
+  AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+  installDeliveryShipmentIntegritySchema,
+} from './delivery-shipment-integrity-migration.js'
+import {
+  AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+  KNOWLEDGE_CONTEXT_USE_ACTUAL_TABLE_SQL,
+  installKnowledgeContextUseActualEvidenceSchema,
+} from './knowledge-context-use-actual-migration.js'
 
 interface Migration {
   id: string
@@ -385,7 +394,13 @@ const assertKnowledgeSchemaCompatible = (db: Database.Database): void => {
   }
   for (const table of tableRows) {
     const actualHash = sha256(normalizedSchemaSql(table.sql ?? ''))
-    if (actualHash !== KNOWLEDGE_TABLE_SCHEMA_HASHES[table.name]) {
+    const acceptedHashes = table.name === 'context_uses'
+      ? [
+          KNOWLEDGE_TABLE_SCHEMA_HASHES.context_uses,
+          sha256(normalizedSchemaSql(KNOWLEDGE_CONTEXT_USE_ACTUAL_TABLE_SQL)),
+        ]
+      : [KNOWLEDGE_TABLE_SCHEMA_HASHES[table.name]]
+    if (!acceptedHashes.includes(actualHash)) {
       throw new Error(
         'migration 018-knowledge-persistence found an incompatible knowledge schema',
       )
@@ -7608,6 +7623,38 @@ const migrations: Migration[] = [
         )
       }
       installTeamCollaborationReviewSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+    apply(db) {
+      const hasTeamCollaborationReview = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID)
+      if (!hasTeamCollaborationReview) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryShipmentIntegritySchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+    apply(db) {
+      const dependencies = db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+        WHERE id IN (?, ?)`).get(
+        '018-knowledge-persistence',
+        AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+      ) as { count: number }
+      if (dependencies.count !== 2) {
+        throw new Error(
+          `migration ${AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID}`
+          + ' requires 018-knowledge-persistence'
+          + ` and ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`,
+        )
+      }
+      installKnowledgeContextUseActualEvidenceSchema(db)
     },
   },
 ]

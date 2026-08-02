@@ -549,7 +549,7 @@ describe('knowledge persistence migration 018', () => {
     `).get(MIGRATION_ID)).toEqual({ id: MIGRATION_ID })
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '034-team-collaboration-review' })
+    `).get()).toEqual({ id: '036-knowledge-context-use-actual-evidence' })
     const tables = (db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
@@ -567,7 +567,7 @@ describe('knowledge persistence migration 018', () => {
     ])
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get() as { count: number }).count).toBe(34)
+    ).get() as { count: number }).count).toBe(36)
     db.close()
   })
 
@@ -1825,11 +1825,6 @@ describe('knowledge persistence migration 018', () => {
     `).get(boardId, buildId)).toEqual({ status: 'used' })
     expect(() => db.prepare(`
       UPDATE context_uses
-      SET outcome='completed', actual_tokens=NULL, completed_at=?
-      WHERE board_id=? AND id=?
-    `).run(at, boardId, useId)).toThrow()
-    expect(() => db.prepare(`
-      UPDATE context_uses
       SET outcome='completed', actual_tokens=1, completed_at='2026-07-25T23:59:59.000Z'
       WHERE board_id=? AND id=?
     `).run(boardId, useId)).toThrow()
@@ -1840,7 +1835,7 @@ describe('knowledge persistence migration 018', () => {
     `).run(at, boardId, useId)).toThrow(/CHECK/)
     db.prepare(`
       UPDATE context_uses
-      SET outcome='completed', actual_tokens=1, completed_at=?
+      SET outcome='completed', actual_tokens=NULL, completed_at=?
       WHERE board_id=? AND id=?
     `).run(at, boardId, useId)
     expect(db.prepare(`
@@ -1848,7 +1843,7 @@ describe('knowledge persistence migration 018', () => {
       FROM context_uses WHERE board_id=? AND id=?
     `).get(boardId, useId)).toEqual({
       outcome: 'completed',
-      actual_tokens: 1,
+      actual_tokens: null,
       completed_at: at,
     })
     expect(() => db.prepare(`

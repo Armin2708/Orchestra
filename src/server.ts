@@ -21,6 +21,7 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
+import { DeliveryTrackbookService } from './agent-os/delivery-trackbook.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { CODEX_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
@@ -115,6 +116,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
   const deliveryLifecycle = new DeliveryLifecycleIntegration(db)
+  const deliveryTrackbook = new DeliveryTrackbookService(db)
   const deliveryFailure = (error: unknown, reply: any) => {
     if (error instanceof AgentOsError) {
       return reply.code(error.statusCode).send({ error: error.message, code: error.code })
@@ -369,16 +371,40 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   }
   // ── auto-ship (#59): one queue per board, integrating approved branches serially ──
   const ships = new Map<number, Pick<ShipQueue, 'enqueue' | 'status'>>()
+  const pendingShipmentEvidence = new Map<number, { reportId: string; sourceCommit: string }>()
   const shipFor = (board: { id: number; project_path: string }) => {
     let q = ships.get(board.id)
     if (q) return q
     const hooks: ShipHooks = {
-      onEvent: (type, data) => emit(board.id, 'ship', { status: type, ...data }),
+      onEvent: (type, data) => {
+        emit(board.id, 'ship', { status: type, ...data })
+        if (type === 'skipped') pendingShipmentEvidence.delete(Number(data.card_id))
+      },
       recordShipped: async (cardId, hash) => {
         await recordShipped(db, server.bus, { id: cardId, board_id: board.id }, board.project_path, { hash, by: 'autoship' })
+        const evidence = pendingShipmentEvidence.get(cardId)
+        if (!evidence) throw new Error('accepted delivery shipment evidence is missing')
+        const receipt = deliveryTrackbook.recordShipQueueReceipt({
+          boardId: board.id,
+          cardId,
+          sourceCommit: evidence.sourceCommit,
+          observedHeadCommit: hash,
+          idempotencyKey: `ship-queue-receipt:${board.id}:${cardId}:${hash}`,
+        })
+        deliveryTrackbook.ship(evidence.reportId, {
+          actor: { type: 'operator', id: 'ship_queue' },
+          receiptId: receipt.id,
+          artifactAttestationIds: deliveryTrackbook.artifactAttestations(evidence.reportId)
+            .map((attestation) => attestation.id),
+          idempotencyKey: `ship-queue-delivery:${receipt.id}`,
+        })
       },
-      onSuccess: (c) => emit(board.id, 'card', getCard(c.cardId)),
+      onSuccess: (c) => {
+        pendingShipmentEvidence.delete(c.cardId)
+        emit(board.id, 'card', getCard(c.cardId))
+      },
       onFailure: (c, reason, detail) => {
+        pendingShipmentEvidence.delete(c.cardId)
         db.prepare(`UPDATE cards SET column_name='blocked', updated_at=datetime('now') WHERE id=?`).run(c.cardId)
         logEvent(c.cardId, null, 'autoship_failed', { reason, detail: detail.slice(0, 4000) })
         emit(board.id, 'card', getCard(c.cardId))
@@ -667,6 +693,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         return { card: getCard(card.id), decision, held: true, reason: gate.held }
       }
       let delivery
+      let shipmentEvidence: { reportId: string; sourceCommit: string } | null = null
       try {
         delivery = deliveryLifecycle.accept({
           cardId: card.id,
@@ -674,7 +701,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           summary: note,
           confirmed,
         })
+        if (!delivery) {
+          return reply.code(409).send({ error: 'accepted delivery evidence is unavailable' })
+        }
         deliveryLifecycle.assertDoneReady(card.id)
+        if (wantShip) {
+          const sourceCommit = delivery.commits
+            .filter((commit) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit))
+            .at(-1)
+          if (delivery.status !== 'accepted' || !sourceCommit) {
+            return reply.code(409).send({
+              error: 'autoship requires the current accepted delivery to cite a full source commit',
+            })
+          }
+          shipmentEvidence = { reportId: delivery.id, sourceCommit }
+        }
       } catch (error) {
         return deliveryFailure(error, reply)
       }
@@ -694,6 +735,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         ...(confirmed ? { confirmed: true } : {}),
       })
       if (wantShip) {
+        pendingShipmentEvidence.set(card.id, shipmentEvidence!)
         if (gate.warn) logEvent(card.id, null, 'autoship_note', { warn: gate.warn })
         const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
         shipFor(board).enqueue({ boardId: card.board_id, cardId: card.id, branch: card.branch, title: card.title, worktree: null })

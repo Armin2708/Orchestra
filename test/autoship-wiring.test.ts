@@ -116,9 +116,18 @@ function serverSetup(shipQueue: any) {
   return { db, s }
 }
 
-async function reviewCard(db: any, s: any, branch: string | null = 'card-1') {
+async function reviewCard(
+  db: any,
+  s: any,
+  branch: string | null = 'card-1',
+  projectPath = '/proj',
+) {
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/proj' } })).json()
+  const b = (await s.inject({
+    method: 'POST',
+    url: '/api/v1/boards/resolve',
+    payload: { project_path: projectPath },
+  })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'ship me' } })).json()
   db.prepare(`UPDATE cards SET column_name='review', branch=? WHERE id=?`).run(branch, card.id)
   return card.id
@@ -127,7 +136,9 @@ async function reviewCard(db: any, s: any, branch: string | null = 'card-1') {
 it('approving a branch-bearing card enqueues it for shipping', async () => {
   const enqueued: any[] = []
   const t = serverSetup({ enqueue: (c: any) => { enqueued.push(c); return { queued: true } }, status: () => null })
-  const id = await reviewCard(t.db, t.s)
+  const repo = await mkRepo()
+  await git(repo, 'branch', 'card-1')
+  const id = await reviewCard(t.db, t.s, 'card-1', repo)
   const res = await t.s.inject({ method: 'POST', url: `/api/v1/cards/${id}/approve`, payload: {} })
   expect(res.statusCode).toBe(200)
   expect(enqueued).toHaveLength(1)
@@ -150,7 +161,9 @@ it('no branch or AUTOSHIP=0 approves without queueing (today behavior)', async (
 it('a fail verdict holds the card in review unless the approve confirms', async () => {
   const enqueued: any[] = []
   const t = serverSetup({ enqueue: (c: any) => { enqueued.push(c); return { queued: true } }, status: () => null })
-  const id = await reviewCard(t.db, t.s)
+  const repo = await mkRepo()
+  await git(repo, 'branch', 'card-1')
+  const id = await reviewCard(t.db, t.s, 'card-1', repo)
   t.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, NULL, 'verification', ?)`)
     .run(id, JSON.stringify({ criteria: [], verdict: 'fail', tested: true }))
 
