@@ -7,6 +7,7 @@ type Classification = 'canonical' | 'compatibility' | 'legacy' | 'infrastructure
 
 type BaselineInventory = {
   observed_at_commit: string
+  table_sources: string[]
   database_tables: Record<Classification, string[]>
   route_sources: Array<{ file: string; prefix: string }>
   http_routes: Record<Classification, string[]>
@@ -105,6 +106,14 @@ function registeredCliCommands(): string[] {
 }
 
 describe('Agent OS baseline documentation drift', () => {
+  it('lists every late migration that owns inventory tables', () => {
+    expect(inventory.table_sources).toEqual(expect.arrayContaining([
+      'src/agent-os/delivery-shipment-integrity-migration.ts',
+      'src/agent-os/knowledge-context-use-actual-migration.ts',
+      'src/agent-os/delivery-autoship-intent-migration.ts',
+    ]))
+  })
+
   it('matches every live application table exactly and classifies each once', () => {
     const expected = flatten(inventory.database_tables)
     expect(expected).toHaveLength(new Set(expected).size)

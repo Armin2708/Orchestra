@@ -5,7 +5,7 @@ Discussions, Teams, planning, and durable conflict resolution surfaces,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work surface, observed at exact code head
-`4ba9301`.
+`9e95c63`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -16,7 +16,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 134 | 3 | 10 | 12 | 159 |
+| SQLite application tables | 136 | 3 | 10 | 12 | 161 |
 | Registered HTTP routes | 153 | 29 | 25 | 9 | 216 |
 | CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
@@ -130,7 +130,11 @@ evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
 are defined in `src/agent-os/organization-migration.ts` and
 `src/agent-os/organization-coordination-migration.ts`.
 The assurance evidence graph is defined in
-`src/agent-os/organization-assurance-migration.ts`.
+`src/agent-os/organization-assurance-migration.ts`. Exact ShipQueue receipts, attributed ContextUse
+evidence, and the durable autoship outbox are defined in
+`src/agent-os/delivery-shipment-integrity-migration.ts`,
+`src/agent-os/knowledge-context-use-actual-migration.ts`, and
+`src/agent-os/delivery-autoship-intent-migration.ts`.
 
 ### Canonical
 
@@ -140,7 +144,7 @@ The assurance evidence graph is defined in
 | Retention and transcript integrity | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs`, `agent_home_transcript_repairs` |
 | Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
 | Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
-| Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `delivery_review_comments`, `delivery_verification_runs`, `delivery_artifact_attestations`, `delivery_regressions`, `delivery_shipment_receipts`, `delivery_shipments`, `artifacts` |
+| Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `delivery_review_comments`, `delivery_verification_runs`, `delivery_artifact_attestations`, `delivery_regressions`, `delivery_shipment_receipts`, `delivery_shipments`, `delivery_autoship_intents`, `delivery_autoship_completions`, `artifacts` |
 | Provider acceptance | `provider_acceptance_evidence` |
 | Control plane | `os_command_receipts`, `os_events`, `attention_items`, `policies`, `checkpoints`, `context_items` |
 | Knowledge persistence and retrieval | `knowledge_sources`, `knowledge_chunks`, `context_builds`, `context_build_sources`, `context_build_entries`, `context_uses`, `knowledge_retrieval_schema`, `knowledge_retrieval_documents`, `knowledge_retrieval_index_state`, and the `knowledge_retrieval_fts*` virtual-table family |

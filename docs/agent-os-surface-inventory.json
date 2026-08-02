@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "4ba9301",
+  "observed_at_commit": "9e95c63",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -135,7 +135,10 @@
     "src/agent-os/team-planning-migration.ts",
     "src/agent-os/organization-migration.ts",
     "src/agent-os/organization-coordination-migration.ts",
-    "src/agent-os/organization-assurance-migration.ts"
+    "src/agent-os/organization-assurance-migration.ts",
+    "src/agent-os/delivery-shipment-integrity-migration.ts",
+    "src/agent-os/knowledge-context-use-actual-migration.ts",
+    "src/agent-os/delivery-autoship-intent-migration.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -163,6 +166,8 @@
       "delivery_criterion_results",
       "delivery_deliverable_results",
       "delivery_artifact_attestations",
+      "delivery_autoship_completions",
+      "delivery_autoship_intents",
       "delivery_regressions",
       "delivery_reports",
       "delivery_review_comments",
