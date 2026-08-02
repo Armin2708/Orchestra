@@ -575,6 +575,11 @@ const accessibleNameAudit = (client) => evaluate(client, `(() => {
 })()`)
 
 const contrastAudit = (client) => evaluate(client, `(() => {
+  const styleCache = new WeakMap(), backgroundCache = new WeakMap();
+  const styleFor = (element) => {
+    if (!styleCache.has(element)) styleCache.set(element, getComputedStyle(element));
+    return styleCache.get(element);
+  };
   const parse = (value) => {
     const match = String(value).match(/^rgba?\\(\\s*([\\d.]+)[, ]+([\\d.]+)[, ]+([\\d.]+)(?:\\s*[,/]\\s*([\\d.]+))?\\s*\\)$/i);
     return match ? { r: +match[1], g: +match[2], b: +match[3], a: match[4] === undefined ? 1 : +match[4] } : null;
@@ -592,17 +597,21 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     };
   };
   const background = (element) => {
+    if (backgroundCache.has(element)) return backgroundCache.get(element);
     const ancestry = [];
     for (let current = element; current; current = current.parentElement) ancestry.push(current);
     let resolved = { r: 255, g: 255, b: 255, a: 1 };
     for (const current of ancestry.reverse()) {
-      const currentStyle = getComputedStyle(current);
+      const currentStyle = styleFor(current);
       if (Number(currentStyle.opacity) !== 1 || currentStyle.backgroundImage !== 'none') {
-        return { supported: false, reason: 'opacity_or_background_image' };
+        const unsupported = { supported: false, reason: 'opacity_or_background_image' };
+        backgroundCache.set(element, unsupported);
+        return unsupported;
       }
       const parsed = parse(currentStyle.backgroundColor);
       if (parsed && parsed.a > 0) resolved = over(parsed, resolved);
     }
+    backgroundCache.set(element, resolved);
     return resolved;
   };
   const rows = [], unsupported = [];
@@ -611,7 +620,7 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     const text = walker.currentNode.textContent?.trim();
     const element = walker.currentNode.parentElement;
     if (!text || !element || element.closest('[aria-hidden="true"],.sr-only') || element.matches('script,style')) continue;
-    const style = getComputedStyle(element);
+    const style = styleFor(element);
     const rect = element.getBoundingClientRect();
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0 || rect.width === 0 || rect.height === 0) continue;
     if (element.closest('button:disabled,input:disabled,select:disabled,textarea:disabled')) continue;
