@@ -148,6 +148,11 @@ export interface DeliveryAutoshipIntent {
   source_repository: string
   source_branch: string
   source_commit: string
+  worktree_path: string | null
+  worktree_git_dir: string | null
+  worktree_common_dir: string | null
+  worktree_git_dir_device: string | null
+  worktree_git_dir_inode: string | null
   destination: 'main'
   prepared_by: string
   prepared_at: string
@@ -493,6 +498,12 @@ export class DeliveryTrackbookService {
     if (!deliveryCitesCommit(report, sourceCommit)) {
       throw new ValidationError('autoship branch commit must be cited by the accepted delivery')
     }
+    const worktreeIdentity = captureAutoshipWorktreeIdentity(
+      sourceRepository,
+      report.card_id,
+      branch,
+      sourceCommit,
+    )
     const idempotencyKey = bounded(input.idempotencyKey, 'idempotencyKey', MAX.idempotencyKey)
     const preparedBy = actorKey(actor)
     const requestSha256 = hashJson({
@@ -503,6 +514,7 @@ export class DeliveryTrackbookService {
       source_repository: sourceRepository,
       source_branch: branch,
       source_commit: sourceCommit,
+      ...worktreeIdentity,
       destination: 'main',
       prepared_by: preparedBy,
     })
@@ -522,17 +534,22 @@ export class DeliveryTrackbookService {
       const preparedAt = timestamp()
       this.db.prepare(`INSERT INTO delivery_autoship_intents
         (id, report_id, board_id, card_id, job_id, source_repository, source_branch,
-         source_commit, destination, prepared_by, prepared_at, idempotency_key,
-         request_sha256, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'main', ?, ?, ?, ?, ?)`).run(
+         source_commit, worktree_path, worktree_git_dir, worktree_common_dir,
+         worktree_git_dir_device, worktree_git_dir_inode, destination, prepared_by,
+         prepared_at, idempotency_key, request_sha256, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'main', ?, ?, ?, ?, ?)`).run(
         id, report.id, report.board_id, report.card_id, report.job_id, sourceRepository,
-        branch, sourceCommit, preparedBy, preparedAt, idempotencyKey, requestSha256, preparedAt,
+        branch, sourceCommit, worktreeIdentity.worktree_path, worktreeIdentity.worktree_git_dir,
+        worktreeIdentity.worktree_common_dir, worktreeIdentity.worktree_git_dir_device,
+        worktreeIdentity.worktree_git_dir_inode, preparedBy, preparedAt, idempotencyKey,
+        requestSha256, preparedAt,
       )
       this.appendEvent(report, actor, 'delivery.autoship_intent_prepared', id, {
         autoship_intent_id: id,
         source_repository: sourceRepository,
         source_branch: branch,
         source_commit: sourceCommit,
+        ...worktreeIdentity,
         destination: 'main',
       }, preparedAt)
       return this.autoshipIntentByKey(idempotencyKey)!
@@ -1168,13 +1185,18 @@ export class DeliveryTrackbookService {
     const rows = this.db.prepare(`SELECT name FROM sqlite_master
       WHERE type='table' AND name IN ('delivery_autoship_intents','delivery_autoship_completions')`)
       .all() as Array<{ name: string }>
-    return rows.length === 2
+    if (rows.length !== 2) return false
+    const columns = new Set((this.db.prepare(`PRAGMA table_info('delivery_autoship_intents')`)
+      .all() as Array<{ name: string }>).map((column) => column.name))
+    return ['worktree_path', 'worktree_git_dir', 'worktree_common_dir',
+      'worktree_git_dir_device', 'worktree_git_dir_inode']
+      .every((column) => columns.has(column))
   }
 
   private requireAutoshipIntentSchema(): void {
     this.requireShipmentIntegritySchema()
     if (!this.hasAutoshipIntentSchema()) {
-      throw new Error('delivery autoship intent migration 037 is not installed')
+      throw new Error('delivery autoship worktree identity migration 038 is not installed')
     }
   }
 
@@ -1402,6 +1424,11 @@ function mapAutoshipIntent(row: Record<string, unknown>): DeliveryAutoshipIntent
     source_repository: String(row.source_repository),
     source_branch: String(row.source_branch),
     source_commit: String(row.source_commit),
+    worktree_path: nullableString(row.worktree_path),
+    worktree_git_dir: nullableString(row.worktree_git_dir),
+    worktree_common_dir: nullableString(row.worktree_common_dir),
+    worktree_git_dir_device: nullableString(row.worktree_git_dir_device),
+    worktree_git_dir_inode: nullableString(row.worktree_git_dir_inode),
     destination: 'main',
     prepared_by: String(row.prepared_by),
     prepared_at: String(row.prepared_at),
@@ -1553,6 +1580,14 @@ type RepositoryWorktree = {
   branch: string | null
 }
 
+type AutoshipWorktreeIdentity = {
+  worktree_path: string
+  worktree_git_dir: string
+  worktree_common_dir: string
+  worktree_git_dir_device: string
+  worktree_git_dir_inode: string
+}
+
 function repositoryWorktrees(repository: string): RepositoryWorktree[] {
   let output: string
   try {
@@ -1597,7 +1632,73 @@ function sameRegisteredPath(left: string, right: string): boolean {
   }
 }
 
+function observedWorktreeIdentity(worktree: string): AutoshipWorktreeIdentity {
+  try {
+    const worktreePath = realpathSync(worktree)
+    const gitDir = realpathSync(gitEvidence(worktreePath, ['rev-parse', '--absolute-git-dir']))
+    const commonDir = realpathSync(gitEvidence(worktreePath, [
+      'rev-parse', '--path-format=absolute', '--git-common-dir',
+    ]))
+    const admin = lstatSync(gitDir, { bigint: true })
+    if (!admin.isDirectory()) throw new Error('worktree Git administration path is not a directory')
+    return {
+      worktree_path: worktreePath,
+      worktree_git_dir: gitDir,
+      worktree_common_dir: commonDir,
+      worktree_git_dir_device: admin.dev.toString(),
+      worktree_git_dir_inode: admin.ino.toString(),
+    }
+  } catch {
+    throw new ValidationError('autoship candidate durable worktree identity could not be verified')
+  }
+}
+
+function captureAutoshipWorktreeIdentity(
+  repository: string,
+  cardId: number,
+  branch: string,
+  sourceCommit: string,
+): AutoshipWorktreeIdentity {
+  const branchRef = `refs/heads/${branch}`
+  const matches = repositoryWorktrees(repository)
+    .filter((entry) => entry.branch === branchRef)
+  if (matches.length !== 1) {
+    throw new ValidationError('autoship requires one exact registered candidate worktree')
+  }
+  const registered = matches[0]
+  const expectedPath = cardWorktree(repository, cardId)
+  if (!sameRegisteredPath(registered.path, expectedPath)) {
+    throw new ValidationError('autoship candidate worktree must use the canonical card path')
+  }
+  if (registered.head !== sourceCommit) {
+    throw new ValidationError('autoship candidate worktree HEAD must equal the accepted source commit')
+  }
+  const identity = observedWorktreeIdentity(registered.path)
+  const repositoryCommonDir = realpathSync(gitEvidence(repository, [
+    'rev-parse', '--path-format=absolute', '--git-common-dir',
+  ]))
+  if (identity.worktree_common_dir !== repositoryCommonDir) {
+    throw new ValidationError('autoship candidate worktree does not belong to the exact board repository')
+  }
+  return identity
+}
+
+function durableWorktreeIdentity(intent: DeliveryAutoshipIntent): AutoshipWorktreeIdentity {
+  if (!intent.worktree_path || !intent.worktree_git_dir || !intent.worktree_common_dir
+    || !intent.worktree_git_dir_device || !intent.worktree_git_dir_inode) {
+    throw new ConflictError('autoship intent lacks durable candidate worktree identity')
+  }
+  return {
+    worktree_path: intent.worktree_path,
+    worktree_git_dir: intent.worktree_git_dir,
+    worktree_common_dir: intent.worktree_common_dir,
+    worktree_git_dir_device: intent.worktree_git_dir_device,
+    worktree_git_dir_inode: intent.worktree_git_dir_inode,
+  }
+}
+
 function assertAutoshipCandidateCleaned(intent: DeliveryAutoshipIntent): void {
+  const durableIdentity = durableWorktreeIdentity(intent)
   const branchCommit = localBranchCommit(intent.source_repository, intent.source_branch)
   if (branchCommit !== null) {
     const identity = branchCommit === intent.source_commit ? 'accepted' : 'moved'
@@ -1609,13 +1710,17 @@ function assertAutoshipCandidateCleaned(intent: DeliveryAutoshipIntent): void {
   if (registered.some((entry) => entry.branch === branchRef)) {
     throw new ConflictError('autoship candidate branch remains registered in a worktree')
   }
-  const repositoryRoot = realpathSync(intent.source_repository)
-  if (registered.some((entry) => entry.head === intent.source_commit
-    && !sameRegisteredPath(entry.path, repositoryRoot))) {
-    // The schema predates a persisted worktree path. Once detached/moved, exact source HEAD is
-    // the only remaining durable identity; fail closed rather than treating that worktree as
-    // unrelated and recording completion while candidate bytes remain registered elsewhere.
-    throw new ConflictError('autoship accepted source commit remains registered in a worktree')
+  try {
+    const admin = lstatSync(durableIdentity.worktree_git_dir, { bigint: true })
+    if (admin.dev.toString() === durableIdentity.worktree_git_dir_device
+      && admin.ino.toString() === durableIdentity.worktree_git_dir_inode) {
+      throw new ConflictError('autoship durable candidate worktree remains registered')
+    }
+  } catch (error: any) {
+    if (error instanceof ConflictError) throw error
+    if (error?.code !== 'ENOENT') {
+      throw new ValidationError('autoship candidate worktree administration could not be verified')
+    }
   }
   if (registered.some((entry) => sameRegisteredPath(entry.path, expectedPath))) {
     throw new ConflictError('autoship candidate card worktree cleanup is incomplete')

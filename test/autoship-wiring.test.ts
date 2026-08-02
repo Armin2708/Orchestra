@@ -130,6 +130,10 @@ async function reviewCard(
   })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'ship me' } })).json()
   db.prepare(`UPDATE cards SET column_name='review', branch=? WHERE id=?`).run(branch, card.id)
+  if (branch && existsSync(projectPath)) {
+    const worktree = path.join(projectPath, '..', `${path.basename(projectPath)}-card-${card.id}`)
+    await git(projectPath, 'worktree', 'add', worktree, branch)
+  }
   return card.id
 }
 

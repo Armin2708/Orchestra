@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
+import SqliteDatabase from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +9,10 @@ import {
   AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID,
   installDeliveryAutoshipIntentSchema,
 } from '../src/agent-os/delivery-autoship-intent-migration.js'
+import {
+  AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID,
+  installDeliveryAutoshipWorktreeIdentitySchema,
+} from '../src/agent-os/delivery-autoship-worktree-identity-migration.js'
 import { installDeliveryShipmentIntegritySchema } from '../src/agent-os/delivery-shipment-integrity-migration.js'
 import { installDeliveryTrackbookSchema } from '../src/agent-os/delivery-trackbook-migration.js'
 import { DeliveryTrackbookService } from '../src/agent-os/delivery-trackbook.js'
@@ -59,11 +64,14 @@ function fixture() {
   installDeliveryTrackbookSchema(db)
   installDeliveryShipmentIntegritySchema(db)
   installDeliveryAutoshipIntentSchema(db)
+  installDeliveryAutoshipWorktreeIdentitySchema(db)
   const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES (?, 'Autoship')")
     .run(realpathSync(repository)).lastInsertRowid)
   const cardId = Number(db.prepare(`INSERT INTO cards
     (board_id, title, description, branch) VALUES (?, 'Durable autoship', 'Restart safe', 'card-77')`)
     .run(boardId).lastInsertRowid)
+  const candidateWorktree = cardWorktree(realpathSync(repository), cardId)
+  git(repository, 'worktree', 'add', candidateWorktree, 'card-77')
   new TaskContractService(db).put(cardId, {
     objective: 'Ship accepted evidence after a restart.',
     deliverables: [{ id: 'autoship', text: 'Durable autoship', required: true }],
@@ -105,6 +113,7 @@ function fixture() {
     db,
     boardId,
     cardId,
+    candidateWorktree,
     accepted,
     sourceCommit,
     mainBeforeMerge,
@@ -113,10 +122,64 @@ function fixture() {
 }
 
 describe('delivery autoship intent migration 037', () => {
+  it('upgrades a genuine populated 037 table and enforces identity on later inserts', () => {
+    const legacy = new SqliteDatabase(':memory:')
+    try {
+      legacy.exec(`CREATE TABLE delivery_autoship_intents (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL,
+        board_id INTEGER NOT NULL,
+        card_id INTEGER NOT NULL,
+        job_id TEXT,
+        source_repository TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        source_commit TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        prepared_by TEXT NOT NULL,
+        prepared_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`)
+      legacy.prepare(`INSERT INTO delivery_autoship_intents VALUES
+        ('legacy', 'report', 1, 1, NULL, '/repository', 'card-1', ?, 'main',
+         'operator:legacy', '2026-08-02T00:00:00.000Z', 'legacy', ?,
+         '2026-08-02T00:00:00.000Z')`).run('a'.repeat(40), '0'.repeat(64))
+      const before = new Set((legacy.prepare(`PRAGMA table_info('delivery_autoship_intents')`)
+        .all() as Array<{ name: string }>).map((column) => column.name))
+      expect(before.has('worktree_path')).toBe(false)
+
+      installDeliveryAutoshipWorktreeIdentitySchema(legacy)
+      installDeliveryAutoshipWorktreeIdentitySchema(legacy)
+      expect(legacy.prepare(`SELECT worktree_path, worktree_git_dir, worktree_common_dir,
+        worktree_git_dir_device, worktree_git_dir_inode
+        FROM delivery_autoship_intents WHERE id='legacy'`).get()).toEqual({
+        worktree_path: null,
+        worktree_git_dir: null,
+        worktree_common_dir: null,
+        worktree_git_dir_device: null,
+        worktree_git_dir_inode: null,
+      })
+      expect(() => legacy.prepare(`INSERT INTO delivery_autoship_intents
+        (id, report_id, board_id, card_id, source_repository, source_branch,
+         source_commit, destination, prepared_by, prepared_at, idempotency_key,
+         request_sha256, created_at)
+        VALUES ('new-without-identity', 'report-2', 1, 2, '/repository', 'card-2', ?,
+          'main', 'operator:test', '2026-08-02T00:00:00.000Z', 'new', ?,
+          '2026-08-02T00:00:00.000Z')`).run('b'.repeat(40), '1'.repeat(64)))
+        .toThrow(/worktree identity is required/)
+    } finally {
+      legacy.close()
+    }
+  })
+
   it('is replay-safe and keeps prepared/completed records append-only', () => {
     const setup = fixture()
     expect(AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID).toBe('037-delivery-autoship-intents')
+    expect(AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID)
+      .toBe('038-delivery-autoship-worktree-identity')
     expect(() => installDeliveryAutoshipIntentSchema(setup.db)).not.toThrow()
+    expect(() => installDeliveryAutoshipWorktreeIdentitySchema(setup.db)).not.toThrow()
     const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
       actor,
       branch: 'card-77',
@@ -134,6 +197,11 @@ describe('delivery autoship intent migration 037', () => {
       source_repository: setup.repository,
       source_branch: 'card-77',
       source_commit: setup.sourceCommit,
+      worktree_path: realpathSync(setup.candidateWorktree),
+      worktree_git_dir: expect.stringContaining(`${path.sep}worktrees${path.sep}`),
+      worktree_common_dir: realpathSync(path.join(setup.repository, '.git')),
+      worktree_git_dir_device: expect.stringMatching(/^\d+$/),
+      worktree_git_dir_inode: expect.stringMatching(/^\d+$/),
       destination: 'main',
     })
     expect(setup.trackbook.pendingAutoshipIntents()).toEqual([intent])
@@ -147,6 +215,7 @@ describe('delivery autoship intent migration 037', () => {
 
   it('rejects a branch tip that is not cited by the current accepted report', () => {
     const setup = fixture()
+    git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
     git(setup.repository, 'branch', '-f', 'card-77', 'main')
     expect(() => setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
       actor,
@@ -155,12 +224,65 @@ describe('delivery autoship intent migration 037', () => {
     })).toThrow(/must be cited/)
     expect(setup.trackbook.pendingAutoshipIntents()).toEqual([])
   })
+
+  it('keeps a populated legacy null identity pending without fabricating completion', () => {
+    const setup = fixture()
+    setup.db.exec('DROP TRIGGER delivery_autoship_intents_worktree_identity')
+    const at = '2026-08-02T00:00:00.000Z'
+    setup.db.prepare(`INSERT INTO delivery_autoship_intents
+      (id, report_id, board_id, card_id, job_id, source_repository, source_branch,
+       source_commit, destination, prepared_by, prepared_at, idempotency_key,
+       request_sha256, created_at)
+      VALUES ('legacy-037-intent', ?, ?, ?, ?, ?, 'card-77', ?, 'main',
+        'operator:legacy', ?, 'legacy-037-intent', ?, ?)`).run(
+      setup.accepted.id,
+      setup.boardId,
+      setup.cardId,
+      setup.accepted.job_id,
+      setup.repository,
+      setup.sourceCommit,
+      at,
+      '0'.repeat(64),
+      at,
+    )
+    installDeliveryAutoshipWorktreeIdentitySchema(setup.db)
+    const [legacy] = setup.trackbook.pendingAutoshipIntents()
+    expect(legacy).toMatchObject({
+      id: 'legacy-037-intent',
+      worktree_path: null,
+      worktree_git_dir: null,
+      worktree_common_dir: null,
+      worktree_git_dir_device: null,
+      worktree_git_dir_inode: null,
+    })
+
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge legacy accepted source')
+    git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
+    git(setup.repository, 'branch', '-d', 'card-77')
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/lacks durable candidate worktree identity/),
+      }),
+    ])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+  })
 })
 
 describe('durable autoship recovery', () => {
   it('uses one bounded startup snapshot without rotating the current candidate out of recovery', async () => {
     const setup = fixture()
     const at = '2026-08-02T00:00:00.000Z'
+    const current = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:after-200',
+    })
     const insertCard = setup.db.prepare(`INSERT INTO cards
       (board_id, title, description, branch) VALUES (?, ?, 'Older pending', 'card-77')`)
     const insertReport = setup.db.prepare(`INSERT INTO delivery_reports
@@ -169,9 +291,10 @@ describe('durable autoship recovery', () => {
       VALUES (?, ?, 1, ?, ?, 'accepted', ?, ?, 'test', ?, ?)`)
     const insertIntent = setup.db.prepare(`INSERT INTO delivery_autoship_intents
       (id, report_id, board_id, card_id, source_repository, source_branch,
-       source_commit, destination, prepared_by, prepared_at, idempotency_key,
-       request_sha256, created_at)
-      VALUES (?, ?, ?, ?, ?, 'card-77', ?, 'main', 'operator:test', ?, ?, ?, ?)`)
+       source_commit, worktree_path, worktree_git_dir, worktree_common_dir,
+       worktree_git_dir_device, worktree_git_dir_inode, destination, prepared_by,
+       prepared_at, idempotency_key, request_sha256, created_at)
+      VALUES (?, ?, ?, ?, ?, 'card-77', ?, ?, ?, ?, ?, ?, 'main', 'operator:test', ?, ?, ?, ?)`)
     const insertAttempt = setup.db.prepare(`INSERT INTO os_events
       (id, board_id, card_id, actor_type, actor_id, correlation_id, causation_id,
        idempotency_key, kind, source, payload, created_at)
@@ -198,6 +321,11 @@ describe('durable autoship recovery', () => {
         cardId,
         setup.repository,
         setup.sourceCommit,
+        current.worktree_path,
+        current.worktree_git_dir,
+        current.worktree_common_dir,
+        current.worktree_git_dir_device,
+        current.worktree_git_dir_inode,
         at,
         `older-intent:${index}`,
         '0'.repeat(64),
@@ -214,11 +342,6 @@ describe('durable autoship recovery', () => {
         at,
       )
     }
-    const current = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
-      actor,
-      branch: 'card-77',
-      idempotencyKey: 'prepare:after-200',
-    })
     expect(setup.trackbook.pendingAutoshipIntents(setup.boardId, 200)).toHaveLength(200)
     expect(setup.trackbook.pendingAutoshipIntents(setup.boardId, 1)).toEqual([current])
     expect(setup.trackbook.pendingAutoshipIntentForCard(setup.boardId, setup.cardId))
@@ -295,6 +418,7 @@ describe('durable autoship recovery', () => {
       .toEqual({ count: 0 })
     expect(restartedDb.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId))
       .toEqual({ column_name: 'blocked' })
+    git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
     git(setup.repository, 'branch', '-d', 'card-77')
     restartedDb.exec(`CREATE TRIGGER fail_autoship_card_restore
       BEFORE UPDATE OF column_name ON cards
@@ -364,8 +488,7 @@ describe('durable autoship recovery', () => {
       idempotencyKey: 'prepare:ignored-content',
     })
     git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before ignored-content recovery')
-    const worktree = cardWorktree(setup.repository, setup.cardId)
-    git(setup.repository, 'worktree', 'add', worktree, 'card-77')
+    const worktree = setup.candidateWorktree
     writeFileSync(path.join(setup.repository, '.git', 'info', 'exclude'), '.env\nnode_modules/\nartifacts/\n')
     mkdirSync(path.join(worktree, 'node_modules'), { recursive: true })
     mkdirSync(path.join(worktree, 'artifacts'), { recursive: true })
@@ -405,8 +528,7 @@ describe('durable autoship recovery', () => {
       idempotencyKey: 'prepare:worktree-proof',
     })
     git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge accepted delivery')
-    const candidateWorktree = cardWorktree(setup.repository, setup.cardId)
-    git(setup.repository, 'worktree', 'add', candidateWorktree, 'card-77')
+    const candidateWorktree = setup.candidateWorktree
     git(candidateWorktree, 'checkout', '--detach', setup.sourceCommit)
     git(setup.repository, 'branch', '-d', 'card-77')
     git(setup.repository, 'branch', 'unrelated-recovery-work')
@@ -416,7 +538,7 @@ describe('durable autoship recovery', () => {
     expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
       expect.objectContaining({
         status: 'pending',
-        reason: expect.stringMatching(/accepted source commit remains registered/),
+        reason: expect.stringMatching(/durable candidate worktree remains registered/),
       }),
     ])
     expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
@@ -447,6 +569,46 @@ describe('durable autoship recovery', () => {
     expect(intent.source_commit).toBe(setup.sourceCommit)
   })
 
+  it('blocks canonical-path reuse but permits unrelated reuse of a released admin path', () => {
+    const setup = fixture()
+    const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:admin-path-reuse',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before admin reuse')
+    git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
+    git(setup.repository, 'branch', '-d', 'card-77')
+    git(setup.repository, 'branch', 'unrelated-admin-reuse')
+
+    git(setup.repository, 'worktree', 'add', setup.candidateWorktree, 'unrelated-admin-reuse')
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/card worktree cleanup is incomplete/),
+      }),
+    ])
+    git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
+
+    const alternateParent = path.join(setup.holder, 'unrelated-parent')
+    mkdirSync(alternateParent)
+    const unrelatedWorktree = path.join(alternateParent, path.basename(setup.candidateWorktree))
+    git(setup.repository, 'worktree', 'add', unrelatedWorktree, 'unrelated-admin-reuse')
+    const reusedGitDir = realpathSync(git(unrelatedWorktree, 'rev-parse', '--absolute-git-dir'))
+    const reusedAdmin = lstatSync(reusedGitDir, { bigint: true })
+    expect(reusedGitDir).toBe(intent.worktree_git_dir)
+    expect(`${reusedAdmin.dev}:${reusedAdmin.ino}`).not.toBe(
+      `${intent.worktree_git_dir_device}:${intent.worktree_git_dir_inode}`,
+    )
+
+    const [completed] = setup.trackbook.reconcilePendingAutoshipIntents({ actor })
+    expect(completed?.status).toBe('completed')
+    expect(git(setup.repository, 'worktree', 'list', '--porcelain'))
+      .toContain(realpathSync(unrelatedWorktree))
+    expect(git(unrelatedWorktree, 'rev-parse', 'unrelated-admin-reuse'))
+      .toBe(git(setup.repository, 'rev-parse', 'main'))
+  })
+
   it('keeps completion pending when the detached accepted worktree was moved off its canonical path', () => {
     const setup = fixture()
     setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
@@ -455,9 +617,8 @@ describe('durable autoship recovery', () => {
       idempotencyKey: 'prepare:moved-detached-worktree',
     })
     git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before moved cleanup bypass')
-    const canonicalWorktree = cardWorktree(setup.repository, setup.cardId)
+    const canonicalWorktree = setup.candidateWorktree
     const movedWorktree = path.join(setup.holder, 'moved-detached-candidate')
-    git(setup.repository, 'worktree', 'add', canonicalWorktree, 'card-77')
     git(canonicalWorktree, 'checkout', '--detach', setup.sourceCommit)
     git(setup.repository, 'branch', '-d', 'card-77')
     git(setup.repository, 'worktree', 'move', canonicalWorktree, movedWorktree)
@@ -465,7 +626,7 @@ describe('durable autoship recovery', () => {
     expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
       expect.objectContaining({
         status: 'pending',
-        reason: expect.stringMatching(/accepted source commit remains registered/),
+        reason: expect.stringMatching(/durable candidate worktree remains registered/),
       }),
     ])
     expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
@@ -479,6 +640,59 @@ describe('durable autoship recovery', () => {
     )
     expect(git(movedWorktree, 'rev-parse', 'HEAD')).toBe(setup.sourceCommit)
   })
+
+  it('tracks a moved candidate by durable admin identity after HEAD advances and content becomes dirty', async () => {
+    const setup = fixture()
+    const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:moved-advanced-dirty-worktree',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before advanced worktree bypass')
+    const movedWorktree = path.join(setup.holder, 'moved-advanced-dirty-candidate')
+    git(setup.candidateWorktree, 'checkout', '--detach', setup.sourceCommit)
+    git(setup.repository, 'branch', '-d', 'card-77')
+    git(setup.repository, 'worktree', 'move', setup.candidateWorktree, movedWorktree)
+    writeFileSync(path.join(movedWorktree, 'advanced.txt'), 'advanced commit\n')
+    git(movedWorktree, 'add', 'advanced.txt')
+    git(movedWorktree, 'commit', '-m', 'advance detached candidate after move')
+    const advancedHead = git(movedWorktree, 'rev-parse', 'HEAD')
+    expect(advancedHead).not.toBe(setup.sourceCommit)
+    writeFileSync(path.join(movedWorktree, 'advanced.txt'), 'dirty tracked content\n')
+    writeFileSync(path.join(movedWorktree, 'untracked.txt'), 'dirty untracked content\n')
+    writeFileSync(path.join(setup.repository, '.git', 'info', 'exclude'), '.env\nartifacts/\n')
+    mkdirSync(path.join(movedWorktree, 'artifacts'), { recursive: true })
+    const ignoredPaths = [
+      path.join(movedWorktree, '.env'),
+      path.join(movedWorktree, 'artifacts', 'retained-output.log'),
+    ]
+    for (const ignoredPath of ignoredPaths) writeFileSync(ignoredPath, 'ignored user content\n')
+    setup.db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(setup.cardId)
+
+    const server = buildServer(setup.db)
+    await expect.poll(
+      () => setup.db.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId),
+      { timeout: 30_000 },
+    ).toEqual({ column_name: 'blocked' })
+
+    expect(existsSync(movedWorktree)).toBe(true)
+    expect(existsSync(path.join(movedWorktree, 'advanced.txt'))).toBe(true)
+    expect(existsSync(path.join(movedWorktree, 'untracked.txt'))).toBe(true)
+    expect(ignoredPaths.every((ignoredPath) => existsSync(ignoredPath))).toBe(true)
+    expect(git(setup.repository, 'worktree', 'list', '--porcelain')).toContain(realpathSync(movedWorktree))
+    expect(git(movedWorktree, 'rev-parse', 'HEAD')).toBe(advancedHead)
+    expect(git(movedWorktree, 'status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching'))
+      .toMatch(/(?: M advanced\.txt|\?\? untracked\.txt|!! \.env)/)
+    expect(git(setup.repository, 'branch', '--list', 'card-77')).toBe('')
+    expect(setup.trackbook.pendingAutoshipIntents()).toEqual([intent])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    await server.close()
+  }, 60_000)
 
   it('startup keeps merged work pending and requeues exact cleanup identity from done or autoship-failed', async () => {
     const setup = fixture()
