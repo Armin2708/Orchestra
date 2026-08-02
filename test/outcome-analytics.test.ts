@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { ConflictError, ValidationError } from '../src/agent-os/errors.js'
 import {
+  canonicalHash,
+  stableJson,
+} from '../src/agent-os/agent-home-support.js'
+import {
   OutcomeAnalyticsService,
   type UsageObservationInput,
 } from '../src/agent-os/outcome-analytics.js'
@@ -244,9 +248,15 @@ describe('durable scoped token and outcome attribution', () => {
         gateId, { state: 'passed' as const, evidence_refs: [`evidence/${gateId}.json`] },
       ])) as DeclaredProviderAcceptanceMatrixV1['gates'],
     }
-    const retained = new ProviderAcceptanceEvidenceStoreV1(db).record(
+    const artifactRef = 'memory://outcome-analytics/codex-subscription.json'
+    const retained = new ProviderAcceptanceEvidenceStoreV1(db, {
+      loadArtifact: (ref) => {
+        if (ref !== artifactRef) throw new Error(`unexpected artifact ref: ${ref}`)
+        return stableJson(matrix)
+      },
+    }).record(
       new ProviderAdapterRegistryV1(), matrix,
-      { artifact_ref: 'evidence/codex/subscription.json', artifact_sha256: 'b'.repeat(64) },
+      { artifact_ref: artifactRef, artifact_sha256: canonicalHash(matrix) },
     )
     db.prepare(`UPDATE agent_sessions SET context_json=? WHERE id='session-1'`).run(JSON.stringify({
       provider_acceptance: {
