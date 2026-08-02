@@ -90,19 +90,20 @@ depending on simulator timing.
 
 - Environment: repository `.env` and `.env.local` do not exist; tests used explicit isolated
   variables. Node was explicitly loaded from `v22.20.0`.
-- Builds/package: root build, TypeScript, web `npm ci` and production Vite build, and
-  `npm pack --dry-run` passed (48 files; 954.8 kB package).
-- Tests: serialized final full suite passed 211 files / 1,890 tests. One earlier parallel
-  `autoship-wiring` failure was reproduced as cross-process temporary-worktree contention and its
-  isolated 7/7 rerun plus the serialized full run passed.
+- Builds/package: root build, TypeScript, web `npm ci` and production Vite build, and exact-candidate
+  `npm pack --dry-run --json` passed (48 files; 957,711 bytes, approximately 957.7 kB).
+- Tests: the remediation candidate passed 213 files / 1,893 tests in both default-parallel and
+  one-worker modes. The prior `2e29f9d7` marker passed 211 files / 1,890 tests; those prior counts
+  are historical evidence only and are not substituted for the remediation result.
 - Supply chain: the prior marker had two moderate findings through
   `@modelcontextprotocol/sdk@1.29.0 -> @hono/node-server@1.19.14`. The remediation lockfile uses
   SDK `1.30.0` and Hono adapter `2.0.12`; root and web audits must be rerun at the exact marker.
 - Secrets/injection: Gitleaks passed for production source, web assets and docs; seeded diagnostic
   secrets/content are absent from decoded bundles. Executable calls use fixed programs and argv.
   Backup, restore, diagnostics and repository paths reject traversal and symlinks.
-- Independent review of prior marker `2e29f9d7` found four P1 and one P2 issue. This remediation
-  addresses them; zero-P0/P1/P2 status is not claimed until an independent exact-head rereview.
+- Independent review of prior marker `2e29f9d7` found four P1 and one P2 issue. Exact-candidate
+  review of `9325a234` reduced that result to one P2 documentation-evidence drift and no P0/P1;
+  this marker correction binds the package and full-suite counts to the exact candidate evidence.
 
 ## MILE-D summaries
 

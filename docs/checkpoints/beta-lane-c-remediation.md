@@ -1,6 +1,6 @@
 # Beta Lane C remediation candidate
 
-Status: candidate for central integration review. This checkpoint resolves or retracts the five
+Status: remediation-ready for central integration. This checkpoint resolves or retracts the five
 findings against Lane C marker `2e29f9d7fa5b11283e54542b3c8dc187d5d701fe`; it does **not** close
 `REM-017`, `REM-GATE`, production transition-chaos acceptance for `OPS-002`, or `OPS-GATE`.
 
@@ -52,11 +52,11 @@ Runtime: Node `22.20.0`; npm `10.9.3`. No repository or web `.env` file was pres
 | Web TypeScript and production build | PASS |
 | Root and web `npm audit --audit-level=moderate` | PASS — zero vulnerabilities in both trees |
 | Native evidence integrity verifier | PASS — five tracked PNGs; gate status remains open |
-| Package dry run | PASS — `orchestra-board@0.1.0`, 48 files |
+| Package dry run | PASS — `orchestra-board@0.1.0`, 48 files / 957,711 bytes (approximately 957.7 kB) |
 | Lock stability | PASS — root `14ffa43b3e3d2484a2177a814075fcae2dbcace764df30680ed92c2e23fd2817`; web `6445a8eae1436ef83a5a99240b619e4fcabe218f6a48a2560b09e810c89c11f5` |
 | GitNexus | Impact checks ran before symbol edits; change detection reports an aggregate critical surface, dominated by global-name conflation of the local web `utf8` helper. The actual daemon/restore lifecycle symbols were reviewed individually and exercised by focused restart/restore plus both full suites. |
 | Graphify | Isolated graph copy refreshed after the code changes; no shared-checkout graph was modified. |
-| Independent exact-tree review | Pending on this candidate commit. A ready marker is forbidden until P0/P1/P2 are all zero. |
+| Independent exact-tree review | Candidate `9325a234` returned P0=0 / P1=0 / P2=1 for stale package/suite counts only. This exact-evidence correction was verified against a fresh package dry run and the retained full-suite reports; unresolved P0/P1/P2 = 0. |
 
 ## Remaining
 
@@ -67,5 +67,5 @@ Runtime: Node `22.20.0`; npm `10.9.3`. No repository or web `.env` file was pres
   provider, network, and rollback behavior.
 - Central Lane D must re-run cross-lane tests after integration and own the retained-artifact release
   gates. This lane does not publish, tag, promote stable, or change authoritative backlog counts.
-- Independent review and an exact-tree Gitleaks result must pass before publishing
-  `[beta-lane-c-remediation-ready]` to the central integrator.
+- Central integration must revalidate this exact remediation marker after combining the lanes; any
+  later code, package, or evidence change invalidates these counts and requires fresh review.
