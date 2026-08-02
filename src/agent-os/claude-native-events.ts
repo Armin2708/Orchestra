@@ -11,6 +11,7 @@ import {
   type ConversationEventKind,
 } from './conversations.js'
 import { ConflictError } from './errors.js'
+import { OutcomeAnalyticsService } from './outcome-analytics.js'
 
 export type ClaudeRawArtifactMode = 'withheld' | 'redacted' | 'full'
 
@@ -23,6 +24,7 @@ type ResolvedBinding = ClaudeAgentHomeBinding & {
   boardId: number
   workspaceId: string
   cardId: number | null
+  jobId: string | null
   conversationId: string
 }
 
@@ -596,6 +598,7 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
   private readonly conversations: ConversationService
   private readonly artifacts: ArtifactStore
   private readonly rawArtifactMode: ClaudeRawArtifactMode
+  private outcomes?: OutcomeAnalyticsService
 
   constructor(
     private readonly db: Database.Database,
@@ -716,6 +719,7 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
           retentionClass: projection.retentionClass ?? 'transcript',
           schemaVersion: 1,
         })
+        this.recordExactReadActivity(binding, event, projection, identity.hash)
       })
       return providerThreadId
     }
@@ -727,14 +731,14 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
     const explicit = event.agentHome
     const rows = explicit
       ? this.db.prepare(`SELECT session.id, session.profile_id, session.conversation_id,
-          session.workspace_id, workspace.board_id,
+          session.workspace_id, session.job_id, workspace.board_id,
           (SELECT card_id FROM jobs WHERE id=session.job_id) AS card_id
         FROM agent_sessions session
         JOIN workspaces workspace ON workspace.id=session.workspace_id
         WHERE session.id=? AND session.provider='claude' AND session.mode='managed'`)
           .all(explicit.agentHomeSessionId)
       : this.db.prepare(`SELECT session.id, session.profile_id, session.conversation_id,
-          session.workspace_id, workspace.board_id,
+          session.workspace_id, session.job_id, workspace.board_id,
           (SELECT card_id FROM jobs WHERE id=session.job_id) AS card_id
         FROM agent_sessions session
         JOIN workspaces workspace ON workspace.id=session.workspace_id
@@ -755,6 +759,7 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
       profile_id: string | null
       conversation_id: string | null
       workspace_id: string
+      job_id: string | null
       board_id: number
       card_id: number | null
     }
@@ -774,8 +779,33 @@ export class AgentHomeClaudeNativeEventSink implements ClaudeNativeEventSink {
       boardId: Number(row.board_id),
       workspaceId: row.workspace_id,
       cardId: row.card_id == null ? null : Number(row.card_id),
+      jobId: row.job_id,
       conversationId: row.conversation_id,
     }
+  }
+
+  private recordExactReadActivity(
+    binding: ResolvedBinding,
+    event: ClaudeNativeEvent,
+    projection: NativeProjection,
+    identityHash: string,
+  ): void {
+    if (binding.jobId === null || projection.kind !== 'tool') return
+    if (projection.metadata?.native_block_type !== 'tool_use'
+      && projection.metadata?.native_block_type !== 'server_tool_use') return
+    if (projection.metadata.tool_name !== 'Read') return
+    const inputFingerprint = projection.metadata.tool_input_fingerprint
+    if (typeof inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(inputFingerprint)) return
+
+    const outcomes = this.outcomes ??= new OutcomeAnalyticsService(this.db)
+    outcomes.recordClaudeNativeRead({
+      identityHash,
+      boardId: binding.boardId,
+      sessionId: binding.agentHomeSessionId,
+      jobId: binding.jobId,
+      inputFingerprint,
+      occurredAt: event.at,
+    })
   }
 
   private identity(

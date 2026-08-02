@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, streamUrl } from './api'
+import { createSingleFlightRefresh } from './singleFlightRefresh'
 import './outcome-dashboard.css'
 
 type Dashboard = {
@@ -9,9 +10,9 @@ type Dashboard = {
     provider_usage: 'available'
     child_dispatch: 'available'
     context_injection: 'unavailable'
-    context_selection: 'unavailable'
-    exploration: 'unavailable'
-    first_useful_result: 'unavailable'
+    context_selection: 'knowledge_context_use_receipts'
+    exploration: 'claude_native_read_receipts'
+    first_useful_result: 'accepted_delivery_receipts'
     model_acknowledgement: 'unavailable'
     high_fanout_preflight: 'operator_plan_only'
   }
@@ -21,13 +22,13 @@ type Dashboard = {
     cached_input_tokens: number
     output_tokens: number
     thinking_tokens: number
-    context_injection_tokens: number
+    context_injection_tokens: null
     cached_input_ratio: number | null
     accepted_delivery_tokens: number
     accepted_deliveries: number
     tokens_per_accepted_delivery: number | null
   }
-  context: { selected: number; reused: number; rejected: number; refreshed: number }
+  context: { selected: number; reused: number; rejected: number; refreshed: number; uses: number }
   coordination: { wakes: number; fanout: number; model_acknowledgements: number }
   exploration: { reads: number; likely_duplicates: number; duplicate_rate: number | null }
   speed: {
@@ -58,10 +59,10 @@ type Dashboard = {
     job_id: string
     contract_ref: string
     provider_tokens: number
-    context_tokens: number
+    context_tokens: null
     accepted: number
   }>
-  by_team: Array<{ team_id: string; provider_tokens: number; context_tokens: number }>
+  by_team: Array<{ team_id: string; provider_tokens: number; context_tokens: null }>
 }
 
 const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
@@ -80,43 +81,84 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const refreshTimer = useRef<number | null>(null)
-  const activeBoard = useRef(boardId)
-  activeBoard.current = boardId
+  const refreshRequest = useRef<(visible?: boolean) => void>(() => {})
 
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async () => {
     const requestedBoard = boardId
-    if (!quiet) setLoading(true)
-    try {
-      const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
-      if (activeBoard.current !== requestedBoard) return
-      if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
-      setDashboard(next)
-      setError(null)
-    } catch (reason) {
-      if (activeBoard.current !== requestedBoard) return
-      setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
-    } finally {
-      if (!quiet && activeBoard.current === requestedBoard) setLoading(false)
-    }
+    const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
+    if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
+    return next
   }, [boardId])
 
   useEffect(() => {
     setDashboard(null)
     setError(null)
     setLoading(true)
-    void load()
     const stream = new EventSource(streamUrl())
+    let pending: number | undefined
+    let retry: number | undefined
+    let initialRequest = true
+    let disposed = false
+    const controller = createSingleFlightRefresh({
+      load,
+      onStart: (visible) => {
+        if (visible) setLoading(true)
+      },
+      onSuccess: (next) => {
+        setDashboard(next)
+        setError(null)
+      },
+      onFailure: (reason) => {
+        setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
+      },
+      onSettled: (visible) => {
+        if (visible) setLoading(false)
+      },
+      onCycle: ({ succeeded, queued }) => {
+        if (!succeeded && !queued && retry === undefined) {
+          retry = window.setTimeout(() => {
+            if (disposed) return
+            retry = undefined
+            controller.request()
+          }, 1_000)
+        }
+      },
+    })
+    const requestRefresh = () => {
+      const visible = initialRequest
+      initialRequest = false
+      controller.request(visible)
+    }
+    refreshRequest.current = (visible = true) => controller.request(visible)
+    stream.onopen = () => {
+      if (disposed) return
+      if (retry !== undefined) {
+        window.clearTimeout(retry)
+        retry = undefined
+      }
+      requestRefresh()
+    }
+    const initialFallback = window.setTimeout(requestRefresh, 1_000)
     stream.onmessage = (event) => {
+      if (disposed) return
       let payload: { board_id?: number; type?: string }
       try { payload = JSON.parse(event.data) as { board_id?: number; type?: string } } catch { return }
       if (payload.board_id !== boardId || payload.type !== 'outcome_analytics') return
-      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
-      refreshTimer.current = window.setTimeout(() => void load(true), 250)
+      if (pending !== undefined) window.clearTimeout(pending)
+      pending = window.setTimeout(() => {
+        if (disposed) return
+        pending = undefined
+        controller.request()
+      }, 250)
     }
     return () => {
+      disposed = true
+      controller.dispose()
+      refreshRequest.current = () => {}
       stream.close()
-      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+      window.clearTimeout(initialFallback)
+      if (retry !== undefined) window.clearTimeout(retry)
+      if (pending !== undefined) window.clearTimeout(pending)
     }
   }, [load])
 
@@ -140,11 +182,11 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
           <p className="outcome-dashboard-eyebrow">Quality-aware efficiency</p>
           <h2 id="outcome-dashboard-title">Outcome dashboard</h2>
           <p>Token reduction counts only when accepted-delivery quality holds.</p>
-          <p>Live beta signals cover provider usage and child dispatch. Context injection,
-            context selection, exploration, useful-result acceptance, model acknowledgement,
-            and provider-native high-fanout preflight are not yet available.</p>
+          <p>Live beta signals cover provider usage, child dispatch, immutable knowledge-context
+            receipts, accepted-delivery timing, and Claude-native Read receipts. Exact context-token
+            injection, model acknowledgement, and provider-native high-fanout preflight remain unavailable.</p>
         </div>
-        <button type="button" onClick={() => void load()} disabled={loading}>
+        <button type="button" onClick={() => refreshRequest.current(true)} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh evidence'}
         </button>
       </header>
@@ -154,7 +196,7 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
       <div className="outcome-metric-grid">
         <Metric label="Tokens / accepted delivery" value={formatCount(dashboard.usage.tokens_per_accepted_delivery)} detail={`${formatCount(dashboard.usage.accepted_deliveries)} accepted`} />
         <Metric label="Cached-input ratio" value={formatRate(dashboard.usage.cached_input_ratio)} detail={`${formatCount(dashboard.usage.cached_input_tokens)} cached tokens`} />
-        <Metric label="First useful result" value="Not available" detail="No exact production acceptance signal" />
+        <Metric label="First useful result" value={formatDuration(dashboard.speed.average_ms_to_first_useful_result)} detail="Accepted-delivery receipt from job start" />
         <Metric label="Verified delivery" value={formatDuration(dashboard.speed.average_ms_to_verified_delivery)} detail="Average from job start" />
       </div>
 
@@ -170,13 +212,15 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
         </article>
 
         <article className="outcome-panel">
-          <header><h3>Context and coordination</h3><span>Bounded activity</span></header>
+          <header><h3>Context and coordination</h3><span>{dashboard.context.uses} context uses</span></header>
           <dl>
-            <Data label="Context selected / reused" value="Not available" />
-            <Data label="Rejected / refreshed" value="Not available" />
+            <Data label="Context selected / reused" value={`${dashboard.context.selected} / ${dashboard.context.reused}`} />
+            <Data label="Rejected / refreshed" value={`${dashboard.context.rejected} / ${dashboard.context.refreshed}`} />
             <Data label="Wakes / total fanout" value={`${dashboard.coordination.wakes} / ${dashboard.coordination.fanout}`} />
             <Data label="Model acknowledgements" value="Not available" />
-            <Data label="Duplicate exploration" value="Not available" />
+            <Data label="Repeated Claude Read inputs" value={dashboard.exploration.reads === 0
+              ? 'Not observed'
+              : `${dashboard.exploration.likely_duplicates} / ${dashboard.exploration.reads}`} />
           </dl>
         </article>
       </div>

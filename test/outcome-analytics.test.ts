@@ -24,6 +24,7 @@ import { ProviderAcceptanceEvidenceStoreV1 } from '../src/provider-acceptance-ev
 
 const START = '2026-08-01T10:00:00.000Z'
 const FIRST = '2026-08-01T10:01:00.000Z'
+const VERIFIED = '2026-08-01T10:06:00.000Z'
 const ACCEPTED = '2026-08-01T10:10:00.000Z'
 
 function fixture() {
@@ -90,10 +91,10 @@ function acceptDelivery(db: Database.Database, boardId: number, cardId: number, 
     (id, lineage_id, sequence, board_id, card_id, job_id, session_id, workspace_id,
      status, asked_snapshot, summary, delivered_items, claims_json, changed_files,
      commits, artifact_ids, gaps, created_by, accepted_by, created_at, updated_at,
-     accepted_at)
+     verified_at, accepted_at)
     VALUES ('report-1', 'lineage-1', 1, ?, ?, 'job-1', 'session-1', 'workspace-1',
       'accepted', '{}', 'done', '[]', '[]', '[]', '[]', '[]', '[]', 'agent',
-      'operator', ?, ?, ?)`).run(boardId, cardId, START, ACCEPTED, ACCEPTED)
+      'operator', ?, ?, ?, ?)`).run(boardId, cardId, START, ACCEPTED, VERIFIED, ACCEPTED)
   if (overrides) {
     db.prepare(`INSERT INTO delivery_criterion_results
       (report_id, criterion_id, outcome, note, evidence_refs, override_actor,
@@ -104,6 +105,48 @@ function acceptDelivery(db: Database.Database, boardId: number, cardId: number, 
 }
 
 describe('outcome analytics migration and privacy boundary', () => {
+  it('upgrades schema-v5 consumptions conservatively without rewriting compatibility data', () => {
+    const { db, boardId, service } = fixture()
+    service.planOperation({
+      id: 'v5-operation', boardId, operationKind: 'swarm', fanout: 1,
+      estimatedTokens: 100, reason: 'Retained v5 execution', requestedBy: 'operator',
+      executionKey: 'v5-execution', jobId: 'job-1',
+    })
+    service.consumeOperationExecution({
+      id: 'v5-operation', executionKey: 'v5-execution', actor: 'runner',
+      providerTokens: 58, contextTokens: 42, fanout: 1,
+    })
+    const markerTriggers = db.prepare(`SELECT name, sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (
+        'outcome_schema_immutable_update','outcome_schema_immutable_delete'
+      ) ORDER BY name`).all() as Array<{ name: string; sql: string }>
+    db.exec(`DROP TRIGGER outcome_operation_context_receipt_immutable_update;
+      DROP TABLE outcome_operation_context_receipts;`)
+    const owned = (db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name LIKE 'outcome_%' ORDER BY type, name`).all() as Array<{
+        type: string; name: string; tbl_name: string; sql: string | null
+      }>).map((row) => ({
+      type: row.type, name: row.name, table: row.tbl_name,
+      sql: String(row.sql ?? '').replace(/\s+/gu, ' ').trim(),
+    }))
+    const v5Digest = createHash('sha256').update(JSON.stringify(owned), 'utf8').digest('hex')
+    db.exec(`DROP TRIGGER outcome_schema_immutable_update;
+      DROP TRIGGER outcome_schema_immutable_delete;`)
+    db.prepare(`UPDATE outcome_analytics_schema SET version=5, schema_sha256=? WHERE singleton=1`)
+      .run(v5Digest)
+    for (const trigger of markerTriggers) db.exec(trigger.sql)
+
+    expect(() => applyOutcomeAnalyticsMigration(db)).not.toThrow()
+    expect(db.prepare(`SELECT version FROM outcome_analytics_schema WHERE singleton=1`).pluck().get())
+      .toBe(6)
+    expect(db.prepare(`SELECT context_tokens FROM outcome_operation_consumptions
+      WHERE operation_id='v5-operation'`).pluck().get()).toBe(42)
+    expect(db.prepare(`SELECT availability, exact_tokens FROM outcome_operation_context_receipts
+      WHERE operation_id='v5-operation'`).get()).toEqual({
+      availability: 'unavailable', exact_tokens: null,
+    })
+  })
+
   it('is replay-safe, verifies exact columns, and rejects a forged schema marker', () => {
     const { db } = fixture()
     expect(() => applyOutcomeAnalyticsMigration(db)).not.toThrow()
@@ -399,18 +442,18 @@ describe('durable scoped token and outcome attribution', () => {
       provider_usage: 'available',
       child_dispatch: 'available',
       context_injection: 'unavailable',
-      context_selection: 'unavailable',
-      exploration: 'unavailable',
-      first_useful_result: 'unavailable',
+      context_selection: 'knowledge_context_use_receipts',
+      exploration: 'claude_native_read_receipts',
+      first_useful_result: 'accepted_delivery_receipts',
       model_acknowledgement: 'unavailable',
       high_fanout_preflight: 'operator_plan_only',
     })
-    expect(dashboard.context).toEqual({ selected: 4, reused: 3, rejected: 1, refreshed: 1 })
+    expect(dashboard.context).toEqual({ selected: 0, reused: 0, rejected: 0, refreshed: 0, uses: 0 })
     expect(dashboard.coordination).toEqual({ wakes: 2, fanout: 6, model_acknowledgements: 1 })
-    expect(dashboard.exploration).toMatchObject({ reads: 4, likely_duplicates: 1, duplicate_rate: 0.25 })
+    expect(dashboard.exploration).toMatchObject({ reads: 0, likely_duplicates: 0, duplicate_rate: null })
     expect(dashboard.speed).toEqual({
-      average_ms_to_first_useful_result: 60_000,
-      average_ms_to_verified_delivery: 600_000,
+      average_ms_to_first_useful_result: 600_000,
+      average_ms_to_verified_delivery: 360_000,
     })
     expect(dashboard.quality).toMatchObject({
       accepted: 1, retries: 1, retry_source: 'os_events', human_overrides: 1,
@@ -471,7 +514,7 @@ describe('budgets, confirmations and leader digests', () => {
     if (reserved.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-1', 'operator')
     service.consumeOperationExecution({
       id: 'budget-operation-1', executionKey: 'budget-execution-1', actor: 'runner',
-      providerTokens: 50, fanout: 6,
+      providerTokens: 50, contextTokens: 0, fanout: 6,
     })
     const cumulative = service.evaluateBudgets({
       boardId, teamId: 'team-1', jobId: 'job-1', fanout: 5,
@@ -480,7 +523,7 @@ describe('budgets, confirmations and leader digests', () => {
       .dimensions.find((item: any) => item.name === 'fanout')).toMatchObject({ used: 11, exceeded: true })
     expect(() => service.consumeOperationExecution({
       id: 'hard-race-operation', executionKey: 'hard-race-execution', actor: 'runner',
-      providerTokens: 100, fanout: 1,
+      providerTokens: 100, contextTokens: 0, fanout: 1,
     })).toThrow(/hard budget at execution/)
     const late = service.planOperation({
       id: 'budget-operation-2', boardId, operationKind: 'swarm', fanout: 1,
@@ -490,7 +533,7 @@ describe('budgets, confirmations and leader digests', () => {
     if (late.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-2', 'operator')
     expect(() => service.consumeOperationExecution({
       id: 'budget-operation-2', executionKey: 'budget-execution-2', actor: 'runner',
-      providerTokens: 100, fanout: 1,
+      providerTokens: 100, contextTokens: 0, fanout: 1,
     })).toThrow(/new confirmation/)
     expect(() => db.prepare(`UPDATE outcome_budget_policies SET max_provider_tokens=999999
       WHERE id='job-budget'`).run()).toThrow(/identity is immutable/)
@@ -506,21 +549,21 @@ describe('budgets, confirmations and leader digests', () => {
     expect(plan.status).toBe('awaiting_confirmation')
     expect(() => service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/requires explicit/)
     expect(service.confirmOperation('operation-1', 'operator').status).toBe('confirmed')
     expect(() => service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'wrong-execution', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/another execution/)
     expect(service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toMatchObject({ status: 'confirmed', consumption: { operation_id: 'operation-1' } })
     const competingService = new OutcomeAnalyticsService(db)
     expect(() => competingService.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/already consumed/)
     expect(() => db.prepare(`UPDATE outcome_operation_confirmations SET reason='changed'
       WHERE id='operation-1'`).run()).toThrow(/transition is invalid/)
@@ -532,7 +575,7 @@ describe('budgets, confirmations and leader digests', () => {
     expect(small.status).toBe('not_required')
     expect(() => service.consumeOperationExecution({
       id: 'operation-2', executionKey: 'native-execution-2', actor: 'runner',
-      providerTokens: 501, fanout: 2,
+      providerTokens: 501, contextTokens: 0, fanout: 2,
     })).toThrow(/new confirmation/)
     service.setBudget({
       id: 'context-warning', boardId, scopeKind: 'project', scopeId: String(boardId),
@@ -561,8 +604,14 @@ describe('budgets, confirmations and leader digests', () => {
       id: 'reconcile-operation', executionKey: 'reconcile-execution', actor: 'runner',
       providerTokens: 1_300, contextTokens: 200, fanout: 2, at: observedAt,
     })).toMatchObject({ consumption: {
+      context_availability: 'exact',
       provider_context_status: 'provisional_until_canonical_usage',
     } })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_operation_context_receipts WHERE operation_id='reconcile-operation'`).get())
+      .toEqual({ availability: 'exact', exact_tokens: 200 })
+    expect(() => db.prepare(`UPDATE outcome_operation_context_receipts
+      SET exact_tokens=0 WHERE operation_id='reconcile-operation'`).run()).toThrow(/immutable/)
     const reserved = service.evaluateBudgets({ boardId, jobId: 'job-1' }) as any
     expect(reserved.policies[0].dimensions).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'provider_tokens', used: 1_300 }),

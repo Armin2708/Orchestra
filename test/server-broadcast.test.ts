@@ -2,6 +2,19 @@ import { expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
+it('emits one board-created event so clients do not need discovery polling', async () => {
+  const s = buildServer(openDb(':memory:')); await s.ready()
+  const emitted: Array<{ board_id: number; type: string; data: unknown }> = []
+  s.bus.on('event', (event) => emitted.push(event))
+  const first = (await s.inject({
+    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' },
+  })).json()
+  await s.inject({
+    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' },
+  })
+  expect(emitted).toEqual([{ board_id: first.id, type: 'board', data: first }])
+})
+
 it('announcements wake nobody; confirmed swarms reach only their snapshotted recipients', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
   const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()

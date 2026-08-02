@@ -387,9 +387,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Body: { project_path: string } }>('/api/v1/boards/resolve', (req) => {
     const p = req.body.project_path
-    db.prepare(`INSERT OR IGNORE INTO boards (project_path, name) VALUES (?, ?)`)
+    const inserted = db.prepare(`INSERT OR IGNORE INTO boards (project_path, name) VALUES (?, ?)`)
       .run(p, path.basename(p))
-    return db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p)
+    const board = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p) as
+      Record<string, unknown> & { id: number }
+    if (inserted.changes === 1) emit(board.id, 'board', board)
+    return board
   })
 
   server.get('/api/v1/boards', () => db.prepare(`SELECT * FROM boards ORDER BY id`).all())

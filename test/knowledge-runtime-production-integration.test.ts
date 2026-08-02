@@ -8,6 +8,7 @@ import type Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   KnowledgeService,
+  OutcomeAnalyticsService,
   TaskContractService,
   WorkspaceStore,
   knowledgeChunkId,
@@ -404,6 +405,13 @@ describe('knowledge runtime production wiring', () => {
     expect(uses).toHaveLength(3)
     expect(uses.map((use) => use.outcome)).toEqual(['failed', 'completed', 'completed'])
     expect(uses.map((use) => use.actual_tokens)).toEqual([null, null, null])
+    const dashboard = new OutcomeAnalyticsService(db).dashboard(boardId) as any
+    expect(dashboard.production_signals.context_selection)
+      .toBe('knowledge_context_use_receipts')
+    expect(dashboard.usage.context_injection_tokens).toBeNull()
+    expect(dashboard.context).toMatchObject({ uses: 3 })
+    expect(dashboard.context.selected).toBeGreaterThan(0)
+    expect(dashboard.context.refreshed).toBeGreaterThan(0)
     expect(sessionContext()).not.toHaveProperty('knowledge_context_input_tokens')
     expect(sessionContext()).not.toHaveProperty('knowledge_context_input_source')
     expect(runtime.scheduler.get(job.id)?.spent_tokens).toBe(4_000)

@@ -148,19 +148,26 @@ describe('production outcome analytics composition', () => {
     })
   })
 
-  it('consumes the native operation immediately before launch and atomically reconciles usage', () => {
+  it('rejects unknown native context and reconciles an exact-capable operation consumer', () => {
     const { db, boardId, agentId, job, service } = fixture()
     const published: unknown[] = []
     const bridge = new OutcomeAnalyticsRuntimeBridge(db, (event) => published.push(event))
     planNativeOperation(service, boardId)
 
-    const consumed = bridge.consumeBeforeProviderLaunch(job)
+    expect(() => bridge.consumeBeforeProviderLaunch(job)).toThrow(/exact context tokens/)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_consumptions`).pluck().get()).toBe(0)
+    const consumed = service.consumeOperationExecution({
+      id: 'runtime-operation', executionKey: nativeOutcomeExecutionKey(job.id),
+      actor: 'exact-capable-runtime', providerTokens: 100, contextTokens: 0, fanout: 2,
+    })
     expect(consumed).toMatchObject({
       id: 'runtime-operation',
       job_id: 'runtime-job',
       consumption: {
         operation_id: 'runtime-operation',
         provider_tokens: 100,
+        context_tokens: 0,
+        context_availability: 'exact',
         provider_context_status: 'provisional_until_canonical_usage',
       },
     })
@@ -183,7 +190,23 @@ describe('production outcome analytics composition', () => {
       output_tokens: 20,
       thinking_tokens: 5,
       provider_total_tokens: 120,
+      context_injection_tokens: null,
       observed_at: event.at,
+      operation_reconciliation: {
+        actual_context_tokens: null,
+        context_variance_tokens: null,
+        plan_overage_tokens: null,
+      },
+    })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_usage_context_receipts`).get()).toEqual({
+      availability: 'unavailable',
+      exact_tokens: null,
+    })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_operation_context_receipts`).get()).toEqual({
+      availability: 'exact',
+      exact_tokens: 0,
     })
     expect(db.prepare(`SELECT operation_id, actual_provider_tokens, provider_variance_tokens
       FROM outcome_operation_usage_reconciliations`).get()).toEqual({
@@ -207,7 +230,6 @@ describe('production outcome analytics composition', () => {
     )).toBeNull()
     expect(db.prepare(`SELECT COUNT(*) FROM outcome_usage_observations`).pluck().get()).toBe(1)
     expect(published).toEqual(expect.arrayContaining([
-      expect.objectContaining({ data: { kind: 'operation.consumed', id: 'runtime-operation' } }),
       expect.objectContaining({ data: expect.objectContaining({ kind: 'usage.recorded' }) }),
     ]))
   })
@@ -284,18 +306,31 @@ describe('production outcome analytics composition', () => {
     expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_consumptions`).pluck().get()).toBe(0)
   })
 
+  it('fails closed before launch when a hard context budget cannot observe native context', () => {
+    const { db, boardId, job, service } = fixture()
+    const bridge = new OutcomeAnalyticsRuntimeBridge(db)
+    service.setBudget({
+      id: 'native-context-budget', boardId, scopeKind: 'project', scopeId: String(boardId),
+      maxContextTokens: 100, enforcement: 'hard', actor: 'operator',
+    })
+    planNativeOperation(service, boardId)
+    expect(() => bridge.consumeBeforeProviderLaunch(job)).toThrow(/exact context tokens/)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_consumptions`).pluck().get()).toBe(0)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_context_receipts`).pluck().get()).toBe(0)
+  })
+
   it('fails closed and rolls back projections for ambiguous provider evidence', () => {
     const { db, boardId, job, service } = fixture()
     const bridge = new OutcomeAnalyticsRuntimeBridge(db)
     planNativeOperation(service, boardId, 'runtime-operation-a')
     service.consumeOperationExecution({
       id: 'runtime-operation-a', executionKey: nativeOutcomeExecutionKey(job.id),
-      actor: 'runtime', providerTokens: 100, fanout: 2,
+      actor: 'runtime', providerTokens: 100, contextTokens: 0, fanout: 2,
     })
     planNativeOperation(service, boardId, 'runtime-operation-b')
     service.consumeOperationExecution({
       id: 'runtime-operation-b', executionKey: nativeOutcomeExecutionKey(job.id),
-      actor: 'runtime', providerTokens: 100, fanout: 2,
+      actor: 'runtime', providerTokens: 100, contextTokens: 0, fanout: 2,
     })
     expect(() => bridge.recordNormalizedProviderUsage(
       job, 'runtime-session', driverEvent(), usageTotal(),
