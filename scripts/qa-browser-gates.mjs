@@ -349,6 +349,8 @@ const hitTestPoint = async (client, selector, label) => {
   const found = await evaluate(client, `(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!(element instanceof HTMLElement)) return null;
+    const stream = element.closest('.ah-event-stream');
+    if (stream instanceof HTMLElement) stream.scrollTop = stream.scrollHeight;
     element.scrollIntoView({ block: 'center', inline: 'center' });
     return true;
   })()`)
@@ -377,6 +379,8 @@ const pointerClick = async (client, selector, label, mobile = false) => {
   if (mobile) {
     await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y }] })
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
   } else {
     await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
     await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
@@ -806,6 +810,8 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         elapsed_ms: modeElapsed,
         error,
         action_evidence: actionEvidence,
+        input_surface: mode === 'pointer' ? (viewport.mobile ? 'touch_with_compatibility_mouse' : 'mouse')
+          : mode === 'keyboard' ? 'keyboard' : 'dom',
         counts_toward_pass: mode !== 'dom_fallback',
         performance_eligible: mode === 'pointer',
         diagnostic_only: mode === 'dom_fallback',
