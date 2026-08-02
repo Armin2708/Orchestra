@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "captured_at": "2026-08-02T09:09:19.473Z",
+  "captured_at": "2026-08-02T09:14:20.245Z",
   "backlog_items": [
     "QA-013",
     "QA-014",
@@ -14,18 +14,18 @@
   },
   "source": {
     "repository": "agentboard-beta-release-browser",
-    "commit": "d8a835b8b5ae959eb9f3fea53cce2d88083d953b",
+    "commit": "46ac9835a94c4f306b108698d328aabac962ad82",
     "node": "22.20.0",
     "artifact_identity": {
       "root_dist_sha256": "24f5841f314b1b9240ff34c3519c568e76fbbce300a23ec43b371f29a36a8d84",
       "web_dist_sha256": "9c73c5dac73fa0534b097e25201ec878774930d0efe406844ba1d4806a668112"
     },
-    "build_manifest_sha256": "f4c59fb71ae7be124997a1b194b1f0a94d82ccf5e44ddff7bcc889eabbce6d9e"
+    "build_manifest_sha256": "ed8b161bc6c8b9496d29e497cd1097b5d71df7b69a49538428fc8a665c83303f"
   },
   "scenario": {
     "board_id": 1,
-    "profile_id": "7778583e-6020-4005-b904-6d4198370bed",
-    "session_id": "78e2572d-ecfe-45fc-8f1c-cab381460623",
+    "profile_id": "e0541b49-4258-4c64-9eda-b1f03cc7c50e",
+    "session_id": "2df6c7f2-1a81-483f-84bb-a8c30e959fa8",
     "transcript_events": 250,
     "graph_agents": 18,
     "fixture_transport": "authenticated public APIs only"
@@ -48,14 +48,14 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 568.8180840000005,
+          "elapsed_ms": 383.90745800000013,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 568.8180840000005,
+              "elapsed_ms": 383.90745800000013,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -66,7 +66,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4035.765208,
+              "elapsed_ms": 4039.7141250000004,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -77,7 +77,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 45.13054200000079,
+              "elapsed_ms": 65.5334159999993,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -342,15 +342,15 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 272.25433300000077,
+          "elapsed_ms": 2775.404041,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 272.25433300000077,
-              "error": "could not hit-test Load more matching events",
+              "elapsed_ms": 2775.404041,
+              "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
               "performance_eligible": true,
@@ -360,7 +360,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10002.936250000002,
+              "elapsed_ms": 10040.530125,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -371,7 +371,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 331.98241699999926,
+              "elapsed_ms": 339.6442500000012,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -390,19 +390,19 @@
               "passed": true,
               "checked": 11,
               "focus_order": [
+                "board-tab-messages",
+                "board-tab-workspace",
+                "board-tab-timeline",
+                "board-tab-shipped",
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-6339275d-39df-4e30-8be9-4a9b5320ddc0General agentrunning · managedCodex",
-                "pause",
-                "stop",
-                "More session actions including lifecycle controls",
-                "Copy exact Agent Home link",
-                "Refresh Agent Home"
+                "J1job-1-a849ed9b-187f-4621-aab6-b8eeeddc691bGeneral agentrunning · managedCodex",
+                "pause"
               ],
               "reverse_focus_order": [
-                "Copy exact Agent Home link",
-                "More session actions including lifecycle controls",
-                "stop"
+                "J1job-1-a849ed9b-187f-4621-aab6-b8eeeddc691bGeneral agentrunning · managedCodex",
+                null,
+                "Create durable agent"
               ],
               "activation": {
                 "supported": true,
@@ -734,14 +734,14 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 326.28479199999856,
+          "elapsed_ms": 334.6859999999979,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 326.28479199999856,
+              "elapsed_ms": 334.6859999999979,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "pointer"
@@ -754,9 +754,13 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10209.996834000001,
+              "elapsed_ms": 10304.991875000003,
               "error": "five rendered search results readiness did not pass",
-              "action_evidence": null,
+              "action_evidence": {
+                "focus_acquisition": "tab_navigation",
+                "tab_events": 12,
+                "error": "five rendered search results readiness did not pass"
+              },
               "counts_toward_pass": true,
               "performance_eligible": false,
               "diagnostic_only": false,
@@ -765,7 +769,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 268.1601249999985,
+              "elapsed_ms": 346.64154199999757,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -1159,14 +1163,14 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 48.04020800000217,
+          "elapsed_ms": 57.01474999999482,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 48.04020800000217,
+              "elapsed_ms": 57.01474999999482,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1177,7 +1181,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4022.326124999996,
+              "elapsed_ms": 4013.7520829999994,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1188,7 +1192,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 43.99104200000147,
+              "elapsed_ms": 44.61174999999639,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -1404,14 +1408,14 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 47.51637499999924,
+          "elapsed_ms": 47.97695800000656,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 47.51637499999924,
+              "elapsed_ms": 47.97695800000656,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1422,7 +1426,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4020.4198749999996,
+              "elapsed_ms": 4016.457166,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1433,7 +1437,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 46.25762499999837,
+              "elapsed_ms": 52.16404099999636,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -1796,14 +1800,14 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 46.88875000000553,
+          "elapsed_ms": 46.86720900000364,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 46.88875000000553,
+              "elapsed_ms": 46.86720900000364,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1814,7 +1818,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4021.3820419999975,
+              "elapsed_ms": 4012.0146250000034,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -1825,7 +1829,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 44.70245900000009,
+              "elapsed_ms": 44.974417000004905,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -1880,11 +1884,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "29819"
+                  "node_id": "30571"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "29861"
+                  "node_id": "30613"
                 }
               ]
             },
@@ -2042,14 +2046,14 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 46.36066600000049,
+          "elapsed_ms": 47.9890000000014,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 46.36066600000049,
+              "elapsed_ms": 47.9890000000014,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2060,7 +2064,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4010.2292919999963,
+              "elapsed_ms": 4014.7519580000007,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2071,7 +2075,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 44.559041000000434,
+              "elapsed_ms": 44.356667000000016,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -2270,14 +2274,14 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 45.19345899999462,
+          "elapsed_ms": 46.700665999997,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 45.19345899999462,
+              "elapsed_ms": 46.700665999997,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2288,7 +2292,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4017.5818750000035,
+              "elapsed_ms": 4019.4066669999957,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2299,7 +2303,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 44.84749999999622,
+              "elapsed_ms": 46.77087500000198,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -2539,14 +2543,14 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 44.262416999998095,
+          "elapsed_ms": 45.63733300000604,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 44.262416999998095,
+              "elapsed_ms": 45.63733300000604,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2557,7 +2561,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4013.761416000001,
+              "elapsed_ms": 4014.265333999996,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2568,7 +2572,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 44.84625000000233,
+              "elapsed_ms": 44.911832999998296,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -2754,14 +2758,14 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 51.11108400000376,
+          "elapsed_ms": 52.816500000000815,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 51.11108400000376,
+              "elapsed_ms": 52.816500000000815,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2772,7 +2776,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4024.3559160000004,
+              "elapsed_ms": 4015.4283339999965,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -2783,7 +2787,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 48.04533299999457,
+              "elapsed_ms": 45.5322079999969,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -2840,7 +2844,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "33838"
+                  "node_id": "34590"
                 }
               ]
             },
@@ -3016,7 +3020,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "just now",
+                  "text": "1m ago",
                   "ratio": 2.07,
                   "required": 4.5
                 },
@@ -3048,14 +3052,14 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 48.69920799999818,
+          "elapsed_ms": 43.510957999998936,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 48.69920799999818,
+              "elapsed_ms": 43.510957999998936,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -3066,7 +3070,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4029.176999999996,
+              "elapsed_ms": 4015.776958000002,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -3077,7 +3081,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 44.88791599999968,
+              "elapsed_ms": 44.42033400000946,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -3367,14 +3371,14 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 43.460666999999376,
+          "elapsed_ms": 44.552542000004905,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 43.460666999999376,
+              "elapsed_ms": 44.552542000004905,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -3385,7 +3389,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4024.342082999996,
+              "elapsed_ms": 4007.3857500000013,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -3396,7 +3400,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 46.95345900001121,
+              "elapsed_ms": 45.23379100000602,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -3688,11 +3692,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "29819"
+                  "node_id": "30571"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "29861"
+                  "node_id": "30613"
                 }
               ]
             },
@@ -3701,7 +3705,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "33838"
+                  "node_id": "34590"
                 }
               ]
             }
@@ -4560,7 +4564,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "just now",
+                  "text": "1m ago",
                   "ratio": 2.07,
                   "required": 4.5
                 },
@@ -4725,31 +4729,31 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 77.6000000089407,
+          "observed_ms": 75.1000000089407,
           "measurement_mode": "navigation_timing",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 545.8000000119209,
+          "observed_ms": 335.6000000089407,
           "measurement_mode": "authenticated_fetch",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 272.25433300000077,
+          "observed_ms": 2775.404041,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 568.8180840000005,
+          "observed_ms": 383.90745800000013,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 326.28479199999856,
+          "observed_ms": 334.6859999999979,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
@@ -4766,14 +4770,14 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 398.44933299999684,
+          "elapsed_ms": 399.3669579999987,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 398.44933299999684,
+              "elapsed_ms": 399.3669579999987,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -4784,7 +4788,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4038.925415999998,
+              "elapsed_ms": 4021.9205830000137,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -4795,7 +4799,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 45.89829199999804,
+              "elapsed_ms": 48.03370800000266,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -4807,7 +4811,7 @@
           "accessibility": {
             "accessible_names": {
               "passed": true,
-              "checked": 58,
+              "checked": 59,
               "violations": []
             },
             "keyboard_focus": {
@@ -5060,14 +5064,14 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 253.66041700000642,
+          "elapsed_ms": 181.54666700000234,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 253.66041700000642,
+              "elapsed_ms": 181.54666700000234,
               "error": "could not hit-test Load more matching events",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -5078,7 +5082,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10033.077583000006,
+              "elapsed_ms": 10032.288459000003,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -5089,7 +5093,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 350.3321660000074,
+              "elapsed_ms": 304.4969999999885,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -5110,7 +5114,7 @@
               "focus_order": [
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-6339275d-39df-4e30-8be9-4a9b5320ddc0General agentrunning · managedCodex",
+                "J1job-1-a849ed9b-187f-4621-aab6-b8eeeddc691bGeneral agentrunning · managedCodex",
                 "Exact runtime links",
                 "pause",
                 "stop",
@@ -5452,14 +5456,14 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 303.35275000000547,
+          "elapsed_ms": 294.5467079999944,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 303.35275000000547,
+              "elapsed_ms": 294.5467079999944,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "pointer"
@@ -5472,9 +5476,13 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10185.962167000005,
+              "elapsed_ms": 10168.6535,
               "error": "five rendered search results readiness did not pass",
-              "action_evidence": null,
+              "action_evidence": {
+                "focus_acquisition": "tab_navigation",
+                "tab_events": 13,
+                "error": "five rendered search results readiness did not pass"
+              },
               "counts_toward_pass": true,
               "performance_eligible": false,
               "diagnostic_only": false,
@@ -5483,7 +5491,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 261.72445799999696,
+              "elapsed_ms": 271.4724169999972,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -5506,7 +5514,7 @@
               "focus_order": [
                 "Filter conversation event kind",
                 "Search",
-                "tooloperator · operatorCodexAug 2, 11:05 AMquality-harnessquality benchmark mark",
+                "tooloperator · operatorCodexAug 2, 11:10 AMquality-harnessquality benchmark mark",
                 "shell",
                 "New shell",
                 "Interrupt",
@@ -5848,14 +5856,14 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 59.29474999998638,
+          "elapsed_ms": 79.1268749999872,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 59.29474999998638,
+              "elapsed_ms": 79.1268749999872,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -5866,7 +5874,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4038.3742499999935,
+              "elapsed_ms": 4040.4358749999956,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -5877,7 +5885,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 44.90924999999697,
+              "elapsed_ms": 45.53012500000477,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -6093,14 +6101,14 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 63.427791999987676,
+          "elapsed_ms": 56.00191700000141,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 63.427791999987676,
+              "elapsed_ms": 56.00191700000141,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6111,7 +6119,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4040.865208000003,
+              "elapsed_ms": 4018.0091669999965,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6122,7 +6130,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 45.46208299999125,
+              "elapsed_ms": 46.213375000006636,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -6485,14 +6493,14 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 75.47491599999194,
+          "elapsed_ms": 57.66420800000196,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 75.47491599999194,
+              "elapsed_ms": 57.66420800000196,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6503,7 +6511,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4006.635792000001,
+              "elapsed_ms": 4018.261249999996,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6514,7 +6522,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 45.615666999990935,
+              "elapsed_ms": 48.0353749999922,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -6569,11 +6577,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "69555"
+                  "node_id": "70569"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "69597"
+                  "node_id": "70611"
                 }
               ]
             },
@@ -6731,14 +6739,14 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 58.239125000007334,
+          "elapsed_ms": 57.43191599998681,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 58.239125000007334,
+              "elapsed_ms": 57.43191599998681,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6749,7 +6757,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4020.9502920000086,
+              "elapsed_ms": 4018.0104579999897,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6760,7 +6768,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 44.41395800000464,
+              "elapsed_ms": 45.509874999988824,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -6959,14 +6967,14 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 59.16941699999734,
+          "elapsed_ms": 54.6033749999915,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 59.16941699999734,
+              "elapsed_ms": 54.6033749999915,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6977,7 +6985,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4016.5107090000092,
+              "elapsed_ms": 4012.994749999998,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -6988,7 +6996,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 45.42766699999629,
+              "elapsed_ms": 46.259791999997105,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -7216,14 +7224,14 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 62.41250000000582,
+          "elapsed_ms": 56.76575000000594,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 62.41250000000582,
+              "elapsed_ms": 56.76575000000594,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7234,7 +7242,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4036.993791000001,
+              "elapsed_ms": 4017.692083999995,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7245,7 +7253,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 46.01404199999524,
+              "elapsed_ms": 46.52720900000713,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -7431,14 +7439,14 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 57.67699999999604,
+          "elapsed_ms": 62.815125000008265,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 57.67699999999604,
+              "elapsed_ms": 62.815125000008265,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7449,7 +7457,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4015.2869159999973,
+              "elapsed_ms": 4009.910290999993,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7460,7 +7468,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 49.266417000006186,
+              "elapsed_ms": 44.05179100000532,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -7517,7 +7525,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "73726"
+                  "node_id": "74815"
                 }
               ]
             },
@@ -7725,14 +7733,14 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 60.424708999998984,
+          "elapsed_ms": 72.97599999999511,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 60.424708999998984,
+              "elapsed_ms": 72.97599999999511,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7743,7 +7751,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4026.032917000004,
+              "elapsed_ms": 4003.781833000001,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7754,7 +7762,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 46.16520899999887,
+              "elapsed_ms": 45.76825000002282,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -7766,7 +7774,7 @@
           "accessibility": {
             "accessible_names": {
               "passed": true,
-              "checked": 8,
+              "checked": 31,
               "violations": []
             },
             "keyboard_focus": {
@@ -7775,17 +7783,17 @@
               "focus_order": [
                 "Needs You, 0 open items",
                 "Turn notifications on for this device",
-                "agentboard-beta-release-browser▾",
-                "AI subscription usage",
-                "Board",
-                "Open Work",
-                "Organization",
-                "Roadmap"
+                "worker-default-provider",
+                "worker-default-model",
+                "Refresh models",
+                "Provider",
+                "Low",
+                "Medium"
               ],
               "reverse_focus_order": [
-                "Organization",
-                "Open Work",
-                "Board"
+                "Low",
+                "Provider",
+                "Refresh models"
               ],
               "activation": {
                 "supported": false
@@ -7794,7 +7802,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 87,
+              "checked": 250,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -7803,7 +7811,7 @@
               "passed": false,
               "checked": true,
               "scope": "opaque text on opaque solid computed backgrounds",
-              "unsupported_count": 21,
+              "unsupported_count": 49,
               "unsupported": [
                 {
                   "tag": "h1",
@@ -7909,6 +7917,26 @@
                   "tag": "span",
                   "class_name": "",
                   "reason": "translucent_background"
+                },
+                {
+                  "tag": "p",
+                  "class_name": "agent-default-index",
+                  "reason": "opacity_or_background_image"
+                },
+                {
+                  "tag": "p",
+                  "class_name": "agent-default-index",
+                  "reason": "opacity_or_background_image"
+                },
+                {
+                  "tag": "p",
+                  "class_name": "agent-default-index",
+                  "reason": "opacity_or_background_image"
+                },
+                {
+                  "tag": "h2",
+                  "class_name": "",
+                  "reason": "opacity_or_background_image"
                 }
               ],
               "violations": [
@@ -7932,6 +7960,90 @@
                   "text": "Running and resumed agents keep their stored configuration.",
                   "ratio": 3.09,
                   "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Low",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Medium",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "High",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "X-high",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Max",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Low",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Medium",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "High",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "X-high",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Max",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "span",
+                  "class_name": "",
+                  "text": "Defaults are up to date",
+                  "ratio": 3.17,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "settings-clear-all",
+                  "text": "Clear overrides",
+                  "ratio": 3.17,
+                  "required": 4.5
                 }
               ]
             }
@@ -7940,14 +8052,14 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 62.980291999992914,
+          "elapsed_ms": 64.01704199999222,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 62.980291999992914,
+              "elapsed_ms": 64.01704199999222,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7958,7 +8070,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4028.175999999992,
+              "elapsed_ms": 4010.4394159999792,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -7969,7 +8081,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 43.8327500000014,
+              "elapsed_ms": 46.40091699999175,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -8228,11 +8340,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "69555"
+                  "node_id": "70569"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "69597"
+                  "node_id": "70611"
                 }
               ]
             },
@@ -8241,7 +8353,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "73726"
+                  "node_id": "74815"
                 }
               ]
             }
@@ -9143,6 +9255,90 @@
                   "text": "Running and resumed agents keep their stored configuration.",
                   "ratio": 3.09,
                   "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Low",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Medium",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "High",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "X-high",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Max",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Low",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Medium",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "High",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "X-high",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "",
+                  "text": "Max",
+                  "ratio": 3.58,
+                  "required": 4.5
+                },
+                {
+                  "tag": "span",
+                  "class_name": "",
+                  "text": "Defaults are up to date",
+                  "ratio": 3.17,
+                  "required": 4.5
+                },
+                {
+                  "tag": "button",
+                  "class_name": "settings-clear-all",
+                  "text": "Clear overrides",
+                  "ratio": 3.17,
+                  "required": 4.5
                 }
               ]
             },
@@ -9174,31 +9370,31 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 77.69999998807907,
+          "observed_ms": 79.8999999910593,
           "measurement_mode": "navigation_timing",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 306.40000000596046,
+          "observed_ms": 311.09999999403954,
           "measurement_mode": "authenticated_fetch",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 253.66041700000642,
+          "observed_ms": 181.54666700000234,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 398.44933299999684,
+          "observed_ms": 399.3669579999987,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 303.35275000000547,
+          "observed_ms": 294.5467079999944,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
@@ -9215,14 +9411,14 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 619.3388750000158,
+          "elapsed_ms": 394.5478329999896,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 619.3388750000158,
+              "elapsed_ms": 394.5478329999896,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -9233,7 +9429,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4021.5347089999996,
+              "elapsed_ms": 4004.967000000004,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -9244,7 +9440,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 63.10520799999358,
+              "elapsed_ms": 47.65862499998184,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -9256,7 +9452,7 @@
           "accessibility": {
             "accessible_names": {
               "passed": true,
-              "checked": 58,
+              "checked": 59,
               "violations": []
             },
             "keyboard_focus": {
@@ -9509,14 +9705,14 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 333.48454100001254,
+          "elapsed_ms": 195.6453750000219,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 333.48454100001254,
+              "elapsed_ms": 195.6453750000219,
               "error": "could not hit-test Load more matching events",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -9527,7 +9723,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10040.501625000004,
+              "elapsed_ms": 10008.585167000012,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -9538,7 +9734,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 397.5265000000072,
+              "elapsed_ms": 324.5953750000044,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -9559,7 +9755,7 @@
               "focus_order": [
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-6339275d-39df-4e30-8be9-4a9b5320ddc0General agentrunning · managedCodex",
+                "J1job-1-a849ed9b-187f-4621-aab6-b8eeeddc691bGeneral agentrunning · managedCodex",
                 "More session actions including lifecycle controls",
                 "Copy exact Agent Home link",
                 "Refresh Agent Home",
@@ -9806,7 +10002,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -9834,7 +10030,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:0932f…",
+                  "text": "codex:3e43a…",
                   "ratio": 2.86,
                   "required": 4.5
                 },
@@ -9848,7 +10044,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.38,
                   "required": 4.5
                 },
@@ -9890,7 +10086,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:0932f…",
+                  "text": "codex:3e43a…",
                   "ratio": 3.01,
                   "required": 4.5
                 }
@@ -9901,14 +10097,14 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 21.68924999999581,
+          "elapsed_ms": 18.216167000005953,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 21.68924999999581,
+              "elapsed_ms": 18.216167000005953,
               "error": "conversation search input could not receive focus",
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -9919,9 +10115,13 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10200.368707999995,
+              "elapsed_ms": 10126.200083999982,
               "error": "five rendered search results readiness did not pass",
-              "action_evidence": null,
+              "action_evidence": {
+                "focus_acquisition": "tab_navigation",
+                "tab_events": 13,
+                "error": "five rendered search results readiness did not pass"
+              },
               "counts_toward_pass": true,
               "performance_eligible": false,
               "diagnostic_only": false,
@@ -9930,7 +10130,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 241.6729580000101,
+              "elapsed_ms": 259.2734170000185,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -9948,21 +10148,22 @@
               "violations": []
             },
             "keyboard_focus": {
-              "passed": false,
-              "checked": 10,
+              "passed": true,
+              "checked": 11,
               "focus_order": [
                 "Filter conversation event kind",
                 "Search",
-                "tooloperator · operatorCodexAug 2, 11:05 AMquality-harnessquality benchmark mark",
+                "tooloperator · operatorCodexAug 2, 11:10 AMquality-harnessquality benchmark mark",
                 "agentboard-beta-release-browser▾",
                 "AI subscription usage",
                 "Board",
-                "Open Work"
+                "Open Work",
+                "Organization"
               ],
               "reverse_focus_order": [
+                "Open Work",
                 "Board",
-                "AI subscription usage",
-                "agentboard-beta-release-browser▾"
+                "AI subscription usage"
               ],
               "activation": {
                 "supported": true,
@@ -9970,12 +10171,7 @@
                 "selected": "true",
                 "remained_selected": true
               },
-              "violations": [
-                {
-                  "step": 4,
-                  "reason": "focus did not reach an interactive element"
-                }
-              ]
+              "violations": []
             },
             "screen_reader_tree": {
               "passed": true,
@@ -10204,7 +10400,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10232,7 +10428,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10260,7 +10456,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10288,7 +10484,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 }
@@ -10299,14 +10495,14 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 56.49154199997429,
+          "elapsed_ms": 68.22320800001035,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 56.49154199997429,
+              "elapsed_ms": 68.22320800001035,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10317,7 +10513,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4001.9451249999984,
+              "elapsed_ms": 4033.551208000019,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10328,7 +10524,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 44.784041000006255,
+              "elapsed_ms": 46.6440419999999,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -10544,14 +10740,14 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 59.182374999974854,
+          "elapsed_ms": 86.62150000000838,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 59.182374999974854,
+              "elapsed_ms": 86.62150000000838,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10562,7 +10758,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4027.26883299998,
+              "elapsed_ms": 4037.798959000007,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10573,7 +10769,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 56.87341700002435,
+              "elapsed_ms": 44.88379199997871,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -10616,7 +10812,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 157,
+              "checked": 158,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -10817,14 +11013,14 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 4042.56700000001,
+          "elapsed_ms": 4030.9370000000054,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4042.56700000001,
+              "elapsed_ms": 4030.9370000000054,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10835,7 +11031,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4017.901750000019,
+              "elapsed_ms": 4013.4893750000047,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -10846,7 +11042,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 43.98862499999814,
+              "elapsed_ms": 68.79604199997266,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -10868,8 +11064,8 @@
               ]
             },
             "keyboard_focus": {
-              "passed": true,
-              "checked": 11,
+              "passed": false,
+              "checked": 10,
               "focus_order": [
                 "board-tab-shipped",
                 "all agentscodex-job-1qa-agent-01qa-agent-02qa-agent-03qa-agent-04qa-agent-05qa-a",
@@ -10877,13 +11073,12 @@
                 "INPUT",
                 "agentboard-beta-release-browser▾",
                 "AI subscription usage",
-                "Board",
-                "Open Work"
+                "Board"
               ],
               "reverse_focus_order": [
-                "Board",
                 "AI subscription usage",
-                "agentboard-beta-release-browser▾"
+                "agentboard-beta-release-browser▾",
+                null
               ],
               "activation": {
                 "supported": true,
@@ -10891,7 +11086,12 @@
                 "selected": "true",
                 "remained_selected": true
               },
-              "violations": []
+              "violations": [
+                {
+                  "step": 5,
+                  "reason": "focus did not reach an interactive element"
+                }
+              ]
             },
             "screen_reader_tree": {
               "passed": false,
@@ -10901,11 +11101,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "111560"
+                  "node_id": "113108"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "111602"
+                  "node_id": "113150"
                 }
               ]
             },
@@ -11063,14 +11263,14 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 4025.501916999987,
+          "elapsed_ms": 4027.208249999996,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4025.501916999987,
+              "elapsed_ms": 4027.208249999996,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11081,7 +11281,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4018.207374999998,
+              "elapsed_ms": 4040.4202919999952,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11092,7 +11292,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 46.51320799998939,
+              "elapsed_ms": 45.39229200000409,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -11291,14 +11491,14 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 63.391666999988956,
+          "elapsed_ms": 60.97775000002002,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 63.391666999988956,
+              "elapsed_ms": 60.97775000002002,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11309,7 +11509,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4040.200499999977,
+              "elapsed_ms": 4004.4761660000077,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11320,7 +11520,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 77.16800000000512,
+              "elapsed_ms": 46.51733299999614,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -11360,7 +11560,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 170,
+              "checked": 166,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -11369,7 +11569,7 @@
               "passed": false,
               "checked": true,
               "scope": "opaque text on opaque solid computed backgrounds",
-              "unsupported_count": 21,
+              "unsupported_count": 20,
               "unsupported": [
                 {
                   "tag": "h1",
@@ -11470,11 +11670,6 @@
                   "tag": "button",
                   "class_name": "tab",
                   "reason": "translucent_background"
-                },
-                {
-                  "tag": "button",
-                  "class_name": "ow-button primary",
-                  "reason": "opacity_or_background_image"
                 }
               ],
               "violations": [
@@ -11540,13 +11735,6 @@
                   "text": "No filters applied",
                   "ratio": 2.86,
                   "required": 4.5
-                },
-                {
-                  "tag": "p",
-                  "class_name": "",
-                  "text": "Publish a valid contract to make it available to the operator queue.",
-                  "ratio": 4.47,
-                  "required": 4.5
                 }
               ]
             }
@@ -11555,14 +11743,14 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 75.23962499998743,
+          "elapsed_ms": 59.81991599997855,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 75.23962499998743,
+              "elapsed_ms": 59.81991599997855,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11573,7 +11761,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4053.922416000016,
+              "elapsed_ms": 4001.248707999999,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11584,7 +11772,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 49.31816699999035,
+              "elapsed_ms": 44.36320799999521,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -11765,14 +11953,14 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 104.25391700002365,
+          "elapsed_ms": 65.36845899999025,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 104.25391700002365,
+              "elapsed_ms": 65.36845899999025,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11783,7 +11971,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4033.1367919999757,
+              "elapsed_ms": 4005.3674170000013,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -11794,7 +11982,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 47.090666999982204,
+              "elapsed_ms": 45.23050000000512,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -11851,7 +12039,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "115264"
+                  "node_id": "116849"
                 }
               ]
             },
@@ -12054,14 +12242,14 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 66.15929099998903,
+          "elapsed_ms": 59.56258300002082,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 66.15929099998903,
+              "elapsed_ms": 59.56258300002082,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -12072,7 +12260,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4004.248292000004,
+              "elapsed_ms": 4036.952666999976,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -12083,7 +12271,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 47.61599999997998,
+              "elapsed_ms": 43.60804199997801,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -12373,14 +12561,14 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 58.32320899999468,
+          "elapsed_ms": 57.598291000002064,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 58.32320899999468,
+              "elapsed_ms": 57.598291000002064,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -12391,7 +12579,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4013.885750000016,
+              "elapsed_ms": 4005.6585409999825,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": true,
@@ -12402,7 +12590,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 44.85004200000549,
+              "elapsed_ms": 45.107958000007784,
               "error": null,
               "action_evidence": null,
               "counts_toward_pass": false,
@@ -12686,10 +12874,10 @@
           "surfaces_checked": 12,
           "failures": [
             {
-              "journey": "conversation search",
+              "journey": "timeline board view",
               "violations": [
                 {
-                  "step": 4,
+                  "step": 5,
                   "reason": "focus did not reach an interactive element"
                 }
               ]
@@ -12719,11 +12907,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "111560"
+                  "node_id": "113108"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "111602"
+                  "node_id": "113150"
                 }
               ]
             },
@@ -12732,7 +12920,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "115264"
+                  "node_id": "116849"
                 }
               ]
             }
@@ -12914,7 +13102,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -12942,7 +13130,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:0932f…",
+                  "text": "codex:3e43a…",
                   "ratio": 2.86,
                   "required": 4.5
                 },
@@ -12956,7 +13144,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.38,
                   "required": 4.5
                 },
@@ -12998,7 +13186,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:0932f…",
+                  "text": "codex:3e43a…",
                   "ratio": 3.01,
                   "required": 4.5
                 }
@@ -13094,7 +13282,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13122,7 +13310,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13150,7 +13338,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13178,7 +13366,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:05 AM",
+                  "text": "Aug 2, 11:10 AM",
                   "ratio": 3.21,
                   "required": 4.5
                 }
@@ -13373,13 +13561,6 @@
                   "class_name": "empty",
                   "text": "No filters applied",
                   "ratio": 2.86,
-                  "required": 4.5
-                },
-                {
-                  "tag": "p",
-                  "class_name": "",
-                  "text": "Publish a valid contract to make it available to the operator queue.",
-                  "ratio": 4.47,
                   "required": 4.5
                 }
               ]
@@ -13637,31 +13818,31 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 88.79999999701977,
+          "observed_ms": 76.80000001192093,
           "measurement_mode": "navigation_timing",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 667.7999999970198,
+          "observed_ms": 345.30000001192093,
           "measurement_mode": "authenticated_fetch",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 333.48454100001254,
+          "observed_ms": 195.6453750000219,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 619.3388750000158,
+          "observed_ms": 394.5478329999896,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 21.68924999999581,
+          "observed_ms": 18.216167000005953,
           "measurement_mode": "pointer",
           "budget_ms": null,
           "budget_source": "observation_only"
@@ -13669,17 +13850,15 @@
       }
     }
   ],
-  "sha256": "6eeacf85974205c4cd7a0cc659a1db70f2b1acd8ef9489771cc750289cd054d7",
+  "sha256": "336617ae7307809093936c29fa63a09f397d43d22b44138cd1931713cba294f3",
   "validation_errors": [
     "desktop failed accessible_names",
     "desktop failed keyboard_focus",
     "desktop failed screen_reader_tree",
     "desktop failed text_contrast",
     "desktop graph overview failed independent keyboard interaction",
-    "desktop durable transcript failed independent pointer interaction",
     "desktop durable transcript failed independent keyboard interaction",
     "desktop conversation search failed independent keyboard interaction",
-    "desktop conversation search lacks keyboard-only focus acquisition evidence",
     "desktop messages board view failed independent keyboard interaction",
     "desktop workspace board view failed independent keyboard interaction",
     "desktop timeline board view failed independent keyboard interaction",
@@ -13697,7 +13876,6 @@
     "tablet durable transcript failed independent pointer interaction",
     "tablet durable transcript failed independent keyboard interaction",
     "tablet conversation search failed independent keyboard interaction",
-    "tablet conversation search lacks keyboard-only focus acquisition evidence",
     "tablet messages board view failed independent keyboard interaction",
     "tablet workspace board view failed independent keyboard interaction",
     "tablet timeline board view failed independent keyboard interaction",
@@ -13717,7 +13895,6 @@
     "phone durable transcript failed independent keyboard interaction",
     "phone conversation search failed independent pointer interaction",
     "phone conversation search failed independent keyboard interaction",
-    "phone conversation search lacks keyboard-only focus acquisition evidence",
     "phone messages board view failed independent keyboard interaction",
     "phone workspace board view failed independent keyboard interaction",
     "phone timeline board view failed independent pointer interaction",
