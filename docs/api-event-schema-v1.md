@@ -24,3 +24,16 @@ a matching API major alone does not authorize an old binary to write a newer dat
 
 Authentication and DeviceSession scope are not encoded by URL version. Every route inherits the
 current authorization boundary, and Lane C must prove remote attribution/step-up independently.
+
+## Local support-case export
+
+`POST /api/v1/ops/support-case` is local-owner-only and additive within API v1. Its request is a
+closed schema containing title, summary, reproduction steps, expected/actual behavior, exact commit,
+Orchestra version and the exact local-export/review consent literal. Unknown or missing fields fail
+closed. Clients cannot supply diagnostics metadata, bytes, file paths or a verifier verdict.
+
+On success, the response is one attachment with `application/json`, `Cache-Control: no-store`,
+`X-Content-Type-Options: nosniff` and an `X-Content-SHA256` digest covering the exact response bytes.
+The schema-1 body contains the validated support case, the exact verified gzip bytes encoded as
+base64, and explicit `required_before_sharing`, `transport_registered: false` and
+`publication_performed: false` state. This route creates no external side effect.
