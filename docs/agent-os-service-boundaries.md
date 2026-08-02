@@ -1,6 +1,6 @@
 # Agent OS focused service boundaries
 
-Status: DOM-014 plus Beta Lane A collaboration domains, observed at code head `408f5b2`.
+Status: DOM-014 plus Beta Lane A collaboration domains, observed at code head `364967d`.
 
 ## TL;DR
 
