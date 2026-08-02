@@ -346,15 +346,27 @@ const waitFor = async (client, expression, label) => {
 }
 
 const hitTestPoint = async (client, selector, label) => {
-  const point = await evaluate(client, `(() => {
+  const found = await evaluate(client, `(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!(element instanceof HTMLElement)) return null;
     element.scrollIntoView({ block: 'center', inline: 'center' });
+    return true;
+  })()`)
+  if (!found) throw new Error(`could not find ${label}`)
+  await delay(150)
+  const point = await evaluate(client, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!(element instanceof HTMLElement)) return null;
     const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    if (!hit || !(hit === element || element.contains(hit))) return null;
-    return { x, y };
+    const candidates = [
+      [0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75],
+    ];
+    for (const [xRatio, yRatio] of candidates) {
+      const x = rect.left + rect.width * xRatio, y = rect.top + rect.height * yRatio;
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === element || element.contains(hit))) return { x, y };
+    }
+    return null;
   })()`)
   if (!point) throw new Error(`could not hit-test ${label}`)
   return point
@@ -872,7 +884,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         })()`)
         if (!focusedByFallback) throw new Error('DOM fallback could not focus conversation search input')
       }
-      const focused = await evaluate(client, `document.activeElement === document.querySelector('.ah-search input')`)
+      const focused = await modeReady(
+        `document.activeElement === document.querySelector('.ah-search input')`,
+        interactionReadinessTimeoutMs,
+      )
       if (!focused) throw new Error('conversation search input could not receive focus')
       await typeText(client, 'quality')
       await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
