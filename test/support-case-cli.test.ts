@@ -80,4 +80,27 @@ describe('support-case CLI export', () => {
     ])).rejects.toThrow('invalid support-case export')
     expect(fs.readdirSync(root)).toEqual(['request.json'])
   })
+
+  it('opens the request descriptor-first and rejects a symlink request', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-support-cli-'))
+    roots.push(root)
+    const actual = path.join(root, 'actual.json')
+    const linked = path.join(root, 'linked.json')
+    fs.writeFileSync(actual, '{}')
+    fs.symlinkSync(actual, linked)
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined })
+    const ops = program.command('ops')
+    let fetched = false
+    registerSupportCaseCommand(ops, {
+      ensureReady: async () => undefined,
+      baseUrl: () => 'http://127.0.0.1:4111',
+      ownerToken: () => 'owner-secret',
+      fetchImpl: async () => { fetched = true; return new Response() },
+    })
+    await expect(program.parseAsync([
+      'node', 'orchestra', 'ops', 'support-case', linked, root,
+      '--consent-review-before-sharing',
+    ])).rejects.toThrow()
+    expect(fetched).toBe(false)
+  })
 })

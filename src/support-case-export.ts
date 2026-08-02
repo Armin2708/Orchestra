@@ -14,6 +14,8 @@ import {
   WITHHELD_OPERATIONAL_VALUE,
 } from './operations/redaction.js'
 import type { OperationsDiagnosticsArtifact } from './operations/diagnostics.js'
+import { OPERATIONS_HEALTH_COMPONENTS } from './operations/health.js'
+import { OPERATIONS_METRICS } from './operations/metrics.js'
 import { REDACTED_STRUCTURED_VALUE } from './agent-os/structured-redaction.js'
 
 const MAX_COMPRESSED_BYTES = 8 * 1024 * 1024
@@ -23,7 +25,8 @@ const DIAGNOSTICS_FILE = /^orchestra-diagnostics-[A-Za-z0-9-]+\.json\.gz$/
 const SUPPORT_CASE_FILE = /^orchestra-support-case-[A-Za-z0-9-]+-[a-f0-9]{12}\.json$/
 const SAFE_KEY = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/
 const SECRET_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:github_pat_|gh[pousr]_|glpat-|xox[baprs]-|sk-)[A-Za-z0-9_-]{8,}|\bAKIA[A-Z0-9]{16}\b|bearer\s+[a-z0-9._~+/-]+|(?:api[_-]?key|authorization|cookie|token|secret|password)\s*[:=]\s*\S+)/i
-const LOCAL_PATH_OR_URL = /(?:https?:\/\/|file:\/\/|(?:^|[\s"'])\/(?:Users|home|private|var\/folders)\/|[A-Za-z]:\\Users\\)/i
+const PATH_SEPARATOR_OR_URL = /[/\\]/u
+const BARE_SENSITIVE_PATH = /(?:^|[\s"'=(])(?:\.env(?:\.[A-Za-z0-9_-]+)?|id_(?:rsa|dsa|ecdsa|ed25519)|known_hosts|authorized_keys)(?=$|[\s"',;)])/i
 const ROOT_KEYS = [
   'schema_version',
   'created_at',
@@ -57,6 +60,36 @@ const INCLUDED_CATEGORIES = [
   'runtime',
   'versions',
 ] as const
+const GENERATOR_KEYS = ['version', 'revision'] as const
+const GENERATOR_REQUIRED_KEYS = ['version'] as const
+const RUNTIME_KEYS = ['node_version', 'platform', 'arch', 'uptime_seconds'] as const
+const HEALTH_KEYS = ['status', 'checked_at', 'duration_ms', 'components'] as const
+const HEALTH_COMPONENT_KEYS = [
+  'component', 'required', 'status', 'reasonCode', 'observedAt', 'latencyMs', 'details',
+] as const
+const HEALTH_COMPONENT_REQUIRED_KEYS = [
+  'component', 'required', 'status', 'observedAt', 'latencyMs', 'details',
+] as const
+const METRIC_KEYS = ['name', 'value', 'labels', 'observed_at'] as const
+const METRIC_LABELS = new Set(['provider', 'result', 'priority', 'component'])
+const LOG_KEYS = [
+  'timestamp', 'level', 'event', 'outcome', 'component', 'reason_code', 'correlation_id',
+  'job_id', 'session_id', 'device_id', 'attributes', 'redactions',
+] as const
+const LOG_REQUIRED_KEYS = ['timestamp', 'level', 'event', 'attributes', 'redactions'] as const
+const CONFIGURATION_KEYS = [
+  'authentication', 'remote_exposure', 'stale_remote_authorized_intents',
+  'max_active_sessions', 'token', 'workspace_path',
+] as const
+const NODE_PLATFORMS = new Set([
+  'aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'openbsd', 'sunos', 'win32', 'cygwin', 'netbsd',
+])
+const HEALTH_STATUSES = new Set(['ready', 'degraded', 'unavailable', 'disabled'])
+const LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error'])
+const LOG_OUTCOMES = new Set(['allowed', 'denied', 'succeeded', 'failed', 'degraded'])
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const EVENT_NAME = /^[a-z][a-z0-9_.-]{0,95}$/
+const VERSION = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/
 
 export const SUPPORT_CASE_EXPORT_CONSENT =
   'I_CONSENT_TO_LOCAL_EXPORT_AND_REVIEW_BEFORE_SHARING' as const
@@ -112,6 +145,121 @@ const exactStrings = (value: unknown, expected: readonly string[]): boolean => A
   && value.length === expected.length
   && value.every((item, index) => item === expected[index])
 
+const exactRecordShape = (
+  value: unknown,
+  allowed: readonly string[],
+  required: readonly string[] = allowed,
+): value is Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype) return false
+  const keys = Object.keys(value)
+  return keys.every((key) => allowed.includes(key))
+    && required.every((key) => Object.hasOwn(value, key))
+}
+
+const isIsoTimestamp = (value: unknown): value is string => typeof value === 'string'
+  && Number.isFinite(Date.parse(value))
+  && new Date(Date.parse(value)).toISOString() === value
+
+const isFiniteNonNegative = (value: unknown): value is number => typeof value === 'number'
+  && Number.isFinite(value)
+  && value >= 0
+
+const isIdentifier = (value: unknown): value is string => typeof value === 'string'
+  && IDENTIFIER.test(value)
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => Boolean(value)
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && Object.getPrototypeOf(value) === Object.prototype
+
+const validateDiagnosticsSchema = (payload: Record<string, unknown>): boolean => {
+  if (!exactRecordShape(payload.generator, GENERATOR_KEYS, GENERATOR_REQUIRED_KEYS)
+    || typeof payload.generator.version !== 'string'
+    || !VERSION.test(payload.generator.version)
+    || (payload.generator.revision !== undefined
+      && (typeof payload.generator.revision !== 'string' || !/^[0-9a-f]{7,64}$/i.test(payload.generator.revision)))) {
+    return false
+  }
+  if (!exactRecordShape(payload.runtime, RUNTIME_KEYS)
+    || typeof payload.runtime.node_version !== 'string'
+    || !/^v\d+\.\d+\.\d+$/.test(payload.runtime.node_version)
+    || typeof payload.runtime.platform !== 'string'
+    || !NODE_PLATFORMS.has(payload.runtime.platform)
+    || typeof payload.runtime.arch !== 'string'
+    || !/^[a-z0-9_-]{1,32}$/i.test(payload.runtime.arch)
+    || !isFiniteNonNegative(payload.runtime.uptime_seconds)) return false
+
+  if (!exactRecordShape(payload.health, HEALTH_KEYS)
+    || !['ready', 'degraded', 'unavailable'].includes(String(payload.health.status))
+    || !isIsoTimestamp(payload.health.checked_at)
+    || !isFiniteNonNegative(payload.health.duration_ms)
+    || !Array.isArray(payload.health.components)
+    || payload.health.components.length !== OPERATIONS_HEALTH_COMPONENTS.length) return false
+  const componentNames = new Set<string>()
+  for (const component of payload.health.components) {
+    if (!exactRecordShape(component, HEALTH_COMPONENT_KEYS, HEALTH_COMPONENT_REQUIRED_KEYS)
+      || typeof component.component !== 'string'
+      || !OPERATIONS_HEALTH_COMPONENTS.includes(component.component as never)
+      || componentNames.has(component.component)
+      || typeof component.required !== 'boolean'
+      || typeof component.status !== 'string'
+      || !HEALTH_STATUSES.has(component.status)
+      || (component.reasonCode !== undefined && !isIdentifier(component.reasonCode))
+      || !isIsoTimestamp(component.observedAt)
+      || !isFiniteNonNegative(component.latencyMs)
+      || !isPlainRecord(component.details)) return false
+    componentNames.add(component.component)
+  }
+  if (componentNames.size !== OPERATIONS_HEALTH_COMPONENTS.length) return false
+
+  if (!Array.isArray(payload.metrics) || payload.metrics.length > 512) return false
+  for (const metric of payload.metrics) {
+    if (!exactRecordShape(metric, METRIC_KEYS)
+      || typeof metric.name !== 'string'
+      || !OPERATIONS_METRICS.includes(metric.name as never)
+      || !isFiniteNonNegative(metric.value)
+      || !isIsoTimestamp(metric.observed_at)
+      || !exactRecordShape(metric.labels, [...METRIC_LABELS], [])) return false
+    for (const [key, value] of Object.entries(metric.labels)) {
+      if (!METRIC_LABELS.has(key) || !isIdentifier(value)) return false
+    }
+  }
+
+  if (!Array.isArray(payload.recent_logs) || payload.recent_logs.length > 500) return false
+  for (const log of payload.recent_logs) {
+    if (!exactRecordShape(log, LOG_KEYS, LOG_REQUIRED_KEYS)
+      || !isIsoTimestamp(log.timestamp)
+      || typeof log.level !== 'string' || !LOG_LEVELS.has(log.level)
+      || typeof log.event !== 'string' || !EVENT_NAME.test(log.event)
+      || (log.outcome !== undefined && (typeof log.outcome !== 'string' || !LOG_OUTCOMES.has(log.outcome)))
+      || (log.component !== undefined && !isIdentifier(log.component))
+      || (log.reason_code !== undefined && !isIdentifier(log.reason_code))
+      || (log.correlation_id !== undefined && !isIdentifier(log.correlation_id))
+      || (log.job_id !== undefined && !isIdentifier(log.job_id))
+      || (log.session_id !== undefined && !isIdentifier(log.session_id))
+      || (log.device_id !== undefined && !isIdentifier(log.device_id))
+      || !isPlainRecord(log.attributes)
+      || !Number.isSafeInteger(log.redactions) || Number(log.redactions) < 0) return false
+  }
+
+  if (!exactRecordShape(payload.configuration, CONFIGURATION_KEYS, [])) return false
+  const configuration = payload.configuration
+  if (configuration.authentication !== undefined
+      && configuration.authentication !== 'required_or_loopback_only'
+      && configuration.authentication !== REDACTED_STRUCTURED_VALUE) return false
+  if (configuration.remote_exposure !== undefined && !isIdentifier(configuration.remote_exposure)) return false
+  for (const key of ['stale_remote_authorized_intents', 'max_active_sessions'] as const) {
+    if (configuration[key] !== undefined && !isFiniteNonNegative(configuration[key])) return false
+  }
+  for (const key of ['token', 'workspace_path'] as const) {
+    if (configuration[key] !== undefined
+      && configuration[key] !== WITHHELD_OPERATIONAL_VALUE
+      && configuration[key] !== REDACTED_STRUCTURED_VALUE) return false
+  }
+  return true
+}
+
 const scanRedactedValue = (
   value: unknown,
   key = '',
@@ -135,7 +283,8 @@ const scanRedactedValue = (
     if (value.length > 4_000
       || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(value)
       || SECRET_VALUE.test(value)
-      || LOCAL_PATH_OR_URL.test(value)) {
+      || PATH_SEPARATOR_OR_URL.test(value)
+      || BARE_SENSITIVE_PATH.test(value)) {
       throw new Error('diagnostics payload contains unsafe text')
     }
     return
@@ -193,11 +342,10 @@ export const verifyOperationsDiagnosticsArtifact = (
   }
   if (!exactRecord(payload, ROOT_KEYS)
     || payload.schema_version !== 1
-    || typeof payload.created_at !== 'string'
-    || !Number.isFinite(Date.parse(payload.created_at))
-    || new Date(Date.parse(payload.created_at)).toISOString() !== payload.created_at
+    || !isIsoTimestamp(payload.created_at)
     || Date.parse(payload.created_at) > nowMs() + 5_000
-    || !exactStrings(payload.exclusions, REQUIRED_EXCLUSIONS)) {
+    || !exactStrings(payload.exclusions, REQUIRED_EXCLUSIONS)
+    || !validateDiagnosticsSchema(payload)) {
     throw new Error('diagnostics artifact schema or exclusion contract is invalid')
   }
   scanRedactedValue(Object.fromEntries(
@@ -299,9 +447,16 @@ export const writeSupportCaseExport = (
   try {
     fs.writeFileSync(descriptor, artifact.bytes)
     fs.fsyncSync(descriptor)
-    fs.chmodSync(destination, 0o600)
+    fs.fchmodSync(descriptor, 0o600)
   } catch (error) {
-    try { fs.rmSync(destination, { force: true }) } catch { /* preserve original failure */ }
+    try {
+      const opened = fs.fstatSync(descriptor)
+      const current = fs.lstatSync(destination)
+      if (opened.dev === current.dev && opened.ino === current.ino
+        && opened.nlink === 1 && current.isFile()) {
+        fs.unlinkSync(destination)
+      }
+    } catch { /* preserve original failure without deleting a swapped path */ }
     throw error
   } finally {
     fs.closeSync(descriptor)

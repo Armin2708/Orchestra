@@ -86,4 +86,22 @@ describe('local-owner support-case export route', () => {
       expect([401, 403]).toContain(response.statusCode)
     }
   })
+
+  it('retains the central mutation rate limit ahead of support-case authorization', async () => {
+    const server = fixture()
+    for (let index = 0; index < 240; index += 1) {
+      const response = await server.inject({
+        method: 'POST', url: '/api/v1/ops/support-case',
+        headers: { host: 'localhost', authorization: 'Bearer owner-secret' }, payload: {},
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    const limited = await server.inject({
+      method: 'POST', url: '/api/v1/ops/support-case',
+      headers: { host: 'localhost', authorization: 'Bearer owner-secret' }, payload: {},
+    })
+    expect(limited.statusCode).toBe(429)
+    expect(limited.headers['retry-after']).toBeDefined()
+    expect(limited.json()).toMatchObject({ error: 'operational rate limit exceeded' })
+  })
 })

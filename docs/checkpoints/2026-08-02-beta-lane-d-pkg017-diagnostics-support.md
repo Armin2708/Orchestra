@@ -11,15 +11,17 @@ consent, redaction, digest/size, path and fail-closed boundaries across the daem
 ## Delivered
 
 - Added an independent verifier for the exact gzip bytes. It recomputes the digest, enforces
-  compressed/decoded bounds, validates the closed schema and exclusions, and rejects retained
-  unsafe content before issuing an attestation.
+  compressed/decoded bounds, validates exact versioned schemas at every fixed nested container and
+  the exclusions, and rejects Unix, home, relative, Windows, UNC, URL and credential-like retained
+  content before issuing an attestation. Caller-supplied verification claims are never trusted.
 - Added a local-owner-only support-case route that generates fresh diagnostics and returns one
   digest-bound JSON attachment containing the report plus the exact gzip bytes as base64.
 - Added a Settings workflow and `orchestra ops support-case` command. Both require explicit local
   export/review consent; neither performs an upload or public action.
 - The CLI accepts one bounded regular request file and an existing output directory, verifies the
-  response digest, uses the server-generated filename, writes mode `0600` with exclusive create,
-  and refuses overwrite or unsafe filenames.
+  response digest, uses the server-generated filename, reads descriptor-first with no-follow,
+  writes mode `0600` with exclusive no-follow create plus descriptor-based chmod/fsync, and refuses
+  overwrite, unsafe filenames, symlink inputs/outputs and deletion of a swapped output path.
 - Kept the standalone `prepareSupportCase` dependency-injection boundary fail closed and extended
   its filename contract only for the generator's real `.json.gz` format.
 
@@ -28,26 +30,36 @@ consent, redaction, digest/size, path and fail-closed boundaries across the daem
 - Positive coverage decodes an export and proves its embedded bytes equal the generated artifact.
 - Adversarial coverage rejects absent consent, unknown fields, authorization failures, digest drift,
   malformed/compression-amplified data, closed-schema drift, exclusion drift, unsafe retained
-  content, traversal filenames and overwrite attempts.
+  content and misleading claims. It also covers absolute/home/relative/Windows/UNC paths, nested
+  unknown and mistyped fields, traversal, symlinks, canonical containment, inode changes, overwrite
+  attempts and the inherited central mutation rate limit.
 - Root and web typechecks/builds, complete test suites, audits, secret scanning, GitNexus change
   review, Graphify update and configuration stability must pass at the candidate commit before this
   checkpoint can be accepted.
 
 ## Candidate evidence
 
-- Post-hardening focused verification: 8 files / 20 tests in both default and one-worker modes.
-- Complete default-parallel verification: 272 files / 2,246 tests at the final working tree.
-- Complete one-worker verification: 272 files / 2,246 tests before the final canonical-JSON-only
-  verifier hardening; the affected focused set then passed in both modes. Central integration must
-  run its own complete dual suites at the combined exact head.
+The earlier `7ceed609b113af6ebe2f3d43c315a9c400d33be7` candidate was rejected by independent
+review (P0=0, P1=1, P2=2) and is not eligible for integration. The findings were incomplete local
+path detection, open nested schemas and pathname-based file operations. The replacement candidate
+must receive a fresh exact-SHA review.
+
+- Remediated focused verification: 7 files / 23 tests in both default and one-worker modes. The
+  quality-inventory contract plus affected support tests also passed as 4 files / 37 tests.
+- Complete default-parallel verification: 272 files / 2,251 tests in 120.84 seconds.
+- Complete one-worker verification: 272 files / 2,251 tests in 409.59 seconds. Central integration
+  must still run its own complete dual suites at the combined exact head.
 - Root/web TypeScript checks and production builds passed under Node `22.20.0` / npm `10.9.3`.
-- Root/web audits reported zero vulnerabilities. Full-history Gitleaks scanned 792 commits with no
-  findings. GitNexus PDG review reported no persisted finding in the four changed runtime/UI files,
-  with its documented closure/property-flow limitations.
-- GitNexus change review classified the central operations registration seam as critical breadth;
-  the exact candidate therefore requires independent P0/P1/P2 review before integration.
-- Graphify code update produced 10,690 nodes, 25,126 edges and 411 communities and resolves the new
-  verifier/export symbols. Configuration/release-calibration files remained byte-identical to base.
+- Root/web audits reported zero vulnerabilities. Full-history Gitleaks scanned 797 commits with no
+  findings. A clean GitNexus PDG rebuild found no persisted taint finding in the verifier, CLI or
+  quality-contract script, with its documented closure/property/implicit-flow limitations.
+- GitNexus remediation change review was low risk: 8 files, 48 changed symbols and zero affected
+  execution flows. The broader original registration seam remains critical breadth and still
+  requires independent P0/P1/P2 review before integration.
+- Graphify's code update produced 10,758 nodes, 25,215 edges and 422 communities before the final
+  semantic checkpoint refresh. The quality requirements now explicitly classify the verifier as a
+  reviewed state-machine candidate; its discovery digest and independent immutable requirements
+  pin were updated together and remained stable after focused and complete verification.
 
 ## Remaining
 

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { gzipSync, gunzipSync } from 'node:zlib'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   OPERATIONS_HEALTH_COMPONENTS,
   OperationsDiagnosticsBundle,
@@ -100,6 +100,8 @@ describe('strict diagnostics-backed support-case export', () => {
       publication_performed: false,
     })
     expect(Buffer.from(exported.value.diagnostics_bundle.bytes, 'base64')).toEqual(source.bytes)
+    expect(exported.value.diagnostics_bundle.byte_length).toBe(source.bytes.byteLength)
+    expect(exported.value.diagnostics_bundle.sha256).toBe(source.sha256)
     expect(exported.value.support_case.diagnostics).toMatchObject({
       bundle_file: source.filename,
       sha256: source.sha256,
@@ -123,6 +125,39 @@ describe('strict diagnostics-backed support-case export', () => {
     )
   })
 
+  it('uses canonical containment and never follows or removes a swapped output path', async () => {
+    const exported = createSupportCaseExport({ request, diagnostics: await diagnostics(), nowMs })
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-support-export-'))
+    roots.push(root)
+    const canonical = path.join(root, 'canonical')
+    fs.mkdirSync(canonical)
+    const alias = path.join(root, 'alias')
+    fs.symlinkSync(canonical, alias, 'dir')
+    const destination = writeSupportCaseExport(alias, exported)
+    expect(path.dirname(destination)).toBe(fs.realpathSync(canonical))
+
+    const target = path.join(root, 'do-not-touch.json')
+    fs.writeFileSync(target, 'preserved')
+    const symlinkDestination = path.join(canonical, exported.filename)
+    expect(() => fs.symlinkSync(target, symlinkDestination)).toThrow()
+    fs.unlinkSync(destination)
+    fs.symlinkSync(target, symlinkDestination)
+    expect(() => writeSupportCaseExport(canonical, exported)).toThrow()
+    expect(fs.readFileSync(target, 'utf8')).toBe('preserved')
+
+    fs.unlinkSync(symlinkDestination)
+    const originalWrite = fs.writeFileSync.bind(fs)
+    const writer = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(((descriptor, bytes) => {
+      expect(typeof descriptor).toBe('number')
+      fs.unlinkSync(symlinkDestination)
+      originalWrite(symlinkDestination, 'replacement')
+      throw new Error(`simulated write failure after ${Buffer.byteLength(bytes as Uint8Array)} bytes`)
+    }) as typeof fs.writeFileSync)
+    expect(() => writeSupportCaseExport(canonical, exported)).toThrow('simulated write failure')
+    writer.mockRestore()
+    expect(fs.readFileSync(symlinkDestination, 'utf8')).toBe('replacement')
+  })
+
   it('fails closed for absent consent, digest drift, unsafe content, schema drift, and exclusion drift', async () => {
     const source = await diagnostics()
     expect(() => createSupportCaseExport({
@@ -134,12 +169,14 @@ describe('strict diagnostics-backed support-case export', () => {
       .toThrow('digest does not match')
 
     const unsafeText = rewrite(source, (payload) => {
-      ;(payload.configuration as Record<string, unknown>).safe_label = 'authorization=Bearer leaked-value'
+      const log = (payload.recent_logs as Array<Record<string, unknown>>)[0]!
+      ;(log.attributes as Record<string, unknown>).safe_label = 'authorization=Bearer leaked-value'
     })
     expect(() => verifyOperationsDiagnosticsArtifact(unsafeText, nowMs)).toThrow('unsafe text')
 
     const unsafeWithheldKey = rewrite(source, (payload) => {
-      ;(payload.configuration as Record<string, unknown>).workspace_path = '/Users/operator/project'
+      const log = (payload.recent_logs as Array<Record<string, unknown>>)[0]!
+      ;(log.attributes as Record<string, unknown>).workspace_path = '/Users/operator/project'
     })
     expect(() => verifyOperationsDiagnosticsArtifact(unsafeWithheldKey, nowMs)).toThrow('withheld value')
 
@@ -150,6 +187,60 @@ describe('strict diagnostics-backed support-case export', () => {
       payload.exclusions = (payload.exclusions as string[]).slice(1)
     })
     expect(() => verifyOperationsDiagnosticsArtifact(exclusionDrift, nowMs)).toThrow('schema or exclusion')
+  })
+
+  it('rejects absolute, home, relative, Windows, and UNC paths despite misleading claims', async () => {
+    const source = await diagnostics()
+    for (const retainedPath of [
+      '/root/operator/private-project/.ssh/id_rsa',
+      '~/private-project/.env',
+      './private-project/.env',
+      '../private-project/.env',
+      'private-project/.ssh/id_ed25519',
+      'C:\\Users\\operator\\private-project\\.env',
+      '\\\\server\\share\\private-project\\.env',
+      'id_rsa',
+    ]) {
+      const unsafe = rewrite(source, (payload) => {
+        const log = (payload.recent_logs as Array<Record<string, unknown>>)[0]!
+        ;(log.attributes as Record<string, unknown>).safe_label = retainedPath
+      })
+      expect(() => verifyOperationsDiagnosticsArtifact({
+        ...unsafe,
+        redactions: 999,
+        verified: true,
+        redaction_verified: true,
+        secret_findings: 0,
+      } as never, nowMs), retainedPath).toThrow('unsafe text')
+    }
+  })
+
+  it('enforces every versioned nested container and rejects unknown or mistyped fields', async () => {
+    const source = await diagnostics()
+    const mutations: Array<(payload: Record<string, unknown>) => void> = [
+      (payload) => { (payload.generator as Record<string, unknown>).unreviewed = true },
+      (payload) => { (payload.runtime as Record<string, unknown>).unreviewed = true },
+      (payload) => { (payload.health as Record<string, unknown>).unreviewed = true },
+      (payload) => {
+        const component = ((payload.health as Record<string, unknown>).components as Array<Record<string, unknown>>)[0]!
+        component.unreviewed = true
+      },
+      (payload) => { (payload.metrics as Array<Record<string, unknown>>)[0]!.unreviewed = true },
+      (payload) => { (payload.recent_logs as Array<Record<string, unknown>>)[0]!.unreviewed = true },
+      (payload) => { (payload.configuration as Record<string, unknown>).unreviewed_nested_field = true },
+      (payload) => { (payload.runtime as Record<string, unknown>).uptime_seconds = '3' },
+      (payload) => { (payload.metrics as Array<Record<string, unknown>>)[0]!.value = '1' },
+      (payload) => { (payload.configuration as Record<string, unknown>).max_active_sessions = '3' },
+      (payload) => {
+        const component = ((payload.health as Record<string, unknown>).components as Array<Record<string, unknown>>)[0]!
+        component.details = null
+      },
+      (payload) => { (payload.recent_logs as Array<Record<string, unknown>>)[0]!.attributes = [] },
+    ]
+    for (const mutate of mutations) {
+      expect(() => verifyOperationsDiagnosticsArtifact(rewrite(source, mutate), nowMs))
+        .toThrow('schema or exclusion')
+    }
   })
 
   it('rejects malformed and decompression-amplified artifacts before parsing', async () => {

@@ -20,11 +20,21 @@ export type SupportCaseCliDeps = {
 
 const readRequest = (requestFile: string): Record<string, unknown> => {
   const resolved = path.resolve(requestFile)
-  const info = fs.lstatSync(resolved)
-  if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > 64 * 1024) {
-    throw new Error('support-case request must be a regular JSON file no larger than 64 KiB')
+  if (fs.constants.O_NOFOLLOW === undefined) {
+    throw new Error('secure no-follow file access is unavailable on this platform')
   }
-  const parsed = JSON.parse(fs.readFileSync(fs.realpathSync(resolved), 'utf8')) as unknown
+  const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  let serialized: string
+  try {
+    const info = fs.fstatSync(descriptor)
+    if (!info.isFile() || info.size <= 0 || info.size > 64 * 1024) {
+      throw new Error('support-case request must be a regular JSON file no larger than 64 KiB')
+    }
+    serialized = fs.readFileSync(descriptor, 'utf8')
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  const parsed = JSON.parse(serialized) as unknown
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
     || Object.getPrototypeOf(parsed) !== Object.prototype) {
     throw new Error('support-case request must be one plain JSON object')
