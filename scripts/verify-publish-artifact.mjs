@@ -281,6 +281,13 @@ export function verifyPublishArtifact({
     'package provenance does not match the release commit and builder',
   )
   invariant(
+    metadata.source_identity?.expected_commit === commitSha &&
+      metadata.source_identity?.observed_commit === commitSha &&
+      metadata.source_identity?.tracked_source_clean === true &&
+      metadata.source_identity?.packaged_nonbuild_inputs_tracked === true,
+    'package source identity is not exact and clean',
+  )
+  invariant(
     metadata.reproducibility?.byte_identical === true &&
       metadata.reproducibility?.second_pack_sha256 === actualSha256 &&
       metadata.reproducibility?.scripts_disabled_for_second_pack === true,

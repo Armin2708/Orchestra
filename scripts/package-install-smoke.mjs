@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { runPackageLifecycle } from './package-lifecycle-smoke.mjs'
 import { verifyPackagedMarkdownLinks } from './package-link-integrity.mjs'
+import { verifyPackageSourceIdentity } from './package-source-identity.mjs'
 
 const shaPattern = /^[0-9a-f]{40}$/
 const expectedSha = String(process.env.CI_EVIDENCE_SHA ?? process.env.GITHUB_SHA ?? '')
@@ -22,6 +23,8 @@ const evidenceDirectory = process.env.CI_EVIDENCE_DIR?.trim()
 
 if (!shaPattern.test(expectedSha)) throw new Error('CI_EVIDENCE_SHA must be a full commit SHA')
 if (!evidenceDirectory) throw new Error('CI_EVIDENCE_DIR is required')
+
+verifyPackageSourceIdentity({ cwd: process.cwd(), expectedSha })
 
 const packageDirectory = resolve(evidenceDirectory, 'package')
 mkdirSync(packageDirectory, { recursive: true })
@@ -57,6 +60,11 @@ const sha256 = createHash('sha256').update(packageBytes).digest('hex')
 const packedFiles = new Set(
   Array.isArray(packReport.files) ? packReport.files.map((entry) => entry.path) : [],
 )
+const sourceIdentity = verifyPackageSourceIdentity({
+  cwd: process.cwd(),
+  expectedSha,
+  packedPaths: [...packedFiles],
+})
 const requiredFiles = [
   'README.md',
   '.claude-plugin/plugin.json',
@@ -240,6 +248,7 @@ try {
       node_version: process.version,
       npm_user_agent: String(process.env.npm_config_user_agent ?? 'unknown'),
     },
+    source_identity: sourceIdentity,
     reproducibility: reproduction,
     lifecycle,
     markdown_links: markdownLinks,

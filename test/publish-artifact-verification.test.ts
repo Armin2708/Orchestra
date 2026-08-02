@@ -241,6 +241,12 @@ const fixture = () => {
     file_manifest: requiredPackageFiles.map((entry) => ({ path: entry, size: 1, mode: 420 })),
     release_channel: { name: 'beta', opt_in: true, stable_promotion: false },
     provenance: { source_commit: commitSha, builder: 'npm pack' },
+    source_identity: {
+      expected_commit: commitSha,
+      observed_commit: commitSha,
+      tracked_source_clean: true,
+      packaged_nonbuild_inputs_tracked: true,
+    },
     reproducibility: {
       byte_identical: true,
       second_pack_sha256: packageSha256,
@@ -519,6 +525,15 @@ describe('exact package publish verification', () => {
 
     expect(() => verifyPublishArtifact(sample.arguments))
       .toThrow('package metadata byte count does not match')
+  })
+
+  it('rejects metadata that is not bound to one clean exact source tree', () => {
+    const sample = fixture()
+    sample.metadata.source_identity.tracked_source_clean = false
+    rewriteMetadata(sample)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package source identity is not exact and clean')
   })
 
   it('rejects a package upload identity that differs from the evidence manifest', () => {
