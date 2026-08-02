@@ -1,48 +1,49 @@
-# Remote preview
+# Remote and mobile beta
 
-Status: legacy functional preview; not a safe remote beta, supported remote-control surface, or
-secure device-pairing system.
+Status: Beta Lane C candidate. `REM-GATE` is satisfied only by the exact evidence recorded in the
+lane checkpoint; this is not a public-release or plug-and-play claim.
 
-## What the command currently does
+## Security boundary
 
-`orchestra remote` refuses to run when daemon authentication is disabled. Its current lifecycle is:
+`orchestra remote` keeps the daemon on loopback and exposes it through a verified Orchestra-owned
+Tailscale route by default. Public Cloudflare fallback requires both
+`ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1` and `--public`. Before starting or reusing a tunnel, the CLI
+checks daemon health, durable rollback state, tunnel ownership, origin, and end-to-end auth.
 
-1. If `remote.json` appears live, it reuses that record without rechecking daemon health. Tailscale
-   reuse checks only that the binary still exists; Cloudflare reuse checks only recorded PID
-   liveness.
-2. For a fresh tunnel, it attempts to ensure the loopback daemon is reachable.
-3. It prefers `tailscale serve` when Tailscale is installed; otherwise it starts a public
-   Cloudflare quick tunnel when `cloudflared` is installed.
-4. It records tunnel metadata in `ORCHESTRA_HOME/remote.json`.
-5. It prints a URL and QR whose fragment contains the reusable master operator bearer.
+The QR fragment contains a short-lived, single-use, origin-bound `PairingTicket`—never the master
+operator token. Redemption creates a named, scoped, expiring `DeviceSession` with a hashed,
+rotating, P-256 key-bound credential that is individually revocable without rotating unrelated
+sessions. The master and agent tokens remain loopback-only and are not
+accepted through public or forwarded Host headers, query strings, browser storage, logs, referrers,
+analytics, push payloads, or stream URLs.
 
-The web client copies that bearer into browser storage. This is token bootstrap, not device
-enrollment or secure pairing.
+Remote reads and mutations are default-deny and service-boundary classified. Terminal viewing is
+read-only by default. Terminal write, destructive operations, administration, and higher-risk
+approvals require exact-resource, exact-request step-up. Every allowed or denied remote mutation
+retains device attribution and redacted audit evidence. Offline mutations are never queued.
 
-## Missing security boundary
+Live events use a short-lived, single-use `Stream` Authorization credential. A held stream closes
+at session/credential expiry, rotation, selective revoke, rollback, or daemon shutdown. Event data
+is a board-grant-filtered invalidation envelope; clients refetch through classified APIs.
 
-The current preview has no named `DeviceSession`, one-time pairing ticket, per-device scope,
-expiry, key binding, per-device revocation, or user-verifying step-up for terminal writes,
-approvals, agent control, and administration. Every browser holding the master token represents the
-same broad operator. A captured QR, copied URL, lost phone, browser extension, injected script, or
-leaked stream URL can therefore retain broad authority. There is no per-device revocation.
-
-Stopping the tunnel:
+## Operator commands
 
 ```sh
+orchestra remote
 orchestra remote --stop
+
+# Emergency rollback: persistently disable remote access, revoke every device/pairing/stream/
+# step-up/push/grant authority, purge caches on contact, and stop only verified tunnel state.
+orchestra remote --rollback REVOKE_ALL_REMOTE_AUTHORITY --reason 'lost device or security incident'
+
+# Re-enable only fresh pairing. Revoked credentials and grants are never restored.
+orchestra remote --enable-new-pairing ENABLE_NEW_REMOTE_PAIRING
 ```
 
-requests `tailscale serve reset` or sends `SIGTERM` to the recorded Cloudflare process, then removes
-`remote.json` without checking the reset result or waiting for termination. The Tailscale reset is
-host-wide serve configuration, not an Orchestra-scoped route removal. Treat stop as best effort and
-verify the external URL no longer reaches the daemon. Stop does not rotate the master token, revoke
-one browser, clear browser storage, invalidate cached responses, or remotely erase an offline
-device.
+Rollback preserves the loopback owner and daemon. A phone that is offline and unreachable cannot
+be remotely erased; server authority is revoked immediately and `Clear-Site-Data` plus the v3
+service worker purges authenticated browser state at next contact.
 
-Do not use this preview for sensitive remote work or treat TLS transport as proof of safe device
-authorization. If it is evaluated at all, prefer a private tailnet, use non-sensitive data, and keep
-the exposure brief. A public quick tunnel is not a release-ready fallback.
-
-The evidence-backed control inventory and abuse cases are in the
-[remote/mobile threat model](remote-mobile-threat-model.md). Its `REM-GATE` remains open.
+The mandatory threats, controls, AC-01–AC-20 abuse contract, and rollback invariants are in the
+[remote/mobile threat model](remote-mobile-threat-model.md) and
+[control matrix](remote-mobile-threat-control-matrix.json).

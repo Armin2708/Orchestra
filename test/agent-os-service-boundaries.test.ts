@@ -49,7 +49,7 @@ describe('Agent OS domain service boundaries', () => {
         'canonical',
         'canonical',
         'compatibility_only',
-        'reserved',
+        'canonical',
       ])
     expect(boundaries.orchestration.service).toBeInstanceOf(OrchestrationService)
     expect(boundaries.conversations.service).toBeInstanceOf(ConversationService)
@@ -60,7 +60,8 @@ describe('Agent OS domain service boundaries', () => {
     expect(boundaries.assurance.service).toBeInstanceOf(OrganizationAssuranceService)
     expect(boundaries.conflicts.service).toBeInstanceOf(ComputedWorkspaceConflictService)
     expect(boundaries.discussions.service).toBeNull()
-    expect(boundaries.device_pairing.service).toBeNull()
+    expect(boundaries.device_pairing.implementation_state).toBe('canonical')
+    expect(boundaries.device_pairing.service.listDeviceSessions()).toEqual([])
     expect(Object.isFrozen(boundaries)).toBe(true)
     expect(Object.values(boundaries).every(Object.isFrozen)).toBe(true)
   })
@@ -80,7 +81,7 @@ describe('Agent OS domain service boundaries', () => {
       'enforcement or automatic resolution',
     ]))
     expect(boundaries.device_pairing.excludes).toContain('operator master-token QR bootstrap')
-    expect(boundaries.device_pairing.detail).toMatch(/threat-model gates/i)
+    expect(boundaries.device_pairing.detail).toMatch(/default-deny/i)
   })
 
   it('adapts current overlap detection without inventing a durable Conflict lifecycle', () => {

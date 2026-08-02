@@ -334,7 +334,7 @@ describe('Open Work query and protocol', () => {
       '/api/v1/os/open-work?capability=typescript&capability=ui',
       expect.objectContaining({
         method: 'GET',
-        headers: { authorization: 'Bearer operator-token' },
+        headers: undefined,
       }),
     )
   })
@@ -474,7 +474,6 @@ describe('Open Work query and protocol', () => {
     expect(request).toMatchObject({
       method: 'POST',
       headers: {
-        authorization: 'Bearer operator-token',
         'content-type': 'application/json',
         'idempotency-key': 'dispatch-key-retained-on-retry',
       },

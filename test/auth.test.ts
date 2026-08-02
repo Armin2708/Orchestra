@@ -69,21 +69,22 @@ it('SSE requires a token', async () => {
   expect(res.statusCode).toBe(401)
 })
 
-it('SSE accepts the query-param fallback (EventSource cannot set headers)', async () => {
+it('SSE rejects the master token in query parameters', async () => {
   const s = srv(); await s.ready()
   const res = await s.inject({ method: 'GET',
     url: `/api/v1/events?token=${TOKEN}`, payloadAsStream: true })
-  expect(res.statusCode).toBe(200)
-  expect(res.headers['content-type']).toContain('text/event-stream')
+  expect(res.statusCode).toBe(401)
 })
 
-it('board SSE honors the same fallback', async () => {
+it('board SSE rejects query credentials and accepts loopback operator headers', async () => {
   const s = srv(); await s.ready()
   await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
     headers: bearer(TOKEN), payload: { project_path: '/p' } })
   expect((await s.inject({ method: 'GET', url: '/api/v1/boards/1/events' })).statusCode).toBe(401)
-  const ok = await s.inject({ method: 'GET',
-    url: `/api/v1/boards/1/events?token=${TOKEN}`, payloadAsStream: true })
+  expect((await s.inject({ method: 'GET',
+    url: `/api/v1/boards/1/events?token=${TOKEN}` })).statusCode).toBe(401)
+  const ok = await s.inject({ method: 'GET', url: '/api/v1/boards/1/events',
+    headers: bearer(TOKEN), payloadAsStream: true })
   expect(ok.statusCode).toBe(200)
   expect(ok.headers['content-type']).toContain('text/event-stream')
 })

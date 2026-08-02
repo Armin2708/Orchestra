@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Snapshot, TimelineItem, agentInk, agentWash, fetchTimeline, initials, streamUrl, timeAgo } from './api'
+import { Snapshot, TimelineItem, agentInk, agentWash, fetchTimeline, initials, timeAgo } from './api'
 
 const TYPE_FILTERS = ['created', 'moved', 'shipped', 'launched', 'review', 'message', 'milestone']
 const itemKey = (boardId: number, i: TimelineItem) => `${boardId}:${i.source}:${i.id}`
@@ -47,15 +47,10 @@ export function TimelineView({ snaps }: { snaps: Snapshot[]; focused?: boolean; 
   // filters or visible boards changed — reset and refetch from the top
   useEffect(() => { setLanes([]); loadHead() }, [boardKey, filterKey])
 
-  // live updates ride the existing SSE stream; any board event refreshes the head (debounced)
+  // Proof-bound device credentials never enter EventSource URLs; refresh via authenticated fetch.
   useEffect(() => {
-    const es = new EventSource(streamUrl())
-    let pending: number | undefined
-    es.onmessage = () => {
-      if (pending) return
-      pending = window.setTimeout(() => { pending = undefined; loadHead() }, 500)
-    }
-    return () => { es.close(); if (pending) clearTimeout(pending) }
+    const poll = window.setInterval(() => { void loadHead() }, 5_000)
+    return () => window.clearInterval(poll)
   }, [loadHead])
 
   const loadMore = useCallback(async () => {

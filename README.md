@@ -5,10 +5,10 @@
 [![CI](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/Armin2708/Orchestra/actions/workflows/ci.yml)
 
 The current engineering train also includes milestone review gates, independent delivery
-verification, a test-gated auto-ship queue, shipped-commit history, a legacy phone/tunnel
-preview, push notifications, per-agent token accounting, and manual/automatic wake for agents
-paused by Claude usage limits. The remote path is not a safe remote beta or secure device-pairing
-system.
+verification, a test-gated auto-ship queue, shipped-commit history, a scoped phone/tunnel beta,
+push notifications, per-agent token accounting, and manual/automatic wake for agents paused by
+Claude usage limits. The remote path uses scoped DeviceSession pairing and remains an engineering
+beta whose exact build must satisfy the lane checkpoint.
 
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
@@ -145,7 +145,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project] [--provider claude\|codex\|both]` | Add provider hooks idempotently (default: `claude`) |
 | `orchestra uninstall [--project] [--provider claude\|codex\|both]` | Remove only Orchestra's selected provider hooks |
-| `orchestra remote [--stop]` | Start/stop the legacy tunnel preview; its QR contains the reusable master operator token and is not secure device pairing |
+| `orchestra remote [--stop]` | Start/stop verified remote access with a one-time PairingTicket and scoped DeviceSession |
 
 ### Safe message composition
 
@@ -175,28 +175,29 @@ Rules of thumb:
 - The CLI warns (without blocking) when a body looks like leaked command output —
   credential dumps, unmatched backticks, an unclosed `$(`.
 
-## Remote preview — not secure device pairing
+## Remote/mobile beta — scoped device pairing
 
-`orchestra remote` is a legacy functional preview, not a supported remote-control or pairing
-system:
+`orchestra remote` starts verified remote access and prints a one-time, origin-bound pairing QR:
 
 ```
 orchestra remote
 ```
 
-It keeps the daemon on loopback and asks either `tailscale serve` or `cloudflared` to forward to
-it. The printed QR is only a browser bootstrap: it contains the same reusable master operator
-token used by the local web client. There are no named, scoped, expiring, individually revocable
-device sessions or high-risk step-up controls. Stopping the tunnel does not rotate that token,
-revoke a phone, clear browser storage, or erase cached content.
+It keeps the daemon on loopback and asks either verified private `tailscale serve` or explicitly
+confirmed public `cloudflared` to forward to it. The QR never contains the master token. Redemption
+creates a named, scoped, expiring, rotating, key-bound and individually revocable DeviceSession.
+Remote terminal is view-only by default; write, destructive, and administrative actions require
+action-bound step-up.
 
 ```
-orchestra remote --stop   # request a best-effort stop, then verify the external URL is unreachable
+orchestra remote --stop
+orchestra remote --rollback REVOKE_ALL_REMOTE_AUTHORITY --reason 'lost device'
+orchestra remote --enable-new-pairing ENABLE_NEW_REMOTE_PAIRING
 ```
 
-Do not use this preview for real remote access to sensitive work. See the
-[remote-preview boundary](docs/remote-preview.md) and the
-[remote/mobile threat model](docs/remote-mobile-threat-model.md).
+See the [remote/mobile operator boundary](docs/remote-preview.md), mandatory
+[threat model](docs/remote-mobile-threat-model.md), and final lane checkpoint before relying on a
+specific build.
 
 ## Configuration
 

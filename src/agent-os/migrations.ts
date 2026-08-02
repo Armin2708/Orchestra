@@ -37,6 +37,16 @@ import {
   AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID,
   installOrganizationAssuranceSchema,
 } from './organization-assurance-migration.js'
+import {
+  AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+  installDeviceSessionSchema,
+} from './device-session-migration.js'
+import {
+  OPERATIONS_RECOVERY_SCHEMA_ID,
+  installOperationsRecoverySchema,
+} from './operations-recovery.js'
+import { installRemoteDeviceProofSchema } from '../remote-device-proof.js'
+import { installRemoteSecuritySchema } from '../remote-security-schema.js'
 
 interface Migration {
   id: string
@@ -7518,6 +7528,36 @@ const migrations: Migration[] = [
         )
       }
       installOrganizationAssuranceSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+    apply(db) {
+      const hasAssurance = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID)
+      if (!hasAssurance) {
+        throw new Error(
+          `migration ${AGENT_OS_DEVICE_SESSION_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID}`,
+        )
+      }
+      installDeviceSessionSchema(db)
+      installRemoteDeviceProofSchema(db)
+      installRemoteSecuritySchema(db)
+    },
+  },
+  {
+    id: OPERATIONS_RECOVERY_SCHEMA_ID,
+    apply(db) {
+      const hasDeviceSessions = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DEVICE_SESSION_MIGRATION_ID)
+      if (!hasDeviceSessions) {
+        throw new Error(
+          `migration ${OPERATIONS_RECOVERY_SCHEMA_ID}`
+          + ` requires ${AGENT_OS_DEVICE_SESSION_MIGRATION_ID}`,
+        )
+      }
+      installOperationsRecoverySchema(db)
     },
   },
 ]

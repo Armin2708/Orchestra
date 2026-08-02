@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
+import { api, ApiError, setToken, Snapshot, SystemInfo, Telemetry } from './api'
 import { BoardSection } from './BoardSection'
 import { BoardTab, PrimaryView, resolveStoredNavigation } from './boardNavigation'
 import { RoadmapView } from './RoadmapView'
@@ -8,6 +8,10 @@ import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
 import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
+import { OfflineStateBanner, RemoteAccessProvider } from './RemoteAccess'
+import { PhoneRemoteDock } from './PhoneRemoteDock'
+import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
+import type { BrowserAuthorityMode } from './deviceAuth'
 import './messages.css'
 import './agentOs.css'
 
@@ -23,7 +27,13 @@ export const Mark = () => (
   </svg>
 )
 
-export function App() {
+export function App({ authorityMode = 'local-owner' }: { authorityMode?: BrowserAuthorityMode }) {
+  if (authorityMode === 'paired-device') return <RemoteDeviceShell />
+  if (authorityMode === 'pairing-required') return <PairingRequired />
+  return <LocalOwnerApp />
+}
+
+function LocalOwnerApp() {
   const [snaps, setSnaps] = useState<Snapshot[]>([])
   const [loaded, setLoaded] = useState(false)
   const [needsAuth, setNeedsAuth] = useState(false)
@@ -50,9 +60,16 @@ export function App() {
     const params = new URLSearchParams(location.search)
     const b = Number(params.get('board'))
     if (b) { setFocus(b); localStorage.setItem('orchestra-focus', String(b)) }
-    if (['agent', 'session', 'conversation'].some((key) => params.has(key))) {
+    if (['attention', 'approval', 'question', 'conflict'].some((key) => params.has(key))) {
+      setNavigation({ view: 'board', boardTab: 'workspace' })
+      window.setTimeout(() => window.dispatchEvent(new Event('orchestra:open-attention')), 0)
+    } else if (params.has('conversation')) {
+      setNavigation({ view: 'board', boardTab: 'messages' })
+    } else if (['agent', 'session'].some((key) => params.has(key))) {
       setNavigation({ view: 'board', boardTab: 'agents' })
-    } else if (params.has('card')) setNavigation({ view: 'board', boardTab: 'overview' })
+    } else if (params.has('workspace')) {
+      setNavigation({ view: 'board', boardTab: 'workspace' })
+    } else if (params.has('card') || params.has('review')) setNavigation({ view: 'board', boardTab: 'overview' })
   }, [])
 
   // default to the first project (network view) rather than the all-projects grid
@@ -78,16 +95,10 @@ export function App() {
   useEffect(() => {
     if (needsAuth) return // no stream until the token is accepted
     refresh()
-    // a single stream for everything — per-board streams exhaust the browser connection limit
-    const es = new EventSource(streamUrl())
-    let pending: number | undefined
-    es.onmessage = () => {
-      // debounce bursts of events into one refresh
-      if (pending) return
-      pending = window.setTimeout(() => { pending = undefined; refresh() }, 300)
-    }
-    const poll = setInterval(refresh, 30_000) // pick up newly created boards
-    return () => { es.close(); clearInterval(poll); if (pending) clearTimeout(pending) }
+    // EventSource cannot carry Device proof headers. Bounded authenticated polling keeps every
+    // credential out of URLs, browser history, referrers, and intermediary access logs.
+    const poll = setInterval(refresh, 5_000)
+    return () => clearInterval(poll)
   }, [refresh, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
@@ -98,7 +109,9 @@ export function App() {
   const openMessages = shown.reduce((sum, snap) => sum + snap.open_questions.length, 0)
 
   return (
+    <RemoteAccessProvider>
     <div className="app">
+      <OfflineStateBanner />
       <header className="topbar">
         <div className="brand">
           <Mark />
@@ -159,7 +172,12 @@ export function App() {
           : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
               <SettingsView />
             </React.Suspense>}
+      <PhoneRemoteDock active={view === 'board' ? boardTab : 'overview'} onTab={(tab) => {
+        pickView('board')
+        pickBoardTab(tab)
+      }} onAttention={() => window.dispatchEvent(new Event('orchestra:open-attention'))} />
     </div>
+    </RemoteAccessProvider>
   )
 }
 
@@ -206,7 +224,7 @@ function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
             value={token} onChange={(e) => setTokenInput(e.target.value)} />
           <button className="login-btn" type="submit" disabled={!token.trim()}>Connect</button>
         </form>
-        <p className="hint">Stored only in this browser. You won't be asked again.</p>
+        <p className="hint">Accepted only on loopback, held only in this tab's memory, and cleared when the page closes.</p>
       </div>
     </div>
   )

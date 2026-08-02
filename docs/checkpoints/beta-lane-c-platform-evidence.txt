@@ -1,0 +1,51 @@
+Beta Lane C native platform evidence — 2026-08-02
+
+Scope
+- Worktree: /Users/arminrad/Desktop/agentboard-beta-remote-ops
+- Node: 22.20.0
+- Isolated ORCHESTRA_HOME: /tmp/agentboard-lane-c-home.KT1zzd
+- Lane daemon: current worktree dist/cli.js, loopback port 4777
+- Transport: locally trusted TLS reverse proxy, port 4443; no public tunnel
+- iOS: iPhone 17 Pro simulator, iOS 26.5
+- Android: Medium Phone emulator, Android 36.1
+
+Reproducible checks (ticket and credential values intentionally withheld)
+1. Build the current root and web production assets on Node 22.20.0.
+2. Start the current dist/cli.js with isolated ORCHESTRA_HOME and ORCHESTRA_PORT=4777.
+3. Put a locally trusted TLS proxy on 4443 forwarding byte-for-byte to 127.0.0.1:4777.
+4. Through the loopback owner API, issue separate single-use tickets whose expected origins are
+   https://192.168.1.18:4443 and https://10.0.2.2:4443.
+5. Open each ticket only as a URL fragment in its target simulator. Verify the fragment is scrubbed,
+   the ticket becomes consumed, and one active named session/credential is created per device.
+6. On Android, use Chrome Install app/Add to Home screen, launch Orchestra from the home icon, and
+   confirm the resumed activity is org.chromium.chrome.browser.webapps.WebappActivity.
+7. Inspect the Android target: secure=true; WebCrypto=true; display-mode standalone=true at 411x866;
+   one service-worker registration with an active controller; localStorage has zero keys; IndexedDB
+   orchestra-device-authority-v1 contains the device authority.
+8. Disable Android Wi-Fi and data. UI text must include:
+   Offline · read-only
+   Live state may be stale. Messages, approvals, controls, and terminal input are disabled and will
+   not be queued.
+9. Re-enable the network and revoke only the Android session through the local-owner API. Verify
+   Android session+credential are revoked, installed app renders Pairing required, authority store
+   count is zero, and the iPhone session+credential remain active and usable.
+
+Redacted results
+device                      session   credential
+iPhone · 2026-08-02         active    active
+Linux armv81 · 2026-08-02   revoked   revoked
+
+Android resumed activity
+com.android.chrome/org.chromium.chrome.browser.webapps.WebappActivity
+
+Evidence image SHA-256 (temporary capture names; hashes make the reviewed run immutable)
+811d62a6305607d4a0dc34552e7e9acc0deb86323c3c48db1c69a06a20ad0c6e  iOS paired
+2274adcef731715bfaa4e6b6a44cc5a980c9d349ad3e6e030c5bbab6f77c30cc  independent iOS paired
+443ee5722ef9cccf4fcf275a6478f1282e5355b5fbb96f2f52ff9e8740ebc4ff  Android installed paired
+6e433add43759c525dea0a9090e556c2de9e904131eba06fd19994edab556391  Android offline read-only
+39aa9c3a557188150e479913466c86c7e2116cbaf75d139391fbfb8e8daa924d  Android post-revoke
+
+The simulator run does not substitute for the production AC suite. AC-01–20 separately executes
+buildServer, durable SQLite, held SSE sockets, shipped workers and production helper boundaries;
+AC-04, AC-09, AC-10 and AC-13 cover replay, expiry, offline mutation rejection, cache purge and
+unrelated-device survival deterministically.
