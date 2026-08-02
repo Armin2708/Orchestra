@@ -97,12 +97,14 @@ without observed representative evidence.
 
 ## Bounded candidate checkpoint
 
-- Status: **CANDIDATE PENDING FINAL EXACT REVIEW**, not final-central ready.
+- Status: **READY FOR CENTRAL INTEGRATION** as the bounded Lane-D candidate; not final-central ready.
 - Base: `b6dc067f7de66f7978b951d1e37ffb9c86ba9cfb`; central must integrate the accepted Lane B and
   Lane C ancestry before evaluating final-central readiness.
 - Exact heads `d31bb8e`, `8837762`, `183aa7e`, `575c9c7`, and `e3cd863` were rejected by independent
-  review and are superseded by the current remediation. A fresh exact candidate review must report
-  P0=0, P1=0, P2=0 before this marker can become ready for central integration.
+  review and are superseded by exact code head `882ab288ccb9890a29c098720a16fa99601ee421`.
+- Fresh independent exact-code review accepted `882ab288ccb9890a29c098720a16fa99601ee421`
+  with **P0=0, P1=0, P2=0** across every required provenance, authorization, unavailable-context,
+  replay, SSE lifecycle, schema, route-inventory, and gate closure.
 
 ## Evidence
 
@@ -120,17 +122,19 @@ without observed representative evidence.
 - Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
   retains the existing advisory for a JavaScript chunk larger than 500 kB.
 - Root and web `npm audit --audit-level=high` report zero vulnerabilities.
-- Gitleaks 8.30.1 reports no findings across 800 commits / 30.10 MB of full-history content or the
-  candidate diff.
-- The final GitNexus comparison will be frozen against the committed remediation code head before
-  readiness is claimed. The required pre-edit
+- At exact code head `882ab288`, Gitleaks 8.30.1 reports no findings across 800 commits / 30.10 MB
+  of full-history content or the candidate diff.
+- The exact-code GitNexus index contains 15,217 nodes / 43,764 edges / 966 clusters / 250 flows.
+  `detect_changes(scope="compare", base_ref="b6dc067f…")` maps 26 changed symbols across 21 files
+  to two affected App flows and reports MEDIUM aggregate risk. The required pre-edit
   symbol analysis identified HIGH risk for `recordActivity` and `recordNormalizedProviderUsage`
   and CRITICAL risk for shared `buildServer`; those warnings were surfaced before remediation.
   The refreshed index has no PDG taint layer, so no clean taint claim is made.
-- Graphify will refresh the deterministic code graph and semantically re-extract the three changed
-  inventory/checkpoint artifacts against the committed remediation code head before readiness is
-  claimed. `graphify-out/` remains an untracked verification artifact and is not part of this
-  checkpoint commit.
+- The deterministic Graphify artifact has `built_at_commit` exactly `882ab288…`, contains 9,300
+  nodes / 22,388 edges / 332 communities after semantic replacement of the three changed
+  inventory/checkpoint artifacts, includes schema-v6 evidence, and has no stale schema-v4
+  checkpoint node. `graphify-out/` remains an untracked verification artifact and is not part of
+  this checkpoint commit.
 - The controlled unit suite proves the quality guard, but is not representative product evidence.
 
 ## Remaining
