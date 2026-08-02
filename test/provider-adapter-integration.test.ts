@@ -21,6 +21,7 @@ import {
   type DeclaredProviderAcceptanceMatrixV1,
 } from '../src/provider-adapter-registry.js'
 import {
+  CLAUDE_PROVIDER_MANIFEST_V1,
   CODEX_PROVIDER_MANIFEST_V1,
   FIRST_RELEASE_PROVIDER_MANIFESTS_V1,
 } from '../src/provider-manifests.js'
@@ -180,6 +181,10 @@ const fakeDriver = (manifest: ProviderManifestV1): FakeDriver => {
     async interrupt(sessionId) {
       interrupted.push(sessionId)
     },
+    async cancel(sessionId) {
+      interrupted.push(sessionId)
+      stopped.push(sessionId)
+    },
     async stop(sessionId) {
       stopped.push(sessionId)
     },
@@ -325,7 +330,7 @@ const executionPlan = (
   execution_scope: 'managed_background',
   usage_priced_api: defineProviderNoCostConsentV1(),
   provider_managed_overage: defineProviderNoCostConsentV1(),
-  required_capabilities: ['launch', 'structured_events', 'usage'],
+  required_capabilities: ['launch', 'structured_events', 'usage', 'cancel'],
 })
 
 const authorize = async (
@@ -444,11 +449,7 @@ describe('TOOL-014 capability-aware adapter integration', () => {
     expect(driver.launches[0]?.maxBudgetUsd).toBeUndefined()
 
     await adapter.interrupt(session.session_id)
-    await adapter.cancel(session.session_id)
-    expect(driver.interrupted).toEqual([
-      `${manifest.provider_id}:internal-1`,
-      `${manifest.provider_id}:internal-1`,
-    ])
+    expect(driver.interrupted).toEqual([`${manifest.provider_id}:internal-1`])
 
     const followUp: Extract<ProviderActionV1, { kind: 'follow_up' }> = {
       contract_version: 1,
@@ -479,6 +480,8 @@ describe('TOOL-014 capability-aware adapter integration', () => {
       sequence: 1,
       safe_text: 'safe output',
     })
+    await adapter.cancel(session.session_id)
+    expect(driver.stopped).toEqual([`${manifest.provider_id}:internal-1`])
     expect((await events.next()).value).toMatchObject({
       kind: 'tool',
       session_id: session.session_id,
@@ -590,6 +593,31 @@ describe('TOOL-014 capability-aware adapter integration', () => {
     const runtime = createAgentOsRuntime(openDb(':memory:'))
     expect(runtime.providerAdapters.declarations().map((entry) => entry.provider_id))
       .toEqual(['claude', 'codex', 'kimi', 'qwen'])
+    await runtime.shutdown()
+  })
+
+  it('registers the real Claude driver bridge without promoting unsupported provider support', async () => {
+    const runtime = createAgentOsRuntime(openDb(':memory:'))
+    runtime.registerClaude({
+      isHired: () => false,
+      hire: () => { throw new Error('not launched by this composition test') },
+      task: () => false,
+      transcript: () => ({ lines: [], working: null }),
+      interruptAgent: async () => false,
+      fire: async () => false,
+    })
+    expect(runtime.providerAdapters.declarations().find((entry) => entry.provider_id === 'claude'))
+      .toMatchObject({
+        adapter_registered: true,
+        acceptance_matrix_count: 0,
+        release_state: 'unsupported',
+      })
+    expect(runtime.providerAdapters.assessSupport(
+      selectProviderExecutionV1(CLAUDE_PROVIDER_MANIFEST_V1),
+      '2.1.212',
+      'darwin-arm64',
+      'a'.repeat(40),
+    )).toMatchObject({ ready: false })
     await runtime.shutdown()
   })
 

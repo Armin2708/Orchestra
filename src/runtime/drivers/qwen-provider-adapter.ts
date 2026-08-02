@@ -40,6 +40,19 @@ export type QwenProviderAdapterOptionsV1 =
     now?: () => Date
   }
 
+export const QWEN_CODING_PLAN_POLICY_EVIDENCE_V1 = Object.freeze({
+  billing_mode: 'personal_subscription',
+  credential_kind: 'subscription_scoped_key',
+  permitted_execution_scopes: Object.freeze(['interactive'] as const),
+  prohibited_execution_scopes: Object.freeze([
+    'managed_foreground',
+    'managed_background',
+  ] as const),
+  reason_code: 'coding_plan_noninteractive_use_prohibited',
+  provider_confirmation_required_for_managed_use: true,
+  support_claim: false,
+})
+
 export function discoverQwenProviderExecutableV1(
   options: QwenProviderExecutableOptionsV1 = {},
 ) {
@@ -105,10 +118,12 @@ export function createQwenProviderAdapterV1(
       )
     },
     async listModels() {
-      throw new Error('Qwen managed model discovery is not verified')
+      throw new Error('Qwen managed model discovery is policy blocked')
     },
     async launchRequest() {
-      throw new Error('Qwen managed launch transport is not implemented')
+      throw new Error(
+        'Qwen Coding Plan managed automation is prohibited without provider permission',
+      )
     },
     async sessionEvidence() {
       throw new Error('Qwen managed session evidence is not implemented')

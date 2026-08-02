@@ -83,6 +83,10 @@ class FakeCodexDriver implements ManagedAgentDriver {
     this.emit(sessionId, { type: 'status', data: 'interrupted', metadata: { turnActive: false } })
   }
 
+  async cancel(sessionId: string): Promise<void> {
+    await this.stop(sessionId)
+  }
+
   async stop(sessionId: string): Promise<void> {
     this.emit(sessionId, { type: 'exit', data: 'Codex session stopped' })
     const feed = this.feeds.get(sessionId)

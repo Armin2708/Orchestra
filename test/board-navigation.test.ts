@@ -39,7 +39,7 @@ describe('board-local navigation', () => {
     expect(globalTabs).not.toContain("pickView('workspaces')")
     expect(globalTabs).not.toContain("pickView('timeline')")
     expect(globalTabs).not.toContain("pickView('shipped')")
-    expect(app).toContain('<BoardSection')
+    expect(app).toContain('<CanonicalActivity')
     expect(boardSection).toContain('<TimelineView')
     expect(boardSection).toContain('<ShippedView')
     expect(boardSection).toContain('<AgentHome')

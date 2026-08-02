@@ -1194,6 +1194,9 @@ describe('phase-two assignment runtime behavior', () => {
       attach: async () => null,
       send: async () => undefined,
       interrupt: async () => undefined,
+      cancel: async (sessionId) => {
+        stopped.push(sessionId)
+      },
       stop: async (sessionId) => {
         stopped.push(sessionId)
       },
@@ -1611,6 +1614,9 @@ describe('phase-two assignment runtime behavior', () => {
         sent.push(sessionId)
       },
       interrupt: async () => undefined,
+      cancel: async (sessionId) => {
+        stopped.push(sessionId)
+      },
       stop: async (sessionId) => {
         stopped.push(sessionId)
       },
@@ -1688,6 +1694,62 @@ describe('phase-two assignment runtime behavior', () => {
       })
       expect(input.db.prepare('SELECT status FROM agent_sessions WHERE id=?')
         .get(snapshot.session!.id)).toEqual({ status: 'failed' })
+    } finally {
+      await runtime.shutdown()
+      input.db.close()
+    }
+  })
+
+  it('quarantines failed recovery cleanup without retrying a second provider session', async () => {
+    const prepared = prepareRecoverableAssignedJob('recovery-cleanup-quarantine')
+    const { input, snapshot } = prepared
+    input.db.prepare('UPDATE jobs SET max_attempts=2 WHERE id=?').run(snapshot.job.id)
+    const runtime = createAgentOsRuntime(input.db)
+    let launches = 0
+    const driver: AgentDriver = {
+      id: 'claude',
+      capabilities: () => ({
+        attach: true,
+        streaming: true,
+        interrupt: true,
+        stop: true,
+        rawTerminal: false,
+        resume: true,
+        managesAgentIdentity: true,
+      }),
+      launch: async () => {
+        launches += 1
+        throw new Error('quarantined recovery must not relaunch')
+      },
+      attach: async (externalId) => ({
+        id: 'claude:recovery-cleanup-quarantine',
+        externalId,
+        driverId: 'claude',
+        workspaceId: input.workspaceId,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        metadata: {},
+      }),
+      send: async () => { throw new Error('continuation failed') },
+      interrupt: async () => undefined,
+      stop: async () => { throw new Error('provider cleanup failed') },
+      events: async function* () {},
+    }
+    runtime.registerDriver(driver)
+
+    try {
+      expect(await runtime.reconcileJobs()).toEqual({
+        resumed: [],
+        recovered: [snapshot.job.id],
+      })
+      expect(runtime.scheduler.get(snapshot.job.id)).toMatchObject({
+        status: 'cancelling',
+        attempts: 1,
+        max_attempts: 2,
+        error: expect.stringMatching(/provider cleanup failed/),
+      })
+      expect((await runtime.scheduler.tick()).started).toEqual([])
+      expect(launches).toBe(0)
     } finally {
       await runtime.shutdown()
       input.db.close()
@@ -1810,6 +1872,9 @@ describe('phase-two assignment runtime behavior', () => {
         sent.push(sessionId)
       },
       interrupt: async () => undefined,
+      cancel: async (sessionId) => {
+        stopped.push(sessionId)
+      },
       stop: async (sessionId) => {
         stopped.push(sessionId)
       },

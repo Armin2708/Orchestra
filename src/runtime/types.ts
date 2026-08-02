@@ -230,6 +230,8 @@ export interface AgentDriver {
   recover?(request: DriverRecoveryRequest): Promise<DriverSession | null>
   send(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
+  /** Provider-native cancellation; never inferred from stop. */
+  cancel?(sessionId: string): Promise<void>
   stop(sessionId: string): Promise<void>
   /** Release this process's subscription without terminating the resumable provider session. */
   detach?(sessionId: string): Promise<void>

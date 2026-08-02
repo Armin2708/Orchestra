@@ -38,6 +38,7 @@ const supportedCapabilities = new Set<ProviderCapabilityId>([
   'resume',
   'restart_recovery',
   'interrupt',
+  'cancel',
   'stop',
   'model_discovery',
   'model_selection',
@@ -107,6 +108,7 @@ type FakeDriver = AgentDriver & {
   attached: string[]
   sent: string[]
   interrupted: string[]
+  cancelled: string[]
   stopped: string[]
   queue: AsyncQueue<DriverEvent>
 }
@@ -116,6 +118,7 @@ const rawDriver = (): FakeDriver => {
   const attached: string[] = []
   const sent: string[] = []
   const interrupted: string[] = []
+  const cancelled: string[] = []
   const stopped: string[] = []
   const queue = new AsyncQueue<DriverEvent>()
   return {
@@ -124,6 +127,7 @@ const rawDriver = (): FakeDriver => {
     attached,
     sent,
     interrupted,
+    cancelled,
     stopped,
     queue,
     capabilities: () => ({
@@ -172,6 +176,10 @@ const rawDriver = (): FakeDriver => {
     },
     async interrupt(sessionId) {
       interrupted.push(sessionId)
+    },
+    async cancel(sessionId) {
+      cancelled.push(sessionId)
+      queue.close()
     },
     async stop(sessionId) {
       stopped.push(sessionId)
@@ -293,6 +301,29 @@ const fixture = (accepted: boolean) => {
 }
 
 describe('TOOL-014 production provider-contract driver', () => {
+  it('exposes the selected provider mode to scheduler runtime policy', () => {
+    const { driver } = fixture(true)
+    expect(driver.runtimePolicy({
+      operation: 'retry',
+      executionScope: 'managed_background',
+      strategy: 'resume_session',
+      attempts: 1,
+      maxAttempts: 2,
+    })).toMatchObject({ state: 'allowed', operation: 'retry', method: 'resume' })
+    expect(driver.runtimePolicy({
+      operation: 'capacity',
+      activeSessions: 1,
+      quarantinedSessions: 1,
+      capacity: 2,
+    })).toMatchObject({ state: 'at_capacity', operation: 'capacity' })
+    expect(driver.runtimePolicy({
+      operation: 'timeout',
+      elapsedMs: 1_000,
+      timeoutMs: 1_000,
+      method: 'stop',
+    })).toMatchObject({ state: 'allowed', operation: 'timeout', method: 'stop' })
+  })
+
   it('routes the full AgentDriver lifecycle through an accepted adapter', async () => {
     const { raw, driver } = fixture(true)
     await expect(driver.assertSupported()).resolves.toMatchObject({
@@ -355,6 +386,7 @@ describe('TOOL-014 production provider-contract driver', () => {
     await driver.interrupt(session.id)
     expect(raw.sent).toEqual(['Continue'])
     expect(raw.interrupted).toEqual(['raw-session-1'])
+    expect(raw.cancelled).toEqual([])
 
     raw.queue.push({
       sessionId: 'raw-session-1',
@@ -396,6 +428,29 @@ describe('TOOL-014 production provider-contract driver', () => {
       blockers: ['acceptance_matrix_missing'],
     })
     expect(raw.launches).toEqual([])
+  })
+
+  it('preserves native cancellation before explicit provider cleanup', async () => {
+    const { raw, driver } = fixture(true)
+    const session = await driver.launch({
+      workspaceId: 'workspace-1',
+      cwd: '/workspace',
+      prompt: 'Cancel safely',
+      accessProfile: 'workspace_write',
+    })
+    const events = driver.events(session.id)[Symbol.asyncIterator]()
+
+    await driver.cancel!(session.id)
+
+    expect(raw.cancelled).toEqual(['raw-session-1'])
+    expect(raw.interrupted).toEqual([])
+    expect(raw.stopped).toEqual([])
+    expect((await events.next()).value).toMatchObject({
+      type: 'exit',
+      data: 'provider session stopped',
+      metadata: { providerStatus: 'stopped', exitCode: 0 },
+    })
+    expect((await events.next()).done).toBe(true)
   })
 
   it('routes durable recovery through authorization while raw attach stays disabled', async () => {

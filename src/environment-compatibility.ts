@@ -1,9 +1,12 @@
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { release as osRelease } from 'node:os'
 import { dirname, join } from 'node:path'
 import compatibilityContract from '../environment-compatibility.json' with { type: 'json' }
+import {
+  DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1,
+} from './declared-provider-compatibility.js'
 
 export type CompatibilityStatus = 'validated' | 'experimental' | 'unsupported'
 export type DoctorProvider = 'claude' | 'codex' | 'both'
@@ -40,7 +43,15 @@ export type CompatibilityCheck = {
   actual: string | null
   expected: string
   detail: string
+  probe_failure?: VersionProbeFailure | null
 }
+
+export type VersionProbeFailure =
+  | 'missing'
+  | 'timeout'
+  | 'overflow'
+  | 'failed'
+  | 'unparseable'
 
 export type EnvironmentProbe = {
   platform: NodeJS.Platform | string
@@ -84,6 +95,42 @@ export type EnvironmentDoctorReport = {
 }
 
 export const ENVIRONMENT_COMPATIBILITY_CONTRACT = compatibilityContract
+// Import-time construction is the fail-closed validator for the shipped
+// doctor/CLI graph. Exporting the validated view prevents raw JSON consumers
+// from accidentally treating an unchecked provider declaration as support.
+export const ENVIRONMENT_DECLARED_PROVIDER_COMPATIBILITY_CONTRACT =
+  DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1
+
+const VERSION_PROBE_FAILURE_PREFIX = 'orchestra-version-probe-failure:'
+const VERSION_PROBE_FAST_TIMEOUT_MS = 3_000
+const VERSION_PROBE_COLD_TIMEOUT_MS = 15_000
+const VERSION_PROBE_MAX_BUFFER_BYTES = 16 * 1024
+
+export type VersionCommandOutcome = {
+  stdout: string
+  exitCode: number | null
+  failure: Exclude<VersionProbeFailure, 'unparseable'> | null
+}
+
+export type VersionCommandRunner = (
+  command: string,
+  timeoutMs: number,
+) => VersionCommandOutcome
+
+const failureValue = (
+  failure: Exclude<VersionProbeFailure, 'unparseable'>,
+): string => `${VERSION_PROBE_FAILURE_PREFIX}${failure}`
+
+const versionProbeFailure = (value: string | null | undefined): VersionProbeFailure | null => {
+  if (value === null || value === undefined) return 'missing'
+  if (value.startsWith(VERSION_PROBE_FAILURE_PREFIX)) {
+    const failure = value.slice(VERSION_PROBE_FAILURE_PREFIX.length)
+    if (['missing', 'timeout', 'overflow', 'failed'].includes(failure)) {
+      return failure as Exclude<VersionProbeFailure, 'unparseable'>
+    }
+  }
+  return parseSemver(value) ? null : 'unparseable'
+}
 
 type Semver = readonly [major: number, minor: number, patch: number]
 
@@ -133,15 +180,26 @@ export const classifyVersion = (
   raw: string | null | undefined,
   policy: VersionPolicy,
   label: string,
-): Pick<CompatibilityCheck, 'status' | 'actual' | 'expected' | 'detail'> => {
+): Pick<CompatibilityCheck, 'status' | 'actual' | 'expected' | 'detail' | 'probe_failure'> => {
   const parsed = parseSemver(raw)
   const expected = expectedVersions(policy)
   if (!parsed) {
+    const failure = versionProbeFailure(raw)
+    const failureDetail = failure === 'timeout'
+      ? 'timed out after both the 3 second fast probe and bounded 15 second cold-start retry'
+      : failure === 'missing'
+        ? 'was not found'
+        : failure === 'overflow'
+          ? 'returned more than 16 KiB of version output'
+          : failure === 'failed'
+            ? 'failed while reporting its version'
+            : 'returned output without one semantic version'
     return {
       status: 'unsupported',
       actual: null,
       expected,
-      detail: `${label} is missing or did not return a semantic version.`,
+      detail: `${label} ${failureDetail}.`,
+      probe_failure: failure,
     }
   }
   if (policy.validated_versions.includes(parsed.value)) {
@@ -150,6 +208,7 @@ export const classifyVersion = (
       actual: parsed.value,
       expected,
       detail: `${label} ${parsed.value} matches observed release evidence.`,
+      probe_failure: null,
     }
   }
   if (insideRange(parsed.tuple, policy.experimental_range)) {
@@ -158,6 +217,7 @@ export const classifyVersion = (
       actual: parsed.value,
       expected,
       detail: `${label} ${parsed.value} is inside the evaluation range but has no observed release gate.`,
+      probe_failure: null,
     }
   }
   return {
@@ -165,6 +225,7 @@ export const classifyVersion = (
     actual: parsed.value,
     expected,
     detail: `${label} ${parsed.value} is outside the validated compatibility contract.`,
+    probe_failure: null,
   }
 }
 
@@ -235,7 +296,10 @@ const ambientClaudeCheck = (raw: string | null): CompatibilityCheck => {
     expected: `optional; observed only: ${observed.join(', ')}`,
     detail: parsed
       ? `Claude CLI ${parsed.value} was found, but ambient CLI compatibility has no credentialed release gate.`
-      : 'Optional ambient Claude CLI was not found; managed Claude uses the SDK-bundled executable.',
+      : versionProbeFailure(raw) === 'timeout'
+        ? 'Optional ambient Claude CLI version detection timed out after the bounded cold-start retry; managed Claude uses the SDK-bundled executable.'
+        : 'Optional ambient Claude CLI was not found or did not return one semantic version; managed Claude uses the SDK-bundled executable.',
+    probe_failure: parsed ? null : versionProbeFailure(raw),
   }
 }
 
@@ -348,18 +412,50 @@ export const evaluateEnvironmentCompatibility = (
   }
 }
 
-const probeVersion = (command: string): string | null => {
-  try {
-    const output = execFileSync(command, ['--version'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 3_000,
-      windowsHide: true,
-    }).trim()
-    return output ? output.slice(0, 200) : null
-  } catch {
-    return null
+const runVersionCommand: VersionCommandRunner = (command, timeoutMs) => {
+  const result = spawnSync(command, ['--version'], {
+    encoding: 'utf8',
+    input: undefined,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
+    windowsHide: true,
+    maxBuffer: VERSION_PROBE_MAX_BUFFER_BYTES,
+  })
+  const code = (result.error as NodeJS.ErrnoException | undefined)?.code
+  const failure = result.error
+    ? code === 'ENOENT'
+      ? 'missing'
+      : code === 'ETIMEDOUT'
+        ? 'timeout'
+        : code === 'ENOBUFS'
+          ? 'overflow'
+          : 'failed'
+    : result.status === 0
+      ? null
+      : 'failed'
+  return {
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    exitCode: result.status,
+    failure,
   }
+}
+
+/**
+ * Exact, shell-free version probe. A timeout receives one longer bounded retry so a cold
+ * 244 MB provider binary is not mislabeled missing; every terminal failure still fails closed.
+ */
+export const probeExecutableVersion = (
+  command: string,
+  run: VersionCommandRunner = runVersionCommand,
+): string | null => {
+  let outcome = run(command, VERSION_PROBE_FAST_TIMEOUT_MS)
+  if (outcome.failure === 'timeout') {
+    outcome = run(command, VERSION_PROBE_COLD_TIMEOUT_MS)
+  }
+  if (outcome.failure) return failureValue(outcome.failure)
+  const output = outcome.stdout.trim()
+  return output ? output.slice(0, 200) : failureValue('failed')
 }
 
 const nativeClaudePackageName = (
@@ -505,7 +601,7 @@ export const collectEnvironmentProbe = (
 ): EnvironmentProbe => {
   const wantsCodex = provider === 'codex' || provider === 'both'
   const wantsAmbientClaude = provider === 'claude' || provider === 'both'
-  const readVersion = deps.probeVersion ?? probeVersion
+  const readVersion = deps.probeVersion ?? probeExecutableVersion
   const readClaude = deps.readClaudeSdkDescriptor ?? readClaudeSdkDescriptor
   const platform = process.platform
   const arch = process.arch

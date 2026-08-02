@@ -62,6 +62,8 @@ import {
   WorkspaceManager,
 } from '../runtime/index.js'
 import { projectDriverTranscript } from '../runtime/transcript.js'
+import { createClaudeProviderAdapterV1 } from '../runtime/drivers/claude-provider-adapter.js'
+import type { ProviderContractRuntimePolicyInput } from '../runtime/drivers/provider-contract-driver.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
 import { readProviderModelCache } from '../agent-providers.js'
 import { hasOpenReviewRequest } from '../review.js'
@@ -75,6 +77,10 @@ import {
   type ProviderAcceptanceArtifactV1,
   type ProviderAcceptanceEvidenceRecordV1,
 } from '../provider-acceptance-evidence-store.js'
+import {
+  executeBoundedProviderControl,
+  type ProviderRuntimePolicyDecision,
+} from './provider-runtime-policy.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -557,6 +563,11 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
   providerAcceptanceEvidence.hydrate(providerAdapters)
   jobExecutor.bindScheduler(scheduler)
   const registeredProviders = new Set(layer.drivers.list().map(({ id }) => id))
+  const registeredProviderAdapters = new Set(
+    providerAdapters.declarations()
+      .filter((entry) => entry.adapter_registered)
+      .map((entry) => entry.provider_id),
+  )
   const registerDriver = (driver: AgentDriver): void => {
     if (registeredProviders.has(driver.id)) return
     layer.drivers.register(driver)
@@ -579,12 +590,14 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
     })),
     registerDriver,
     registerProviderAdapter: (adapter) => {
+      if (registeredProviderAdapters.has(adapter.manifest.provider_id)) return
       providerAdapters.register(adapter)
+      registeredProviderAdapters.add(adapter.manifest.provider_id)
     },
     recordProviderAcceptance: (matrix, artifact) =>
       providerAcceptanceEvidence.record(providerAdapters, matrix, artifact),
     registerClaude: (conductor) => {
-      registerDriver(new ClaudeAgentDriverAdapter({
+      const driver = new ClaudeAgentDriverAdapter({
         conductor,
         resolveAgent: (externalId) => {
           const row = /^\d+$/.test(externalId)
@@ -594,7 +607,84 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
         },
         workspaceForAgent: (agentId) => (db.prepare(`SELECT workspace_id FROM agent_sessions
           WHERE agent_id=? ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(agentId) as { workspace_id: string } | undefined)?.workspace_id,
-      }))
+      })
+      registerDriver(driver)
+      const boardForWorkspace = (workspaceId: string): number => {
+        const row = db.prepare('SELECT board_id FROM workspaces WHERE id=?')
+          .get(workspaceId) as { board_id: number } | undefined
+        if (!row) throw new Error('Claude provider workspace is unavailable')
+        return row.board_id
+      }
+      const sessionFacts = (session: DriverSession) => {
+        const agentId = Number(session.metadata.agentId)
+        if (!Number.isSafeInteger(agentId) || agentId <= 0) {
+          throw new Error('Claude provider session agent identity is unavailable')
+        }
+        return { agentId, info: conductor.transcript(agentId).info ?? {} }
+      }
+      const adapter = createClaudeProviderAdapterV1({
+        driver,
+        listModels: () => (readProviderModelCache(db, 'claude')?.models ?? []).map((model) => ({
+          id: model.value,
+          display_name: model.displayName,
+          is_default: model.isDefault === true,
+          supports_effort: model.supportsEffort === true,
+          effort_levels: model.supportedEffortLevels ?? [],
+        })),
+        launchRequest: (context) => {
+          if (context.action.kind !== 'launch') {
+            throw new Error('Claude provider launch action is required')
+          }
+          return {
+            workspaceId: context.action.scope_id,
+            boardId: boardForWorkspace(context.action.scope_id),
+            cwd: context.action.cwd,
+            prompt: context.action.prompt,
+          }
+        },
+        sessionEvidence: (context, session) => {
+          const { info } = sessionFacts(session)
+          const effectiveModel = typeof info.model === 'string'
+            ? info.model.trim()
+            : context.action.kind === 'launch' || context.action.kind === 'fork'
+              ? context.action.model?.trim() ?? ''
+              : ''
+          if (!effectiveModel) throw new Error('Claude provider did not report an effective model')
+          const requestedAccess = context.action.kind === 'launch' || context.action.kind === 'fork'
+            ? context.action.access_profile
+            : 'workspace_write'
+          return {
+            effective_model: effectiveModel,
+            effective_effort: typeof info.effort === 'string' ? info.effort : null,
+            effective_access_profile: requestedAccess,
+          }
+        },
+        forkLaunchRequest: (context) => ({
+          workspaceId: context.action.scope_id,
+          boardId: boardForWorkspace(context.action.scope_id),
+          cwd: '',
+        }),
+        usage: (context) => {
+          const { agentId } = sessionFacts(context.driver_session)
+          const accounting = conductor.sessionAccounting?.(agentId)
+          return {
+            contract_version: 1,
+            observed_at: new Date().toISOString(),
+            selection: context.selection,
+            action_id: context.action_id,
+            scope_id: context.scope_id,
+            billing_mode: context.selection.billing_mode,
+            status: accounting ? 'available' : 'unknown',
+            overage_status: 'not_applicable',
+            windows: [],
+            metered_cost: null,
+          }
+        },
+      })
+      if (!registeredProviderAdapters.has('claude')) {
+        providerAdapters.register(adapter)
+        registeredProviderAdapters.add('claude')
+      }
     },
     setBus: (nextBus) => { bus.current = nextBus },
     reconcileLost: () => layer.supervisor.reconcileLost(),
@@ -607,6 +697,15 @@ export function createAgentOsRuntime(db: Database.Database): AgentOsRuntime {
 }
 
 type LiveJob = { driver: AgentDriver; session: DriverSession }
+
+type ContractAwareRuntimeDriver = AgentDriver & {
+  runtimePolicy(input: ProviderContractRuntimePolicyInput): ProviderRuntimePolicyDecision
+}
+
+const contractAwareRuntimeDriver = (driver: AgentDriver | undefined): ContractAwareRuntimeDriver | null =>
+  driver && typeof (driver as Partial<ContractAwareRuntimeDriver>).runtimePolicy === 'function'
+    ? driver as ContractAwareRuntimeDriver
+    : null
 
 type DriverNativeForkResult = {
   sourceExternalId: string
@@ -772,6 +871,35 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   supportedProviders(): readonly string[] {
     return this.drivers.list().map((driver) => driver.id)
+  }
+
+  retryDecision(job: Job): { allowed: boolean; reason: string } {
+    const driver = contractAwareRuntimeDriver(this.drivers.get(job.driver_id) ?? this.drivers.get(job.provider))
+    if (!driver) return { allowed: true, reason: 'legacy_driver_policy_unavailable' }
+    const decision = driver.runtimePolicy({
+      operation: 'retry',
+      executionScope: 'managed_background',
+      strategy: 'new_session',
+      attempts: job.attempts,
+      maxAttempts: job.max_attempts,
+    })
+    return {
+      allowed: decision.state === 'allowed',
+      reason: decision.reason_code,
+    }
+  }
+
+  capacityDecision(
+    job: Job,
+    input: { activeSessions: number; quarantinedSessions: number; capacity: number },
+  ): { allowed: boolean; reason: string } {
+    const driver = contractAwareRuntimeDriver(this.drivers.get(job.driver_id) ?? this.drivers.get(job.provider))
+    if (!driver) return { allowed: true, reason: 'legacy_driver_policy_unavailable' }
+    const decision = driver.runtimePolicy({ operation: 'capacity', ...input })
+    return {
+      allowed: decision.state === 'allowed',
+      reason: decision.reason_code,
+    }
   }
 
   agentHomeSessionCapabilities(session: AgentSessionRecord): RuntimeActionCapabilities {
@@ -1577,7 +1705,68 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     for (const row of rows) {
       const job = mapRuntimeJob(row)
       if (job.status === 'cancelling') {
-        this.scheduler.recover(job.id, 'daemon restarted while cancellation was in progress')
+        const sessionRow = this.sessionForJob(job.id)
+        const driver = sessionRow
+          ? this.drivers.get(sessionRow.driver_id ?? sessionRow.provider)
+          : undefined
+        let blocker = 'daemon restarted before provider cancellation was confirmed'
+        if (sessionRow?.external_id && driver?.cancel) {
+          try {
+            let attached = await driver.attach(sessionRow.external_id)
+            if (!attached && driver.recover) {
+              const workspace = await this.workspaces.get(sessionRow.workspace_id)
+              if (workspace?.status === 'active') {
+                attached = await driver.recover({
+                  externalId: sessionRow.external_id,
+                  workspaceId: sessionRow.workspace_id,
+                  cwd: workspace.worktreePath ?? workspace.rootPath,
+                  ...(sessionRow.model ? { model: sessionRow.model } : {}),
+                  ...(sessionRow.effort ? { effort: sessionRow.effort } : {}),
+                  accessProfile: sessionRow.access_profile ?? job.access_profile,
+                  metadata: {
+                    jobId: job.id,
+                    agentHomeSessionId: sessionRow.id,
+                  },
+                })
+              }
+            }
+            if (!attached) {
+              blocker = 'provider session could not be attached to confirm cancellation'
+            } else {
+              const bindingError = providerSessionBindingError({
+                job,
+                driver,
+                session: attached,
+                workspaceId: job.workspace_id ?? sessionRow.workspace_id,
+                externalId: sessionRow.external_id,
+              })
+              if (bindingError) {
+                await driver.detach?.(attached.id).catch(() => undefined)
+                blocker = `provider cancellation recovery rejected: ${bindingError}`
+              } else {
+                const result = await executeBoundedProviderControl(
+                  () => driver.cancel!(attached.id),
+                  10_000,
+                )
+                if (result.state === 'confirmed') {
+                  this.scheduler.confirmCancellation(job.id, {
+                    recovered: true,
+                    provider_control_confirmed: true,
+                  })
+                  this.markSessionStopped(sessionRow.id)
+                  recovered.push(job.id)
+                  continue
+                }
+                blocker = `${result.reason_code}: ${result.detail}`
+              }
+            }
+          } catch (error) {
+            blocker = error instanceof Error ? error.message : String(error)
+          }
+        } else if (!driver?.cancel) {
+          blocker = `${job.provider} does not expose provider-native cancellation recovery`
+        }
+        this.scheduler.quarantineCancellation(job.id, blocker)
         recovered.push(job.id)
         continue
       }
@@ -1759,7 +1948,8 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           currentSession.id,
         )
         this.live.set(job.id, { driver, session })
-        void this.watch(job, currentSession.id, driver, session, job.spent_tokens, job.spent_cents)
+        void this.watch(job, currentSession.id, driver, session, job.spent_tokens, job.spent_cents,
+          this.timeBudgetMilliseconds(job))
         resumed.push(job.id)
       } catch (error) {
         this.pausedJobs.delete(job.id)
@@ -1780,6 +1970,12 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         const reason = `daemon restart recovery failed: ${
           error instanceof Error ? error.message : String(error)
         }${cleanupError ? `; exact provider session cleanup failed: ${cleanupError}` : ''}`
+        if (cleanupError) {
+          const quarantined = this.scheduler.quarantineCancellation(job.id, reason)
+          this.finalizeManagedAgent(job, sessionRow.id, reason, quarantined.status)
+          recovered.push(job.id)
+          continue
+        }
         const recoveredJob = this.scheduler.recover(job.id, reason)
         if (providerSessionLost) this.markSessionLost(sessionRow.id)
         this.finalizeManagedAgent(job, sessionRow.id, reason, recoveredJob.status)
@@ -1844,6 +2040,19 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   async execute(job: Job): Promise<JobExecutionResult> {
     const driver = this.drivers.require(job.driver_id)
     const capabilities = driver.capabilities()
+    const timeoutMs = this.timeBudgetMilliseconds(job)
+    const policyDriver = contractAwareRuntimeDriver(driver)
+    if (timeoutMs !== null && policyDriver) {
+      const decision = policyDriver.runtimePolicy({
+        operation: 'timeout',
+        elapsedMs: timeoutMs,
+        timeoutMs,
+        method: 'stop',
+      })
+      if (decision.state !== 'allowed' || decision.method !== 'stop') {
+        throw new Error(`provider timeout control blocked: ${decision.reason_code}`)
+      }
+    }
     const assignment = runtimeJobAssignment(job)
     const delivery = job.card_id
       ? assignment
@@ -2110,25 +2319,56 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       throw error
     }
     this.live.set(job.id, { driver, session })
-    void this.watch(job, sessionId, driver, session)
+    void this.watch(job, sessionId, driver, session, 0, 0, timeoutMs)
     return { status: 'running', detail: { session_id: sessionId, driver_session_id: session.id, workspace_id: workspace.id } }
   }
 
   async cancel(job: Job): Promise<void> {
     const current = this.live.get(job.id)
     if (current) {
-      await current.driver.stop(current.session.id)
+      const nativeControl = current.driver.cancel
+        ? () => current.driver.cancel!(current.session.id)
+        : job.provider === 'shell'
+          ? () => current.driver.stop(current.session.id)
+          : () => Promise.reject(new UnsupportedError(
+              `${job.provider} does not expose provider-native cancellation; stop remains an explicit separate action`,
+            ))
+      const result = await executeBoundedProviderControl(nativeControl, 10_000)
+      if (result.state !== 'confirmed') {
+        throw new Error(`${result.reason_code}: ${result.detail}`)
+      }
       this.live.delete(job.id)
     } else {
       const row = this.sessionForJob(job.id)
+      if ((!row || !row.external_id) && job.provider !== 'shell') {
+        throw new ConflictError('cancel rejected: durable provider session identity is unavailable')
+      }
       if (row?.external_id) {
         if (runtimeJobAssignment(job)) {
           const bindingError = this.recoveryBindingError(job, row)
           if (bindingError) throw new ConflictError(`cancel rejected: ${bindingError}`)
         }
         const driver = this.drivers.get(row.driver_id ?? row.provider)
-        const attached = driver ? await driver.attach(row.external_id) : null
-        if (driver && attached) {
+        if (!driver) throw new UnsupportedError(`${row.provider} driver is not registered`)
+        let attached = await driver.attach(row.external_id)
+        if (!attached && driver.recover) {
+          const workspace = await this.workspaces.get(row.workspace_id)
+          if (workspace?.status === 'active') {
+            attached = await driver.recover({
+              externalId: row.external_id,
+              workspaceId: row.workspace_id,
+              cwd: workspace.worktreePath ?? workspace.rootPath,
+              ...(row.model ? { model: row.model } : {}),
+              ...(row.effort ? { effort: row.effort } : {}),
+              accessProfile: row.access_profile ?? job.access_profile,
+              metadata: { jobId: job.id, agentHomeSessionId: row.id },
+            })
+          }
+        }
+        if (!attached) {
+          throw new ConflictError('cancel rejected: exact provider session could not be attached or recovered')
+        }
+        {
           const providerBindingError = providerSessionBindingError({
             job,
             driver,
@@ -2142,7 +2382,17 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
             }
             throw new ConflictError(`cancel rejected: attached ${providerBindingError}`)
           }
-          await driver.stop(attached.id)
+          const nativeControl = driver.cancel
+            ? () => driver.cancel!(attached.id)
+            : job.provider === 'shell'
+              ? () => driver.stop(attached.id)
+              : () => Promise.reject(new UnsupportedError(
+                  `${job.provider} does not expose provider-native cancellation; stop remains an explicit separate action`,
+                ))
+          const result = await executeBoundedProviderControl(nativeControl, 10_000)
+          if (result.state !== 'confirmed') {
+            throw new Error(`${result.reason_code}: ${result.detail}`)
+          }
         }
       }
     }
@@ -2413,12 +2663,34 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     session: DriverSession,
     initialAccountedTokens = 0,
     initialAccountedCents = 0,
+    timeoutMs: number | null = null,
   ): Promise<void> {
     let failure: string | undefined
     let detached = false
     let accountedTokens = Math.max(0, initialAccountedTokens)
     let accountedCents = Math.max(0, initialAccountedCents)
     let stopRequested = false
+    let timeoutHandle: NodeJS.Timeout | undefined
+    if (timeoutMs !== null) {
+      timeoutHandle = setTimeout(() => {
+        if (stopRequested) return
+        stopRequested = true
+        failure = `job time budget exhausted after ${timeoutMs}ms`
+        this.scheduler?.quarantineCancellation(job.id, failure)
+        void executeBoundedProviderControl(() => driver.stop(session.id), 10_000).then((result) => {
+          if (result.state === 'confirmed') {
+            const current = this.scheduler?.get(job.id)
+            if (current?.status === 'cancelling') {
+              this.scheduler?.confirmCancellation(job.id, { timeout: true, timeout_ms: timeoutMs })
+            }
+            return
+          }
+          failure = `${failure}; ${result.reason_code}: ${result.detail}`
+          this.scheduler?.quarantineCancellation(job.id, failure)
+        })
+      }, timeoutMs)
+      timeoutHandle.unref?.()
+    }
     try {
       for await (const event of driver.events(session.id)) {
         this.recordDriverEvent(job, sessionId, event)
@@ -2476,6 +2748,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error)
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle)
       this.pausedJobs.delete(job.id)
       this.live.delete(job.id)
       if (detached || this.shuttingDown) return
@@ -2492,6 +2765,20 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       }
       this.finalizeManagedAgent(job, sessionId, failure, finalStatus)
     }
+  }
+
+  private timeBudgetMilliseconds(job: Job): number | null {
+    if (!job.card_id) return null
+    const row = this.db.prepare(`SELECT budget_time_seconds FROM job_market_contracts
+      WHERE card_id=?`).get(job.card_id) as { budget_time_seconds: number | null } | undefined
+    const seconds = row?.budget_time_seconds
+    if (!seconds || !Number.isSafeInteger(seconds)) return null
+    const milliseconds = seconds * 1_000
+    if (!Number.isSafeInteger(milliseconds)) return null
+    const startedAt = job.started_at ? Date.parse(job.started_at) : Number.NaN
+    return Number.isFinite(startedAt)
+      ? Math.max(0, milliseconds - Math.max(0, Date.now() - startedAt))
+      : milliseconds
   }
 
   private prepareManagedAgent(
@@ -3014,6 +3301,13 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   private markSessionFailed(id: string): void {
     this.db.prepare("UPDATE agent_sessions SET status='failed', updated_at=datetime('now') WHERE id=?").run(id)
+  }
+
+  private markSessionStopped(id: string): void {
+    this.db.prepare(`UPDATE agent_sessions
+      SET status='stopped', control_state='stopped',
+        ended_at=coalesce(ended_at, datetime('now')), updated_at=datetime('now')
+      WHERE id=?`).run(id)
   }
 
   private markSessionLost(id: string): void {

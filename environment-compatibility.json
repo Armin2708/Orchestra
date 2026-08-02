@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "evidence_as_of": "2026-07-25",
+  "evidence_as_of": "2026-08-02",
   "fail_closed": true,
   "validated_toolchains": [
     {
@@ -167,5 +167,195 @@
         "scope": "PATH-resolved 2.1.170 and alternate-install 2.1.217 version commands observed on the 2026-07-25 Darwin arm64 host; no credentialed release gate"
       }
     }
+  },
+  "declared_provider_matrix": {
+    "schema_version": 1,
+    "evidence_standard": "real_exact_eight_gate",
+    "source_commit_required": true,
+    "mock_evidence_authorizes_support": false,
+    "providers": [
+      {
+        "provider_id": "claude",
+        "adapter_id": "claude-agent-sdk",
+        "release_state": "unsupported",
+        "executable": {
+          "command": "claude",
+          "source": "sdk_bundled",
+          "command_override_env": null,
+          "exact_versions": [
+            "2.1.212"
+          ],
+          "exact_platforms": [
+            "darwin-arm64"
+          ]
+        },
+        "native_subscription": {
+          "mode_id": "native_subscription",
+          "runtime_mode": "native_cli",
+          "billing_mode": "personal_subscription",
+          "credential_kind": "provider_account_session",
+          "authentication_mechanism": "claude_ai_account_session",
+          "safe_readiness_probe": [
+            "auth",
+            "status",
+            "--json"
+          ],
+          "automation_policy": "blocked",
+          "overage_behavior": "none",
+          "explicit_overage_consent_required": false
+        },
+        "provider_api": {
+          "mode_id": "native_api_key",
+          "runtime_mode": "native_cli",
+          "billing_mode": "usage_priced_api",
+          "credential_kind": "usage_priced_api_key",
+          "explicit_opt_in_required": true,
+          "automatic_fallback_allowed": false
+        },
+        "acceptance": {
+          "real_matrix_state": "missing",
+          "support_claim": "blocked",
+          "blocker_codes": [
+            "third_party_subscription_routing_prohibited",
+            "real_acceptance_matrix_missing",
+            "linux_platform_evidence_missing"
+          ]
+        }
+      },
+      {
+        "provider_id": "codex",
+        "adapter_id": "codex-app-server",
+        "release_state": "candidate",
+        "executable": {
+          "command": "codex",
+          "source": "path",
+          "command_override_env": "ORCHESTRA_CODEX_COMMAND",
+          "exact_versions": [
+            "0.144.6"
+          ],
+          "exact_platforms": [
+            "darwin-arm64"
+          ]
+        },
+        "native_subscription": {
+          "mode_id": "native_subscription",
+          "runtime_mode": "native_cli",
+          "billing_mode": "personal_subscription",
+          "credential_kind": "provider_account_session",
+          "authentication_mechanism": "chatgpt_account_session",
+          "safe_readiness_probe": [
+            "login",
+            "status"
+          ],
+          "automation_policy": "allowed",
+          "overage_behavior": "none",
+          "explicit_overage_consent_required": false
+        },
+        "provider_api": {
+          "mode_id": "native_api_key",
+          "runtime_mode": "native_cli",
+          "billing_mode": "usage_priced_api",
+          "credential_kind": "usage_priced_api_key",
+          "explicit_opt_in_required": true,
+          "automatic_fallback_allowed": false
+        },
+        "acceptance": {
+          "real_matrix_state": "missing",
+          "support_claim": "blocked",
+          "blocker_codes": [
+            "real_acceptance_matrix_missing",
+            "exact_subscription_billing_evidence_missing",
+            "linux_platform_evidence_missing"
+          ]
+        }
+      },
+      {
+        "provider_id": "qwen",
+        "adapter_id": "qwen-code-cli",
+        "release_state": "unsupported",
+        "executable": {
+          "command": "qwen",
+          "source": "path",
+          "command_override_env": null,
+          "exact_versions": [],
+          "exact_platforms": []
+        },
+        "native_subscription": {
+          "mode_id": "native_subscription",
+          "runtime_mode": "native_cli",
+          "billing_mode": "personal_subscription",
+          "credential_kind": "subscription_scoped_key",
+          "authentication_mechanism": "coding_plan_slash_auth",
+          "safe_readiness_probe": null,
+          "automation_policy": "interactive_only",
+          "overage_behavior": "none",
+          "explicit_overage_consent_required": false
+        },
+        "provider_api": {
+          "mode_id": "native_api_key",
+          "runtime_mode": "native_cli",
+          "billing_mode": "usage_priced_api",
+          "credential_kind": "usage_priced_api_key",
+          "explicit_opt_in_required": true,
+          "automatic_fallback_allowed": false
+        },
+        "acceptance": {
+          "real_matrix_state": "missing",
+          "support_claim": "blocked",
+          "blocker_codes": [
+            "exact_executable_version_missing",
+            "exact_platform_evidence_missing",
+            "safe_auth_readiness_probe_missing",
+            "autonomous_subscription_use_not_permitted",
+            "managed_adapter_acceptance_missing",
+            "real_acceptance_matrix_missing"
+          ]
+        }
+      },
+      {
+        "provider_id": "kimi",
+        "adapter_id": "kimi-code-acp",
+        "release_state": "unsupported",
+        "executable": {
+          "command": "kimi",
+          "source": "path",
+          "command_override_env": null,
+          "exact_versions": [],
+          "exact_platforms": []
+        },
+        "native_subscription": {
+          "mode_id": "native_subscription",
+          "runtime_mode": "native_cli",
+          "billing_mode": "personal_subscription",
+          "credential_kind": "provider_account_session",
+          "authentication_mechanism": "membership_oauth_device_session",
+          "safe_readiness_probe": null,
+          "automation_policy": "allowed",
+          "overage_behavior": "optional_metered",
+          "explicit_overage_consent_required": true
+        },
+        "provider_api": {
+          "mode_id": "native_api_key",
+          "runtime_mode": "native_cli",
+          "billing_mode": "usage_priced_api",
+          "credential_kind": "usage_priced_api_key",
+          "explicit_opt_in_required": true,
+          "automatic_fallback_allowed": false
+        },
+        "acceptance": {
+          "real_matrix_state": "missing",
+          "support_claim": "blocked",
+          "blocker_codes": [
+            "exact_executable_version_missing",
+            "exact_platform_evidence_missing",
+            "safe_auth_readiness_probe_missing",
+            "provider_managed_overage_state_missing",
+            "metering_and_cost_cap_evidence_missing",
+            "managed_adapter_acceptance_missing",
+            "real_acceptance_matrix_missing"
+          ]
+        }
+      }
+    ]
   }
 }

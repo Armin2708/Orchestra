@@ -20,17 +20,23 @@ import {
   defineProviderNoCostConsentV1,
   selectProviderExecutionV1,
 } from '../src/provider-contract.js'
-import type { ProviderManifestV1 } from '../src/provider-contract.js'
+import type {
+  ProviderLaunchBoundaryV1,
+  ProviderManifestV1,
+} from '../src/provider-contract.js'
 import {
   KIMI_PROVIDER_MANIFEST_V1,
   QWEN_PROVIDER_MANIFEST_V1,
 } from '../src/provider-manifests.js'
 import {
+  KIMI_ACP_IMPLEMENTATION_EVIDENCE_V1,
   createKimiProviderAdapterV1,
+  defineKimiProviderCandidateReadinessV1,
   discoverKimiProviderExecutableV1,
   inspectKimiProviderCandidateV1,
 } from '../src/runtime/drivers/kimi-provider-adapter.js'
 import {
+  QWEN_CODING_PLAN_POLICY_EVIDENCE_V1,
   createQwenProviderAdapterV1,
   discoverQwenProviderExecutableV1,
   inspectQwenProviderCandidateV1,
@@ -275,6 +281,15 @@ describe('Qwen Code and Kimi Code executable discovery candidates', () => {
 
 describe('Qwen Code and Kimi Code candidate policy evidence', () => {
   it('keeps Qwen subscription mode interactive-only and every unverified managed capability explicit', () => {
+    expect(QWEN_CODING_PLAN_POLICY_EVIDENCE_V1).toEqual({
+      billing_mode: 'personal_subscription',
+      credential_kind: 'subscription_scoped_key',
+      permitted_execution_scopes: ['interactive'],
+      prohibited_execution_scopes: ['managed_foreground', 'managed_background'],
+      reason_code: 'coding_plan_noninteractive_use_prohibited',
+      provider_confirmation_required_for_managed_use: true,
+      support_claim: false,
+    })
     const evidence = inspectQwenProviderCandidateV1({
       execution_scope: 'managed_background',
       environment: {
@@ -347,6 +362,28 @@ describe('Qwen Code and Kimi Code candidate policy evidence', () => {
   })
 
   it('keeps Kimi OAuth readiness unknown and Extra Usage separately unresolved', () => {
+    expect(KIMI_ACP_IMPLEMENTATION_EVIDENCE_V1).toMatchObject({
+      protocol: 'acp-0.23',
+      command: ['kimi', 'acp'],
+      implemented: expect.arrayContaining([
+        'launch',
+        'follow_up',
+        'resume',
+        'cancel',
+        'approvals',
+        'structured_events',
+      ]),
+      unavailable: {
+        attach: 'raw_provider_session_id_is_not_authority',
+        fork: 'kimi_acp_fork_not_documented_stable',
+        model_discovery: 'kimi_acp_models_require_a_session',
+        access_profile: 'native_mapping_requires_exact_version_acceptance',
+        usage: 'kimi_acp_does_not_expose_subscription_or_extra_usage_state',
+        token_budget: 'provider_does_not_expose_token_budget',
+        cost_budget: 'provider_does_not_expose_cost_budget',
+      },
+      support_claim: false,
+    })
     const evidence = inspectKimiProviderCandidateV1({
       environment: {
         PATH: '',
@@ -398,6 +435,59 @@ describe('Qwen Code and Kimi Code candidate policy evidence', () => {
     })
     expect(JSON.stringify(evidence)).not.toContain('sk-secret-must-not-appear')
     expect(JSON.stringify(evidence)).not.toContain('oauth-does-not-prove')
+  })
+
+  it('accepts only boundary-bound Kimi subscription observations and derives Extra Usage consent separately', async () => {
+    const executableFingerprint = `sha256:${'a'.repeat(64)}`
+    const environmentFingerprint = `sha256:${'b'.repeat(64)}`
+    const configurationFingerprint = `sha256:${'c'.repeat(64)}`
+    const boundary = {
+      evidence: {
+        executable_status: 'validated',
+        executable_fingerprint: executableFingerprint,
+        environment_fingerprint: environmentFingerprint,
+        configuration_fingerprint: configurationFingerprint,
+      },
+    } as unknown as ProviderLaunchBoundaryV1
+    const intent = nativeIntent(KIMI_PROVIDER_MANIFEST_V1)
+    const observation = {
+      observed_at: '2026-08-02T08:00:00.000Z',
+      evidence_source: 'kimi_console' as const,
+      billing_mode: 'personal_subscription' as const,
+      credential_kind: 'provider_account_session' as const,
+      auth_status: 'ready' as const,
+      overage_status: 'disabled' as const,
+      metering_status: 'ready' as const,
+      cost_cap_status: 'enforced' as const,
+      executable_fingerprint: executableFingerprint,
+      environment_fingerprint: environmentFingerprint,
+      configuration_fingerprint: configurationFingerprint,
+    }
+
+    const readiness = await defineKimiProviderCandidateReadinessV1(
+      intent,
+      boundary,
+      '2026-08-02T08:00:01.000Z',
+      async () => observation,
+    )
+    expect(readiness).toMatchObject({
+      observed_at: observation.observed_at,
+      auth_status: 'ready',
+      overage_status: 'disabled',
+      overage_consent: 'not_required',
+      metering_status: 'not_required',
+      cost_cap_status: 'not_required',
+    })
+
+    await expect(defineKimiProviderCandidateReadinessV1(
+      intent,
+      boundary,
+      '2026-08-02T08:00:01.000Z',
+      async () => ({
+        ...observation,
+        executable_fingerprint: `sha256:${'d'.repeat(64)}`,
+      }),
+    )).rejects.toThrow('Kimi readiness observation does not match launch boundary')
   })
 
   it.each([

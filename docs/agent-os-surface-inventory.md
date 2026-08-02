@@ -15,8 +15,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 89 | 3 | 10 | 12 | 114 |
-| Registered HTTP routes | 109 | 29 | 25 | 9 | 172 |
+| SQLite application tables | 91 | 3 | 10 | 12 | 116 |
+| Registered HTTP routes | 113 | 29 | 25 | 9 | 176 |
 | CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -137,7 +137,7 @@ The assurance evidence graph is defined in
 |---|---|
 | Agent Home | `agent_profiles`, `agent_conversations`, `agent_sessions`, `agent_session_actions`, `agent_session_action_reconciliations`, `conversation_events`, `conversation_event_conflicts` |
 | Retention and transcript integrity | `agent_home_retention_policies`, `agent_home_retention_runs`, `agent_home_raw_artifact_archives`, `agent_home_evidence_bundle_repairs`, `agent_home_transcript_repairs` |
-| Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `daemon_leases` |
+| Runtime/workspace | `workspaces`, `workspace_assignments`, `processes`, `process_output`, `terminal_workspace_state`, `terminal_command_history`, `daemon_leases` |
 | Contract/scheduling | `jobs`, `job_market_assignments`, `job_market_contracts`, `job_market_criteria`, `job_market_dependencies` |
 | Delivery/evidence | `delivery_reports`, `delivery_deliverable_results`, `delivery_criterion_results`, `artifacts` |
 | Provider acceptance | `provider_acceptance_evidence` |
@@ -242,6 +242,8 @@ GET /api/v1/os/workspaces/:id
 GET /api/v1/os/workspaces/:id/checkpoints
 GET /api/v1/os/workspaces/:id/context
 GET /api/v1/os/workspaces/:id/processes
+GET /api/v1/os/workspaces/:id/terminal-history
+GET /api/v1/os/workspaces/:id/terminal-selection
 PATCH /api/v1/os/agent-profiles/:id
 PATCH /api/v1/os/conversations/:id
 PATCH /api/v1/os/workspaces/:id
@@ -282,6 +284,7 @@ POST /api/v1/os/organizations/:organizationId/assurance/:command
 POST /api/v1/os/organizations/:organizationId/coordination/:command
 POST /api/v1/os/organizations/:organizationId/core/:command
 POST /api/v1/os/policies/:id/evaluate
+POST /api/v1/os/processes/:id/commands
 POST /api/v1/os/processes/:id/input
 POST /api/v1/os/processes/:id/resize
 POST /api/v1/os/processes/:id/restart
@@ -303,6 +306,7 @@ PUT /api/v1/os/boards/:id/retention
 PUT /api/v1/os/cards/:id/contract
 PUT /api/v1/os/settings/agent-defaults
 PUT /api/v1/os/workspaces/:id/context
+PUT /api/v1/os/workspaces/:id/terminal-selection
 ```
 
 ### Compatibility routes
@@ -492,7 +496,7 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 172 signatures;
+   actions, and exact-compares all 176 signatures;
 3. extracts every Commander root/subcommand and exact-compares all 125 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;

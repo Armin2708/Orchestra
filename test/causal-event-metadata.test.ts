@@ -91,7 +91,7 @@ describe('causal event metadata migration 020', () => {
       .toEqual(assignmentTriggerSql)
     expect(db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get()).toEqual({ count: 29 })
+    ).get()).toEqual({ count: 30 })
 
     expect(() => db.prepare(`INSERT INTO os_events (
       id, board_id, actor_type, workspace_id, correlation_id,

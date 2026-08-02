@@ -37,6 +37,10 @@ import {
   AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID,
   installOrganizationAssuranceSchema,
 } from './organization-assurance-migration.js'
+import { TERMINAL_SESSION_STATE_SCHEMA_SQL } from './terminal-session-state.js'
+
+export const AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID =
+  '030-terminal-session-state' as const
 
 interface Migration {
   id: string
@@ -7518,6 +7522,20 @@ const migrations: Migration[] = [
         )
       }
       installOrganizationAssuranceSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID,
+    apply(db) {
+      const hasOrganizationAssurance = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID)
+      if (!hasOrganizationAssurance) {
+        throw new Error(
+          `migration ${AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID}`,
+        )
+      }
+      db.exec(TERMINAL_SESSION_STATE_SCHEMA_SQL)
     },
   },
 ]

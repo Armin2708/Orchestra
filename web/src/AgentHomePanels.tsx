@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { Agent } from './api'
 import {
   AGENT_HOME_EVENT_KINDS,
@@ -34,6 +34,12 @@ import type {
 } from './osApi'
 import { ProcessTerminal } from './ProcessTerminal'
 import { ProviderBadge } from './ProviderBadge'
+import { AgentToolControls } from './AgentToolControls'
+import {
+  agentToolApi,
+  type SessionToolSnapshot,
+  type ToolPolicyDecision,
+} from './agentToolApi'
 
 export type AgentHomeDetailTab = 'work' | 'context' | 'tools' | 'usage' | 'history'
 export type AgentHomeMobilePane = 'conversation' | 'terminal' | 'details'
@@ -330,6 +336,7 @@ export function AgentTerminalPanel({
   error,
   openingShell,
   startingCommand,
+  restartingProcessId,
   onSelectProcess,
   onOpenShell,
   onRunCommand,
@@ -344,6 +351,7 @@ export function AgentTerminalPanel({
   error: string | null
   openingShell: boolean
   startingCommand: boolean
+  restartingProcessId: string | null
   onSelectProcess: (process: WorkspaceProcess) => void
   onOpenShell: () => void
   onRunCommand: (command: string) => Promise<void>
@@ -387,7 +395,10 @@ export function AgentTerminalPanel({
                 <button type="button" onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button>
                 <button type="button" onClick={() => onSignal(process, 'SIGTERM')}>Stop</button>
               </>
-            : Boolean(process.restartable) && <button type="button" onClick={() => onRestart(process)}>Restart</button>)}
+            : Boolean(process.restartable) && <button type="button"
+                disabled={restartingProcessId === String(process.id)} onClick={() => onRestart(process)}>
+                {restartingProcessId === String(process.id) ? 'Restarting…' : 'Restart'}
+              </button>)}
         </div>
       </header>
       {error && <div className="ah-panel-error" role="alert">{error}</div>}
@@ -467,7 +478,7 @@ export function AgentInspector({
         {tab === 'work' && <WorkDetail workspace={workspace} job={job} contract={contract} session={session}
           processes={processes} attention={attention} />}
         {tab === 'context' && <ContextDetail context={context} />}
-        {tab === 'tools' && <ToolsDetail profile={profile} events={events} />}
+        {tab === 'tools' && <ToolsDetail profile={profile} session={session} events={events} />}
         {tab === 'usage' && <UsageDetail events={events} job={job} />}
         {tab === 'history' && <HistoryDetail home={home} session={session} conversation={conversation}
           onSelectSession={onSelectSession} onSelectConversation={onSelectConversation} />}
@@ -545,7 +556,18 @@ function ContextDetail({ context }: { context: Loadable<ContextItem[]> }) {
   )
 }
 
-function ToolsDetail({ profile, events }: { profile: AgentProfile; events: ConversationEvent[] }) {
+function ToolsDetail({
+  profile,
+  session,
+  events,
+}: {
+  profile: AgentProfile
+  session: AgentSessionRecord | null
+  events: ConversationEvent[]
+}) {
+  const [snapshot, setSnapshot] = useState<SessionToolSnapshot | null>(null)
+  const [busyToolId, setBusyToolId] = useState<string | null>(null)
+  const [toolError, setToolError] = useState<string | null>(null)
   const toolEvents = events.filter((event) => event.kind === 'tool' || event.kind === 'tool_result')
   const grouped = useMemo(() => {
     const counts = new Map<string, { requested: number; completed: number }>()
@@ -558,8 +580,47 @@ function ToolsDetail({ profile, events }: { profile: AgentProfile; events: Conve
     }
     return [...counts.entries()]
   }, [toolEvents])
+
+  useEffect(() => {
+    let current = true
+    setSnapshot(null)
+    setToolError(null)
+    if (!session) return () => { current = false }
+    void agentToolApi.getSessionTools(session.id)
+      .then((next) => { if (current) setSnapshot(next) })
+      .catch((error: unknown) => {
+        if (current) setToolError(error instanceof Error ? error.message : 'Tool capabilities could not be loaded.')
+      })
+    return () => { current = false }
+  }, [session?.id])
+
+  const changePolicy = async (toolId: string, decision: ToolPolicyDecision) => {
+    if (!session || !snapshot) return
+    setBusyToolId(toolId)
+    setToolError(null)
+    try {
+      const rules = snapshot.policy.rules.filter((rule) => rule.target !== toolId)
+      rules.push({ target: toolId, decision })
+      await agentToolApi.updatePolicy(session.id, {
+        default_decision: snapshot.policy.default_decision,
+        rules,
+        revision: snapshot.policy.revision,
+      })
+      setSnapshot(await agentToolApi.getSessionTools(session.id))
+    } catch (error) {
+      setToolError(error instanceof Error ? error.message : 'The tool policy could not be updated.')
+    } finally {
+      setBusyToolId(null)
+    }
+  }
+
   return (
     <div className="ah-detail-stack">
+      {!session && <p className="ah-detail-empty">Select a durable provider session to inspect effective tool permissions.</p>}
+      {session && !snapshot && !toolError && <AgentHomePanelSkeleton rows={3} />}
+      {snapshot && <AgentToolControls snapshot={snapshot} busyToolId={busyToolId}
+        error={toolError} onPolicyChange={(toolId, decision) => void changePolicy(toolId, decision)} />}
+      {session && toolError && !snapshot && <p className="ah-detail-error" role="alert">{toolError}</p>}
       <DetailSection title="Declared capabilities" eyebrow={`${profile.capabilities.length} available`}>
         {profile.capabilities.length === 0 ? <p className="ah-detail-empty">No durable capability labels have been declared.</p>
           : <div className="ah-capability-list">{profile.capabilities.map((capability) => <code key={capability}>{capability}</code>)}</div>}

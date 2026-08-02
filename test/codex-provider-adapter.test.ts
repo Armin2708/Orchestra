@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  authorizeProviderLaunchV1,
   defineProviderExecutionIntentV1,
   defineProviderLaunchBoundaryV1,
   defineProviderNoCostConsentV1,
@@ -62,6 +63,7 @@ const fakeDriver = (): CodexProviderDriverPortV1 => ({
   async updateSession(): Promise<void> {},
   async send(): Promise<void> {},
   async interrupt(): Promise<void> {},
+  async cancel(): Promise<void> {},
   async stop(): Promise<void> {},
   async *events(): AsyncIterable<DriverEvent> {},
   async forkSession() {
@@ -154,6 +156,8 @@ const createAdapter = (
   command: '/safe/bin/codex',
   environment: {
     PATH: '/safe/bin',
+    HOME: '/safe/home',
+    LANG: 'en_US.UTF-8',
     OPENAI_API_KEY: 'must-be-stripped',
   },
   platform: 'darwin-arm64',
@@ -196,15 +200,23 @@ const readiness = async (
     environment,
   )
   return {
+    boundary,
     discovery,
     environment,
+    intent: executionIntent,
     readiness: await adapter.probeReadiness(executionIntent, boundary),
   }
 }
 
 describe('Codex TOOL-014 provider adapter', () => {
   it('binds exact executable, environment, account, and protocol evidence', async () => {
-    const adapter = createAdapter()
+    let versionEnvironment: NodeJS.ProcessEnv | null = null
+    const adapter = createAdapter({
+      readVersion: (_resolvedPath, environment) => {
+        versionEnvironment = environment
+        return 'codex-cli 0.144.6'
+      },
+    })
     const observed = await readiness(adapter)
 
     expect(adapter.manifest).toEqual(CODEX_PROVIDER_MANIFEST_V1)
@@ -219,6 +231,7 @@ describe('Codex TOOL-014 provider adapter', () => {
       resolved_path: '/safe/bin/codex',
       executable_fingerprint: EXECUTABLE_FINGERPRINT,
     })
+    expect(versionEnvironment).toEqual({ LANG: 'en_US.UTF-8' })
     expect(observed.environment.forSpawn()).toEqual({ PATH: '/safe/bin' })
     expect(observed.environment.evidence).toMatchObject({
       conflict_policy: 'strip',
@@ -251,6 +264,43 @@ describe('Codex TOOL-014 provider adapter', () => {
     const apiKeyAccount = createAdapter({ service: fakeService('apiKey') })
     expect((await readiness(apiKeyAccount)).readiness.auth_status)
       .toBe('credential_conflict')
+  })
+
+  it('fails closed when subscription quota readiness cannot be observed', async () => {
+    const service = fakeService()
+    const adapter = createAdapter({
+      service: {
+        ...service,
+        async readRateLimits() {
+          throw new Error('rate limits unavailable')
+        },
+      },
+    })
+    const observed = await readiness(adapter)
+
+    expect(observed.readiness.overage_status).toBe('unknown')
+    const authorization = authorizeProviderLaunchV1(
+      adapter.manifest,
+      observed.intent,
+      observed.readiness,
+      observed.boundary,
+      {
+        contract_version: 1,
+        kind: 'launch',
+        action_id: 'codex-quota-unknown',
+        scope_id: 'workspace-1',
+        cwd: '/workspace',
+        prompt: 'test',
+        model: null,
+        effort: null,
+        access_profile: 'workspace_write',
+        cost_limit: null,
+      },
+    )
+    expect(authorization).toMatchObject({
+      ready: false,
+      blockers: expect.arrayContaining(['overage_policy_mismatch']),
+    })
   })
 
   it('registers the implementation without claiming unsupported canonical routing', () => {

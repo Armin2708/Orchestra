@@ -972,6 +972,15 @@ export class CodexAgentDriver implements AgentDriver {
     await this.options.service.interruptTurn(state.threadId, state.activeTurnId)
   }
 
+  async cancel(sessionId: string): Promise<void> {
+    const state = this.required(sessionId)
+    if (state.stopped) return
+    if (!state.activeTurnId) throw new Error(`Codex session has no active turn: ${sessionId}`)
+    await this.options.service.interruptTurn(state.threadId, state.activeTurnId)
+    const unsubscribeStatus = (await this.options.service.unsubscribeThread(state.threadId)).status
+    this.stopState(state, 'Codex session cancelled', { unsubscribeStatus })
+  }
+
   async stop(sessionId: string): Promise<void> {
     const state = this.required(sessionId)
     if (state.stopped) return

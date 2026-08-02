@@ -28,6 +28,10 @@ import type {
   DriverSession,
 } from '../types.js'
 import { ProviderLaunchRequestBrokerV1 } from './provider-launch-request-broker.js'
+import {
+  evaluateProviderRuntimeOperation,
+  type ProviderRuntimePolicyDecision,
+} from '../../agent-os/provider-runtime-policy.js'
 
 const SOURCE_COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const CONFIGURATION_FINGERPRINT = /^sha256:[a-f0-9]{64}$/
@@ -64,6 +68,28 @@ type ContractDriverSessionV1 = {
   terminal: boolean
   stop_requested: boolean
 }
+
+export type ProviderContractRuntimePolicyInput =
+  | { operation: 'cancel' }
+  | {
+      operation: 'retry'
+      executionScope: ProviderExecutionScope
+      strategy: 'new_session' | 'resume_session'
+      attempts: number
+      maxAttempts: number
+    }
+  | {
+      operation: 'timeout'
+      elapsedMs: number
+      timeoutMs: number
+      method: 'cancel' | 'stop'
+    }
+  | {
+      operation: 'capacity'
+      activeSessions: number
+      quarantinedSessions: number
+      capacity: number
+    }
 
 const terminalStatus = (
   status: ProviderSessionV1['status'],
@@ -245,6 +271,13 @@ export class ProviderContractAgentDriverV1 implements AgentDriver {
     }
   }
 
+  runtimePolicy(input: ProviderContractRuntimePolicyInput): ProviderRuntimePolicyDecision {
+    const mode = this.options.adapter.manifest.modes.find((candidate) =>
+      candidate.id === this.#selection.mode_id)
+    if (!mode) throw new ProviderContractRoutingError('provider runtime mode is unavailable')
+    return evaluateProviderRuntimeOperation({ ...input, mode })
+  }
+
   async assertSupported(): Promise<ProviderExecutableDiscoveryV1> {
     const discovery = await this.options.adapter.discoverExecutable()
     const registered = this.options.registry.requireSupported(
@@ -375,6 +408,20 @@ export class ProviderContractAgentDriverV1 implements AgentDriver {
   async interrupt(sessionId: string): Promise<void> {
     this.required(sessionId)
     await this.options.adapter.interrupt(sessionId)
+  }
+
+  async cancel(sessionId: string): Promise<void> {
+    const state = this.required(sessionId)
+    const decision = this.runtimePolicy({ operation: 'cancel' })
+    if (decision.state !== 'allowed' || decision.method !== 'cancel') {
+      throw new ProviderContractRoutingError(
+        'provider cancellation is not allowed',
+        [decision.reason_code],
+      )
+    }
+    state.stop_requested = true
+    await this.options.adapter.cancel(sessionId)
+    this.finish(state, 'stopped')
   }
 
   async stop(sessionId: string): Promise<void> {
