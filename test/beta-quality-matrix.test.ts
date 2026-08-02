@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -43,6 +43,27 @@ function writeJson(directory: string, name: string, value: unknown): { path: str
   const content = JSON.stringify(value)
   fs.writeFileSync(file, content, 'utf8')
   return { path: name, sha256: createHash('sha256').update(content).digest('hex') }
+}
+
+function syntheticNonancestorCommit(): string {
+  const tree = execFileSync('git', ['rev-parse', `${REQUIRED_BETA_BASE}^{tree}`], {
+    cwd: DEFAULT_ROOT,
+    encoding: 'utf8',
+  }).trim()
+  return execFileSync('git', ['commit-tree', tree, '-p', REQUIRED_BETA_BASE], {
+    cwd: DEFAULT_ROOT,
+    encoding: 'utf8',
+    input: `test: synthetic nonancestor ${randomUUID()} [beta-lane-b-ready]\n`,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Beta Quality Test',
+      GIT_AUTHOR_EMAIL: 'beta-quality@example.invalid',
+      GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z',
+      GIT_COMMITTER_NAME: 'Beta Quality Test',
+      GIT_COMMITTER_EMAIL: 'beta-quality@example.invalid',
+      GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z',
+    },
+  }).trim()
 }
 
 const matrix = () => JSON.parse(fs.readFileSync(DEFAULT_MATRIX, 'utf8')) as {
@@ -420,6 +441,8 @@ describe('beta quality coverage contract', () => {
     const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-git-binding-'))
     temporaryDirectories.push(directory)
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim()
+    const nonancestor = syntheticNonancestorCommit()
+    expect(spawnSync('git', ['merge-base', '--is-ancestor', nonancestor, head], { cwd: DEFAULT_ROOT }).status).not.toBe(0)
     const lane = (readyCommit: string, readyMarker: string) => ({
       ready_commit: readyCommit, base_ref: REQUIRED_BETA_BASE, range: `${REQUIRED_BETA_BASE}..${readyCommit}`,
       ready_marker: readyMarker, gitnexus_version: '1.0.0', graphify_version: '1.0.0',
@@ -428,7 +451,7 @@ describe('beta quality coverage contract', () => {
       schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head,
       lanes: {
         lane_a: lane('f'.repeat(40), '[beta-lane-a-ready]'),
-        lane_b: lane('3c79b69b3298a17a54e9fd2426e2eca1a337bd18', '[beta-lane-b-ready]'),
+        lane_b: lane(nonancestor, '[beta-lane-b-ready]'),
         lane_c: lane(head, '[beta-lane-c-ready]'),
         lane_d: lane(head, '[beta-lane-d-ready]'),
         integrator: lane(head, '[beta-release-candidate]'),
