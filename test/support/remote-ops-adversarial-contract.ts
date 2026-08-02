@@ -364,6 +364,49 @@ const remoteCases: readonly AdversarialCase[] = [
   },
 ]
 
+const lifecycleEvidence = (overrides: Partial<Record<string, number>> = {}) => ({
+  contracts: 3,
+  queuedJobs: 0,
+  runningJobs: 0,
+  startingSessions: 0,
+  runningSessions: 0,
+  startingProcesses: 0,
+  runningProcesses: 0,
+  submittedDeliveries: 0,
+  pendingOutbox: 0,
+  ...overrides,
+})
+
+const lifecycleEvidenceByTransition: Readonly<Record<string, Record<string, number>>> = Object.freeze({
+  'contract-created': lifecycleEvidence(),
+  'job-queued': lifecycleEvidence({ queuedJobs: 3 }),
+  'job-claimed': lifecycleEvidence({ runningJobs: 3 }),
+  'session-created': lifecycleEvidence({ runningJobs: 3, startingSessions: 3 }),
+  'provider-launching': lifecycleEvidence({
+    runningJobs: 3,
+    startingSessions: 3,
+    startingProcesses: 3,
+  }),
+  'provider-running': lifecycleEvidence({
+    runningJobs: 3,
+    runningSessions: 3,
+    runningProcesses: 3,
+  }),
+  'delivery-submitted': lifecycleEvidence({
+    runningJobs: 3,
+    runningSessions: 3,
+    runningProcesses: 3,
+    submittedDeliveries: 3,
+  }),
+  'outbox-pending': lifecycleEvidence({
+    runningJobs: 3,
+    runningSessions: 3,
+    runningProcesses: 3,
+    submittedDeliveries: 3,
+    pendingOutbox: 3,
+  }),
+})
+
 const operationsCases: readonly AdversarialCase[] = [
   {
     id: 'OPS-CHAOS-01',
@@ -372,14 +415,22 @@ const operationsCases: readonly AdversarialCase[] = [
       const transitions = ['contract-created', 'job-queued', 'job-claimed', 'session-created', 'provider-launching', 'provider-running', 'delivery-submitted', 'outbox-pending']
       for (const transition of transitions) {
         await target.reset()
-        ok(await target.perform({ op: 'chaos.seed-active-work', agents: 3, transition }), `seed ${transition}`)
-        ok(await target.perform({ op: 'chaos.crash', transition }), `crash ${transition}`)
-        ok(await target.perform({ op: 'chaos.restart' }), `restart ${transition}`)
+        const seed = ok(await target.perform({ op: 'chaos.seed-active-work', agents: 3, transition }), `seed ${transition}`)
+        assert.deepEqual(seed.lifecycleEvidence, lifecycleEvidenceByTransition[transition], `${transition}: exact fixture shape`)
+        const seededIdentities = value<Record<string, readonly (number | string)[]>>(seed, 'durableIdentities')
+        assert.equal(seededIdentities.cards.length, 3, `${transition}: exact card identities`)
+        assert.equal(seededIdentities.contracts.length, 3, `${transition}: exact contract identities`)
+        const crash = ok(await target.perform({ op: 'chaos.crash', transition }), `crash ${transition}`)
+        assert.equal(crash.databaseClosed, true, `${transition}: crash must close SQLite`)
+        const restart = ok(await target.perform({ op: 'chaos.restart' }), `restart ${transition}`)
+        assert.equal(restart.reopened, true, `${transition}: restart must reopen SQLite`)
+        assert.equal(restart.runtimeGeneration, 2, `${transition}: runtime generation`)
         const state = ok(await target.perform({ op: 'chaos.inspect' }), `inspect ${transition}`)
         assert.equal(state.duplicateJobs, 0, `${transition}: duplicate jobs`)
         assert.equal(state.orphanAuthority, 0, `${transition}: orphan authority`)
         assert.equal(state.silentDataLoss, 0, `${transition}: silent data loss`)
         assert.equal(state.invalidLeases, 0, `${transition}: invalid leases`)
+        assert.deepEqual(state.durableIdentities, seededIdentities, `${transition}: every durable identity preserved`)
       }
     },
   },
@@ -394,7 +445,7 @@ const operationsCases: readonly AdversarialCase[] = [
       const state = ok(await target.perform({ op: 'chaos.inspect' }), 'inspect survivor state')
       assert.equal(state.activeAgents, 2)
       assert.equal(state.staleGenerationWritesAccepted, 0)
-      assert.equal(state.providerChildren, 2)
+      assert.equal(state.liveHelperProcesses, 2)
     },
   },
   {
@@ -402,8 +453,11 @@ const operationsCases: readonly AdversarialCase[] = [
     title: 'outbox and event consumers replay idempotently after ambiguous delivery',
     async run(target) {
       ok(await target.perform({ op: 'outbox.seed', events: 5 }), 'seed outbox')
-      ok(await target.perform({ op: 'outbox.deliver-and-crash-before-ack', eventIndex: 2 }), 'crash after delivery')
-      ok(await target.perform({ op: 'chaos.restart' }), 'restart daemon')
+      const interrupted = ok(await target.perform({ op: 'outbox.deliver-and-crash-before-ack', eventIndex: 2 }), 'crash after delivery')
+      assert.equal(interrupted.databaseClosed, true, 'ambiguous delivery must close SQLite')
+      const restarted = ok(await target.perform({ op: 'chaos.restart' }), 'restart daemon')
+      assert.equal(restarted.reopened, true, 'outbox recovery must reopen SQLite')
+      assert.equal(restarted.runtimeGeneration, 2, 'outbox recovery must use a new runtime generation')
       ok(await target.perform({ op: 'outbox.drain' }), 'drain outbox')
       const state = ok(await target.perform({ op: 'outbox.inspect' }), 'inspect outbox')
       assert.equal(state.pending, 0)
@@ -418,14 +472,43 @@ const operationsCases: readonly AdversarialCase[] = [
     async run(target) {
       for (const fault of ['disk-full', 'database-locked', 'provider-unavailable', 'git-conflict']) {
         await target.reset()
-        ok(await target.perform({ op: 'chaos.inject-fault', fault }), `inject ${fault}`)
-        const attempt = await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey: `fault-${fault}` })
+        const idempotencyKey = `fault-${fault}`
+        const expectedFailure = fault.replaceAll('-', '_')
+        const injected = ok(await target.perform({
+          op: 'chaos.inject-fault',
+          fault,
+          idempotencyKey,
+        }), `prepare and inject ${fault}`)
+        assert.equal(injected.preparedCriticalMutations, 1, `${fault}: durable intent must predate fault`)
+        const preservedJobId = value<string>(injected, 'preservedJobId')
+        const preservedOutboxId = value<string>(injected, 'preservedOutboxId')
+        assert.ok(preservedJobId.length > 0, `${fault}: nonempty durable job identity`)
+        assert.ok(preservedOutboxId.length > 0, `${fault}: nonempty durable outbox identity`)
+        const attempt = await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey })
         assert.ok(attempt.status >= 400, `${fault}: operation must not report success`)
+        assert.equal(attempt.failure, expectedFailure, `${fault}: exact stable failure classification`)
+        assert.equal(attempt.failClosed, true, `${fault}: failure must be fail-closed`)
+        const failedState = ok(await target.perform({ op: 'chaos.inspect' }), `inspect failed ${fault}`)
+        assert.equal(failedState.preparedCriticalMutations, 1, `${fault}: prepared mutation preserved`)
+        assert.equal(failedState.appliedCriticalMutations, 0, `${fault}: failed mutation not applied`)
+        assert.equal(failedState.criticalEffects, 0, `${fault}: no failed-attempt side effect`)
+        assert.equal(failedState.silentDataLoss, 0, `${fault}: failed-attempt identities preserved`)
+        assert.deepEqual(failedState.criticalMutationIdentities, [{
+          idempotencyKey,
+          jobId: preservedJobId,
+          outboxId: preservedOutboxId,
+        }], `${fault}: reported identities equal durable database state`)
         ok(await target.perform({ op: 'chaos.clear-fault', fault }), `clear ${fault}`)
-        ok(await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey: `fault-${fault}` }), `retry ${fault}`)
+        const retry = ok(await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey }), `retry ${fault}`)
+        assert.equal(retry.replayed, false, `${fault}: first successful application`)
+        const replay = ok(await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey }), `replay ${fault}`)
+        assert.equal(replay.replayed, true, `${fault}: idempotent replay`)
         const state = ok(await target.perform({ op: 'chaos.inspect' }), `inspect ${fault}`)
         assert.equal(state.duplicateJobs, 0)
         assert.equal(state.silentDataLoss, 0)
+        assert.equal(state.preparedCriticalMutations, 1)
+        assert.equal(state.appliedCriticalMutations, 1)
+        assert.equal(state.criticalEffects, 1)
       }
     },
   },
