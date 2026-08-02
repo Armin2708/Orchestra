@@ -162,17 +162,6 @@ function TicketRail({ snap, providers, onOpen, onChange }: {
   )
 }
 
-function RemoveProject({ boardId, onChange }: { boardId: number; onChange: () => void }) {
-  const [arming, setArming] = useState(false)
-  if (!arming) return <button className="icon-x quiet" title="Remove project from board" onClick={() => setArming(true)}>×</button>
-  return (
-    <span className="confirm-remove">
-      <button className="btn danger" onClick={async () => { await api('DELETE', `/boards/${boardId}`); onChange() }}>Remove?</button>
-      <button className="btn ghost" onClick={() => setArming(false)}>Keep</button>
-    </span>
-  )
-}
-
 const boardCanvasMidpoint = (a: CanvasPoint, b: CanvasPoint): CanvasPoint => ({
   x: (a.x + b.x) / 2,
   y: (a.y + b.y) / 2,
@@ -191,7 +180,7 @@ function loadBoardViewport(storageKey: string): CanvasViewport {
 
 const BOARD_PAN_EXCLUDE = [
   'button', 'input', 'textarea', 'select', 'a', '[role="button"]', '[draggable="true"]',
-  '.q-edge', '.project-head-left', '.project-head-right', '.task-panel', '.ticket-rail', '.project-cards', '.threads', '.ideas',
+  '.q-edge', '.project-head-right', '.task-panel', '.ticket-rail', '.project-cards', '.threads', '.ideas',
   '.add-form', '.net-prompt', '.net-thread', '.net-legend',
 ].join(', ')
 const BOARD_NATIVE_SCROLL = '.ticket-rail, .project-cards, .threads, .net-thread'
@@ -530,10 +519,6 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
           return (
             <section key={s.board.id} className="project network-mode">
               <header className="project-head">
-                <div className="project-head-left">
-                  <h2>{s.board.name}</h2>
-                  <RemoveProject boardId={s.board.id} onChange={onChange} />
-                </div>
                 <div className="project-head-right">
                   <ProviderLaunchControl providers={providers} variant="hire" label="+ Hire"
                     title="Spawn an autonomous agent on this project"

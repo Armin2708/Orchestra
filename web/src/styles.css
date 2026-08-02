@@ -150,25 +150,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .projects.focused { align-items: stretch; }
 .project {
-  pointer-events: auto; background: transparent; border: none; border-radius: 14px;
+  position: relative; pointer-events: auto; background: transparent; border: none; border-radius: 14px;
   padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 12px;
   max-height: calc(100dvh - 200px); overflow: hidden;
 }
 .project.network-mode { overflow: visible; }
 .projects.focused .project { height: calc(100dvh - 200px); }
 .project-head {
-  position: relative; z-index: 4; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  position: absolute; top: 18px; left: 20px; right: 20px; z-index: 6;
+  display: flex; align-items: flex-start; justify-content: flex-end; gap: 12px;
   flex-shrink: 0; pointer-events: none;
 }
-.project-head-left, .project-head-right {
+.project-head-right {
   pointer-events: auto; display: flex; align-items: center;
   background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(16px);
   border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
 }
-.project-head-left { gap: 8px; min-width: 0; padding: 8px 10px; }
 .project-head-right { justify-content: flex-end; gap: 12px; min-width: 0; padding: 8px 10px; }
-.project-head-left .icon-x.quiet { margin-right: 0; }
-.project-head h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .project-crew { display: flex; }
 .project-crew .avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
 .threads { display: grid; gap: 8px; overflow-y: auto; max-height: 230px; flex-shrink: 0; }
@@ -202,9 +200,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 0 2px; border-radius: 4px; flex-shrink: 0;
 }
 .icon-x:hover { color: #9F2F2D; }
-.icon-x.quiet { opacity: 0; transition: opacity 0.15s; margin-right: auto; }
-.project:hover .icon-x.quiet { opacity: 1; }
-.confirm-remove { display: inline-flex; gap: 6px; margin-right: auto; }
 .btn.danger { background: #9F2F2D; color: #fff; }
 .btn.danger:hover { background: #b8403d; }
 .danger-text { color: #9F2F2D; }
@@ -1104,7 +1099,7 @@ textarea {
 /* ── Touch devices — visible + reachable controls ── */
 @media (pointer: coarse) {
   /* hover-revealed controls have no hover on touch */
-  .icon-x.quiet, .crew-slot .fire, .net-kill, .rm-idea-open { opacity: 1; }
+  .crew-slot .fire, .net-kill, .rm-idea-open { opacity: 1; }
   .crew-slot .fire, .net-kill { transform: scale(1); pointer-events: auto; }
   .board-cursor-lens { display: none; }
   .board-control { min-width: 44px; height: 44px; }
@@ -1149,8 +1144,7 @@ textarea {
     height: auto; max-height: none; padding: 14px 14px 12px;
   }
   .projects.focused .project { height: auto; }
-  .project-head { flex-wrap: wrap; }
-  .project-head-left { max-width: 100%; }
+  .project-head { top: 14px; left: 14px; right: 14px; flex-wrap: wrap; }
   .project-head-right { max-width: 100%; margin-left: auto; flex-wrap: wrap; }
   .project-cards { grid-template-columns: 1fr; }
 
