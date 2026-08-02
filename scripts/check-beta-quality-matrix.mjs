@@ -17,7 +17,7 @@ export const DEFAULT_INTEGRATION_MANIFEST_SCHEMA = path.join(DEFAULT_ROOT, 'docs
 
 // These are intentionally independent of the JSON files. Changing either contract requires an
 // explicit reviewed code change and new evasion tests, not a self-authorized JSON edit.
-export const PINNED_REQUIREMENTS_SHA256 = 'ec7d321c0336fce3d6db8ab90cdb336d80fbcd9c061c9b134fc2cc074f4236b5'
+export const PINNED_REQUIREMENTS_SHA256 = 'c4c9ef59137d9cf6d6a1e1270d1f1f799eefe9a77cb5913acecf57b41bf0c4d7'
 export const PINNED_MATRIX_SHA256 = 'd5ee8665bf1f1512e89e9f9edf961e7e864a65497768659c0edbbce79676adb4'
 export const PINNED_EVIDENCE_SCHEMA_SHA256 = '722b57778fce235dba403b97008d1aa677234540b0601f371e7eef7e5ab467df'
 export const PINNED_TOOL_EVIDENCE_SCHEMA_SHA256 = 'eabeaed383d2e4b8fcfb4b740f966a42a0c9a458d580e9a07cec6ef7ed2b4667'
