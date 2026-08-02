@@ -28,6 +28,7 @@ interface AgentCredentialRow {
 
 interface CanonicalSessionRow {
   id: string
+  profile_id: string
   job_id: string | null
   job_assignment_id: string | null
   assigned_profile_id: string | null
@@ -53,32 +54,30 @@ export function resolveAgentMutationPrincipal(
       hook_token_hash, status FROM agents WHERE id=?`).get(agentId) as
     | AgentCredentialRow
     | undefined
-  if (!agent || agent.kind !== 'session' || agent.status === 'gone'
+  if (!agent || !['session', 'hired'].includes(agent.kind) || agent.status === 'gone'
     || agent.provider !== provider || agent.external_session_id !== providerSessionId
     || !agent.hook_token_hash) return null
   const presentedHash = createHash('sha256').update(sessionToken).digest('hex')
   if (!tokenEquals(presentedHash, agent.hook_token_hash)) return null
 
-  const profile = db.prepare(`SELECT id FROM agent_profiles
-      WHERE legacy_agent_id=? AND board_id=? AND status='active'`)
-    .get(agent.id, agent.board_id) as { id: string } | undefined
-  if (!profile) return null
-  const session = db.prepare(`SELECT s.id, s.job_id, s.job_assignment_id,
+  const session = db.prepare(`SELECT s.id, s.profile_id, s.job_id, s.job_assignment_id,
       s.assigned_profile_id, s.assignment_market_version
       FROM agent_sessions s JOIN workspaces w ON w.id=s.workspace_id
-      WHERE w.board_id=? AND s.agent_id=? AND s.profile_id=?
+      JOIN agent_profiles p ON p.id=s.profile_id AND p.board_id=w.board_id
+        AND p.status='active'
+      WHERE w.board_id=? AND s.agent_id=? AND s.profile_id IS NOT NULL
         AND s.provider=? AND s.external_id=?
         AND s.status NOT IN ('completed', 'stopped', 'failed', 'archived')
         AND (s.assigned_profile_id IS NULL OR s.assigned_profile_id=s.profile_id)
       ORDER BY s.updated_at DESC, s.rowid DESC LIMIT 1`)
-    .get(agent.board_id, agent.id, profile.id, provider, providerSessionId) as
+    .get(agent.board_id, agent.id, provider, providerSessionId) as
       | CanonicalSessionRow
       | undefined
   if (!session) return null
   return {
     agentId: agent.id,
     boardId: agent.board_id,
-    profileId: profile.id,
+    profileId: session.profile_id,
     provider,
     providerSessionId,
     sessionId: session.id,

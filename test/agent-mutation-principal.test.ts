@@ -32,14 +32,14 @@ function fixture() {
   const agentId = Number(db.prepare(`INSERT INTO agents
       (board_id, name, session_id, kind, provider, external_session_id,
        hook_token_hash, status)
-      VALUES (?, 'Ada', 'provider-session', 'session', 'codex',
+      VALUES (?, 'Ada', 'provider-session', 'hired', 'codex',
         'provider-session', ?, 'active')`)
     .run(boardId, tokenHash).lastInsertRowid)
   db.prepare(`INSERT INTO agent_profiles
       (id, board_id, legacy_agent_id, name, capabilities_json,
        owner_actor_type, owner_actor_id, status, provenance_json, created_at, updated_at)
-      VALUES ('profile-ada', ?, ?, 'Ada', '[]', 'operator', 'test',
-        'active', '{}', datetime('now'), datetime('now'))`).run(boardId, agentId)
+      VALUES ('profile-ada', ?, NULL, 'Ada', '[]', 'operator', 'test',
+        'active', '{}', datetime('now'), datetime('now'))`).run(boardId)
   db.prepare(`INSERT INTO agent_conversations
       (id, board_id, profile_id, title, status, is_default, next_sequence,
        created_by_actor_type, created_by_actor_id, created_at, updated_at)
@@ -75,7 +75,7 @@ function request(
 }
 
 describe('exact agent mutation principal', () => {
-  it('resolves a session credential through agent, profile, and canonical session identity', () => {
+  it('resolves a managed hook credential through its canonical session profile identity', () => {
     const { db, boardId, agentId, token } = fixture()
 
     expect(resolveAgentMutationPrincipal(db, request(agentId, token))).toEqual({
