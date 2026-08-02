@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "364967d",
+  "observed_at_commit": "4ba9301",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -166,6 +166,7 @@
       "delivery_regressions",
       "delivery_reports",
       "delivery_review_comments",
+      "delivery_shipment_receipts",
       "delivery_shipments",
       "delivery_verification_runs",
       "job_market_assignments",
