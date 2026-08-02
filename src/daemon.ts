@@ -63,7 +63,39 @@ import {
 } from './provider-agent-manager.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 import { createDeclaredProviderToolRegistry } from './tool-capabilities.js'
+import type { ToolIntegrationCheck } from './tool-capabilities.js'
 import { inspectDeclaredProviderToolIntegrations } from './tool-readiness.js'
+import {
+  runOperatorReadinessDoctor,
+  type OperatorDoctorReport,
+} from './readiness-doctor.js'
+import type { ProviderExecutableDiscoveryV1 } from './provider-contract.js'
+
+export type DaemonProviderToolSurface = ReturnType<
+  typeof createDeclaredProviderToolRegistry
+>
+
+export const createDaemonProviderToolSurface = async (input: {
+  doctor: () => OperatorDoctorReport
+  discoverCodex: () => Promise<ProviderExecutableDiscoveryV1>
+  integrations: () => readonly ToolIntegrationCheck[]
+}): Promise<DaemonProviderToolSurface> => {
+  const doctor = input.doctor()
+  const discovery = await input.discoverCodex()
+  return createDeclaredProviderToolRegistry({
+    doctor,
+    discoveries: { codex: discovery },
+    observedAt: doctor.checked_at,
+  }, input.integrations())
+}
+
+export const synchronizeDaemonProviderToolSurface = (
+  current: DaemonProviderToolSurface,
+  next: DaemonProviderToolSurface,
+): void => {
+  current.registry.synchronize(next.registry.list())
+  current.matrix.splice(0, current.matrix.length, ...next.matrix)
+}
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -251,6 +283,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let maestro: Conductor | undefined
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
+  let toolEvidenceRefreshTimer: ReturnType<typeof setInterval> | undefined
   const agentOs = createAgentOsRuntime(db)
   const terminalSessionState = new TerminalSessionStateService(db, {
     digestKey: ensureTerminalHistoryDigestKey(orchestraDataDir),
@@ -407,12 +440,16 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         },
       },
     })
-    const toolIntegrations = inspectDeclaredProviderToolIntegrations({
-      scope: 'project',
-      roots: { cwd: process.cwd() },
-      pluginRoot: process.cwd(),
+    const inspectToolSurface = () => createDaemonProviderToolSurface({
+      doctor: () => runOperatorReadinessDoctor('both'),
+      discoverCodex: () => codexAdapter.discoverExecutable(),
+      integrations: () => inspectDeclaredProviderToolIntegrations({
+        scope: 'project',
+        roots: { cwd: process.cwd() },
+        pluginRoot: process.cwd(),
+      }),
     })
-    const toolSurface = createDeclaredProviderToolRegistry(undefined, toolIntegrations)
+    const toolSurface = await inspectToolSurface()
     server.register(sessionToolPlugin, {
       prefix: '/api/v1/os',
       db,
@@ -420,6 +457,20 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       providerMatrix: toolSurface.matrix,
       isOperator: (request: FastifyRequest) => request.orchestraPrincipal === 'operator',
     })
+    toolEvidenceRefreshTimer = setInterval(() => {
+      void inspectToolSurface().then((refreshed) => {
+        synchronizeDaemonProviderToolSurface(toolSurface, refreshed)
+      }).catch(() => {
+        const integrations = inspectDeclaredProviderToolIntegrations({
+          scope: 'project',
+          roots: { cwd: process.cwd() },
+          pluginRoot: process.cwd(),
+        })
+        const closed = createDeclaredProviderToolRegistry({}, integrations)
+        synchronizeDaemonProviderToolSurface(toolSurface, closed)
+      })
+    }, 60_000)
+    toolEvidenceRefreshTimer.unref()
     registerPush(server)
   } catch (error) {
     await shutdownRuntimes()
@@ -437,6 +488,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     })
   }
   server.addHook('onClose', async () => {
+    if (toolEvidenceRefreshTimer) clearInterval(toolEvidenceRefreshTimer)
     if (reapTimer) clearInterval(reapTimer)
     if (schedulerTimer) clearInterval(schedulerTimer)
     autowake?.stop()

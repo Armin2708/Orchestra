@@ -333,6 +333,33 @@ describe('Kimi ACP driver', () => {
     await expect(permission).resolves.toEqual(rejected)
   })
 
+  it('never turns a generic approval into persistent Kimi permission', async () => {
+    const fake = fakeConnection()
+    let client: Client | null = null
+    const driver = new KimiAcpDriverV1({
+      command: '/opt/kimi/bin/kimi',
+      accessProfileValues,
+      randomId: () => 'driver-session-generic-approval',
+      spawnProcess: () => fakeProcess(),
+      createConnection: (_process, value) => {
+        client = value
+        return fake.connection
+      },
+    })
+    const session = await driver.launch({
+      workspaceId: 'workspace-1', cwd: process.cwd(), accessProfile: 'workspace_write',
+    })
+
+    const permission = client!.requestPermission({
+      sessionId: session.externalId,
+      toolCall: { toolCallId: 'tool-persistent', title: 'Edit files', kind: 'edit' },
+      options: [{ optionId: 'yes-always', name: 'Always allow', kind: 'allow_always' }],
+    })
+    await driver.resolveApproval(session.id, 'kimi-acp-approval-1', 'approve')
+
+    await expect(permission).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+  })
+
   it('resumes through the documented ACP session/resume surface and fails closed on unsupported native controls', async () => {
     const child = fakeProcess()
     const fake = fakeConnection()

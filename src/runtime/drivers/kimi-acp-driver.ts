@@ -728,7 +728,7 @@ export class KimiAcpDriverV1 implements KimiAcpDriverPortV1 {
     const pending = state?.pendingApprovals.get(approvalId)
     if (!state || !pending) throw new Error('Kimi ACP approval is unavailable')
     const kinds = decision === 'approve'
-      ? ['allow_once', 'allow_always']
+      ? ['allow_once']
       : ['reject_once', 'reject_always']
     const option = pending.options.find((candidate) => kinds.includes(candidate.kind))
     state.pendingApprovals.delete(approvalId)
