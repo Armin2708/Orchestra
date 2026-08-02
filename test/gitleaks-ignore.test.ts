@@ -16,7 +16,7 @@ const EXPECTED_FINGERPRINTS = [
 ]
 
 describe('gitleaks ignore policy', () => {
-  it('permits only reviewed commit-scoped redaction fixtures', () => {
+  it('permits only reviewed commit-scoped test fixtures', () => {
     const fingerprints = readFileSync(new URL('../.gitleaksignore', import.meta.url), 'utf8')
       .split(/\r?\n/)
       .map((line) => line.trim())
