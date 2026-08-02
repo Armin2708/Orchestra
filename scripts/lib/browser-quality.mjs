@@ -348,6 +348,9 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       if (result?.measurement_mode !== expectedMeasurementModes[surface]) {
         errors.push(`${expected.id} ${surface} has invalid performance measurement mode`)
       }
+      if (typeof result?.quality_gate_passed !== 'boolean') {
+        errors.push(`${expected.id} ${surface} is missing quality-linked performance status`)
+      }
     }
   }
   if (!/^[a-f0-9]{64}$/.test(String(evidence?.source?.artifact_identity?.root_dist_sha256 ?? ''))

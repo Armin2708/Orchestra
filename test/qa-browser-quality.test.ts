@@ -60,6 +60,7 @@ const passingEvidence = () => {
       observed_ms: 10,
       measurement_mode: surface === 'startup' ? 'navigation_timing'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
+      quality_gate_passed: true,
       budget_ms: 100,
       budget_source: 'checked_observation',
     }])),
@@ -233,6 +234,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     incomplete.viewports[0].horizontal_overflow_px = 4
     incomplete.viewports[0].accessibility.keyboard_focus.passed = false
     delete incomplete.viewports[0].performance.search
+    delete incomplete.viewports[1].performance.graph_view.quality_gate_passed
     ;(incomplete as any).token = 'unsafe'
     incomplete.sha256 = verifiableDocumentDigest(incomplete)
 
@@ -241,6 +243,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       'desktop has horizontal overflow',
       'desktop failed keyboard_focus',
       'desktop is missing search performance evidence',
+      'tablet graph_view is missing quality-linked performance status',
       'evidence contains secret-shaped fields or values',
     ]))
   })

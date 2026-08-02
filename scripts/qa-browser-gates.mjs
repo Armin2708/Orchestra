@@ -907,10 +907,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         })()`)
         if (!focusedByFallback) throw new Error('DOM fallback could not focus conversation search input')
       }
-      const focused = await modeReady(
-        `document.activeElement === document.querySelector('.ah-search input')`,
-        interactionReadinessTimeoutMs,
-      )
+      const focused = await evaluate(client, `document.activeElement === document.querySelector('.ah-search input')`)
       if (!focused) throw new Error('conversation search input could not receive focus')
       await typeText(client, 'quality')
       await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
@@ -995,6 +992,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   accessibility.keyboard_focus.modal_focus = modalFocus
   if (modalFocus.supported && !modalFocus.passed) accessibility.keyboard_focus.passed = false
   const metrics = { startup, snapshot_loading: snapshot, transcript_loading: transcript, graph_view: graph, search }
+  const qualityLinkedPass = {
+    startup: true,
+    snapshot_loading: true,
+    transcript_loading: journeys.find((journey) => journey.name === 'durable transcript')?.interaction_modes.pointer.passed === true,
+    graph_view: journeys.find((journey) => journey.name === 'graph overview')?.interaction_modes.pointer.passed === true,
+    search: journeys.find((journey) => journey.name === 'conversation search')?.interaction_modes.pointer.passed === true,
+  }
   const performanceEvidence = Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => {
     const observed = surface === 'startup' ? metrics.startup : metrics[surface]
     const measurementMode = surface === 'startup' ? 'navigation_timing'
@@ -1002,6 +1006,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     return [surface, {
       observed_ms: observed,
       measurement_mode: measurementMode,
+      quality_gate_passed: qualityLinkedPass[surface],
       ...budgetFor(baseline, viewport.id, surface),
     }]
   }))
@@ -1149,6 +1154,7 @@ const main = async () => {
         fixture_transport: 'board, agents, card, workspace, canonical job/session, profile, conversation, and events created through authenticated public APIs',
         failure_artifacts: 'bounded redacted JSON only; no page HTML, response body, transcript, storage, or screenshot capture',
         interaction_readiness: `two consecutive 40ms observations; ${interactionReadinessTimeoutMs}ms interaction bound and ${asynchronousReadinessTimeoutMs}ms asynchronous render bound`,
+        performance_quality_link: 'pointer-only timing is retained separately from pointer quality; a fast failed attempt never becomes a quality pass',
         budgets: options.captureOnly
           ? 'observation-only: no budget is derived from this run'
           : 'explicit beta experience ceilings bounded by a checked three-run regression baseline',
