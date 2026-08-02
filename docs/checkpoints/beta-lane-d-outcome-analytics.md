@@ -100,9 +100,9 @@ without observed representative evidence.
 - Status: **CANDIDATE PENDING FINAL EXACT REVIEW**, not final-central ready.
 - Base: `b6dc067f7de66f7978b951d1e37ffb9c86ba9cfb`; central must integrate the accepted Lane B and
   Lane C ancestry before evaluating final-central readiness.
-- Exact heads `d31bb8e`, `8837762`, `183aa7e`, and `575c9c7` were rejected by independent review and
-  are superseded by the current remediation. A fresh exact candidate review must report P0=0,
-  P1=0, P2=0 before this marker can become ready for central integration.
+- Exact heads `d31bb8e`, `8837762`, `183aa7e`, `575c9c7`, and `e3cd863` were rejected by independent
+  review and are superseded by the current remediation. A fresh exact candidate review must report
+  P0=0, P1=0, P2=0 before this marker can become ready for central integration.
 
 ## Evidence
 
@@ -112,14 +112,15 @@ without observed representative evidence.
   exact accepted-versus-verified timing, changed-timestamp replay stability, reserved native-ID
   enforcement, app and dashboard subscribe-before-fetch/reconnect/retry/disposal behavior, and
   exactly-once board-create events. Deferred-response behavior tests prove that queued refreshes
-  remain single-flight and that disposal suppresses every post-request callback.
+  remain single-flight, a queued visible refresh stays visibly loading through its final response,
+  and disposal suppresses every post-request callback.
 - The complete repository suite passed 240 files / 2,009 tests in both default-parallel and
   `--maxWorkers=1` modes on Node 22.20.0 / npm 10.9.3.
 - Root TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
 - Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
   retains the existing advisory for a JavaScript chunk larger than 500 kB.
 - Root and web `npm audit --audit-level=high` report zero vulnerabilities.
-- Gitleaks 8.30.1 reports no findings across 798 commits / 30.09 MB of full-history content or the
+- Gitleaks 8.30.1 reports no findings across 800 commits / 30.10 MB of full-history content or the
   candidate diff.
 - The final GitNexus comparison will be frozen against the committed remediation code head before
   readiness is claimed. The required pre-edit

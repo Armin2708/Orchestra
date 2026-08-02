@@ -80,23 +80,33 @@ describe('outcome dashboard UI contract', () => {
   it('serializes deferred refreshes and applies responses in request order', async () => {
     const requests = [deferred<number>(), deferred<number>()]
     const applied: number[] = []
+    const loading: boolean[] = []
     let started = 0
     const controller = createSingleFlightRefresh({
       load: () => requests[started++].promise,
+      onStart: (visible) => {
+        if (visible) loading.push(true)
+      },
       onSuccess: (value) => applied.push(value),
       onFailure: () => undefined,
+      onSettled: (visible) => {
+        if (visible) loading.push(false)
+      },
     })
 
-    controller.request()
+    controller.request(true)
     controller.request(true)
     expect(started).toBe(1)
+    expect(loading).toEqual([true, true])
     requests[0].resolve(1)
     await flushPromises()
     expect(started).toBe(2)
     expect(applied).toEqual([1])
+    expect(loading).toEqual([true, true])
     requests[1].resolve(2)
     await flushPromises()
     expect(applied).toEqual([1, 2])
+    expect(loading).toEqual([true, true, false])
   })
 
   it('suppresses every callback after disposal during a deferred refresh', async () => {

@@ -33,11 +33,11 @@ export function createSingleFlightRefresh<T>(options: SingleFlightRefreshOptions
     } finally {
       if (disposed) return
       running = false
-      options.onSettled?.(visible)
       const continueQueued = queued
       const nextVisible = queuedVisible
       queued = false
       queuedVisible = false
+      if (!continueQueued || !nextVisible) options.onSettled?.(visible)
       options.onCycle?.({ succeeded, queued: continueQueued, visible })
       if (continueQueued) void run(nextVisible)
     }
