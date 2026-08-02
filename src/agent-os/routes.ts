@@ -54,6 +54,7 @@ import { knowledgeManagementPlugin } from './knowledge-management-routes.js'
 import { discussionPlugin } from './discussion-routes.js'
 import { teamPlanningPlugin } from './team-planning-routes.js'
 import { DiscussionService } from './discussions.js'
+import { CanonicalDiscussionKnowledgePromotionAdapter } from './discussion-knowledge-promotion.js'
 import {
   CanonicalConflictDiscussionAdapter,
   DiscussionAttentionWakeAdapter,
@@ -164,6 +165,7 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   const discussionService = new DiscussionService(
     options.db,
     new DiscussionAttentionWakeAdapter(options.db),
+    new CanonicalDiscussionKnowledgePromotionAdapter(options.db),
   )
   server.register(agentOsPlugin, { ...canonicalOptions, prefix: '/api/v1/os' })
   server.register(agentHomePlugin, {
