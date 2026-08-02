@@ -69,3 +69,30 @@ reproducible Vitest JSON, Git blob digests, and digest/commit-bound GitNexus and
 The code-only Graphify refresh observed 7,173 nodes / 17,134 edges / 279 communities, but that
 observation does not close `QA-018`. Exact branch-history Gitleaks (`--log-opts HEAD`) scanned 382
 commits / 9.33 MB with no findings, and the allowlist checksum remained unchanged.
+
+## P1 fail-closed evidence remediation
+
+- The SHA-256 pin now covers the complete matrix bytes, so changing any item, case, status, lane,
+  or command binding fails even when the replacement command is known and passing.
+- State-machine discovery now recognizes enums, lowercase transition maps, arrow transitions,
+  workflow classes, and `setStatus`/`setState` methods. This regex discovery is advisory and does
+  **not** establish exhaustive `QA-001` completeness; nevertheless, every discovered candidate is
+  digest-bound and an unclassified candidate fails the gate.
+- `QA-018` requires separately keyed Lane A, B, C, D, and integrator GitNexus and Graphify files.
+  Their semantic schemas bind lane and commit, require useful impact/change or update fields, and
+  require zero unresolved P0/P1/P2 findings. The integrator pair must match exact HEAD; lane pairs
+  must identify commits that are ancestors of it.
+- Evidence/log/tool paths must resolve inside the retained evidence directory, including through
+  symlinks. Malformed JSON and schema violations produce structured failures, and command
+  reproduction uses only the repository-local Vitest executable from the digest-pinned argv.
+
+All 37 cases remain open as prerequisites or lane dependencies. In particular, this remediation
+does not close `QA-001`, `QA-016`, or `QA-018`; the final integrator must produce and retain the
+exact-head evidence set after all lane commits are integrated.
+
+Verification used Node 22.20.0/npm 10.9.3: the current-base gate passed, the focused matrix suite
+passed 11/11 tests, and the affected QA surface passed 34 suites / 164 tests. Root/web TypeScript
+checks and production builds passed. GitNexus classified the nine-file staged change as LOW risk
+with zero affected processes. Graphify refreshed the code graph to 7,214 nodes / 17,186 edges /
+273 communities; this code-only refresh is not a semantic `QA-018` report. `npm audit
+--audit-level=high` passed while still reporting two existing moderate transitive findings.

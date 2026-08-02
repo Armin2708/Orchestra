@@ -12,6 +12,7 @@ import {
   DEFAULT_ROOT,
   PINNED_EVIDENCE_SCHEMA_SHA256,
   PINNED_REQUIREMENTS_SHA256,
+  PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
 } from './check-beta-quality-matrix.mjs'
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex')
@@ -42,7 +43,10 @@ if (isMain) {
   const passedCommandIds = new Set()
 
   for (const [id, argv] of Object.entries(requirements.commands)) {
-    const execution = spawnSync(argv[0], argv.slice(1), {
+    if (argv[0] !== 'node_modules/.bin/vitest') throw new Error(`command ${id} does not use the pinned local Vitest executable`)
+    const executable = path.resolve(DEFAULT_ROOT, argv[0])
+    if (!fs.existsSync(executable)) throw new Error(`missing pinned local Vitest executable for ${id}`)
+    const execution = spawnSync(executable, argv.slice(1), {
       cwd: DEFAULT_ROOT,
       encoding: 'utf8',
       env: process.env,
@@ -73,31 +77,38 @@ if (isMain) {
       maxBuffer: 32 * 1024 * 1024,
     })),
   }))
-  const caseResults = matrix.requirements.filter((entry) =>
-    entry.command_ids.every((id) => passedCommandIds.has(id)),
-  ).map((entry) => ({ item: entry.item, case: entry.case, command_ids: entry.command_ids, status: 'passed' }))
-
   const toolReports = {}
-  for (const tool of ['gitnexus', 'graphify']) {
-    const supplied = argument(`--${tool}-report`)
-    if (!supplied) continue
-    const absolute = path.resolve(supplied)
-    const parsed = readJson(absolute)
-    if (parsed.tested_commit !== testedCommit) throw new Error(`${tool} report is not bound to exact HEAD`)
-    const destination = path.join(output, `${tool}-report.json`)
-    fs.copyFileSync(absolute, destination)
-    toolReports[tool] = {
-      tested_commit: testedCommit,
-      path: relativeInside(output, destination),
-      sha256: sha256(fs.readFileSync(destination)),
+  for (const lane of ['lane_a', 'lane_b', 'lane_c', 'lane_d', 'integrator']) {
+    const laneReports = {}
+    for (const tool of ['gitnexus', 'graphify']) {
+      const supplied = argument(`--${lane.replace('_', '-')}-${tool}-report`)
+      if (!supplied) continue
+      const absolute = path.resolve(supplied)
+      const parsed = readJson(absolute)
+      if (parsed.tool !== tool || parsed.lane !== lane) throw new Error(`${lane} ${tool} report identity mismatch`)
+      if (lane === 'integrator' && parsed.tested_commit !== testedCommit) throw new Error(`${lane} ${tool} report is not bound to exact HEAD`)
+      const destination = path.join(output, `${lane}-${tool}-report.json`)
+      fs.copyFileSync(absolute, destination)
+      laneReports[tool] = {
+        tested_commit: parsed.tested_commit,
+        path: relativeInside(output, destination),
+        sha256: sha256(fs.readFileSync(destination)),
+      }
     }
+    if (Object.keys(laneReports).length > 0) toolReports[lane] = laneReports
   }
+  const completeToolReports = ['lane_a', 'lane_b', 'lane_c', 'lane_d', 'integrator'].every((lane) =>
+    toolReports[lane]?.gitnexus && toolReports[lane]?.graphify)
+  const caseResults = matrix.requirements.filter((entry) => entry.command_ids.every((id) =>
+    id === 'qa018-tool-reports' ? completeToolReports : passedCommandIds.has(id)),
+  ).map((entry) => ({ item: entry.item, case: entry.case, command_ids: entry.command_ids, status: 'passed' }))
 
   const report = {
     schema_version: 1,
     tested_commit: testedCommit,
     requirements_sha256: PINNED_REQUIREMENTS_SHA256,
     schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256,
+    tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
     artifacts,
     commands,
     case_results: caseResults,
