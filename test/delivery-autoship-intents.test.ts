@@ -252,6 +252,25 @@ describe('durable autoship recovery', () => {
     restartedDb.prepare("UPDATE cards SET column_name='blocked' WHERE id=?").run(setup.cardId)
     restartedDb.prepare(`INSERT INTO card_events (card_id, type, payload)
       VALUES (?, 'autoship_failed', '{}')`).run(setup.cardId)
+    restartedDb.exec(`CREATE TRIGGER fail_autoship_card_restore
+      BEFORE UPDATE OF column_name ON cards
+      WHEN OLD.column_name='blocked' AND NEW.column_name='done'
+      BEGIN SELECT RAISE(ABORT, 'forced autoship card repair failure'); END;`)
+    expect(restarted.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/forced autoship card repair failure/),
+      }),
+    ])
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId))
+      .toEqual({ column_name: 'blocked' })
+    restartedDb.exec('DROP TRIGGER fail_autoship_card_restore')
     const [reconciled] = restarted.reconcilePendingAutoshipIntents({ actor })
     expect(reconciled?.status).toBe('completed')
     if (!reconciled || reconciled.status !== 'completed') throw new Error('intent did not reconcile')
