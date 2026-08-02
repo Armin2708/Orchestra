@@ -868,13 +868,11 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
-    const resetUrl = `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`
-    await client.send('Page.navigate', { url: resetUrl })
-    await waitFor(
-      client,
-      `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`,
-      `${name} ${mode} isolated reset`,
-    )
+    await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
+  }
+  const reloadViewportPage = async (label) => {
+    await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}&group=${encodeURIComponent(label)}` })
+    await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`, label)
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
     const deadline = performance.now() + readinessTimeoutMs
@@ -1077,6 +1075,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   )
   const searchMatchesRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
 
+  await reloadViewportPage('command center section isolation')
   for (const section of ['work', 'discussions', 'knowledge', 'outcomes', 'activity']) {
     const resetSection = section === 'work' ? 'activity' : 'work'
     await recordJourney(
@@ -1089,6 +1088,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       },
     )
   }
+  await reloadViewportPage('primary view isolation')
   for (const view of ['Organization', 'Roadmap', 'Settings', 'Command center']) {
     await recordJourney(
       `${view} primary view`,
