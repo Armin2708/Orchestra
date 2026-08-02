@@ -343,6 +343,18 @@ const canonicalPrimaryKey = (row, columns) => JSON.stringify(
   columns.map((column) => canonicalSqlValue(row[column])),
 )
 
+const foreignKeySignature = (foreignKey) => JSON.stringify({
+  referenced_table: foreignKey.referenced_table,
+  from_columns: foreignKey.from_columns,
+  to_columns: foreignKey.to_columns,
+})
+
+const multiset = (values) => {
+  const counts = new Map()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  return counts
+}
+
 export const captureDatabasePreservation = (databasePath) => {
   invariant(existsSync(databasePath), 'Orchestra database is missing')
   const database = new Database(databasePath, { readonly: true, fileMustExist: true })
@@ -355,10 +367,17 @@ export const captureDatabasePreservation = (databasePath) => {
     `).all().map((row) => row.name)
     const tables = tableNames.map((name) => {
       const columns = database.prepare(`
-        SELECT name, pk
+        SELECT cid, name, type, "notnull" AS not_null, dflt_value, pk
         FROM pragma_table_info(?)
         ORDER BY cid
       `).all(name)
+      const columnDescriptors = columns.map((column) => ({
+        name: column.name,
+        type: column.type,
+        not_null: Number(column.not_null),
+        default_value: column.dflt_value,
+        primary_key_position: Number(column.pk),
+      }))
       const primaryKeyColumns = columns
         .filter((column) => Number(column.pk) > 0)
         .sort((left, right) => Number(left.pk) - Number(right.pk))
@@ -373,11 +392,46 @@ export const captureDatabasePreservation = (databasePath) => {
           `SELECT ${selected} FROM ${table} ORDER BY ${ordered}`,
         ).all().map((row) => canonicalPrimaryKey(row, primaryKeyColumns))
       }
+      const foreignKeyRows = database.prepare(`
+        SELECT id, seq, "table" AS referenced_table, "from" AS from_column,
+          "to" AS to_column
+        FROM pragma_foreign_key_list(?)
+        ORDER BY id, seq
+      `).all(name)
+      const groupedForeignKeys = new Map()
+      for (const row of foreignKeyRows) {
+        const foreignKey = groupedForeignKeys.get(row.id) ?? {
+          referenced_table: row.referenced_table,
+          from_columns: [],
+          to_columns: [],
+        }
+        foreignKey.from_columns.push(row.from_column)
+        foreignKey.to_columns.push(row.to_column)
+        groupedForeignKeys.set(row.id, foreignKey)
+      }
+      const foreignKeys = [...groupedForeignKeys.values()].map((foreignKey) => {
+        const relationships = database.prepare(`SELECT * FROM ${table}`).all().map((row) =>
+          JSON.stringify({
+            child_primary_key: primaryKeyColumns.map((column) => canonicalSqlValue(row[column])),
+            referenced_values: foreignKey.from_columns.map(
+              (column) => canonicalSqlValue(row[column]),
+            ),
+          })).sort()
+        return { ...foreignKey, relationships }
+      }).sort((left, right) => foreignKeySignature(left).localeCompare(foreignKeySignature(right)))
+      const noPrimaryKeyRowHashes = primaryKeyColumns.length === 0
+        ? database.prepare(`SELECT * FROM ${table}`).all().map((row) => sha256(JSON.stringify(
+            columnDescriptors.map((column) => canonicalSqlValue(row[column.name])),
+          ))).sort()
+        : []
       return {
         name,
+        columns: columnDescriptors,
         row_count: rowCount,
         primary_key_columns: primaryKeyColumns,
         primary_keys: primaryKeys,
+        foreign_keys: foreignKeys,
+        no_primary_key_row_hashes: noPrimaryKeyRowHashes,
       }
     })
     return { tables }
@@ -391,6 +445,17 @@ const preservationSummary = (snapshot) => ({
   row_count: snapshot.tables.reduce((total, table) => total + table.row_count, 0),
   primary_key_count: snapshot.tables.reduce(
     (total, table) => total + table.primary_keys.length,
+    0,
+  ),
+  foreign_key_relationship_count: snapshot.tables.reduce(
+    (total, table) => total + table.foreign_keys.reduce(
+      (tableTotal, foreignKey) => tableTotal + foreignKey.relationships.length,
+      0,
+    ),
+    0,
+  ),
+  no_primary_key_row_hash_count: snapshot.tables.reduce(
+    (total, table) => total + table.no_primary_key_row_hashes.length,
     0,
   ),
   snapshot_sha256: sha256(JSON.stringify(snapshot)),
@@ -407,6 +472,13 @@ export const verifyDatabasePreservation = (databasePath, baseline, label) => {
         JSON.stringify(expectedTable.primary_key_columns),
       `${label} changed the primary key of Orchestra table ${expectedTable.name}`,
     )
+    const observedColumns = new Map(observedTable.columns.map((column) => [column.name, column]))
+    for (const expectedColumn of expectedTable.columns) {
+      invariant(
+        JSON.stringify(observedColumns.get(expectedColumn.name)) === JSON.stringify(expectedColumn),
+        `${label} removed or changed Orchestra column ${expectedTable.name}.${expectedColumn.name}`,
+      )
+    }
     invariant(
       observedTable.row_count >= expectedTable.row_count,
       `${label} removed rows from Orchestra table ${expectedTable.name}`,
@@ -418,12 +490,40 @@ export const verifyDatabasePreservation = (databasePath, baseline, label) => {
         `${label} removed or replaced a primary-key identity in Orchestra table ${expectedTable.name}`,
       )
     }
+    const observedForeignKeys = new Map(
+      observedTable.foreign_keys.map((foreignKey) => [foreignKeySignature(foreignKey), foreignKey]),
+    )
+    for (const expectedForeignKey of expectedTable.foreign_keys) {
+      const signature = foreignKeySignature(expectedForeignKey)
+      const observedForeignKey = observedForeignKeys.get(signature)
+      invariant(
+        observedForeignKey,
+        `${label} removed a foreign-key relationship from Orchestra table ${expectedTable.name}`,
+      )
+      const observedRelationships = multiset(observedForeignKey.relationships)
+      for (const [relationship, expectedCount] of multiset(expectedForeignKey.relationships)) {
+        invariant(
+          (observedRelationships.get(relationship) ?? 0) >= expectedCount,
+          `${label} changed a foreign-key relationship in Orchestra table ${expectedTable.name}`,
+        )
+      }
+    }
+    const observedUnkeyedRows = multiset(observedTable.no_primary_key_row_hashes)
+    for (const [rowHash, expectedCount] of multiset(expectedTable.no_primary_key_row_hashes)) {
+      invariant(
+        (observedUnkeyedRows.get(rowHash) ?? 0) >= expectedCount,
+        `${label} changed a row without a primary key in Orchestra table ${expectedTable.name}`,
+      )
+    }
   }
   return {
     ...preservationSummary(observed),
     baseline_snapshot_sha256: preservationSummary(baseline).snapshot_sha256,
     all_prior_tables_present: true,
     all_protected_prior_primary_keys_present: true,
+    all_prior_foreign_key_relationships_present: true,
+    all_prior_columns_present: true,
+    all_prior_unkeyed_rows_present: true,
     rotating_primary_key_tables: [...rotatingPrimaryKeyTables],
     row_counts_non_decreasing: true,
     passed: true,

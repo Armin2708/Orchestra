@@ -310,6 +310,12 @@ describe('QA-019 exact-commit CI contract', () => {
       package_version: '0.1.0',
       filename: 'orchestra-board-0.1.0.tgz',
       sha256: 'c'.repeat(64),
+      source_identity: {
+        expected_commit: commitSha,
+        observed_commit: commitSha,
+        tracked_source_clean: true,
+        packaged_nonbuild_inputs_tracked: true,
+      },
       install_smoke: {
         scripts_disabled: true,
         cli_version: '0.1.0',
@@ -317,7 +323,19 @@ describe('QA-019 exact-commit CI contract', () => {
       },
       lifecycle: {
         local_rehearsal_passed: true,
-        release_gate: { status: 'passed' },
+        release_gate: {
+          status: 'passed',
+          prior_evidence_verified: true,
+          upgrade_passed: true,
+          rollback_passed: true,
+        },
+        data_preservation: {
+          database_continuity: {
+            after_upgrade: { passed: true },
+            after_rollback: { passed: true },
+            after_uninstall: { passed: true },
+          },
+        },
         passed: true,
       },
     }
@@ -354,6 +372,28 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(manifest.contract.contract_sha256).not.toBe(
       manifestContractBinding({ ...contract, codex_cli_version: 'changed' }).contract_sha256,
     )
+
+    const missingSourceIdentity = structuredClone(packageArtifact)
+    delete missingSourceIdentity.source_identity
+    expect(createEvidenceManifest({
+      contract,
+      expectedSha: commitSha,
+      records,
+      packageArtifact: missingSourceIdentity,
+      generatedAt: '2026-07-25T00:00:02.000Z',
+      workflowRun: { run_id: '1', run_attempt: '1' },
+    })).toMatchObject({ result: 'failed', summary: { package_consistent: false } })
+
+    const missingContinuity = structuredClone(packageArtifact)
+    delete missingContinuity.lifecycle.data_preservation.database_continuity
+    expect(createEvidenceManifest({
+      contract,
+      expectedSha: commitSha,
+      records,
+      packageArtifact: missingContinuity,
+      generatedAt: '2026-07-25T00:00:02.000Z',
+      workflowRun: { run_id: '1', run_attempt: '1' },
+    })).toMatchObject({ result: 'failed', summary: { package_consistent: false } })
 
     const noPriorArtifact = structuredClone(packageArtifact)
     noPriorArtifact.lifecycle.release_gate.status = 'incomplete'

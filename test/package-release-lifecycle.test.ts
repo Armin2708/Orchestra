@@ -300,8 +300,12 @@ describe('QA-017 package lifecycle harness', () => {
     database.exec(`
       CREATE TABLE boards(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE retained_notes(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE parents(id INTEGER PRIMARY KEY);
+      CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
       INSERT INTO boards(id, name) VALUES(1, 'project');
       INSERT INTO retained_notes(id, body) VALUES('note-1', 'preserve');
+      INSERT INTO parents(id) VALUES(1), (2);
+      INSERT INTO children(id, parent_id) VALUES(1, 1);
     `)
     database.close()
     const baseline = captureDatabasePreservation(databasePath)
@@ -323,6 +327,56 @@ describe('QA-017 package lifecycle harness', () => {
     restored.close()
     expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
       .toThrow('dropped Orchestra table retained_notes')
+  })
+
+  it('rejects a foreign-key reassignment even when all primary keys and counts survive', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-fk-'))
+    temporaryDirectories.push(directory)
+    const databasePath = path.join(directory, 'orchestra.db')
+    const database = new Database(databasePath)
+    database.exec(`
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE parents(id INTEGER PRIMARY KEY);
+      CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
+      INSERT INTO parents(id) VALUES(1), (2);
+      INSERT INTO children(id, parent_id) VALUES(1, 1);
+    `)
+    const baseline = captureDatabasePreservation(databasePath)
+    database.exec('UPDATE children SET parent_id=2 WHERE id=1')
+    database.close()
+
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('changed a foreign-key relationship in Orchestra table children')
+  })
+
+  it('rejects removed columns and changed rows without primary keys', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-shape-'))
+    temporaryDirectories.push(directory)
+    const databasePath = path.join(directory, 'orchestra.db')
+    const database = new Database(databasePath)
+    database.exec(`
+      CREATE TABLE records(id INTEGER PRIMARY KEY, retained_relation TEXT NOT NULL);
+      CREATE TABLE unkeyed_records(value TEXT NOT NULL);
+      INSERT INTO records(id, retained_relation) VALUES(1, 'keep');
+      INSERT INTO unkeyed_records(value) VALUES('keep');
+    `)
+    const baseline = captureDatabasePreservation(databasePath)
+    database.exec('ALTER TABLE records DROP COLUMN retained_relation')
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('removed or changed Orchestra column records.retained_relation')
+    database.close()
+
+    const secondDatabasePath = path.join(directory, 'unkeyed.db')
+    const second = new Database(secondDatabasePath)
+    second.exec(`
+      CREATE TABLE unkeyed_records(value TEXT NOT NULL);
+      INSERT INTO unkeyed_records(value) VALUES('keep');
+    `)
+    const secondBaseline = captureDatabasePreservation(secondDatabasePath)
+    second.exec("UPDATE unkeyed_records SET value='changed'")
+    second.close()
+    expect(() => verifyDatabasePreservation(secondDatabasePath, secondBaseline, 'candidate upgrade'))
+      .toThrow('changed a row without a primary key in Orchestra table unkeyed_records')
   })
 
   it('checks reference, HTML, and root-relative links while ignoring examples', () => {

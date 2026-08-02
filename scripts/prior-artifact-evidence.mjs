@@ -163,6 +163,7 @@ export function verifyPriorArtifactEvidence({
   invariant(artifactPath, 'prior artifact path is required')
   const artifactFile = regularFileBytes(artifactPath, 'prior package artifact')
   invariant(artifactFile.resolved.endsWith('.tgz'), 'prior package artifact must be a .tgz')
+  assertTarRegularEntries(artifactFile.resolved)
   const artifact = {
     filename: basename(artifactFile.resolved),
     bytes: artifactFile.stat.size,
