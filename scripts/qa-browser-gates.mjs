@@ -738,6 +738,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     }
     return false
   }
+  const assertModeReady = async (expression, label) => {
+    if (!await modeReady(expression)) throw new Error(`${label} readiness did not pass`)
+  }
   const recordJourney = async (name, action, ready, prepare = async () => {}) => {
     const interactionModes = {}
     let elapsed = 0
@@ -784,12 +787,12 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     'durable transcript',
     async (mode) => {
       await activateMode(client, mode, '#board-tab-agents', 'Agents', viewport.mobile)
-      await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home')
+      await assertModeReady(`Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home')
       for (let page = 0; page < 20; page += 1) {
         const state = await evaluate(client, `({ count: document.querySelectorAll('.ah-event').length, more: Boolean(document.querySelector('.ah-load-more:not(:disabled)')) })`)
         if (!state.more) break
         await activateMode(client, mode, '.ah-load-more:not(:disabled)', 'Load more matching events', viewport.mobile)
-        await waitFor(client, `document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'additional transcript page')
+        await assertModeReady(`document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'additional transcript page')
       }
     },
     `document.querySelectorAll('.ah-event').length >= 250`,
@@ -821,7 +824,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         })()`)
         if (!submitted) throw new Error('conversation search form could not be submitted')
       }
-      await waitFor(client, `(() => {
+      await assertModeReady(`(() => {
         const events = [...document.querySelectorAll('.ah-event')];
         return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'));
       })()`, 'five rendered search results')
@@ -835,12 +838,12 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       await domActivate(client, '#board-tab-messages')
       await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'`, 'search reset away from Agent Home')
       await domActivate(client, '#board-tab-agents')
-      await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'search reset Agent Home')
+      await assertModeReady(`Boolean(document.querySelector('.agent-home .ah-search input'))`, 'search reset Agent Home')
       for (let page = 0; page < 20; page += 1) {
         const state = await evaluate(client, `({ count: document.querySelectorAll('.ah-event').length, more: Boolean(document.querySelector('.ah-load-more:not(:disabled)')) })`)
         if (!state.more) break
         await domActivate(client, '.ah-load-more:not(:disabled)')
-        await waitFor(client, `document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'search reset transcript page')
+        await assertModeReady(`document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'search reset transcript page')
       }
     },
   )
