@@ -8,6 +8,7 @@ export const COMMAND_CENTER_SECTIONS = [
   { id: 'agents', label: 'Agents', description: 'Durable identities, provider sessions, and terminals' },
   { id: 'discussions', label: 'Discussions', description: 'Questions, plans, decisions, and conflicts' },
   { id: 'knowledge', label: 'Knowledge', description: 'Cited project context and accepted findings' },
+  { id: 'outcomes', label: 'Outcomes', description: 'Quality-aware token and delivery evidence' },
   { id: 'activity', label: 'Activity', description: 'Causal project events and shipped outcomes' },
 ] as const
 

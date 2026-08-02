@@ -15,6 +15,7 @@ import {
   type OperationExecutionInput,
   type UsageObservationInput,
 } from './outcome-analytics.js'
+import { nativeOutcomeExecutionKey } from './outcome-analytics-runtime.js'
 
 export interface OutcomeAnalyticsRouteOptions extends FastifyPluginOptions {
   db: Database.Database
@@ -136,8 +137,13 @@ export const outcomeAnalyticsPlugin: FastifyPluginAsync<OutcomeAnalyticsRouteOpt
     '/boards/:boardId/outcomes/operations',
     (request, reply) => {
       const body = operatorBody(request, request.body)
+      const jobId = optionalText(body.jobId, 'jobId')
       const result = service.planOperation({
         ...body,
+        jobId,
+        executionKey: jobId === undefined
+          ? requiredText(body.executionKey, 'executionKey')
+          : nativeOutcomeExecutionKey(jobId),
         requestedBy: request.orchestraPrincipal ?? 'operator',
         boardId: positiveId(request.params.boardId, 'board id'),
       } as unknown as OperationPlanInput)

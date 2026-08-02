@@ -22,6 +22,7 @@ import {
 } from './commandCenterModel'
 import { RoadmapView } from './RoadmapView'
 import { NeedsYou } from './NeedsYou'
+import { OutcomeDashboard } from './OutcomeDashboard'
 import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
@@ -361,8 +362,13 @@ export function App() {
                       locationSearch={locationSearch} readOnly={connectionState !== 'live'} />
                   : commandSection === 'discussions'
                     ? <CanonicalDiscussionDetail discussion={null} posts={[]} backendAvailable={false} />
-                    : commandSection === 'knowledge'
+                  : commandSection === 'knowledge'
                       ? <KnowledgeBrowse records={[]} available={false} />
+                    : commandSection === 'outcomes'
+                      ? focus === 'all'
+                        ? <CommandCenterState kind="empty" title="Choose one project"
+                            detail="Outcome evidence is scoped to one canonical project. Select a project to inspect quality-aware efficiency." />
+                        : <OutcomeDashboard boardId={focus} />
                        : <CanonicalActivity snaps={shown} />}
             </CommandCenter>
         : view === 'organization'

@@ -38,7 +38,7 @@ describe('unified command center component contract', () => {
       onNavigate: () => undefined,
       children: createElement('p', {}, 'Canonical work'),
     }))
-    for (const label of ['Work', 'Agents', 'Discussions', 'Knowledge', 'Activity']) {
+    for (const label of ['Work', 'Agents', 'Discussions', 'Knowledge', 'Outcomes', 'Activity']) {
       expect(markup).toContain(`>${label}<`)
     }
     expect(markup).toContain('Project command center')
@@ -189,6 +189,9 @@ describe('unified command center component contract', () => {
     expect(appSource).toContain('<CanonicalAgentHome')
     expect(appSource).toContain('<CanonicalDiscussionDetail discussion={null} posts={[]} backendAvailable={false}')
     expect(appSource).toContain('<KnowledgeBrowse records={[]} available={false}')
+    expect(appSource).toContain("commandSection === 'outcomes'")
+    expect(appSource).toContain('<OutcomeDashboard boardId={focus} />')
+    expect(appSource).toContain('Outcome evidence is scoped to one canonical project.')
     expect(appSource).toContain("window.addEventListener('popstate', restoreDeepLink)")
     expect(appSource).not.toContain('>Board</button>')
   })

@@ -64,7 +64,7 @@ import {
 import { projectDriverTranscript } from '../runtime/transcript.js'
 import { createClaudeProviderAdapterV1 } from '../runtime/drivers/claude-provider-adapter.js'
 import type { ProviderContractRuntimePolicyInput } from '../runtime/drivers/provider-contract-driver.js'
-import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from '../usage.js'
+import { fromCodexUsage, type ProviderUsageSplit } from '../usage.js'
 import { readProviderModelCache } from '../agent-providers.js'
 import { hasOpenReviewRequest } from '../review.js'
 import {
@@ -81,6 +81,7 @@ import {
   executeBoundedProviderControl,
   type ProviderRuntimePolicyDecision,
 } from './provider-runtime-policy.js'
+import { OutcomeAnalyticsRuntimeBridge } from './outcome-analytics-runtime.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -870,6 +871,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
   private readonly deliveries: DeliveryLifecycleIntegration
+  private readonly outcomes: OutcomeAnalyticsRuntimeBridge
   private scheduler?: JobScheduler
   private shuttingDown = false
 
@@ -880,6 +882,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     private readonly bus: BusRef = {},
   ) {
     this.deliveries = new DeliveryLifecycleIntegration(db)
+    this.outcomes = new OutcomeAnalyticsRuntimeBridge(db, (event) => {
+      this.bus.current?.emit('event', event)
+    })
   }
 
   bindScheduler(scheduler: JobScheduler): void {
@@ -2187,6 +2192,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       if (launchBudgetMs === 0) {
         throw new Error('job time budget exhausted before provider launch started')
       }
+      if (job.provider !== 'shell') {
+        this.outcomes.consumeBeforeProviderLaunch(effectiveJob)
+      }
       launchPromise = driver.launch(request)
       if (launchBudgetMs === null) {
         session = await launchPromise
@@ -2793,11 +2801,14 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     try {
       for await (const event of driver.events(session.id)) {
         this.recordDriverEvent(job, sessionId, event)
+        if (job.provider !== 'shell') {
+          this.outcomes.recordExactEventActivities(job, sessionId, event)
+        }
         const pausedTurnCompleted = event.metadata?.turnCompleted === true
           && this.pausedJobs.has(job.id)
         if (event.type === 'error' && !pausedTurnCompleted) failure = event.data
         const breakdown = this.codexUsageBreakdown(event)
-        if (breakdown) this.recordManagedProviderUsage(sessionId, breakdown)
+        if (breakdown) this.recordManagedProviderUsage(job, sessionId, event, breakdown)
         const reportedTokens = breakdown?.total_tokens ?? this.reportedTokens(event)
         const reportedCents = this.reportedCents(event)
         if (this.scheduler) {
@@ -3062,30 +3073,13 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     return total && typeof total === 'object' ? fromCodexUsage(total) : null
   }
 
-  private recordManagedProviderUsage(sessionId: string, total: ProviderUsageSplit): void {
-    const row = this.db.prepare(`SELECT s.agent_id, s.provider, s.context_json, a.board_id
-      FROM agent_sessions s LEFT JOIN agents a ON a.id=s.agent_id WHERE s.id=?`).get(sessionId) as
-      { agent_id: number | null; provider: string; context_json: string; board_id: number | null } | undefined
-    if (!row?.agent_id || row.provider !== 'codex') return
-    let context: Record<string, unknown> = {}
-    try { context = JSON.parse(row.context_json) as Record<string, unknown> } catch { /* legacy */ }
-    const prior = context.usage_total && typeof context.usage_total === 'object'
-      ? fromCodexUsage(context.usage_total)
-      : fromCodexUsage({})
-    const delta: ProviderUsageSplit = {
-      provider: 'codex',
-      total_tokens: Math.max(0, total.total_tokens - prior.total_tokens),
-      input_tokens: Math.max(0, total.input_tokens - prior.input_tokens),
-      cached_input_tokens: Math.max(0, total.cached_input_tokens - prior.cached_input_tokens),
-      cache_creation_input_tokens: 0,
-      output_tokens: Math.max(0, total.output_tokens - prior.output_tokens),
-      reasoning_output_tokens: Math.max(0, total.reasoning_output_tokens - prior.reasoning_output_tokens),
-      cost_cents: null,
-    }
-    if (delta.total_tokens > 0 && row.board_id) recordProviderUsage(this.db, row.board_id, row.agent_id, delta)
-    context.usage_total = total
-    this.db.prepare('UPDATE agent_sessions SET context_json=?, updated_at=datetime(\'now\') WHERE id=?')
-      .run(JSON.stringify(context), sessionId)
+  private recordManagedProviderUsage(
+    job: Job,
+    sessionId: string,
+    event: DriverEvent,
+    total: ProviderUsageSplit,
+  ): void {
+    this.outcomes.recordNormalizedProviderUsage(job, sessionId, event, total)
   }
 
   private reportedTokens(event: DriverEvent): number | null {

@@ -16,6 +16,7 @@ import {
   installKnowledgeRetrievalSchema,
 } from './knowledge-retrieval.js'
 import { conversationEventContentHash } from './conversation-event-integrity.js'
+import { applyOutcomeAnalyticsMigration } from './outcome-analytics-migration.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import {
   isNativeProviderProjection,
@@ -7557,6 +7558,7 @@ export function applyAgentOsMigrations(db: Database.Database): void {
       migration.apply(db)
       record.run(migration.id)
     }
+    applyOutcomeAnalyticsMigration(db)
   })
   migrate()
   refreshCompatibilityMigrationTelemetryCollectorEpoch(db, {

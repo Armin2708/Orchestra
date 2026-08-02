@@ -4,6 +4,7 @@ import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { outcomeAnalyticsPlugin } from '../src/agent-os/outcome-analytics-routes.js'
+import { nativeOutcomeExecutionKey } from '../src/agent-os/outcome-analytics-runtime.js'
 
 const operator = { authorization: 'Bearer operator' }
 const servers: FastifyInstance[] = []
@@ -137,7 +138,9 @@ describe('outcome analytics focused registrar', () => {
     const blocked = await server.inject({
       method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
       headers: operator,
-      payload: { executionKey: 'api-native-execution', providerTokens: 5000, fanout: 10 },
+      payload: {
+        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000, fanout: 10,
+      },
     })
     expect(blocked.statusCode).toBe(409)
     const confirmed = await server.inject({
@@ -146,10 +149,18 @@ describe('outcome analytics focused registrar', () => {
     })
     expect(confirmed.statusCode, confirmed.body).toBe(200)
     expect(confirmed.json().result.status).toBe('confirmed')
-    const authorized = await server.inject({
+    const callerSuppliedKey = await server.inject({
       method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
       headers: operator,
       payload: { executionKey: 'api-native-execution', providerTokens: 5000, fanout: 10 },
+    })
+    expect(callerSuppliedKey.statusCode).toBe(409)
+    const authorized = await server.inject({
+      method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
+      headers: operator,
+      payload: {
+        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000, fanout: 10,
+      },
     })
     expect(authorized.statusCode, authorized.body).toBe(200)
   })
