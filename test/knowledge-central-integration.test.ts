@@ -53,8 +53,8 @@ describe('Lane 3 Knowledge Compiler central integration', () => {
         'deterministic retrieval synchronization and query',
       ]))
       expect(boundaries.knowledge.excludes).toEqual(expect.arrayContaining([
-        'managed prompt injection',
-        'automatic freshness or promotion',
+        'unreviewed arbitrary-text promotion',
+        'provider-reported token estimates as actual usage',
       ]))
       expect(boundaries.knowledge.excludes).not.toContain('retrieval and ranking')
       expect(boundaries.knowledge.service.ingestStructural).toBeTypeOf('function')

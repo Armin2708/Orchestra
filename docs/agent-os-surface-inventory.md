@@ -1,10 +1,11 @@
 # Agent OS surface inventory
 
-Status: current runtime inventory plus KNO-003 through KNO-010's verified ingestion and deterministic retrieval boundary,
+Status: current runtime inventory plus Beta Lane A's Delivery Trackbook, managed Knowledge Compiler,
+Discussions, Teams, planning, and durable conflict resolution surfaces,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work surface, observed at exact code head
-`11c1691654094e74dbe9fc53f073aa602e5ae7bb`.
+`1c9ace4`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -15,8 +16,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 89 | 3 | 10 | 12 | 114 |
-| Registered HTTP routes | 109 | 29 | 25 | 9 | 172 |
+| SQLite application tables | 133 | 3 | 10 | 12 | 158 |
+| Registered HTTP routes | 152 | 29 | 25 | 9 | 215 |
 | CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -45,12 +46,12 @@ which partial foundation exists.
 | `orchestration` | `canonical` | `src/agent-os/orchestration-service.ts` |
 | `conversations` | `canonical` | `src/agent-os/conversations.ts` |
 | `deliveries` | `canonical` | `src/agent-os/delivery-reports.ts` |
-| `discussions` | `reserved` | `src/agent-os/service-boundaries.ts` |
+| `discussions` | `canonical` | `src/agent-os/discussions.ts` |
 | `knowledge` | `canonical` | `src/agent-os/knowledge-service.ts` |
 | `organization` | `canonical` | `src/agent-os/organization.ts` |
 | `coordination` | `canonical` | `src/agent-os/organization-coordination.ts` |
 | `assurance` | `canonical` | `src/agent-os/organization-assurance.ts` |
-| `conflicts` | `compatibility_only` | `src/agent-os/conflict-service.ts` |
+| `conflicts` | `canonical` | `src/agent-os/team-planning.ts` |
 | `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
 
 The exact ownership/exclusion contract is
@@ -188,12 +189,57 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`, and
 `src/agent-os/job-assignment-routes.ts`, `src/agent-os/open-work-routes.ts`, and
-`src/agent-os/organization-routes.ts`. The seven session action routes are expanded from
+`src/agent-os/organization-routes.ts`, `src/agent-os/delivery-trackbook-routes.ts`,
+`src/agent-os/knowledge-management-routes.ts`, `src/agent-os/discussion-routes.ts`, and
+`src/agent-os/team-planning-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
 
 ```text
+DELETE /api/v1/os/discussions/:discussionId/subscriptions/:profileId
+GET /api/v1/os/boards/:boardId/discussion-promotions
+GET /api/v1/os/boards/:boardId/discussion-queues/:queue
+GET /api/v1/os/boards/:boardId/discussions
+GET /api/v1/os/boards/:boardId/knowledge
+GET /api/v1/os/boards/:boardId/knowledge/benchmarks
+GET /api/v1/os/boards/:boardId/knowledge/promotions
+GET /api/v1/os/boards/:boardId/knowledge/reviews
+GET /api/v1/os/boards/:boardId/team-conflicts
+GET /api/v1/os/boards/:boardId/team-plans
+GET /api/v1/os/boards/:boardId/team-visualization
+GET /api/v1/os/boards/:id/delivery-trackbook
+GET /api/v1/os/context-builds/:buildId/knowledge-manifest
+GET /api/v1/os/discussions/:discussionId
+GET /api/v1/os/jobs/:id/detail
+GET /api/v1/os/team-plans/:planId
+PATCH /api/v1/os/discussions/:discussionId/posts/:postId
+POST /api/v1/os/boards/:boardId/discussion-permissions
+POST /api/v1/os/boards/:boardId/discussions
+POST /api/v1/os/boards/:boardId/knowledge/benchmarks
+POST /api/v1/os/boards/:boardId/knowledge/promotions
+POST /api/v1/os/boards/:boardId/knowledge/promotions/:promotionId/review
+POST /api/v1/os/boards/:boardId/knowledge/refresh
+POST /api/v1/os/boards/:boardId/knowledge/sources/:sourceId/actions
+POST /api/v1/os/boards/:boardId/team-plans
+POST /api/v1/os/deliveries/:id/artifacts/:artifactId/attest
+POST /api/v1/os/deliveries/:id/reject-with-feedback
+POST /api/v1/os/deliveries/:id/reopen-regression
+POST /api/v1/os/deliveries/:id/review-comments
+POST /api/v1/os/deliveries/:id/revise-rejected
+POST /api/v1/os/deliveries/:id/ship
+POST /api/v1/os/deliveries/:id/verification-runs
+POST /api/v1/os/discussion-permissions/:permissionId/revoke
+POST /api/v1/os/discussion-promotions/:promotionId/review
+POST /api/v1/os/discussions/:discussionId/accept
+POST /api/v1/os/discussions/:discussionId/posts
+POST /api/v1/os/discussions/:discussionId/posts/:postId/promotion
+POST /api/v1/os/discussions/:discussionId/transition
+POST /api/v1/os/team-conflicts/:conflictId/knowledge-candidates
+POST /api/v1/os/team-conflicts/:conflictId/proposals
+POST /api/v1/os/team-conflicts/:conflictId/resolve
+POST /api/v1/os/team-plans/:planId/:command
+PUT /api/v1/os/discussions/:discussionId/subscriptions/:profileId
 DELETE /api/v1/os/workspaces/:id
 GET /api/v1/os/agent-profiles/:id
 GET /api/v1/os/agent-profiles/:id/conversations
@@ -449,6 +495,7 @@ in `web/src/BoardSection.tsx`.
 | Board → Shipped | compatibility | `web/src/ShippedView.tsx` |
 | Open Work | canonical | `web/src/OpenWorkView.tsx` |
 | Organization control center | canonical | `web/src/OrganizationCenter.tsx` |
+| Collaborate → Discussions / Knowledge / Teams | canonical | `web/src/CollaborationCenter.tsx` |
 | Roadmap | legacy | `web/src/RoadmapView.tsx` |
 | Settings | infrastructure | `web/src/SettingsView.tsx` |
 | Needs You | canonical | `web/src/NeedsYou.tsx` |
@@ -464,15 +511,10 @@ markers are listed in the JSON inventory and fail the drift test if removed or r
 ## Planned domains without complete current surfaces
 
 The canonical domain document names the target. A reserved service slot is not an implementation.
-Knowledge has durable persistence, verified repository evidence ingestion, and deterministic
-bounded retrieval, but not the remaining compilation or product surfaces:
+The collaboration domains are implemented; only the unrelated reserved boundary remains here:
 
 | Planned domain | Current nearest surface | Missing canonical boundary |
 |---|---|---|
-| Discussion / DiscussionPost | reserved boundary; `messages`, Messages UI | durable topics/posts, accepted answer, subscriptions, search, decision/knowledge promotion |
-| Team / PlanningSession | explicit `swarm` transport | bounded participants/roles/budgets/rounds/proposals/synthesis |
-| Conflict | compatibility-only computed workspace overlap + attention | durable collision, negotiation, proposals, arbiter, rationale, resolution/follow-up |
-| Knowledge compilation and operator surfaces | durable Knowledge persistence; verified structural, Git history/blame, delivery-summary, and gotcha ingestion; deterministic board-scoped FTS synchronization, rebuild, query, citation, and attestation | managed prompt injection, freshness automation, review controls, API/UI, benchmarks |
 | DeviceSession | reserved boundary; `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
 
 These rows identify incomplete product boundaries, not necessarily total absence. Existing
@@ -492,7 +534,7 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 172 signatures;
+    actions, and exact-compares all 215 signatures;
 3. extracts every Commander root/subcommand and exact-compares all 125 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;

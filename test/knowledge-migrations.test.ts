@@ -416,6 +416,26 @@ function insertContextUse(
 
 function removeMigration018(db: Database.Database): void {
   db.exec(`
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_immutable;
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_delete;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_immutable;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_delete;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_insert;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_immutable;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_delete;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_immutable;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_delete;
+    DROP TABLE IF EXISTS knowledge_promotion_sources;
+    DROP TABLE IF EXISTS knowledge_promotion_requests;
+    DROP TABLE IF EXISTS knowledge_review_requests;
+    DROP TABLE IF EXISTS knowledge_freshness_observations;
+    DROP TABLE IF EXISTS knowledge_control_actions;
+    DROP TABLE IF EXISTS knowledge_benchmark_runs;
+    DELETE FROM os_schema_migrations WHERE id='031-knowledge-management';
     DROP TABLE IF EXISTS knowledge_retrieval_fts;
     DROP TABLE IF EXISTS knowledge_retrieval_index_state;
     DROP TABLE IF EXISTS knowledge_retrieval_documents;
@@ -525,7 +545,7 @@ describe('knowledge persistence migration 018', () => {
     `).get(MIGRATION_ID)).toEqual({ id: MIGRATION_ID })
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '029-agent-organization-assurance' })
+    `).get()).toEqual({ id: '033-teams-planning-conflicts' })
     const tables = (db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
@@ -543,7 +563,7 @@ describe('knowledge persistence migration 018', () => {
     ])
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get() as { count: number }).count).toBe(29)
+    ).get() as { count: number }).count).toBe(33)
     db.close()
   })
 

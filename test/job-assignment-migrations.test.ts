@@ -195,6 +195,26 @@ function releaseAssignment(
 
 function removeMigration018Schema(db: Database.Database): void {
   db.exec(`
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_immutable;
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_delete;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_immutable;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_delete;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_insert;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_immutable;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_delete;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_immutable;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_delete;
+    DROP TABLE IF EXISTS knowledge_promotion_sources;
+    DROP TABLE IF EXISTS knowledge_promotion_requests;
+    DROP TABLE IF EXISTS knowledge_review_requests;
+    DROP TABLE IF EXISTS knowledge_freshness_observations;
+    DROP TABLE IF EXISTS knowledge_control_actions;
+    DROP TABLE IF EXISTS knowledge_benchmark_runs;
+    DELETE FROM os_schema_migrations WHERE id='031-knowledge-management';
     DROP TRIGGER IF EXISTS os_knowledge_promotion_scope_insert;
     DROP TABLE IF EXISTS os_knowledge_promotions;
     DELETE FROM os_schema_migrations WHERE id='029-agent-organization-assurance';

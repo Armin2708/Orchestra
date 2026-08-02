@@ -1034,9 +1034,9 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 64,
+    "total_get_routes": 79,
     "by_classification": {
-      "canonical": 47,
+      "canonical": 62,
       "compatibility": 3,
       "legacy": 9,
       "infrastructure": 5
@@ -1045,9 +1045,9 @@
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 108,
+    "total_non_get_routes": 136,
     "by_classification": {
-      "canonical": 62,
+      "canonical": 90,
       "compatibility": 26,
       "legacy": 16,
       "infrastructure": 4
