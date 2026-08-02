@@ -13,6 +13,7 @@ import {
   ConversationService,
   type ConversationEvent,
 } from '../src/agent-os/conversations.js'
+import { OutcomeAnalyticsService } from '../src/agent-os/outcome-analytics.js'
 import { Conductor } from '../src/conductor.js'
 import { openDb } from '../src/db.js'
 import {
@@ -160,6 +161,27 @@ function nativeEvent(scope: Scope, input: NativeEventInput): ClaudeNativeEvent {
 
 function append(scope: Scope, input: NativeEventInput): void {
   scope.sink.append(nativeEvent(scope, input))
+}
+
+function bindJob(scope: Scope): string {
+  const at = '2026-07-24T09:00:00.000Z'
+  const cardId = Number(scope.db.prepare(`INSERT INTO cards (board_id, title)
+    VALUES (?, 'Measure native Claude reads')`).run(scope.boardId).lastInsertRowid)
+  scope.db.prepare(`INSERT INTO task_contracts
+    (card_id, objective, acceptance_criteria, dependencies, base_ref, verify_commands,
+     budget_tokens, budget_cents, priority, policy_id, workspace_id, updated_at,
+     deliverables, non_goals, risks, version)
+    VALUES (?, 'Measure reads', '[]', '[]', 'main', '[]', 10000, NULL, 10, NULL, ?,
+      ?, '[]', '[]', '[]', 1)`).run(cardId, scope.workspaceId, at)
+  const jobId = `claude-native-job-${scope.agentId}`
+  scope.db.prepare(`INSERT INTO jobs
+    (id, board_id, card_id, workspace_id, provider, model, status, started_at,
+     created_at, contract_version, driver_id)
+    VALUES (?, ?, ?, ?, 'claude', 'claude-test', 'running', ?, ?, 1, 'claude')`)
+    .run(jobId, scope.boardId, cardId, scope.workspaceId, at, at)
+  scope.db.prepare(`UPDATE agent_sessions SET job_id=?, driver_id='claude', created_at=?, updated_at=?
+    WHERE id=?`).run(jobId, at, at, scope.sessionId)
+  return jobId
 }
 
 function events(scope: Scope): ConversationEvent[] {
@@ -446,6 +468,69 @@ describe('Claude provider-native Agent Home capture', () => {
     expect((scope.db.prepare(
       'SELECT COUNT(*) AS count FROM conversation_event_conflicts',
     ).get() as { count: number }).count).toBe(0)
+  })
+
+  it('records replay-safe HMAC-pseudonymous Claude Read and identical-input receipts', () => {
+    const scope = createScope()
+    bindJob(scope)
+    const readPayload = structuredClone(claudeNativePayloads.assistant)
+    readPayload.uuid = 'claude-event-read-one'
+    readPayload.message.id = 'claude-message-read-one'
+    readPayload.message.content = [{
+      type: 'tool_use',
+      id: 'claude-tool-read-one',
+      name: 'Read',
+      input: { file_path: '/private/repository/src/secret.ts', offset: 1, limit: 100 },
+    }]
+    const first: NativeEventInput = {
+      kind: 'provider_message',
+      direction: 'inbound',
+      payload: readPayload,
+      at: '2026-07-24T10:00:00.000Z',
+    }
+    append(scope, first)
+    append(scope, {
+      ...first,
+      resumed: true,
+      at: '2026-07-24T10:05:00.000Z',
+    })
+
+    const repeatedPayload = structuredClone(readPayload)
+    repeatedPayload.uuid = 'claude-event-read-two'
+    repeatedPayload.message.id = 'claude-message-read-two'
+    const repeatedTool = repeatedPayload.message.content[0] as { id: string }
+    repeatedTool.id = 'claude-tool-read-two'
+    append(scope, {
+      kind: 'provider_message',
+      direction: 'inbound',
+      payload: repeatedPayload,
+      at: '2026-07-24T10:01:00.000Z',
+    })
+
+    const observations = scope.db.prepare(`SELECT id, category, quantity, resource_sha256,
+        occurred_at
+      FROM outcome_activity_observations
+      WHERE id GLOB 'claude-native-read:*' ORDER BY rowid`).all() as Array<{
+      id: string
+      category: string
+      quantity: number
+      resource_sha256: string
+      occurred_at: string
+    }>
+    expect(observations).toHaveLength(3)
+    expect(observations.map((row) => row.category)).toEqual([
+      'exploration.file_read', 'exploration.file_read', 'exploration.duplicate',
+    ])
+    expect(new Set(observations.map((row) => row.resource_sha256)).size).toBe(1)
+    expect(observations.map((row) => row.occurred_at)).toEqual([
+      '2026-07-24T10:00:00.000Z',
+      '2026-07-24T10:01:00.000Z',
+      '2026-07-24T10:01:00.000Z',
+    ])
+    expect(JSON.stringify(observations)).not.toContain('/private/repository')
+    const dashboard = new OutcomeAnalyticsService(scope.db).dashboard(scope.boardId) as any
+    expect(dashboard.production_signals.exploration).toBe('claude_native_read_receipts')
+    expect(dashboard.exploration).toEqual({ reads: 2, likely_duplicates: 1, duplicate_rate: 0.5 })
   })
 
   it('redacts safe projected text even when the raw provider payload is withheld', () => {

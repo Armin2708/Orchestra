@@ -183,7 +183,18 @@ describe('production outcome analytics composition', () => {
       output_tokens: 20,
       thinking_tokens: 5,
       provider_total_tokens: 120,
+      context_injection_tokens: null,
       observed_at: event.at,
+      operation_reconciliation: {
+        actual_context_tokens: null,
+        context_variance_tokens: null,
+        plan_overage_tokens: null,
+      },
+    })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_usage_context_receipts`).get()).toEqual({
+      availability: 'unavailable',
+      exact_tokens: null,
     })
     expect(db.prepare(`SELECT operation_id, actual_provider_tokens, provider_variance_tokens
       FROM outcome_operation_usage_reconciliations`).get()).toEqual({

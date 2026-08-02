@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const component = readFileSync(new URL('../web/src/OutcomeDashboard.tsx', import.meta.url), 'utf8')
+const app = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../web/src/outcome-dashboard.css', import.meta.url), 'utf8')
 
 describe('outcome dashboard UI contract', () => {
@@ -9,13 +10,13 @@ describe('outcome dashboard UI contract', () => {
     for (const label of [
       'Tokens / accepted delivery', 'Cached-input ratio', 'First useful result',
       'Verified delivery', 'Evidence-gap rate', 'Rejection rate', 'Human-override rate',
-      'Context and coordination', 'Duplicate exploration', 'Job attribution',
+      'Context and coordination', 'Repeated Claude Read inputs', 'Job attribution',
     ]) expect(component).toContain(label)
     expect(component).toContain('Token reduction counts only when accepted-delivery quality holds.')
-    expect(component).toContain('Live beta signals cover provider usage and child dispatch.')
-    expect(component).toContain('No exact production acceptance signal')
+    expect(component).toContain('immutable knowledge-context')
+    expect(component).toContain('Accepted-delivery receipt from job start')
     expect(component).toContain('<Data label="Model acknowledgements" value="Not available" />')
-    expect(component).toContain('<Data label="Duplicate exploration" value="Not available" />')
+    expect(component).toContain('dashboard.exploration.likely_duplicates')
   })
 
   it('refreshes from the event stream without introducing snapshot polling', () => {
@@ -26,6 +27,13 @@ describe('outcome dashboard UI contract', () => {
     expect(component).toContain('setDashboard(null)')
     expect(component).toContain('activeBoard.current !== requestedBoard')
     expect(component).toContain('dashboard.board_id !== boardId')
+    expect(app).toContain('new EventSource(streamUrl())')
+    expect(app).not.toContain('setInterval(refresh, 30_000)')
+    const setup = app.slice(app.indexOf('// a single stream for everything'), app.indexOf('if (needsAuth) return <Login'))
+    expect(setup.indexOf('new EventSource(streamUrl())')).toBeLessThan(setup.indexOf('void refresh()'))
+    expect(setup).toContain('es.onopen = initialize')
+    expect(setup).toContain('window.setTimeout(initialize, 1_000)')
+    expect(setup).toContain('clearTimeout(initialFallback)')
   })
 
   it('has responsive, focus-visible and reduced-motion behavior', () => {

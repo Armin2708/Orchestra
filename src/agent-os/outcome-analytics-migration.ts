@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type Database from 'better-sqlite3'
 
-export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 4
+export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 5
 
 const TABLE_COLUMNS = Object.freeze({
   outcome_analytics_schema: [
@@ -59,6 +59,13 @@ const TABLE_COLUMNS = Object.freeze({
     'runtime_mode', 'billing_mode', 'platform', 'source_commit',
     'evidence_sha256', 'created_at',
   ],
+  outcome_usage_context_receipts: [
+    'usage_id', 'availability', 'exact_tokens', 'created_at',
+  ],
+  outcome_context_refresh_receipts: [
+    'board_id', 'context_use_id', 'previous_context_use_id',
+    'context_build_id', 'previous_context_build_id', 'created_at',
+  ],
   outcome_benchmark_evidence_bindings: [
     'observation_id', 'artifact_id', 'artifact_sha256', 'evidence_version',
     'verifier_ref', 'provenance_sha256', 'artifact_created_at', 'created_at',
@@ -81,6 +88,8 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'outcome_operation_usage_link_immutable_update',
   'outcome_operation_usage_reconciliation_immutable_update',
   'outcome_usage_provider_binding_immutable_update',
+  'outcome_usage_context_receipt_immutable_update',
+  'outcome_context_refresh_receipt_immutable_update',
   'outcome_benchmark_evidence_binding_immutable_update',
 ] as const)
 
@@ -132,6 +141,15 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
     'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
     'REFERENCES provider_acceptance_evidence(id) ON DELETE RESTRICT',
     'evidence_sha256 NOT GLOB',
+  ],
+  outcome_usage_context_receipts: [
+    'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
+    "availability IN ('exact','unavailable')",
+    "availability='exact' AND exact_tokens IS NOT NULL",
+  ],
+  outcome_context_refresh_receipts: [
+    'REFERENCES context_uses(board_id, id) ON DELETE CASCADE',
+    'context_use_id!=previous_context_use_id',
   ],
   outcome_benchmark_evidence_bindings: [
     'REFERENCES outcome_benchmark_observations(id) ON DELETE CASCADE',
@@ -186,6 +204,14 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   outcome_usage_provider_binding_immutable_update: [
     'BEFORE UPDATE ON outcome_usage_provider_bindings', 'outcome provider evidence binding is immutable',
   ],
+  outcome_usage_context_receipt_immutable_update: [
+    'BEFORE UPDATE ON outcome_usage_context_receipts',
+    'outcome usage context receipt is immutable',
+  ],
+  outcome_context_refresh_receipt_immutable_update: [
+    'BEFORE UPDATE ON outcome_context_refresh_receipts',
+    'outcome context refresh receipt is immutable',
+  ],
   outcome_benchmark_evidence_binding_immutable_update: [
     'BEFORE UPDATE ON outcome_benchmark_evidence_bindings',
     'outcome benchmark evidence binding is immutable',
@@ -230,6 +256,13 @@ const EXPECTED_FOREIGN_KEYS: Readonly<Record<string, readonly string[]>> = Objec
     'outcome_usage_observations:usage_id:id:CASCADE',
     'provider_acceptance_evidence:evidence_id:id:RESTRICT',
   ],
+  outcome_usage_context_receipts: [
+    'outcome_usage_observations:usage_id:id:CASCADE',
+  ],
+  outcome_context_refresh_receipts: [
+    'context_uses:board_id:board_id:CASCADE',
+    'context_uses:context_use_id:id:CASCADE',
+  ],
   outcome_benchmark_evidence_bindings: [
     'outcome_benchmark_observations:observation_id:id:CASCADE',
     'artifacts:artifact_id:id:RESTRICT',
@@ -270,7 +303,7 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       WHERE name LIKE 'outcome_%' LIMIT 1`).get()) {
       throw new Error('outcome analytics schema exists without an authoritative marker')
     }
-    if (current && ![1, 2, 3, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
+    if (current && ![1, 2, 3, 4, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
       throw new Error('outcome analytics schema marker is incompatible')
     }
     if (current && current.version >= 2 && current.schema_sha256 !== actualSchemaDigest(db)) {
@@ -522,6 +555,31 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_outcome_usage_provider_evidence
         ON outcome_usage_provider_bindings(evidence_id, usage_id);
 
+      CREATE TABLE IF NOT EXISTS outcome_usage_context_receipts (
+        usage_id TEXT PRIMARY KEY
+          REFERENCES outcome_usage_observations(id) ON DELETE CASCADE,
+        availability TEXT NOT NULL CHECK(availability IN ('exact','unavailable')),
+        exact_tokens INTEGER CHECK(exact_tokens BETWEEN 0 AND 1000000000000),
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL),
+        CHECK(
+          (availability='exact' AND exact_tokens IS NOT NULL)
+          OR (availability='unavailable' AND exact_tokens IS NULL)
+        )
+      );
+
+      CREATE TABLE IF NOT EXISTS outcome_context_refresh_receipts (
+        board_id INTEGER NOT NULL,
+        context_use_id TEXT NOT NULL,
+        previous_context_use_id TEXT NOT NULL,
+        context_build_id TEXT NOT NULL,
+        previous_context_build_id TEXT NOT NULL,
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL),
+        PRIMARY KEY(board_id, context_use_id),
+        FOREIGN KEY(board_id, context_use_id)
+          REFERENCES context_uses(board_id, id) ON DELETE CASCADE,
+        CHECK(context_use_id!=previous_context_use_id)
+      );
+
       CREATE TABLE IF NOT EXISTS outcome_benchmark_evidence_bindings (
         observation_id TEXT PRIMARY KEY
           REFERENCES outcome_benchmark_observations(id) ON DELETE CASCADE,
@@ -622,6 +680,14 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         BEFORE UPDATE ON outcome_usage_provider_bindings BEGIN
           SELECT RAISE(ABORT, 'outcome provider evidence binding is immutable');
         END;
+      CREATE TRIGGER IF NOT EXISTS outcome_usage_context_receipt_immutable_update
+        BEFORE UPDATE ON outcome_usage_context_receipts BEGIN
+          SELECT RAISE(ABORT, 'outcome usage context receipt is immutable');
+        END;
+      CREATE TRIGGER IF NOT EXISTS outcome_context_refresh_receipt_immutable_update
+        BEFORE UPDATE ON outcome_context_refresh_receipts BEGIN
+          SELECT RAISE(ABORT, 'outcome context refresh receipt is immutable');
+        END;
       CREATE TRIGGER IF NOT EXISTS outcome_benchmark_evidence_binding_immutable_update
         BEFORE UPDATE ON outcome_benchmark_evidence_bindings BEGIN
           SELECT RAISE(ABORT, 'outcome benchmark evidence binding is immutable');
@@ -663,6 +729,9 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
           END`)
       }
     }
+    db.exec(`INSERT OR IGNORE INTO outcome_usage_context_receipts
+      (usage_id, availability, exact_tokens, created_at)
+      SELECT id, 'unavailable', NULL, created_at FROM outcome_usage_observations`)
     assertOutcomeAnalyticsSchema(db, false)
     const schemaDigest = actualSchemaDigest(db)
     if (!current) {
@@ -715,9 +784,10 @@ export function assertOutcomeAnalyticsSchema(
   for (const [name, fragments] of Object.entries(REQUIRED_SQL_FRAGMENTS)) {
     const object = db.prepare(`SELECT sql FROM sqlite_master WHERE name=?`).get(name) as { sql: string | null } | undefined
     const sql = String(object?.sql ?? '').replace(/\s+/gu, ' ')
-    if (fragments.some((fragment) => !sql.includes(fragment))) {
-      throw new Error(`outcome analytics schema is incompatible (${name} SQL)`)
-    }
+    const missing = fragments.find((fragment) => !sql.includes(fragment))
+    if (missing) throw new Error(
+      `outcome analytics schema is incompatible (${name} SQL missing ${missing})`,
+    )
   }
   for (const [table, spec] of Object.entries(EXPECTED_FOREIGN_KEYS)) {
     const foreignKeys = db.prepare(`SELECT "table", "from", "to", on_delete

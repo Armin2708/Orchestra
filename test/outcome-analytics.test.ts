@@ -24,6 +24,7 @@ import { ProviderAcceptanceEvidenceStoreV1 } from '../src/provider-acceptance-ev
 
 const START = '2026-08-01T10:00:00.000Z'
 const FIRST = '2026-08-01T10:01:00.000Z'
+const VERIFIED = '2026-08-01T10:06:00.000Z'
 const ACCEPTED = '2026-08-01T10:10:00.000Z'
 
 function fixture() {
@@ -90,10 +91,10 @@ function acceptDelivery(db: Database.Database, boardId: number, cardId: number, 
     (id, lineage_id, sequence, board_id, card_id, job_id, session_id, workspace_id,
      status, asked_snapshot, summary, delivered_items, claims_json, changed_files,
      commits, artifact_ids, gaps, created_by, accepted_by, created_at, updated_at,
-     accepted_at)
+     verified_at, accepted_at)
     VALUES ('report-1', 'lineage-1', 1, ?, ?, 'job-1', 'session-1', 'workspace-1',
       'accepted', '{}', 'done', '[]', '[]', '[]', '[]', '[]', '[]', 'agent',
-      'operator', ?, ?, ?)`).run(boardId, cardId, START, ACCEPTED, ACCEPTED)
+      'operator', ?, ?, ?, ?)`).run(boardId, cardId, START, ACCEPTED, VERIFIED, ACCEPTED)
   if (overrides) {
     db.prepare(`INSERT INTO delivery_criterion_results
       (report_id, criterion_id, outcome, note, evidence_refs, override_actor,
@@ -399,18 +400,18 @@ describe('durable scoped token and outcome attribution', () => {
       provider_usage: 'available',
       child_dispatch: 'available',
       context_injection: 'unavailable',
-      context_selection: 'unavailable',
-      exploration: 'unavailable',
-      first_useful_result: 'unavailable',
+      context_selection: 'knowledge_context_use_receipts',
+      exploration: 'claude_native_read_receipts',
+      first_useful_result: 'accepted_delivery_receipts',
       model_acknowledgement: 'unavailable',
       high_fanout_preflight: 'operator_plan_only',
     })
-    expect(dashboard.context).toEqual({ selected: 4, reused: 3, rejected: 1, refreshed: 1 })
+    expect(dashboard.context).toEqual({ selected: 0, reused: 0, rejected: 0, refreshed: 0, uses: 0 })
     expect(dashboard.coordination).toEqual({ wakes: 2, fanout: 6, model_acknowledgements: 1 })
-    expect(dashboard.exploration).toMatchObject({ reads: 4, likely_duplicates: 1, duplicate_rate: 0.25 })
+    expect(dashboard.exploration).toMatchObject({ reads: 0, likely_duplicates: 0, duplicate_rate: null })
     expect(dashboard.speed).toEqual({
-      average_ms_to_first_useful_result: 60_000,
-      average_ms_to_verified_delivery: 600_000,
+      average_ms_to_first_useful_result: 600_000,
+      average_ms_to_verified_delivery: 360_000,
     })
     expect(dashboard.quality).toMatchObject({
       accepted: 1, retries: 1, retry_source: 'os_events', human_overrides: 1,

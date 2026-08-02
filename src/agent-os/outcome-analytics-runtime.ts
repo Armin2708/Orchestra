@@ -197,7 +197,7 @@ export class OutcomeAnalyticsRuntimeBridge {
       throw new ValidationError('normalized provider total is inconsistent with its exact segments')
     }
     const operationId = this.unlinkedOperation(job.id, event.at)
-    const contextTokens = safeInteger(event.metadata?.outcomeContextInjectionTokens) ?? 0
+    const contextTokens = safeInteger(event.metadata?.outcomeContextInjectionTokens)
     const billingMode = this.billingMode(context)
     const id = deterministicEventId('usage', job, sessionId, event)
     const persist = this.db.transaction(() => {

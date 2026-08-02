@@ -115,6 +115,27 @@ describe('outcome analytics focused registrar', () => {
     })
   })
 
+  it('cannot forge the reserved Claude-native Read provenance through the operator API', async () => {
+    const { server, db, boardId } = await fixture()
+    const response = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/outcomes/activity`,
+      headers: operator,
+      payload: {
+        id: `claude-native-read:${'a'.repeat(64)}`,
+        sessionId: 'api-session',
+        jobId: 'api-job',
+        category: 'exploration.file_read',
+        resourceIdentity: 'forged-input',
+        occurredAt: '2026-08-01T10:01:00.000Z',
+      },
+    })
+    expect(response.statusCode, response.body).toBe(400)
+    expect(response.json()).toMatchObject({ code: 'validation_error' })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM outcome_activity_observations`).get())
+      .toEqual({ count: 0 })
+  })
+
   it('records scoped observations and exposes the derived dashboard contract', async () => {
     const { server, boardId, published } = await fixture()
     const usage = await server.inject({
@@ -157,14 +178,14 @@ describe('outcome analytics focused registrar', () => {
         provider_usage: 'available',
         child_dispatch: 'available',
         context_injection: 'unavailable',
-        context_selection: 'unavailable',
-        exploration: 'unavailable',
-        first_useful_result: 'unavailable',
+        context_selection: 'knowledge_context_use_receipts',
+        exploration: 'claude_native_read_receipts',
+        first_useful_result: 'accepted_delivery_receipts',
         model_acknowledgement: 'unavailable',
         high_fanout_preflight: 'operator_plan_only',
       },
       usage: { provider_tokens: 1000, cached_input_tokens: 400 },
-      context: { selected: 3 },
+      context: { selected: 0, uses: 0 },
       by_job: [{ job_id: 'api-job', provider_tokens: 1000 }],
     })
   })

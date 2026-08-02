@@ -469,7 +469,38 @@ export class KnowledgeContextBridgeService {
     ) {
       fail('context_lifecycle_conflict')
     }
-    return this.managed('managed_follow_up', result, input)
+    const previousBuild = this.store.getContextBuild(
+      result.build.board_id,
+      previous.context_build_id,
+    )
+    if (previousBuild === null
+      || previousBuild.manifest_fingerprint !== previous.manifest_fingerprint) {
+      fail('context_lifecycle_conflict')
+    }
+    const prepare = this.db.transaction(() => {
+      const envelope = this.managed('managed_follow_up', result, input)
+      const expected = {
+        board_id: result.build.board_id,
+        context_use_id: envelope.context_use.id,
+        previous_context_use_id: previous.id,
+        context_build_id: envelope.context_build_id,
+        previous_context_build_id: previousBuild.id,
+        created_at: envelope.context_use.injected_at,
+      }
+      this.db.prepare(`INSERT OR IGNORE INTO outcome_context_refresh_receipts
+        (board_id, context_use_id, previous_context_use_id, context_build_id,
+         previous_context_build_id, created_at)
+        VALUES (@board_id, @context_use_id, @previous_context_use_id, @context_build_id,
+         @previous_context_build_id, @created_at)`).run(expected)
+      const retained = this.db.prepare(`SELECT * FROM outcome_context_refresh_receipts
+        WHERE board_id=? AND context_use_id=?`)
+        .get(expected.board_id, expected.context_use_id) as Record<string, unknown> | undefined
+      if (!retained || Object.entries(expected).some(([key, value]) => retained[key] !== value)) {
+        fail('context_persistence_failed')
+      }
+      return envelope
+    })
+    return prepare.immediate()
   }
 
   prepareAmbientSessionStart(

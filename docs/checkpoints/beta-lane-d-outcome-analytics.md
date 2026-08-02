@@ -9,11 +9,13 @@ without observed representative evidence.
 
 ## Delivered
 
-- A focused, replay-safe schema-v4 migration with an exact self-digested schema contract,
+- A focused, replay-safe schema-v5 migration with an exact self-digested schema contract,
   immutable marker guards, update-immutable but retention-deletable evidence,
   versioned project/team/job budgets, execution-bound one-shot confirmations, and compact team digests.
-- Exact input, cached-input, output, thinking, provider-total, and context-injection attribution to
-  board, optional team, canonical session, job, and derived contract revision.
+- Exact input, cached-input, output, thinking, and provider-total attribution to board, optional
+  team, canonical session, job, and derived contract revision. Context-injection tokens have a
+  separate immutable exact/unavailable receipt; absent provider-native evidence remains `null` and
+  cannot silently become a zero in reconciliation or budget evaluation.
 - Privacy-safe exploration accounting: callers supply a resource identity, but only a per-install
   keyed HMAC is persisted or returned; legacy unkeyed digests are re-keyed during schema upgrade.
 - Derived accepted-delivery efficiency, cached-input ratio, context selection/reuse/rejection/
@@ -40,6 +42,24 @@ without observed representative evidence.
 - A focused Fastify registrar and an event-driven responsive React dashboard. Mutations emit one
   payload-free `outcome_analytics` invalidation event through the inherited Orchestra bus or an
   injected publisher; the dashboard debounces that stream and introduces no snapshot poll.
+- Live immutable Knowledge Compiler receipts now drive selection, reuse, rejection, and refresh
+  counts: selected build entries are selections, duplicate omissions are reuse, and other omissions
+  are rejection. Refresh requires an immutable receipt tying the current use/build to the exact
+  previous managed use/build; a positive injection ordinal alone is not refresh evidence.
+  Estimates are never relabeled as exact context-injection tokens.
+- Accepted and verified delivery timestamps now supply distinct exact job-start durations. The
+  dashboard labels accepted delivery as its useful-result boundary instead of accepting an
+  operator-injected generic activity as production evidence.
+- Managed Claude `Read` tool-use projections now create deterministic, replay-safe exploration
+  receipts. Only the already-derived input fingerprint enters analytics, where it is protected
+  again with the per-install HMAC; a later identical `Read` input in the same job/session produces
+  an exact duplicate receipt. Replaying a native event with a changed delivery timestamp retains
+  the first observation time, and the reserved `claude-native-read:` identity namespace is rejected
+  by the operator activity API. This is deliberately partial Claude coverage, not an all-provider
+  or same-file-with-different-range claim.
+- Board creation now emits an SSE invalidation exactly once from `/boards/resolve`. The app
+  subscribes before its initial board fetch, initializes on stream open, and retains a one-shot
+  fallback when the stream is unavailable; the redundant 30-second discovery poll remains removed.
 - A fail-closed remote-access classification synchronized to the canonical route inventory. The two
   outcome GET routes are sensitive, exact-board reads that remain denied to `DeviceSession` by
   default; all nine POST routes require the current production operator predicate and target a
@@ -55,31 +75,49 @@ without observed representative evidence.
 5. At the existing normalized provider-usage seam, call `OutcomeAnalyticsService.recordUsage`
    with one deterministic provider-event ID and timestamp. Preserve each provider's declared
    `subset` versus `additive` cached-input semantics.
-6. At Knowledge Compiler, coordination, exploration, first-useful-result, delivery retry, and
-   override seams, record the corresponding bounded activity observation with a deterministic ID.
+6. Knowledge context metrics are read from immutable `context_uses` and
+   `context_build_entries`; accepted/useful and verified timing are read from delivery reports.
+   Managed Claude native capture writes exact `Read` observations. Coordination, delivery retry,
+   override, model acknowledgement, and future provider producers continue to use bounded,
+   deterministic activity observations only where an exact native event exists.
 7. Pass a native execution key when planning work, then call `consumeOperationExecution` with the
    same key and actual projected usage immediately before execution. The transactional consume is
    the authorization boundary and cannot be reused. The provider-native usage callback must pass
    that operation's `operationId`; the first canonical observation atomically reconciles the
    provisional provider/context reservation.
 
+## Bounded candidate checkpoint
+
+- Status: **READY FOR CENTRAL INTEGRATION**, not final-central ready.
+- Base: `b6dc067f7de66f7978b951d1e37ffb9c86ba9cfb`; central must integrate the accepted Lane B and
+  Lane C ancestry before evaluating final-central readiness.
+- Independent remediation review target: P0=0, P1=0, P2=0. This marker must be withdrawn if the
+  exact candidate review or post-integration verification reports any unresolved finding.
+
 ## Evidence
 
-- Focused analytics/API/runtime, baseline-documentation, and remote-threat suite passed 5 files /
-  42 tests and covers all 11 outcome routes, including exact no-unclassified-route drift and
-  remote-device denial before body validation.
-- The broader relevant regression suite passed 14 files / 125 tests in both default-parallel and
-  one-worker modes.
+- Focused analytics/API/runtime/knowledge/native-Claude/UI/SSE coverage passed 8 files / 52 tests.
+  It proves exact refresh linkage, ordinal non-inference, unavailable context-token propagation,
+  exact accepted-versus-verified timing, changed-timestamp replay stability, reserved native-ID
+  enforcement, subscribe-before-fetch startup, and exactly-once board-create events.
+- The complete repository suite passed 240 files / 2,004 tests in both default-parallel and
+  `--maxWorkers=1` modes on Node 22.20.0 / npm 10.9.3.
 - Root TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
 - Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
   retains the existing advisory for a JavaScript chunk larger than 500 kB.
 - Root and web `npm audit --audit-level=moderate` report zero vulnerabilities.
-- Gitleaks 8.30.1 reports no findings across 759 commits or the candidate diff.
-- GitNexus PDG re-index and change detection completed; its high-risk flag reflects the shared
-  registrar symbol, while the inspected change is the fail-closed guard on one POST route. The
-  route file has no persisted taint finding, subject to GitNexus's documented analysis limits.
-- `graphify update .` refreshed the 8,305-node / 19,572-edge code graph; `graphify-out/` remains an
-  untracked verification artifact and is not part of this checkpoint commit.
+- Gitleaks 8.30.1 reports no findings across 788 commits or the 78.89 kB candidate diff.
+- GitNexus compare detection reports high aggregate risk across 12 affected execution flows, which
+  is expected for this cross-runtime/API/Knowledge Compiler/App candidate. The required pre-edit
+  symbol analysis identified HIGH risk for `recordActivity` and `recordNormalizedProviderUsage`
+  and CRITICAL risk for shared `buildServer`; those warnings were surfaced before remediation.
+  The refreshed index has no PDG taint layer, so no clean taint claim is made.
+- Root and web dependency audits report zero vulnerabilities at moderate severity.
+- Graphify refreshed the deterministic code graph and semantically re-extracted the three changed
+  inventory/checkpoint artifacts. The verified graph contains 9,284 nodes / 22,368 edges / 332
+  communities, includes schema-v5 evidence, and contains no stale schema-v4 checkpoint node.
+  `graphify-out/` remains an untracked verification artifact and is not part of this checkpoint
+  commit.
 - The controlled unit suite proves the quality guard, but is not representative product evidence.
 
 ## Remaining
@@ -89,17 +127,22 @@ without observed representative evidence.
   `c25ec778febd393950829a8dae5cb7e44b102e8d` plus its review remediation. Child dispatch is
   deduplicated by durable provider child identity across `item/started`, `thread/started`, and
   `item/completed` projections.
-- The live runtime does **not** yet produce exact context-injection totals (MET-002), stable-context
-  selection/reuse/rejection/refresh evidence (MET-004/MET-005), file-read/duplicate exploration
-  evidence (MET-007), an accepted/useful-result signal (MET-008), or model acknowledgements.
-  These fields are explicitly `unavailable` in `production_signals` and the UI rather than
-  reported as zero or inferred from message deltas or child dispatch.
+- The live runtime still does **not** produce exact context-injection token totals (MET-002) or
+  model acknowledgements. An immutable availability receipt preserves that absence through usage,
+  reconciliation, dashboard, and budget projections: totals remain `null`/`unavailable`, including
+  per-job and per-team views, rather than using compiler estimates, compatibility zeros, or
+  provider-wide input as an inference.
+- MET-004/MET-005 now have live Knowledge Compiler receipt coverage. MET-007 has exact managed
+  Claude `Read` and identical-input duplicate coverage only; Codex and other providers, and
+  same-file reads with changed input ranges, remain unavailable. MET-008 uses the exact human
+  accepted-delivery boundary; it does not claim an earlier provider-native usefulness signal.
 - High-fanout planning is available only through the operator-bound plan/confirm API. There is no
   provider-native automatic high-fanout preflight producer yet, so MET-011 remains open.
 - Product navigation is integrated; visual browser acceptance remains part of final combined
   verification.
-- MET-013 is proven only for this analytics dashboard; broader avoidable snapshot polling remains
-  a repository-wide integration concern.
+- MET-013 now covers the analytics dashboard and global board discovery. Terminal streaming,
+  provider status, external Git HEAD, settings, and other independent polling remain in place
+  because this slice found no equivalent event contract for those sources.
 - MET-015 still needs retained exact-artifact before/after observations from a controlled task
   suite.
 - MET-GATE remains open. `representative_evidence_observed` and `gate_claimed` are hard-coded false

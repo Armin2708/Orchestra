@@ -26,6 +26,7 @@ import {
   type KnowledgeRetrievalMatch,
 } from '../src/agent-os/knowledge-retrieval-contracts.js'
 import { KnowledgeStore } from '../src/agent-os/knowledge-store.js'
+import { OutcomeAnalyticsService } from '../src/agent-os/outcome-analytics.js'
 import {
   CONTEXT_SECTIONS,
   type ContextBudget,
@@ -373,7 +374,7 @@ describe('KnowledgeCompiler and canonical context bridges', () => {
       version: KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
       job_id: runtime.jobId,
       session_id: runtime.sessionId,
-      injection_ordinal: 0,
+      injection_ordinal: 7,
       repository_head_sha: BASE,
       adapter_index_commits: {},
       checked_at: INJECTED,
@@ -394,7 +395,7 @@ describe('KnowledgeCompiler and canonical context bridges', () => {
       version: KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
       job_id: runtime.jobId,
       session_id: runtime.sessionId,
-      injection_ordinal: 0,
+      injection_ordinal: 7,
       repository_head_sha: BASE,
       adapter_index_commits: {},
       checked_at: INJECTED,
@@ -413,6 +414,10 @@ describe('KnowledgeCompiler and canonical context bridges', () => {
       manifest_fingerprint: first.build.manifest_fingerprint,
     })
     expect(receipt.chunks).toHaveLength(envelope.chunks.length)
+    expect(new OutcomeAnalyticsService(runtime.db).dashboard(1, {
+      since: AT,
+      until: '2026-08-02T08:05:00.000Z',
+    })).toMatchObject({ context: { uses: 1, refreshed: 0 } })
   })
 
   it('omits unchanged chunks from follow-ups and emits only the exact working-memory delta', () => {
@@ -486,6 +491,17 @@ describe('KnowledgeCompiler and canonical context bridges', () => {
     })
     expect(envelope.documents.map((document) => document.kind)).toEqual(['working_memory_delta'])
     expect(envelope.chunks.map((item) => item.chunk_id)).toEqual([added.chunk.id])
+    const dashboard = new OutcomeAnalyticsService(runtime.db).dashboard(1, {
+      since: AT,
+      until: '2026-08-02T08:05:00.000Z',
+    }) as any
+    expect(dashboard.context).toEqual({
+      selected: 2,
+      reused: previousIds.length,
+      rejected: 0,
+      refreshed: 1,
+      uses: 2,
+    })
   })
 
   it('provides an honest ambient SessionStart bridge without fabricating a managed ContextUse', () => {

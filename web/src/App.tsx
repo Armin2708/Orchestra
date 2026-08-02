@@ -213,18 +213,34 @@ export function App() {
 
   useEffect(() => {
     if (needsAuth) return // no stream until the token is accepted
-    refresh()
     // a single stream for everything — per-board streams exhaust the browser connection limit
     const es = new EventSource(streamUrl())
     let pending: number | undefined
+    let initialized = false
+    const initialize = () => {
+      if (initialized) return
+      initialized = true
+      void refresh()
+    }
+    // Subscribe before the first snapshot. Once open, the refresh covers every event that
+    // preceded it; the bounded fallback still loads data when the stream cannot connect.
+    es.onopen = initialize
+    const initialFallback = window.setTimeout(initialize, 1_000)
     es.onmessage = () => {
+      if (!initialized) {
+        initialize()
+        return
+      }
       // debounce bursts of events into one refresh
       if (pending) return
       pending = window.setTimeout(() => { pending = undefined; refresh() }, 300)
     }
     es.onerror = () => setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
-    const poll = setInterval(refresh, 30_000) // pick up newly created boards
-    return () => { es.close(); clearInterval(poll); if (pending) clearTimeout(pending) }
+    return () => {
+      es.close()
+      clearTimeout(initialFallback)
+      if (pending) clearTimeout(pending)
+    }
   }, [refresh, needsAuth])
 
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
