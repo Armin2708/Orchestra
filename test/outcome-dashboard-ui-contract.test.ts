@@ -30,10 +30,15 @@ describe('outcome dashboard UI contract', () => {
     expect(app).toContain('new EventSource(streamUrl())')
     expect(app).not.toContain('setInterval(refresh, 30_000)')
     const setup = app.slice(app.indexOf('// a single stream for everything'), app.indexOf('if (needsAuth) return <Login'))
-    expect(setup.indexOf('new EventSource(streamUrl())')).toBeLessThan(setup.indexOf('void refresh()'))
-    expect(setup).toContain('es.onopen = initialize')
-    expect(setup).toContain('window.setTimeout(initialize, 1_000)')
+    expect(setup.indexOf('new EventSource(streamUrl())'))
+      .toBeLessThan(setup.indexOf('void requestRefresh()'))
+    expect(setup).toContain('es.onopen = () =>')
+    expect(setup).toContain('void requestRefresh()')
+    expect(setup).toContain('if (!succeeded && retry === undefined)')
+    expect(setup).toContain('retry = window.setTimeout(() =>')
+    expect(setup).toContain('refreshQueued = true')
     expect(setup).toContain('clearTimeout(initialFallback)')
+    expect(setup).toContain('if (retry !== undefined) clearTimeout(retry)')
   })
 
   it('has responsive, focus-visible and reduced-motion behavior', () => {

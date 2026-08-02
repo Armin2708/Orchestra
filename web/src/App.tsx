@@ -201,11 +201,11 @@ export function App() {
       setJobs(nextJobs.flat())
       setAgentProfiles(nextProfiles.flat())
       setNeedsAuth(false)
-      return boards
+      return true
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) setNeedsAuth(true)
       setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
-      return []
+      return false
     } finally {
       setLoaded(true)
     }
@@ -216,29 +216,52 @@ export function App() {
     // a single stream for everything — per-board streams exhaust the browser connection limit
     const es = new EventSource(streamUrl())
     let pending: number | undefined
-    let initialized = false
-    const initialize = () => {
-      if (initialized) return
-      initialized = true
-      void refresh()
-    }
-    // Subscribe before the first snapshot. Once open, the refresh covers every event that
-    // preceded it; the bounded fallback still loads data when the stream cannot connect.
-    es.onopen = initialize
-    const initialFallback = window.setTimeout(initialize, 1_000)
-    es.onmessage = () => {
-      if (!initialized) {
-        initialize()
+    let retry: number | undefined
+    let refreshing = false
+    let refreshQueued = false
+    const requestRefresh = async () => {
+      if (refreshing) {
+        refreshQueued = true
         return
       }
+      refreshing = true
+      const succeeded = await refresh()
+      refreshing = false
+      if (refreshQueued) {
+        refreshQueued = false
+        void requestRefresh()
+        return
+      }
+      if (!succeeded && retry === undefined) {
+        retry = window.setTimeout(() => {
+          retry = undefined
+          void requestRefresh()
+        }, 1_000)
+      }
+    }
+    // Subscribe before the first snapshot. Once open, the refresh covers every event that
+    // preceded it. Every reconnect refreshes again; failed snapshots retry until REST recovers.
+    es.onopen = () => {
+      if (retry !== undefined) {
+        clearTimeout(retry)
+        retry = undefined
+      }
+      void requestRefresh()
+    }
+    const initialFallback = window.setTimeout(() => void requestRefresh(), 1_000)
+    es.onmessage = () => {
       // debounce bursts of events into one refresh
       if (pending) return
-      pending = window.setTimeout(() => { pending = undefined; refresh() }, 300)
+      pending = window.setTimeout(() => {
+        pending = undefined
+        void requestRefresh()
+      }, 300)
     }
     es.onerror = () => setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
     return () => {
       es.close()
       clearTimeout(initialFallback)
+      if (retry !== undefined) clearTimeout(retry)
       if (pending) clearTimeout(pending)
     }
   }, [refresh, needsAuth])

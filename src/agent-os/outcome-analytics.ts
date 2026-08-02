@@ -90,7 +90,7 @@ export interface OperationExecutionInput {
   executionKey: string
   actor: string
   providerTokens: number
-  contextTokens?: number
+  contextTokens?: number | null
   fanout: number
   planningRoundTokens?: number
   at?: string
@@ -519,7 +519,7 @@ export class OutcomeAnalyticsService {
     jobId?: string | null
     teamId?: string | null
     additionalProviderTokens?: number
-    additionalContextTokens?: number
+    additionalContextTokens?: number | null
     fanout?: number
     planningRoundTokens?: number
   }): Record<string, unknown> {
@@ -530,7 +530,8 @@ export class OutcomeAnalyticsService {
     const policies = this.activeBudgets(boardId, teamId, jobId)
     const projections = {
       provider_tokens: count(input.additionalProviderTokens ?? 0, 'additional provider tokens'),
-      context_tokens: count(input.additionalContextTokens ?? 0, 'additional context tokens'),
+      context_tokens: input.additionalContextTokens === null
+        ? null : count(input.additionalContextTokens ?? 0, 'additional context tokens'),
       fanout: count(input.fanout ?? 0, 'fanout', 1_000_000),
       planning_round_tokens: count(input.planningRoundTokens ?? 0, 'planning round tokens'),
     }
@@ -538,21 +539,22 @@ export class OutcomeAnalyticsService {
       const used = this.budgetUsage(boardId, policy, teamId, jobId)
       const dimensions = [
         dimension('provider_tokens', used.provider_tokens + projections.provider_tokens, policy.max_provider_tokens, policy.warning_milli),
-        dimension('context_tokens', used.context_tokens === null
+        dimension('context_tokens', used.context_tokens === null || projections.context_tokens === null
           ? null : used.context_tokens + projections.context_tokens,
         policy.max_context_tokens, policy.warning_milli),
         dimension('fanout', used.fanout + projections.fanout, policy.max_fanout, policy.warning_milli),
         dimension('planning_round_tokens', used.planning_round_tokens + projections.planning_round_tokens, policy.max_planning_round_tokens, policy.warning_milli),
       ].filter((item) => item.limit !== null)
       const exceeded = dimensions.some((item) => item.exceeded)
+      const unavailable = dimensions.some((item) => !item.available)
       return {
         policy_id: policy.id,
         scope_kind: policy.scope_kind,
         scope_id: policy.scope_id,
         enforcement: policy.enforcement,
-        warning: dimensions.some((item) => item.warning),
+        warning: dimensions.some((item) => item.warning) || unavailable,
         exceeded,
-        allowed: !(exceeded && policy.enforcement === 'hard'),
+        allowed: !((exceeded || unavailable) && policy.enforcement === 'hard'),
         dimensions,
       }
     })
@@ -674,7 +676,8 @@ export class OutcomeAnalyticsService {
     const consumedAt = timestamp(input.at ?? now(), 'consumed at')
     const actual = {
       provider_tokens: count(input.providerTokens, 'provider tokens'),
-      context_tokens: count(input.contextTokens ?? 0, 'context tokens'),
+      context_tokens: input.contextTokens == null
+        ? null : count(input.contextTokens, 'context tokens'),
       fanout: positiveCount(input.fanout, 'fanout'),
       planning_round_tokens: count(input.planningRoundTokens ?? 0, 'planning round tokens'),
     }
@@ -700,7 +703,7 @@ export class OutcomeAnalyticsService {
       if (row.operation_kind !== 'planning_round' && actual.planning_round_tokens !== 0) {
         throw new ValidationError('planning round tokens require a planning operation')
       }
-      const actualTokenEnvelope = actual.provider_tokens + actual.context_tokens
+      const actualTokenEnvelope = actual.provider_tokens + (actual.context_tokens ?? 0)
       if (actual.fanout > Number(row.fanout)
         || actualTokenEnvelope > Number(row.estimated_tokens)
         || (row.operation_kind === 'planning_round'
@@ -731,13 +734,20 @@ export class OutcomeAnalyticsService {
          fanout, planning_round_tokens, consumed_by, consumed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(operationId, row.board_id, row.team_id, row.job_id, actual.provider_tokens,
-          actual.context_tokens, actual.fanout, actual.planning_round_tokens, actor, consumedAt)
+          actual.context_tokens ?? 0, actual.fanout, actual.planning_round_tokens, actor, consumedAt)
+      this.db.prepare(`INSERT INTO outcome_operation_context_receipts
+        (operation_id, availability, exact_tokens, created_at) VALUES (?, ?, ?, ?)`)
+        .run(operationId, actual.context_tokens === null ? 'unavailable' : 'exact',
+          actual.context_tokens, consumedAt)
+      const consumption = this.db.prepare(`SELECT * FROM outcome_operation_consumptions
+        WHERE operation_id=?`).get(operationId) as Record<string, unknown>
       return {
         ...row,
         execution_sha256: undefined,
         consumption: {
-          ...(this.db.prepare(`SELECT * FROM outcome_operation_consumptions
-            WHERE operation_id=?`).get(operationId) as Record<string, unknown>),
+          ...consumption,
+          context_tokens: actual.context_tokens,
+          context_availability: actual.context_tokens === null ? 'unavailable' : 'exact',
           provider_context_status: 'provisional_until_canonical_usage',
         },
       }
@@ -963,16 +973,21 @@ export class OutcomeAnalyticsService {
         COUNT(*) AS linked_operations,
         COALESCE(SUM(reconciliation.provider_variance_tokens),0) AS provider_variance_tokens,
         COALESCE(SUM(CASE WHEN receipt.availability='exact'
+          AND provisional_context.availability='exact'
           THEN reconciliation.context_variance_tokens ELSE 0 END),0) AS context_variance_tokens,
         COALESCE(SUM(CASE WHEN receipt.availability='exact'
           THEN reconciliation.plan_overage_tokens ELSE 0 END),0) AS plan_overage_tokens,
         COALESCE(SUM(CASE WHEN receipt.availability='unavailable' THEN 1 ELSE 0 END),0)
-          AS unavailable_context_observations
+          AS unavailable_actual_context_observations,
+        COALESCE(SUM(CASE WHEN provisional_context.availability='unavailable'
+          THEN 1 ELSE 0 END),0) AS unavailable_provisional_context_observations
       FROM outcome_operation_usage_reconciliations reconciliation
       JOIN outcome_operation_usage_links link
         ON link.operation_id=reconciliation.operation_id
       JOIN outcome_usage_observations usage ON usage.id=link.usage_id
       JOIN outcome_usage_context_receipts receipt ON receipt.usage_id=usage.id
+      JOIN outcome_operation_context_receipts provisional_context
+        ON provisional_context.operation_id=link.operation_id
       WHERE usage.board_id=? AND usage.observed_at>=? AND usage.observed_at<?`)
       .get(boardId, since, until) as Record<string, unknown>
     const budgetRows = this.db.prepare(`SELECT * FROM outcome_budget_policies
@@ -993,14 +1008,15 @@ export class OutcomeAnalyticsService {
         dimension('planning_round_tokens', used.planning_round_tokens, policy.max_planning_round_tokens, policy.warning_milli),
       ].filter((item) => item.limit !== null)
       const exceeded = dimensions.some((item) => item.exceeded)
+      const unavailable = dimensions.some((item) => !item.available)
       return {
         policy_id: policy.id,
         scope_kind: policy.scope_kind,
         scope_id: policy.scope_id,
         enforcement: policy.enforcement,
-        warning: dimensions.some((item) => item.warning),
+        warning: dimensions.some((item) => item.warning) || unavailable,
         exceeded,
-        allowed: !(exceeded && policy.enforcement === 'hard'),
+        allowed: !((exceeded || unavailable) && policy.enforcement === 'hard'),
         dimensions,
       }
     })
@@ -1059,9 +1075,11 @@ export class OutcomeAnalyticsService {
       operation_reconciliation: {
         linked_operations: numberValue(reconciliation.linked_operations),
         provider_variance_tokens: numberValue(reconciliation.provider_variance_tokens),
-        context_variance_tokens: numberValue(reconciliation.unavailable_context_observations) > 0
+        context_variance_tokens:
+          numberValue(reconciliation.unavailable_actual_context_observations) > 0
+            || numberValue(reconciliation.unavailable_provisional_context_observations) > 0
           ? null : numberValue(reconciliation.context_variance_tokens),
-        plan_overage_tokens: numberValue(reconciliation.unavailable_context_observations) > 0
+        plan_overage_tokens: numberValue(reconciliation.unavailable_actual_context_observations) > 0
           ? null : numberValue(reconciliation.plan_overage_tokens),
       },
       budgets,
@@ -1346,10 +1364,14 @@ export class OutcomeAnalyticsService {
     observedAt: string,
   ): OperationUsageReconciliation {
     const consumption = this.db.prepare(`SELECT consumption.*,
-        link.usage_id AS linked_usage_id, confirmation.estimated_tokens
+        link.usage_id AS linked_usage_id, confirmation.estimated_tokens,
+        context.availability AS context_availability,
+        context.exact_tokens AS exact_context_tokens
       FROM outcome_operation_consumptions consumption
       JOIN outcome_operation_confirmations confirmation
         ON confirmation.id=consumption.operation_id
+      JOIN outcome_operation_context_receipts context
+        ON context.operation_id=consumption.operation_id
       LEFT JOIN outcome_operation_usage_links link ON link.operation_id=consumption.operation_id
       WHERE consumption.operation_id=?`).get(operationId) as Record<string, unknown> | undefined
     if (!consumption) throw new ValidationError('operation usage requires a consumed execution')
@@ -1365,15 +1387,16 @@ export class OutcomeAnalyticsService {
       throw new ValidationError('canonical usage predates its consumed execution')
     }
     const provisionalProvider = Number(consumption.provider_tokens)
-    const provisionalContext = Number(consumption.context_tokens)
+    const provisionalContext = consumption.context_availability === 'exact'
+      ? Number(consumption.exact_context_tokens) : null
     return {
       operation_id: operationId,
       provisional_provider_tokens: provisionalProvider,
-      provisional_context_tokens: provisionalContext,
+      provisional_context_tokens: provisionalContext ?? 0,
       actual_provider_tokens: providerTokens,
       actual_context_tokens: contextTokens,
       provider_variance_tokens: providerTokens - provisionalProvider,
-      context_variance_tokens: contextTokens === null
+      context_variance_tokens: contextTokens === null || provisionalContext === null
         ? null : contextTokens - provisionalContext,
       plan_overage_tokens: contextTokens === null
         ? null
@@ -1412,9 +1435,12 @@ export class OutcomeAnalyticsService {
     const contextTokens = context?.availability === 'exact'
       ? numberValue(context.exact_tokens) : null
     const reconciliation = this.db.prepare(`SELECT reconciliation.*
+        , context.availability AS provisional_context_availability
       FROM outcome_operation_usage_links link
       JOIN outcome_operation_usage_reconciliations reconciliation
         ON reconciliation.operation_id=link.operation_id
+      JOIN outcome_operation_context_receipts context
+        ON context.operation_id=link.operation_id
       WHERE link.usage_id=?`).get(id) as Record<string, unknown> | undefined
     const visibleUsage = { ...usage, context_injection_tokens: contextTokens }
     if (!reconciliation) return visibleUsage
@@ -1427,7 +1453,13 @@ export class OutcomeAnalyticsService {
             context_variance_tokens: null,
             plan_overage_tokens: null,
           }
-        : reconciliation,
+        : reconciliation.provisional_context_availability === 'unavailable'
+          ? {
+              ...reconciliation,
+              provisional_context_tokens: null,
+              context_variance_tokens: null,
+            }
+          : reconciliation,
     }
   }
 
@@ -1514,17 +1546,22 @@ export class OutcomeAnalyticsService {
     const operations = this.db.prepare(`SELECT
         COALESCE(SUM(CASE WHEN link.operation_id IS NULL
           THEN consumption.provider_tokens ELSE 0 END),0) AS provider_tokens,
-        COALESCE(SUM(CASE WHEN link.operation_id IS NULL
-          THEN consumption.context_tokens ELSE 0 END),0) AS context_tokens,
+        COALESCE(SUM(CASE WHEN link.operation_id IS NULL AND context.availability='exact'
+          THEN context.exact_tokens ELSE 0 END),0) AS context_tokens,
+        COALESCE(SUM(CASE WHEN link.operation_id IS NULL AND context.availability='unavailable'
+          THEN 1 ELSE 0 END),0) AS unavailable_context_consumptions,
         COALESCE(SUM(consumption.fanout),0) AS fanout,
         COALESCE(SUM(consumption.planning_round_tokens),0) AS planning_round_tokens
       FROM outcome_operation_consumptions consumption
+      JOIN outcome_operation_context_receipts context
+        ON context.operation_id=consumption.operation_id
       LEFT JOIN outcome_operation_usage_links link ON link.operation_id=consumption.operation_id
       WHERE consumption.board_id=?${predicate}`)
       .get(...values) as Record<string, unknown>
     return {
       provider_tokens: numberValue(usage.provider_tokens) + numberValue(operations.provider_tokens),
       context_tokens: numberValue(usage.unavailable_context_observations) > 0
+          || numberValue(operations.unavailable_context_consumptions) > 0
         ? null : numberValue(usage.context_tokens) + numberValue(operations.context_tokens),
       fanout: numberValue(operations.fanout),
       planning_round_tokens: numberValue(operations.planning_round_tokens),

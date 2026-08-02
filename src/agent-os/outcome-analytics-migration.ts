@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type Database from 'better-sqlite3'
 
-export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 5
+export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 6
 
 const TABLE_COLUMNS = Object.freeze({
   outcome_analytics_schema: [
@@ -46,6 +46,9 @@ const TABLE_COLUMNS = Object.freeze({
     'operation_id', 'board_id', 'team_id', 'job_id', 'provider_tokens',
     'context_tokens', 'fanout', 'planning_round_tokens', 'consumed_by', 'consumed_at',
   ],
+  outcome_operation_context_receipts: [
+    'operation_id', 'availability', 'exact_tokens', 'created_at',
+  ],
   outcome_operation_usage_links: [
     'operation_id', 'usage_id', 'linked_at',
   ],
@@ -85,6 +88,7 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'outcome_secret_delete_guard',
   'outcome_binding_immutable_update',
   'outcome_consumption_immutable_update',
+  'outcome_operation_context_receipt_immutable_update',
   'outcome_operation_usage_link_immutable_update',
   'outcome_operation_usage_reconciliation_immutable_update',
   'outcome_usage_provider_binding_immutable_update',
@@ -127,6 +131,11 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   outcome_operation_consumptions: [
     'REFERENCES outcome_operation_confirmations(id) ON DELETE CASCADE',
     'planning_round_tokens BETWEEN 0 AND 1000000000000',
+  ],
+  outcome_operation_context_receipts: [
+    'REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE',
+    "availability IN ('exact','unavailable')",
+    "availability='exact' AND exact_tokens IS NOT NULL",
   ],
   outcome_operation_usage_links: [
     'REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE',
@@ -194,6 +203,10 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   outcome_consumption_immutable_update: [
     'BEFORE UPDATE ON outcome_operation_consumptions', 'outcome operation consumption is immutable',
   ],
+  outcome_operation_context_receipt_immutable_update: [
+    'BEFORE UPDATE ON outcome_operation_context_receipts',
+    'outcome operation context receipt is immutable',
+  ],
   outcome_operation_usage_link_immutable_update: [
     'BEFORE UPDATE ON outcome_operation_usage_links', 'outcome operation usage link is immutable',
   ],
@@ -244,6 +257,9 @@ const EXPECTED_FOREIGN_KEYS: Readonly<Record<string, readonly string[]>> = Objec
   outcome_operation_consumptions: [
     'boards:board_id:id:CASCADE', 'jobs:job_id:id:CASCADE',
     'outcome_operation_confirmations:operation_id:id:CASCADE', 'os_teams:team_id:id:SET NULL',
+  ],
+  outcome_operation_context_receipts: [
+    'outcome_operation_consumptions:operation_id:operation_id:CASCADE',
   ],
   outcome_operation_usage_links: [
     'outcome_operation_consumptions:operation_id:operation_id:CASCADE',
@@ -303,7 +319,7 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       WHERE name LIKE 'outcome_%' LIMIT 1`).get()) {
       throw new Error('outcome analytics schema exists without an authoritative marker')
     }
-    if (current && ![1, 2, 3, 4, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
+    if (current && ![1, 2, 3, 4, 5, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
       throw new Error('outcome analytics schema marker is incompatible')
     }
     if (current && current.version >= 2 && current.schema_sha256 !== actualSchemaDigest(db)) {
@@ -507,6 +523,18 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         ON outcome_operation_consumptions(board_id, job_id, consumed_at, operation_id)
         WHERE job_id IS NOT NULL;
 
+      CREATE TABLE IF NOT EXISTS outcome_operation_context_receipts (
+        operation_id TEXT PRIMARY KEY
+          REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE,
+        availability TEXT NOT NULL CHECK(availability IN ('exact','unavailable')),
+        exact_tokens INTEGER CHECK(exact_tokens BETWEEN 0 AND 1000000000000),
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL),
+        CHECK(
+          (availability='exact' AND exact_tokens IS NOT NULL)
+          OR (availability='unavailable' AND exact_tokens IS NULL)
+        )
+      );
+
       CREATE TABLE IF NOT EXISTS outcome_operation_usage_links (
         operation_id TEXT PRIMARY KEY
           REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE,
@@ -668,6 +696,10 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         BEFORE UPDATE ON outcome_operation_consumptions BEGIN
           SELECT RAISE(ABORT, 'outcome operation consumption is immutable');
         END;
+      CREATE TRIGGER IF NOT EXISTS outcome_operation_context_receipt_immutable_update
+        BEFORE UPDATE ON outcome_operation_context_receipts BEGIN
+          SELECT RAISE(ABORT, 'outcome operation context receipt is immutable');
+        END;
       CREATE TRIGGER IF NOT EXISTS outcome_operation_usage_link_immutable_update
         BEFORE UPDATE ON outcome_operation_usage_links BEGIN
           SELECT RAISE(ABORT, 'outcome operation usage link is immutable');
@@ -732,6 +764,10 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
     db.exec(`INSERT OR IGNORE INTO outcome_usage_context_receipts
       (usage_id, availability, exact_tokens, created_at)
       SELECT id, 'unavailable', NULL, created_at FROM outcome_usage_observations`)
+    db.exec(`INSERT OR IGNORE INTO outcome_operation_context_receipts
+      (operation_id, availability, exact_tokens, created_at)
+      SELECT operation_id, 'unavailable', NULL, consumed_at
+      FROM outcome_operation_consumptions`)
     assertOutcomeAnalyticsSchema(db, false)
     const schemaDigest = actualSchemaDigest(db)
     if (!current) {

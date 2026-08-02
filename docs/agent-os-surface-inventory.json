@@ -281,6 +281,7 @@
       "outcome_context_refresh_receipts",
       "outcome_operation_bindings",
       "outcome_operation_confirmations",
+      "outcome_operation_context_receipts",
       "outcome_operation_consumptions",
       "outcome_operation_usage_links",
       "outcome_operation_usage_reconciliations",

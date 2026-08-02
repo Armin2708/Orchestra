@@ -158,7 +158,7 @@ export class OutcomeAnalyticsRuntimeBridge {
       executionKey,
       actor: `runtime:${job.driver_id}`,
       providerTokens: operation.estimated_tokens,
-      contextTokens: 0,
+      contextTokens: null,
       fanout: operation.fanout,
       planningRoundTokens: operation.operation_kind === 'planning_round'
         ? operation.estimated_tokens : 0,

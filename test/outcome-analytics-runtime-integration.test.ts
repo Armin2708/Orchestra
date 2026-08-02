@@ -161,6 +161,8 @@ describe('production outcome analytics composition', () => {
       consumption: {
         operation_id: 'runtime-operation',
         provider_tokens: 100,
+        context_tokens: null,
+        context_availability: 'unavailable',
         provider_context_status: 'provisional_until_canonical_usage',
       },
     })
@@ -193,6 +195,11 @@ describe('production outcome analytics composition', () => {
     })
     expect(db.prepare(`SELECT availability, exact_tokens
       FROM outcome_usage_context_receipts`).get()).toEqual({
+      availability: 'unavailable',
+      exact_tokens: null,
+    })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_operation_context_receipts`).get()).toEqual({
       availability: 'unavailable',
       exact_tokens: null,
     })
@@ -293,6 +300,19 @@ describe('production outcome analytics composition', () => {
     planNativeOperation(service, boardId, 'runtime-operation-b')
     expect(() => bridge.consumeBeforeProviderLaunch(job)).toThrow(ConflictError)
     expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_consumptions`).pluck().get()).toBe(0)
+  })
+
+  it('fails closed before launch when a hard context budget cannot observe native context', () => {
+    const { db, boardId, job, service } = fixture()
+    const bridge = new OutcomeAnalyticsRuntimeBridge(db)
+    service.setBudget({
+      id: 'native-context-budget', boardId, scopeKind: 'project', scopeId: String(boardId),
+      maxContextTokens: 100, enforcement: 'hard', actor: 'operator',
+    })
+    planNativeOperation(service, boardId)
+    expect(() => bridge.consumeBeforeProviderLaunch(job)).toThrow(/hard budget at execution/)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_consumptions`).pluck().get()).toBe(0)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_operation_context_receipts`).pluck().get()).toBe(0)
   })
 
   it('fails closed and rolls back projections for ambiguous provider evidence', () => {

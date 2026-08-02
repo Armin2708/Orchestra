@@ -9,7 +9,7 @@ without observed representative evidence.
 
 ## Delivered
 
-- A focused, replay-safe schema-v5 migration with an exact self-digested schema contract,
+- A focused, replay-safe schema-v6 migration with an exact self-digested schema contract,
   immutable marker guards, update-immutable but retention-deletable evidence,
   versioned project/team/job budgets, execution-bound one-shot confirmations, and compact team digests.
 - Exact input, cached-input, output, thinking, and provider-total attribution to board, optional
@@ -24,7 +24,9 @@ without observed representative evidence.
 - Soft/hard budgets with cumulative fanout/planning accounting and an atomic execution-time hard
   budget recheck. Confirmation is bound to a native execution key and can be consumed once;
   provisional fanout and provider/context counters cannot exceed the confirmed plan, and warning
-  thresholds are re-evaluated before consumption.
+  thresholds are re-evaluated before consumption. A separate immutable operation-context receipt
+  prevents the compatibility carrier zero from authorizing unknown native context: hard context
+  budgets fail closed and soft policies surface the unavailable dimension as a warning.
 - Canonical provider/session/job attribution, conservative billing derivation from retained
   provider-acceptance evidence verified through the canonical content-addressed evidence store,
   active-membership team derivation, bounded timestamps, and
@@ -58,8 +60,9 @@ without observed representative evidence.
   by the operator activity API. This is deliberately partial Claude coverage, not an all-provider
   or same-file-with-different-range claim.
 - Board creation now emits an SSE invalidation exactly once from `/boards/resolve`. The app
-  subscribes before its initial board fetch, initializes on stream open, and retains a one-shot
-  fallback when the stream is unavailable; the redundant 30-second discovery poll remains removed.
+  subscribes before its initial board fetch, refreshes on every stream open/reconnect, queues events
+  arriving during a snapshot, and retries failed snapshots while REST is unavailable; the redundant
+  30-second discovery poll remains removed.
 - A fail-closed remote-access classification synchronized to the canonical route inventory. The two
   outcome GET routes are sensitive, exact-board reads that remain denied to `DeviceSession` by
   default; all nine POST routes require the current production operator predicate and target a
@@ -96,26 +99,27 @@ without observed representative evidence.
 
 ## Evidence
 
-- Focused analytics/API/runtime/knowledge/native-Claude/UI/SSE coverage passed 8 files / 52 tests.
+- Focused analytics/API/runtime/knowledge/native-Claude/UI/SSE/inventory coverage passed 9 files /
+  61 tests.
   It proves exact refresh linkage, ordinal non-inference, unavailable context-token propagation,
   exact accepted-versus-verified timing, changed-timestamp replay stability, reserved native-ID
   enforcement, subscribe-before-fetch startup, and exactly-once board-create events.
-- The complete repository suite passed 240 files / 2,004 tests in both default-parallel and
+- The complete repository suite passed 240 files / 2,006 tests in both default-parallel and
   `--maxWorkers=1` modes on Node 22.20.0 / npm 10.9.3.
 - Root TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
 - Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
   retains the existing advisory for a JavaScript chunk larger than 500 kB.
 - Root and web `npm audit --audit-level=moderate` report zero vulnerabilities.
-- Gitleaks 8.30.1 reports no findings across 788 commits or the 78.89 kB candidate diff.
-- GitNexus compare detection reports high aggregate risk across 12 affected execution flows, which
+- Gitleaks 8.30.1 reports no findings across 791 commits or the 102.80 kB candidate diff.
+- GitNexus compare detection reports high aggregate risk across 15 affected execution flows, which
   is expected for this cross-runtime/API/Knowledge Compiler/App candidate. The required pre-edit
   symbol analysis identified HIGH risk for `recordActivity` and `recordNormalizedProviderUsage`
   and CRITICAL risk for shared `buildServer`; those warnings were surfaced before remediation.
   The refreshed index has no PDG taint layer, so no clean taint claim is made.
 - Root and web dependency audits report zero vulnerabilities at moderate severity.
 - Graphify refreshed the deterministic code graph and semantically re-extracted the three changed
-  inventory/checkpoint artifacts. The verified graph contains 9,284 nodes / 22,368 edges / 332
-  communities, includes schema-v5 evidence, and contains no stale schema-v4 checkpoint node.
+  inventory/checkpoint artifacts. The verified graph contains 9,280 nodes / 22,360 edges / 338
+  communities, includes schema-v6 evidence, and contains no stale schema-v4 checkpoint node.
   `graphify-out/` remains an untracked verification artifact and is not part of this checkpoint
   commit.
 - The controlled unit suite proves the quality guard, but is not representative product evidence.

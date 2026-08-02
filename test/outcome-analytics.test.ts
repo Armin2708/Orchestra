@@ -105,6 +105,48 @@ function acceptDelivery(db: Database.Database, boardId: number, cardId: number, 
 }
 
 describe('outcome analytics migration and privacy boundary', () => {
+  it('upgrades schema-v5 consumptions conservatively without rewriting compatibility data', () => {
+    const { db, boardId, service } = fixture()
+    service.planOperation({
+      id: 'v5-operation', boardId, operationKind: 'swarm', fanout: 1,
+      estimatedTokens: 100, reason: 'Retained v5 execution', requestedBy: 'operator',
+      executionKey: 'v5-execution', jobId: 'job-1',
+    })
+    service.consumeOperationExecution({
+      id: 'v5-operation', executionKey: 'v5-execution', actor: 'runner',
+      providerTokens: 58, contextTokens: 42, fanout: 1,
+    })
+    const markerTriggers = db.prepare(`SELECT name, sql FROM sqlite_master
+      WHERE type='trigger' AND name IN (
+        'outcome_schema_immutable_update','outcome_schema_immutable_delete'
+      ) ORDER BY name`).all() as Array<{ name: string; sql: string }>
+    db.exec(`DROP TRIGGER outcome_operation_context_receipt_immutable_update;
+      DROP TABLE outcome_operation_context_receipts;`)
+    const owned = (db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name LIKE 'outcome_%' ORDER BY type, name`).all() as Array<{
+        type: string; name: string; tbl_name: string; sql: string | null
+      }>).map((row) => ({
+      type: row.type, name: row.name, table: row.tbl_name,
+      sql: String(row.sql ?? '').replace(/\s+/gu, ' ').trim(),
+    }))
+    const v5Digest = createHash('sha256').update(JSON.stringify(owned), 'utf8').digest('hex')
+    db.exec(`DROP TRIGGER outcome_schema_immutable_update;
+      DROP TRIGGER outcome_schema_immutable_delete;`)
+    db.prepare(`UPDATE outcome_analytics_schema SET version=5, schema_sha256=? WHERE singleton=1`)
+      .run(v5Digest)
+    for (const trigger of markerTriggers) db.exec(trigger.sql)
+
+    expect(() => applyOutcomeAnalyticsMigration(db)).not.toThrow()
+    expect(db.prepare(`SELECT version FROM outcome_analytics_schema WHERE singleton=1`).pluck().get())
+      .toBe(6)
+    expect(db.prepare(`SELECT context_tokens FROM outcome_operation_consumptions
+      WHERE operation_id='v5-operation'`).pluck().get()).toBe(42)
+    expect(db.prepare(`SELECT availability, exact_tokens FROM outcome_operation_context_receipts
+      WHERE operation_id='v5-operation'`).get()).toEqual({
+      availability: 'unavailable', exact_tokens: null,
+    })
+  })
+
   it('is replay-safe, verifies exact columns, and rejects a forged schema marker', () => {
     const { db } = fixture()
     expect(() => applyOutcomeAnalyticsMigration(db)).not.toThrow()
@@ -562,8 +604,14 @@ describe('budgets, confirmations and leader digests', () => {
       id: 'reconcile-operation', executionKey: 'reconcile-execution', actor: 'runner',
       providerTokens: 1_300, contextTokens: 200, fanout: 2, at: observedAt,
     })).toMatchObject({ consumption: {
+      context_availability: 'exact',
       provider_context_status: 'provisional_until_canonical_usage',
     } })
+    expect(db.prepare(`SELECT availability, exact_tokens
+      FROM outcome_operation_context_receipts WHERE operation_id='reconcile-operation'`).get())
+      .toEqual({ availability: 'exact', exact_tokens: 200 })
+    expect(() => db.prepare(`UPDATE outcome_operation_context_receipts
+      SET exact_tokens=0 WHERE operation_id='reconcile-operation'`).run()).toThrow(/immutable/)
     const reserved = service.evaluateBudgets({ boardId, jobId: 'job-1' }) as any
     expect(reserved.policies[0].dimensions).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'provider_tokens', used: 1_300 }),
