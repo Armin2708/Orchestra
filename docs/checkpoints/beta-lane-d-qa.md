@@ -91,7 +91,8 @@ does not close `QA-001`, `QA-016`, or `QA-018`; the final integrator must produc
 exact-head evidence set after all lane commits are integrated.
 
 Verification used Node 22.20.0/npm 10.9.3: the current-base gate passed, the focused matrix suite
-passed 15/15 tests, and the affected QA surface passed 34 suites / 168 tests with zero pending,
+and strict allowlist suites passed 17/17 tests, and the affected QA surface passed 36 suites / 170
+tests with zero pending,
 skipped, or todo tests. Root/web TypeScript
 checks and production builds passed. GitNexus classified the nine-file staged change as LOW risk
 with zero affected processes. Graphify refreshed the code graph to 7,214 nodes / 17,186 edges /
@@ -110,6 +111,11 @@ with zero affected processes. Graphify refreshed the code graph to 7,214 nodes /
 - A separately pinned integration-manifest schema binds both tool receipts for each lane to the
   same ready commit and exact beta base/range/marker. Arbitrary ancestors are not accepted. Lane
   ready commits are intentionally not pinned before final integration.
+- The checker verifies the manifest against Git itself: every ready commit must exist, descend
+  from `0dd3dd4`, be an ancestor of exact integrator HEAD, and contain the declared marker in its
+  real subject/body. The external receipt signature is only a schema field today and is explicitly
+  **not cryptographically verifiable**; this is why `QA-018` remains impossible until a reviewed
+  signature verifier and trusted key policy are added.
 - Vitest evidence now requires `passed === total` and zero failed, pending, skipped, and todo tests
   in both retained JSON and the release rerun.
 - Evidence creation requires a fresh mode-0700 directory outside the repository by realpath. It
@@ -118,3 +124,7 @@ with zero affected processes. Graphify refreshed the code graph to 7,214 nodes /
   pre-existing symlink.
 - Malformed contract, evidence, receipt, and tool payload shapes return structured failures. The
   focused adversarial suite now covers these constraints; all 37 matrix cases remain open.
+- Full-ref Gitleaks review found one new generic-key false positive: the literal
+  `idempotency-key` header at `test/session-tool-routes.test.ts:83` in commit `3c79b69`. Only that
+  exact commit:path:rule:line fingerprint was added; the strict allowlist test and the 621-commit
+  `--all` scan both pass with zero findings.

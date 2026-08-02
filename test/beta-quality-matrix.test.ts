@@ -380,18 +380,22 @@ describe('beta quality coverage contract', () => {
       schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head, lanes,
       external_receipt: { signer: 'release-integrator', signed_at: '2026-08-02T00:00:00Z', signature: 'a'.repeat(64), verification: 'external-human-required' },
     })
+    const malformedEnvelopeFile = writeJson(directory, 'malformed-mcp.json', { content: [{ type: 'text', text: 'not-json' }] })
+    const nullFile = writeJson(directory, 'null.json', null)
+    const malformedEnvelope = { path: malformedEnvelopeFile.path, output_sha256: malformedEnvelopeFile.sha256 }
+    const nullArtifact = { path: nullFile.path, output_sha256: nullFile.sha256 }
     const missing = { path: 'missing.json', output_sha256: '0'.repeat(64) }
     const gitReceipt = writeJson(directory, 'lane-a-gitnexus.json', {
       schema_version: 2, tool: 'gitnexus', lane: 'lane_a', tested_commit: head, base_ref: REQUIRED_BETA_BASE,
       range: `${REQUIRED_BETA_BASE}..${head}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
       invocation_argv: { impact: ['gitnexus', 'impact'], detect_changes: ['gitnexus', 'detect_changes', REQUIRED_BETA_BASE] },
-      raw_impact: missing, raw_detect_changes: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+      raw_impact: malformedEnvelope, raw_detect_changes: nullArtifact, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
     })
     const graphReceipt = writeJson(directory, 'lane-a-graphify.json', {
       schema_version: 2, tool: 'graphify', lane: 'lane_a', tested_commit: REQUIRED_BETA_BASE, base_ref: REQUIRED_BETA_BASE,
       range: `${REQUIRED_BETA_BASE}..${REQUIRED_BETA_BASE}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
-      invocation_argv: { update: ['graphify', 'update', '.'], status: ['graphify', 'status'] }, raw_update: missing,
-      raw_status: missing, graph_artifact: missing, manifest_artifact: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+      invocation_argv: { update: ['graphify', 'update', '.'], status: ['graphify', 'status'] }, raw_update: nullArtifact,
+      raw_status: malformedEnvelope, graph_artifact: missing, manifest_artifact: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
     })
     const report = path.join(directory, 'evidence.json')
     fs.writeFileSync(report, JSON.stringify({
@@ -404,6 +408,44 @@ describe('beta quality coverage contract', () => {
 
     const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
     expect(result.errors).toContain('lane_a graphify report does not match the signed integration manifest')
+    expect(result.errors).toContain('lane_a GitNexus and Graphify receipts do not use the same exact ready commit')
+    expect(result.errors).toContain('lane_a raw GitNexus impact output is null, malformed, or lacks semantic fields')
+    expect(result.errors).toContain('lane_a raw GitNexus detect_changes output is null, malformed, or lacks semantic fields')
+    expect(result.errors).toContain('lane_a raw Graphify update output is null, malformed, or lacks semantic fields')
+    expect(result.errors).toContain('lane_a raw Graphify status output is null, malformed, or does not bind retained graph/manifest hashes')
     expect(result.errors).toContain('QA-018 remains impossible in this runner: integrator-signed external raw tool receipts require a reviewed verifier upgrade')
+  })
+
+  it('rejects nonexistent, nonancestor, and wrong-marker ready commits from actual Git history', () => {
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-git-binding-'))
+    temporaryDirectories.push(directory)
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim()
+    const lane = (readyCommit: string, readyMarker: string) => ({
+      ready_commit: readyCommit, base_ref: REQUIRED_BETA_BASE, range: `${REQUIRED_BETA_BASE}..${readyCommit}`,
+      ready_marker: readyMarker, gitnexus_version: '1.0.0', graphify_version: '1.0.0',
+    })
+    const manifest = writeJson(directory, 'integration.json', {
+      schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head,
+      lanes: {
+        lane_a: lane('f'.repeat(40), '[beta-lane-a-ready]'),
+        lane_b: lane('3c79b69b3298a17a54e9fd2426e2eca1a337bd18', '[beta-lane-b-ready]'),
+        lane_c: lane(head, '[beta-lane-c-ready]'),
+        lane_d: lane(head, '[beta-lane-d-ready]'),
+        integrator: lane(head, '[beta-release-candidate]'),
+      },
+      external_receipt: { signer: 'release-integrator', signed_at: '2026-08-02T00:00:00Z', signature: 'a'.repeat(64), verification: 'external-human-required' },
+    })
+    const report = path.join(directory, 'evidence.json')
+    fs.writeFileSync(report, JSON.stringify({
+      schema_version: 1, tested_commit: head, requirements_sha256: PINNED_REQUIREMENTS_SHA256,
+      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256, tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
+      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256, qa018_closure_supported: false,
+      integration_manifest: manifest, artifacts: [], commands: [], case_results: [], tool_reports: {},
+    }), 'utf8')
+
+    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
+    expect(result.errors).toContain('lane_a ready commit does not exist in the repository')
+    expect(result.errors).toContain('lane_b ready commit is not integrated into exact HEAD')
+    expect(result.errors).toContain('lane_c ready marker is absent from the actual commit message')
   })
 })

@@ -9,6 +9,7 @@ const EXPECTED_FINGERPRINTS = [
   '6d8235922a88200c4856ee424e5ee00820de02b1:test/agent-home-domain.test.ts:private-key:418',
   '6d8235922a88200c4856ee424e5ee00820de02b1:test/agent-os-migrations.test.ts:private-key:154',
   '1b1dfbee2f2d4969e5a9351caaa97e2926366d02:test/projected-text-redaction.test.ts:private-key:22',
+  '3c79b69b3298a17a54e9fd2426e2eca1a337bd18:test/session-tool-routes.test.ts:generic-api-key:83',
 ]
 
 describe('gitleaks ignore policy', () => {
@@ -21,7 +22,7 @@ describe('gitleaks ignore policy', () => {
     expect(fingerprints).toEqual(EXPECTED_FINGERPRINTS)
     for (const fingerprint of fingerprints) {
       expect(fingerprint).toMatch(
-        /^[0-9a-f]{40}:test\/(?:(?:agent-home-domain|agent-os-migrations|projected-text-redaction)\.test\.ts:private-key|(?:organization-coordination|command-idempotency-coverage)\.test\.ts:generic-api-key):\d+$/,
+        /^[0-9a-f]{40}:test\/(?:(?:agent-home-domain|agent-os-migrations|projected-text-redaction)\.test\.ts:private-key|(?:organization-coordination|command-idempotency-coverage|session-tool-routes)\.test\.ts:generic-api-key):\d+$/,
       )
     }
   })

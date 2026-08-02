@@ -296,6 +296,19 @@ const validateEvidenceReport = ({ root, reportPath, requirements, requirementKey
   const evidenceDirectory = path.dirname(absoluteReport)
   for (const lane of ['lane_a', 'lane_b', 'lane_c', 'lane_d', 'integrator']) {
     const manifestLane = integrationManifest?.lanes?.[lane]
+    if (isRecord(manifestLane)) {
+      const commitExists = spawnSync('git', ['cat-file', '-e', `${manifestLane.ready_commit}^{commit}`], { cwd: root }).status === 0
+      if (!commitExists) errors.push(`${lane} ready commit does not exist in the repository`)
+      if (commitExists && spawnSync('git', ['merge-base', '--is-ancestor', REQUIRED_BETA_BASE, manifestLane.ready_commit], { cwd: root }).status !== 0) errors.push(`${lane} ready commit does not descend from the required beta base`)
+      if (commitExists && spawnSync('git', ['merge-base', '--is-ancestor', manifestLane.ready_commit, head], { cwd: root }).status !== 0) errors.push(`${lane} ready commit is not integrated into exact HEAD`)
+      if (commitExists) {
+        const commitMessage = execFileSync('git', ['show', '-s', '--format=%B', manifestLane.ready_commit], { cwd: root, encoding: 'utf8' })
+        if (!commitMessage.includes(LANE_MARKERS[lane])) errors.push(`${lane} ready marker is absent from the actual commit message`)
+      }
+    }
+    const pairedReports = report.tool_reports?.[lane]
+    if (pairedReports?.gitnexus?.tested_commit && pairedReports?.graphify?.tested_commit
+      && pairedReports.gitnexus.tested_commit !== pairedReports.graphify.tested_commit) errors.push(`${lane} GitNexus and Graphify receipts do not use the same exact ready commit`)
     for (const tool of ['gitnexus', 'graphify']) {
       const entry = report.tool_reports?.[lane]?.[tool]
       const file = resolveInside(path.dirname(absoluteReport), entry?.path)
@@ -332,9 +345,9 @@ const validateEvidenceReport = ({ root, reportPath, requirements, requirementKey
           || !toolReport.invocation_argv.detect_changes.includes(toolReport.base_ref)) errors.push(`${lane} GitNexus invocation argv is incomplete or not bound to base_ref`)
         const rawImpact = unwrapMachineJson(readEvidenceArtifact({ directory: evidenceDirectory, artifact: toolReport.raw_impact, label: `${lane} GitNexus impact`, errors }))
         const rawDetect = unwrapMachineJson(readEvidenceArtifact({ directory: evidenceDirectory, artifact: toolReport.raw_detect_changes, label: `${lane} GitNexus detect_changes`, errors }))
-        if (rawImpact && (!isRecord(rawImpact.target) || typeof rawImpact.risk !== 'string' || !isRecord(rawImpact.summary))) errors.push(`${lane} raw GitNexus impact output lacks semantic fields`)
-        if (rawDetect && (!isRecord(rawDetect.summary) || !Number.isInteger(rawDetect.summary.changed_files)
-          || typeof rawDetect.summary.risk_level !== 'string' || !Array.isArray(rawDetect.affected_processes))) errors.push(`${lane} raw GitNexus detect_changes output lacks semantic fields`)
+        if (!isRecord(rawImpact) || !isRecord(rawImpact.target) || typeof rawImpact.risk !== 'string' || !isRecord(rawImpact.summary)) errors.push(`${lane} raw GitNexus impact output is null, malformed, or lacks semantic fields`)
+        if (!isRecord(rawDetect) || !isRecord(rawDetect.summary) || !Number.isInteger(rawDetect.summary.changed_files)
+          || typeof rawDetect.summary.risk_level !== 'string' || !Array.isArray(rawDetect.affected_processes)) errors.push(`${lane} raw GitNexus detect_changes output is null, malformed, or lacks semantic fields`)
       } else {
         if (!Array.isArray(toolReport.invocation_argv?.update) || !toolReport.invocation_argv.update.includes('update')
           || !Array.isArray(toolReport.invocation_argv?.status) || !toolReport.invocation_argv.status.includes('status')) errors.push(`${lane} Graphify invocation argv is incomplete`)
@@ -342,10 +355,10 @@ const validateEvidenceReport = ({ root, reportPath, requirements, requirementKey
         const rawStatus = readEvidenceArtifact({ directory: evidenceDirectory, artifact: toolReport.raw_status, label: `${lane} Graphify status`, errors })
         const graphFile = readEvidenceArtifact({ directory: evidenceDirectory, artifact: toolReport.graph_artifact, label: `${lane} Graphify graph`, errors, json: false })
         const manifestFile = readEvidenceArtifact({ directory: evidenceDirectory, artifact: toolReport.manifest_artifact, label: `${lane} Graphify manifest`, errors, json: false })
-        if (rawUpdate && (rawUpdate.operation !== 'update' || rawUpdate.tested_commit !== toolReport.tested_commit || !Array.isArray(rawUpdate.updated_sources))) errors.push(`${lane} raw Graphify update output lacks semantic fields`)
-        if (rawStatus && (rawStatus.tested_commit !== toolReport.tested_commit
+        if (!isRecord(rawUpdate) || rawUpdate.operation !== 'update' || rawUpdate.tested_commit !== toolReport.tested_commit || !Array.isArray(rawUpdate.updated_sources)) errors.push(`${lane} raw Graphify update output is null, malformed, or lacks semantic fields`)
+        if (!isRecord(rawStatus) || rawStatus.tested_commit !== toolReport.tested_commit
           || rawStatus.graph_sha256 !== toolReport.graph_artifact?.output_sha256
-          || rawStatus.manifest_sha256 !== toolReport.manifest_artifact?.output_sha256)) errors.push(`${lane} raw Graphify status output does not bind retained graph/manifest hashes`)
+          || rawStatus.manifest_sha256 !== toolReport.manifest_artifact?.output_sha256) errors.push(`${lane} raw Graphify status output is null, malformed, or does not bind retained graph/manifest hashes`)
         if (graphFile) {
           try { const graph = readJson(graphFile); if (graph.built_at_commit !== toolReport.tested_commit || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) errors.push(`${lane} Graphify graph lacks exact-commit semantic fields`) } catch { errors.push(`${lane} Graphify graph JSON is malformed`) }
         }
