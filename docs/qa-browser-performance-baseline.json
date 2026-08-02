@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "backlog_item": "QA-015",
+  "status": "observed_fallback_baseline",
+  "captured_on": "2026-08-02",
+  "source": {
+    "commit": "0dd3dd43b9f376370ee73a9e2fe4725974caaae8",
+    "application_source_modified_by_capture_lane": false,
+    "node": "22.20.0",
+    "npm": "10.9.3",
+    "browser_surface": "standalone_chromium_cdp_fallback"
+  },
+  "methodology": {
+    "runs": 3,
+    "scenario": "fresh disposable daemon and browser profile; 18 graph agents; one durable Agent Home session; 250 transcript events; real snapshot, graph, transcript, and search paths",
+    "budget_formula": "ceil(max(observed_p95_ms * 4, observed_p95_ms + 100))",
+    "scope": "single-host engineering regression baseline, not a public SLO or in-app Browser acceptance claim"
+  },
+  "capture_digests": [
+    "6b649c7a9ad24afd535bbe0307aed12de4a30011d8857ab3734de1cb6d454e47",
+    "c14d4b909c5720d8f3c3a8bc66522d64f946287075d754b0db43d03e368a4807",
+    "5d75f345537658959f3ebae82f4d5fe04b17d29b57b991e36452e81f7801dc33"
+  ],
+  "viewports": [
+    {
+      "id": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "performance": {
+        "startup": { "samples_ms": [778.2, 769.2, 79], "observed_ms": 778.2, "budget_ms": 3113 },
+        "snapshot_loading": { "samples_ms": [2249.3, 920.7, 717.1], "observed_ms": 2249.3, "budget_ms": 8998 },
+        "transcript_loading": { "samples_ms": [453.755, 354.311, 502.59], "observed_ms": 502.59, "budget_ms": 2011 },
+        "graph_view": { "samples_ms": [4.189, 2.146, 2.108], "observed_ms": 4.189, "budget_ms": 105 },
+        "search": { "samples_ms": [130.32, 43.528, 46.294], "observed_ms": 130.32, "budget_ms": 522 }
+      }
+    },
+    {
+      "id": "tablet",
+      "width": 834,
+      "height": 1194,
+      "performance": {
+        "startup": { "samples_ms": [389.2, 85.6, 83.3], "observed_ms": 389.2, "budget_ms": 1557 },
+        "snapshot_loading": { "samples_ms": [1510, 953.5, 675], "observed_ms": 1510, "budget_ms": 6040 },
+        "transcript_loading": { "samples_ms": [317.284, 486.236, 465.269], "observed_ms": 486.236, "budget_ms": 1945 },
+        "graph_view": { "samples_ms": [12.003, 4.952, 5.047], "observed_ms": 12.003, "budget_ms": 113 },
+        "search": { "samples_ms": [59.164, 44.183, 44.232], "observed_ms": 59.164, "budget_ms": 237 }
+      }
+    },
+    {
+      "id": "phone",
+      "width": 390,
+      "height": 844,
+      "performance": {
+        "startup": { "samples_ms": [281.3, 249.8, 122.9], "observed_ms": 281.3, "budget_ms": 1126 },
+        "snapshot_loading": { "samples_ms": [2037.8, 989.6, 703.9], "observed_ms": 2037.8, "budget_ms": 8152 },
+        "transcript_loading": { "samples_ms": [758.278, 352.11, 254.636], "observed_ms": 758.278, "budget_ms": 3034 },
+        "graph_view": { "samples_ms": [9.582, 4.411, 8.06], "observed_ms": 9.582, "budget_ms": 110 },
+        "search": { "samples_ms": [161.132, 44.084, 45.204], "observed_ms": 161.132, "budget_ms": 645 }
+      }
+    }
+  ]
+}
