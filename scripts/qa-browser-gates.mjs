@@ -1222,6 +1222,8 @@ const main = async () => {
   }
   const daemonStdout = [], daemonStderr = [], chromeStderr = []
   let daemon, chrome, client, operatorToken = ''
+  let activeViewport = null
+  const completedViewports = []
   try {
     daemon = spawn(process.execPath, [join(repositoryRoot, 'dist/cli.js'), 'serve'], {
       cwd: repositoryRoot,
@@ -1279,10 +1281,12 @@ const main = async () => {
       ? RESPONSIVE_VIEWPORTS.filter((viewport) => viewport.id === requestedViewport)
       : RESPONSIVE_VIEWPORTS
     if (requestedViewport && viewportMatrix.length !== 1) throw new Error(`unknown QA viewport: ${requestedViewport}`)
-    const viewports = []
+    const viewports = completedViewports
     for (const viewport of viewportMatrix) {
+      activeViewport = viewport.id
       viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario }))
     }
+    activeViewport = null
     const evidence = redactEvidence({
       schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
       captured_at: new Date().toISOString(),
@@ -1335,6 +1339,32 @@ const main = async () => {
       daemon_stderr: stripRunToken(boundedText(daemonStderr)),
       chrome_stderr: stripRunToken(boundedText(chromeStderr)),
     })
+    const failureEvidence = redactEvidence({
+      schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
+      captured_at: new Date().toISOString(),
+      incomplete: true,
+      backlog_items: ['QA-013', 'QA-014', 'QA-015'],
+      evidence_boundary: {
+        in_app_browser_available: false,
+        surface: 'standalone_chromium_cdp_fallback',
+        qa_013_closure_permitted: false,
+      },
+      source: {
+        repository: basename(repositoryRoot),
+        commit: buildManifest.source_commit,
+        source_status: buildManifest.source_status,
+        source_tree_sha256: buildManifest.source_tree_sha256,
+        node: process.versions.node,
+        artifact_identity: buildManifest.artifact_identity,
+        build_manifest_sha256: buildManifest.sha256,
+      },
+      active_viewport: activeViewport,
+      completed_viewports: completedViewports,
+      diagnostics,
+    })
+    failureEvidence.sha256 = verifiableDocumentDigest(failureEvidence)
+    mkdirSync(dirname(options.output), { recursive: true })
+    writeFileSync(options.output, `${JSON.stringify(failureEvidence, null, 2)}\n`, { mode: 0o600 })
     console.error(JSON.stringify(diagnostics, null, 2))
     throw error
   } finally {
