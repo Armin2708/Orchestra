@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { AttentionService } from './attention.js'
 import type { ActorIdentity } from './agent-home-support.js'
@@ -31,6 +32,11 @@ export const CONFLICT_PROPOSAL_KINDS = Object.freeze([
 ] as const)
 export type ConflictProposalKind = typeof CONFLICT_PROPOSAL_KINDS[number]
 
+export const CONFLICT_RESOURCE_KINDS = Object.freeze([
+  'path', 'branch', 'workspace', 'card', 'job', 'assignment',
+] as const)
+export type ConflictResourceKind = typeof CONFLICT_RESOURCE_KINDS[number]
+
 export interface ConflictDiscussionAdapter {
   createConflictDiscussion(input: {
     boardId: number
@@ -48,6 +54,19 @@ export interface ConflictDiscussionAdapter {
     summary: string
     idempotencyKey: string
   }): void
+}
+
+export interface ConflictKnowledgePromotionAdapter {
+  promoteConflictResolution(input: {
+    boardId: number
+    cardId: number | null
+    conflictId: string
+    resolutionId: string
+    title: string
+    exactSource: Record<string, unknown>
+    sourceSha256: string
+    reviewedAt: string
+  }): { sourceId: string; chunkId: string; repositoryHeadSha: string }
 }
 
 export interface PlanningParticipantInput {
@@ -103,12 +122,25 @@ export interface DelegateTeamWorkInput {
   teamId: string
   exclusiveAssignmentId: string
   assignmentMarketVersion: number
+  jobId: string
   memberId: string
   delegatedByMemberId: string
   contractRef: string
   objective: string
   criterionIds: string[]
   scopePaths: string[]
+  reason: string
+  actor: ActorIdentity
+  idempotencyKey: string
+  correlationId?: string | null
+}
+
+export interface TransitionTeamDelegationInput {
+  teamId: string
+  delegationId: string
+  memberId: string
+  transition: 'accept' | 'complete' | 'cancel'
+  expectedVersion: number
   reason: string
   actor: ActorIdentity
   idempotencyKey: string
@@ -122,7 +154,7 @@ export interface OpenConflictInput {
   summary: string
   participantMemberIds: string[]
   causalJobIds: string[]
-  affectedResources: Array<{ kind: string; key: string }>
+  affectedResources: Array<{ kind: ConflictResourceKind; key: string }>
   detectionEvidence: Record<string, unknown>
   actor: ActorIdentity
   idempotencyKey: string
@@ -155,6 +187,7 @@ export interface ResolveConflictInput {
 
 interface PlanningTeamServiceOptions {
   discussionAdapter?: ConflictDiscussionAdapter | null
+  conflictKnowledgeAdapter?: ConflictKnowledgePromotionAdapter | null
   events?: EventStore
   attention?: AttentionService
 }
@@ -168,6 +201,7 @@ export class PlanningTeamService {
   private readonly events: EventStore
   private readonly attention: AttentionService
   private readonly discussionAdapter: ConflictDiscussionAdapter | null
+  private readonly conflictKnowledgeAdapter: ConflictKnowledgePromotionAdapter | null
 
   constructor(
     private readonly db: Database.Database,
@@ -176,6 +210,7 @@ export class PlanningTeamService {
     this.events = options.events ?? new EventStore(db)
     this.attention = options.attention ?? new AttentionService(db)
     this.discussionAdapter = options.discussionAdapter ?? null
+    this.conflictKnowledgeAdapter = options.conflictKnowledgeAdapter ?? null
   }
 
   createPlan(input: CreatePlanningTeamInput): Record<string, unknown> {
@@ -558,6 +593,22 @@ export class PlanningTeamService {
     if (!ownerMember) {
       throw new ConflictError('the exclusive assignment owner must be an explicit planning-team participant')
     }
+    const jobId = boundedText(input.jobId, 'canonical job id', 200)
+    const job = this.db.prepare(`SELECT id, board_id, card_id, job_assignment_id,
+        assigned_profile_id, assignment_market_version, status
+      FROM jobs WHERE id=? AND board_id=? AND card_id=?`)
+      .get(jobId, boardId, cardId) as Record<string, unknown> | undefined
+    if (!job
+      || String(job.job_assignment_id) !== assignmentId
+      || String(job.assigned_profile_id) !== String(assignment.profile_id)
+      || Number(job.assignment_market_version) !== assignmentMarketVersion) {
+      throw new ConflictError(
+        'collaborative delegation must reference the executable job for the exclusive assignment',
+      )
+    }
+    if (!['queued', 'running'].includes(String(job.status))) {
+      throw new ConflictError('collaborative delegation requires a queued or running canonical job')
+    }
     const contractRef = boundedText(input.contractRef, 'contract reference', 512)
     const objective = boundedText(input.objective, 'delegated objective', 4000)
     const criterionIds = stringList(input.criterionIds, 'criterion ids', 200)
@@ -570,6 +621,7 @@ export class PlanningTeamService {
       teamId: team.id,
       assignmentId,
       assignmentMarketVersion,
+      jobId,
       memberId: member.id,
       delegatorId: delegator.id,
       contractRef,
@@ -625,8 +677,9 @@ export class PlanningTeamService {
       this.db.prepare(`INSERT INTO os_team_delegations
         (id, binding_id, plan_id, participant_id, delegated_by_participant_id, contract_ref,
          objective, criterion_ids_json, scope_paths_json, status, created_at,
-         accepted_at, completed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'assigned', ?, NULL, NULL)`)
+         accepted_at, completed_at, job_id, version, updated_at, cancelled_at,
+         transition_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'assigned', ?, NULL, NULL, ?, 1, ?, NULL, NULL)`)
         .run(
           delegationId,
           binding.id,
@@ -637,6 +690,8 @@ export class PlanningTeamService {
           objective,
           stableJson(criterionIds),
           stableJson(scopePaths),
+          at,
+          jobId,
           at,
         )
       this.events.append({
@@ -652,6 +707,7 @@ export class PlanningTeamService {
           binding_id: binding.id,
           exclusive_assignment_id: assignmentId,
           delegation_id: delegationId,
+          job_id: jobId,
           member_id: member.id,
           criterion_ids: criterionIds,
           scope_paths: scopePaths,
@@ -660,6 +716,128 @@ export class PlanningTeamService {
       return {
         binding: mapRow(binding),
         delegation: mapRow(this.requireRow('os_team_delegations', delegationId, 'team delegation')),
+        exclusive_ownership_preserved: true,
+      }
+    })
+    return { ...command.result, replayed: command.replayed }
+  }
+
+  transitionDelegation(input: TransitionTeamDelegationInput): Record<string, unknown> {
+    const team = this.requireTeam(input.teamId)
+    const boardId = Number(team.board_id)
+    const delegationId = boundedText(input.delegationId, 'delegation id', 200)
+    const memberId = boundedText(input.memberId, 'team member id', 200)
+    const transition = enumValue(
+      input.transition,
+      ['accept', 'complete', 'cancel'] as const,
+      'delegation transition',
+    )
+    const expectedVersion = positiveInteger(input.expectedVersion, 'expected delegation version')
+    const reason = boundedText(input.reason, 'delegation transition reason', 2000)
+    const actor = normalizeActor(input.actor)
+    const idempotencyKey = boundedText(input.idempotencyKey, 'idempotency key', 200)
+    const command = this.runCommand(boardId, idempotencyKey, 'planning_team.transition_delegation', {
+      teamId: team.id,
+      delegationId,
+      memberId,
+      transition,
+      expectedVersion,
+      reason,
+      actor,
+    }, () => {
+      const delegation = this.db.prepare(`SELECT delegation.*, binding.exclusive_assignment_id,
+          binding.executable_profile_id, binding.assignment_market_version,
+          job.status AS job_status
+        FROM os_team_delegations delegation
+        JOIN os_team_work_bindings binding ON binding.id=delegation.binding_id
+        JOIN jobs job ON job.id=delegation.job_id
+        WHERE delegation.id=? AND delegation.plan_id=?`)
+        .get(delegationId, team.id) as Record<string, unknown> | undefined
+      if (!delegation) throw new NotFoundError('team delegation not found')
+      const member = this.requireActiveMember(String(team.id), memberId)
+      if (Number(delegation.version) !== expectedVersion) {
+        throw new ConflictError('team delegation version is stale')
+      }
+      if (transition === 'accept' || transition === 'complete') {
+        if (String(member.id) !== String(delegation.participant_id)) {
+          throw new ConflictError('only the assigned participant can accept or complete delegated work')
+        }
+      } else if (
+        String(member.id) !== String(delegation.participant_id)
+        && String(member.id) !== String(delegation.delegated_by_participant_id)
+        && !this.memberHasRole(String(member.id), 'facilitator')
+      ) {
+        throw new ConflictError('only the assignee, delegator, or facilitator can cancel delegated work')
+      }
+      const currentStatus = String(delegation.status)
+      const nextStatus = transition === 'accept'
+        ? 'accepted'
+        : transition === 'complete'
+          ? 'completed'
+          : 'cancelled'
+      const transitionAllowed = (currentStatus === 'assigned'
+        && (nextStatus === 'accepted' || nextStatus === 'cancelled'))
+        || (currentStatus === 'accepted'
+          && (nextStatus === 'completed' || nextStatus === 'cancelled'))
+      if (!transitionAllowed) {
+        throw new ConflictError(`delegated work in ${currentStatus} cannot transition to ${nextStatus}`)
+      }
+      if (nextStatus === 'accepted' && !['queued', 'running'].includes(String(delegation.job_status))) {
+        throw new ConflictError('delegated work cannot be accepted after its canonical job stopped')
+      }
+      if (nextStatus === 'completed'
+        && !['running', 'succeeded'].includes(String(delegation.job_status))) {
+        throw new ConflictError('delegated work can complete only while its canonical job runs or succeeds')
+      }
+      const at = timestamp()
+      const changed = this.db.prepare(`UPDATE os_team_delegations SET
+          status=?, version=version+1, updated_at=?, transition_reason=?,
+          accepted_at=CASE WHEN ?='accepted' THEN ? ELSE accepted_at END,
+          completed_at=CASE WHEN ?='completed' THEN ? ELSE completed_at END,
+          cancelled_at=CASE WHEN ?='cancelled' THEN ? ELSE cancelled_at END
+        WHERE id=? AND plan_id=? AND status=? AND version=?`)
+        .run(
+          nextStatus,
+          at,
+          reason,
+          nextStatus,
+          at,
+          nextStatus,
+          at,
+          nextStatus,
+          at,
+          delegationId,
+          team.id,
+          currentStatus,
+          expectedVersion,
+        )
+      if (changed.changes !== 1) throw new ConflictError('team delegation changed concurrently')
+      const updated = mapRow(this.requireRow('os_team_delegations', delegationId, 'team delegation'))
+      this.events.append({
+        boardId,
+        cardId: nullableNumber(team.card_id),
+        jobId: String(delegation.job_id),
+        actor,
+        correlationId: input.correlationId,
+        idempotencyKey: `team:${idempotencyKey}`,
+        kind: `planning_team.work_${nextStatus}`,
+        source: 'planning-team-service',
+        payload: {
+          plan_id: team.id,
+          delegation_id: delegationId,
+          job_id: delegation.job_id,
+          exclusive_assignment_id: delegation.exclusive_assignment_id,
+          participant_id: member.id,
+          previous_status: currentStatus,
+          status: nextStatus,
+          version: updated.version,
+          reason,
+        },
+      })
+      return {
+        delegation: updated,
+        canonical_job_id: delegation.job_id,
+        exclusive_assignment_id: delegation.exclusive_assignment_id,
         exclusive_ownership_preserved: true,
       }
     })
@@ -683,11 +861,11 @@ export class PlanningTeamService {
     if (memberIds.length < 2) throw new ValidationError('a conflict requires at least two explicit participants')
     const members = memberIds.map((id) => this.requireActiveMember(String(team.id), id))
     const profileIds = members.map((member) => String(member.agent_profile_id))
-    const causalJobIds = stringList(input.causalJobIds, 'causal job ids', 200)
-    const affectedResources = input.affectedResources.map((resource) => ({
-      kind: boundedText(resource.kind, 'affected resource kind', 80),
-      key: boundedText(resource.key, 'affected resource key', 512),
-    }))
+    const causalJobIds = this.validateCausalJobs(
+      team,
+      stringList(input.causalJobIds, 'causal job ids', 200),
+    )
+    const affectedResources = this.validateAffectedResources(team, input.affectedResources)
     if (!affectedResources.length) throw new ValidationError('at least one affected resource is required')
     const detectionEvidence = boundedJsonObject(input.detectionEvidence, 'detection evidence')
     const dedupeSha256 = sha256(stableJson({
@@ -960,17 +1138,7 @@ export class PlanningTeamService {
     if (!resolution) throw new ConflictError('resolved conflict is missing its exact resolution source')
     const summary = boundedText(input.summary, 'knowledge candidate summary', 4000)
     const actor = normalizeActor(input.actor)
-    const source = {
-      source_kind: 'conflict_resolution',
-      conflict_id: conflict.id,
-      discussion_id: conflict.discussion_id,
-      resolution_id: resolution.id,
-      proposal_id: resolution.proposal_id,
-      rationale: resolution.rationale,
-      follow_up_actions: parseJson(resolution.follow_up_actions_json, []),
-      integration_member_id: resolution.integration_member_id,
-      resolved_at: conflict.resolved_at,
-    }
+    const source = this.conflictKnowledgeSource(conflict, resolution)
     const sourceSha256 = sha256(stableJson(source))
     const boardId = Number(conflict.board_id)
     const idempotencyKey = boundedText(input.idempotencyKey, 'idempotency key', 200)
@@ -1022,6 +1190,141 @@ export class PlanningTeamService {
         )),
         exact_source: source,
         review_required: true,
+      }
+    })
+    return { ...command.result, replayed: command.replayed }
+  }
+
+  reviewConflictKnowledgeCandidate(input: {
+    candidateId: string
+    decision: 'accept' | 'reject'
+    reason: string
+    actor: ActorIdentity
+    idempotencyKey: string
+    correlationId?: string | null
+  }): Record<string, unknown> {
+    const candidateId = boundedText(input.candidateId, 'conflict knowledge candidate id', 200)
+    const candidate = this.db.prepare(`SELECT candidate.*, conflict.board_id, conflict.plan_id,
+        plan.card_id, resolution.arbiter_id
+      FROM os_conflict_knowledge_candidates candidate
+      JOIN os_conflicts conflict ON conflict.id=candidate.conflict_id
+      JOIN os_team_plans plan ON plan.id=conflict.plan_id
+      JOIN os_conflict_resolutions resolution ON resolution.id=candidate.resolution_id
+      WHERE candidate.id=?`).get(candidateId) as Record<string, unknown> | undefined
+    if (!candidate) throw new NotFoundError('conflict knowledge candidate not found')
+    const decision = enumValue(input.decision, ['accept', 'reject'] as const, 'review decision')
+    const reason = boundedText(input.reason, 'knowledge review reason', 4000)
+    const actor = requireHumanActor(input.actor)
+    if (actor.id === candidate.requested_by_id || actor.id === candidate.arbiter_id) {
+      throw new ConflictError('conflict knowledge review must be independent of requester and arbiter')
+    }
+    const conflict = this.requireConflict(String(candidate.conflict_id))
+    const resolution = this.db.prepare(`SELECT * FROM os_conflict_resolutions WHERE id=?`)
+      .get(candidate.resolution_id) as Record<string, unknown> | undefined
+    if (!resolution) throw new ConflictError('conflict knowledge exact resolution is missing')
+    const exactSource = this.conflictKnowledgeSource(conflict, resolution)
+    const sourceSha256 = sha256(stableJson(exactSource))
+    if (sourceSha256 !== candidate.source_sha256) {
+      throw new ConflictError('conflict knowledge exact source changed before independent review')
+    }
+    const boardId = Number(candidate.board_id)
+    const idempotencyKey = boundedText(input.idempotencyKey, 'idempotency key', 200)
+    const command = this.runCommand(boardId, idempotencyKey, 'conflict.review_knowledge_candidate', {
+      candidateId,
+      decision,
+      reason,
+      sourceSha256,
+      actor,
+    }, () => {
+      const currentCandidate = this.db.prepare(`SELECT candidate.*, conflict.board_id,
+          conflict.plan_id, plan.card_id, resolution.arbiter_id
+        FROM os_conflict_knowledge_candidates candidate
+        JOIN os_conflicts conflict ON conflict.id=candidate.conflict_id
+        JOIN os_team_plans plan ON plan.id=conflict.plan_id
+        JOIN os_conflict_resolutions resolution ON resolution.id=candidate.resolution_id
+        WHERE candidate.id=?`).get(candidateId) as Record<string, unknown> | undefined
+      if (!currentCandidate) throw new NotFoundError('conflict knowledge candidate not found')
+      if (currentCandidate.status !== 'pending_review') {
+        throw new ConflictError('conflict knowledge candidate has already been reviewed')
+      }
+      if (decision === 'accept' && !this.conflictKnowledgeAdapter) {
+        throw new ConflictError('canonical Knowledge adapter is required to accept conflict knowledge')
+      }
+      const at = timestamp()
+      const promotion = decision === 'accept'
+        ? this.conflictKnowledgeAdapter!.promoteConflictResolution({
+            boardId,
+            cardId: nullableNumber(candidate.card_id),
+            conflictId: String(candidate.conflict_id),
+            resolutionId: String(candidate.resolution_id),
+            title: boundedText(candidate.summary, 'knowledge candidate summary', 4000),
+            exactSource,
+            sourceSha256,
+            reviewedAt: at,
+          })
+        : null
+      if (promotion) {
+        this.validateConflictKnowledgePromotion({
+          boardId,
+          cardId: nullableNumber(candidate.card_id),
+          conflictId: String(candidate.conflict_id),
+          resolutionId: String(candidate.resolution_id),
+          exactSource,
+          sourceSha256,
+          ...promotion,
+        })
+      }
+      const changed = this.db.prepare(`UPDATE os_conflict_knowledge_candidates SET
+          status=?, reviewed_at=?, reviewed_by_type=?, reviewed_by_id=?, review_reason=?,
+          knowledge_source_id=?
+        WHERE id=? AND status='pending_review' AND source_sha256=?`)
+        .run(
+          decision === 'accept' ? 'accepted' : 'rejected',
+          at,
+          actor.type,
+          actor.id,
+          reason,
+          promotion?.sourceId ?? null,
+          candidateId,
+          sourceSha256,
+        )
+      if (changed.changes !== 1) {
+        throw new ConflictError('conflict knowledge candidate changed concurrently')
+      }
+      this.events.append({
+        boardId,
+        cardId: nullableNumber(candidate.card_id),
+        actor,
+        correlationId: input.correlationId,
+        idempotencyKey: `team:${idempotencyKey}`,
+        kind: decision === 'accept'
+          ? 'conflict.knowledge_candidate_accepted'
+          : 'conflict.knowledge_candidate_rejected',
+        source: 'planning-team-service',
+        payload: {
+          candidate_id: candidateId,
+          conflict_id: candidate.conflict_id,
+          resolution_id: candidate.resolution_id,
+          source_ref: candidate.source_ref,
+          source_sha256: sourceSha256,
+          knowledge_source_id: promotion?.sourceId ?? null,
+          knowledge_chunk_id: promotion?.chunkId ?? null,
+          repository_head_sha: promotion?.repositoryHeadSha ?? null,
+          reviewed_by: actor.id,
+          decision,
+          reason,
+        },
+      })
+      return {
+        ...mapRow(this.requireRow(
+          'os_conflict_knowledge_candidates',
+          candidateId,
+          'conflict knowledge candidate',
+        )),
+        exact_source: exactSource,
+        knowledge_chunk_id: promotion?.chunkId ?? null,
+        repository_head_sha: promotion?.repositoryHeadSha ?? null,
+        independently_reviewed: true,
       }
     })
     return { ...command.result, replayed: command.replayed }
@@ -1309,6 +1612,192 @@ export class PlanningTeamService {
     return { nodes, edges, needs_you: needsYou }
   }
 
+  private conflictKnowledgeSource(
+    conflict: Record<string, unknown>,
+    resolution: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const plan = this.requireTeam(String(conflict.plan_id))
+    const proposal = this.db.prepare(`SELECT id, kind, summary, details_json
+      FROM os_conflict_proposals WHERE id=? AND conflict_id=?`)
+      .get(resolution.proposal_id, conflict.id) as Record<string, unknown> | undefined
+    if (!proposal) throw new ConflictError('conflict knowledge exact proposal is missing')
+    return {
+      schema_version: 1,
+      source_kind: 'conflict_resolution',
+      board_id: conflict.board_id,
+      plan_id: conflict.plan_id,
+      canonical_team_id: plan.team_id,
+      card_id: plan.card_id,
+      conflict_id: conflict.id,
+      discussion_id: conflict.discussion_id,
+      conflict_kind: conflict.kind,
+      severity: conflict.severity,
+      conflict_summary: conflict.summary,
+      causal_job_ids: parseJson(conflict.causal_job_ids_json, []),
+      affected_resources: parseJson(conflict.affected_resources_json, []),
+      detection_evidence: parseJson(conflict.detection_evidence_json, {}),
+      resolution_id: resolution.id,
+      proposal: {
+        id: proposal.id,
+        kind: proposal.kind,
+        summary: proposal.summary,
+        details: parseJson(proposal.details_json, {}),
+      },
+      arbiter: { type: resolution.arbiter_type, id: resolution.arbiter_id },
+      rationale: resolution.rationale,
+      follow_up_actions: parseJson(resolution.follow_up_actions_json, []),
+      integration_member_id: resolution.integration_member_id,
+      human_override_id: resolution.human_override_id,
+      resolved_at: conflict.resolved_at,
+    }
+  }
+
+  private validateConflictKnowledgePromotion(input: {
+    boardId: number
+    cardId: number | null
+    conflictId: string
+    resolutionId: string
+    exactSource: Record<string, unknown>
+    sourceSha256: string
+    sourceId: string
+    chunkId: string
+    repositoryHeadSha: string
+  }): void {
+    const retained = this.db.prepare(`SELECT source.source_kind, source.normalized_locator,
+        source.source_revision, source.content_sha256, source.access_scope_json,
+        source.targets_json, source.provenance_json,
+        chunk.content, chunk.content_sha256 AS chunk_content_sha256
+      FROM knowledge_sources source
+      JOIN knowledge_chunks chunk
+        ON chunk.board_id=source.board_id AND chunk.source_id=source.id
+      WHERE source.board_id=? AND source.id=? AND chunk.id=?`)
+      .get(input.boardId, input.sourceId, input.chunkId) as Record<string, unknown> | undefined
+    const expectedLocator = `conflicts/${input.conflictId}/resolutions/${input.resolutionId}.json`
+    const accessScope = retained
+      ? parseJson<Record<string, unknown>>(retained.access_scope_json, {})
+      : null
+    const targets = retained
+      ? parseJson<Record<string, unknown>>(retained.targets_json, {})
+      : null
+    const provenance = retained
+      ? parseJson<Record<string, unknown>>(retained.provenance_json, {})
+      : null
+    if (!retained
+      || retained.source_kind !== 'decision'
+      || retained.normalized_locator !== expectedLocator
+      || retained.source_revision !== input.sourceSha256
+      || retained.content_sha256 !== input.sourceSha256
+      || retained.chunk_content_sha256 !== input.sourceSha256
+      || retained.content !== stableJson(input.exactSource)
+      || !accessScope || accessScope.kind !== 'board'
+      || !targets || Number(targets.board_id) !== input.boardId
+      || nullableNumber(targets.card_id) !== input.cardId
+      || !provenance || provenance.base_commit_sha !== input.repositoryHeadSha
+      || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(input.repositoryHeadSha)) {
+      throw new ConflictError('canonical conflict Knowledge promotion evidence is incomplete')
+    }
+  }
+
+  private validateCausalJobs(
+    team: Record<string, unknown>,
+    values: string[],
+  ): string[] {
+    const boardId = Number(team.board_id)
+    const cardId = nullableNumber(team.card_id)
+    const binding = this.db.prepare(`SELECT exclusive_assignment_id FROM os_team_work_bindings
+      WHERE plan_id=? AND status='active'`).get(team.id) as
+      { exclusive_assignment_id: string } | undefined
+    const normalized = [...new Set(values)].sort()
+    for (const jobId of normalized) {
+      const job = this.db.prepare(`SELECT board_id, card_id, job_assignment_id,
+          assigned_profile_id, assignment_market_version
+        FROM jobs WHERE id=?`).get(jobId) as Record<string, unknown> | undefined
+      if (!job || Number(job.board_id) !== boardId
+        || (cardId !== null && Number(job.card_id) !== cardId)
+        || typeof job.job_assignment_id !== 'string'
+        || typeof job.assigned_profile_id !== 'string'
+        || !Number.isSafeInteger(job.assignment_market_version)) {
+        throw new ValidationError('causal job must retain a canonical assignment in plan scope')
+      }
+      if (binding && job.job_assignment_id !== binding.exclusive_assignment_id) {
+        throw new ValidationError('causal job does not belong to the collaborative plan binding')
+      }
+    }
+    return normalized
+  }
+
+  private validateAffectedResources(
+    team: Record<string, unknown>,
+    values: Array<{ kind: ConflictResourceKind; key: string }>,
+  ): Array<{ kind: ConflictResourceKind; key: string }> {
+    if (!Array.isArray(values) || values.length === 0 || values.length > 200) {
+      throw new ValidationError('affected resources must contain between 1 and 200 identities')
+    }
+    const boardId = Number(team.board_id)
+    const cardId = nullableNumber(team.card_id)
+    const binding = this.db.prepare(`SELECT exclusive_assignment_id FROM os_team_work_bindings
+      WHERE plan_id=? AND status='active'`).get(team.id) as
+      { exclusive_assignment_id: string } | undefined
+    const seen = new Set<string>()
+    const resources: Array<{ kind: ConflictResourceKind; key: string }> = []
+    for (const value of values) {
+      if (!value || typeof value !== 'object') throw new ValidationError('affected resource is invalid')
+      const kind = enumValue(value.kind, CONFLICT_RESOURCE_KINDS, 'affected resource kind')
+      const key = boundedText(value.key, 'affected resource key', 512)
+      if (kind === 'path') {
+        const normalized = path.posix.normalize(key)
+        if (path.posix.isAbsolute(key) || key.includes('\\') || normalized !== key
+          || normalized === '..' || normalized.startsWith('../')
+          || normalized.split('/').some((part) => part === '.git' || !part)) {
+          throw new ValidationError('affected path must be a normalized repository-relative identity')
+        }
+      } else if (kind === 'branch') {
+        if (key.startsWith('-') || key.endsWith('.') || key.endsWith('.lock')
+          || key.includes('..') || key.includes('@{')
+          || /[\s~^:?*[\]\\]/u.test(key)) {
+          throw new ValidationError('affected branch identity is invalid')
+        }
+      } else if (kind === 'workspace') {
+        const workspace = this.db.prepare(`SELECT board_id, card_id FROM workspaces WHERE id=?`)
+          .get(key) as { board_id: number; card_id: number | null } | undefined
+        if (!workspace || workspace.board_id !== boardId
+          || (cardId !== null && workspace.card_id !== null && workspace.card_id !== cardId)) {
+          throw new ValidationError('affected workspace is outside plan scope')
+        }
+      } else if (kind === 'card') {
+        if (!/^[1-9]\d*$/u.test(key)) throw new ValidationError('affected card identity is invalid')
+        const resourceCardId = Number(key)
+        const card = this.db.prepare('SELECT board_id FROM cards WHERE id=?').get(resourceCardId) as
+          { board_id: number } | undefined
+        if (!card || card.board_id !== boardId || (cardId !== null && resourceCardId !== cardId)) {
+          throw new ValidationError('affected card is outside plan scope')
+        }
+      } else if (kind === 'job') {
+        this.validateCausalJobs(team, [key])
+      } else {
+        const assignment = this.db.prepare(`SELECT board_id, card_id FROM job_market_assignments
+          WHERE id=?`).get(key) as { board_id: number; card_id: number } | undefined
+        if (!assignment || assignment.board_id !== boardId
+          || (cardId !== null && assignment.card_id !== cardId)
+          || (binding && binding.exclusive_assignment_id !== key)) {
+          throw new ValidationError('affected assignment is outside plan scope')
+        }
+      }
+      const identity = `${kind}\u0000${key}`
+      if (!seen.has(identity)) {
+        seen.add(identity)
+        resources.push({ kind, key })
+      }
+    }
+    return resources.sort((left, right) =>
+      left.kind.localeCompare(right.kind) || left.key.localeCompare(right.key))
+  }
+
+  private memberHasRole(memberId: string, role: PlanningTeamRole): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM os_team_plan_roles
+      WHERE participant_id=? AND role=? AND ended_at IS NULL`).get(memberId, role)
+  }
+
   private participantSnapshot(planId: string): Array<Record<string, unknown>> {
     return (this.db.prepare(`SELECT participant.id, participant.agent_profile_id,
       participant.membership_id, participant.joined_at, profile.name, profile.status
@@ -1336,7 +1825,16 @@ export class PlanningTeamService {
       .map(mapRow)
     const resolution = this.db.prepare(`SELECT * FROM os_conflict_resolutions
       WHERE conflict_id=?`).get(conflictId) as Record<string, unknown> | undefined
-    return { ...conflict, participants, proposals, resolution: resolution ? mapRow(resolution) : null }
+    const knowledgeCandidates = (this.db.prepare(`SELECT * FROM os_conflict_knowledge_candidates
+      WHERE conflict_id=? ORDER BY created_at, id`).all(conflictId) as Record<string, unknown>[])
+      .map(mapRow)
+    return {
+      ...conflict,
+      participants,
+      proposals,
+      resolution: resolution ? mapRow(resolution) : null,
+      knowledge_candidates: knowledgeCandidates,
+    }
   }
 
   private normalizeParticipants(

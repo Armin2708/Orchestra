@@ -231,6 +231,8 @@ function removeMigration018Schema(db: Database.Database): void {
 function removeMigration016Schema(db: Database.Database): void {
   removeMigration018Schema(db)
   db.exec(`
+    DROP TRIGGER IF EXISTS os_team_delegation_scope_insert;
+    DELETE FROM os_schema_migrations WHERE id='034-team-collaboration-review';
     DROP TRIGGER IF EXISTS job_market_assignment_insert_scope;
     DROP TRIGGER IF EXISTS job_market_assignment_insert_market_cas;
     DROP TRIGGER IF EXISTS job_market_assignment_update;

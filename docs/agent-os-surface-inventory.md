@@ -17,7 +17,7 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 133 | 3 | 10 | 12 | 158 |
-| Registered HTTP routes | 152 | 29 | 25 | 9 | 215 |
+| Registered HTTP routes | 153 | 29 | 25 | 9 | 216 |
 | CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -235,6 +235,7 @@ POST /api/v1/os/discussions/:discussionId/accept
 POST /api/v1/os/discussions/:discussionId/posts
 POST /api/v1/os/discussions/:discussionId/posts/:postId/promotion
 POST /api/v1/os/discussions/:discussionId/transition
+POST /api/v1/os/team-conflict-knowledge-candidates/:candidateId/review
 POST /api/v1/os/team-conflicts/:conflictId/knowledge-candidates
 POST /api/v1/os/team-conflicts/:conflictId/proposals
 POST /api/v1/os/team-conflicts/:conflictId/resolve

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { installTeamCollaborationReviewSchema } from './team-collaboration-review-migration.js'
 
 export const AGENT_OS_TEAM_PLANNING_MIGRATION_ID =
   '033-teams-planning-conflicts'
@@ -59,7 +60,8 @@ const TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze
   os_team_delegations: [
     'id', 'binding_id', 'plan_id', 'participant_id', 'delegated_by_participant_id',
     'contract_ref', 'objective', 'criterion_ids_json', 'scope_paths_json',
-    'status', 'created_at', 'accepted_at', 'completed_at',
+    'status', 'created_at', 'accepted_at', 'completed_at', 'job_id', 'version',
+    'updated_at', 'cancelled_at', 'transition_reason',
   ],
   os_team_integrations: [
     'id', 'plan_id', 'binding_id', 'integrator_participant_id',
@@ -91,7 +93,8 @@ const TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze
   os_conflict_knowledge_candidates: [
     'id', 'conflict_id', 'resolution_id', 'status', 'source_kind',
     'source_ref', 'source_sha256', 'summary', 'requested_by_type',
-    'requested_by_id', 'created_at', 'reviewed_at',
+    'requested_by_id', 'created_at', 'reviewed_at', 'reviewed_by_type',
+    'reviewed_by_id', 'review_reason', 'knowledge_source_id',
   ],
   os_team_command_receipts: [
     'board_id', 'idempotency_key', 'command_kind', 'request_sha256',
@@ -258,7 +261,18 @@ export function installTeamPlanningSchema(db: Database.Database): void {
       status TEXT NOT NULL CHECK (status IN ('assigned', 'accepted', 'completed', 'cancelled')),
       created_at TEXT NOT NULL,
       accepted_at TEXT,
-      completed_at TEXT
+      completed_at TEXT,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE RESTRICT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      updated_at TEXT NOT NULL,
+      cancelled_at TEXT,
+      transition_reason TEXT,
+      CHECK (
+        (status='assigned' AND accepted_at IS NULL AND completed_at IS NULL AND cancelled_at IS NULL)
+        OR (status='accepted' AND accepted_at IS NOT NULL AND completed_at IS NULL AND cancelled_at IS NULL)
+        OR (status='completed' AND accepted_at IS NOT NULL AND completed_at IS NOT NULL AND cancelled_at IS NULL)
+        OR (status='cancelled' AND completed_at IS NULL AND cancelled_at IS NOT NULL)
+      )
     );
 
     CREATE TABLE IF NOT EXISTS os_team_integrations (
@@ -367,6 +381,10 @@ export function installTeamPlanningSchema(db: Database.Database): void {
       requested_by_id TEXT,
       created_at TEXT NOT NULL,
       reviewed_at TEXT,
+      reviewed_by_type TEXT,
+      reviewed_by_id TEXT,
+      review_reason TEXT,
+      knowledge_source_id TEXT,
       UNIQUE (resolution_id, source_sha256)
     );
 
@@ -497,12 +515,14 @@ export function installTeamPlanningSchema(db: Database.Database): void {
       SELECT RAISE(ABORT, 'conflict scope is inconsistent');
     END;
   `)
+  installTeamCollaborationReviewSchema(db)
 }
 
 function assertTeamPlanningPrerequisites(db: Database.Database): void {
   const required = [
     'boards', 'cards', 'agent_profiles', 'os_teams', 'os_organizations',
-    'job_market_assignments', 'delivery_reports', 'attention_items', 'os_events',
+    'job_market_assignments', 'jobs', 'delivery_reports', 'attention_items', 'os_events',
+    'knowledge_sources',
   ]
   const present = new Set((db.prepare(`SELECT name FROM sqlite_master
     WHERE type='table'`).all() as Array<{ name: string }>).map((row) => row.name))
@@ -519,8 +539,26 @@ function assertExistingTeamPlanningTablesCompatible(db: Database.Database): void
     if (!exists) continue
     const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
       .map((row) => row.name)
-    if (columns.length !== expected.length || expected.some((name) => !columns.includes(name))) {
+    const legacy = LEGACY_TABLE_COLUMNS[table]
+    const currentMatch = columns.length === expected.length
+      && expected.every((name, index) => columns[index] === name)
+    const legacyMatch = legacy !== undefined && columns.length === legacy.length
+      && legacy.every((name, index) => columns[index] === name)
+    if (!currentMatch && !legacyMatch) {
       throw new Error(`${table} has an incompatible schema`)
     }
   }
 }
+
+const LEGACY_TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  os_team_delegations: [
+    'id', 'binding_id', 'plan_id', 'participant_id', 'delegated_by_participant_id',
+    'contract_ref', 'objective', 'criterion_ids_json', 'scope_paths_json',
+    'status', 'created_at', 'accepted_at', 'completed_at',
+  ],
+  os_conflict_knowledge_candidates: [
+    'id', 'conflict_id', 'resolution_id', 'status', 'source_kind',
+    'source_ref', 'source_sha256', 'summary', 'requested_by_type',
+    'requested_by_id', 'created_at', 'reviewed_at',
+  ],
+})

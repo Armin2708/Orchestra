@@ -6,11 +6,14 @@ import { objectBody, positiveId } from './json.js'
 import {
   PlanningTeamService,
   type ConflictDiscussionAdapter,
+  type ConflictKnowledgePromotionAdapter,
 } from './team-planning.js'
+import { CanonicalConflictKnowledgeAdapter } from './team-conflict-knowledge.js'
 
 export interface TeamPlanningRouteOptions extends FastifyPluginOptions {
   db: Database.Database
   discussionAdapter: ConflictDiscussionAdapter
+  conflictKnowledgeAdapter?: ConflictKnowledgePromotionAdapter
   isOperator?: (request: FastifyRequest) => boolean
 }
 
@@ -22,6 +25,8 @@ export const teamPlanningPlugin: FastifyPluginAsync<TeamPlanningRouteOptions> = 
 ) => {
   const service = new PlanningTeamService(options.db, {
     discussionAdapter: options.discussionAdapter,
+    conflictKnowledgeAdapter:
+      options.conflictKnowledgeAdapter ?? new CanonicalConflictKnowledgeAdapter(options.db),
   })
   const isOperator = options.isOperator ?? (() => false)
 
@@ -78,6 +83,7 @@ export const teamPlanningPlugin: FastifyPluginAsync<TeamPlanningRouteOptions> = 
     'round.advance': (body) => service.advanceRound(body as never),
     'override.record': (body) => service.recordHumanOverride(body as never),
     'work.delegate': (body) => service.delegateWork(body as never),
+    'work.transition': (body) => service.transitionDelegation(body as never),
     'integration.record': (body) => service.recordIntegratedDelivery(body as never),
     'conflict.open': (body) => service.openConflict(body as never),
     'lease.create': (body) => service.createWorkLease(body as never),
@@ -129,6 +135,18 @@ export const teamPlanningPlugin: FastifyPluginAsync<TeamPlanningRouteOptions> = 
       const result = service.requestConflictKnowledgePromotion({
         ...body,
         conflictId: request.params.conflictId,
+      } as never)
+      return reply.code(result.replayed ? 200 : 201).send({ result })
+    },
+  )
+
+  app.post<{ Params: { candidateId: string }; Body: unknown }>(
+    '/team-conflict-knowledge-candidates/:candidateId/review',
+    (request, reply) => {
+      const body = mutationBody(request, request.body, isOperator, 'human')
+      const result = service.reviewConflictKnowledgeCandidate({
+        ...body,
+        candidateId: request.params.candidateId,
       } as never)
       return reply.code(result.replayed ? 200 : 201).send({ result })
     },

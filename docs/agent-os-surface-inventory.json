@@ -403,6 +403,7 @@
       "POST /api/v1/os/discussions/:discussionId/posts",
       "POST /api/v1/os/discussions/:discussionId/posts/:postId/promotion",
       "POST /api/v1/os/discussions/:discussionId/transition",
+      "POST /api/v1/os/team-conflict-knowledge-candidates/:candidateId/review",
       "POST /api/v1/os/team-conflicts/:conflictId/knowledge-candidates",
       "POST /api/v1/os/team-conflicts/:conflictId/proposals",
       "POST /api/v1/os/team-conflicts/:conflictId/resolve",

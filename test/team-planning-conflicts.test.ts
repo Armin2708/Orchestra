@@ -1,9 +1,17 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import Fastify from 'fastify'
 import { AgentProfileService } from '../src/agent-os/agent-profiles.js'
 import { JobAssignmentService } from '../src/agent-os/job-assignments.js'
 import { JobMarketService } from '../src/agent-os/job-market.js'
 import { OrganizationService } from '../src/agent-os/organization.js'
+import { JobScheduler } from '../src/agent-os/scheduler.js'
+import { CanonicalConflictKnowledgeAdapter } from '../src/agent-os/team-conflict-knowledge.js'
+import { canonicalKnowledgeJson } from '../src/agent-os/knowledge-contracts.js'
+import { AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID } from '../src/agent-os/team-collaboration-review-migration.js'
 import {
   AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
   AGENT_OS_TEAM_PLANNING_TABLES,
@@ -23,7 +31,7 @@ function future(minutes = 60): string {
   return new Date(Date.now() + minutes * 60_000).toISOString()
 }
 
-function fixture() {
+function fixture(options: { canonicalKnowledge?: boolean; projectPath?: string } = {}) {
   const db = openDb(':memory:')
   installTeamPlanningSchema(db)
   db.exec(`CREATE TABLE test_conflict_discussions (
@@ -32,10 +40,16 @@ function fixture() {
     status TEXT NOT NULL
   )`)
   const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
-    VALUES (?, 'Team planning')`).run(`/team-planning-${Math.random()}`).lastInsertRowid)
+    VALUES (?, 'Team planning')`)
+    .run(options.projectPath ?? `/team-planning-${Math.random()}`).lastInsertRowid)
   const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
     VALUES (?, 'Collaborative slice', 'Plan and integrate one bounded slice')`)
     .run(boardId).lastInsertRowid)
+  const workspaceId = `team-planning-workspace-${boardId}`
+  db.prepare(`INSERT INTO workspaces
+    (id, board_id, card_id, name, kind, root_path, base_ref, status)
+    VALUES (?, ?, ?, ?, 'shared', ?, 'HEAD', 'active')`)
+    .run(workspaceId, boardId, cardId, workspaceId, `/tmp/${workspaceId}`)
   const profiles = new AgentProfileService(db)
   const facilitator = profiles.create({
     boardId,
@@ -91,10 +105,22 @@ function fixture() {
   const assignment = new JobAssignmentService(db).assign({
     cardId,
     profileId: facilitator.id,
+    workspaceId,
     expectedMarketVersion: before.market_version,
     actor: operator,
     idempotencyKey: `exclusive-assignment-${boardId}`,
   }).assignment
+  const job = new JobScheduler(db).create({
+    boardId,
+    cardId,
+    workspaceId,
+    provider: 'claude',
+    jobAssignment: {
+      jobAssignmentId: assignment.id,
+      assignedProfileId: assignment.profile_id,
+      assignmentMarketVersion: assignment.assigned_market_version,
+    },
+  })
   const discussionAdapter: ConflictDiscussionAdapter = {
     createConflictDiscussion(input) {
       const id = `discussion:${input.conflictId}`
@@ -107,7 +133,12 @@ function fixture() {
         .run(input.discussionId)
     },
   }
-  const service = new PlanningTeamService(db, { discussionAdapter })
+  const service = new PlanningTeamService(db, {
+    discussionAdapter,
+    conflictKnowledgeAdapter: options.canonicalKnowledge
+      ? new CanonicalConflictKnowledgeAdapter(db)
+      : null,
+  })
   const plan = service.createPlan({
     boardId,
     teamId: canonicalTeam.id,
@@ -143,6 +174,8 @@ function fixture() {
     reviewer,
     canonicalTeam,
     assignment,
+    job,
+    workspaceId,
     service,
     discussionAdapter,
     plan,
@@ -150,6 +183,58 @@ function fixture() {
     implementerMember: members.find((item) => item.agent_profile_id === implementer.id)!,
     reviewerMember: members.find((item) => item.agent_profile_id === reviewer.id)!,
   }
+}
+
+function createRepository(): { root: string; head: string; cleanup: () => void } {
+  const root = mkdtempSync(path.join(tmpdir(), 'agentboard-conflict-knowledge-'))
+  execFileSync('git', ['init', '--quiet', root])
+  execFileSync('git', ['-C', root, 'config', 'user.email', 'knowledge-review@example.test'])
+  execFileSync('git', ['-C', root, 'config', 'user.name', 'Knowledge Reviewer'])
+  writeFileSync(path.join(root, 'README.md'), '# Exact conflict evidence\n', 'utf8')
+  execFileSync('git', ['-C', root, 'add', 'README.md'])
+  execFileSync('git', ['-C', root, 'commit', '--quiet', '-m', 'fixture'])
+  return {
+    root,
+    head: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+function resolveConflictFixture(
+  value: ReturnType<typeof fixture>,
+  suffix: string,
+  resourceKey = `src/agent-os/team-planning-${suffix}.ts`,
+) {
+  const conflict = value.service.openConflict({
+    teamId: String(value.plan.id),
+    kind: 'path',
+    severity: 'medium',
+    summary: `Exact overlap ${suffix}`,
+    participantMemberIds: [value.implementerMember.id, value.reviewerMember.id],
+    causalJobIds: [value.job.id],
+    affectedResources: [{ kind: 'path', key: resourceKey }],
+    detectionEvidence: { detector: 'review-fixture', suffix },
+    actor: operator,
+    idempotencyKey: `review-conflict-${value.boardId}-${suffix}`,
+  })
+  const proposal = value.service.addConflictProposal({
+    conflictId: String(conflict.id),
+    proposedByMemberId: value.implementerMember.id,
+    kind: 'serialize',
+    summary: `Serialize ${suffix}`,
+    details: { order: ['implementation', 'review'] },
+    actor: operator,
+    idempotencyKey: `review-proposal-${value.boardId}-${suffix}`,
+  })
+  value.service.resolveConflict({
+    conflictId: String(conflict.id),
+    proposalId: String(proposal.id),
+    rationale: `Retain exact causal evidence for ${suffix}.`,
+    followUpActions: [{ owner: value.reviewer.id, action: 'Review the exact resolution.' }],
+    actor: human,
+    idempotencyKey: `review-resolution-${value.boardId}-${suffix}`,
+  })
+  return conflict
 }
 
 describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
@@ -161,6 +246,13 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
     for (const table of AGENT_OS_TEAM_PLANNING_TABLES) expect(tables.has(table), table).toBe(true)
     expect(tables.has('os_planning_teams')).toBe(false)
     expect(AGENT_OS_TEAM_PLANNING_MIGRATION_ID).toBe('033-teams-planning-conflicts')
+    expect(AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID).toBe('034-team-collaboration-review')
+    expect(db.prepare(`SELECT 1 AS present FROM os_schema_migrations WHERE id=?`)
+      .get(AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID)).toEqual({ present: 1 })
+    expect((db.prepare(`PRAGMA table_info(os_team_delegations)`).all() as Array<{ name: string }>)
+      .map((column) => column.name)).toEqual(expect.arrayContaining([
+      'job_id', 'version', 'updated_at', 'cancelled_at', 'transition_reason',
+    ]))
     expect(() => installTeamPlanningSchema(db)).not.toThrow()
     db.close()
   })
@@ -171,6 +263,7 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       teamId: String(value.plan.id),
       exclusiveAssignmentId: value.assignment.id,
       assignmentMarketVersion: value.assignment.assigned_market_version,
+      jobId: value.job.id,
       memberId: value.implementerMember.id,
       delegatedByMemberId: value.facilitatorMember.id,
       contractRef: `task-contract:${value.cardId}:v1`,
@@ -201,8 +294,250 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
     expect(value.db.prepare(`SELECT COUNT(*) count FROM job_market_assignments
       WHERE card_id=? AND status='active'`).get(value.cardId)).toEqual({ count: 1 })
     expect(value.db.prepare(`SELECT job_assignment_id, assigned_profile_id
-      FROM jobs WHERE card_id=?`).get(value.cardId)).toBeUndefined()
+      FROM jobs WHERE card_id=?`).get(value.cardId)).toEqual({
+        job_assignment_id: value.assignment.id,
+        assigned_profile_id: value.facilitator.id,
+      })
     value.db.close()
+  })
+
+  it('links delegation to one existing executable job and owns only its internal lifecycle', () => {
+    const value = fixture()
+    const jobsBefore = value.db.prepare('SELECT COUNT(*) AS count FROM jobs').get()
+    const sessionsBefore = value.db.prepare('SELECT COUNT(*) AS count FROM agent_sessions').get()
+    const delegated = value.service.delegateWork({
+      teamId: String(value.plan.id),
+      exclusiveAssignmentId: value.assignment.id,
+      assignmentMarketVersion: value.assignment.assigned_market_version,
+      jobId: value.job.id,
+      memberId: value.implementerMember.id,
+      delegatedByMemberId: value.facilitatorMember.id,
+      contractRef: `task-contract:${value.cardId}:v1`,
+      objective: 'Accept and complete one existing executable job.',
+      criterionIds: ['criterion-existing-job'],
+      scopePaths: ['src/agent-os/team-planning.ts'],
+      reason: 'Internal responsibility without a second executable owner.',
+      actor: operator,
+      idempotencyKey: `lifecycle-delegate-${value.boardId}`,
+    })
+    const delegation = delegated.delegation as Record<string, unknown>
+    const acceptedInput = {
+      teamId: String(value.plan.id),
+      delegationId: String(delegation.id),
+      memberId: value.implementerMember.id,
+      transition: 'accept' as const,
+      expectedVersion: 1,
+      reason: 'Assignee accepts the bounded internal responsibility.',
+      actor: operator,
+      idempotencyKey: `lifecycle-accept-${value.boardId}`,
+    }
+    expect(value.service.transitionDelegation(acceptedInput)).toMatchObject({
+      delegation: { status: 'accepted', version: 2, job_id: value.job.id },
+      canonical_job_id: value.job.id,
+      exclusive_assignment_id: value.assignment.id,
+      exclusive_ownership_preserved: true,
+      replayed: false,
+    })
+    expect(value.service.transitionDelegation(acceptedInput)).toMatchObject({ replayed: true })
+    value.db.prepare(`UPDATE jobs SET status='running', attempts=1, started_at=datetime('now')
+      WHERE id=?`).run(value.job.id)
+    expect(value.service.transitionDelegation({
+      ...acceptedInput,
+      transition: 'complete',
+      expectedVersion: 2,
+      reason: 'Assignee completes the delegated slice against the same running job.',
+      idempotencyKey: `lifecycle-complete-${value.boardId}`,
+    })).toMatchObject({ delegation: { status: 'completed', version: 3, job_id: value.job.id } })
+    const cancellable = value.service.delegateWork({
+      teamId: String(value.plan.id),
+      exclusiveAssignmentId: value.assignment.id,
+      assignmentMarketVersion: value.assignment.assigned_market_version,
+      jobId: value.job.id,
+      memberId: value.reviewerMember.id,
+      delegatedByMemberId: value.facilitatorMember.id,
+      contractRef: `task-contract:${value.cardId}:v1`,
+      objective: 'Cancel a second bounded review responsibility.',
+      criterionIds: ['criterion-cancel'],
+      scopePaths: ['test/team-planning-conflicts.test.ts'],
+      reason: 'Exercise the explicit cancellation lifecycle.',
+      actor: operator,
+      idempotencyKey: `lifecycle-cancellable-${value.boardId}`,
+    }).delegation as Record<string, unknown>
+    expect(value.service.transitionDelegation({
+      teamId: String(value.plan.id),
+      delegationId: String(cancellable.id),
+      memberId: value.facilitatorMember.id,
+      transition: 'cancel',
+      expectedVersion: 1,
+      reason: 'Facilitator cancels the internal review responsibility.',
+      actor: operator,
+      idempotencyKey: `lifecycle-cancel-${value.boardId}`,
+    })).toMatchObject({ delegation: { status: 'cancelled', version: 2, job_id: value.job.id } })
+    expect(value.db.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual(jobsBefore)
+    expect(value.db.prepare('SELECT COUNT(*) AS count FROM agent_sessions').get()).toEqual(sessionsBefore)
+    expect(value.db.prepare(`SELECT COUNT(*) AS count FROM job_market_assignments
+      WHERE board_id=? AND card_id=? AND status='active'`).get(value.boardId, value.cardId))
+      .toEqual({ count: 1 })
+    expect(() => value.service.delegateWork({
+      teamId: String(value.plan.id),
+      exclusiveAssignmentId: value.assignment.id,
+      assignmentMarketVersion: value.assignment.assigned_market_version,
+      jobId: 'job-that-does-not-exist',
+      memberId: value.reviewerMember.id,
+      delegatedByMemberId: value.facilitatorMember.id,
+      contractRef: `task-contract:${value.cardId}:v1`,
+      objective: 'This must not mint an executable job.',
+      criterionIds: ['criterion-invalid-job'],
+      scopePaths: ['src/agent-os/team-planning.ts'],
+      reason: 'Invalid canonical identity fixture.',
+      actor: operator,
+      idempotencyKey: `lifecycle-invalid-${value.boardId}`,
+    })).toThrow(/reference the executable job/)
+    value.db.close()
+  })
+
+  it('validates causal job and affected resource identities before conflict persistence', () => {
+    const value = fixture()
+    const base = {
+      teamId: String(value.plan.id),
+      kind: 'path' as const,
+      severity: 'medium' as const,
+      summary: 'Validate canonical conflict scope.',
+      participantMemberIds: [value.implementerMember.id, value.reviewerMember.id],
+      causalJobIds: [value.job.id],
+      detectionEvidence: { detector: 'scope-validator' },
+      actor: operator,
+    }
+    expect(() => value.service.openConflict({
+      ...base,
+      causalJobIds: ['missing-causal-job'],
+      affectedResources: [{ kind: 'path', key: 'src/agent-os/team-planning.ts' }],
+      idempotencyKey: `invalid-causal-${value.boardId}`,
+    })).toThrow(/canonical assignment in plan scope/)
+    expect(() => value.service.openConflict({
+      ...base,
+      affectedResources: [{ kind: 'path', key: '../outside.ts' }],
+      idempotencyKey: `invalid-path-${value.boardId}`,
+    })).toThrow(/repository-relative identity/)
+    expect(() => value.service.openConflict({
+      ...base,
+      affectedResources: [{ kind: 'unsupported', key: 'anything' }] as never,
+      idempotencyKey: `invalid-resource-kind-${value.boardId}`,
+    })).toThrow(/affected resource kind/)
+    expect(value.db.prepare('SELECT COUNT(*) AS count FROM os_conflicts').get()).toEqual({ count: 0 })
+    const opened = value.service.openConflict({
+      ...base,
+      affectedResources: [
+        { kind: 'workspace', key: value.workspaceId },
+        { kind: 'card', key: String(value.cardId) },
+        { kind: 'job', key: value.job.id },
+        { kind: 'assignment', key: value.assignment.id },
+        { kind: 'branch', key: 'codex/beta-collaboration' },
+        { kind: 'path', key: 'src/agent-os/team-planning.ts' },
+      ],
+      idempotencyKey: `valid-resource-scope-${value.boardId}`,
+    })
+    expect(opened.causal_job_ids).toEqual([value.job.id])
+    expect(opened.affected_resources).toHaveLength(6)
+    expect(value.db.prepare('SELECT COUNT(*) AS count FROM os_conflicts').get()).toEqual({ count: 1 })
+    value.db.close()
+  })
+
+  it('requires independent review and promotes only exact conflict evidence into canonical Knowledge', () => {
+    const repository = createRepository()
+    const value = fixture({ canonicalKnowledge: true, projectPath: repository.root })
+    try {
+      const rejectedConflict = resolveConflictFixture(value, 'reject')
+      const rejectedCandidate = value.service.requestConflictKnowledgePromotion({
+        conflictId: String(rejectedConflict.id),
+        summary: 'Arbitrary prose must remain review metadata, never source content.',
+        actor: human,
+        idempotencyKey: `candidate-reject-${value.boardId}`,
+      })
+      expect(() => value.service.reviewConflictKnowledgeCandidate({
+        candidateId: String(rejectedCandidate.id),
+        decision: 'reject',
+        reason: 'Requester cannot self-review.',
+        actor: human,
+        idempotencyKey: `candidate-self-review-${value.boardId}`,
+      })).toThrow(/independent/)
+      const rejectInput = {
+        candidateId: String(rejectedCandidate.id),
+        decision: 'reject' as const,
+        reason: 'Exact evidence is valid but not reusable beyond this incident.',
+        actor: { type: 'human' as const, id: 'knowledge-reviewer' },
+        idempotencyKey: `candidate-independent-reject-${value.boardId}`,
+      }
+      expect(value.service.reviewConflictKnowledgeCandidate(rejectInput)).toMatchObject({
+        status: 'rejected',
+        reviewed_by_id: 'knowledge-reviewer',
+        knowledge_source_id: null,
+        independently_reviewed: true,
+        replayed: false,
+      })
+      expect(value.service.reviewConflictKnowledgeCandidate(rejectInput))
+        .toMatchObject({ status: 'rejected', replayed: true })
+
+      const acceptedConflict = resolveConflictFixture(value, 'accept')
+      const acceptedCandidate = value.service.requestConflictKnowledgePromotion({
+        conflictId: String(acceptedConflict.id),
+        summary: 'UNTRUSTED CANDIDATE SUMMARY MUST NOT ENTER CHUNK CONTENT',
+        actor: human,
+        idempotencyKey: `candidate-accept-${value.boardId}`,
+      })
+      expect(() => value.db.prepare(`UPDATE os_conflict_knowledge_candidates
+        SET status='accepted' WHERE id=?`).run(acceptedCandidate.id)).toThrow(/review transition/)
+      const accepted = value.service.reviewConflictKnowledgeCandidate({
+        candidateId: String(acceptedCandidate.id),
+        decision: 'accept',
+        reason: 'Independent reviewer verified exact resolution provenance.',
+        actor: { type: 'human', id: 'knowledge-reviewer' },
+        idempotencyKey: `candidate-independent-accept-${value.boardId}`,
+      })
+      expect(accepted).toMatchObject({
+        status: 'accepted',
+        source_sha256: acceptedCandidate.source_sha256,
+        reviewed_by_id: 'knowledge-reviewer',
+        knowledge_source_id: expect.stringMatching(/^ks_[a-f0-9]{64}$/),
+        repository_head_sha: repository.head,
+        independently_reviewed: true,
+      })
+      const source = value.db.prepare(`SELECT * FROM knowledge_sources
+        WHERE board_id=? AND id=?`).get(value.boardId, accepted.knowledge_source_id) as
+        Record<string, unknown>
+      const chunk = value.db.prepare(`SELECT * FROM knowledge_chunks
+        WHERE board_id=? AND source_id=?`).get(value.boardId, accepted.knowledge_source_id) as
+        Record<string, unknown>
+      expect(source).toMatchObject({
+        source_kind: 'decision',
+        source_revision: acceptedCandidate.source_sha256,
+        content_sha256: acceptedCandidate.source_sha256,
+        freshness_policy: 'manual_until_superseded',
+      })
+      expect(JSON.parse(String(source.provenance_json))).toMatchObject({
+        base_commit_sha: repository.head,
+        adapter_id: 'conflict-resolution-promotion',
+      })
+      expect(chunk.content).toBe(canonicalKnowledgeJson(
+        accepted.exact_source as Record<string, unknown>,
+      ))
+      expect(String(chunk.content)).not.toContain('UNTRUSTED CANDIDATE SUMMARY')
+      expect(value.service.getTeam(String(value.plan.id))).toMatchObject({
+        conflicts: expect.arrayContaining([
+          expect.objectContaining({
+            id: acceptedConflict.id,
+            knowledge_candidates: [expect.objectContaining({
+              id: acceptedCandidate.id,
+              status: 'accepted',
+              knowledge_source_id: accepted.knowledge_source_id,
+            })],
+          }),
+        ]),
+      })
+    } finally {
+      value.db.close()
+      repository.cleanup()
+    }
   })
 
   it('enforces facilitator synthesis, digest fanout, budgets, deadlines, and human override', () => {
@@ -288,7 +623,7 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       severity: 'high' as const,
       summary: 'Implementation and review both touch the route boundary.',
       participantMemberIds: [value.implementerMember.id, value.reviewerMember.id],
-      causalJobIds: ['job-implement', 'job-review'],
+      causalJobIds: [value.job.id],
       affectedResources: [{ kind: 'path', key: 'src/agent-os/team-planning-routes.ts' }],
       detectionEvidence: { detector: 'owned-path-overlap', source_hash: 'a'.repeat(64) },
       actor: operator,
@@ -408,6 +743,7 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       teamId: String(value.plan.id),
       exclusiveAssignmentId: value.assignment.id,
       assignmentMarketVersion: value.assignment.assigned_market_version,
+      jobId: value.job.id,
       memberId: value.implementerMember.id,
       delegatedByMemberId: value.facilitatorMember.id,
       contractRef: `task-contract:${value.cardId}:v1`,
@@ -424,7 +760,7 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       severity: 'medium',
       summary: 'Implementation and integration initially overlap.',
       participantMemberIds: [value.implementerMember.id, value.reviewerMember.id],
-      causalJobIds: ['job-gate'],
+      causalJobIds: [value.job.id],
       affectedResources: [{ kind: 'path', key: 'src/agent-os/team-planning.ts' }],
       detectionEvidence: { detector: 'gate-fixture', exact: true },
       actor: operator,
