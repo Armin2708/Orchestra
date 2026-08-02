@@ -514,46 +514,58 @@ const overflowAudit = (client) => evaluate(client, `(() => {
     document.documentElement.scrollWidth - document.documentElement.clientWidth,
     (document.body?.scrollWidth ?? 0) - document.documentElement.clientWidth,
   );
+  const ancestorCache = new WeakMap();
   const clippedByAncestor = (element, rect) => {
     for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-      const style = getComputedStyle(parent);
-      if (!['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX)) continue;
-      const parentRect = parent.getBoundingClientRect();
-      if (rect.right > parentRect.right + .5 || rect.left < parentRect.left - .5) return true;
+      let ancestor = ancestorCache.get(parent);
+      if (!ancestor) {
+        ancestor = { overflow_x: getComputedStyle(parent).overflowX, rect: parent.getBoundingClientRect() };
+        ancestorCache.set(parent, ancestor);
+      }
+      if (!['auto', 'scroll', 'hidden', 'clip'].includes(ancestor.overflow_x)) continue;
+      if (rect.right > ancestor.rect.right + .5 || rect.left < ancestor.rect.left - .5) return true;
     }
     return false;
   };
   const offenders = [], excluded = [];
+  let visibleOverflow = 0, offenderCount = 0, excludedCount = 0;
   for (const element of document.querySelectorAll('body *')) {
-    const style = getComputedStyle(element), rect = element.getBoundingClientRect();
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0
-      || rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
     if (rect.right <= viewportRight + .5 && rect.left >= viewportLeft - .5) continue;
+    const rendered = typeof element.checkVisibility === 'function'
+      ? element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      : (() => {
+          const style = getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+        })();
+    if (!rendered) continue;
     const row = {
       tag: element.tagName.toLowerCase(), id: element.id || null,
       class_name: String(element.className || '').slice(0, 120),
       left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
     };
     if (element.closest('[aria-hidden="true"],.sr-only')) {
-      excluded.push({ ...row, reason: 'nonvisual_accessibility_content' });
+      excludedCount += 1;
+      if (excluded.length < 25) excluded.push({ ...row, reason: 'nonvisual_accessibility_content' });
       continue;
     }
     if (clippedByAncestor(element, rect)) {
-      excluded.push({ ...row, reason: 'contained_horizontal_scroller_or_clip' });
+      excludedCount += 1;
+      if (excluded.length < 25) excluded.push({ ...row, reason: 'contained_horizontal_scroller_or_clip' });
       continue;
     }
-    offenders.push(row);
+    offenderCount += 1;
+    visibleOverflow = Math.max(visibleOverflow, row.right - viewportRight, viewportLeft - row.left);
+    if (offenders.length < 25) offenders.push(row);
   }
-  const visibleOverflow = offenders.reduce((maximum, row) => Math.max(
-    maximum,
-    row.right - viewportRight,
-    viewportLeft - row.left,
-  ), 0);
   return {
     visible_overflow_px: Math.max(0, Math.ceil(visibleOverflow)),
     document_extent_overflow_px: Math.ceil(documentExtent),
-    offenders: offenders.slice(0, 25),
-    excluded_nonvisual_or_contained: excluded.slice(0, 25),
+    offender_count: offenderCount,
+    excluded_count: excludedCount,
+    offenders,
+    excluded_nonvisual_or_contained: excluded,
   };
 })()`)
 
