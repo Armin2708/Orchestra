@@ -92,3 +92,13 @@ ORCHESTRA_QA_VIEWPORT=desktop node scripts/qa-browser-gates.mjs \
   box, QA gate, or beta readiness summary should be closed from this checkpoint.
 - No product UI, CSS, App/navigation, route, packaging, publication, tag, or release action is part
   of this branch.
+
+## Integrated-stack capture addendum
+
+At exact Lane D stack source `ae6d62a2e2c7e67165db76756a39ee75cf847eef`, the repaired
+desktop capture again failed closed, this time before viewport execution because a fixture event
+POST returned HTTP 429. Exact source/build binding passed at failure; no tablet, phone, or in-app
+Browser claim was made. The retained fatal document has internal digest
+`e6eb5ec2ff1a49595ded8b1b5c9516acacf35c363e074444cfdfdff3371d734f` and file SHA-256
+`505460c8d5be53198560c21ea635ab4c04d926caccba7063bce106dc45f6c136`.
+QA-014 remains open.

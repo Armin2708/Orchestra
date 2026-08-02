@@ -155,3 +155,12 @@ manifest tampering, wrong repository/base/HEAD/scope, attempted public-release a
 artifact traversal/symlinks/digest changes, remediation-marker substitution, missing signed
 HIGH/CRITICAL dispositions, and unverified QA-018 case injection. The exact final integration
 manifest and human signature do not exist yet, so all five QA-018 matrix cases remain open.
+
+## Integrated Lane A/C command binding addendum
+
+The Lane D stack based on central `36f3602` replaces the four Lane A/C future placeholders with
+exact integrated Vitest commands. Discussion/Team, DeviceSession, team budget/conflict, and remote
+pairing/scope/revoke/step-up commands independently passed 17, 38, 15, and 65 tests. This closes
+the placeholder-binding gap only; the cases remain exact-evidence prerequisites until the final
+clean-head runner reproduces them. QA-016 long-running dogfood and production-signed QA-018 remain
+open, and Lane B is not part of this stack checkpoint.

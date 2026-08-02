@@ -101,3 +101,13 @@ required. Windows remains unsupported.
 - Code rollback is the removal of the packaging hardening commits before candidate creation. A
   released data rollback never down-migrates schema or deletes user data; it restores only a
   retained provenance-verified application artifact after the documented offline checks.
+
+## Integrated-stack rehearsal addendum
+
+The accepted packaging ancestry was merged onto central `36f3602` and rehearsed at exact stack
+commit `ae6d62a2e2c7e67165db76756a39ee75cf847eef`. The local lifecycle passed and two packs were
+byte-identical at SHA-256
+`f7a16eb67fa7577b79ab045add645646ff6d13b0f388c1dbf1e1d2ad7eff3deb`
+(1,207,466 bytes). The release gate correctly remained incomplete without a distinct signed prior
+artifact/evidence bundle. These bytes are diagnostic, not the final retained beta candidate; Lane B
+and the remaining central slices must be integrated before one final artifact is created.
