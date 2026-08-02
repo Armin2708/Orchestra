@@ -384,10 +384,12 @@ const pointerClickButtonText = async (client, text, mobile = false) => {
   await evaluate(client, `document.querySelector(${JSON.stringify(selector)})?.click()`)
 }
 
-const dispatchKey = async (client, key, { shift = false } = {}) => {
-  const code = key === 'Tab' ? 'Tab' : key === 'Enter' ? 'Enter' : key === 'Escape' ? 'Escape' : key === ' ' ? 'Space' : key
-  const windowsVirtualKeyCode = key === 'Tab' ? 9 : key === 'Enter' ? 13 : key === 'Escape' ? 27 : key === ' ' ? 32 : 0
-  const modifiers = shift ? 8 : 0
+const dispatchKey = async (client, key, { shift = false, meta = false } = {}) => {
+  const code = key === 'Tab' ? 'Tab' : key === 'Enter' ? 'Enter' : key === 'Escape' ? 'Escape'
+    : key === 'Backspace' ? 'Backspace' : key === ' ' ? 'Space' : key
+  const windowsVirtualKeyCode = key === 'Tab' ? 9 : key === 'Enter' ? 13 : key === 'Escape' ? 27
+    : key === 'Backspace' ? 8 : key === ' ' ? 32 : key.toUpperCase().charCodeAt(0)
+  const modifiers = (shift ? 8 : 0) | (meta ? 4 : 0)
   await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers })
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers })
 }
@@ -731,6 +733,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     screenWidth: viewport.width,
     screenHeight: viewport.height,
   })
+  await client.send('Emulation.setTouchEmulationEnabled', {
+    enabled: viewport.mobile,
+    maxTouchPoints: viewport.mobile ? 5 : 1,
+  })
   await client.send('Network.clearBrowserCache')
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
   await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.board-section-tabs'))`, 'initial board')
@@ -776,7 +782,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       const started = performance.now()
       let error = null
       let actionEvidence = null
-      try { actionEvidence = await action(mode) ?? null } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
+      try {
+        actionEvidence = await action(mode) ?? null
+        if (actionEvidence?.error) error = actionEvidence.error
+      } catch (caught) { error = caught instanceof Error ? caught.message : String(caught) }
       const passed = !error && await modeReady(ready)
       const modeElapsed = performance.now() - started
       interactionModes[mode] = {
@@ -837,16 +846,23 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       if (mode === 'pointer') {
         await pointerClick(client, '.ah-search input', 'conversation search input', viewport.mobile)
       } else if (mode === 'keyboard') {
-        const tabEvents = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
+        let tabEvents = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
+        await dispatchKey(client, 'a', { meta: true })
+        await dispatchKey(client, 'Backspace')
         await typeText(client, 'quality')
         await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
         await delay(50)
+        tabEvents += await keyboardNavigateTo(client, '.ah-search button[type="submit"]', 'Search submit button')
         await dispatchKey(client, 'Enter')
-        await assertModeReady(`(() => {
+        const searchReady = await modeReady(`(() => {
           const events = [...document.querySelectorAll('.ah-event')];
           return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'));
-        })()`, 'five rendered search results')
-        return { focus_acquisition: 'tab_navigation', tab_events: tabEvents }
+        })()`, asynchronousReadinessTimeoutMs)
+        return {
+          focus_acquisition: 'tab_navigation',
+          tab_events: tabEvents,
+          error: searchReady ? null : 'five rendered search results readiness did not pass',
+        }
       } else {
         const focusedByFallback = await evaluate(client, `(() => {
           const input = document.querySelector('.ah-search input');
