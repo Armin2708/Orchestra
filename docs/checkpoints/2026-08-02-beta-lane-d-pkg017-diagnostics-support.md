@@ -44,10 +44,16 @@ review (P0=0, P1=1, P2=2) and is not eligible for integration. The findings were
 path detection, open nested schemas and pathname-based file operations. The replacement candidate
 must receive a fresh exact-SHA review.
 
-- Remediated focused verification: 7 files / 23 tests in both default and one-worker modes. The
-  quality-inventory contract plus affected support tests also passed as 4 files / 37 tests.
-- Complete default-parallel verification: 272 files / 2,251 tests in 120.84 seconds.
-- Complete one-worker verification: 272 files / 2,251 tests in 409.59 seconds. Central integration
+- The first remediated exact review reproduced 8 focused files / 23 tests in both modes and rejected
+  the candidate only for a same-inode request-growth bound and this evidence-count mismatch
+  (P0=0, P1=0, P2=2). The replacement exact focused command and counts are recorded below after the
+  added bounded-read regression test.
+- Replacement focused verification passed 8 files / 49 tests in default and one-worker modes. The
+  exact files were `support-case-export`, `support-case-cli`, `support-case-route`, `support-case-ui`,
+  `operator-docs`, `operations-health-diagnostics`, `operations-metrics-capacity`, and
+  `beta-quality-matrix`; each is under `test/` with the `.test.ts` suffix.
+- Complete default-parallel verification: 272 files / 2,252 tests in 112.90 seconds.
+- Complete one-worker verification: 272 files / 2,252 tests in 404.11 seconds. Central integration
   must still run its own complete dual suites at the combined exact head.
 - Root/web TypeScript checks and production builds passed under Node `22.20.0` / npm `10.9.3`.
 - Root/web audits reported zero vulnerabilities. Full-history Gitleaks scanned 797 commits with no
@@ -56,6 +62,10 @@ must receive a fresh exact-SHA review.
 - GitNexus remediation change review was low risk: 8 files, 48 changed symbols and zero affected
   execution flows. The broader original registration seam remains critical breadth and still
   requires independent P0/P1/P2 review before integration.
+- The final bounded-read delta's generic `readRequest` name produced a conservative CRITICAL
+  `detect-changes` result with 203 unrelated flows; the exact function-UID upstream impact remained
+  LOW (3 symbols, 1 direct caller, 0 flows), and file-anchored PDG review had zero persisted findings
+  with the limitations above. This graph-name ambiguity is disclosed rather than suppressed.
 - Graphify's code update produced 10,758 nodes, 25,215 edges and 422 communities before the final
   semantic checkpoint refresh. The quality requirements now explicitly classify the verifier as a
   reviewed state-machine candidate; its discovery digest and independent immutable requirements

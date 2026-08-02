@@ -9,6 +9,7 @@ import {
 
 const SHA256 = /^[a-f0-9]{64}$/
 const CONTENT_DISPOSITION = /^attachment; filename="(orchestra-support-case-[A-Za-z0-9-]+-[a-f0-9]{12}\.json)"$/
+const MAX_REQUEST_BYTES = 64 * 1024
 
 export type SupportCaseCliDeps = {
   ensureReady: () => Promise<void>
@@ -27,10 +28,20 @@ const readRequest = (requestFile: string): Record<string, unknown> => {
   let serialized: string
   try {
     const info = fs.fstatSync(descriptor)
-    if (!info.isFile() || info.size <= 0 || info.size > 64 * 1024) {
+    if (!info.isFile() || info.size <= 0 || info.size > MAX_REQUEST_BYTES) {
       throw new Error('support-case request must be a regular JSON file no larger than 64 KiB')
     }
-    serialized = fs.readFileSync(descriptor, 'utf8')
+    const bytes = Buffer.allocUnsafe(MAX_REQUEST_BYTES + 1)
+    let length = 0
+    while (length < bytes.byteLength) {
+      const count = fs.readSync(descriptor, bytes, length, bytes.byteLength - length, null)
+      if (count === 0) break
+      length += count
+    }
+    if (length <= 0 || length > MAX_REQUEST_BYTES) {
+      throw new Error('support-case request must be a regular JSON file no larger than 64 KiB')
+    }
+    serialized = bytes.toString('utf8', 0, length)
   } finally {
     fs.closeSync(descriptor)
   }

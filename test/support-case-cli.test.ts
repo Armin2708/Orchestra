@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Command } from 'commander'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerSupportCaseCommand } from '../src/support-case-cli.js'
 
 const roots: string[] = []
@@ -101,6 +101,37 @@ describe('support-case CLI export', () => {
       'node', 'orchestra', 'ops', 'support-case', linked, root,
       '--consent-review-before-sharing',
     ])).rejects.toThrow()
+    expect(fetched).toBe(false)
+  })
+
+  it('bounds descriptor reads when the same request inode grows after fstat', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-support-cli-'))
+    roots.push(root)
+    const requestFile = path.join(root, 'request.json')
+    fs.writeFileSync(requestFile, '{}')
+    const originalFstat = fs.fstatSync.bind(fs)
+    const fstat = vi.spyOn(fs, 'fstatSync').mockImplementationOnce(((descriptor) => {
+      const initial = originalFstat(descriptor)
+      fs.writeFileSync(requestFile, JSON.stringify({ title: 'x'.repeat(70 * 1024) }))
+      return initial
+    }) as typeof fs.fstatSync)
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined })
+    const ops = program.command('ops')
+    let fetched = false
+    registerSupportCaseCommand(ops, {
+      ensureReady: async () => undefined,
+      baseUrl: () => 'http://127.0.0.1:4111',
+      ownerToken: () => 'owner-secret',
+      fetchImpl: async () => { fetched = true; return new Response() },
+    })
+    try {
+      await expect(program.parseAsync([
+        'node', 'orchestra', 'ops', 'support-case', requestFile, root,
+        '--consent-review-before-sharing',
+      ])).rejects.toThrow('no larger than 64 KiB')
+    } finally {
+      fstat.mockRestore()
+    }
     expect(fetched).toBe(false)
   })
 })
