@@ -1,28 +1,48 @@
-import { createHash, randomUUID } from 'node:crypto'
+import {
+  createHash,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+} from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { canonicalJson } from '../scripts/exact-commit-contract.mjs'
 import {
   DEFAULT_EVIDENCE_SCHEMA,
   DEFAULT_INTEGRATION_MANIFEST_SCHEMA,
   DEFAULT_MATRIX,
   DEFAULT_REQUIREMENTS,
   DEFAULT_ROOT,
+  DEFAULT_SIGNATURE_RECEIPT_SCHEMA,
   DEFAULT_TOOL_EVIDENCE_SCHEMA,
   PINNED_EVIDENCE_SCHEMA_SHA256,
   PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
   PINNED_REQUIREMENTS_SHA256,
+  PINNED_SIGNATURE_RECEIPT_SCHEMA_SHA256,
   PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
-  REQUIRED_BETA_BASE,
   discoverStateMachineFiles,
   evaluateBetaQualityMatrix,
   stateMachineDiscoveryDigest,
+  verifyQa018EvidenceBundle,
 } from '../scripts/check-beta-quality-matrix.mjs'
+import {
+  BETA_QUALITY_AUTHORIZATION_SCOPE,
+  BETA_QUALITY_PURPOSE,
+  BETA_QUALITY_REPOSITORY,
+  DEFAULT_BETA_QUALITY_TRUST_ROOTS,
+  betaQualitySigningPayload,
+  verifyBetaQualitySignature,
+  verifyBetaQualitySignatureForTesting,
+} from '../scripts/beta-quality-signature.mjs'
+import { importQa018Bundle } from '../scripts/run-beta-quality-evidence.mjs'
+import { captureGraphifyStatus } from '../scripts/capture-graphify-status.mjs'
 
 const temporaryDirectories: string[] = []
 const temporaryRoot = fs.realpathSync(os.tmpdir())
+const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -30,9 +50,14 @@ afterEach(() => {
   }
 })
 
-function temporaryFile(name: string, content: string): string {
-  const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-contract-'))
+function temporaryDirectory(prefix: string): string {
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, prefix))
   temporaryDirectories.push(directory)
+  return directory
+}
+
+function temporaryFile(name: string, content: string): string {
+  const directory = temporaryDirectory('beta-quality-contract-')
   const file = path.join(directory, name)
   fs.writeFileSync(file, content, 'utf8')
   return file
@@ -40,35 +65,268 @@ function temporaryFile(name: string, content: string): string {
 
 function writeJson(directory: string, name: string, value: unknown): { path: string; sha256: string } {
   const file = path.join(directory, name)
-  const content = JSON.stringify(value)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const content = JSON.stringify(value, null, 2)
+  fs.writeFileSync(file, `${content}\n`, 'utf8')
+  return { path: name, sha256: hash(`${content}\n`) }
+}
+
+function writeText(directory: string, name: string, content: string): { path: string; sha256: string } {
+  const file = path.join(directory, name)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, content, 'utf8')
-  return { path: name, sha256: createHash('sha256').update(content).digest('hex') }
+  return { path: name, sha256: hash(content) }
 }
 
-function syntheticNonancestorCommit(): string {
-  const tree = execFileSync('git', ['rev-parse', `${REQUIRED_BETA_BASE}^{tree}`], {
-    cwd: DEFAULT_ROOT,
-    encoding: 'utf8',
-  }).trim()
-  return execFileSync('git', ['commit-tree', tree, '-p', REQUIRED_BETA_BASE], {
-    cwd: DEFAULT_ROOT,
-    encoding: 'utf8',
-    input: `test: synthetic nonancestor ${randomUUID()} [beta-lane-b-ready]\n`,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'Beta Quality Test',
-      GIT_AUTHOR_EMAIL: 'beta-quality@example.invalid',
-      GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z',
-      GIT_COMMITTER_NAME: 'Beta Quality Test',
-      GIT_COMMITTER_EMAIL: 'beta-quality@example.invalid',
-      GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z',
+function commit(root: string, message: string): string {
+  fs.writeFileSync(path.join(root, 'history.txt'), `${randomUUID()}\n`, { flag: 'a' })
+  execFileSync('git', ['add', 'history.txt'], { cwd: root })
+  execFileSync('git', ['commit', '-q', '-m', message], { cwd: root })
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+}
+
+type Fixture = ReturnType<typeof qa018Fixture>
+
+function qa018Fixture({
+  highRiskWithoutDisposition = false,
+  highRiskWithDisposition = false,
+  wrongGitRequestCasing = false,
+  nonexistentGraphifyStatus = false,
+} = {}) {
+  const root = temporaryDirectory('beta-quality-git-')
+  execFileSync('git', ['init', '-q'], { cwd: root })
+  execFileSync('git', ['config', 'user.name', 'Beta Quality Test'], { cwd: root })
+  execFileSync('git', ['config', 'user.email', 'beta-quality@example.invalid'], { cwd: root })
+  const base = commit(root, 'test: beta base')
+  const checkpoints = {
+    lane_a: {
+      source: commit(root, 'test: Lane A source [beta-lane-a-ready]'),
+      remediations: [] as string[],
     },
-  }).trim()
+    lane_b: {
+      source: '',
+      remediations: [] as string[],
+    },
+    lane_c: {
+      source: '',
+      remediations: [] as string[],
+    },
+    lane_d: {
+      source: '',
+      remediations: [] as string[],
+    },
+    integrator: {
+      source: '',
+      remediations: [] as string[],
+    },
+  }
+  checkpoints.lane_a.remediations.push(commit(root, 'test: Lane A remediation [beta-lane-a-remediation-ready]'))
+  checkpoints.lane_b.source = commit(root, 'test: Lane B source [beta-lane-b-ready]')
+  checkpoints.lane_b.remediations.push(commit(root, 'test: Lane B remediation [beta-lane-b-remediation-ready]'))
+  checkpoints.lane_c.source = commit(root, 'test: Lane C source [beta-lane-c-ready]')
+  checkpoints.lane_d.source = commit(root, 'test: Lane D source [beta-lane-d-ready]')
+  checkpoints.integrator.source = commit(root, 'test: integrator source [beta-release-candidate]')
+  const head = checkpoints.integrator.source
+  const evidenceDirectory = temporaryDirectory('beta-quality-evidence-')
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  const keyId = `sha256:${hash(publicKey.export({ format: 'der', type: 'spki' }) as Buffer)}`
+  const trustRoots = {
+    schema_version: 1,
+    purpose: BETA_QUALITY_PURPOSE,
+    repository: BETA_QUALITY_REPOSITORY,
+    authorization_scope: BETA_QUALITY_AUTHORIZATION_SCOPE,
+    trusted_signing_keys: [{
+      algorithm: 'ed25519', key_id: keyId,
+      public_key_pem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+      signer: 'independent-beta-reviewer', status: 'active',
+    }],
+  }
+  const sourceMarkers: Record<string, string> = {
+    lane_a: '[beta-lane-a-ready]', lane_b: '[beta-lane-b-ready]',
+    lane_c: '[beta-lane-c-ready]', lane_d: '[beta-lane-d-ready]',
+    integrator: '[beta-release-candidate]',
+  }
+  const remediationMarkers: Record<string, string> = {
+    lane_a: '[beta-lane-a-remediation-ready]', lane_b: '[beta-lane-b-remediation-ready]',
+    lane_c: '[beta-lane-c-remediation-ready]', lane_d: '[beta-lane-d-remediation-ready]',
+    integrator: '[beta-release-candidate-remediation]',
+  }
+  const slices = Object.entries(checkpoints).map(([sliceId, checkpoint]) => {
+    const acceptedCommit = checkpoint.remediations.at(-1) ?? checkpoint.source
+    const target = `symbol-${sliceId}`
+    const risk = (highRiskWithoutDisposition || highRiskWithDisposition) && sliceId === 'lane_a' ? 'HIGH' : 'LOW'
+    const impactRaw = writeJson(evidenceDirectory, `${sliceId}/gitnexus-impact.json`, {
+      target: { name: target }, risk, summary: { direct: 0 }, affected_processes: [],
+    })
+    const detectRaw = writeJson(evidenceDirectory, `${sliceId}/gitnexus-detect.json`, {
+      summary: { changed_files: 1, risk_level: 'LOW' }, affected_processes: [],
+    })
+    const impactArguments = wrongGitRequestCasing && sliceId === 'lane_a'
+      ? {
+        repo: root, target, direction: 'upstream', max_depth: 3,
+        min_confidence: 0.8, include_tests: true,
+      }
+      : {
+        repo: root, target, direction: 'upstream', maxDepth: 3,
+        minConfidence: 0.8, includeTests: true,
+      }
+    const impactRequest = {
+      request_id: `impact-${sliceId.replace('_', '-')}`,
+      api: 'mcp__gitnexus__impact',
+      arguments: impactArguments,
+      observed_risk: risk,
+      result: impactRaw,
+    }
+    const gitRequests = {
+      impact: [impactRequest],
+      detect_changes: {
+        api: 'mcp__gitnexus__detect_changes',
+        arguments: { repo: root, worktree: root, scope: 'compare', base_ref: base },
+        result: detectRaw,
+      },
+    }
+    const gitReport = writeJson(evidenceDirectory, `${sliceId}/gitnexus-report.json`, {
+      schema_version: 3, tool: 'gitnexus', slice_id: sliceId,
+      tested_commit: acceptedCommit, base_ref: base, range: `${base}..${acceptedCommit}`,
+      tool_version: '1.2.3', requests: gitRequests,
+      unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+    })
+    const graph = writeJson(evidenceDirectory, `${sliceId}/graph.json`, {
+      built_at_commit: acceptedCommit, nodes: [], links: [],
+    })
+    const graphManifest = writeJson(evidenceDirectory, `${sliceId}/graph-manifest.json`, { files: ['history.txt'] })
+    const updateRaw = writeText(
+      evidenceDirectory,
+      `${sliceId}/graphify-update.txt`,
+      `Graphify update completed for ${acceptedCommit}\n`,
+    )
+    const statusRaw = writeJson(evidenceDirectory, `${sliceId}/graphify-status.json`, {
+      schema_version: 1, operation: 'status', tested_commit: acceptedCommit,
+      graph_path: 'graphify-out/graph.json', graph_sha256: graph.sha256,
+      manifest_path: 'graphify-out/manifest.json', manifest_sha256: graphManifest.sha256,
+    })
+    const graphRequests = {
+      update: { argv: ['graphify', 'update', '.'], exit_code: 0, result: updateRaw },
+      status: {
+        argv: nonexistentGraphifyStatus && sliceId === 'lane_a' ? ['graphify', 'status'] : [
+          'node', 'scripts/capture-graphify-status.mjs',
+          '--graph', 'graphify-out/graph.json',
+          '--manifest', 'graphify-out/manifest.json',
+          '--tested-commit', acceptedCommit,
+        ],
+        exit_code: 0,
+        result: statusRaw,
+      },
+    }
+    const graphReport = writeJson(evidenceDirectory, `${sliceId}/graphify-report.json`, {
+      schema_version: 3, tool: 'graphify', slice_id: sliceId,
+      tested_commit: acceptedCommit, base_ref: base, range: `${base}..${acceptedCommit}`,
+      tool_version: '4.5.6', requests: graphRequests,
+      artifacts: { graph, manifest: graphManifest },
+      unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+    })
+    return {
+      slice_id: sliceId,
+      source_checkpoint: {
+        commit: checkpoint.source, base_ref: base, range: `${base}..${checkpoint.source}`,
+        marker: sourceMarkers[sliceId],
+      },
+      accepted_remediation_checkpoints: checkpoint.remediations.map((checkpointCommit) => ({
+        commit: checkpointCommit, base_ref: base, range: `${base}..${checkpointCommit}`,
+        marker: remediationMarkers[sliceId],
+      })),
+      accepted_commit: acceptedCommit,
+      tool_reports: {
+        gitnexus: {
+          tested_commit: acceptedCommit, tool_version: '1.2.3', ...gitReport,
+          requests_sha256: hash(canonicalJson(gitRequests)),
+          raw_artifacts: [
+            { kind: 'gitnexus-impact', ...impactRaw },
+            { kind: 'gitnexus-detect-changes', ...detectRaw },
+          ],
+        },
+        graphify: {
+          tested_commit: acceptedCommit, tool_version: '4.5.6', ...graphReport,
+          requests_sha256: hash(canonicalJson(graphRequests)),
+          raw_artifacts: [
+            { kind: 'graphify-update', ...updateRaw },
+            { kind: 'graphify-status', ...statusRaw },
+            { kind: 'graphify-graph', ...graph },
+            { kind: 'graphify-manifest', ...graphManifest },
+          ],
+        },
+      },
+      risk_dispositions: risk === 'HIGH' && highRiskWithDisposition ? [{
+        request_sha256: hash(canonicalJson({ api: impactRequest.api, arguments: impactRequest.arguments })),
+        target,
+        risk: 'HIGH',
+        disposition: 'accepted-after-independent-review',
+        reviewer: 'independent-beta-reviewer',
+        rationale: 'Reviewed the exact upstream blast radius and accepted this bounded change.',
+        checkpoint_commit: acceptedCommit,
+      }] : [],
+      unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+    }
+  })
+  let manifest = {
+    schema_version: 2,
+    purpose: BETA_QUALITY_PURPOSE,
+    repository: BETA_QUALITY_REPOSITORY,
+    base_ref: base,
+    integrator_commit: head,
+    authorization_scope: BETA_QUALITY_AUTHORIZATION_SCOPE,
+    public_release_authorized: false,
+    slices,
+    unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+  }
+  let manifestReference = writeJson(evidenceDirectory, 'integration-manifest.json', manifest)
+  let receipt: Record<string, unknown>
+  let receiptReference: { path: string; sha256: string }
+
+  const resign = () => {
+    manifestReference = writeJson(evidenceDirectory, 'integration-manifest.json', manifest)
+    const attestation = {
+      purpose: BETA_QUALITY_PURPOSE,
+      repository: BETA_QUALITY_REPOSITORY,
+      manifest_sha256: manifestReference.sha256,
+      integrator_commit: manifest.integrator_commit,
+      signed_at: '2026-08-02T12:00:00.000Z',
+      authorization_scope: BETA_QUALITY_AUTHORIZATION_SCOPE,
+    }
+    receipt = {
+      schema_version: 1,
+      kind: 'qa-018-evidence-signature',
+      attestation,
+      signature: {
+        algorithm: 'ed25519', key_id: keyId,
+        value: sign(null, betaQualitySigningPayload(attestation), privateKey).toString('base64'),
+      },
+    }
+    receiptReference = writeJson(evidenceDirectory, 'signature-receipt.json', receipt)
+  }
+  resign()
+
+  return {
+    root, base, head, evidenceDirectory, trustRoots, keyId,
+    publicKey, privateKey,
+    get manifest() { return manifest },
+    set manifest(value) { manifest = value },
+    get manifestReference() { return manifestReference },
+    get receipt() { return receipt },
+    get receiptReference() { return receiptReference },
+    resign,
+  }
 }
 
-const matrix = () => JSON.parse(fs.readFileSync(DEFAULT_MATRIX, 'utf8')) as {
-  requirements: Array<Record<string, unknown>>
-}
+const verifyFixture = (fixture: Fixture) => verifyQa018EvidenceBundle({
+  root: fixture.root,
+  evidenceDirectory: fixture.evidenceDirectory,
+  manifestReference: fixture.manifestReference,
+  receiptReference: fixture.receiptReference,
+  testOnlyTrustRoots: fixture.trustRoots,
+  testOnlyRequiredBase: fixture.base,
+  testOnlyHead: fixture.head,
+})
 
 describe('beta quality coverage contract', () => {
   it('validates the immutable current-base inventory without claiming beta closure', () => {
@@ -77,103 +335,24 @@ describe('beta quality coverage contract', () => {
     expect(result.errors).toEqual([])
     expect(result.ok).toBe(true)
     expect(result.unresolved).toHaveLength(37)
-    expect(result.unresolved.every((entry) =>
-      entry.status === 'prerequisite' || entry.status === 'lane-dependent')).toBe(true)
-    expect(result.unresolved.some((entry) => entry.item === 'QA-016'
-      && entry.case === 'long-running-dogfood-daemon-provider-network'
-      && entry.status === 'lane-dependent')).toBe(true)
     expect(result.unresolved.some((entry) => entry.item === 'QA-018')).toBe(true)
   })
 
-  it('rejects deleted, renamed, status-flipped, unknown, and empty-bound cases', () => {
-    const variants = [
-      (value: ReturnType<typeof matrix>) => { value.requirements.shift() },
-      (value: ReturnType<typeof matrix>) => { value.requirements[0].case = 'renamed-case' },
-      (value: ReturnType<typeof matrix>) => { value.requirements[0].status = 'covered' },
-      (value: ReturnType<typeof matrix>) => { value.requirements[0].command_ids = [] },
-      (value: ReturnType<typeof matrix>) => { value.requirements[0].evidence = [{ path: 'comment.md', anchors: ['PASS'] }] },
-      (value: ReturnType<typeof matrix>) => { value.requirements.push({ item: 'QA-999', case: 'unknown', status: 'prerequisite', command_ids: ['qa001-runtime'] }) },
-    ]
-
-    for (const mutate of variants) {
-      const candidate = matrix()
-      mutate(candidate)
-      const result = evaluateBetaQualityMatrix({
-        root: DEFAULT_ROOT,
-        mode: 'current-base',
-        matrixPath: temporaryFile('matrix.json', JSON.stringify(candidate)),
-      })
-      expect(result.ok).toBe(false)
-      expect(result.errors.length).toBeGreaterThan(0)
+  it('pins the requirement manifest and every quality evidence schema', () => {
+    const checks = [
+      ['requirements manifest digest differs from the pinned immutable digest', { requirementsPath: temporaryFile('requirements.json', `${fs.readFileSync(DEFAULT_REQUIREMENTS, 'utf8')} `) }],
+      ['evidence schema digest differs from the pinned immutable digest', { schemaPath: temporaryFile('schema.json', `${fs.readFileSync(DEFAULT_EVIDENCE_SCHEMA, 'utf8')} `) }],
+      ['tool evidence schema digest differs from the pinned immutable digest', { toolSchemaPath: temporaryFile('tool.json', `${fs.readFileSync(DEFAULT_TOOL_EVIDENCE_SCHEMA, 'utf8')} `) }],
+      ['integration manifest schema digest differs from the pinned immutable digest', { integrationSchemaPath: temporaryFile('integration.json', `${fs.readFileSync(DEFAULT_INTEGRATION_MANIFEST_SCHEMA, 'utf8')} `) }],
+      ['signature receipt schema digest differs from the pinned immutable digest', { signatureSchemaPath: temporaryFile('receipt.json', `${fs.readFileSync(DEFAULT_SIGNATURE_RECEIPT_SCHEMA, 'utf8')} `) }],
+    ] as const
+    for (const [message, options] of checks) {
+      expect(evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'current-base', ...options }).errors).toContain(message)
     }
   })
 
-  it('rejects rebinding a case to a known passing command or a different lane', () => {
-    const rebound = matrix()
-    rebound.requirements[9].command_ids = ['qa001-runtime']
-    const reboundResult = evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      matrixPath: temporaryFile('rebound-matrix.json', JSON.stringify(rebound)),
-    })
-    expect(reboundResult.errors).toContain('quality matrix digest differs from the pinned immutable digest')
-
-    const moved = matrix()
-    const laneEntry = moved.requirements.find((entry) => entry.status === 'lane-dependent')!
-    laneEntry.lane = laneEntry.lane === 'A' ? 'B' : 'A'
-    const movedResult = evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      matrixPath: temporaryFile('moved-matrix.json', JSON.stringify(moved)),
-    })
-    expect(movedResult.errors).toContain('quality matrix digest differs from the pinned immutable digest')
-  })
-
-  it('pins the complete matrix, requirement manifest, and all evidence schemas', () => {
-    const requirements = temporaryFile(
-      'requirements.json',
-      `${fs.readFileSync(DEFAULT_REQUIREMENTS, 'utf8')} `,
-    )
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      requirementsPath: requirements,
-    }).errors).toContain('requirements manifest digest differs from the pinned immutable digest')
-
-    const schema = temporaryFile(
-      'schema.json',
-      `${fs.readFileSync(DEFAULT_EVIDENCE_SCHEMA, 'utf8')} `,
-    )
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      schemaPath: schema,
-    }).errors).toContain('evidence schema digest differs from the pinned immutable digest')
-
-    const toolSchema = temporaryFile(
-      'tool-schema.json',
-      `${fs.readFileSync(DEFAULT_TOOL_EVIDENCE_SCHEMA, 'utf8')} `,
-    )
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      toolSchemaPath: toolSchema,
-    }).errors).toContain('tool evidence schema digest differs from the pinned immutable digest')
-
-    const integrationSchema = temporaryFile(
-      'integration-schema.json',
-      `${fs.readFileSync(DEFAULT_INTEGRATION_MANIFEST_SCHEMA, 'utf8')} `,
-    )
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      integrationSchemaPath: integrationSchema,
-    }).errors).toContain('integration manifest schema digest differs from the pinned immutable digest')
-  })
-
   it('discovers enum, arrow transition, lowercase transitions, workflow setter, and SQL evasions', () => {
-    const root = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-discovery-'))
-    temporaryDirectories.push(root)
+    const root = temporaryDirectory('beta-quality-discovery-')
     fs.mkdirSync(path.join(root, 'src'), { recursive: true })
     const fixtures = {
       'enum.ts': 'export enum HiddenState { Open, Closed }',
@@ -182,293 +361,231 @@ describe('beta quality coverage contract', () => {
       'workflow.ts': 'export class HiddenWorkflow { setStatus() {} }',
       'trigger.sql': 'CREATE TRIGGER hidden_status_transition BEFORE UPDATE ON hidden BEGIN SELECT 1; END;',
     }
-    for (const [name, content] of Object.entries(fixtures)) {
-      fs.writeFileSync(path.join(root, 'src', name), content, 'utf8')
-    }
-
-    expect(discoverStateMachineFiles(root)).toEqual(Object.keys(fixtures).sort()
-      .map((name) => `src/${name}`))
+    for (const [name, content] of Object.entries(fixtures)) fs.writeFileSync(path.join(root, 'src', name), content, 'utf8')
+    expect(discoverStateMachineFiles(root)).toEqual(Object.keys(fixtures).sort().map((name) => `src/${name}`))
+    expect(stateMachineDiscoveryDigest(root)).toMatch(/^[0-9a-f]{64}$/)
   })
 
-  it('changes the discovery digest when an existing classified file gains a candidate', () => {
-    const root = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-existing-file-'))
-    temporaryDirectories.push(root)
-    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
-    const file = path.join(root, 'src', 'existing.ts')
-    fs.writeFileSync(file, "export type ExistingStatus = 'open' | 'closed'\n", 'utf8')
-    const before = stateMachineDiscoveryDigest(root)
+  it('verifies a complete v2 inventory and obtains signer identity only from a test-local trust root', () => {
+    const fixture = qa018Fixture()
+    expect(verifyFixture(fixture)).toMatchObject({ ok: true, verified: true, errors: [] })
 
-    fs.appendFileSync(file, 'export function transitionExistingStatus() {}\n', 'utf8')
-
-    expect(stateMachineDiscoveryDigest(root)).not.toBe(before)
-  })
-
-  it('fails when a discovered state-machine candidate loses classification', () => {
-    const requirements = JSON.parse(fs.readFileSync(DEFAULT_REQUIREMENTS, 'utf8')) as {
-      classified_state_machine_files: string[]
-    }
-    const removed = requirements.classified_state_machine_files.shift()!
-    const result = evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'current-base',
-      requirementsPath: temporaryFile('requirements.json', JSON.stringify(requirements)),
+    const verification = verifyBetaQualitySignatureForTesting({
+      manifestPath: path.join(fixture.evidenceDirectory, fixture.manifestReference.path),
+      receiptPath: path.join(fixture.evidenceDirectory, fixture.receiptReference.path),
+      testOnlyTrustRoots: fixture.trustRoots,
     })
-
-    expect(result.errors).toContain(`unclassified state-machine candidate: ${removed}`)
-  })
-
-  it('requires exact-head artifacts, Vitest JSON, and GitNexus/Graphify reports for release', () => {
-    const report = temporaryFile('evidence.json', JSON.stringify({
-      schema_version: 1,
-      tested_commit: '0'.repeat(40),
-      requirements_sha256: '0'.repeat(64),
-      schema_sha256: '0'.repeat(64),
-      tool_schema_sha256: '0'.repeat(64),
-      integration_schema_sha256: '0'.repeat(64),
-      qa018_closure_supported: false,
-      integration_manifest: null,
-      artifacts: [],
-      commands: [],
-      case_results: [],
-      tool_reports: {},
-    }))
-    const result = evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'release',
-      evidenceReport: report,
+    expect(verification).toMatchObject({
+      verified: true,
+      signer: 'independent-beta-reviewer',
+      authorization_scope: 'qa-018-evidence-only',
+      public_release_authorized: false,
     })
-
-    expect(result.ok).toBe(false)
-    expect(result.errors).toEqual(expect.arrayContaining([
-      'evidence report schema/version arrays are empty or invalid',
-      'evidence report is not bound to exact HEAD',
-      'evidence report requirements digest mismatch',
-      'evidence report schema digest mismatch',
-      'evidence report tool schema digest mismatch',
-      'evidence report integration schema digest mismatch',
-      'missing or altered lane_a gitnexus report',
-      'missing or altered integrator graphify report',
-    ]))
-    expect(result.errors.some((error) => error.includes('release evidence missing required case')))
-      .toBe(true)
+    expect((fixture.receipt as { signer?: string }).signer).toBeUndefined()
   })
 
-  it('returns structured failures for malformed evidence JSON', () => {
-    const result = evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      mode: 'release',
-      evidenceReport: temporaryFile('malformed-evidence.json', '{'),
+  it('imports one external manifest/receipt pair and only its signed artifact inventory', () => {
+    const fixture = qa018Fixture()
+    const output = temporaryDirectory('beta-quality-imported-')
+    const imported = importQa018Bundle({
+      manifestArgument: path.join(fixture.evidenceDirectory, fixture.manifestReference.path),
+      receiptArgument: path.join(fixture.evidenceDirectory, fixture.receiptReference.path),
+      output,
     })
-
-    expect(result.ok).toBe(false)
-    expect(result.errors.some((error) => error.startsWith('malformed evidence report:'))).toBe(true)
+    expect(fs.existsSync(path.join(output, imported.manifestReference.path))).toBe(true)
+    expect(fs.existsSync(path.join(output, imported.receiptReference.path))).toBe(true)
+    expect(verifyQa018EvidenceBundle({
+      root: fixture.root,
+      evidenceDirectory: output,
+      manifestReference: imported.manifestReference,
+      receiptReference: imported.receiptReference,
+      testOnlyTrustRoots: fixture.trustRoots,
+      testOnlyRequiredBase: fixture.base,
+      testOnlyHead: fixture.head,
+    })).toMatchObject({ ok: true, verified: true, errors: [] })
   })
 
-  it('rejects evidence paths outside the evidence directory', () => {
-    const toolEntry = { tested_commit: '0'.repeat(40), path: '../outside.json', sha256: '0'.repeat(64) }
-    const laneReports = { gitnexus: toolEntry, graphify: toolEntry }
-    const report = temporaryFile('path-traversal.json', JSON.stringify({
-      schema_version: 1,
-      tested_commit: '0'.repeat(40),
-      requirements_sha256: '0'.repeat(64),
-      schema_sha256: '0'.repeat(64),
-      tool_schema_sha256: '0'.repeat(64),
-      integration_schema_sha256: '0'.repeat(64),
-      qa018_closure_supported: false,
-      integration_manifest: null,
-      artifacts: [],
-      commands: [{ id: 'qa001-runtime', argv: ['node_modules/.bin/vitest', 'run', '--reporter=json', 'test/codex-runtime-state-machines.test.ts'], exit_code: 0, log_path: '../outside.json', log_sha256: '0'.repeat(64), test_files: 1, tests: 1, passed: 1, failed: 0, pending: 0, skipped: 0, todo: 0 }],
-      case_results: [],
-      tool_reports: { lane_a: laneReports, lane_b: laneReports, lane_c: laneReports, lane_d: laneReports, integrator: laneReports },
-    }))
-    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
-
-    expect(result.errors).toContain('command log is outside evidence directory qa001-runtime')
-    expect(result.errors).toContain('lane_a gitnexus report is outside evidence directory')
-  })
-
-  it('rejects schema-invalid empty tool payloads instead of accepting self-hashes', () => {
-    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-tool-schema-'))
-    temporaryDirectories.push(directory)
-    const payload = path.join(directory, 'empty-tool.json')
-    fs.writeFileSync(payload, '{}', 'utf8')
-    const digest = createHash('sha256').update('{}').digest('hex')
-    const entry = { tested_commit: '0'.repeat(40), path: 'empty-tool.json', sha256: digest }
-    const laneReports = { gitnexus: entry, graphify: entry }
-    const report = path.join(directory, 'evidence.json')
-    fs.writeFileSync(report, JSON.stringify({
-      schema_version: 1,
-      tested_commit: '0'.repeat(40),
-      requirements_sha256: '0'.repeat(64),
-      schema_sha256: '0'.repeat(64),
-      tool_schema_sha256: '0'.repeat(64),
-      integration_schema_sha256: '0'.repeat(64),
-      qa018_closure_supported: false,
-      integration_manifest: null,
-      artifacts: [], commands: [], case_results: [],
-      tool_reports: { lane_a: laneReports, lane_b: laneReports, lane_c: laneReports, lane_d: laneReports, integrator: laneReports },
+  it('captures Graphify status through a real deterministic project command', () => {
+    const fixture = qa018Fixture()
+    const graphDirectory = path.join(fixture.root, 'graphify-out')
+    fs.mkdirSync(graphDirectory)
+    fs.writeFileSync(path.join(graphDirectory, 'graph.json'), JSON.stringify({
+      built_at_commit: fixture.head, nodes: [], links: [],
     }), 'utf8')
-
-    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
-    expect(result.errors.some((error) => error.startsWith('lane_a gitnexus report schema validation failed:'))).toBe(true)
-    expect(result.errors).toContain('invalid identity binding for lane_a gitnexus report')
-  })
-
-  it('returns structured errors for invalid contract and evidence root shapes', () => {
-    expect(() => evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      requirementsPath: temporaryFile('null-requirements.json', 'null'),
-    })).not.toThrow()
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      requirementsPath: temporaryFile('array-requirements.json', '[]'),
-    }).errors).toContain('requirements manifest schema/required arrays are empty or invalid')
-    expect(evaluateBetaQualityMatrix({
-      root: DEFAULT_ROOT,
-      matrixPath: temporaryFile('null-matrix.json', 'null'),
-    }).errors).toContain('matrix schema is invalid or empty')
-
-    const malformedShape = temporaryFile('shape-evidence.json', JSON.stringify({
+    fs.writeFileSync(path.join(graphDirectory, 'manifest.json'), JSON.stringify({
+      'history.txt': { sha256: hash(fs.readFileSync(path.join(fixture.root, 'history.txt'))) },
+    }), 'utf8')
+    expect(captureGraphifyStatus({
+      root: fixture.root,
+      graphPath: 'graphify-out/graph.json',
+      manifestPath: 'graphify-out/manifest.json',
+      testedCommit: fixture.head,
+    })).toMatchObject({
       schema_version: 1,
-      tested_commit: '0'.repeat(40),
-      requirements_sha256: PINNED_REQUIREMENTS_SHA256,
-      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256,
-      tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
-      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
-      qa018_closure_supported: false,
-      integration_manifest: [], artifacts: {}, commands: {}, case_results: {}, tool_reports: null,
-    }))
-    expect(() => evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: malformedShape })).not.toThrow()
-    expect(evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: malformedShape }).errors)
-      .toContain('evidence report schema/version arrays are empty or invalid')
-  })
-
-  it('rejects pending, skipped, and todo tests even when Vitest reports success', () => {
-    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-incomplete-vitest-'))
-    temporaryDirectories.push(directory)
-    const log = writeJson(directory, 'qa001-runtime.json', {
-      success: true, numFailedTests: 0, numPendingTests: 1, numTodoTests: 1,
-      numPassedTests: 1, numTotalTests: 3, numTotalTestSuites: 1,
-      testResults: [{ assertionResults: [{ status: 'passed' }, { status: 'skipped' }, { status: 'todo' }] }],
+      operation: 'status',
+      tested_commit: fixture.head,
+      graph_path: 'graphify-out/graph.json',
+      manifest_path: 'graphify-out/manifest.json',
     })
-    const report = path.join(directory, 'evidence.json')
-    fs.writeFileSync(report, JSON.stringify({
-      schema_version: 1,
+  })
+
+  it('keeps production trust empty and fails closed without generating or accepting a key override', () => {
+    const fixture = qa018Fixture()
+    const productionRoots = JSON.parse(fs.readFileSync(DEFAULT_BETA_QUALITY_TRUST_ROOTS, 'utf8'))
+    expect(productionRoots.trusted_signing_keys).toEqual([])
+    expect(fs.readFileSync(DEFAULT_BETA_QUALITY_TRUST_ROOTS, 'utf8')).not.toContain('PRIVATE KEY')
+    expect(() => verifyBetaQualitySignature({
+      manifestPath: path.join(fixture.evidenceDirectory, fixture.manifestReference.path),
+      receiptPath: path.join(fixture.evidenceDirectory, fixture.receiptReference.path),
+    })).toThrow('no trusted beta-quality signing key is configured')
+  })
+
+  it('rejects unknown and revoked keys', () => {
+    const fixture = qa018Fixture()
+    const unknownRoots = structuredClone(fixture.trustRoots)
+    unknownRoots.trusted_signing_keys[0].key_id = `sha256:${'0'.repeat(64)}`
+    expect(() => verifyBetaQualitySignatureForTesting({
+      manifestPath: path.join(fixture.evidenceDirectory, fixture.manifestReference.path),
+      receiptPath: path.join(fixture.evidenceDirectory, fixture.receiptReference.path),
+      testOnlyTrustRoots: unknownRoots,
+    })).toThrow('signing key is not trusted')
+
+    const revokedRoots = structuredClone(fixture.trustRoots)
+    revokedRoots.trusted_signing_keys[0].status = 'revoked'
+    expect(() => verifyBetaQualitySignatureForTesting({
+      manifestPath: path.join(fixture.evidenceDirectory, fixture.manifestReference.path),
+      receiptPath: path.join(fixture.evidenceDirectory, fixture.receiptReference.path),
+      testOnlyTrustRoots: revokedRoots,
+    })).toThrow('signing key is revoked')
+  })
+
+  it('rejects manifest and detached-signature tampering', () => {
+    const fixture = qa018Fixture()
+    fs.appendFileSync(path.join(fixture.evidenceDirectory, fixture.manifestReference.path), ' ')
+    expect(verifyFixture(fixture).errors.join('\n')).toContain('digest mismatch')
+
+    const signatureFixture = qa018Fixture()
+    const receipt = structuredClone(signatureFixture.receipt) as any
+    receipt.signature.value = `${receipt.signature.value.slice(0, -2)}AA`
+    writeJson(signatureFixture.evidenceDirectory, signatureFixture.receiptReference.path, receipt)
+    expect(verifyFixture(signatureFixture).errors.join('\n')).toMatch(/digest mismatch|signature verification failed/)
+  })
+
+  it.each([
+    ['repository', 'Elsewhere/Other'],
+    ['authorization_scope', 'public-release'],
+    ['public_release_authorized', true],
+    ['base_ref', 'f'.repeat(40)],
+    ['integrator_commit', 'e'.repeat(40)],
+  ])('rejects a signed manifest with wrong %s binding', (field, value) => {
+    const fixture = qa018Fixture()
+    fixture.manifest = { ...fixture.manifest, [field]: value }
+    fixture.resign()
+    expect(verifyFixture(fixture).ok).toBe(false)
+    expect(verifyFixture(fixture).errors.length).toBeGreaterThan(0)
+  })
+
+  it('rejects QA-only evidence that attempts to authorize public release', () => {
+    const fixture = qa018Fixture()
+    fixture.manifest = { ...fixture.manifest, public_release_authorized: true }
+    fixture.resign()
+    const result = verifyFixture(fixture)
+    expect(result.ok).toBe(false)
+    expect(result.errors.join('\n')).toMatch(/public_release_authorized|QA-only scope|must not authorize a public release/)
+  })
+
+  it('rejects remediation marker substitution even when the mutated manifest is freshly signed', () => {
+    const fixture = qa018Fixture()
+    const manifest = structuredClone(fixture.manifest)
+    manifest.slices[0].accepted_remediation_checkpoints[0].marker = '[beta-lane-a-ready]'
+    fixture.manifest = manifest
+    fixture.resign()
+    expect(verifyFixture(fixture).errors.join('\n')).toContain('remediation checkpoint 1 base, range, or marker is not exact')
+  })
+
+  it('rejects missing signed HIGH/CRITICAL dispositions', () => {
+    const fixture = qa018Fixture({ highRiskWithoutDisposition: true })
+    const result = verifyFixture(fixture)
+    expect(result.ok).toBe(false)
+    expect(result.errors.join('\n')).toContain('HIGH impact symbol-lane_a lacks one exact signed independent-review disposition')
+  })
+
+  it('accepts exactly one signed disposition for a real HIGH impact request', () => {
+    expect(verifyFixture(qa018Fixture({ highRiskWithDisposition: true }))).toMatchObject({
+      ok: true, verified: true, errors: [],
+    })
+  })
+
+  it('rejects normalized snake_case GitNexus fields instead of treating them as exact MCP input', () => {
+    const result = verifyFixture(qa018Fixture({ wrongGitRequestCasing: true }))
+    expect(result.ok).toBe(false)
+    expect(result.errors.join('\n')).toMatch(/schema validation failed|exact GitNexus MCP invocation/)
+  })
+
+  it('rejects evidence claiming the nonexistent Graphify status command', () => {
+    const result = verifyFixture(qa018Fixture({ nonexistentGraphifyStatus: true }))
+    expect(result.ok).toBe(false)
+    expect(result.errors.join('\n')).toContain('status request is not the exact supported capture-graphify-status invocation')
+  })
+
+  it('rejects raw artifact digest tampering', () => {
+    const digestFixture = qa018Fixture()
+    fs.appendFileSync(path.join(digestFixture.evidenceDirectory, 'lane_a/gitnexus-impact.json'), ' ')
+    expect(verifyFixture(digestFixture).errors.join('\n')).toContain('digest mismatch')
+  })
+
+  it('rejects signed artifact path traversal', () => {
+    const traversalFixture = qa018Fixture()
+    const traversalManifest = structuredClone(traversalFixture.manifest)
+    traversalManifest.slices[0].tool_reports.gitnexus.path = '../outside.json'
+    traversalFixture.manifest = traversalManifest
+    traversalFixture.resign()
+    expect(verifyFixture(traversalFixture).errors.join('\n')).toContain('outside the evidence directory')
+  })
+
+  it('rejects symlink substitution inside the signed artifact inventory', () => {
+    const symlinkFixture = qa018Fixture()
+    const impact = path.join(symlinkFixture.evidenceDirectory, 'lane_a/gitnexus-impact.json')
+    const outside = temporaryFile('outside-impact.json', fs.readFileSync(impact, 'utf8'))
+    fs.rmSync(impact)
+    fs.symlinkSync(outside, impact)
+    expect(verifyFixture(symlinkFixture).errors.join('\n')).toContain('uses a symlink')
+  })
+
+  it('does not allow QA-018 case results without independently verified inventory and signature', () => {
+    const report = temporaryFile('evidence.json', JSON.stringify({
+      schema_version: 2,
       tested_commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim(),
       requirements_sha256: PINNED_REQUIREMENTS_SHA256,
       schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256,
       tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
       integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
-      qa018_closure_supported: false, integration_manifest: null, artifacts: [],
-      commands: [{ id: 'qa001-runtime', argv: ['node_modules/.bin/vitest', 'run', '--reporter=json', 'test/codex-runtime-state-machines.test.ts'], exit_code: 0, log_path: log.path, log_sha256: log.sha256, test_files: 1, tests: 3, passed: 1, failed: 0, pending: 1, skipped: 1, todo: 1 }],
-      case_results: [], tool_reports: {},
-    }), 'utf8')
-
+      signature_schema_sha256: PINNED_SIGNATURE_RECEIPT_SCHEMA_SHA256,
+      qa018_closure_supported: true,
+      integration_manifest: null,
+      qa018_signature_receipt: null,
+      artifacts: [], commands: [],
+      case_results: [{ item: 'QA-018', case: 'lane-a-tool-reports', command_ids: ['qa018-tool-reports'], status: 'passed' }],
+    }))
     const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
-    expect(result.errors).toContain('command qa001-runtime has incomplete, skipped, pending, todo, or failing tests')
-    expect(result.errors).toContain('command qa001-runtime result does not match its complete Vitest JSON artifact')
+    expect(result.errors).toContain('evidence report QA-018 closure flag does not match independent signature and inventory verification')
+    expect(result.errors).toContain('case result command binding mismatch QA-018/lane-a-tool-reports')
   })
 
-  it('rejects pre-existing and symlinked output directories and refuses QA-018 receipt flags', () => {
+  it('rejects pre-existing/symlinked outputs and all legacy per-lane runner flags before testing', () => {
     const runner = path.join(DEFAULT_ROOT, 'scripts/run-beta-quality-evidence.mjs')
-    const existing = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-existing-output-'))
-    temporaryDirectories.push(existing)
+    const existing = temporaryDirectory('beta-quality-existing-output-')
     const existingRun = spawnSync(process.execPath, [runner, '--output-dir', existing], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
     expect(`${existingRun.stderr}${existingRun.stdout}`).toContain('evidence output directory must not already exist')
 
-    const realParent = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-real-parent-'))
-    temporaryDirectories.push(realParent)
+    const legacy = spawnSync(process.execPath, [runner, '--output-dir', path.join(temporaryRoot, `beta-quality-${randomUUID()}`), '--lane-a-gitnexus-report', 'receipt.json'], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
+    expect(`${legacy.stderr}${legacy.stdout}`).toContain('per-lane QA-018 flags are unsupported')
+
+    const realParent = temporaryDirectory('beta-quality-real-parent-')
     const linkParent = `${realParent}-link`
     fs.symlinkSync(realParent, linkParent, 'dir')
     temporaryDirectories.push(linkParent)
     const symlinkRun = spawnSync(process.execPath, [runner, '--output-dir', path.join(linkParent, 'evidence')], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
     expect(`${symlinkRun.stderr}${symlinkRun.stdout}`).toContain('evidence output parent must be a real, existing, non-symlink directory')
-
-    const unsupported = spawnSync(process.execPath, [runner, '--output-dir', path.join(temporaryRoot, `beta-quality-unsupported-${Date.now()}`), '--lane-a-gitnexus-report', 'receipt.json'], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
-    expect(`${unsupported.stderr}${unsupported.stdout}`).toContain('current runner cannot close QA-018')
-  })
-
-  it('rejects lane tool pairs that do not match one exact signed ready commit', () => {
-    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-lane-binding-'))
-    temporaryDirectories.push(directory)
-    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim()
-    const marker = { lane_a: '[beta-lane-a-ready]', lane_b: '[beta-lane-b-ready]', lane_c: '[beta-lane-c-ready]', lane_d: '[beta-lane-d-ready]', integrator: '[beta-release-candidate]' } as const
-    const lanes = Object.fromEntries(Object.entries(marker).map(([lane, readyMarker]) => [lane, {
-      ready_commit: head, base_ref: REQUIRED_BETA_BASE, range: `${REQUIRED_BETA_BASE}..${head}`,
-      ready_marker: readyMarker, gitnexus_version: '1.0.0', graphify_version: '1.0.0',
-    }]))
-    const manifest = writeJson(directory, 'integration.json', {
-      schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head, lanes,
-      external_receipt: { signer: 'release-integrator', signed_at: '2026-08-02T00:00:00Z', signature: 'a'.repeat(64), verification: 'external-human-required' },
-    })
-    const malformedEnvelopeFile = writeJson(directory, 'malformed-mcp.json', { content: [{ type: 'text', text: 'not-json' }] })
-    const nullFile = writeJson(directory, 'null.json', null)
-    const malformedEnvelope = { path: malformedEnvelopeFile.path, output_sha256: malformedEnvelopeFile.sha256 }
-    const nullArtifact = { path: nullFile.path, output_sha256: nullFile.sha256 }
-    const missing = { path: 'missing.json', output_sha256: '0'.repeat(64) }
-    const gitReceipt = writeJson(directory, 'lane-a-gitnexus.json', {
-      schema_version: 2, tool: 'gitnexus', lane: 'lane_a', tested_commit: head, base_ref: REQUIRED_BETA_BASE,
-      range: `${REQUIRED_BETA_BASE}..${head}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
-      invocation_argv: { impact: ['gitnexus', 'impact'], detect_changes: ['gitnexus', 'detect_changes', REQUIRED_BETA_BASE] },
-      raw_impact: malformedEnvelope, raw_detect_changes: nullArtifact, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
-    })
-    const graphReceipt = writeJson(directory, 'lane-a-graphify.json', {
-      schema_version: 2, tool: 'graphify', lane: 'lane_a', tested_commit: REQUIRED_BETA_BASE, base_ref: REQUIRED_BETA_BASE,
-      range: `${REQUIRED_BETA_BASE}..${REQUIRED_BETA_BASE}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
-      invocation_argv: { update: ['graphify', 'update', '.'], status: ['graphify', 'status'] }, raw_update: nullArtifact,
-      raw_status: malformedEnvelope, graph_artifact: missing, manifest_artifact: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
-    })
-    const report = path.join(directory, 'evidence.json')
-    fs.writeFileSync(report, JSON.stringify({
-      schema_version: 1, tested_commit: head, requirements_sha256: PINNED_REQUIREMENTS_SHA256,
-      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256, tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
-      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256, qa018_closure_supported: false,
-      integration_manifest: manifest, artifacts: [], commands: [], case_results: [],
-      tool_reports: { lane_a: { gitnexus: { tested_commit: head, ...gitReceipt }, graphify: { tested_commit: REQUIRED_BETA_BASE, ...graphReceipt } } },
-    }), 'utf8')
-
-    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
-    expect(result.errors).toContain('lane_a graphify report does not match the signed integration manifest')
-    expect(result.errors).toContain('lane_a GitNexus and Graphify receipts do not use the same exact ready commit')
-    expect(result.errors).toContain('lane_a raw GitNexus impact output is null, malformed, or lacks semantic fields')
-    expect(result.errors).toContain('lane_a raw GitNexus detect_changes output is null, malformed, or lacks semantic fields')
-    expect(result.errors).toContain('lane_a raw Graphify update output is null, malformed, or lacks semantic fields')
-    expect(result.errors).toContain('lane_a raw Graphify status output is null, malformed, or does not bind retained graph/manifest hashes')
-    expect(result.errors).toContain('QA-018 remains impossible in this runner: integrator-signed external raw tool receipts require a reviewed verifier upgrade')
-  })
-
-  it('rejects nonexistent, nonancestor, and wrong-marker ready commits from actual Git history', () => {
-    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-git-binding-'))
-    temporaryDirectories.push(directory)
-    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim()
-    const nonancestor = syntheticNonancestorCommit()
-    expect(spawnSync('git', ['merge-base', '--is-ancestor', nonancestor, head], { cwd: DEFAULT_ROOT }).status).not.toBe(0)
-    const lane = (readyCommit: string, readyMarker: string) => ({
-      ready_commit: readyCommit, base_ref: REQUIRED_BETA_BASE, range: `${REQUIRED_BETA_BASE}..${readyCommit}`,
-      ready_marker: readyMarker, gitnexus_version: '1.0.0', graphify_version: '1.0.0',
-    })
-    const manifest = writeJson(directory, 'integration.json', {
-      schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head,
-      lanes: {
-        lane_a: lane('f'.repeat(40), '[beta-lane-a-ready]'),
-        lane_b: lane(nonancestor, '[beta-lane-b-ready]'),
-        lane_c: lane(head, '[beta-lane-c-ready]'),
-        lane_d: lane(head, '[beta-lane-d-ready]'),
-        integrator: lane(head, '[beta-release-candidate]'),
-      },
-      external_receipt: { signer: 'release-integrator', signed_at: '2026-08-02T00:00:00Z', signature: 'a'.repeat(64), verification: 'external-human-required' },
-    })
-    const report = path.join(directory, 'evidence.json')
-    fs.writeFileSync(report, JSON.stringify({
-      schema_version: 1, tested_commit: head, requirements_sha256: PINNED_REQUIREMENTS_SHA256,
-      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256, tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
-      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256, qa018_closure_supported: false,
-      integration_manifest: manifest, artifacts: [], commands: [], case_results: [], tool_reports: {},
-    }), 'utf8')
-
-    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
-    expect(result.errors).toContain('lane_a ready commit does not exist in the repository')
-    expect(result.errors).toContain('lane_b ready commit is not integrated into exact HEAD')
-    expect(result.errors).toContain('lane_c ready marker is absent from the actual commit message')
   })
 })
