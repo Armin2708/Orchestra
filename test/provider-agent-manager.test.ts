@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
-import { expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, beforeEach, expect, it } from 'vitest'
 import { writeAgentDefaults } from '../src/agent-defaults.js'
 import { writeProviderModelCache } from '../src/agent-providers.js'
 import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
@@ -19,6 +22,22 @@ import type {
   DriverSession,
 } from '../src/runtime/types.js'
 import { buildServer, type ConductorLike } from '../src/server.js'
+import { loadManagedAgentSessionCredential } from '../src/agent-session-credential.js'
+
+let credentialHome = ''
+const previousOrchestraHome = process.env.ORCHESTRA_HOME
+beforeEach(() => {
+  credentialHome = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-codex-credentials-'))
+  process.env.ORCHESTRA_HOME = credentialHome
+})
+afterEach(() => {
+  fs.rmSync(credentialHome, { recursive: true, force: true })
+  if (previousOrchestraHome === undefined) delete process.env.ORCHESTRA_HOME
+  else process.env.ORCHESTRA_HOME = previousOrchestraHome
+  delete process.env.ORCHESTRA_MANAGED_AGENT
+  delete process.env.ORCHESTRA_AGENT_ID
+  delete process.env.ORCHESTRA_NAME
+})
 
 type Feed = {
   queue: DriverEvent[]
@@ -222,6 +241,22 @@ it('routes the stored worker default to Codex and queues work until the thread i
   expect(t.driver.sends[0][1]).toBe('implement the card')
   expect(t.db.prepare('SELECT status, external_session_id FROM agents WHERE id=?').get(agent.id))
     .toMatchObject({ status: 'active', external_session_id: 'thread-1' })
+  expect(t.db.prepare(`SELECT profile_id, external_id FROM agent_sessions
+    WHERE agent_id=? AND provider='codex'`).get(agent.id)).toMatchObject({
+    profile_id: expect.any(String),
+    external_id: 'thread-1',
+  })
+  expect(t.db.prepare('SELECT hook_token_hash FROM agents WHERE id=?').get(agent.id))
+    .toMatchObject({ hook_token_hash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+  process.env.ORCHESTRA_MANAGED_AGENT = '1'
+  process.env.ORCHESTRA_AGENT_ID = String(agent.id)
+  process.env.ORCHESTRA_NAME = 'codex-owl'
+  expect(loadManagedAgentSessionCredential('/project')).toMatchObject({
+    agentId: agent.id,
+    provider: 'codex',
+    sessionId: 'thread-1',
+    sessionToken: expect.any(String),
+  })
   Object.assign(t.driver.sessions.get('codex:1')!.metadata, {
     resolvedModel: 'gpt-5.4-runtime',
     resolvedEffort: 'medium',

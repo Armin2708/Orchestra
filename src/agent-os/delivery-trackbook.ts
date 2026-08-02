@@ -545,11 +545,31 @@ export class DeliveryTrackbookService {
     const boundedLimit = Math.min(MAX.list, Math.max(1, integer(limit, 'limit')))
     return (this.db.prepare(`SELECT intent.* FROM delivery_autoship_intents intent
       LEFT JOIN delivery_autoship_completions completion ON completion.intent_id=intent.id
+      LEFT JOIN (
+        SELECT json_extract(payload, '$.autoship_intent_id') AS intent_id,
+          MAX(rowid) AS last_attempt_rowid
+        FROM os_events
+        WHERE kind='delivery.autoship_reconciliation_pending' AND json_valid(payload)
+        GROUP BY json_extract(payload, '$.autoship_intent_id')
+      ) recovery ON recovery.intent_id=intent.id
       WHERE completion.id IS NULL AND (@board_id IS NULL OR intent.board_id=@board_id)
-      ORDER BY intent.prepared_at, intent.rowid LIMIT @limit`).all({
+      ORDER BY CASE WHEN recovery.last_attempt_rowid IS NULL THEN 0 ELSE 1 END,
+        recovery.last_attempt_rowid, intent.prepared_at, intent.rowid LIMIT @limit`).all({
       board_id: scopedBoardId,
       limit: boundedLimit,
     }) as Record<string, unknown>[]).map(mapAutoshipIntent)
+  }
+
+  pendingAutoshipIntentForCard(boardId: number, cardId: number): DeliveryAutoshipIntent | null {
+    this.requireAutoshipIntentSchema()
+    const row = this.db.prepare(`SELECT intent.* FROM delivery_autoship_intents intent
+      LEFT JOIN delivery_autoship_completions completion ON completion.intent_id=intent.id
+      WHERE completion.id IS NULL AND intent.board_id=? AND intent.card_id=?
+      ORDER BY intent.prepared_at DESC, intent.rowid DESC LIMIT 1`).get(
+      positiveInteger(boardId, 'boardId'),
+      positiveInteger(cardId, 'cardId'),
+    ) as Record<string, unknown> | undefined
+    return row ? mapAutoshipIntent(row) : null
   }
 
   /** Completes a durable intent only after exact main HEAD contains its immutable source commit. */
@@ -641,9 +661,13 @@ export class DeliveryTrackbookService {
         const head = repositoryHead(intent.source_repository)
         if (repositoryBranchName(intent.source_repository) !== 'main'
           || !repositoryContainsCommit(intent.source_repository, intent.source_commit, head)) {
-          return { status: 'pending' as const, intent, reason: 'source commit is not on exact current main HEAD' }
+          return this.pendingAutoshipReconciliation(
+            intent,
+            actor,
+            'source commit is not on exact current main HEAD',
+          )
         }
-        return {
+        const completed = {
           status: 'completed' as const,
           result: this.completeAutoshipIntent(intent.id, {
             actor,
@@ -651,14 +675,36 @@ export class DeliveryTrackbookService {
             idempotencyKey: `autoship-intent-reconcile:${intent.id}:${head}`,
           }),
         }
+        this.restoreAutoshipCard(intent)
+        return completed
       } catch (error) {
-        return {
-          status: 'pending' as const,
+        return this.pendingAutoshipReconciliation(
           intent,
-          reason: error instanceof Error ? error.message.slice(0, 1_000) : 'autoship reconciliation failed',
-        }
+          actor,
+          error instanceof Error ? error.message.slice(0, 1_000) : 'autoship reconciliation failed',
+        )
       }
     })
+  }
+
+  private pendingAutoshipReconciliation(
+    intent: DeliveryAutoshipIntent,
+    actor: ActorIdentity,
+    reason: string,
+  ): DeliveryAutoshipReconciliation {
+    const report = this.reports.get(intent.report_id)
+    this.appendEvent(report, actor, 'delivery.autoship_reconciliation_pending', randomUUID(), {
+      autoship_intent_id: intent.id,
+      reason,
+    })
+    return { status: 'pending', intent, reason }
+  }
+
+  private restoreAutoshipCard(intent: DeliveryAutoshipIntent): void {
+    this.db.prepare(`UPDATE cards SET column_name='done', updated_at=datetime('now')
+      WHERE id=? AND board_id=? AND column_name='blocked'
+        AND (SELECT type FROM card_events WHERE card_id=cards.id ORDER BY id DESC LIMIT 1)
+          ='autoship_failed'`).run(intent.card_id, intent.board_id)
   }
 
   recordShipQueueReceipt(input: RecordShipQueueReceiptInput): DeliveryShipmentReceipt {

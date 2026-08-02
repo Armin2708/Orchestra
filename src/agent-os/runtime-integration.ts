@@ -79,6 +79,7 @@ import {
   type ProviderAcceptanceArtifactV1,
   type ProviderAcceptanceEvidenceRecordV1,
 } from '../provider-acceptance-evidence-store.js'
+import { provisionManagedAgentSessionCredential } from '../agent-session-credential.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -2162,19 +2163,31 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           JSON.stringify(context),
         )
       }
-      if (managedAgentId) this.db.prepare(`UPDATE agents SET status='active', external_session_id=?,
-        provider_state_json=?, last_seen=datetime('now') WHERE id=?`).run(
-          session.externalId,
-          JSON.stringify({
-            driver_session_id: session.id,
-            external_session_id: session.externalId,
-            workspace_id: workspace.id,
-            job_id: job.id,
-            cwd,
-            lifecycle: 'active',
-          }),
-          managedAgentId,
-        )
+      if (managedAgentId) {
+        this.db.prepare(`UPDATE agents SET status='active', external_session_id=?,
+          provider_state_json=?, last_seen=datetime('now') WHERE id=?`).run(
+            session.externalId,
+            JSON.stringify({
+              driver_session_id: session.id,
+              external_session_id: session.externalId,
+              workspace_id: workspace.id,
+              job_id: job.id,
+              cwd,
+              lifecycle: 'active',
+            }),
+            managedAgentId,
+          )
+        const managedAgent = this.db.prepare('SELECT name FROM agents WHERE id=?')
+          .get(managedAgentId) as { name: string }
+        provisionManagedAgentSessionCredential(this.db, {
+          agentId: managedAgentId,
+          boardId: job.board_id,
+          agentName: managedAgent.name,
+          provider: job.provider,
+          externalSessionId: session.externalId,
+          cwd,
+        })
+      }
       if (!assignment) {
         this.db.prepare('UPDATE jobs SET workspace_id=? WHERE id=?').run(workspace.id, job.id)
       }

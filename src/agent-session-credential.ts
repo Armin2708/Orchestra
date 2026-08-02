@@ -49,6 +49,15 @@ export interface ManagedAgentBootstrapResult {
   sessionToken: string
 }
 
+export interface ProvisionManagedAgentSessionCredential {
+  agentId: number
+  boardId: number
+  agentName: string
+  provider: string
+  externalSessionId: string
+  cwd: string
+}
+
 const BOOTSTRAP_REJECTED = Symbol('managed-agent-bootstrap-rejected')
 
 /** Mints a launch-only bearer whose hash is persisted before the provider starts. */
@@ -149,6 +158,74 @@ export function consumeManagedAgentLaunchBootstrap(
   } catch (error) {
     if (error === BOOTSTRAP_REJECTED) return null
     throw error
+  }
+}
+
+/**
+ * Daemon-side equivalent of hook bootstrap for runtimes whose provider process is shared.
+ * The exact canonical session must already be bound; only the resulting hash reaches SQLite.
+ */
+export function provisionManagedAgentSessionCredential(
+  db: Database.Database,
+  input: ProvisionManagedAgentSessionCredential,
+): AgentSessionCredential {
+  if (!Number.isSafeInteger(input.agentId) || input.agentId <= 0
+    || !Number.isSafeInteger(input.boardId) || input.boardId <= 0
+    || !bounded(input.agentName, 200)
+    || !bounded(input.provider, 64)
+    || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(input.provider)
+    || !bounded(input.externalSessionId, 512)
+    || !bounded(input.cwd, 4_096)) {
+    throw new Error('managed provider-session credential scope is invalid')
+  }
+  const exact = db.prepare(`SELECT 1 FROM agents agent
+    JOIN agent_sessions session ON session.agent_id=agent.id
+    JOIN workspaces workspace ON workspace.id=session.workspace_id
+    JOIN agent_profiles profile ON profile.id=session.profile_id
+      AND profile.board_id=workspace.board_id AND profile.status='active'
+    WHERE agent.id=? AND agent.board_id=? AND agent.name=? AND agent.kind='hired'
+      AND agent.provider=? AND agent.external_session_id=?
+      AND agent.status IN ('active','starting','idle')
+      AND workspace.board_id=agent.board_id
+      AND session.provider=agent.provider AND session.external_id=agent.external_session_id
+      AND session.status IN ('running','idle')
+    LIMIT 1`).get(
+    input.agentId,
+    input.boardId,
+    input.agentName,
+    input.provider,
+    input.externalSessionId,
+  )
+  if (!exact) throw new Error('managed provider session lacks an exact canonical identity')
+
+  const sessionToken = randomBytes(32).toString('base64url')
+  persistManagedAgentSessionCredential({
+    agent_id: input.agentId,
+    agent_name: input.agentName,
+    board_id: input.boardId,
+    provider: input.provider,
+    session_id: input.externalSessionId,
+    session_token: sessionToken,
+    cwd: input.cwd,
+  })
+  const rotated = db.prepare(`UPDATE agents SET hook_token_hash=?, last_seen=datetime('now')
+    WHERE id=? AND board_id=? AND name=? AND kind='hired' AND provider=?
+      AND external_session_id=? AND status IN ('active','starting','idle')`).run(
+    managedAgentCredentialHash(sessionToken),
+    input.agentId,
+    input.boardId,
+    input.agentName,
+    input.provider,
+    input.externalSessionId,
+  )
+  if (rotated.changes !== 1) {
+    throw new Error('managed provider-session credential lost its exact identity compare-and-set')
+  }
+  return {
+    agentId: input.agentId,
+    provider: input.provider,
+    sessionId: input.externalSessionId,
+    sessionToken,
   }
 }
 

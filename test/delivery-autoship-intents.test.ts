@@ -135,6 +135,8 @@ describe('delivery autoship intent migration 037', () => {
       destination: 'main',
     })
     expect(setup.trackbook.pendingAutoshipIntents()).toEqual([intent])
+    expect(setup.trackbook.pendingAutoshipIntentForCard(setup.boardId, setup.cardId))
+      .toEqual(intent)
     expect(() => setup.db.prepare('UPDATE delivery_autoship_intents SET source_branch=? WHERE id=?')
       .run('tampered', intent.id)).toThrow(/immutable/)
     expect(() => setup.db.prepare('DELETE FROM delivery_autoship_intents WHERE id=?')
@@ -154,6 +156,72 @@ describe('delivery autoship intent migration 037', () => {
 })
 
 describe('durable autoship recovery', () => {
+  it('uses exact live lookup and rotates bounded recovery past 200 older attempts', () => {
+    const setup = fixture()
+    const at = '2026-08-02T00:00:00.000Z'
+    const insertCard = setup.db.prepare(`INSERT INTO cards
+      (board_id, title, description, branch) VALUES (?, ?, 'Older pending', 'card-77')`)
+    const insertReport = setup.db.prepare(`INSERT INTO delivery_reports
+      (id, lineage_id, sequence, board_id, card_id, status, asked_snapshot, commits,
+       created_by, created_at, updated_at)
+      VALUES (?, ?, 1, ?, ?, 'accepted', '{}', ?, 'test', ?, ?)`)
+    const insertIntent = setup.db.prepare(`INSERT INTO delivery_autoship_intents
+      (id, report_id, board_id, card_id, source_repository, source_branch,
+       source_commit, destination, prepared_by, prepared_at, idempotency_key,
+       request_sha256, created_at)
+      VALUES (?, ?, ?, ?, ?, 'card-77', ?, 'main', 'operator:test', ?, ?, ?, ?)`)
+    const insertAttempt = setup.db.prepare(`INSERT INTO os_events
+      (id, board_id, card_id, actor_type, actor_id, correlation_id, causation_id,
+       idempotency_key, kind, source, payload, created_at)
+      VALUES (?, ?, ?, 'operator', 'test', ?, ?, ?,
+        'delivery.autoship_reconciliation_pending', 'delivery-trackbook', ?, ?)`)
+    for (let index = 0; index < 200; index += 1) {
+      const cardId = Number(insertCard.run(setup.boardId, `Older pending ${index}`).lastInsertRowid)
+      const reportId = `older-report-${index}`
+      const intentId = `older-intent-${index}`
+      insertReport.run(
+        reportId,
+        reportId,
+        setup.boardId,
+        cardId,
+        JSON.stringify([setup.sourceCommit]),
+        at,
+        at,
+      )
+      insertIntent.run(
+        intentId,
+        reportId,
+        setup.boardId,
+        cardId,
+        setup.repository,
+        setup.sourceCommit,
+        at,
+        `older-intent:${index}`,
+        '0'.repeat(64),
+        at,
+      )
+      insertAttempt.run(
+        `older-attempt-${index}`,
+        setup.boardId,
+        cardId,
+        `older-attempt-${index}`,
+        reportId,
+        `older-attempt:${index}`,
+        JSON.stringify({ delivery_report_id: reportId, autoship_intent_id: intentId }),
+        at,
+      )
+    }
+    const current = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:after-200',
+    })
+    expect(setup.trackbook.pendingAutoshipIntents(setup.boardId, 200)).toHaveLength(200)
+    expect(setup.trackbook.pendingAutoshipIntents(setup.boardId, 1)).toEqual([current])
+    expect(setup.trackbook.pendingAutoshipIntentForCard(setup.boardId, setup.cardId))
+      .toEqual(current)
+  })
+
   it('survives restart after merge and reconciles receipt, shipment and completion exactly once', () => {
     const setup = fixture()
     const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
@@ -181,6 +249,9 @@ describe('durable autoship recovery', () => {
     installDeliveryAutoshipIntentSchema(restartedDb)
     const restarted = new DeliveryTrackbookService(restartedDb)
     expect(restarted.pendingAutoshipIntents()).toEqual([intent])
+    restartedDb.prepare("UPDATE cards SET column_name='blocked' WHERE id=?").run(setup.cardId)
+    restartedDb.prepare(`INSERT INTO card_events (card_id, type, payload)
+      VALUES (?, 'autoship_failed', '{}')`).run(setup.cardId)
     const [reconciled] = restarted.reconcilePendingAutoshipIntents({ actor })
     expect(reconciled?.status).toBe('completed')
     if (!reconciled || reconciled.status !== 'completed') throw new Error('intent did not reconcile')
@@ -216,6 +287,8 @@ describe('durable autoship recovery', () => {
       .toEqual({ count: 1 })
     expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
       .toEqual({ count: 1 })
+    expect(restartedDb.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId))
+      .toEqual({ column_name: 'done' })
     expect(() => restartedDb.prepare('DELETE FROM delivery_autoship_completions WHERE intent_id=?')
       .run(intent.id)).toThrow(/immutable/)
   })

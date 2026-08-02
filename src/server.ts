@@ -438,8 +438,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       },
       recordShipped: async (cardId, hash) => {
         await recordShipped(db, server.bus, { id: cardId, board_id: board.id }, board.project_path, { hash, by: 'autoship' })
-        const intent = deliveryTrackbook.pendingAutoshipIntents(board.id, 200)
-          .find((candidate) => candidate.card_id === cardId)
+        const intent = deliveryTrackbook.pendingAutoshipIntentForCard(board.id, cardId)
         if (!intent) throw new Error('accepted delivery autoship intent is missing')
         deliveryTrackbook.completeAutoshipIntent(intent.id, {
           actor: { type: 'operator', id: 'ship_queue' },
