@@ -75,6 +75,7 @@ async function request<T>(
     method,
     headers: {
       'content-type': 'application/json',
+      ...(getToken() ? { authorization: `Bearer ${getToken()}` } : {}),
       ...(method === 'GET' ? {} : { 'idempotency-key': commandKey(path) }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -131,3 +132,4 @@ export const discussionApi: DiscussionClient = {
     {},
   ),
 }
+import { getToken } from './api'

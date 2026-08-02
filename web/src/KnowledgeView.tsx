@@ -123,10 +123,10 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
 
           {pendingReviews.map((review) => <article className="knowledge-queue" key={review.id}>
             <b>{review.kind}</b><strong>{review.title}</strong><code>{review.normalized_locator}</code>
-            <span>{review.freshness_reason.replaceAll('_', ' ')}</span>
+            <span>{review.freshness_reason.replace(/_/g, ' ')}</span>
           </article>)}
           {pendingPromotions.map((promotion) => <article className="knowledge-queue promotion" key={promotion.id}>
-            <b>promotion</b><strong>{promotion.kind.replaceAll('_', ' ')}</strong>
+            <b>promotion</b><strong>{promotion.kind.replace(/_/g, ' ')}</strong>
             <span>Requested by {promotion.requested_by}. Exact source evidence is revalidated on approval.</span>
             <div><button disabled={busy !== null || !reason.trim()} onClick={() => void decidePromotion(promotion, 'promote')}>Promote</button>
               <button disabled={busy !== null || !reason.trim()} onClick={() => void decidePromotion(promotion, 'reject')}>Reject</button></div>
@@ -141,7 +141,7 @@ function KnowledgeCard({ item, active, onSelect }: { item: KnowledgeItem; active
   const citation = item.citation
   const range = citation.start_line === null ? '' : `:${citation.start_line}${citation.end_line === citation.start_line ? '' : `–${citation.end_line}`}`
   return <button type="button" className={`knowledge-card ${active ? 'active' : ''}`} onClick={onSelect}>
-    <header><span>{citation.source_kind.replaceAll('_', ' ')}</span>
+    <header><span>{citation.source_kind.replace(/_/g, ' ')}</span>
       <b data-freshness={citation.freshness}>{citation.freshness}</b>{citation.pinned && <em>pinned</em>}</header>
     <h4>{citation.title}</h4><p>{item.content}</p>
     <footer><code>{citation.locator}{range}</code><span>{citation.estimated_tokens.toLocaleString()} tok</span></footer>

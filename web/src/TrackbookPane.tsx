@@ -16,6 +16,7 @@ import {
   TaskContract,
 } from './osApi'
 import { DeliveryTrackbookFilterBar, JobDeliveryDetail, type DeliveryListFilter } from './JobDeliveryDetail'
+import { JobDetailDiscussions } from './DiscussionCenter'
 import { OsIcon, OsIconName } from './OsIcon'
 import { PaneFrame, PaneSkeleton, Resource } from './WorkspacePanes'
 
@@ -519,11 +520,12 @@ function RevisionHistory({ deliveries, selectedId, currentId, onSelect }: {
   )
 }
 
-export function TrackbookPane({ deliveries, evidence, contract, card }: {
+export function TrackbookPane({ deliveries, evidence, contract, card, boardId }: {
   deliveries: Resource<DeliveryCollection>
   evidence: Resource<EvidenceBundle | null>
   contract: Resource<TaskContract | null>
   card: Card | undefined
+  boardId: number
 }) {
   const currentId = deliveries.data.current ? String(deliveries.data.current.id) : null
   const [selectedId, setSelectedId] = useState<string | null>(currentId)
@@ -611,6 +613,8 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
           {jobDetail.status === 'error' && <div className="os-pane-error" role="alert"><OsIcon name="attention" />
             <strong>Exact job evidence could not load</strong><span>{jobDetail.error}</span></div>}
           {jobDetail.data && <JobDeliveryDetail detail={jobDetail.data} />}
+          {card && selected?.job_id && <JobDetailDiscussions boardId={boardId}
+            linkType="job" linkTarget={String(selected.job_id)} />}
           {filteredDeliveries.length > 0 && (
             <RevisionHistory deliveries={filteredDeliveries} selectedId={selected ? String(selected.id) : null}
               currentId={currentId} onSelect={(delivery) => setSelectedId(String(delivery.id))} />

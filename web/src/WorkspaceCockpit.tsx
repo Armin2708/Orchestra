@@ -451,7 +451,8 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
         onOpenAgent={setLiveAgent} />
     )
     if (pane === 'changes') return <ChangesPane evidence={evidence} />
-    if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card} />
+    if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence}
+      contract={contract} card={card} boardId={currentBoard!} />
     if (pane === 'processes') return (
       <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} onAttach={attachProcess}
         onSignal={signalProcess} onRestart={restartProcess} />

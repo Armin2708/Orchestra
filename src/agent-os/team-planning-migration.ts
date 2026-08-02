@@ -100,6 +100,22 @@ const TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze
 })
 
 export function installTeamPlanningSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attention_items (
+      id TEXT PRIMARY KEY,
+      board_id INTEGER NOT NULL,
+      workspace_id TEXT,
+      card_id INTEGER,
+      agent_id INTEGER,
+      kind TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+  `)
   assertTeamPlanningPrerequisites(db)
   assertExistingTeamPlanningTablesCompatible(db)
   db.exec(`

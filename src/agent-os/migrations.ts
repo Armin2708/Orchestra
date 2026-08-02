@@ -41,6 +41,18 @@ import {
   AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID,
   installDeliveryTrackbookSchema,
 } from './delivery-trackbook-migration.js'
+import {
+  AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID,
+  installKnowledgeManagementSchema,
+} from './knowledge-management-migration.js'
+import {
+  AGENT_OS_DISCUSSION_MIGRATION_ID,
+  installDiscussionSchema,
+} from './discussion-migration.js'
+import {
+  AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
+  installTeamPlanningSchema,
+} from './team-planning-migration.js'
 
 interface Migration {
   id: string
@@ -7536,6 +7548,48 @@ const migrations: Migration[] = [
         )
       }
       installDeliveryTrackbookSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID,
+    apply(db) {
+      const hasDeliveryTrackbook = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID)
+      if (!hasDeliveryTrackbook) {
+        throw new Error(
+          `migration ${AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID}`,
+        )
+      }
+      installKnowledgeManagementSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DISCUSSION_MIGRATION_ID,
+    apply(db) {
+      const hasKnowledgeManagement = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID)
+      if (!hasKnowledgeManagement) {
+        throw new Error(
+          `migration ${AGENT_OS_DISCUSSION_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID}`,
+        )
+      }
+      installDiscussionSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
+    apply(db) {
+      const hasDiscussions = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DISCUSSION_MIGRATION_ID)
+      if (!hasDiscussions) {
+        throw new Error(
+          `migration ${AGENT_OS_TEAM_PLANNING_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DISCUSSION_MIGRATION_ID}`,
+        )
+      }
+      installTeamPlanningSchema(db)
     },
   },
 ]

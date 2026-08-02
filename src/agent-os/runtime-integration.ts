@@ -28,6 +28,10 @@ import { ConversationService, type AgentSessionRecord } from './conversations.js
 import { parseJson } from './json.js'
 import { projectManagedDriverEvent } from './managed-driver-event-projection.js'
 import { ManagedAgentSessionBinder, type ManagedAgentSessionBinding } from './managed-session-binding.js'
+import {
+  KnowledgeRuntimeIntegration,
+  type ManagedKnowledgePrompt,
+} from './knowledge-runtime-integration.js'
 import { OpenWorkService } from './open-work.js'
 import { JobScheduler, type Job, type JobExecutionResult, type JobExecutor } from './scheduler.js'
 import { TaskContractService, type TaskContract } from './task-contracts.js'
@@ -754,6 +758,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
   private readonly deliveries: DeliveryLifecycleIntegration
+  private readonly knowledge: KnowledgeRuntimeIntegration
   private scheduler?: JobScheduler
   private shuttingDown = false
 
@@ -764,6 +769,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     private readonly bus: BusRef = {},
   ) {
     this.deliveries = new DeliveryLifecycleIntegration(db)
+    this.knowledge = new KnowledgeRuntimeIntegration(db)
   }
 
   bindScheduler(scheduler: JobScheduler): void {
@@ -1877,7 +1883,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       : null
     const agentName = job.card_id ? `job-${job.card_id}` : `job-${job.id.slice(0, 8)}`
     const profileName = job.card_id ? `job-${job.card_id}-${job.id}` : `job-${job.id}`
-    const sessionContext = {
+    const sessionContext: Record<string, unknown> = {
       job_id: job.id,
       card_id: job.card_id,
       managed_identity: managedAgentId !== null,
@@ -1908,9 +1914,25 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         throw error
       }
     }
+    const repositoryHead = job.provider !== 'shell' && this.knowledge.hasSources(job.board_id)
+      ? (await git(cwd, ['rev-parse', 'HEAD'])).stdout.trim().toLowerCase()
+      : null
     const agentBrief = job.provider === 'shell'
       ? null
-      : this.prompt(job, contract, delivery)
+      : this.prompt(
+          job,
+          contract,
+          delivery,
+          agentHome!.agentHomeSessionId,
+          workspace.id,
+          repositoryHead,
+        )
+    if (agentBrief?.knowledge) {
+      sessionContext.knowledge_context_use_id = agentBrief.knowledge.context_use_id
+      sessionContext.knowledge_context_build_id = agentBrief.knowledge.context_build_id
+      sessionContext.knowledge_context_estimated_tokens = agentBrief.knowledge.estimated_tokens
+      sessionContext.knowledge_context_manifest_fingerprint = agentBrief.knowledge.manifest_fingerprint
+    }
     const request = job.provider === 'shell'
       ? this.shellRequest(effectiveJob, workspace, contract, cwd)
       : {
@@ -1918,7 +1940,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           boardId: job.board_id,
           cwd,
           name: agentName,
-          prompt: agentBrief!,
+          prompt: agentBrief!.prompt,
           ...(job.model ? { model: job.model } : {}),
           ...(job.effort ? { effort: job.effort } : {}),
           accessProfile: job.access_profile,
@@ -2239,9 +2261,19 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     }
   }
 
-  private prompt(job: Job, contract: TaskContract | null, delivery: DeliveryReport | null): string {
+  private prompt(
+    job: Job,
+    contract: TaskContract | null,
+    delivery: DeliveryReport | null,
+    sessionId: string,
+    workspaceId: string,
+    repositoryHead: string | null,
+  ): { prompt: string; knowledge: ManagedKnowledgePrompt | null } {
     if (!contract || !delivery) {
-      return `Execute Agent OS job ${job.id} in this workspace. Finish with a concise Delivery summary and Evidence.`
+      return {
+        prompt: `Execute Agent OS job ${job.id} in this workspace. Finish with a concise Delivery summary and Evidence.`,
+        knowledge: null,
+      }
     }
     if (!job.card_id) {
       throw new Error('card-backed contract is required for an Agent OS delivery brief')
@@ -2258,7 +2290,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           !== stored.agent_brief_sha256) {
         throw new Error('persisted Agent OS brief evidence is invalid')
       }
-      return stored.agent_brief
+      return { prompt: stored.agent_brief, knowledge: null }
     }
     const rendered = new OpenWorkService(this.db).renderBrief(job.card_id, {
       job_id: job.id,
@@ -2272,18 +2304,30 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         access_profile: job.access_profile,
       } : null,
     })
-    const digest = createHash('sha256').update(rendered.agent_brief).digest('hex')
-    if (digest !== rendered.agent_brief_sha256) {
+    const knowledge = repositoryHead === null ? null : this.knowledge.prepareManagedJob({
+      job,
+      contract,
+      delivery,
+      session_id: sessionId,
+      workspace_id: workspaceId,
+      repository_head_sha: repositoryHead,
+      created_at: durableJobTimestamp(job.created_at ?? job.scheduled_at),
+    })
+    const prompt = knowledge === null
+      ? rendered.agent_brief
+      : `${rendered.agent_brief}\n\n${knowledge.prompt}`
+    const digest = createHash('sha256').update(prompt).digest('hex')
+    if (knowledge === null && digest !== rendered.agent_brief_sha256) {
       throw new Error('rendered Agent OS brief digest is inconsistent')
     }
     const persisted = this.db.prepare(`UPDATE jobs
       SET agent_brief=?, agent_brief_sha256=?
       WHERE id=? AND agent_brief IS NULL AND agent_brief_sha256 IS NULL`)
-      .run(rendered.agent_brief, rendered.agent_brief_sha256, job.id)
+      .run(prompt, digest, job.id)
     if (persisted.changes !== 1) {
       throw new Error('Agent OS brief persistence raced; retry from the stored job')
     }
-    return rendered.agent_brief
+    return { prompt, knowledge }
   }
 
   private claimCard(job: Job, agentId: number): void {
@@ -2490,7 +2534,43 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         try { finalStatus = this.scheduler?.complete(job.id, failure).status }
         catch { /* cancellation or another completion won the race */ }
       }
+      this.finishKnowledgeContextUse(
+        job,
+        sessionId,
+        cancellationWon ? 'cancelled' : failure ? 'failed' : 'completed',
+        accountedTokens,
+      )
       this.finalizeManagedAgent(job, sessionId, failure, finalStatus)
+    }
+  }
+
+  private finishKnowledgeContextUse(
+    job: Job,
+    sessionId: string,
+    outcome: 'completed' | 'failed' | 'cancelled',
+    actualTokens: number,
+  ): void {
+    const row = this.db.prepare('SELECT context_json FROM agent_sessions WHERE id=?').get(sessionId) as
+      { context_json: string } | undefined
+    const context = parseJson<Record<string, unknown>>(row?.context_json, {})
+    if (typeof context.knowledge_context_use_id !== 'string') return
+    try {
+      this.knowledge.finishManagedJob({
+        board_id: job.board_id,
+        context_use_id: context.knowledge_context_use_id,
+        outcome,
+        actual_tokens: Number.isSafeInteger(actualTokens) ? actualTokens : null,
+        completed_at: new Date().toISOString(),
+      })
+    } catch {
+      new AttentionService(this.db).create({
+        boardId: job.board_id,
+        cardId: job.card_id,
+        kind: `knowledge.context_use_receipt:${context.knowledge_context_use_id}`,
+        severity: 'high',
+        title: 'Knowledge context usage receipt needs repair',
+        detail: `Session ${sessionId} finished without a valid actual-token receipt.`,
+      })
     }
   }
 
@@ -3133,6 +3213,13 @@ function frozenRuntimeContract(job: Job, delivery: DeliveryReport | null): TaskC
     version: delivery.asked.contract_version,
     updated_at: delivery.asked.contract_updated_at,
   }
+}
+
+function durableJobTimestamp(value: string): string {
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`
+  const parsed = new Date(normalized)
+  if (!Number.isFinite(parsed.getTime())) throw new Error('job timestamp is invalid')
+  return parsed.toISOString()
 }
 
 const mapRuntimeJob = (row: Record<string, unknown>): Job => {

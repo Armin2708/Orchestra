@@ -13,6 +13,7 @@ describe('Knowledge management additive schema', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-kno-schema-'))
     temporary.push(directory)
     const db = openDb(path.join(directory, 'db.sqlite'))
+    db.exec('DROP TABLE knowledge_freshness_observations')
     db.exec('CREATE TABLE knowledge_freshness_observations (id TEXT PRIMARY KEY)')
     expect(() => installKnowledgeManagementSchema(db)).toThrow(/schema is invalid/u)
     db.close()
