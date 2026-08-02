@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstatSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 3
+export const BROWSER_QUALITY_SCHEMA_VERSION = 4
 export const BROWSER_BASELINE_SCHEMA_VERSION = 3
 export const BROWSER_BUILD_SCHEMA_VERSION = 2
 
@@ -161,7 +161,7 @@ export const resolveApprovedEvidencePath = (repositoryRoot, value) => {
   return actual
 }
 
-const parseRgb = (value) => {
+export const parseRgb = (value) => {
   const match = String(value).match(/^rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i)
   if (!match) return null
   return {
@@ -172,15 +172,31 @@ const parseRgb = (value) => {
   }
 }
 
+export const compositeRgba = (foreground, background) => {
+  const fg = typeof foreground === 'string' ? parseRgb(foreground) : foreground
+  const bg = typeof background === 'string' ? parseRgb(background) : background
+  if (!fg || !bg || !Number.isFinite(fg.alpha) || !Number.isFinite(bg.alpha)) return null
+  const alpha = fg.alpha + bg.alpha * (1 - fg.alpha)
+  if (alpha <= 0) return { red: 0, green: 0, blue: 0, alpha: 0 }
+  return {
+    red: (fg.red * fg.alpha + bg.red * bg.alpha * (1 - fg.alpha)) / alpha,
+    green: (fg.green * fg.alpha + bg.green * bg.alpha * (1 - fg.alpha)) / alpha,
+    blue: (fg.blue * fg.alpha + bg.blue * bg.alpha * (1 - fg.alpha)) / alpha,
+    alpha,
+  }
+}
+
 const luminanceChannel = (value) => {
   const normalized = value / 255
   return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
 }
 
 export const contrastRatio = (foreground, background) => {
-  const fg = parseRgb(foreground)
+  let fg = parseRgb(foreground)
   const bg = parseRgb(background)
-  if (!fg || !bg || fg.alpha !== 1 || bg.alpha !== 1) return null
+  if (!fg || !bg || bg.alpha !== 1) return null
+  if (fg.alpha !== 1) fg = compositeRgba(fg, bg)
+  if (!fg || fg.alpha !== 1) return null
   const luminance = (color) => 0.2126 * luminanceChannel(color.red)
     + 0.7152 * luminanceChannel(color.green)
     + 0.0722 * luminanceChannel(color.blue)
@@ -296,6 +312,11 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     if (actual.width !== expected.width || actual.height !== expected.height) {
       errors.push(`${expected.id} viewport dimensions changed`)
     }
+    if (actual.overflow_measurement?.visible_overflow_px !== actual.horizontal_overflow_px
+      || !Number.isFinite(actual.overflow_measurement?.document_extent_overflow_px)
+      || actual.overflow_measurement.document_extent_overflow_px < 0) {
+      errors.push(`${expected.id} has invalid overflow measurement provenance`)
+    }
     if (actual.horizontal_overflow_px > 0) errors.push(`${expected.id} has horizontal overflow`)
     if (actual.console_errors?.length) errors.push(`${expected.id} emitted console errors`)
     if (actual.page_errors?.length) errors.push(`${expected.id} emitted page errors`)
@@ -313,6 +334,13 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       for (const mode of ['pointer', 'keyboard']) {
         if (journey.interaction_modes?.[mode]?.passed !== true) errors.push(`${expected.id} ${journey.name} failed independent ${mode} interaction`)
       }
+      const keyboardEvidence = journey.interaction_modes?.keyboard?.action_evidence
+      if (keyboardEvidence?.focus_acquisition !== 'tab_navigation'
+        || keyboardEvidence?.programmatic_focus !== false
+        || !Number.isInteger(keyboardEvidence?.tab_events)
+        || keyboardEvidence.tab_events < 1) {
+        errors.push(`${expected.id} ${journey.name} lacks keyboard-only activation evidence`)
+      }
       if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
         errors.push(`${expected.id} ${journey.name} is missing separately labeled DOM fallback evidence`)
       }
@@ -326,12 +354,6 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         || journey.interaction_modes?.dom_fallback?.performance_eligible !== false
         || journey.interaction_modes?.dom_fallback?.diagnostic_only !== true) {
         errors.push(`${expected.id} ${journey.name} has invalid performance-mode attribution`)
-      }
-      if (journey.name === 'conversation search'
-        && (journey.interaction_modes?.keyboard?.action_evidence?.focus_acquisition !== 'tab_navigation'
-          || !Number.isInteger(journey.interaction_modes.keyboard.action_evidence.tab_events)
-          || journey.interaction_modes.keyboard.action_evidence.tab_events < 1)) {
-        errors.push(`${expected.id} conversation search lacks keyboard-only focus acquisition evidence`)
       }
     }
     const expectedMeasurementModes = {
@@ -364,6 +386,11 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     errors.push('evidence is missing build artifact identity')
   }
   if (!/^[a-f0-9]{40}$/.test(String(evidence?.source?.commit ?? ''))) errors.push('evidence source commit is invalid')
+  if (evidence?.source?.source_status !== 'clean'
+    || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.source_tree_sha256 ?? ''))
+    || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.build_manifest_sha256 ?? ''))) {
+    errors.push('evidence source binding is incomplete')
+  }
   if (!/^[a-f0-9]{64}$/.test(String(evidence?.sha256 ?? '')) || evidence.sha256 !== verifiableDocumentDigest(evidence)) {
     errors.push('evidence digest is invalid')
   }

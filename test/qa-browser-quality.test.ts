@@ -13,6 +13,7 @@ import {
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  compositeRgba,
   contrastRatio,
   checkedBudget,
   deriveRegressionBudgetMs,
@@ -32,11 +33,15 @@ const passingEvidence = () => {
   schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
   source: {
     commit: 'a'.repeat(40),
+    source_status: 'clean',
+    source_tree_sha256: 'd'.repeat(64),
+    build_manifest_sha256: 'e'.repeat(64),
     artifact_identity: { root_dist_sha256: 'b'.repeat(64), web_dist_sha256: 'c'.repeat(64) },
   },
   viewports: RESPONSIVE_VIEWPORTS.map((viewport) => ({
     ...viewport,
     horizontal_overflow_px: 0,
+    overflow_measurement: { visible_overflow_px: 0, document_extent_overflow_px: 0 },
     console_errors: [],
     page_errors: [],
     failed_requests: [],
@@ -48,7 +53,7 @@ const passingEvidence = () => {
         pointer: { passed: true, counts_toward_pass: true, elapsed_ms: 10, performance_eligible: true, diagnostic_only: false },
         keyboard: {
           passed: true, counts_toward_pass: true, elapsed_ms: 20, performance_eligible: false, diagnostic_only: false,
-          action_evidence: index === 0 ? { focus_acquisition: 'tab_navigation', tab_events: 3 } : null,
+          action_evidence: { focus_acquisition: 'tab_navigation', programmatic_focus: false, tab_events: 3 },
         },
         dom_fallback: { passed: true, counts_toward_pass: false, elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
       },
@@ -222,10 +227,14 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(evidenceDigest(redacted)).toMatch(/^[a-f0-9]{64}$/)
   })
 
-  it('calculates WCAG contrast ratios for opaque computed colors', () => {
+  it('calculates WCAG contrast ratios after alpha-compositing foregrounds', () => {
     expect(contrastRatio('rgb(0, 0, 0)', 'rgb(255, 255, 255)')).toBeCloseTo(21, 5)
     expect(contrastRatio('rgb(119, 119, 119)', 'rgb(255, 255, 255)')).toBeCloseTo(4.478, 2)
-    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgb(255, 255, 255)')).toBeNull()
+    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgb(255, 255, 255)')).toBeCloseTo(3.977, 2)
+    expect(compositeRgba('rgba(255, 255, 255, 0.5)', 'rgb(0, 0, 0)')).toEqual({
+      red: 127.5, green: 127.5, blue: 127.5, alpha: 1,
+    })
+    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgba(255, 255, 255, 0.5)')).toBeNull()
   })
 
   it('fails closed when a viewport, accessibility gate, performance surface, or redaction is absent', () => {
@@ -238,6 +247,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     incomplete.viewports[0].accessibility.keyboard_focus.passed = false
     delete incomplete.viewports[0].performance.search
     delete incomplete.viewports[1].performance.graph_view.quality_gate_passed
+    delete incomplete.source.source_tree_sha256
     ;(incomplete as any).token = 'unsafe'
     incomplete.sha256 = verifiableDocumentDigest(incomplete)
 
@@ -247,6 +257,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       'desktop failed keyboard_focus',
       'desktop is missing search performance evidence',
       'phone graph_view is missing quality-linked performance status',
+      'evidence source binding is incomplete',
       'evidence contains secret-shaped fields or values',
     ]))
   })

@@ -373,62 +373,67 @@ const pointerClick = async (client, selector, label, mobile = false) => {
   }
 }
 
-const pointerClickButtonText = async (client, text, mobile = false) => {
-  const selector = await evaluate(client, `(() => {
-    const element = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === ${JSON.stringify(text)});
-    if (!element) return null;
-    if (!element.dataset.qaPointerId) element.dataset.qaPointerId = 'qa-' + Math.random().toString(16).slice(2);
-    return '[data-qa-pointer-id="' + element.dataset.qaPointerId + '"]';
-  })()`)
-  if (!selector) throw new Error(`could not find ${text}`)
-  await pointerClick(client, selector, text, mobile)
-  await keyboardActivate(client, selector, text)
-  await evaluate(client, `document.querySelector(${JSON.stringify(selector)})?.click()`)
-}
-
 const dispatchKey = async (client, key, { shift = false, meta = false } = {}) => {
   const code = key === 'Tab' ? 'Tab' : key === 'Enter' ? 'Enter' : key === 'Escape' ? 'Escape'
-    : key === 'Backspace' ? 'Backspace' : key === ' ' ? 'Space' : key
+    : key === 'Backspace' ? 'Backspace' : key === ' ' ? 'Space' : key.length === 1 ? `Key${key.toUpperCase()}` : key
   const windowsVirtualKeyCode = key === 'Tab' ? 9 : key === 'Enter' ? 13 : key === 'Escape' ? 27
     : key === 'Backspace' ? 8 : key === ' ' ? 32 : key.toUpperCase().charCodeAt(0)
   const modifiers = (shift ? 8 : 0) | (meta ? 4 : 0)
-  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers })
-  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers })
+  const event = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event })
 }
 
-const keyboardActivate = async (client, selector, label) => {
-  const focused = await evaluate(client, `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof HTMLElement)) return false;
-    element.focus();
-    return document.activeElement === element;
-  })()`)
-  if (!focused) throw new Error(`could not focus ${label}`)
-  await dispatchKey(client, 'Enter')
-}
+const activeFocusProbe = (client, targetSelector = null) => evaluate(client, `(() => {
+  const element = document.activeElement;
+  const target = ${targetSelector ? `document.querySelector(${JSON.stringify(targetSelector)})` : 'null'};
+  if (!(element instanceof HTMLElement) || element === document.body || element === document.documentElement) {
+    return { key: 'document', interactive: false, target: false, xterm_proxy: false, visible: false, focus_visible: false, outline: 'none' };
+  }
+  const xtermProxy = element.matches('.xterm-helper-textarea') || Boolean(element.closest('.xterm'));
+  const focusSurface = xtermProxy ? element.closest('.xterm') : element;
+  const rect = focusSurface.getBoundingClientRect(), style = getComputedStyle(focusSurface);
+  return {
+    key: xtermProxy ? 'Terminal input' : element.id || element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.tagName,
+    interactive: true,
+    target: element === target,
+    xterm_proxy: xtermProxy,
+    visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
+    focus_visible: element.matches(':focus-visible') || focusSurface.matches(':focus-visible') || focusSurface.matches(':focus-within'),
+    outline: style.outlineStyle,
+  };
+})()`)
 
 const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) => {
-  const isFocused = () => evaluate(client, `(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
-    return target instanceof HTMLElement && document.activeElement === target;
-  })()`)
   let tabEvents = 0
-  if (await isFocused()) {
-    await dispatchKey(client, 'Tab', { shift: true })
-    tabEvents += 1
-  }
+  const traversal = []
+  let previous = await activeFocusProbe(client, selector)
   for (let index = 0; index < maximumTabs; index += 1) {
     await dispatchKey(client, 'Tab')
     tabEvents += 1
-    if (await isFocused()) return tabEvents
+    const focused = await activeFocusProbe(client, selector)
+    traversal.push({ key: focused.key, xterm_proxy: focused.xterm_proxy, visible: focused.visible })
+    if (focused.target) {
+      return {
+        focus_acquisition: 'tab_navigation',
+        programmatic_focus: false,
+        tab_events: tabEvents,
+        traversal: traversal.slice(-24),
+        xterm_focus_encounters: traversal.filter((step) => step.xterm_proxy).length,
+      }
+    }
+    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
+      throw new Error(`xterm intercepted Tab before keyboard navigation could reach ${label}`)
+    }
+    previous = focused
   }
   throw new Error(`could not reach ${label} through keyboard navigation`)
 }
 
-const robustActivate = async (client, selector, label, mobile = false) => {
-  await pointerClick(client, selector, label, mobile)
-  await keyboardActivate(client, selector, label)
-  await evaluate(client, `document.querySelector(${JSON.stringify(selector)})?.click()`)
+const keyboardActivate = async (client, selector, label) => {
+  const evidence = await keyboardNavigateTo(client, selector, label)
+  await dispatchKey(client, 'Enter')
+  return { ...evidence, activation_key: 'Enter' }
 }
 
 const domActivate = (client, selector) => evaluate(client, `(() => {
@@ -464,26 +469,56 @@ const typeText = async (client, value) => {
   }
 }
 
-const horizontalOverflow = (client) => evaluate(client, `Math.max(
-  0,
-  document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  document.body?.scrollWidth - document.documentElement.clientWidth,
-)`)
-
-const overflowOffenders = (client) => evaluate(client, `(() => {
-  const width = document.documentElement.clientWidth;
-  return [...document.querySelectorAll('body *')].filter((element) => {
+const overflowAudit = (client) => evaluate(client, `(() => {
+  const viewportLeft = visualViewport?.offsetLeft ?? 0;
+  const viewportWidth = visualViewport?.width ?? document.documentElement.clientWidth;
+  const viewportRight = viewportLeft + viewportWidth;
+  const documentExtent = Math.max(
+    0,
+    document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    (document.body?.scrollWidth ?? 0) - document.documentElement.clientWidth,
+  );
+  const clippedByAncestor = (element, rect) => {
+    for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (!['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX)) continue;
+      const parentRect = parent.getBoundingClientRect();
+      if (rect.right > parentRect.right + .5 || rect.left < parentRect.left - .5) return true;
+    }
+    return false;
+  };
+  const offenders = [], excluded = [];
+  for (const element of document.querySelectorAll('body *')) {
     const style = getComputedStyle(element), rect = element.getBoundingClientRect();
-    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0
-      && (rect.right > width + .5 || rect.left < -.5);
-  }).map((element) => {
-    const rect = element.getBoundingClientRect();
-    return {
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0
+      || rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+    if (rect.right <= viewportRight + .5 && rect.left >= viewportLeft - .5) continue;
+    const row = {
       tag: element.tagName.toLowerCase(), id: element.id || null,
       class_name: String(element.className || '').slice(0, 120),
       left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
     };
-  }).slice(0, 25);
+    if (element.closest('[aria-hidden="true"],.sr-only')) {
+      excluded.push({ ...row, reason: 'nonvisual_accessibility_content' });
+      continue;
+    }
+    if (clippedByAncestor(element, rect)) {
+      excluded.push({ ...row, reason: 'contained_horizontal_scroller_or_clip' });
+      continue;
+    }
+    offenders.push(row);
+  }
+  const visibleOverflow = offenders.reduce((maximum, row) => Math.max(
+    maximum,
+    row.right - viewportRight,
+    viewportLeft - row.left,
+  ), 0);
+  return {
+    visible_overflow_px: Math.max(0, Math.ceil(visibleOverflow)),
+    document_extent_overflow_px: Math.ceil(documentExtent),
+    offenders: offenders.slice(0, 25),
+    excluded_nonvisual_or_contained: excluded.slice(0, 25),
+  };
 })()`)
 
 const accessibleNameAudit = (client) => evaluate(client, `(() => {
@@ -517,17 +552,29 @@ const contrastAudit = (client) => evaluate(client, `(() => {
   };
   const channel = (value) => { const n = value / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4; };
   const lum = (color) => .2126 * channel(color.r) + .7152 * channel(color.g) + .0722 * channel(color.b);
+  const over = (foreground, background) => {
+    const a = foreground.a + background.a * (1 - foreground.a);
+    if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+    return {
+      r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / a,
+      g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / a,
+      b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / a,
+      a,
+    };
+  };
   const background = (element) => {
-    for (let current = element; current; current = current.parentElement) {
+    const ancestry = [];
+    for (let current = element; current; current = current.parentElement) ancestry.push(current);
+    let resolved = { r: 255, g: 255, b: 255, a: 1 };
+    for (const current of ancestry.reverse()) {
       const currentStyle = getComputedStyle(current);
       if (Number(currentStyle.opacity) !== 1 || currentStyle.backgroundImage !== 'none') {
         return { supported: false, reason: 'opacity_or_background_image' };
       }
       const parsed = parse(currentStyle.backgroundColor);
-      if (parsed && parsed.a > 0 && parsed.a < 1) return { supported: false, reason: 'translucent_background' };
-      if (parsed && parsed.a === 1) return parsed;
+      if (parsed && parsed.a > 0) resolved = over(parsed, resolved);
     }
-    return { supported: false, reason: 'no_opaque_background' };
+    return resolved;
   };
   const rows = [], unsupported = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -539,11 +586,12 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     const rect = element.getBoundingClientRect();
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0 || rect.width === 0 || rect.height === 0) continue;
     if (element.closest('button:disabled,input:disabled,select:disabled,textarea:disabled')) continue;
-    const foreground = parse(style.color), bg = background(element);
-    if (!foreground || foreground.a !== 1 || bg.supported === false) {
-      unsupported.push({ tag: element.tagName.toLowerCase(), class_name: String(element.className || '').slice(0, 100), reason: bg.reason || 'translucent_foreground' });
+    let foreground = parse(style.color); const bg = background(element);
+    if (!foreground || bg.supported === false) {
+      unsupported.push({ tag: element.tagName.toLowerCase(), class_name: String(element.className || '').slice(0, 100), reason: bg.reason || 'unparsed_foreground' });
       continue;
     }
+    if (foreground.a < 1) foreground = over(foreground, bg);
     const ratio = (Math.max(lum(foreground), lum(bg)) + .05) / (Math.min(lum(foreground), lum(bg)) + .05);
     const large = parseFloat(style.fontSize) >= (Number(style.fontWeight) >= 700 ? 18.66 : 24);
     const required = large ? 3 : 4.5;
@@ -555,7 +603,7 @@ const contrastAudit = (client) => evaluate(client, `(() => {
   return {
     passed: rows.length === 0 && unsupported.length === 0,
     checked: true,
-    scope: 'opaque text on opaque solid computed backgrounds',
+    scope: 'computed text composited over translucent solid ancestor backgrounds and the opaque browser canvas',
     unsupported_count: unsupported.length,
     unsupported: unsupported.slice(0, 25),
     violations: rows.slice(0, 25),
@@ -566,21 +614,13 @@ const keyboardAudit = async (client) => {
   await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
   const focusOrder = []
   const violations = []
+  let previous = await activeFocusProbe(client)
   for (let index = 0; index < 8; index += 1) {
     await dispatchKey(client, 'Tab')
-    const focused = await evaluate(client, `(() => {
-      const element = document.activeElement;
-      if (!(element instanceof HTMLElement) || element === document.body) return null;
-      const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
-      return {
-        key: element.id || element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.tagName,
-        visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
-        focus_visible: element.matches(':focus-visible'),
-        outline: style.outlineStyle,
-      };
-    })()`)
-    if (!focused) {
+    const focused = await activeFocusProbe(client)
+    if (!focused.interactive) {
       violations.push({ step: index + 1, reason: 'focus did not reach an interactive element' })
+      previous = focused
       continue
     }
     focusOrder.push(focused.key)
@@ -588,6 +628,11 @@ const keyboardAudit = async (client) => {
     if (!focused.focus_visible && (focused.outline === 'none' || focused.outline === '')) {
       violations.push({ step: index + 1, reason: 'focus indicator is not visible', key: focused.key })
     }
+    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
+      violations.push({ step: index + 1, reason: 'xterm intercepted Tab and prevented focus from advancing', key: focused.key })
+      break
+    }
+    previous = focused
   }
   if (new Set(focusOrder).size < 5) violations.push({ reason: 'keyboard traversal reached fewer than five unique controls' })
   const reverseOrder = []
@@ -595,16 +640,21 @@ const keyboardAudit = async (client) => {
     await dispatchKey(client, 'Tab', { shift: true })
     reverseOrder.push(await evaluate(client, `document.activeElement?.id || document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent?.trim().slice(0, 80) || null`))
   }
-  const activation = await evaluate(client, `(() => {
+  const selectedTab = await evaluate(client, `(() => {
     const tab = document.querySelector('.board-section-tabs [aria-selected="true"], .board-section-tabs .active');
-    if (!(tab instanceof HTMLElement)) return { supported: false };
-    tab.focus();
-    return { supported: true, id: tab.id, selected: tab.getAttribute('aria-selected') };
+    return tab instanceof HTMLElement && tab.id ? { supported: true, id: tab.id } : { supported: false };
   })()`)
-  if (activation.supported) {
-    await dispatchKey(client, 'Enter')
-    activation.remained_selected = await evaluate(client, `document.activeElement?.id === ${JSON.stringify(activation.id)} && (document.activeElement?.getAttribute('aria-selected') === 'true' || document.activeElement?.classList.contains('active'))`)
-    if (!activation.remained_selected) violations.push({ reason: 'Enter activation did not preserve selected tab and focus' })
+  const activation = { ...selectedTab }
+  if (selectedTab.supported) {
+    await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
+    try {
+      activation.keyboard = await keyboardActivate(client, `#${selectedTab.id}`, 'selected board tab')
+      activation.remained_selected = await evaluate(client, `document.activeElement?.id === ${JSON.stringify(selectedTab.id)} && (document.activeElement?.getAttribute('aria-selected') === 'true' || document.activeElement?.classList.contains('active'))`)
+      if (!activation.remained_selected) violations.push({ reason: 'Enter activation did not preserve selected tab and focus' })
+    } catch (error) {
+      activation.error = error instanceof Error ? error.message : String(error)
+      violations.push({ reason: activation.error })
+    }
   }
   return {
     passed: violations.length === 0,
@@ -619,11 +669,13 @@ const keyboardAudit = async (client) => {
 const modalFocusAudit = async (client, mobile) => {
   const selector = '[aria-label="Create durable agent"]'
   if (!await evaluate(client, `Boolean(document.querySelector(${JSON.stringify(selector)}))`)) return { supported: false, passed: true }
-  try { await keyboardActivate(client, selector, 'Create durable agent') }
+  let activation
+  await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
+  try { activation = await keyboardActivate(client, selector, 'Create durable agent') }
   catch (error) { return { supported: true, passed: false, reason: error instanceof Error ? error.message : String(error) } }
   await delay(150)
   if (!await evaluate(client, `Boolean(document.querySelector('.ah-dialog[role="dialog"][aria-modal="true"]'))`)) {
-    return { supported: true, passed: false, reason: 'Enter did not open the create-agent modal' }
+    return { supported: true, passed: false, activation, reason: 'Enter did not open the create-agent modal' }
   }
   const initial = await evaluate(client, `document.querySelector('.ah-dialog')?.contains(document.activeElement) === true`)
   await dispatchKey(client, 'Tab', { shift: true })
@@ -632,7 +684,7 @@ const modalFocusAudit = async (client, mobile) => {
   await delay(150)
   const closed = await evaluate(client, `!document.querySelector('.ah-dialog[role="dialog"]')`)
   const restored = await evaluate(client, `document.activeElement?.getAttribute('aria-label') === 'Create durable agent'`)
-  return { supported: true, passed: initial && reverseTrapped && closed && restored, initial_focus_inside: initial, reverse_focus_trapped: reverseTrapped, escape_closed: closed, focus_restored: restored }
+  return { supported: true, passed: initial && reverseTrapped && closed && restored, activation, initial_focus_inside: initial, reverse_focus_trapped: reverseTrapped, escape_closed: closed, focus_restored: restored }
 }
 
 const screenReaderAudit = async (client) => {
@@ -783,6 +835,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
       await resetJourney(name, mode)
       await prepare(mode)
+      if (mode === 'keyboard') {
+        await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
+      }
       const started = performance.now()
       let error = null
       let actionEvidence = null
@@ -799,7 +854,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         error,
         action_evidence: actionEvidence,
         input_surface: mode === 'pointer' ? (viewport.mobile ? 'mouse_pointer_on_mobile_viewport' : 'mouse')
-          : mode === 'keyboard' ? 'keyboard' : 'dom',
+          : mode === 'keyboard' ? 'keyboard_tab_navigation' : 'dom',
         counts_toward_pass: mode !== 'dom_fallback',
         performance_eligible: mode === 'pointer',
         diagnostic_only: mode === 'dom_fallback',
@@ -810,7 +865,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     const elapsed = retainsPerformance
       ? performanceSampleForJourney(interactionModes)
       : interactionModes.pointer.elapsed_ms
-    const overflow = await horizontalOverflow(client)
+    const overflow = await overflowAudit(client)
     overflowSamples.push(overflow)
     const accessibility = await auditSurface(client)
     journeys.push({
@@ -818,7 +873,8 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       passed: interactionModes.pointer.passed && interactionModes.keyboard.passed,
       elapsed_ms: elapsed,
       performance_sample_mode: retainsPerformance ? 'pointer' : 'diagnostic_only',
-      horizontal_overflow_px: overflow,
+      horizontal_overflow_px: overflow.visible_overflow_px,
+      overflow_measurement: overflow,
       interaction_modes: interactionModes,
       accessibility,
     })
@@ -835,13 +891,24 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const transcript = await recordJourney(
     'durable transcript',
     async (mode) => {
-      await activateMode(client, mode, '#board-tab-agents', 'Agents', viewport.mobile)
+      const keyboardSteps = []
+      const initialActivation = await activateMode(client, mode, '#board-tab-agents', 'Agents', viewport.mobile)
+      if (mode === 'keyboard') keyboardSteps.push(initialActivation)
       await assertModeReady(`Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home')
       for (let page = 0; page < 20; page += 1) {
         const state = await evaluate(client, `({ count: document.querySelectorAll('.ah-event').length, more: Boolean(document.querySelector('.ah-load-more:not(:disabled)')) })`)
         if (!state.more) break
-        await activateMode(client, mode, '.ah-load-more:not(:disabled)', 'Load more matching events', viewport.mobile)
+        const pageActivation = await activateMode(client, mode, '.ah-load-more:not(:disabled)', 'Load more matching events', viewport.mobile)
+        if (mode === 'keyboard') keyboardSteps.push(pageActivation)
         await assertModeReady(`document.querySelectorAll('.ah-event').length > ${state.count} || !document.querySelector('.ah-load-more')`, 'additional transcript page')
+      }
+      if (mode === 'keyboard') return {
+        focus_acquisition: 'tab_navigation',
+        programmatic_focus: false,
+        activation_key: 'Enter',
+        tab_events: keyboardSteps.reduce((sum, step) => sum + step.tab_events, 0),
+        traversal: keyboardSteps.flatMap((step) => step.traversal ?? []).slice(-24),
+        xterm_focus_encounters: keyboardSteps.reduce((sum, step) => sum + step.xterm_focus_encounters, 0),
       }
     },
     `document.querySelectorAll('.ah-event').length >= 250`,
@@ -860,13 +927,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
           viewport.mobile,
         )
       } else if (mode === 'keyboard') {
-        let tabEvents = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
+        const inputNavigation = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
         await dispatchKey(client, 'a', { meta: true })
         await dispatchKey(client, 'Backspace')
         await typeText(client, 'quality')
         await waitFor(client, `document.querySelector('.ah-search input')?.value === 'quality'`, 'typed search query')
         await delay(50)
-        tabEvents += await keyboardNavigateTo(client, '.ah-search button[type="submit"]', 'Search submit button')
+        const submitNavigation = await keyboardNavigateTo(client, '.ah-search button[type="submit"]', 'Search submit button')
         await dispatchKey(client, 'Enter')
         const searchReady = await modeReady(`(() => {
           const events = [...document.querySelectorAll('.ah-event')];
@@ -874,7 +941,11 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         })()`, asynchronousReadinessTimeoutMs)
         return {
           focus_acquisition: 'tab_navigation',
-          tab_events: tabEvents,
+          programmatic_focus: false,
+          activation_key: 'Enter',
+          tab_events: inputNavigation.tab_events + submitNavigation.tab_events,
+          traversal: [...inputNavigation.traversal, ...submitNavigation.traversal].slice(-24),
+          xterm_focus_encounters: inputNavigation.xterm_focus_encounters + submitNavigation.xterm_focus_encounters,
           error: searchReady ? null : 'five rendered search results readiness did not pass',
         }
       } else {
@@ -942,7 +1013,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       async (mode) => {
         const selector = await selectorForButtonText(client, view)
         if (!selector) throw new Error(`could not find ${view}`)
-        await activateMode(client, mode, selector, view, viewport.mobile)
+        return activateMode(client, mode, selector, view, viewport.mobile)
       },
       view === 'Board'
         ? `Boolean(document.querySelector('.board-section-tabs'))`
@@ -989,13 +1060,27 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       ...budgetFor(baseline, viewport.id, surface),
     }]
   }))
-  const maximumOverflow = Math.max(0, ...overflowSamples, await horizontalOverflow(client))
+  overflowSamples.push(await overflowAudit(client))
+  const maximumOverflow = Math.max(0, ...overflowSamples.map((sample) => sample.visible_overflow_px))
+  const maximumDocumentExtent = Math.max(0, ...overflowSamples.map((sample) => sample.document_extent_overflow_px))
+  const overflowOffenders = overflowSamples.flatMap((sample) => sample.offenders)
+    .filter((row, index, rows) => rows.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(row)) === index)
+    .slice(0, 25)
+  const excludedOverflow = overflowSamples.flatMap((sample) => sample.excluded_nonvisual_or_contained)
+    .filter((row, index, rows) => rows.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(row)) === index)
+    .slice(0, 25)
   return redactEvidence({
     ...viewport,
     browser_surface: 'standalone_chromium_cdp_fallback',
     journeys,
     horizontal_overflow_px: maximumOverflow,
-    overflow_offenders: maximumOverflow > 0 ? await overflowOffenders(client) : [],
+    overflow_measurement: {
+      visible_overflow_px: maximumOverflow,
+      document_extent_overflow_px: maximumDocumentExtent,
+      offenders: overflowOffenders,
+      excluded_nonvisual_or_contained: excludedOverflow,
+    },
+    overflow_offenders: overflowOffenders,
     console_errors: consoleErrors,
     page_errors: pageErrors,
     failed_requests: failedRequests,
@@ -1128,6 +1213,8 @@ const main = async () => {
       source: {
         repository: basename(repositoryRoot),
         commit: buildManifest.source_commit,
+        source_status: buildManifest.source_status,
+        source_tree_sha256: buildManifest.source_tree_sha256,
         node: process.versions.node,
         artifact_identity: buildManifest.artifact_identity,
         build_manifest_sha256: buildManifest.sha256,
