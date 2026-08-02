@@ -311,6 +311,17 @@ const fixture = () => {
         actual_orchestra_database: true,
         active_work_preserved: true,
         artifact_preserved: true,
+        packaged_backup: {
+          script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
+          database_sha256: 'b'.repeat(64),
+          integrity_check: 'ok',
+          active_work_preserved: true,
+          output_contract: [
+            'backup=/tmp/orchestra-release/orchestra.backup.db',
+            'checksum=/tmp/orchestra-release/orchestra.backup.db.sha256',
+          ],
+          passed: true,
+        },
         schema_before: { integrity_check: 'ok' },
         schema_after_upgrade: { integrity_check: 'ok' },
         schema_after_uninstall: { integrity_check: 'ok' },
@@ -580,6 +591,30 @@ describe('exact package publish verification', () => {
     sample.metadata.lifecycle.upgrade.mode = 'same-artifact-idempotency'
     rewriteMetadata(sample)
 
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+  })
+
+  it('rejects lifecycle evidence that omits the installed packaged-backup drill', () => {
+    const sample = fixture()
+    delete sample.metadata.lifecycle.data_preservation.packaged_backup
+    rewriteMetadata(sample)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+  })
+
+  it('rejects tampered packaged-backup digest and output evidence', () => {
+    const sample = fixture()
+    sample.metadata.lifecycle.data_preservation.packaged_backup.database_sha256 = 'not-a-digest'
+    rewriteMetadata(sample)
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package clean-consumer lifecycle evidence is incomplete')
+
+    sample.metadata.lifecycle.data_preservation.packaged_backup.database_sha256 = 'b'.repeat(64)
+    sample.metadata.lifecycle.data_preservation.packaged_backup.output_contract[1] =
+      'checksum=/tmp/unrelated.db.sha256'
+    rewriteMetadata(sample)
     expect(() => verifyPublishArtifact(sample.arguments))
       .toThrow('package clean-consumer lifecycle evidence is incomplete')
   })

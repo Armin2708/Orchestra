@@ -75,6 +75,22 @@ const canonicalize = (value) => {
 const sameJson = (left, right) =>
   JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right))
 
+const validPackagedBackupEvidence = (value) => {
+  if (
+    value?.script_path !== 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh' ||
+    !sha256Pattern.test(String(value?.database_sha256 ?? '')) ||
+    value?.integrity_check !== 'ok' ||
+    value?.active_work_preserved !== true ||
+    value?.passed !== true ||
+    !Array.isArray(value?.output_contract) ||
+    value.output_contract.length !== 2
+  ) return false
+  const [backupLine, checksumLine] = value.output_contract
+  if (typeof backupLine !== 'string' || typeof checksumLine !== 'string') return false
+  if (!/^backup=\/[^\r\n]+\.db$/.test(backupLine)) return false
+  return checksumLine === `checksum=${backupLine.slice('backup='.length)}.sha256`
+}
+
 const readJson = (path, label) => {
   const stat = lstatSync(path)
   invariant(stat.isFile() && !stat.isSymbolicLink(), `${label} must be one regular file`)
@@ -323,6 +339,7 @@ export function verifyPublishArtifact({
       metadata.lifecycle?.data_preservation?.actual_orchestra_database === true &&
       metadata.lifecycle?.data_preservation?.active_work_preserved === true &&
       metadata.lifecycle?.data_preservation?.artifact_preserved === true &&
+      validPackagedBackupEvidence(metadata.lifecycle?.data_preservation?.packaged_backup) &&
       metadata.lifecycle?.data_preservation?.schema_before?.integrity_check === 'ok' &&
       metadata.lifecycle?.data_preservation?.schema_after_upgrade?.integrity_check === 'ok' &&
       metadata.lifecycle?.data_preservation?.schema_after_uninstall?.integrity_check === 'ok' &&
