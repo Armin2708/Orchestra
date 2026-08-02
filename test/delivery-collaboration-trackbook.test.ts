@@ -141,7 +141,7 @@ describe('delivery collaboration Trackbook migration', () => {
     expect(names).toHaveLength(6)
     const deleteGuards = setup.db.prepare(`SELECT name FROM sqlite_master
       WHERE type='trigger' AND name LIKE 'delivery_%_delete_guard'`).all()
-    expect(deleteGuards).toHaveLength(7)
+    expect(deleteGuards).toHaveLength(9)
   })
 
   it('prevents direct and cascading deletion of every immutable proof ledger', () => {

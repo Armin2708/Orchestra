@@ -4,7 +4,10 @@ import path from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadManagedAgentSessionCredential } from '../src/agent-session-credential.js'
+import {
+  issueManagedAgentLaunchBootstrap,
+  loadManagedAgentSessionCredential,
+} from '../src/agent-session-credential.js'
 import { api } from '../src/client.js'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
@@ -76,12 +79,14 @@ describe('managed collaboration client identity', () => {
       const directory = home()
       const db = openDb(':memory:')
       databases.push(db)
+      const bootstrap = issueManagedAgentLaunchBootstrap()
       const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
         VALUES (?, 'Managed collaboration')`).run(process.cwd()).lastInsertRowid)
       const agentId = Number(db.prepare(`INSERT INTO agents
-        (board_id, name, session_id, kind, provider, external_session_id, status)
+        (board_id, name, session_id, kind, provider, external_session_id, status,
+         hook_token_hash)
         VALUES (?, 'managed-codex', 'agent-os:job', 'hired', 'codex',
-          'provider-session', 'active')`).run(boardId).lastInsertRowid)
+          NULL, 'active', ?)`).run(boardId, bootstrap.hash).lastInsertRowid)
       db.prepare(`INSERT INTO agent_profiles
         (id, board_id, name, capabilities_json, owner_actor_type, owner_actor_id,
          status, provenance_json, created_at, updated_at)
@@ -115,12 +120,14 @@ describe('managed collaboration client identity', () => {
       const registered = await server.inject({
         method: 'POST',
         url: '/api/v1/agents/register',
-        headers: { authorization: 'Bearer shared-agent-secret' },
         payload: {
           board_id: boardId,
           name: 'managed-codex',
           provider: 'codex',
           session_id: 'provider-session',
+          agent_id: agentId,
+          agent_home_session_id: 'managed-session',
+          bootstrap_nonce: bootstrap.nonce,
         },
       })
       expect(registered.statusCode, registered.body).toBe(200)
