@@ -268,7 +268,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const identity = externalSessionId ? db.prepare(`SELECT * FROM agents WHERE provider=? AND external_session_id=?`)
         .get(provider, externalSessionId) as any : undefined
       if (identity) {
-        if (identity.kind !== 'session' || identity.board_id !== board_id || (name && name !== identity.name))
+        if (!['session', 'hired'].includes(identity.kind)
+          || identity.board_id !== board_id || (name && name !== identity.name))
           return reply.code(409).send({ error: 'provider session identity is already bound to another agent' })
         name = identity.name
       }

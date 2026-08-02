@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { baseUrl } from './daemon.js'
 import { loadClientToken } from './token.js'
+import { loadManagedAgentSessionCredential } from './agent-session-credential.js'
 
 export function projectPath(cwd: string = process.cwd()): string {
   try {
@@ -15,6 +16,13 @@ export async function api(method: string, p: string, body?: unknown): Promise<an
   // read fresh each call — the daemon may have minted the token after this process started
   const token = loadClientToken()
   if (token) headers.authorization = `Bearer ${token}`
+  const agent = loadManagedAgentSessionCredential()
+  if (agent) {
+    headers['x-orchestra-agent-id'] = String(agent.agentId)
+    headers['x-orchestra-provider'] = agent.provider
+    headers['x-orchestra-session-id'] = agent.sessionId
+    headers['x-orchestra-session-token'] = agent.sessionToken
+  }
   // fastify rejects bodyless requests that carry a json content-type
   if (body !== undefined) headers['content-type'] = 'application/json'
   const res = await fetch(`${baseUrl()}/api/v1${p}`, {

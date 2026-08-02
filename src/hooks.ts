@@ -40,6 +40,7 @@ type Session = {
   provider: HookProvider
   session_id: string
   session_token: string
+  cwd?: string
   transcript_path?: string
 }
 const safeSessionId = (id: string) => encodeURIComponent(id)
@@ -85,10 +86,20 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
   const sess: Session = {
     agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
     session_id: input.session_id, session_token: agent.session_token,
+    cwd: sessionCwd(input.cwd),
     transcript_path: input.transcript_path,
   }
   saveSession(provider, sess)
   return sess
+}
+
+function sessionCwd(value: unknown): string {
+  const cwd = typeof value === 'string' && value ? value : process.cwd()
+  try {
+    return fs.realpathSync(cwd)
+  } catch {
+    return path.resolve(cwd)
+  }
 }
 
 // session file may be missing (session-start cut short, cleanup, crash) — self-heal
