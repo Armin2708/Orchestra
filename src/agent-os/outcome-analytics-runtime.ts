@@ -74,6 +74,21 @@ function deterministicEventId(
   })}`
 }
 
+function deterministicSubagentActivityId(
+  job: Pick<Job, 'id' | 'driver_id'>,
+  sessionId: string,
+  subagentId: string,
+  category: 'coordination.wake' | 'coordination.fanout',
+): string {
+  return `outcome-activity-${canonicalHash({
+    category,
+    driver_id: job.driver_id,
+    job_id: job.id,
+    session_id: sessionId,
+    subagent_id: subagentId,
+  })}`
+}
+
 function usageDelta(total: ProviderUsageSplit, prior: ProviderUsageSplit): ProviderUsageSplit {
   return {
     provider: total.provider,
@@ -219,40 +234,41 @@ export class OutcomeAnalyticsRuntimeBridge {
     return persist
   }
 
-  /** Record only activity categories that the provider callback proves exactly. */
+  /**
+   * Record only exact child dispatch evidence. A child lifecycle is keyed by its provider-native
+   * identity, so Codex item/started and item/completed projections cannot count it twice.
+   * Dispatch does not prove model acknowledgement or useful output; those remain unavailable.
+   */
   recordExactEventActivities(job: Job, sessionId: string, event: DriverEvent): string[] {
     this.sessionScope(job, sessionId)
-    const observations: Array<{ category: OutcomeActivityCategory; quantity: number }> = []
-    const transcriptKind = event.metadata?.transcriptKind
-    if (event.type === 'output' && event.data.trim()
-      && (transcriptKind === undefined || transcriptKind === 'text')) {
-      const alreadyObserved = this.db.prepare(`SELECT 1 FROM outcome_activity_observations
-        WHERE board_id=? AND job_id=? AND category='result.first_useful' LIMIT 1`)
-        .get(job.board_id, job.id)
-      if (!alreadyObserved) observations.push({ category: 'result.first_useful', quantity: 1 })
-    }
-    const subagentCount = this.exactSubagentCount(event)
-    if (subagentCount > 0) {
-      observations.push(
-        { category: 'coordination.wake', quantity: subagentCount },
-        { category: 'coordination.fanout', quantity: subagentCount },
-        { category: 'coordination.model_ack', quantity: subagentCount },
-      )
-    }
-    if (observations.length === 0) return []
-    const persisted = this.db.transaction(() => observations.map((observation) => {
-      const id = deterministicEventId('activity', job, sessionId, event, observation.category)
-      this.service.recordActivity({
-        id,
-        boardId: job.board_id,
-        sessionId,
-        jobId: job.id,
-        category: observation.category,
-        quantity: observation.quantity,
-        occurredAt: event.at,
-      })
-      return id
-    })).immediate()
+    const subagentIds = this.exactSubagentIds(event)
+    if (subagentIds.length === 0) return []
+    const categories = [
+      'coordination.wake',
+      'coordination.fanout',
+    ] as const satisfies readonly OutcomeActivityCategory[]
+    const persisted = this.db.transaction(() => {
+      const inserted: string[] = []
+      for (const subagentId of subagentIds) {
+        for (const category of categories) {
+          const id = deterministicSubagentActivityId(job, sessionId, subagentId, category)
+          if (this.db.prepare(`SELECT 1 FROM outcome_activity_observations WHERE id=?`).get(id)) {
+            continue
+          }
+          this.service.recordActivity({
+            id,
+            boardId: job.board_id,
+            sessionId,
+            jobId: job.id,
+            category,
+            quantity: 1,
+            occurredAt: event.at,
+          })
+          inserted.push(id)
+        }
+      }
+      return inserted
+    }).immediate()
     for (const id of persisted) this.changed(job.board_id, 'activity.recorded', id)
     return persisted
   }
@@ -316,17 +332,19 @@ export class OutcomeAnalyticsRuntimeBridge {
     }
   }
 
-  private exactSubagentCount(event: DriverEvent): number {
+  private exactSubagentIds(event: DriverEvent): string[] {
     if (event.metadata?.subagentStatus !== 'started'
       || typeof event.metadata.subagentId !== 'string'
-      || !event.metadata.subagentId.trim()) return 0
+      || !event.metadata.subagentId.trim()) return []
+    const unique = new Set([event.metadata.subagentId.trim()])
     const container = event.metadata.subagents
-    if (!container || typeof container !== 'object' || Array.isArray(container)) return 1
+    if (!container || typeof container !== 'object' || Array.isArray(container)) return [...unique]
     const receiverIds = (container as Record<string, unknown>).receiverThreadIds
-    if (!Array.isArray(receiverIds)) return 1
-    const unique = new Set(receiverIds.filter((value): value is string =>
-      typeof value === 'string' && value.trim().length > 0))
-    return Math.max(1, unique.size)
+    if (!Array.isArray(receiverIds)) return [...unique]
+    for (const value of receiverIds) {
+      if (typeof value === 'string' && value.trim()) unique.add(value.trim())
+    }
+    return [...unique].sort()
   }
 
   private changed(boardId: number, kind: string, id: string): void {

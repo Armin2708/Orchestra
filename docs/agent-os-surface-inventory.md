@@ -3,8 +3,8 @@
 Status: current runtime inventory plus KNO-003 through KNO-010's verified ingestion and deterministic retrieval boundary,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
-telemetry and failure evidence, plus the integrated Open Work surface, observed at exact code head
-`11c1691654094e74dbe9fc53f073aa602e5ae7bb`.
+telemetry and failure evidence, plus the integrated Open Work and outcome-analytics surfaces,
+observed at exact code head `c25ec778febd393950829a8dae5cb7e44b102e8d`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -15,8 +15,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 91 | 3 | 10 | 12 | 116 |
-| Registered HTTP routes | 113 | 29 | 25 | 9 | 176 |
+| SQLite application tables | 105 | 3 | 10 | 12 | 130 |
+| Registered HTTP routes | 124 | 29 | 25 | 9 | 187 |
 | CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
@@ -129,7 +129,8 @@ evidence are defined in `src/agent-os/compatibility-migration-telemetry.ts` and
 are defined in `src/agent-os/organization-migration.ts` and
 `src/agent-os/organization-coordination-migration.ts`.
 The assurance evidence graph is defined in
-`src/agent-os/organization-assurance-migration.ts`.
+`src/agent-os/organization-assurance-migration.ts`. Outcome measurement, execution authorization,
+and reconciliation evidence are defined in `src/agent-os/outcome-analytics-migration.ts`.
 
 ### Canonical
 
@@ -146,6 +147,7 @@ The assurance evidence graph is defined in
 | Organization and authority | `os_organizations`, `os_product_areas`, `os_teams`, `os_positions`, `os_team_memberships`, `os_membership_transitions`, `os_role_definitions`, `os_role_assignments`, `os_role_activations`, `os_capability_attestations`, `os_authority_policies`, `os_team_ownerships` |
 | Coordination and risk control | `os_team_interactions`, `os_responsibility_assignments`, `os_objectives`, `os_team_goals`, `os_capacity_snapshots`, `os_message_envelopes`, `os_decision_records`, `os_escalations`, `os_risk_evaluations`, `os_participation_history`, `os_control_approvals` |
 | Assurance and learning | `os_trace_nodes`, `os_trace_edges`, `os_provenance_attestations`, `os_quality_gate_definitions`, `os_quality_gate_runs`, `os_quality_gate_results`, `os_quality_gate_overrides`, `os_metric_definitions`, `os_scorecards`, `os_metric_observations`, `os_calibration_reviews`, `os_access_certifications`, `os_review_appeals`, `os_incidents`, `os_incident_timeline`, `os_postmortems`, `os_corrective_actions`, `os_knowledge_promotions` |
+| Outcome analytics | `outcome_analytics_schema`, `outcome_analytics_secrets`, `outcome_usage_observations`, `outcome_usage_provider_bindings`, `outcome_activity_observations`, `outcome_budget_policies`, `outcome_operation_confirmations`, `outcome_operation_bindings`, `outcome_operation_consumptions`, `outcome_operation_usage_links`, `outcome_operation_usage_reconciliations`, `outcome_team_digests`, `outcome_benchmark_observations`, `outcome_benchmark_evidence_bindings` |
 
 ### Compatibility
 
@@ -187,8 +189,8 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/agent-os/routes.ts`, `src/agent-os/contract-template-routes.ts`,
 `src/agent-os/agent-home-routes.ts`, and
 `src/agent-os/agent-home-retention-routes.ts`, and
-`src/agent-os/job-assignment-routes.ts`, `src/agent-os/open-work-routes.ts`, and
-`src/agent-os/organization-routes.ts`. The seven session action routes are expanded from
+`src/agent-os/job-assignment-routes.ts`, `src/agent-os/open-work-routes.ts`,
+`src/agent-os/organization-routes.ts`, and `src/agent-os/outcome-analytics-routes.ts`. The seven session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
 
 ### Canonical routes
@@ -209,6 +211,8 @@ GET /api/v1/os/boards/:id/retention
 GET /api/v1/os/boards/:id/workspaces
 GET /api/v1/os/boards/:boardId/assignments
 GET /api/v1/os/boards/:boardId/organizations
+GET /api/v1/os/boards/:boardId/outcomes/benchmarks/:suiteKey
+GET /api/v1/os/boards/:boardId/outcomes/dashboard
 GET /api/v1/os/cards/:cardId/assignments
 GET /api/v1/os/cards/:cardId/assignments/current
 GET /api/v1/os/cards/:id/contract
@@ -256,6 +260,13 @@ POST /api/v1/os/boards/:id/policies
 POST /api/v1/os/boards/:id/retention/run
 POST /api/v1/os/boards/:id/workspaces
 POST /api/v1/os/boards/:boardId/organizations
+POST /api/v1/os/boards/:boardId/outcomes/activity
+POST /api/v1/os/boards/:boardId/outcomes/benchmarks
+POST /api/v1/os/boards/:boardId/outcomes/budgets
+POST /api/v1/os/boards/:boardId/outcomes/budgets/evaluate
+POST /api/v1/os/boards/:boardId/outcomes/digests
+POST /api/v1/os/boards/:boardId/outcomes/operations
+POST /api/v1/os/boards/:boardId/outcomes/usage
 POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign
 POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release
 POST /api/v1/os/cards/:cardId/assignments/assign
@@ -283,6 +294,8 @@ POST /api/v1/os/jobs/:id/deliveries/submit
 POST /api/v1/os/organizations/:organizationId/assurance/:command
 POST /api/v1/os/organizations/:organizationId/coordination/:command
 POST /api/v1/os/organizations/:organizationId/core/:command
+POST /api/v1/os/outcomes/operations/:operationId/confirm
+POST /api/v1/os/outcomes/operations/:operationId/consume
 POST /api/v1/os/policies/:id/evaluate
 POST /api/v1/os/processes/:id/commands
 POST /api/v1/os/processes/:id/input

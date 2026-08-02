@@ -12,6 +12,10 @@ describe('outcome dashboard UI contract', () => {
       'Context and coordination', 'Duplicate exploration', 'Job attribution',
     ]) expect(component).toContain(label)
     expect(component).toContain('Token reduction counts only when accepted-delivery quality holds.')
+    expect(component).toContain('Live beta signals cover provider usage and child dispatch.')
+    expect(component).toContain('No exact production acceptance signal')
+    expect(component).toContain('<Data label="Model acknowledgements" value="Not available" />')
+    expect(component).toContain('<Data label="Duplicate exploration" value="Not available" />')
   })
 
   it('refreshes from the event stream without introducing snapshot polling', () => {

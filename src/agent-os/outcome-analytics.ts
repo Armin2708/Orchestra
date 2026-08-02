@@ -914,6 +914,16 @@ export class OutcomeAnalyticsService {
     return {
       board_id: boardId,
       window: { since, until },
+      production_signals: {
+        provider_usage: 'available',
+        child_dispatch: 'available',
+        context_injection: 'unavailable',
+        context_selection: 'unavailable',
+        exploration: 'unavailable',
+        first_useful_result: 'unavailable',
+        model_acknowledgement: 'unavailable',
+        high_fanout_preflight: 'operator_plan_only',
+      },
       usage: {
         provider_tokens: numberValue(usage.provider_tokens),
         input_tokens: numberValue(usage.input_tokens),

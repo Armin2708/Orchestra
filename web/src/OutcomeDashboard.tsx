@@ -5,6 +5,16 @@ import './outcome-dashboard.css'
 type Dashboard = {
   board_id: number
   window: { since: string; until: string }
+  production_signals: {
+    provider_usage: 'available'
+    child_dispatch: 'available'
+    context_injection: 'unavailable'
+    context_selection: 'unavailable'
+    exploration: 'unavailable'
+    first_useful_result: 'unavailable'
+    model_acknowledgement: 'unavailable'
+    high_fanout_preflight: 'operator_plan_only'
+  }
   usage: {
     provider_tokens: number
     input_tokens: number
@@ -130,6 +140,9 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
           <p className="outcome-dashboard-eyebrow">Quality-aware efficiency</p>
           <h2 id="outcome-dashboard-title">Outcome dashboard</h2>
           <p>Token reduction counts only when accepted-delivery quality holds.</p>
+          <p>Live beta signals cover provider usage and child dispatch. Context injection,
+            context selection, exploration, useful-result acceptance, model acknowledgement,
+            and provider-native high-fanout preflight are not yet available.</p>
         </div>
         <button type="button" onClick={() => void load()} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh evidence'}
@@ -141,7 +154,7 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
       <div className="outcome-metric-grid">
         <Metric label="Tokens / accepted delivery" value={formatCount(dashboard.usage.tokens_per_accepted_delivery)} detail={`${formatCount(dashboard.usage.accepted_deliveries)} accepted`} />
         <Metric label="Cached-input ratio" value={formatRate(dashboard.usage.cached_input_ratio)} detail={`${formatCount(dashboard.usage.cached_input_tokens)} cached tokens`} />
-        <Metric label="First useful result" value={formatDuration(dashboard.speed.average_ms_to_first_useful_result)} detail="Average from job start" />
+        <Metric label="First useful result" value="Not available" detail="No exact production acceptance signal" />
         <Metric label="Verified delivery" value={formatDuration(dashboard.speed.average_ms_to_verified_delivery)} detail="Average from job start" />
       </div>
 
@@ -159,10 +172,11 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
         <article className="outcome-panel">
           <header><h3>Context and coordination</h3><span>Bounded activity</span></header>
           <dl>
-            <Data label="Context selected / reused" value={`${dashboard.context.selected} / ${dashboard.context.reused}`} />
-            <Data label="Rejected / refreshed" value={`${dashboard.context.rejected} / ${dashboard.context.refreshed}`} />
+            <Data label="Context selected / reused" value="Not available" />
+            <Data label="Rejected / refreshed" value="Not available" />
             <Data label="Wakes / total fanout" value={`${dashboard.coordination.wakes} / ${dashboard.coordination.fanout}`} />
-            <Data label="Duplicate exploration" value={formatRate(dashboard.exploration.duplicate_rate)} />
+            <Data label="Model acknowledgements" value="Not available" />
+            <Data label="Duplicate exploration" value="Not available" />
           </dl>
         </article>
       </div>
@@ -180,7 +194,7 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
                   <td><code>{job.job_id}</code></td>
                   <td><code>{job.contract_ref}</code></td>
                   <td>{formatCount(job.provider_tokens)}</td>
-                  <td>{formatCount(job.context_tokens)}</td>
+                  <td>Not available</td>
                   <td><span className={job.accepted ? 'outcome-status accepted' : 'outcome-status'}>{job.accepted ? 'Accepted' : 'Open'}</span></td>
                 </tr>
               ))}</tbody>

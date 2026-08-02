@@ -212,7 +212,7 @@ describe('production outcome analytics composition', () => {
     ]))
   })
 
-  it('records only exact first-useful-output and subagent activities without replay inflation', () => {
+  it('counts each exact child lifecycle once across started, completed, and replay events', () => {
     const { db, job } = fixture()
     const bridge = new OutcomeAnalyticsRuntimeBridge(db)
     const output = driverEvent({
@@ -221,33 +221,58 @@ describe('production outcome analytics composition', () => {
       data: 'Useful answer',
       metadata: { nativeMethod: 'item/agentMessage/delta', turnId: 'turn-1' },
     })
-    expect(bridge.recordExactEventActivities(job, 'runtime-session', output)).toHaveLength(1)
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', output)).toEqual([])
     expect(bridge.recordExactEventActivities(job, 'runtime-session', output)).toEqual([])
     expect(bridge.recordExactEventActivities(job, 'runtime-session', {
-      ...output, seq: 2, data: 'More output',
+      ...output,
+      seq: 2,
+      data: 'Completed answer',
+      metadata: { nativeMethod: 'item/completed', turnId: 'turn-1', itemId: 'message-1' },
     })).toEqual([])
 
-    const subagents = driverEvent({
+    const started = driverEvent({
       seq: 3,
+      type: 'tool',
+      data: 'Codex subagent started',
+      metadata: {
+        nativeMethod: 'thread/started',
+        subagentId: 'thread-child-a',
+        subagentStatus: 'started',
+      },
+    })
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', started)).toHaveLength(2)
+
+    const itemStarted = driverEvent({
+      seq: 4,
       type: 'tool',
       data: 'spawn_agent',
       metadata: {
-        nativeMethod: 'item/completed',
+        nativeMethod: 'item/started',
         itemId: 'collab-1',
         subagentId: 'thread-child-a',
         subagentStatus: 'started',
         subagents: { receiverThreadIds: ['thread-child-a', 'thread-child-b', 'thread-child-a'] },
       },
     })
-    expect(bridge.recordExactEventActivities(job, 'runtime-session', subagents)).toHaveLength(3)
-    expect(bridge.recordExactEventActivities(job, 'runtime-session', subagents)).toHaveLength(3)
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', itemStarted)).toHaveLength(2)
+    const completed = {
+      ...itemStarted,
+      seq: 5,
+      metadata: { ...itemStarted.metadata, nativeMethod: 'item/completed' },
+    }
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', completed)).toEqual([])
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', completed)).toEqual([])
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', itemStarted)).toEqual([])
+    expect(bridge.recordExactEventActivities(job, 'runtime-session', started)).toEqual([])
     expect(db.prepare(`SELECT category, quantity FROM outcome_activity_observations
       ORDER BY category`).all()).toEqual([
-      { category: 'coordination.fanout', quantity: 2 },
-      { category: 'coordination.model_ack', quantity: 2 },
-      { category: 'coordination.wake', quantity: 2 },
-      { category: 'result.first_useful', quantity: 1 },
+      { category: 'coordination.fanout', quantity: 1 },
+      { category: 'coordination.fanout', quantity: 1 },
+      { category: 'coordination.wake', quantity: 1 },
+      { category: 'coordination.wake', quantity: 1 },
     ])
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_activity_observations
+      WHERE category IN ('coordination.model_ack','result.first_useful')`).pluck().get()).toBe(0)
   })
 
   it('fails closed before launch when more than one native operation is eligible', () => {

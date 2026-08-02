@@ -116,6 +116,16 @@ describe('outcome analytics focused registrar', () => {
     })
     expect(dashboard.statusCode, dashboard.body).toBe(200)
     expect(dashboard.json()).toMatchObject({
+      production_signals: {
+        provider_usage: 'available',
+        child_dispatch: 'available',
+        context_injection: 'unavailable',
+        context_selection: 'unavailable',
+        exploration: 'unavailable',
+        first_useful_result: 'unavailable',
+        model_acknowledgement: 'unavailable',
+        high_fanout_preflight: 'operator_plan_only',
+      },
       usage: { provider_tokens: 1000, cached_input_tokens: 400 },
       context: { selected: 3 },
       by_job: [{ job_id: 'api-job', provider_tokens: 1000 }],

@@ -68,9 +68,20 @@ without observed representative evidence.
 
 ## Remaining
 
-- Central registration and live runtime/activity producers are deliberately left to the integrator;
-  MET-015 and MET-GATE cannot close until the native callback proves `operationId` propagation.
-- Product navigation and visual browser acceptance require the final integrated App surface.
+- Central registration, exact Codex provider-usage reconciliation, job-bound operation
+  consumption, and provider-native child wake/fanout dispatch are integrated at
+  `c25ec778febd393950829a8dae5cb7e44b102e8d` plus its review remediation. Child dispatch is
+  deduplicated by durable provider child identity across `item/started`, `thread/started`, and
+  `item/completed` projections.
+- The live runtime does **not** yet produce exact context-injection totals (MET-002), stable-context
+  selection/reuse/rejection/refresh evidence (MET-004/MET-005), file-read/duplicate exploration
+  evidence (MET-007), an accepted/useful-result signal (MET-008), or model acknowledgements.
+  These fields are explicitly `unavailable` in `production_signals` and the UI rather than
+  reported as zero or inferred from message deltas or child dispatch.
+- High-fanout planning is available only through the operator-bound plan/confirm API. There is no
+  provider-native automatic high-fanout preflight producer yet, so MET-011 remains open.
+- Product navigation is integrated; visual browser acceptance remains part of final combined
+  verification.
 - MET-013 is proven only for this analytics dashboard; broader avoidable snapshot polling remains
   a repository-wide integration concern.
 - MET-015 still needs retained exact-artifact before/after observations from a controlled task

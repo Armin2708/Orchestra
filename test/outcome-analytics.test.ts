@@ -395,6 +395,16 @@ describe('durable scoped token and outcome attribution', () => {
       tokens_per_accepted_delivery: 1_300,
       cached_input_ratio: 0.6,
     })
+    expect(dashboard.production_signals).toEqual({
+      provider_usage: 'available',
+      child_dispatch: 'available',
+      context_injection: 'unavailable',
+      context_selection: 'unavailable',
+      exploration: 'unavailable',
+      first_useful_result: 'unavailable',
+      model_acknowledgement: 'unavailable',
+      high_fanout_preflight: 'operator_plan_only',
+    })
     expect(dashboard.context).toEqual({ selected: 4, reused: 3, rejected: 1, refreshed: 1 })
     expect(dashboard.coordination).toEqual({ wakes: 2, fanout: 6, model_acknowledgements: 1 })
     expect(dashboard.exploration).toMatchObject({ reads: 4, likely_duplicates: 1, duplicate_rate: 0.25 })

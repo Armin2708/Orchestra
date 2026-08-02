@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "11c1691654094e74dbe9fc53f073aa602e5ae7bb",
+  "observed_at_commit": "c25ec778febd393950829a8dae5cb7e44b102e8d",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -131,7 +131,8 @@
     "src/agent-os/knowledge-retrieval.ts",
     "src/agent-os/organization-migration.ts",
     "src/agent-os/organization-coordination-migration.ts",
-    "src/agent-os/organization-assurance-migration.ts"
+    "src/agent-os/organization-assurance-migration.ts",
+    "src/agent-os/outcome-analytics-migration.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -218,6 +219,20 @@
       "os_teams",
       "os_trace_edges",
       "os_trace_nodes",
+      "outcome_activity_observations",
+      "outcome_analytics_schema",
+      "outcome_analytics_secrets",
+      "outcome_benchmark_evidence_bindings",
+      "outcome_benchmark_observations",
+      "outcome_budget_policies",
+      "outcome_operation_bindings",
+      "outcome_operation_confirmations",
+      "outcome_operation_consumptions",
+      "outcome_operation_usage_links",
+      "outcome_operation_usage_reconciliations",
+      "outcome_team_digests",
+      "outcome_usage_observations",
+      "outcome_usage_provider_bindings",
       "policies",
       "process_output",
       "processes",
@@ -299,6 +314,10 @@
     {
       "file": "src/agent-os/organization-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/outcome-analytics-routes.ts",
+      "prefix": "/api/v1/os"
     }
   ],
   "http_routes": {
@@ -318,6 +337,8 @@
       "GET /api/v1/os/boards/:id/workspaces",
       "GET /api/v1/os/boards/:boardId/assignments",
       "GET /api/v1/os/boards/:boardId/organizations",
+      "GET /api/v1/os/boards/:boardId/outcomes/benchmarks/:suiteKey",
+      "GET /api/v1/os/boards/:boardId/outcomes/dashboard",
       "GET /api/v1/os/cards/:cardId/assignments",
       "GET /api/v1/os/cards/:cardId/assignments/current",
       "GET /api/v1/os/cards/:id/contract",
@@ -365,6 +386,13 @@
       "POST /api/v1/os/boards/:id/retention/run",
       "POST /api/v1/os/boards/:id/workspaces",
       "POST /api/v1/os/boards/:boardId/organizations",
+      "POST /api/v1/os/boards/:boardId/outcomes/activity",
+      "POST /api/v1/os/boards/:boardId/outcomes/benchmarks",
+      "POST /api/v1/os/boards/:boardId/outcomes/budgets",
+      "POST /api/v1/os/boards/:boardId/outcomes/budgets/evaluate",
+      "POST /api/v1/os/boards/:boardId/outcomes/digests",
+      "POST /api/v1/os/boards/:boardId/outcomes/operations",
+      "POST /api/v1/os/boards/:boardId/outcomes/usage",
       "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/reassign",
       "POST /api/v1/os/cards/:cardId/assignments/:assignmentId/release",
       "POST /api/v1/os/cards/:cardId/assignments/assign",
@@ -392,6 +420,8 @@
       "POST /api/v1/os/organizations/:organizationId/assurance/:command",
       "POST /api/v1/os/organizations/:organizationId/coordination/:command",
       "POST /api/v1/os/organizations/:organizationId/core/:command",
+      "POST /api/v1/os/outcomes/operations/:operationId/confirm",
+      "POST /api/v1/os/outcomes/operations/:operationId/consume",
       "POST /api/v1/os/policies/:id/evaluate",
       "POST /api/v1/os/processes/:id/commands",
       "POST /api/v1/os/processes/:id/input",
@@ -742,6 +772,12 @@
       "classification": "canonical",
       "file": "web/src/App.tsx",
       "evidence": ">Command center</button>"
+    },
+    {
+      "id": "command-center.outcomes",
+      "classification": "canonical",
+      "file": "web/src/App.tsx",
+      "evidence": "<OutcomeDashboard boardId={focus} />"
     },
     {
       "id": "primary.roadmap",
