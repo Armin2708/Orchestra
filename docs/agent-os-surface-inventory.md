@@ -6,7 +6,7 @@ DOM-014's focused service-boundary topology, DOM-015's server composition bounda
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work, collaboration, knowledge, team,
 delivery, and outcome-analytics surfaces, observed at exact code head
-`fefec4c70810f1b5fd196835f0696fc2deaba8fe`.
+`3f8aed8a3b5af29c2dcbfaec634277cd32473034`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -53,7 +53,7 @@ which partial foundation exists.
 | `coordination` | `canonical` | `src/agent-os/organization-coordination.ts` |
 | `assurance` | `canonical` | `src/agent-os/organization-assurance.ts` |
 | `conflicts` | `canonical` | `src/agent-os/team-planning.ts` |
-| `device_pairing` | `reserved` | `src/agent-os/service-boundaries.ts` |
+| `device_pairing` | `canonical` | `SqliteDeviceSessionRepository` in `src/agent-os/device-sessions.ts` |
 
 The exact ownership/exclusion contract is
 [`agent-os-service-boundaries.md`](./agent-os-service-boundaries.md).
@@ -534,16 +534,12 @@ markers are listed in the JSON inventory and fail the drift test if removed or r
 
 ## Planned domains without complete current surfaces
 
-The canonical domain document names the target. A reserved service slot is not an implementation.
-The collaboration domains are implemented; only the unrelated reserved boundary remains here:
-
-| Planned domain | Current nearest surface | Missing canonical boundary |
-|---|---|---|
-| DeviceSession | reserved boundary; `orchestra remote` master-token QR | named expiring scoped revocable credential, device attribution, step-up |
-
-These rows identify incomplete product boundaries, not necessarily total absence. Existing
-foundations must be named precisely, while the remaining services/APIs/UI and acceptance evidence
-must not be shown as delivered.
+No canonical domain in this inventory is represented only by a reserved service slot.
+`device_pairing` is an executable canonical boundary backed by `SqliteDeviceSessionRepository`:
+it owns single-use PairingTickets, named scoped DeviceSessions, credential expiry, selective
+revocation, and device attribution. Route authorization remains separately default-deny, and this
+inventory truth does not close the native `REM-017`/`REM-GATE` or production operations acceptance
+gates.
 
 ## Drift-check contract
 

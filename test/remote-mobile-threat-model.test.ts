@@ -420,22 +420,24 @@ describe('REM-001 remote/mobile threat model', () => {
     }
   })
 
-  it('keeps DeviceSession and PairingTicket classified as targets at this baseline', () => {
+  it('records the integrated DeviceSession and PairingTicket tables as canonical current state', () => {
     const plannedDevice = inventory.planned_not_implemented.find(({ noun }) => noun === 'DeviceSession')
-    expect(plannedDevice?.reason).toContain('named scoped revocable device credentials do not exist')
+    expect(plannedDevice).toBeUndefined()
 
     const documentedTables = classifications.flatMap((classification) =>
       inventory.database_tables[classification])
-    expect(documentedTables).not.toContain('device_sessions')
-    expect(documentedTables).not.toContain('pairing_tickets')
+    expect(inventory.database_tables.canonical).toContain('os_device_sessions')
+    expect(inventory.database_tables.canonical).toContain('os_pairing_tickets')
+    expect(documentedTables).toContain('os_device_sessions')
+    expect(documentedTables).toContain('os_pairing_tickets')
 
     const db = openDb(':memory:')
     try {
       const tables = db.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all().map((row) => String((row as { name: string }).name))
-      expect(tables).not.toContain('device_sessions')
-      expect(tables).not.toContain('pairing_tickets')
+      expect(tables).toContain('os_device_sessions')
+      expect(tables).toContain('os_pairing_tickets')
     } finally {
       db.close()
     }

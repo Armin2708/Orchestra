@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "fefec4c70810f1b5fd196835f0696fc2deaba8fe",
+  "observed_at_commit": "3f8aed8a3b5af29c2dcbfaec634277cd32473034",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -55,8 +55,10 @@
     },
     {
       "name": "device_pairing",
-      "implementation_state": "reserved",
-      "source": "src/agent-os/service-boundaries.ts"
+      "implementation_state": "canonical",
+      "source": "src/agent-os/device-sessions.ts",
+      "service": "SqliteDeviceSessionRepository",
+      "composition_source": "src/agent-os/service-boundaries.ts"
     }
   ],
   "server_composition": {
@@ -1136,10 +1138,5 @@
       "evidence": "\"display\": \"standalone\""
     }
   ],
-  "planned_not_implemented": [
-    {
-      "noun": "DeviceSession",
-      "reason": "A reserved device-pairing boundary exists, but remote pairing still uses the operator master token; named scoped revocable device credentials do not exist."
-    }
-  ]
+  "planned_not_implemented": []
 }

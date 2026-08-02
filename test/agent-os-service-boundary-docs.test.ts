@@ -9,6 +9,8 @@ type ServiceBoundaryInventory = {
     name: string
     implementation_state: string
     source: string
+    service?: string
+    composition_source?: string
   }>
 }
 
@@ -24,7 +26,7 @@ describe('Agent OS service boundary documentation', () => {
     const contract = read('docs/agent-os-service-boundaries.md')
 
     expect(inventory.observed_at_commit)
-      .toBe('fefec4c70810f1b5fd196835f0696fc2deaba8fe')
+      .toBe('3f8aed8a3b5af29c2dcbfaec634277cd32473034')
     expect(inventory.service_boundaries.map(({ name }) => name))
       .toEqual(AGENT_OS_DOMAIN_SERVICE_NAMES)
     expect(inventory.service_boundaries.map(({ implementation_state }) =>
@@ -38,16 +40,24 @@ describe('Agent OS service boundary documentation', () => {
       'canonical',
       'canonical',
       'canonical',
-      'reserved',
+      'canonical',
     ])
     for (const boundary of inventory.service_boundaries) {
       expect(fs.existsSync(path.join(root, boundary.source))).toBe(true)
       expect(markdown).toContain(`| \`${boundary.name}\` |`)
       expect(contract).toContain(`| \`${boundary.name}\` |`)
     }
+    expect(inventory.service_boundaries.at(-1)).toMatchObject({
+      name: 'device_pairing',
+      implementation_state: 'canonical',
+      source: 'src/agent-os/device-sessions.ts',
+      service: 'SqliteDeviceSessionRepository',
+      composition_source: 'src/agent-os/service-boundaries.ts',
+    })
+    expect(contract).toContain('| `device_pairing` | `canonical` | `SqliteDeviceSessionRepository` |')
   })
 
-  it('does not promote reserved or partial foundations into completed product domains', () => {
+  it('keeps implemented canonical domains out of the planned-only inventory', () => {
     const inventory = JSON.parse(
       read('docs/agent-os-surface-inventory.json'),
     ) as ServiceBoundaryInventory & {
@@ -60,6 +70,6 @@ describe('Agent OS service boundary documentation', () => {
     expect(planned.has('Discussion and DiscussionPost')).toBe(false)
     expect(planned.has('Conflict')).toBe(false)
     expect(planned.has('Knowledge compilation and operator surfaces')).toBe(false)
-    expect(planned.get('DeviceSession')).toMatch(/credentials do not exist/)
+    expect(planned.has('DeviceSession')).toBe(false)
   })
 })
