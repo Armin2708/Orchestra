@@ -10,6 +10,7 @@ import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
 describe('real lifecycle demo', () => {
+  const stateHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-state-'))
   const project = () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-demo-'))
     fs.writeFileSync(path.join(root, 'README.md'), '# Safe demo scope\n')
@@ -43,6 +44,8 @@ describe('real lifecycle demo', () => {
     const result = await runLifecycleDemo(api, {
       project_root: project(),
       provider: 'codex',
+    }, {
+      orchestraHome: stateHome(),
     })
 
     expect(result).toMatchObject({
@@ -88,6 +91,7 @@ describe('real lifecycle demo', () => {
     }, {
       authorizeLaunch: async () => launchAttestation(),
       nowMs: () => Date.parse('2026-08-02T09:01:00.000Z'),
+      orchestraHome: stateHome(),
     })
 
     expect(result).toMatchObject({ state: 'job_created', job_id: 'job/demo' })
@@ -106,7 +110,7 @@ describe('real lifecycle demo', () => {
       project_root: project(),
       provider: 'codex',
       launch: true,
-    })).rejects.toThrow('launch gate is not registered')
+    }, { orchestraHome: stateHome() })).rejects.toThrow('launch gate is not registered')
     expect(api).not.toHaveBeenCalled()
 
     await expect(runLifecycleDemo(api, {
@@ -116,6 +120,7 @@ describe('real lifecycle demo', () => {
     }, {
       authorizeLaunch: async () => launchAttestation('claude'),
       nowMs: () => Date.parse('2026-08-02T09:01:00.000Z'),
+      orchestraHome: stateHome(),
     })).rejects.toThrow('lacks exact doctor and provider-acceptance evidence')
     expect(api).not.toHaveBeenCalled()
   })
@@ -162,10 +167,11 @@ describe('real lifecycle demo', () => {
     }
     try {
       const root = project()
+      const orchestraHome = stateHome()
       const result = await runLifecycleDemo(api, {
         project_root: root,
         provider: 'codex',
-      })
+      }, { orchestraHome })
       expect(result).toMatchObject({
         board_id: 1,
         card_id: 1,
@@ -181,7 +187,7 @@ describe('real lifecycle demo', () => {
       const repeated = await runLifecycleDemo(api, {
         project_root: root,
         provider: 'codex',
-      })
+      }, { orchestraHome })
       expect(repeated.card_id).toBe(result.card_id)
       expect(db.prepare('SELECT COUNT(*) AS count FROM cards').get())
         .toEqual({ count: 1 })
@@ -189,5 +195,62 @@ describe('real lifecycle demo', () => {
       await server.close()
       db.close()
     }
+  })
+
+  it('serializes concurrent marker transactions before their first API mutation', async () => {
+    const root = project()
+    const orchestraHome = stateHome()
+    let releaseBoard!: () => void
+    const boardGate = new Promise<void>((resolve) => { releaseBoard = resolve })
+    const api = vi.fn(async (method: string, route: string) => {
+      if (method === 'POST' && route === '/boards/resolve') {
+        await boardGate
+        return { id: 9 }
+      }
+      if (method === 'GET' && route === '/boards/9/snapshot') return { cards: [] }
+      if (method === 'POST' && route === '/cards') return { card: { id: 41 } }
+      if (method === 'GET' && route === '/os/cards/41/contract') {
+        return { contract: {}, job_market: { market_version: 2 } }
+      }
+      if (method === 'PUT' && route === '/os/cards/41/contract') {
+        return { contract: { version: 3 }, job_market: { market_version: 3 } }
+      }
+      if (method === 'POST' && route === '/os/cards/41/contract/publish') {
+        return { contract: { status: 'open' } }
+      }
+      throw new Error(`unexpected ${method} ${route}`)
+    })
+    const first = runLifecycleDemo(api, {
+      project_root: root,
+      provider: 'codex',
+      idempotency_prefix: 'concurrent-demo',
+    }, { orchestraHome })
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    const lockDirectory = path.join(orchestraHome, 'lifecycle-demo-locks')
+    const [lockFile] = fs.readdirSync(lockDirectory)
+    expect(fs.statSync(lockDirectory).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(path.join(lockDirectory, lockFile)).mode & 0o777).toBe(0o600)
+    await expect(runLifecycleDemo(api, {
+      project_root: root,
+      provider: 'codex',
+      idempotency_prefix: 'concurrent-demo',
+    }, { orchestraHome })).rejects.toThrow('already running for this exact marker')
+    expect(api).toHaveBeenCalledTimes(1)
+    releaseBoard()
+    await expect(first).resolves.toMatchObject({ card_id: 41, state: 'contract_published' })
+    expect(fs.readdirSync(lockDirectory)).toEqual([])
+  })
+
+  it('rejects relative or explicitly empty ORCHESTRA_HOME before API mutation', async () => {
+    const api = vi.fn()
+    await expect(runLifecycleDemo(api, {
+      project_root: project(),
+      provider: 'codex',
+    }, { orchestraHome: 'relative/state' })).rejects.toThrow('ORCHESTRA_HOME must be')
+    await expect(runLifecycleDemo(api, {
+      project_root: project(),
+      provider: 'codex',
+    }, { orchestraHome: '' })).rejects.toThrow('ORCHESTRA_HOME must be')
+    expect(api).not.toHaveBeenCalled()
   })
 })

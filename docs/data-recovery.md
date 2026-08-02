@@ -26,34 +26,24 @@ Backups are offline-consistent operations:
 6. Inspect and separately preserve every worktree with `git worktree list` and `git status`.
 
 ```sh
-orchestra_state_root="${ORCHESTRA_HOME:-$HOME/.orchestra}"
-orchestra_backup_path="/absolute/secure/path/orchestra.backup.db"
-
-case "$orchestra_state_root" in /*) ;; *) echo 'ORCHESTRA_HOME must be absolute' >&2; exit 1;; esac
-case "$orchestra_backup_path" in /*) ;; *) echo 'backup path must be absolute' >&2; exit 1;; esac
-case "$orchestra_backup_path" in *"'"*) echo "backup path cannot contain a single quote" >&2; exit 1;; esac
-if printf '%s%s' "$orchestra_state_root" "$orchestra_backup_path" | LC_ALL=C grep -q '[[:cntrl:]]'; then
-  echo 'state and backup paths cannot contain control characters' >&2
-  exit 1
-fi
-test -f "$orchestra_state_root/orchestra.db"
-test ! -e "$orchestra_backup_path"
-
-sqlite3 "$orchestra_state_root/orchestra.db" ".backup '$orchestra_backup_path'"
-sqlite3 "$orchestra_backup_path" 'PRAGMA integrity_check;'
-if command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$orchestra_backup_path"       # macOS and many Linux hosts
-elif command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "$orchestra_backup_path"           # GNU/Linux
-else
-  echo 'no SHA-256 utility found' >&2
-  exit 1
-fi
+HOME=/absolute/operator/home \
+ORCHESTRA_HOME=/absolute/operator/home/.orchestra \
+scripts/backup-orchestra-state.sh /absolute/secure/path/orchestra.backup.db
 ```
 
-Do not run the snippet with an unset `HOME`, a relative/custom state root, a pre-existing backup
-target, or a backup path containing control characters. Record the resolved state root before
-stopping the daemon; do not assume a later shell has the same environment.
+The executable script runs with `set -euo pipefail` and `umask 077` under Bash or Zsh. `HOME`, any
+explicit `ORCHESTRA_HOME`, and the destination must be absolute. With `ORCHESTRA_HOME` unset, the
+source is exactly `$HOME/.orchestra/orchestra.db`. It rejects symlinked source files, insecure backup
+directories, existing outputs, quotes/control characters and partial tool results; creates new
+directories as mode `700`; requires `PRAGMA integrity_check` to return exactly `ok`; supports macOS
+`shasum` and GNU `sha256sum`; atomically commits no-clobber backup/checksum files; verifies their
+checksums and mode `600`; and removes partial output after any failure.
+Checksum selection is automatic; `ORCHESTRA_CHECKSUM_TOOL=shasum` or `sha256sum` may pin one of the
+two validated implementations when both are installed.
+
+Record the resolved state root before stopping the daemon; do not assume a later shell has the same
+environment. Run the command from the exact retained source/artifact checkout so the reviewed script
+is the one producing the backup.
 
 Never paste a database, WAL/SHM file, bearer, provider session, transcript, or worktree content into
 a support report.

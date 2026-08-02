@@ -21,7 +21,11 @@ The supplied gate factory runs the doctor first and invokes the exact acceptance
 doctor success; central wiring must use the production evidence store, never a constant success stub.
 Missing, candidate or mismatched evidence fails before any API mutation. Provider-API mode is not
 used by this demo. Repeating the same marker reuses its card and existing Job rather than creating a
-second provider charge.
+second provider charge. A mode-`600` exclusive lock under the absolute `ORCHESTRA_HOME` serializes
+the complete marker/provider transaction before its first API call. A concurrent invocation fails
+closed, while the canonical Job endpoint's durable idempotency key protects the final launch write.
+An unset `ORCHESTRA_HOME` resolves from an absolute home directory; a relative or explicitly empty
+value is rejected before API mutation.
 
 The real lifecycle is:
 

@@ -3,7 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   installHooks,
+  restoreHookSettingsAfterFailedInstall,
+  snapshotHookSettings,
   type HookScope,
+  type HookProvider,
 } from './install.js'
 import { FIRST_RELEASE_PROVIDER_MANIFESTS_V1 } from './provider-manifests.js'
 
@@ -325,10 +328,19 @@ export const assertFirstRunConfigCompatible = (
 
 export const firstRunConfigPath = (
   env: NodeJS.ProcessEnv = process.env,
-): string => path.join(
-  env.ORCHESTRA_HOME?.trim() || path.join(os.homedir(), '.orchestra'),
-  'onboarding.json',
-)
+): string => {
+  const hasConfiguredHome = Object.prototype.hasOwnProperty.call(env, 'ORCHESTRA_HOME')
+  const configuredHome = hasConfiguredHome ? env.ORCHESTRA_HOME?.trim() : undefined
+  if (hasConfiguredHome && (!configuredHome || !path.isAbsolute(configuredHome))) {
+    throw new Error('ORCHESTRA_HOME must be a non-empty absolute path')
+  }
+  const defaultHome = os.homedir()
+  if (!configuredHome && (!defaultHome || !path.isAbsolute(defaultHome))) {
+    throw new Error('HOME must resolve to an absolute path for default ORCHESTRA_HOME')
+  }
+  const stateRoot = configuredHome ?? path.join(defaultHome, '.orchestra')
+  return path.join(stateRoot, 'onboarding.json')
+}
 
 const writeVerifiedText = (
   file: string,
@@ -408,7 +420,21 @@ export const applyFirstRunPlan = (
     configured_at: (deps.now ?? (() => new Date().toISOString()))(),
   }
   assertFirstRunConfigCompatible(config)
+  const hookProvider: HookProvider | null = plan.hooks.scope === 'off'
+    ? null
+    : plan.provider.id === 'claude' || plan.provider.id === 'codex'
+      ? plan.provider.id
+      : (() => { throw new Error('provider hooks are unavailable') })()
+  const hookSnapshot = hookProvider && plan.hooks.scope !== 'off'
+    ? snapshotHookSettings(plan.hooks.scope, hookProvider, {
+        provider: hookProvider,
+        roots: { cwd: plan.project_root },
+      })
+    : null
   const configFile = deps.configPath ?? firstRunConfigPath()
+  if (!path.isAbsolute(configFile)) {
+    throw new Error('first-run configuration path must be absolute')
+  }
   const previous = fs.existsSync(configFile)
     ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
     : null
@@ -425,11 +451,9 @@ export const applyFirstRunPlan = (
   }
   try {
     writeFirstRunConfig(configFile, config)
-    if (plan.hooks.scope !== 'off') {
+    if (plan.hooks.scope !== 'off' && hookProvider) {
       ;(deps.installProviderHooks ?? installHooks)(plan.hooks.scope, {
-        provider: plan.provider.id === 'claude' || plan.provider.id === 'codex'
-          ? plan.provider.id
-          : (() => { throw new Error('provider hooks are unavailable') })(),
+        provider: hookProvider,
         roots: { cwd: plan.project_root },
       })
     }
@@ -437,24 +461,40 @@ export const applyFirstRunPlan = (
       throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
     }
   } catch (error) {
+    const rollbackErrors: unknown[] = []
+    if (hookSnapshot && hookProvider) {
+      try {
+        restoreHookSettingsAfterFailedInstall(hookSnapshot, hookProvider)
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
     const current = currentConfig()
     const unchanged = previous ? current === previous.content : current === null
     if (current !== serialized && !unchanged) {
-      throw new AggregateError(
-        [error],
-        `hook setup failed and ${configFile} changed concurrently; refusing to overwrite it`,
-      )
-    }
-    if (current === serialized) {
-      if (previous) {
-        assertFirstRunConfigCompatible(JSON.parse(previous.content))
-        writeVerifiedText(configFile, previous.content, previous.mode)
-      } else {
-        fs.unlinkSync(configFile)
-        if (fs.existsSync(configFile)) {
-          throw new AggregateError([error], 'hook setup failed and new config rollback did not verify')
+      rollbackErrors.push(new Error(
+        `configuration changed concurrently; refusing rollback for ${configFile}`,
+      ))
+    } else if (current === serialized) {
+      try {
+        if (previous) {
+          assertFirstRunConfigCompatible(JSON.parse(previous.content))
+          writeVerifiedText(configFile, previous.content, previous.mode)
+        } else {
+          fs.unlinkSync(configFile)
+          if (fs.existsSync(configFile)) {
+            throw new Error('new config rollback did not verify')
+          }
         }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
       }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'hook setup failed and rollback was incomplete; concurrent files were not overwritten',
+      )
     }
     throw error
   }

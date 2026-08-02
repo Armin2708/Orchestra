@@ -38,18 +38,29 @@ const PROPERTY_VALUES = Object.freeze({
 } as const)
 
 const validateProperties = (
-  properties: NonNullable<OperatorTelemetryInput['properties']>,
-): void => {
+  properties: unknown,
+): NonNullable<OperatorTelemetryInput['properties']> => {
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)
     || Object.getPrototypeOf(properties) !== Object.prototype) {
     throw new Error('telemetry properties must be a plain object')
   }
+  const normalized: Record<string, string | number | boolean | null> = {}
   for (const [key, value] of Object.entries(properties)) {
     const allowed = PROPERTY_VALUES[key as keyof typeof PROPERTY_VALUES]
-    if (!allowed || !(allowed as readonly string[]).includes(String(value))) {
+    const primitive = value === null
+      || typeof value === 'string'
+      || typeof value === 'number'
+      || typeof value === 'boolean'
+    if (!primitive) {
+      throw new Error(`telemetry property must be a primitive: ${key}`)
+    }
+    if (!allowed || typeof value !== 'string'
+      || !(allowed as readonly string[]).includes(value)) {
       throw new Error(`telemetry property is not allowlisted: ${key}`)
     }
+    normalized[key] = value
   }
+  return normalized as NonNullable<OperatorTelemetryInput['properties']>
 }
 
 export const redactedInstallationId = (localSeed: string): string => {
@@ -74,10 +85,11 @@ export const buildOperatorTelemetryEnvelope = (
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || Object.getPrototypeOf(input) !== Object.prototype
     || Object.keys(input).some((key) => key !== 'event' && key !== 'properties')
+    || typeof input.event !== 'string'
     || !OPERATOR_TELEMETRY_EVENTS.includes(input.event)) {
     throw new Error('telemetry event is not allowlisted')
   }
-  validateProperties(input.properties ?? {})
+  const properties = validateProperties(input.properties ?? {})
   const occurredAt = now()
   const parsedAt = typeof occurredAt === 'string' ? Date.parse(occurredAt) : Number.NaN
   if (!Number.isFinite(parsedAt)
@@ -95,6 +107,6 @@ export const buildOperatorTelemetryEnvelope = (
     event: input.event,
     installation_id: installationId,
     occurred_at: occurredAt,
-    properties: { ...input.properties },
+    properties,
   }
 }

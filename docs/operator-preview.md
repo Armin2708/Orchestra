@@ -36,6 +36,7 @@ The current source writes the following under `ORCHESTRA_HOME`:
 | `remote.json` | Optional legacy tunnel provider, public URL, process identifier when applicable, and start time. |
 | `cloudflared.log` | Optional Cloudflare quick-tunnel startup output. Treat it as sensitive operational data. |
 | `onboarding.json` | Optional owner-only schema-v1 onboarding selection and fixed safe defaults. It contains no provider credential and is not written while provider readiness is blocked. |
+| `lifecycle-demo-locks/*.lock` | Short-lived PID/random ownership token serializing one demo marker/provider transaction. Directory mode is `700` and file mode is `600`; never back up an active lock, and confirm no matching demo process before manually removing a crash-stale lock. |
 
 SQLite stores local injected-context telemetry as event category, character/token estimate, count,
 agent, board, and day. This is local product telemetry; the current product has no Orchestra-hosted

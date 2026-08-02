@@ -33,6 +33,29 @@ describe('operator compatibility, telemetry, and support boundaries', () => {
       event: 'doctor_completed',
       properties: { arbitrary_path: '/workspace/private' } as any,
     })).toThrow('telemetry property is not allowlisted')
+    const smuggled = {
+      secret: 'github_pat_do_not_serialize_this',
+      toString: () => 'codex',
+    }
+    expect(() => buildOperatorTelemetryEnvelope('redacted', 'a'.repeat(32), {
+      event: 'doctor_completed',
+      properties: { provider: smuggled } as any,
+    })).toThrow('telemetry property must be a primitive')
+    expect(() => buildOperatorTelemetryEnvelope('redacted', 'a'.repeat(32), {
+      event: 'doctor_completed',
+      properties: { provider: new String('codex') } as any,
+    })).toThrow('telemetry property must be a primitive')
+    expect(() => buildOperatorTelemetryEnvelope('redacted', 'a'.repeat(32), {
+      event: 'doctor_completed',
+      properties: { provider: { nested: 'codex' } } as any,
+    })).toThrow('telemetry property must be a primitive')
+    expect(() => buildOperatorTelemetryEnvelope('redacted', 'a'.repeat(32), {
+      event: 'doctor_completed',
+      properties: { provider: 1 } as any,
+    })).toThrow('telemetry property is not allowlisted')
+    expect(() => buildOperatorTelemetryEnvelope('redacted', 'a'.repeat(32), {
+      event: new String('doctor_completed') as any,
+    })).toThrow('telemetry event is not allowlisted')
     expect(() => buildOperatorTelemetryEnvelope('unknown' as any, 'a'.repeat(32), {
       event: 'doctor_completed',
     })).toThrow('telemetry consent must be off or redacted')

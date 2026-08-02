@@ -6,7 +6,9 @@ import {
   applyFirstRunPlan,
   assertFirstRunConfigCompatible,
   buildFirstRunPlan,
+  firstRunConfigPath,
 } from '../src/first-run-onboarding.js'
+import { hookSettingsPath, installHooks } from '../src/install.js'
 
 describe('first-run onboarding domain', () => {
   const releaseReadyPlan = (root: string, hooks: 'off' | 'project' = 'off') => {
@@ -179,6 +181,57 @@ describe('first-run onboarding domain', () => {
     expect(fs.readFileSync(configPath, 'utf8')).toBe(previousBytes)
   })
 
+  it('restores exact provider hook bytes, mode, and prior nonexistence after mutation then throw', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-hook-transaction-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const providerPath = hookSettingsPath('project', 'codex', { cwd: root })
+    fs.mkdirSync(path.dirname(providerPath), { recursive: true })
+    const previousProvider = '{"description":"preserve exact provider bytes"}\n'
+    fs.writeFileSync(providerPath, previousProvider, { mode: 0o640 })
+
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root, 'project'), {
+      configPath,
+      installProviderHooks: (scope, options) => {
+        installHooks(scope, options)
+        throw new Error('downstream hook activation failed')
+      },
+    })).toThrow('downstream hook activation failed')
+    expect(fs.readFileSync(providerPath, 'utf8')).toBe(previousProvider)
+    expect(fs.statSync(providerPath).mode & 0o777).toBe(0o640)
+    expect(fs.existsSync(configPath)).toBe(false)
+
+    fs.unlinkSync(providerPath)
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root, 'project'), {
+      configPath,
+      installProviderHooks: (scope, options) => {
+        installHooks(scope, options)
+        throw new Error('activation failed after new provider file')
+      },
+    })).toThrow('activation failed after new provider file')
+    expect(fs.existsSync(providerPath)).toBe(false)
+    expect(fs.existsSync(configPath)).toBe(false)
+  })
+
+  it('refuses to overwrite a concurrent provider edit during failed-hook rollback', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-hook-concurrent-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const providerPath = hookSettingsPath('project', 'codex', { cwd: root })
+    fs.mkdirSync(path.dirname(providerPath), { recursive: true })
+    fs.writeFileSync(providerPath, '{"description":"before"}\n', { mode: 0o600 })
+    const concurrent = '{"description":"concurrent owner edit"}\n'
+
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root, 'project'), {
+      configPath,
+      installProviderHooks: (scope, options) => {
+        installHooks(scope, options)
+        fs.writeFileSync(providerPath, concurrent)
+        throw new Error('hook activation observed a concurrent edit')
+      },
+    })).toThrow('rollback was incomplete')
+    expect(fs.readFileSync(providerPath, 'utf8')).toBe(concurrent)
+    expect(fs.existsSync(configPath)).toBe(false)
+  })
+
   it('fails closed on unknown config schema and invalid project selection', () => {
     expect(() => assertFirstRunConfigCompatible({ schema_version: 2 }))
       .toThrow('unknown or missing fields')
@@ -213,5 +266,18 @@ describe('first-run onboarding domain', () => {
       ...config,
       api_token: 'not-allowed',
     })).toThrow('forbidden sensitive field')
+  })
+
+  it('requires an absolute non-empty ORCHESTRA_HOME and config override', () => {
+    expect(() => firstRunConfigPath({ ORCHESTRA_HOME: 'relative/state' }))
+      .toThrow('ORCHESTRA_HOME must be a non-empty absolute path')
+    expect(() => firstRunConfigPath({ ORCHESTRA_HOME: '' }))
+      .toThrow('ORCHESTRA_HOME must be a non-empty absolute path')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-path-'))
+    expect(firstRunConfigPath({ ORCHESTRA_HOME: root }))
+      .toBe(path.join(root, 'onboarding.json'))
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root), {
+      configPath: 'relative/onboarding.json',
+    })).toThrow('configuration path must be absolute')
   })
 })

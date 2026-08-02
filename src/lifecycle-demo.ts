@@ -1,5 +1,7 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
 import type { AgentOsApi } from './agent-os-cli.js'
 
 export type LifecycleDemoLaunchAttestationV1 = {
@@ -26,6 +28,7 @@ export type LifecycleDemoDeps = {
     projectRoot: string,
   ) => Promise<LifecycleDemoLaunchAttestationV1>
   nowMs?: () => number
+  orchestraHome?: string
 }
 
 export type LifecycleDemoLaunchGateDeps = {
@@ -147,6 +150,80 @@ const demoScope = (projectRoot: string, requested?: string): {
   throw new Error('demo requires an existing safe sample file in the selected project')
 }
 
+const lifecycleStateRoot = (explicit?: string): string => {
+  const environmentHasHome = Object.prototype.hasOwnProperty.call(process.env, 'ORCHESTRA_HOME')
+  const configured = explicit !== undefined
+    ? explicit
+    : environmentHasHome
+      ? process.env.ORCHESTRA_HOME
+      : undefined
+  if (configured !== undefined) {
+    if (!configured || !path.isAbsolute(configured)) {
+      throw new Error('ORCHESTRA_HOME must be a non-empty absolute path')
+    }
+    return path.resolve(configured)
+  }
+  const home = os.homedir()
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error('HOME must resolve to an absolute path before using default ORCHESTRA_HOME')
+  }
+  return path.join(home, '.orchestra')
+}
+
+const acquireLifecycleDemoLock = (
+  stateRoot: string,
+  identity: string,
+): (() => void) => {
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
+  const rootStat = fs.lstatSync(stateRoot)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('ORCHESTRA_HOME must be a real directory for lifecycle locking')
+  }
+  const lockDirectory = path.join(stateRoot, 'lifecycle-demo-locks')
+  fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o700 })
+  const lockStat = fs.lstatSync(lockDirectory)
+  if (!lockStat.isDirectory() || lockStat.isSymbolicLink()) {
+    throw new Error('lifecycle demo lock directory must be a real directory')
+  }
+  fs.chmodSync(lockDirectory, 0o700)
+  const lockId = createHash('sha256').update(identity).digest('hex')
+  const lockPath = path.join(lockDirectory, `${lockId}.lock`)
+  const token = `${process.pid}:${randomUUID()}\n`
+  let descriptor: number
+  try {
+    descriptor = fs.openSync(lockPath, 'wx', 0o600)
+  } catch (error: any) {
+    if (error?.code === 'EEXIST') {
+      throw new Error('lifecycle demo is already running for this exact marker and provider')
+    }
+    throw error
+  }
+  try {
+    fs.writeFileSync(descriptor, token)
+    fs.fsyncSync(descriptor)
+    if ((fs.fstatSync(descriptor).mode & 0o777) !== 0o600) {
+      throw new Error('lifecycle demo lock mode did not verify as 600')
+    }
+  } catch (error) {
+    fs.closeSync(descriptor)
+    if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath)
+    throw error
+  } finally {
+    try { fs.closeSync(descriptor) } catch {}
+  }
+  return () => {
+    let current: string
+    try { current = fs.readFileSync(lockPath, 'utf8') } catch {
+      throw new Error('lifecycle demo lock disappeared before release')
+    }
+    if (current !== token) {
+      throw new Error('lifecycle demo lock changed concurrently; refusing to remove it')
+    }
+    fs.unlinkSync(lockPath)
+    if (fs.existsSync(lockPath)) throw new Error('lifecycle demo lock release did not verify')
+  }
+}
+
 /**
  * Creates real Board + WorkContract records and optionally a real Job. The safe
  * default stops before provider execution so the demo cannot incur usage or
@@ -169,6 +246,7 @@ export const runLifecycleDemo = async (
   }
   const provider = input.provider ?? 'codex'
   const scope = demoScope(input.project_root, input.sample_path)
+  const stateRoot = lifecycleStateRoot(deps.orchestraHome)
   if (input.launch) {
     if (!deps.authorizeLaunch) {
       throw new Error('lifecycle demo launch gate is not registered')
@@ -178,6 +256,11 @@ export const runLifecycleDemo = async (
   }
   const marker = `[orchestra-lifecycle-demo:${prefix}]`
   const description = `${marker} provider=${provider} sample=${scope.relativePath} A real, reviewable Create → Contract → Publish lifecycle sample.`
+  const releaseLock = acquireLifecycleDemoLock(
+    stateRoot,
+    `${scope.projectRoot}\n${provider}\n${prefix}`,
+  )
+  try {
   const board = await api('POST', '/boards/resolve', { project_path: scope.projectRoot })
   const boardId = Number(objectId(board?.id ?? board?.board?.id, 'board id'))
   const snapshot = await api('GET', `/boards/${boardId}/snapshot`)
@@ -261,5 +344,8 @@ export const runLifecycleDemo = async (
     job_id: String(objectId(job?.job?.id ?? job?.id, 'job id')),
     state: 'job_created',
     next_step: 'Inspect the immutable Asked snapshot, submit evidence, verify independently, then accept or reject the Delivery.',
+  }
+  } finally {
+    releaseLock()
   }
 }

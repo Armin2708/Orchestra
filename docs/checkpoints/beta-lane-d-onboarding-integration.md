@@ -72,3 +72,24 @@ lane processes are drained. These candidate artifacts are evidence inputs, not b
 - Node `22.20.0` and npm `10.9.3`: 19 focused tests and 207 adjacent onboarding/install/doctor/
   provider tests pass; root and web TypeScript/production builds pass. Final all-repository and
   retained-artifact verification remains owned by the central beta integrator.
+
+## Residual P1 remediation evidence
+
+- Provider hook installation now snapshots exact bytes/mode/nonexistence, takes an exclusive writer
+  lock, writes through fsynced temporary files with before-rename CAS, verifies the committed file,
+  and transactionally restores earlier provider files if a later provider fails. Failed onboarding
+  restores only a recognized Orchestra hook mutation; an unrelated concurrent edit is preserved and
+  reported for human reconciliation.
+- Operator telemetry rejects boxed strings, custom coercion objects and nested objects. Every enum
+  property must be an actual allowlisted string primitive, and the emitted envelope contains only
+  the normalized primitive map.
+- `scripts/backup-orchestra-state.sh` is an executable Bash/Zsh fail-fast workflow with absolute
+  HOME/state/destination validation, restrictive modes, exact SQLite integrity, macOS/GNU checksum
+  verification, atomic no-clobber output and failure cleanup. Central package integration must add
+  this reviewed script to the retained artifact's explicit `files` allowlist.
+- Lifecycle demo card/contract/job work is serialized by a deterministic exclusive mode-`600` lock
+  under an absolute state root. A concurrent identical invocation fails before its first API call;
+  canonical Job creation retains its durable server-side idempotency key.
+- Node `22.20.0` and npm `10.9.3`: 35 focused tests and 221 adjacent onboarding/backup/install/
+  doctor/provider tests pass; root and web TypeScript/production builds pass. The support adapter
+  still requires Lane C's actual-byte verifier, and PKG-014/PKG-015 remain open as documented.

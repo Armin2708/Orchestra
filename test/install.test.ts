@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { hookSettingsPath, installHooks, uninstallHooks } from '../src/install.js'
+import {
+  hookSettingsPath,
+  installHooks,
+  restoreHookSettingsAfterFailedInstall,
+  snapshotHookSettings,
+  uninstallHooks,
+} from '../src/install.js'
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-hooks-'))
 const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -108,5 +114,62 @@ describe('provider hook installation', () => {
     expect(read(file).hooks.SessionStart).toHaveLength(1)
     uninstallHooks('global', file)
     expect(read(file).hooks.SessionStart).toBeUndefined()
+  })
+
+  it('refuses a contended writer lock without changing existing bytes or mode', () => {
+    const file = path.join(temp(), 'settings.json')
+    const original = '{"description":"exact bytes"}\n'
+    write(file, { description: 'placeholder' })
+    fs.writeFileSync(file, original)
+    fs.chmodSync(file, 0o640)
+    fs.writeFileSync(`${file}.orchestra.lock`, 'another writer\n', { mode: 0o600 })
+
+    expect(() => installHooks('global', file)).toThrow('locked by another writer')
+    expect(fs.readFileSync(file, 'utf8')).toBe(original)
+    expect(fs.statSync(file).mode & 0o777).toBe(0o640)
+  })
+
+  it('refuses rollback over an unrecognized concurrent edit', () => {
+    const file = path.join(temp(), 'settings.json')
+    write(file, { description: 'before' })
+    const snapshot = snapshotHookSettings('global', 'claude', {
+      settingsPaths: { claude: file },
+    })
+    fs.writeFileSync(file, JSON.stringify({ description: 'concurrent owner' }))
+
+    expect(() => restoreHookSettingsAfterFailedInstall(snapshot, 'claude'))
+      .toThrow('changed concurrently; refusing rollback')
+    expect(read(file)).toEqual({ description: 'concurrent owner' })
+  })
+
+  it('rolls an earlier provider back exactly when a later provider is contended', () => {
+    const home = temp()
+    const claudePath = hookSettingsPath('global', 'claude', { home })
+    const codexPath = hookSettingsPath('global', 'codex', { home })
+    write(claudePath, { description: 'claude exact' })
+    write(codexPath, { description: 'codex exact' })
+    const claudeBytes = fs.readFileSync(claudePath, 'utf8')
+    const codexBytes = fs.readFileSync(codexPath, 'utf8')
+    fs.chmodSync(claudePath, 0o640)
+    fs.chmodSync(codexPath, 0o600)
+    fs.writeFileSync(`${codexPath}.orchestra.lock`, 'other writer\n', { mode: 0o600 })
+
+    expect(() => installHooks('global', { provider: 'both', roots: { home } }))
+      .toThrow('locked by another writer')
+    expect(fs.readFileSync(claudePath, 'utf8')).toBe(claudeBytes)
+    expect(fs.statSync(claudePath).mode & 0o777).toBe(0o640)
+    expect(fs.readFileSync(codexPath, 'utf8')).toBe(codexBytes)
+  })
+
+  it.skipIf(process.platform === 'win32')('never follows or replaces a provider settings symlink', () => {
+    const root = temp()
+    const target = path.join(root, 'real-settings.json')
+    const link = path.join(root, 'settings.json')
+    fs.writeFileSync(target, '{"description":"outside owner"}\n')
+    fs.symlinkSync(target, link)
+
+    expect(() => installHooks('global', link)).toThrow('regular non-symlink file')
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true)
+    expect(fs.readFileSync(target, 'utf8')).toBe('{"description":"outside owner"}\n')
   })
 })
