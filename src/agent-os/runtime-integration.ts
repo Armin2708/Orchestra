@@ -757,6 +757,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   private readonly pausedJobs = new Set<string>()
   private readonly pendingApprovals = new Map<number, Map<string, Record<string, unknown>>>()
   private readonly managedSubagents = new Map<number, Map<string, string>>()
+  private readonly knowledgeFollowUps = new Map<string, Promise<void>>()
   private readonly deliveries: DeliveryLifecycleIntegration
   private readonly knowledge: KnowledgeRuntimeIntegration
   private scheduler?: JobScheduler
@@ -1409,7 +1410,15 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
   taskAgent(agentId: number, text: string): boolean {
     const control = this.controlForAgent(agentId)
     if (!control?.live || !text) return false
-    void control.live.driver.send(control.live.session.id, text).catch((error) => {
+    const previous = this.knowledgeFollowUps.get(control.sessionId) ?? Promise.resolve()
+    const queued = previous.catch(() => undefined).then(() => this.sendManagedFollowUp(
+      control.job,
+      control.sessionId,
+      control.live!,
+      text,
+    ))
+    this.knowledgeFollowUps.set(control.sessionId, queued)
+    void queued.catch((error) => {
       this.recordDriverEvent(control.job, control.sessionId, {
         sessionId: control.live!.session.id,
         seq: Date.now(),
@@ -1418,8 +1427,75 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         data: error instanceof Error ? error.message : String(error),
         metadata: { control: 'task' },
       })
+    }).finally(() => {
+      if (this.knowledgeFollowUps.get(control.sessionId) === queued) {
+        this.knowledgeFollowUps.delete(control.sessionId)
+      }
     })
     return true
+  }
+
+  private async sendManagedFollowUp(
+    job: Job,
+    sessionId: string,
+    live: LiveJob,
+    text: string,
+  ): Promise<void> {
+    if (this.live.get(job.id)?.session.id !== live.session.id) {
+      throw new ConflictError('the managed provider session changed before follow-up delivery')
+    }
+    const row = this.db.prepare('SELECT context_json FROM agent_sessions WHERE id=?').get(sessionId) as
+      { context_json: string } | undefined
+    const context = parseJson<Record<string, unknown>>(row?.context_json, {})
+    const previousUseId = typeof context.knowledge_context_use_id === 'string'
+      ? context.knowledge_context_use_id
+      : null
+    let knowledge: ManagedKnowledgePrompt | null = null
+    if (previousUseId && this.knowledge.hasSources(job.board_id) && job.card_id) {
+      const workspace = await this.workspaces.get(live.session.workspaceId)
+      const delivery = this.deliveries.reports.currentForJob(job.id)
+      if (workspace && delivery) {
+        const contract = runtimeJobAssignment(job)
+          ? frozenRuntimeContract(job, delivery)
+          : new TaskContractService(this.db).getOrCreate(job.card_id)
+        const repositoryHead = (await git(this.workspaces.root(workspace), ['rev-parse', 'HEAD']))
+          .stdout.trim().toLowerCase()
+        knowledge = this.knowledge.prepareManagedFollowUp({
+          job,
+          contract,
+          delivery,
+          session_id: sessionId,
+          workspace_id: workspace.id,
+          repository_head_sha: repositoryHead,
+          previous_context_use_id: previousUseId,
+          objective: text,
+          created_at: new Date().toISOString(),
+        })
+      }
+    }
+    const prompt = knowledge === null ? text : `${text}\n\n${knowledge.prompt}`
+    try {
+      await live.driver.send(live.session.id, prompt)
+    } catch (error) {
+      if (knowledge) this.finishPreparedKnowledgeUse(job, knowledge, 'failed')
+      throw error
+    }
+    if (!knowledge) return
+    const priorTokens = Number(context.knowledge_context_input_tokens)
+    this.finishKnowledgeUse(
+      job,
+      previousUseId!,
+      'completed',
+      Number.isSafeInteger(priorTokens) && priorTokens >= 0 ? priorTokens : null,
+      sessionId,
+    )
+    context.knowledge_context_use_id = knowledge.context_use_id
+    context.knowledge_context_build_id = knowledge.context_build_id
+    context.knowledge_context_estimated_tokens = knowledge.estimated_tokens
+    context.knowledge_context_input_tokens = knowledge.estimated_tokens
+    context.knowledge_context_manifest_fingerprint = knowledge.manifest_fingerprint
+    this.db.prepare("UPDATE agent_sessions SET context_json=?, updated_at=datetime('now') WHERE id=?")
+      .run(JSON.stringify(context), sessionId)
   }
 
   deliverAgent(agentId: number, message: any): boolean {
@@ -1931,6 +2007,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       sessionContext.knowledge_context_use_id = agentBrief.knowledge.context_use_id
       sessionContext.knowledge_context_build_id = agentBrief.knowledge.context_build_id
       sessionContext.knowledge_context_estimated_tokens = agentBrief.knowledge.estimated_tokens
+      sessionContext.knowledge_context_input_tokens = agentBrief.knowledge.estimated_tokens
       sessionContext.knowledge_context_manifest_fingerprint = agentBrief.knowledge.manifest_fingerprint
     }
     const request = job.provider === 'shell'
@@ -1968,6 +2045,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     let session: DriverSession
     try { session = await driver.launch(request) }
     catch (error) {
+      if (agentBrief?.knowledge) this.finishPreparedKnowledgeUse(job, agentBrief.knowledge, 'failed')
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw error
     }
@@ -1979,6 +2057,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     })
     if (providerBindingError) {
       if (session.id.trim()) await driver.stop(session.id).catch(() => undefined)
+      if (agentBrief?.knowledge) this.finishPreparedKnowledgeUse(job, agentBrief.knowledge, 'failed')
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw new Error(providerBindingError)
     }
@@ -1990,6 +2069,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         }
       } catch (error) {
         await driver.stop(session.id).catch(() => undefined)
+        if (agentBrief?.knowledge) this.finishPreparedKnowledgeUse(job, agentBrief.knowledge, 'failed')
         if (managedAgentId) this.markManagedAgentGone(managedAgentId)
         throw new ConflictError(
           `assigned job workspace was revoked during provider launch: ${
@@ -2001,6 +2081,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     const launchState = this.db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined
     if (launchState?.status !== 'running') {
       await driver.stop(session.id).catch(() => undefined)
+      if (agentBrief?.knowledge) this.finishPreparedKnowledgeUse(job, agentBrief.knowledge, 'cancelled')
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
       throw new Error(`job ${job.id} left the running state while its provider was launching`)
     }
@@ -2129,6 +2210,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       if (job.card_id && Number.isSafeInteger(agentId) && agentId > 0) this.claimCard(job, agentId)
     } catch (error) {
       await driver.stop(session.id).catch(() => undefined)
+      if (agentBrief?.knowledge) this.finishPreparedKnowledgeUse(job, agentBrief.knowledge, 'failed')
       throw error
     }
     this.live.set(job.id, { driver, session })
@@ -2284,26 +2366,36 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         agent_brief_sha256: string | null
       } | undefined
     if (!stored) throw new Error('job disappeared before Agent OS brief persistence')
+    let stablePrompt: string
     if (stored.agent_brief !== null || stored.agent_brief_sha256 !== null) {
       if (stored.agent_brief === null || stored.agent_brief_sha256 === null
         || createHash('sha256').update(stored.agent_brief).digest('hex')
           !== stored.agent_brief_sha256) {
         throw new Error('persisted Agent OS brief evidence is invalid')
       }
-      return { prompt: stored.agent_brief, knowledge: null }
+      stablePrompt = stored.agent_brief
+    } else {
+      const rendered = new OpenWorkService(this.db).renderBrief(job.card_id, {
+        job_id: job.id,
+        delivery_id: delivery.id,
+        workspace_id: job.workspace_id,
+        contract,
+        selection: job.assigned_profile_id ? {
+          profile_id: job.assigned_profile_id,
+          provider: job.provider,
+          model: job.model,
+          access_profile: job.access_profile,
+        } : null,
+      })
+      const persisted = this.db.prepare(`UPDATE jobs
+        SET agent_brief=?, agent_brief_sha256=?
+        WHERE id=? AND agent_brief IS NULL AND agent_brief_sha256 IS NULL`)
+        .run(rendered.agent_brief, rendered.agent_brief_sha256, job.id)
+      if (persisted.changes !== 1) {
+        throw new Error('Agent OS brief persistence raced; retry from the stored job')
+      }
+      stablePrompt = rendered.agent_brief
     }
-    const rendered = new OpenWorkService(this.db).renderBrief(job.card_id, {
-      job_id: job.id,
-      delivery_id: delivery.id,
-      workspace_id: job.workspace_id,
-      contract,
-      selection: job.assigned_profile_id ? {
-        profile_id: job.assigned_profile_id,
-        provider: job.provider,
-        model: job.model,
-        access_profile: job.access_profile,
-      } : null,
-    })
     const knowledge = repositoryHead === null ? null : this.knowledge.prepareManagedJob({
       job,
       contract,
@@ -2311,23 +2403,12 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       session_id: sessionId,
       workspace_id: workspaceId,
       repository_head_sha: repositoryHead,
-      created_at: durableJobTimestamp(job.created_at ?? job.scheduled_at),
+      created_at: new Date().toISOString(),
     })
-    const prompt = knowledge === null
-      ? rendered.agent_brief
-      : `${rendered.agent_brief}\n\n${knowledge.prompt}`
-    const digest = createHash('sha256').update(prompt).digest('hex')
-    if (knowledge === null && digest !== rendered.agent_brief_sha256) {
-      throw new Error('rendered Agent OS brief digest is inconsistent')
+    return {
+      prompt: knowledge === null ? stablePrompt : `${stablePrompt}\n\n${knowledge.prompt}`,
+      knowledge,
     }
-    const persisted = this.db.prepare(`UPDATE jobs
-      SET agent_brief=?, agent_brief_sha256=?
-      WHERE id=? AND agent_brief IS NULL AND agent_brief_sha256 IS NULL`)
-      .run(prompt, digest, job.id)
-    if (persisted.changes !== 1) {
-      throw new Error('Agent OS brief persistence raced; retry from the stored job')
-    }
-    return { prompt, knowledge }
   }
 
   private claimCard(job: Job, agentId: number): void {
@@ -2538,7 +2619,6 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
         job,
         sessionId,
         cancellationWon ? 'cancelled' : failure ? 'failed' : 'completed',
-        accountedTokens,
       )
       this.finalizeManagedAgent(job, sessionId, failure, finalStatus)
     }
@@ -2548,28 +2628,56 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     job: Job,
     sessionId: string,
     outcome: 'completed' | 'failed' | 'cancelled',
-    actualTokens: number,
   ): void {
     const row = this.db.prepare('SELECT context_json FROM agent_sessions WHERE id=?').get(sessionId) as
       { context_json: string } | undefined
     const context = parseJson<Record<string, unknown>>(row?.context_json, {})
     if (typeof context.knowledge_context_use_id !== 'string') return
+    const contextTokens = Number(
+      context.knowledge_context_input_tokens ?? context.knowledge_context_estimated_tokens,
+    )
+    this.finishKnowledgeUse(
+      job,
+      context.knowledge_context_use_id,
+      outcome,
+      Number.isSafeInteger(contextTokens) && contextTokens >= 0 ? contextTokens : null,
+      sessionId,
+    )
+  }
+
+  private finishPreparedKnowledgeUse(
+    job: Job,
+    knowledge: ManagedKnowledgePrompt,
+    outcome: 'failed' | 'cancelled',
+  ): void {
+    this.finishKnowledgeUse(job, knowledge.context_use_id, outcome, null, null)
+  }
+
+  private finishKnowledgeUse(
+    job: Job,
+    contextUseId: string,
+    outcome: 'completed' | 'failed' | 'cancelled',
+    actualTokens: number | null,
+    sessionId: string | null,
+  ): void {
     try {
       this.knowledge.finishManagedJob({
         board_id: job.board_id,
-        context_use_id: context.knowledge_context_use_id,
+        context_use_id: contextUseId,
         outcome,
-        actual_tokens: Number.isSafeInteger(actualTokens) ? actualTokens : null,
+        actual_tokens: outcome === 'completed' ? actualTokens : null,
         completed_at: new Date().toISOString(),
       })
     } catch {
       new AttentionService(this.db).create({
         boardId: job.board_id,
         cardId: job.card_id,
-        kind: `knowledge.context_use_receipt:${context.knowledge_context_use_id}`,
+        kind: `knowledge.context_use_receipt:${contextUseId}`,
         severity: 'high',
         title: 'Knowledge context usage receipt needs repair',
-        detail: `Session ${sessionId} finished without a valid actual-token receipt.`,
+        detail: sessionId === null
+          ? `Provider launch failed without a valid context receipt for job ${job.id}.`
+          : `Session ${sessionId} finished without a valid actual-token receipt.`,
       })
     }
   }
@@ -3213,13 +3321,6 @@ function frozenRuntimeContract(job: Job, delivery: DeliveryReport | null): TaskC
     version: delivery.asked.contract_version,
     updated_at: delivery.asked.contract_updated_at,
   }
-}
-
-function durableJobTimestamp(value: string): string {
-  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`
-  const parsed = new Date(normalized)
-  if (!Number.isFinite(parsed.getTime())) throw new Error('job timestamp is invalid')
-  return parsed.toISOString()
 }
 
 const mapRuntimeJob = (row: Record<string, unknown>): Job => {

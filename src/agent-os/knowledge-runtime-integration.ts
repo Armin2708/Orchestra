@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { KnowledgeCompiler } from './knowledge-compiler.js'
+import { KnowledgeCompiler, KnowledgeCompilerError } from './knowledge-compiler.js'
 import {
   KNOWLEDGE_COMPILER_CONTRACT_VERSION,
   type KnowledgeCompilationRequest,
@@ -7,8 +8,10 @@ import {
 import {
   KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
   KnowledgeContextBridgeService,
+  type AmbientSessionStartBridgeEnvelope,
 } from './knowledge-context-bridges.js'
 import { KnowledgeService } from './knowledge-service.js'
+import { KnowledgeStore } from './knowledge-store.js'
 import { CONTEXT_SECTIONS, type ContextBudget } from './knowledge-types.js'
 import type { DeliveryReport } from './delivery-reports.js'
 import type { Job } from './scheduler.js'
@@ -29,11 +32,13 @@ export class KnowledgeRuntimeIntegration {
   private readonly knowledge: KnowledgeService
   private readonly compiler: KnowledgeCompiler
   private readonly bridge: KnowledgeContextBridgeService
+  private readonly store: KnowledgeStore
 
   constructor(private readonly db: Database.Database) {
     this.knowledge = new KnowledgeService(db)
     this.compiler = new KnowledgeCompiler(this.knowledge, (request) => this.knowledge.retrieve(request))
     this.bridge = new KnowledgeContextBridgeService(db)
+    this.store = new KnowledgeStore(db)
   }
 
   hasSources(boardId: number): boolean {
@@ -68,11 +73,11 @@ export class KnowledgeRuntimeIntegration {
         contract_ref: input.job.card_id === null
           ? null : `card:${input.job.card_id}:v${input.contract.version}`,
         contract_version: input.contract.version,
-        contract_snapshot_sha256: null,
+        contract_snapshot_sha256: deliveryContractSnapshot(input.delivery),
         job_id: input.job.id,
         profile_id: input.job.assigned_profile_id,
         session_id: input.session_id,
-        delivery_report_id: input.delivery.id,
+        delivery_report_id: null,
       },
       repository_key: repositoryKey,
       base_commit_sha: input.repository_head_sha,
@@ -97,7 +102,8 @@ export class KnowledgeRuntimeIntegration {
       previous_context: null,
       created_at: input.created_at,
     }
-    const compiled = this.compiler.compile(request)
+    const compiled = this.compileWithinBudget(request)
+    if (compiled === null) return null
     const envelope = this.bridge.prepareManagedJob(compiled, {
       version: KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
       job_id: input.job.id,
@@ -114,6 +120,155 @@ export class KnowledgeRuntimeIntegration {
       estimated_tokens: envelope.estimated_tokens,
       manifest_fingerprint: envelope.manifest_fingerprint,
     }
+  }
+
+  prepareManagedFollowUp(input: {
+    job: Job
+    contract: TaskContract
+    delivery: DeliveryReport
+    session_id: string
+    workspace_id: string
+    repository_head_sha: string
+    previous_context_use_id: string
+    objective: string
+    created_at: string
+  }): ManagedKnowledgePrompt | null {
+    const previousUse = this.store.getContextUse(input.job.board_id, input.previous_context_use_id)
+    if (previousUse === null || previousUse.job_id !== input.job.id
+      || previousUse.session_id !== input.session_id) return null
+    const previousBuild = this.store.getContextBuild(input.job.board_id, previousUse.context_build_id)
+    if (previousBuild === null) return null
+    const repositoryKey = this.repositoryKey(input.job.board_id, input.repository_head_sha)
+    if (repositoryKey === null || !this.controlsAllowCompilation(
+      input.job.board_id,
+      repositoryKey,
+      input.repository_head_sha,
+    )) return null
+    const request: KnowledgeCompilationRequest = {
+      version: KNOWLEDGE_COMPILER_CONTRACT_VERSION,
+      board_id: input.job.board_id,
+      access_scope: { kind: 'job', job_id: input.job.id },
+      targets: {
+        board_id: input.job.board_id,
+        workspace_id: input.workspace_id,
+        card_id: input.job.card_id,
+        contract_ref: input.job.card_id === null
+          ? null : `card:${input.job.card_id}:v${input.contract.version}`,
+        contract_version: input.contract.version,
+        contract_snapshot_sha256: deliveryContractSnapshot(input.delivery),
+        job_id: input.job.id,
+        profile_id: input.job.assigned_profile_id,
+        session_id: input.session_id,
+        delivery_report_id: null,
+      },
+      repository_key: repositoryKey,
+      base_commit_sha: input.repository_head_sha,
+      task: {
+        objective: input.objective,
+        criteria: input.contract.acceptance_criteria.map((criterion) => ({
+          id: criterion.id,
+          text: criterion.text,
+          required: criterion.required,
+        })),
+        files: [],
+        symbols: [],
+        recent_work: [],
+      },
+      budget: contextBudget(input.job, input.contract),
+      pinned_chunk_ids: this.pinnedChunks(
+        input.job.board_id,
+        repositoryKey,
+        input.repository_head_sha,
+      ),
+      adapter_signals: [],
+      previous_context: {
+        manifest_fingerprint: previousUse.manifest_fingerprint,
+        selected_chunk_ids: previousBuild.entries
+          .filter((entry) => entry.decision === 'selected')
+          .map((entry) => entry.chunk_id),
+      },
+      created_at: input.created_at,
+    }
+    const compiled = this.compileWithinBudget(request)
+    if (compiled === null) return null
+    const ordinal = this.nextInjectionOrdinal(input.job.board_id, input.session_id)
+    const envelope = this.bridge.prepareManagedFollowUp(compiled, {
+      version: KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
+      job_id: input.job.id,
+      session_id: input.session_id,
+      injection_ordinal: ordinal,
+      previous_context_use_id: input.previous_context_use_id,
+      repository_head_sha: input.repository_head_sha,
+      adapter_index_commits: {},
+      checked_at: input.created_at,
+    })
+    return {
+      prompt: envelope.prompt,
+      context_use_id: envelope.context_use.id,
+      context_build_id: envelope.context_build_id,
+      estimated_tokens: envelope.estimated_tokens,
+      manifest_fingerprint: envelope.manifest_fingerprint,
+    }
+  }
+
+  prepareAmbientSessionStart(input: {
+    board_id: number
+    session_id: string
+    workspace_id: string | null
+    repository_head_sha: string
+    objective: string
+    created_at: string
+  }): AmbientSessionStartBridgeEnvelope | null {
+    const repositoryKey = this.repositoryKey(input.board_id, input.repository_head_sha)
+    if (repositoryKey === null || !this.controlsAllowCompilation(
+      input.board_id,
+      repositoryKey,
+      input.repository_head_sha,
+    )) return null
+    const request: KnowledgeCompilationRequest = {
+      version: KNOWLEDGE_COMPILER_CONTRACT_VERSION,
+      board_id: input.board_id,
+      access_scope: { kind: 'session', session_id: input.session_id },
+      targets: {
+        board_id: input.board_id,
+        workspace_id: input.workspace_id,
+        card_id: null,
+        contract_ref: null,
+        contract_version: null,
+        contract_snapshot_sha256: null,
+        job_id: null,
+        profile_id: null,
+        session_id: input.session_id,
+        delivery_report_id: null,
+      },
+      repository_key: repositoryKey,
+      base_commit_sha: input.repository_head_sha,
+      task: {
+        objective: input.objective,
+        criteria: [],
+        files: [],
+        symbols: [],
+        recent_work: [],
+      },
+      budget: fixedContextBudget(12_000),
+      pinned_chunk_ids: this.pinnedChunks(
+        input.board_id,
+        repositoryKey,
+        input.repository_head_sha,
+      ),
+      adapter_signals: [],
+      previous_context: null,
+      created_at: input.created_at,
+    }
+    const compiled = this.compileWithinBudget(request)
+    if (compiled === null) return null
+    return this.bridge.prepareAmbientSessionStart(compiled, {
+      version: KNOWLEDGE_CONTEXT_BRIDGE_CONTRACT_VERSION,
+      session_id: input.session_id,
+      repository_head_sha: input.repository_head_sha,
+      adapter_index_commits: {},
+      checked_at: input.created_at,
+    })
   }
 
   finishManagedJob(input: {
@@ -195,14 +350,33 @@ export class KnowledgeRuntimeIntegration {
       ORDER BY chunk.id LIMIT 128`).all(boardId, repositoryKey, head) as Array<{ id: string }>)
       .map((row) => row.id)
   }
+
+  private compileWithinBudget(request: KnowledgeCompilationRequest) {
+    try {
+      return this.compiler.compile(request)
+    } catch (error) {
+      if (error instanceof KnowledgeCompilerError && error.code === 'budget_exceeded') return null
+      throw error
+    }
+  }
+
+  private nextInjectionOrdinal(boardId: number, sessionId: string): number {
+    const row = this.db.prepare(`SELECT max(injection_ordinal) AS ordinal
+      FROM context_uses WHERE board_id=? AND session_id=?`).get(boardId, sessionId) as
+      { ordinal: number | null }
+    return Math.max(1, (row.ordinal ?? 0) + 1)
+  }
 }
 
 function contextBudget(job: Job, contract: TaskContract): ContextBudget {
-  const remaining = job.budget_tokens === null
-    ? contract.budget_tokens
-    : Math.max(0, job.budget_tokens - job.spent_tokens)
-  const maxTokens = Math.max(2_000, Math.min(12_000, remaining === null
-    ? 12_000 : Math.floor(remaining * 0.2)))
+  const limit = job.budget_tokens ?? contract.budget_tokens
+  const remaining = limit === null ? null : Math.max(0, limit - job.spent_tokens)
+  const maxTokens = Math.min(12_000, remaining === null
+    ? 12_000 : Math.floor(remaining * 0.2))
+  return fixedContextBudget(maxTokens)
+}
+
+function fixedContextBudget(maxTokens: number): ContextBudget {
   const maxCharacters = Math.min(100_000, maxTokens * 8)
   return {
     max_tokens: maxTokens,
@@ -212,4 +386,8 @@ function contextBudget(job: Job, contract: TaskContract): ContextBudget {
       max_characters: maxCharacters,
     }])),
   }
+}
+
+function deliveryContractSnapshot(delivery: DeliveryReport): string {
+  return createHash('sha256').update(JSON.stringify(delivery.asked), 'utf8').digest('hex')
 }
