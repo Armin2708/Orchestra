@@ -14,24 +14,23 @@ const files = [
 ] as const
 
 describe('packaging documentation truthfulness', () => {
-  it('does not advertise the unsafe remote bootstrap as secure pairing', () => {
+  it('documents scoped pairing without reviving master-token bootstrap', () => {
     const readme = read('README.md')
     const remote = read('docs/remote-preview.md')
     const cli = read('src/cli.ts')
 
-    expect(readme).not.toContain('secure tunnel + QR pairing')
-    expect(readme).toContain('not secure device pairing')
+    expect(readme).toContain('one-time, origin-bound pairing QR')
+    expect(readme).toContain('scoped DeviceSession pairing')
     expect(readme).not.toContain('tear the tunnel down')
     expect(cli).not.toContain('expose the board over a secure tunnel and pair your phone')
     expect(cli).not.toContain('tear the tunnel down')
     expect(cli).not.toContain('tunnel down')
-    expect(cli).toContain('not secure device pairing')
+    expect(cli).toContain('secure device pairing')
     expect(cli).toContain('remote stop requested')
-    expect(remote).toContain('reusable master operator bearer')
-    expect(remote.replace(/\s+/g, ' '))
-      .toContain('token bootstrap, not device enrollment or secure pairing')
-    expect(remote).toContain('no per-device revocation')
-    expect(remote).toContain('`REM-GATE` remains open')
+    expect(remote).toContain('never the master')
+    expect(remote).toContain('individually revocable')
+    expect(remote).toContain('REVOKE_ALL_REMOTE_AUTHORITY')
+    expect(remote).toContain('`REM-GATE` is satisfied only by the exact evidence')
   })
 
   it('keeps state retirement recoverable and distinguishes local telemetry', () => {
@@ -58,7 +57,7 @@ describe('packaging documentation truthfulness', () => {
       'daemon.pid',
       '`token`',
       '`agent-token`',
-      'vapid.json',
+      'vapid-reference.json',
       'sessions/*.json',
       'sessions/codex/*.json',
       'remote.json',
@@ -68,13 +67,14 @@ describe('packaging documentation truthfulness', () => {
     }
   })
 
-  it('states that support has no safe diagnostics bundle', () => {
+  it('documents the allowlisted diagnostics bundle without calling it automatically safe', () => {
     const support = read('docs/support-preview.md')
 
     expect(support).toContain('no SLA')
-    expect(support).toContain('no implemented diagnostics-bundle command')
+    expect(support).toContain('orchestra ops diagnostics')
+    expect(support).toContain('Decode and review it before sharing')
     expect(support).toContain('Do not attach or paste')
-    expect(support).toContain('do not satisfy diagnostics-bundle')
+    expect(support).toContain('does not make the following safe')
   })
 
   it('ships the local documentation linked from the packaged README', () => {

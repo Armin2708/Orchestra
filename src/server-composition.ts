@@ -94,7 +94,7 @@ export function composeAgentOsRouteOptions(
       ?? input.agentOs?.jobExecutor?.supportedProviders()
       ?? [],
     globalCapacity: input.agentOs?.globalCapacity ?? configuredGlobalCapacity(),
-    perProfileCapacity: input.agentOs?.perProfileCapacity ?? 1,
+    perProfileCapacity: input.agentOs?.perProfileCapacity ?? configuredPerProfileCapacity(),
     isOperator: input.isOperator,
   }
 }
@@ -102,6 +102,11 @@ export function composeAgentOsRouteOptions(
 function configuredGlobalCapacity(): number {
   const value = Number(process.env.ORCHESTRA_MAX_LAUNCHED ?? 3)
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 3
+}
+
+function configuredPerProfileCapacity(): number {
+  const value = Number(process.env.ORCHESTRA_MAX_PER_PROFILE ?? 1)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1
 }
 
 export function registerAgentOsServerComposition(

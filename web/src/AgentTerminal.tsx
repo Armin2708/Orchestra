@@ -24,6 +24,7 @@ import {
   uniqueSlashCommands,
   type AgentControlPanelName,
 } from './agentTerminalControls'
+import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
 
@@ -236,6 +237,7 @@ function PermissionModeHint({ agentId, profile, onChange, onError }: {
 }
 export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
+  const remoteAccess = useRemoteAccess()
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
@@ -346,12 +348,19 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
   const provider = normalizeProvider(info?.provider ?? agent.provider)
   const capabilities = info?.capabilities ?? agent.capabilities
-  const canAccessProfile = hasAgentCapability(capabilities, 'access_profile', provider)
-  const canSelectModel = hasAgentCapability(capabilities, 'model', provider)
-  const canSetEffort = hasAgentCapability(capabilities, 'effort', provider)
+  const agentResourceId = String(agent.id)
+  const agentControlActive = remoteAccess.canUse('agent-control', 'agent', agentResourceId)
+  const adminActive = remoteAccess.canUse('admin', 'agent', agentResourceId)
+  const canPromptAgent = hired ? agentControlActive : (!remoteAccess.isRemote || (remoteAccess.online && remoteAccess.hasScope('message')))
+  const canAccessProfile = hasAgentCapability(capabilities, 'access_profile', provider) && adminActive
+  const canSelectModel = hasAgentCapability(capabilities, 'model', provider) && agentControlActive
+  const canSetEffort = hasAgentCapability(capabilities, 'effort', provider) && agentControlActive
   const canApprove = hasAgentCapability(capabilities, 'approvals', provider)
-  const canInterrupt = hasAgentCapability(capabilities, 'interrupt', provider)
-  const canStop = hasAgentCapability(capabilities, 'stop', provider)
+    && (!remoteAccess.isRemote || (remoteAccess.online && remoteAccess.hasScope('approve')))
+  const canAllowApproval = (requestId: string) => canApprove
+    && (!remoteAccess.isRemote || remoteAccess.hasStepUp('approve', 'approval', requestId))
+  const canInterrupt = hasAgentCapability(capabilities, 'interrupt', provider) && agentControlActive
+  const canStop = hasAgentCapability(capabilities, 'stop', provider) && agentControlActive
   const accessProfile = resolveAccessProfile(
     info?.accessProfile ?? info?.access_profile ?? agent.access_profile,
     info?.permissionMode,
@@ -519,7 +528,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
   const send = async () => {
     const text = input.trim()
-    if (!text || sending) return
+    if (!text || sending || !canPromptAgent) return
     setSending(true)
     setSubmitError(null)
     setPromptHistory((prev) => prev[prev.length - 1] === text ? prev : [...prev, text].slice(-100))
@@ -637,6 +646,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     decision: 'allow' | 'allow_session' | 'deny' | 'cancel',
     answers?: Record<string, string[]>,
   ) => {
+    if (!canApprove || ((decision === 'allow' || decision === 'allow_session') && !canAllowApproval(requestId))) return
     const path = provider === 'codex'
       ? `/agents/${agent.id}/approvals/${encodeURIComponent(requestId)}`
       : `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`
@@ -703,7 +713,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <span>{agent.name}</span>
             {hired && <ProviderBadge provider={provider} compact />}
             <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
-            {agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
+            {agentControlActive && agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
               <select className="cc-assign" defaultValue=""
                 title="Assign a ticket — the agent gets briefed and starts"
                 aria-label="Assign ticket"
@@ -756,7 +766,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                     {p.approvalKind === 'mcp-elicitation' && p.url && (
                       <p><a className="cc-perm-link" href={p.url} target="_blank" rel="noreferrer noopener">Open the provider sign-in page ↗</a></p>
                     )}
-                    {canApprove && provider === 'codex'
+                    {canAllowApproval(p.id) && provider === 'codex'
                       && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
                       && questionsFor(p).length > 0 ? (
                       <UserInputApproval permission={p}
@@ -764,10 +774,11 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                         onCancel={() => decide(p.id, 'cancel')} />
                     ) : canApprove ? (
                       <div className="cc-perm-actions">
-                        <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow once</button>
-                        {provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
+                        {canAllowApproval(p.id) && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow')}>✓ allow once</button>}
+                        {canAllowApproval(p.id) && provider === 'codex' && p.approvalKind !== 'mcp-elicitation'
                           && <button className="cc-perm-allow" onClick={() => decide(p.id, 'allow_session')}>✓ allow for session</button>}
                         <button className="cc-perm-deny" onClick={() => decide(p.id, 'deny')}>✗ deny</button>
+                        {!canAllowApproval(p.id) && <span className="cc-perm-external">Allow requires an approval-bound step-up. Deny stays available.</span>}
                       </div>
                     ) : <p className="cc-perm-external">Resolve this request in the provider client.</p>}
                   </div>
@@ -784,7 +795,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
 
           <div className="cc-prompt-wrap">
-            {controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
+            {canPromptAgent && controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
               models={info?.models ?? []} legacyModel={info?.model ?? null}
               requestedModel={info && 'requestedModel' in info ? info.requestedModel : undefined}
               resolvedModel={info?.resolvedModel ?? null}
@@ -799,7 +810,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 } : current)
                 onChange()
               }} />}
-            {menuOpen && (
+            {canPromptAgent && menuOpen && (
               <div className="cc-slash-menu" role="listbox" aria-label="Slash commands">
                 {visibleCommands.map((c, i) => (
                   <button type="button" key={`${c.source}:${c.name}`} role="option" aria-selected={i === menuIdx}
@@ -815,13 +826,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 {filtered.length > 10 && <div className="cc-slash-more">… {filtered.length - 10} more — keep typing</div>}
               </div>
             )}
-            <div className="cc-promptbox">
+            {canPromptAgent ? <div className="cc-promptbox">
               <span className="cc-prompt-caret" aria-hidden="true">&gt;</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
                 placeholder=""
                 onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
                 onKeyDown={promptKeys} />
-            </div>
+            </div> : hired ? <RemoteControlGate scope="agent-control" resourceType="agent" resourceId={agentResourceId}
+              label="Agent prompts and lifecycle changes require an explicit agent-control step-up." />
+              : <div className="remote-control-gate" role="note"><span><strong>View-only</strong>Messaging is unavailable while offline or outside this device scope.</span></div>}
             {submitError && <p className="cc-error" role="alert">✗ {submitError}</p>}
           </div>
           <div className="cc-hints">

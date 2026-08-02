@@ -4,25 +4,188 @@ import os from 'node:os'
 import path from 'node:path'
 import webpush from 'web-push'
 import type { FastifyInstance } from 'fastify'
+import {
+  ProtectedCredentialVault,
+  createPlatformCredentialStore,
+  type PlatformCredentialStore,
+  type ProtectedCredentialReference,
+} from './operations/credentials.js'
 
 // mirrors token.ts: no daemon import — push must stay import-cycle-free
 const home = () => process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
 const port = () => Number(process.env.ORCHESTRA_PORT ?? 4750)
-const vapidPath = () => path.join(home(), 'vapid.json')
+const legacyVapidPath = () => path.join(home(), 'vapid.json')
+const vapidReferencePath = () => path.join(home(), 'vapid-reference.json')
 const remotePath = () => path.join(home(), 'remote.json')
 
 export interface VapidKeys { publicKey: string; privateKey: string }
 
-// first run mints the keypair; reusing it keeps existing phone subscriptions valid
-export function ensureVapidKeys(): VapidKeys {
+interface VapidReferenceDocument {
+  schema_version: 1
+  public_key: string
+  private_key: ProtectedCredentialReference
+  retired_private_keys?: ProtectedCredentialReference[]
+}
+
+const validVapidKey = (value: unknown): value is string => (
+  typeof value === 'string' && /^[A-Za-z0-9_-]{40,256}$/u.test(value)
+)
+
+const readVapidReference = (): VapidReferenceDocument | null => {
   try {
-    const k = JSON.parse(fs.readFileSync(vapidPath(), 'utf8'))
-    if (k.publicKey && k.privateKey) return k
-  } catch { /* mint below */ }
-  const k = webpush.generateVAPIDKeys()
-  fs.mkdirSync(home(), { recursive: true })
-  fs.writeFileSync(vapidPath(), JSON.stringify(k) + '\n', { mode: 0o600 })
-  return k
+    const parsed = JSON.parse(fs.readFileSync(vapidReferencePath(), 'utf8')) as VapidReferenceDocument
+    if (parsed.schema_version !== 1 || !validVapidKey(parsed.public_key)
+      || !parsed.private_key || typeof parsed.private_key !== 'object') {
+      throw new Error('VAPID reference document is invalid')
+    }
+    return parsed
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+const persistVapidReference = (document: VapidReferenceDocument): void => {
+  fs.mkdirSync(home(), { recursive: true, mode: 0o700 })
+  const target = vapidReferencePath()
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`
+  const serialized = `${JSON.stringify(document)}\n`
+  try {
+    fs.writeFileSync(temporary, serialized, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, target)
+    fs.chmodSync(target, 0o600)
+    if (fs.readFileSync(target, 'utf8') !== serialized) {
+      throw new Error('VAPID reference document was overwritten during persistence')
+    }
+  } finally {
+    try { fs.unlinkSync(temporary) } catch { /* renamed or absent */ }
+  }
+}
+
+const readLegacyVapidKeys = (): VapidKeys | null => {
+  try {
+    const legacy = fs.lstatSync(legacyVapidPath())
+    if (!legacy.isFile() || legacy.isSymbolicLink()) throw new Error('legacy VAPID path is unsafe')
+    const parsed = JSON.parse(fs.readFileSync(legacyVapidPath(), 'utf8')) as Partial<VapidKeys>
+    if (!validVapidKey(parsed.publicKey) || !validVapidKey(parsed.privateKey)) {
+      throw new Error('legacy VAPID key material is invalid')
+    }
+    return { publicKey: parsed.publicKey, privateKey: parsed.privateKey }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/**
+ * Loads VAPID private material only from a platform credential facility. The application file
+ * contains an opaque expiring reference and public key. A legacy plaintext file is migrated only
+ * after secure persistence succeeds, then removed and verified absent.
+ */
+export async function loadSecureVapidKeys(input: {
+  store?: PlatformCredentialStore
+  clock?: () => Date
+} = {}): Promise<VapidKeys> {
+  const vault = new ProtectedCredentialVault(
+    input.store ?? createPlatformCredentialStore(),
+    'orchestra.vapid',
+    input.clock,
+  )
+  const existing = readVapidReference()
+  if (existing) {
+    const now = (input.clock ?? (() => new Date()))().getTime()
+    const expires = Date.parse(existing.private_key.expires_at)
+    if (!Number.isFinite(now) || !Number.isFinite(expires)) throw new Error('VAPID credential clock is invalid')
+    if (expires <= now) throw new Error('secure VAPID credential reference expired')
+    let material: Uint8Array | undefined
+    let currentKeys: VapidKeys | undefined
+    material = await vault.resolve(existing.private_key)
+    if (material) {
+      try {
+        const privateKey = Buffer.from(material).toString('utf8')
+        if (!validVapidKey(privateKey)) throw new Error('VAPID private key material is invalid')
+        currentKeys = { publicKey: existing.public_key, privateKey }
+        const legacy = readLegacyVapidKeys()
+        if (legacy) {
+          if (legacy.publicKey !== existing.public_key || legacy.privateKey !== privateKey) {
+            throw new Error('legacy VAPID plaintext does not match the secure reference')
+          }
+          fs.unlinkSync(legacyVapidPath())
+          if (fs.existsSync(legacyVapidPath())) throw new Error('legacy VAPID plaintext removal failed')
+        }
+        if (expires - now > 30 * 24 * 60 * 60_000) {
+          if (existing.retired_private_keys?.length) {
+            for (const retired of existing.retired_private_keys) await vault.revoke(retired)
+            persistVapidReference({
+              schema_version: 1,
+              public_key: existing.public_key,
+              private_key: existing.private_key,
+            })
+          }
+          return { publicKey: existing.public_key, privateKey }
+        }
+      } finally {
+        material.fill(0)
+      }
+    }
+    if (!currentKeys) throw new Error('secure VAPID credential is unavailable for rotation')
+    const replacement = currentKeys
+    const replacementBytes = Buffer.from(replacement.privateKey, 'utf8')
+    let replacementReference: ProtectedCredentialReference
+    try {
+      replacementReference = await vault.protect(replacementBytes, 365 * 24 * 60 * 60_000)
+    } finally {
+      replacementBytes.fill(0)
+    }
+    const retired = [existing.private_key, ...(existing.retired_private_keys ?? [])]
+    try {
+      persistVapidReference({
+        schema_version: 1,
+        public_key: replacement.publicKey,
+        private_key: replacementReference,
+        retired_private_keys: retired,
+      })
+    } catch (error) {
+      await vault.revoke(replacementReference).catch(() => undefined)
+      throw error
+    }
+    if (fs.existsSync(legacyVapidPath())) {
+      fs.unlinkSync(legacyVapidPath())
+      if (fs.existsSync(legacyVapidPath())) throw new Error('legacy VAPID plaintext removal failed')
+    }
+    for (const reference of retired) await vault.revoke(reference)
+    persistVapidReference({
+      schema_version: 1,
+      public_key: replacement.publicKey,
+      private_key: replacementReference,
+    })
+    return replacement
+  }
+
+  const legacy = readLegacyVapidKeys()
+  const generated = legacy ?? webpush.generateVAPIDKeys()
+  const material = Buffer.from(generated.privateKey, 'utf8')
+  let reference: ProtectedCredentialReference
+  try {
+    reference = await vault.protect(material, 365 * 24 * 60 * 60_000)
+  } finally {
+    material.fill(0)
+  }
+  try {
+    persistVapidReference({
+      schema_version: 1,
+      public_key: generated.publicKey,
+      private_key: reference,
+    })
+  } catch (error) {
+    await vault.revoke(reference).catch(() => undefined)
+    throw error
+  }
+  if (legacy) {
+    fs.unlinkSync(legacyVapidPath())
+    if (fs.existsSync(legacyVapidPath())) throw new Error('legacy VAPID plaintext removal failed')
+  }
+  return generated
 }
 
 // the tunnel (card #17) writes its public URL here; without it links only work locally
@@ -44,6 +207,7 @@ export interface PushOptions {
   now?: () => number
   cooldownMs?: number
   globalPerMinute?: number
+  vapidKeys?: VapidKeys
 }
 
 const NOTIFY_COLUMNS: Record<string, string> = {
@@ -70,17 +234,19 @@ export function registerPush(server: FastifyInstance, opts: PushOptions = {}) {
     value TEXT NOT NULL
   );
   `)
-  const keys = ensureVapidKeys()
+  const keys = opts.vapidKeys
   const now = opts.now ?? Date.now
   const cooldownMs = opts.cooldownMs ?? 30_000
   const globalPerMinute = opts.globalPerMinute ?? 12
 
-  const sendWebPush = opts.sendWebPush ?? ((sub, payload) =>
-    webpush.sendNotification(
+  const sendWebPush = opts.sendWebPush ?? ((sub, payload) => {
+    if (!keys) throw new Error('secure VAPID credential is unavailable')
+    return webpush.sendNotification(
       { endpoint: sub.endpoint, keys: sub.keys },
       payload,
       { vapidDetails: { subject: 'mailto:orchestra@localhost', publicKey: keys.publicKey, privateKey: keys.privateKey }, TTL: 3600 },
-    ))
+    )
+  })
   const sendNtfy = opts.sendNtfy ?? ((topic, p) =>
     fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
       method: 'POST',
@@ -214,7 +380,9 @@ export function registerPush(server: FastifyInstance, opts: PushOptions = {}) {
   })
 
   // ── routes ──────────────────────────────────────────────────────────────
-  server.get('/api/v1/push/vapid-key', () => ({ key: keys.publicKey }))
+  server.get('/api/v1/push/vapid-key', (_request, reply) => keys
+    ? { key: keys.publicKey }
+    : reply.code(503).send({ error: 'secure push credentials are unavailable' }))
 
   server.post<{ Body: { endpoint: string; keys: { p256dh: string; auth: string } } }>(
     '/api/v1/push/subscribe', (req, reply) => {

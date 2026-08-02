@@ -24,5 +24,14 @@ describe('installable PWA', () => {
     expect(worker).toContain("importScripts('/sw-push.js')")
     expect(worker).toContain("endsWith('/events')")
     expect(worker).toContain('SSE — never intercept')
+    expect(worker).toContain("cache: 'no-store'")
+    expect(worker).not.toContain('orchestra-api-v1')
+  })
+
+  it('ships phone install metadata without a native-app credential handoff', () => {
+    const manifest = JSON.parse(read('public/manifest.webmanifest'))
+    expect(manifest.prefer_related_applications).toBe(false)
+    expect(manifest.display_override).toContain('standalone')
+    expect(manifest.shortcuts.map((shortcut: { name: string }) => shortcut.name)).toEqual(['Messages', 'Needs You'])
   })
 })

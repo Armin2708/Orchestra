@@ -28,12 +28,12 @@ The current source writes the following under `ORCHESTRA_HOME`:
 | `daemon.pid` | Ephemeral daemon process identifier; removed during a graceful shutdown. |
 | `token` | Reusable master operator bearer. Owner-only when created; never attach or paste it into a report. |
 | `agent-token` | Reusable credential scoped for managed-agent API access. Owner-only when created; never attach or paste it into a report. |
-| `vapid.json` | Web Push public/private key pair. The private key is sensitive. |
+| `vapid-reference.json` | Owner-only opaque reference to the Web Push private key held by the platform credential store; it contains no private key bytes. |
 | `sessions/*.json` | Claude hook session bindings, including a per-session bearer and local transcript path metadata. |
 | `sessions/codex/*.json` | Codex hook session bindings with the same sensitivity boundary. |
 | `sessions/**/*.tel` | Temporary local injected-context telemetry spool containing event names and character counts. |
 | `sessions/**/*.throttle`, `sessions/**/*.nudged`, `sessions/**/*.stale` | Ephemeral hook throttle and reminder markers. |
-| `remote.json` | Optional legacy tunnel provider, public URL, process identifier when applicable, and start time. |
+| `remote.json` | Optional verified tunnel provider, public URL, process ownership fingerprint when applicable, and start time. |
 | `cloudflared.log` | Optional Cloudflare quick-tunnel startup output. Treat it as sensitive operational data. |
 
 SQLite stores local injected-context telemetry as event category, character/token estimate, count,
@@ -72,7 +72,7 @@ PID without waiting for process exit. Before moving or copying state:
    sessions closed for the entire backup window.
 3. Before stopping, read and retain the recorded daemon PID from the configured
    `ORCHESTRA_HOME/daemon.pid`; `orchestra stop` removes that file before shutdown is complete.
-4. Stop the legacy remote preview when it was used, then run `orchestra stop`.
+4. Stop verified remote access when it was used, then run `orchestra stop`.
 5. Wait until that exact daemon process has exited. An unreachable `/health` endpoint alone is not
    sufficient because the listener can close before final provider-state persistence finishes.
 6. Poll the configured loopback `/health` endpoint and proceed only after it remains unreachable.
@@ -103,7 +103,8 @@ sessions and hooks quiesced until state has been restored or deliberately retire
 
 - Public package publication, provenance, clean-machine install/upgrade/uninstall, and
   credentialed-provider release journeys remain open gates.
-- The legacy remote path is not secure device pairing; read the [remote preview](remote-preview.md).
-- There is no automated redacted diagnostics bundle; read the [support preview](support-preview.md)
-  before sharing evidence.
+- Remote access uses scoped DeviceSession pairing; read the [remote/mobile beta](remote-preview.md)
+  and use the typed rollback command immediately for a lost device or suspected credential theft.
+- Generate only the allowlisted redacted bundle with `orchestra ops diagnostics <new-file.json.gz>`;
+  review the decoded contents before sharing as described in the [support preview](support-preview.md).
 - A source checkout passing local tests is not, by itself, a release artifact.

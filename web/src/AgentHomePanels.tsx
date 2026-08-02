@@ -33,6 +33,7 @@ import type {
   WorkspaceProcess,
 } from './osApi'
 import { ProcessTerminal } from './ProcessTerminal'
+import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 import { ProviderBadge } from './ProviderBadge'
 
 export type AgentHomeDetailTab = 'work' | 'context' | 'tools' | 'usage' | 'history'
@@ -351,13 +352,18 @@ export function AgentTerminalPanel({
   onRestart: (process: WorkspaceProcess) => void
   onProcessChanged: () => void
 }) {
+  const remoteAccess = useRemoteAccess()
   const [command, setCommand] = useState('')
   const running = process && activeStatuses.has(process.status)
+  const workspaceWritable = Boolean(workspace
+    && remoteAccess.canUse('terminal-write', 'workspace', String(workspace.id)))
+  const processWritable = Boolean(process
+    && remoteAccess.canUse('terminal-write', 'process', String(process.id)))
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     const next = command.trim()
-    if (!next) return
+    if (!next || !workspaceWritable) return
     await onRunCommand(next)
     setCommand('')
   }
@@ -379,15 +385,15 @@ export function AgentTerminalPanel({
           ))}
         </div>
         <div className="ah-panel-actions">
-          <button type="button" onClick={onOpenShell} disabled={!workspace || openingShell}>
+          <button type="button" onClick={onOpenShell} disabled={!workspace || openingShell || !workspaceWritable}>
             <OsIcon name="terminal" size={13} /> {openingShell ? 'Opening…' : 'New shell'}
           </button>
           {process && (running
             ? <>
-                <button type="button" onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button>
-                <button type="button" onClick={() => onSignal(process, 'SIGTERM')}>Stop</button>
+                <button type="button" disabled={!processWritable} onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button>
+                <button type="button" disabled={!processWritable} onClick={() => onSignal(process, 'SIGTERM')}>Stop</button>
               </>
-            : Boolean(process.restartable) && <button type="button" onClick={() => onRestart(process)}>Restart</button>)}
+            : Boolean(process.restartable) && <button type="button" disabled={!processWritable} onClick={() => onRestart(process)}>Restart</button>)}
         </div>
       </header>
       {error && <div className="ah-panel-error" role="alert">{error}</div>}
@@ -397,7 +403,8 @@ export function AgentTerminalPanel({
           detail="Start or attach a managed provider session to bind a recoverable workspace and real terminal." dark />
       )}
       {workspace && <ProcessTerminal process={process} onProcessChanged={onProcessChanged} />}
-      <form className="ah-command" onSubmit={submit}>
+      {workspace && !workspaceWritable ? <RemoteControlGate scope="terminal-write" resourceType="workspace" resourceId={String(workspace.id)}
+        label="Starting a shell or command requires terminal-write plus a workspace-bound step-up." /> : <form className="ah-command" onSubmit={submit}>
         <label htmlFor="ah-command-input">Run in a new PTY</label>
         <div>
           <span aria-hidden="true">$</span>
@@ -408,7 +415,7 @@ export function AgentTerminalPanel({
           </button>
         </div>
         <small>Raw input/output · ANSI and Unicode preserved · no chat summarization</small>
-      </form>
+      </form>}
     </section>
   )
 }

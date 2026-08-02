@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
 
 type Json = Record<string, any>
 
@@ -39,12 +40,13 @@ afterEach(async () => {
 })
 
 describe.sequential('Agent Home real-daemon restart acceptance', () => {
-  it('keeps one durable identity and exactly-once ordered history across restart', async () => {
+  it('recovers two active agents after SIGKILL without duplicate jobs, authority, or history', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'agent-home-daemon-restart-'))
     tempRoots.add(root)
     const orchestraHome = path.join(root, 'orchestra-home')
     const isolatedUserHome = path.join(root, 'user-home')
     const project = path.join(root, 'project')
+    const secondProject = path.join(root, 'project-second-worktree')
     const fakeCodex = path.join(root, 'fake-codex')
     const fakeCodexState = path.join(root, 'fake-codex-state.json')
     mkdirSync(orchestraHome, { recursive: true })
@@ -53,6 +55,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
     copyFileSync(fakeCodexFixture, fakeCodex)
     chmodSync(fakeCodex, 0o755)
     initializeRepository(project)
+    initializeWorktree(project, secondProject)
 
     const port = await freePort()
     const environment = daemonEnvironment({
@@ -90,7 +93,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       {
         name: 'Restart acceptance workspace',
         kind: 'shared',
-        root_path: project,
+        root_path: secondProject,
         idempotency_key: 'restart-acceptance:workspace',
       },
     )).workspace
@@ -144,14 +147,93 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       agent: expect.any(Number),
     })
 
+    const secondCard = (await api(port, token, 'POST', '/api/v1/cards', {
+      board_id: board.id,
+      title: 'Prove second active Agent Home recovery',
+      description: 'Keep a second authority and transcript isolated across SIGKILL.',
+      paths: [],
+    })).card
+    const secondWorkspace = (await api(
+      port,
+      token,
+      'POST',
+      `/api/v1/os/boards/${board.id}/workspaces`,
+      {
+        name: 'Second restart acceptance workspace',
+        kind: 'shared',
+        root_path: project,
+        idempotency_key: 'restart-acceptance:workspace:second',
+      },
+    )).workspace
+    const secondLaunch = await api(
+      port,
+      token,
+      'POST',
+      `/api/v1/os/boards/${board.id}/jobs`,
+      {
+        card_id: secondCard.id,
+        workspace_id: secondWorkspace.id,
+        provider: 'codex',
+        model: 'gpt-restart-fake',
+        idempotency_key: 'restart-acceptance:launch:second',
+      },
+      { 'idempotency-key': 'restart-acceptance:launch:second' },
+    )
+    expect(secondLaunch).toMatchObject({
+      mode: 'canonical',
+      job: { provider: 'codex' },
+    })
+    expect(['queued', 'running']).toContain(secondLaunch.job.status)
+    await waitFor('second job and session activation', async () => {
+      const job = await boardJob(port, token, board.id, secondLaunch.job.id)
+      const session = (await api(
+        port,
+        token,
+        'GET',
+        `/api/v1/os/sessions/${encodeURIComponent(secondLaunch.session.id)}`,
+      )).session
+      const active = job.status === 'running' && session.status === 'running'
+        && typeof session.agent_id === 'number'
+        && typeof session.profile_id === 'string'
+        && typeof session.conversation_id === 'string'
+      if (!active) throw new Error(JSON.stringify({ job, session }))
+      return true
+    }, 15_000)
+    const secondSessionBefore = (await api(
+      port,
+      token,
+      'GET',
+      `/api/v1/os/sessions/${encodeURIComponent(secondLaunch.session.id)}`,
+    )).session
+    const secondIds = {
+      job: secondLaunch.job.id as string,
+      workspace: secondLaunch.workspace.id as string,
+      session: secondLaunch.session.id as string,
+      profile: secondSessionBefore.profile_id as string,
+      conversation: secondSessionBefore.conversation_id as string,
+      agent: secondSessionBefore.agent_id as number,
+    }
+    expect(secondIds.agent).not.toBe(ids.agent)
+    expect(secondIds.session).not.toBe(ids.session)
+    expect(secondIds.workspace).not.toBe(ids.workspace)
+
     await waitFor('pre-restart transcript event', async () => {
       const events = await conversationEvents(port, token, ids.conversation)
+      return events.some((event) => event.projected_text === 'persisted before daemon restart')
+    })
+    await waitFor('second pre-restart transcript event', async () => {
+      const events = await conversationEvents(port, token, secondIds.conversation)
       return events.some((event) => event.projected_text === 'persisted before daemon restart')
     })
     const beforeRestart = await conversationEvents(port, token, ids.conversation)
     assertExactlyOnceOrdering(beforeRestart)
     expect(nativeMethodCount(beforeRestart, 'item/agentMessage/delta')).toBe(1)
     expect(beforeRestart.filter(
+      (event) => event.projected_text === 'persisted before daemon restart',
+    )).toHaveLength(1)
+    const secondBeforeRestart = await conversationEvents(port, token, secondIds.conversation)
+    assertExactlyOnceOrdering(secondBeforeRestart)
+    expect(secondBeforeRestart.filter(
       (event) => event.projected_text === 'persisted before daemon restart',
     )).toHaveLength(1)
 
@@ -180,7 +262,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       (event: Json) => event.job_id === ids.job,
     )).toBe(true)
 
-    await stopDaemon(daemon)
+    await stopDaemon(daemon, true)
     activeDaemons.delete(daemon)
     await waitFor('daemon port release', () => portAvailable(port))
 
@@ -188,8 +270,8 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
     expect(readFileSync(tokenPath, 'utf8').trim()).toBe(token)
     await waitFor('provider thread resume', () => {
       const fakeState = readFakeCodexState(fakeCodexState)
-      return fakeState.calls.filter((call: Json) => call.method === 'thread/resume').length === 1
-        && fakeState.calls.filter((call: Json) => call.method === 'thread/read').length === 1
+      return fakeState.calls.filter((call: Json) => call.method === 'thread/resume').length === 2
+        && fakeState.calls.filter((call: Json) => call.method === 'thread/read').length === 2
     })
 
     const jobAfterRestart = await boardJob(port, token, board.id, ids.job)
@@ -243,6 +325,44 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
         job: { id: ids.job },
       },
     })
+    expect(await boardJob(port, token, board.id, secondIds.job)).toMatchObject({
+      id: secondIds.job,
+      workspace_id: secondIds.workspace,
+      status: 'running',
+    })
+    expect((await api(
+      port,
+      token,
+      'GET',
+      `/api/v1/os/sessions/${encodeURIComponent(secondIds.session)}`,
+    )).session).toMatchObject({
+      id: secondIds.session,
+      workspace_id: secondIds.workspace,
+      profile_id: secondIds.profile,
+      conversation_id: secondIds.conversation,
+      job_id: secondIds.job,
+      agent_id: secondIds.agent,
+      provider_thread_id: 'restart-thread-2',
+      status: 'running',
+    })
+    const recoveredDb = new Database(path.join(orchestraHome, 'orchestra.db'), { readonly: true })
+    try {
+      expect(recoveredDb.prepare('SELECT count(*) AS count FROM jobs WHERE board_id=?').get(board.id))
+        .toEqual({ count: 2 })
+      expect(recoveredDb.prepare(`SELECT count(*) AS count FROM agent_sessions
+        WHERE status IN ('starting','running','idle')`).get()).toEqual({ count: 2 })
+      expect(recoveredDb.prepare(`SELECT count(DISTINCT agent_id) AS count FROM agent_sessions
+        WHERE status IN ('starting','running','idle')`).get()).toEqual({ count: 2 })
+      expect(recoveredDb.prepare(`SELECT count(*) AS count FROM agent_sessions session
+        LEFT JOIN jobs job ON job.id=session.job_id
+        WHERE session.status IN ('starting','running','idle')
+          AND (job.id IS NULL OR job.status NOT IN ('running','cancelling'))`).get())
+        .toEqual({ count: 0 })
+      expect(recoveredDb.prepare(`SELECT count(*) AS count FROM daemon_leases
+        WHERE name='orchestra-daemon'`).get()).toEqual({ count: 1 })
+    } finally {
+      recoveredDb.close()
+    }
 
     const continuation = await api(
       port,
@@ -260,6 +380,22 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
         session_id: ids.session,
       },
     })
+    const secondContinuation = await api(
+      port,
+      token,
+      'POST',
+      `/api/v1/agents/${secondIds.agent}/task`,
+      { text: 'Continue the second agent after the tested daemon SIGKILL.' },
+    )
+    expect(secondContinuation).toMatchObject({
+      ok: true,
+      mode: 'canonical',
+      orchestration: {
+        job_id: secondIds.job,
+        workspace_id: secondIds.workspace,
+        session_id: secondIds.session,
+      },
+    })
 
     await waitFor('post-restart continuation', async () => {
       const events = await conversationEvents(port, token, ids.conversation)
@@ -268,6 +404,14 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
     })
     await waitFor('canonical job completion', async () => {
       return (await boardJob(port, token, board.id, ids.job)).status === 'succeeded'
+    })
+    await waitFor('second post-restart continuation', async () => {
+      const events = await conversationEvents(port, token, secondIds.conversation)
+      return events.some((event) => event.projected_text === 'continued after daemon restart')
+        && nativeMethodCount(events, 'turn/completed') === 1
+    })
+    await waitFor('second canonical job completion', async () => {
+      return (await boardJob(port, token, board.id, secondIds.job)).status === 'succeeded'
     })
 
     const finalEvents = await conversationEvents(port, token, ids.conversation)
@@ -285,6 +429,19 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
     expect(finalEvents.every(
       (event) => event.provider_thread_id === 'restart-thread-1',
     )).toBe(true)
+    const secondFinalEvents = await conversationEvents(port, token, secondIds.conversation)
+    assertExactlyOnceOrdering(secondFinalEvents)
+    expect(secondFinalEvents.filter(
+      (event) => event.projected_text === 'persisted before daemon restart',
+    )).toHaveLength(1)
+    expect(secondFinalEvents.filter(
+      (event) => event.projected_text === 'continued after daemon restart',
+    )).toHaveLength(1)
+    expect(nativeMethodCount(secondFinalEvents, 'item/agentMessage/delta')).toBe(2)
+    expect(nativeMethodCount(secondFinalEvents, 'turn/completed')).toBe(1)
+    expect(secondFinalEvents.every(
+      (event) => event.provider_thread_id === 'restart-thread-2',
+    )).toBe(true)
 
     const finalSession = (await api(
       port,
@@ -301,14 +458,43 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       agent_id: ids.agent,
       status: 'stopped',
     })
+    expect((await api(
+      port,
+      token,
+      'GET',
+      `/api/v1/os/sessions/${encodeURIComponent(secondIds.session)}`,
+    )).session).toMatchObject({
+      id: secondIds.session,
+      job_id: secondIds.job,
+      agent_id: secondIds.agent,
+      status: 'stopped',
+    })
 
     const fakeState = readFakeCodexState(fakeCodexState)
     expect(fakeState.boots).toBe(2)
-    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/start')).toHaveLength(1)
-    expect(fakeState.calls.filter((call: Json) => call.method === 'turn/start')).toHaveLength(1)
-    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/resume')).toHaveLength(1)
-    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/read')).toHaveLength(1)
-    expect(fakeState.calls.filter((call: Json) => call.method === 'turn/steer')).toHaveLength(1)
+    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/start')).toHaveLength(2)
+    expect(fakeState.calls.filter((call: Json) => call.method === 'turn/start')).toHaveLength(2)
+    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/resume')).toHaveLength(2)
+    expect(fakeState.calls.filter((call: Json) => call.method === 'thread/read')).toHaveLength(2)
+    expect(fakeState.calls.filter((call: Json) => call.method === 'turn/steer')).toHaveLength(2)
+
+    const completedDb = new Database(path.join(orchestraHome, 'orchestra.db'), { readonly: true })
+    try {
+      expect(completedDb.prepare('SELECT count(*) AS count FROM jobs WHERE board_id=?').get(board.id))
+        .toEqual({ count: 2 })
+      expect(completedDb.prepare('SELECT count(*) AS count FROM agent_sessions').get())
+        .toEqual({ count: 2 })
+      expect(completedDb.prepare(`SELECT count(*) AS count FROM agent_sessions
+        WHERE status IN ('starting','running','idle','reserved')`).get()).toEqual({ count: 0 })
+      expect(completedDb.prepare("SELECT count(*) AS count FROM processes WHERE status='lost'").get())
+        .toEqual({ count: 0 })
+      expect(completedDb.prepare(`SELECT count(*) AS count FROM workspace_assignments
+        WHERE status IN ('active','reserved')`).get()).toEqual({ count: 0 })
+      expect(completedDb.prepare(`SELECT count(*) AS count FROM daemon_leases
+        WHERE name='orchestra-daemon'`).get()).toEqual({ count: 1 })
+    } finally {
+      completedDb.close()
+    }
 
     await stopDaemon(daemon)
     activeDaemons.delete(daemon)
@@ -334,7 +520,8 @@ function daemonEnvironment(input: {
     NODE_ENV: 'test',
     ORCHESTRA_HOME: input.orchestraHome,
     ORCHESTRA_PORT: String(input.port),
-    ORCHESTRA_MAX_LAUNCHED: '1',
+    ORCHESTRA_MAX_LAUNCHED: '2',
+    ORCHESTRA_MAX_PER_PROFILE: '2',
     ORCHESTRA_CANONICAL_LAUNCH: '1',
     ORCHESTRA_CODEX_COMMAND: input.fakeCodex,
     ORCHESTRA_CODEX_FORWARD_ENV: 'FAKE_CODEX_STATE',
@@ -399,7 +586,7 @@ async function stopDaemon(handle: DaemonHandle, force = false): Promise<void> {
   }
   if (processGroupExists(pid)) {
     killProcessGroup(pid, 'SIGTERM')
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 50))
     if (processGroupExists(pid)) killProcessGroup(pid, 'SIGKILL')
   }
   activeDaemons.delete(handle)
@@ -556,6 +743,21 @@ function initializeRepository(directory: string): void {
   }
 }
 
+function initializeWorktree(repository: string, destination: string): void {
+  const result = spawnSync('git', ['worktree', 'add', '--detach', destination, 'HEAD'], {
+    cwd: repository,
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH,
+      HOME: repository,
+      GIT_CONFIG_NOSYSTEM: '1',
+    },
+  })
+  if (result.status !== 0) {
+    throw new Error(`git worktree add failed: ${result.stderr || result.stdout}`)
+  }
+}
+
 async function freePort(): Promise<number> {
   const server = net.createServer()
   await new Promise<void>((resolve, reject) => {
@@ -598,7 +800,7 @@ async function waitFor(
     } catch (error) {
       lastError = error
     }
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   const detail = lastError instanceof Error ? `: ${lastError.message}` : ''
   throw new Error(`timed out waiting for ${description}${detail}`)
