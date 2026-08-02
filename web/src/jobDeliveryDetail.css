@@ -1,0 +1,166 @@
+.job-delivery-detail {
+  --jd-ink: #24221e;
+  --jd-muted: #716c63;
+  --jd-line: #ded8ce;
+  --jd-paper: #fbfaf6;
+  --jd-warm: #f2eee5;
+  color: var(--jd-ink);
+  display: grid;
+  gap: 24px;
+  margin: 0 auto;
+  max-width: 1440px;
+  padding: 28px;
+}
+
+.job-delivery-heading,
+.job-delivery-heading dl,
+.job-delivery-comparison,
+.job-delivery-proof-grid,
+.job-delivery-audit-grid {
+  display: grid;
+}
+
+.job-delivery-heading {
+  align-items: end;
+  border-bottom: 1px solid var(--jd-line);
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-bottom: 18px;
+}
+
+.job-delivery-heading p,
+.job-delivery-ledger > header p,
+.job-delivery-audit-grid > section > header p {
+  color: var(--jd-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  margin: 0 0 5px;
+  text-transform: uppercase;
+}
+
+.job-delivery-heading h2,
+.job-delivery-heading dl,
+.job-delivery-ledger h3,
+.job-delivery-audit-grid h3 {
+  margin: 0;
+}
+
+.job-delivery-heading h2 { font-size: clamp(26px, 4vw, 44px); letter-spacing: -.04em; }
+.job-delivery-heading dl { gap: 8px; grid-template-columns: repeat(3, minmax(110px, 1fr)); }
+.job-delivery-heading dl div,
+.job-delivery-contract-facts div {
+  background: var(--jd-warm);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.job-delivery-detail dt { color: var(--jd-muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.job-delivery-detail dd { font-size: 13px; font-weight: 650; margin: 3px 0 0; overflow-wrap: anywhere; }
+
+.job-delivery-comparison { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.job-delivery-comparison > article {
+  background: var(--jd-paper);
+  border: 1px solid var(--jd-line);
+  min-width: 0;
+  padding: 24px;
+}
+.job-delivery-comparison > article:first-child { border-radius: 12px 0 0 12px; }
+.job-delivery-comparison > article:last-child { border-left: 0; border-radius: 0 12px 12px 0; }
+.job-delivery-comparison > article > header { border-bottom: 1px solid var(--jd-line); margin-bottom: 18px; padding-bottom: 14px; }
+.job-delivery-comparison > article > header span { color: #85745a; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.job-delivery-comparison h3 { font-size: 22px; margin: 4px 0 0; }
+.job-delivery-comparison h4,
+.job-delivery-proof-grid h4 { align-items: center; display: flex; font-size: 12px; gap: 7px; letter-spacing: .04em; margin: 20px 0 10px; text-transform: uppercase; }
+.job-delivery-comparison code,
+.job-delivery-proof-grid code { background: #ece7dc; border-radius: 5px; display: block; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 6px; overflow-wrap: anywhere; padding: 8px 10px; white-space: pre-wrap; }
+
+.job-delivery-objective { background: #eee9df; border-radius: 8px; padding: 15px; }
+.job-delivery-objective small { color: var(--jd-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.job-delivery-objective p { font-size: 16px; line-height: 1.55; margin: 5px 0 0; }
+
+.job-delivery-promises,
+.job-delivery-outcomes,
+.job-delivery-audit-grid ol,
+.job-delivery-claims ul,
+.job-delivery-gaps ul { list-style: none; margin: 0; padding: 0; }
+.job-delivery-promises { display: grid; gap: 7px; }
+.job-delivery-promises > li { align-items: start; border-bottom: 1px solid var(--jd-line); display: grid; gap: 10px; grid-template-columns: 24px 1fr; padding: 8px 0; }
+.job-delivery-promises > li > span { align-items: center; background: #e5ded0; border-radius: 50%; display: flex; font-size: 10px; height: 24px; justify-content: center; }
+.job-delivery-promises p { line-height: 1.45; margin: 1px 0; }
+.job-delivery-promises small { color: var(--jd-muted); display: block; font-size: 10px; margin-top: 3px; text-transform: uppercase; }
+
+.job-delivery-outcomes { display: grid; gap: 8px; }
+.job-delivery-outcomes > li { border: 1px solid var(--jd-line); border-left: 3px solid #b8aa91; border-radius: 7px; padding: 11px; }
+.job-delivery-outcomes > li[data-status="met"],
+.job-delivery-outcomes > li[data-status="accepted"],
+.job-delivery-outcomes > li[data-status="verified"] { border-left-color: #568064; }
+.job-delivery-outcomes > li[data-status="missed"],
+.job-delivery-outcomes > li[data-status="rejected"] { border-left-color: #a95d55; }
+.job-delivery-outcomes > li > div { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+.job-delivery-outcomes p { line-height: 1.45; margin: 0; }
+.job-delivery-outcomes > li > div > span { background: #ebe5d9; border-radius: 999px; flex: none; font-size: 10px; font-weight: 700; padding: 4px 7px; text-transform: uppercase; }
+.job-delivery-outcomes small { color: var(--jd-muted); display: block; margin-top: 7px; }
+.job-delivery-outcomes ul { margin: 8px 0 0; padding-left: 18px; }
+.job-delivery-outcomes aside { background: #f4e8cf; border-radius: 6px; margin-top: 9px; padding: 9px; }
+
+.job-delivery-contract-facts { display: grid; gap: 7px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px 0 0; }
+.job-delivery-claims,
+.job-delivery-gaps,
+.job-delivery-regression { border-radius: 8px; margin-top: 14px; padding: 13px; }
+.job-delivery-claims { background: #ece8e0; }
+.job-delivery-gaps,
+.job-delivery-regression { background: #f2e4df; }
+.job-delivery-claims h4,
+.job-delivery-gaps h4 { margin-top: 0; }
+.job-delivery-claims li,
+.job-delivery-gaps li { line-height: 1.45; padding: 3px 0; }
+
+.job-delivery-ledger,
+.job-delivery-audit-grid > section { border: 1px solid var(--jd-line); border-radius: 12px; padding: 22px; }
+.job-delivery-proof-grid,
+.job-delivery-audit-grid { gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.job-delivery-proof-grid > section > h4 { justify-content: space-between; }
+.job-delivery-proof-grid > section > h4 span { background: #e9e2d6; border-radius: 999px; padding: 3px 7px; }
+.job-delivery-proof-grid article,
+.job-delivery-audit-grid li { background: var(--jd-paper); border: 1px solid var(--jd-line); border-radius: 8px; margin-top: 8px; padding: 12px; }
+.job-delivery-proof-grid article > p,
+.job-delivery-audit-grid li > p { color: var(--jd-muted); line-height: 1.45; margin: 5px 0; overflow-wrap: anywhere; }
+.job-delivery-proof-grid dl { margin-bottom: 0; }
+.job-delivery-proof-grid dl div { border-top: 1px solid var(--jd-line); display: grid; gap: 8px; grid-template-columns: 100px 1fr; padding: 7px 0; }
+.job-delivery-proof-grid dl code { background: transparent; display: inline; margin: 0; padding: 0; }
+.job-delivery-run-result,
+.job-delivery-audit-grid li > div { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.job-delivery-run-result strong { color: #568064; }
+.job-delivery-run-result[data-result="fail"] strong { color: #a95d55; }
+.job-delivery-detail time { color: var(--jd-muted); font-size: 11px; }
+.job-delivery-audit-grid li small { color: var(--jd-muted); line-height: 1.45; overflow-wrap: anywhere; }
+
+.job-delivery-empty { color: var(--jd-muted); font-style: italic; margin: 9px 0; }
+
+.job-delivery-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.job-delivery-filters button { background: transparent; border: 1px solid var(--jd-line, #ded8ce); border-radius: 999px; color: inherit; cursor: pointer; padding: 7px 11px; }
+.job-delivery-filters button[aria-pressed="true"] { background: #24221e; border-color: #24221e; color: #fbfaf6; }
+.job-delivery-filters button span { margin-left: 6px; opacity: .7; }
+
+@media (max-width: 820px) {
+  .job-delivery-detail { padding: 16px; }
+  .job-delivery-heading,
+  .job-delivery-comparison,
+  .job-delivery-proof-grid,
+  .job-delivery-audit-grid { grid-template-columns: 1fr; }
+  .job-delivery-heading dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .job-delivery-comparison > article:first-child { border-radius: 12px 12px 0 0; }
+  .job-delivery-comparison > article:last-child { border-left: 1px solid var(--jd-line); border-radius: 0 0 12px 12px; border-top: 0; }
+}
+
+@media (max-width: 520px) {
+  .job-delivery-heading dl,
+  .job-delivery-contract-facts { grid-template-columns: 1fr; }
+  .job-delivery-comparison > article,
+  .job-delivery-ledger,
+  .job-delivery-audit-grid > section { padding: 16px; }
+  .job-delivery-outcomes > li > div,
+  .job-delivery-run-result,
+  .job-delivery-audit-grid li > div { align-items: flex-start; flex-direction: column; gap: 6px; }
+}
