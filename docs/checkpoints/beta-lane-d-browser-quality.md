@@ -33,7 +33,10 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   count. Its keyboard branch contains no pointer activation or programmatic focus acquisition.
 - Interaction readiness requires two consecutive observations with a 4-second bound, while async
   render/page readiness has a separate 10-second bound. All three retained runs completed with the
-  same 55 honest quality findings instead of flaking on the former 750 ms deadline.
+  same 49 honest quality findings instead of flaking on the former 750 ms deadline.
+- The performance sampler rejects `pointer.passed !== true`. CDP-native
+  `DOM.scrollIntoViewIfNeeded` plus content-quad coordinates made all 27 retained graph,
+  transcript and search pointer samples complete successfully across the three runs.
 - Navigation attempts hit-tested mouse/touch and keyboard activation before its deterministic DOM
   fallback. Search types through DevTools keyboard events and exercises the real React form/search
   flow. The interaction method and any fallback remain visible in source and evidence.
@@ -74,27 +77,25 @@ slow run:
 
 Each checked budget is the lower of its experience ceiling and the regression bound
 `max(2 × observed p95, observed p95 + 150 ms)`. The retained baseline digest is
-`aed64e9907f0059ac5f7cf817e07e4fc53eac04d8323d45a6434da52bf06cb0b`.
+`15ffa3c99caeb65bfb2f635661dec43984dde4ac3fe6b755187e728449ced644`.
 
 Retained observation evidence/file digests:
 
 | Observation | Evidence SHA-256 | File SHA-256 |
 |---|---|---|
-| 1 | `f2301fe15e0d2aa6e785aa1dde22abf6fbaaf4ce74f04625e06fc52514adfbbf` | `57787b833431618227b97132a6a4fac6743b096eb0aee11b982ecf480eb704bc` |
-| 2 | `10afd56e73dbdf38c20677a5bc121f0b039ce509353bcccb245dc87d65cb7f29` | `bd5599328ad62d043c7dd2b75a62e9b02e177d2d290391344961a4d54a0cf79a` |
-| 3 | `594d6556d5b3c2def5d02a2dd75da9a79701d302ddbf04aed9faf59f4cfe8413` | `055560f61a92c5a253431074e3d495cb3388a0d10a1d538e4d5ad159f5bc281d` |
+| 1 | `82303fd24ff54128aa41d26b79d74dbda5a7242afade26afb89c3d431f950d77` | `540122a6beda311ee355b2ee9ebf5a2d39abd47e8e899b6f64a54176068ec117` |
+| 2 | `06bbcf235bc0c9a824dedadb109f7bb68278238b510f11d677b8c8edb8e1cb4a` | `ac42bedce00bf36e88ab03b90e77317bc8cb3034c5b0330b7d73fd8000eef560` |
+| 3 | `eeb39a34c0a74b0edc84b54dd674a81d581ee1ef78eb2c7c0b7699f5bbbb5a21` | `b4b73d3357395121883b996b90045cd38ed723a39b1d6491037e2764c825e554` |
 
 The regenerated baseline recomputes these p95/budget pairs directly from the three retained runs:
 
 | Viewport | Startup | Snapshot | Transcript | Graph | Search |
 |---|---:|---:|---:|---:|---:|
-| Desktop | 90 / 241 ms | 395 / 791 ms | 530 / 1,061 ms | 423 / 847 ms | 616 / 750 ms |
-| Tablet | 260 / 520 ms | 574 / 1,148 ms | 616 / 1,232 ms | 460 / 920 ms | 917 / 750 ms |
-| Phone | 76 / 226 ms | 913 / 1,826 ms | 574 / 1,149 ms | 600 / 1,000 ms | 180 / 361 ms |
+| Desktop | 88 / 238 ms | 382 / 764 ms | 658 / 1,317 ms | 393 / 787 ms | 606 / 750 ms |
+| Tablet | 83 / 233 ms | 393 / 786 ms | 657 / 1,314 ms | 540 / 1,000 ms | 669 / 750 ms |
+| Phone | 76 / 226 ms | 339 / 678 ms | 641 / 1,283 ms | 446 / 892 ms | 565 / 750 ms |
 
-The tablet search observation exceeded the 750 ms product ceiling in one retained run; the checked
-exact-head reruns therefore remain authoritative for the current-run performance result, while the
-baseline preserves that outlier rather than normalizing it away. The final integrator must
+All retained p95 values remain within their explicit product ceilings. The final integrator must
 regenerate the build manifest and evidence at the exact integrated HEAD.
 
 ## Honest accessibility/browser findings

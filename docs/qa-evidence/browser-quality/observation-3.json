@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "captured_at": "2026-08-02T09:51:43.406Z",
+  "captured_at": "2026-08-02T10:08:52.527Z",
   "backlog_items": [
     "QA-013",
     "QA-014",
@@ -14,18 +14,18 @@
   },
   "source": {
     "repository": "agentboard-beta-release-browser",
-    "commit": "16b4c07832cb31d0970ddc4ab873ccdf160937b9",
+    "commit": "d05b5fa49f2a2dc4d6444b3a57d685ef0a6f02bf",
     "node": "22.20.0",
     "artifact_identity": {
       "root_dist_sha256": "24f5841f314b1b9240ff34c3519c568e76fbbce300a23ec43b371f29a36a8d84",
       "web_dist_sha256": "9c73c5dac73fa0534b097e25201ec878774930d0efe406844ba1d4806a668112"
     },
-    "build_manifest_sha256": "228aa4e75d92d473fd83a622d970652c10069bc58fd126699c8a39c55c2e4c21"
+    "build_manifest_sha256": "da4be8f161b41d4c6339439790c105b1ba729df68b3d0b93c8e4c5c93ddc0abb"
   },
   "scenario": {
     "board_id": 1,
-    "profile_id": "d94102f8-5bc3-4f52-a174-48e4a2ad7cb6",
-    "session_id": "bc88a186-e788-43e9-8d37-11b1ccc55e6d",
+    "profile_id": "76f103a7-c694-497d-ad7a-df8ca9b485f6",
+    "session_id": "a9b73873-b552-40a0-a288-6530d1716aa2",
     "transcript_events": 250,
     "graph_agents": 18,
     "fixture_transport": "authenticated public APIs only"
@@ -49,14 +49,14 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 404.0591250000002,
+          "elapsed_ms": 378.2784580000002,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 404.0591250000002,
+              "elapsed_ms": 378.2784580000002,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -68,7 +68,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4006.799,
+              "elapsed_ms": 4036.2266250000002,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -80,7 +80,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 45.81995899999947,
+              "elapsed_ms": 48.21612499999901,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -346,15 +346,15 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 511.31508399999984,
+          "elapsed_ms": 650.9902919999986,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 511.31508399999984,
-              "error": "could not hit-test Load more matching events",
+              "elapsed_ms": 650.9902919999986,
+              "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
               "counts_toward_pass": true,
@@ -365,7 +365,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10031.350125,
+              "elapsed_ms": 10003.313166,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -377,7 +377,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 320.2681250000023,
+              "elapsed_ms": 277.5495840000003,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -397,19 +397,19 @@
               "passed": true,
               "checked": 11,
               "focus_order": [
+                "board-tab-messages",
+                "board-tab-workspace",
+                "board-tab-timeline",
+                "board-tab-shipped",
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-47b03437-450e-4d2b-917b-7a87dc8d73fcGeneral agentrunning · managedCodex",
-                "pause",
-                "stop",
-                "More session actions including lifecycle controls",
-                "Copy exact Agent Home link",
-                "Refresh Agent Home"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                "pause"
               ],
               "reverse_focus_order": [
-                "Copy exact Agent Home link",
-                "More session actions including lifecycle controls",
-                "stop"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                null,
+                "Create durable agent"
               ],
               "activation": {
                 "supported": true,
@@ -421,7 +421,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 5638,
+              "checked": 5636,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -741,14 +741,14 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 569.4289590000008,
+          "elapsed_ms": 605.567500000001,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 569.4289590000008,
+              "elapsed_ms": 605.567500000001,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "pointer"
@@ -762,7 +762,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10164.852375000002,
+              "elapsed_ms": 10156.569499999998,
               "error": "five rendered search results readiness did not pass",
               "action_evidence": {
                 "focus_acquisition": "tab_navigation",
@@ -778,7 +778,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 261.6724580000009,
+              "elapsed_ms": 258.21883300000263,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -853,7 +853,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 550,
+              "checked": 548,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -1173,14 +1173,14 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 202.2998329999973,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 201.80895800000144,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 202.2998329999973,
+              "elapsed_ms": 201.80895800000144,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -1192,7 +1192,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4015.7912499999984,
+              "elapsed_ms": 4042.1652920000015,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -1204,7 +1204,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 44.71229199999652,
+              "elapsed_ms": 44.23512499999924,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -1421,14 +1421,14 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 197.3179170000003,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 199.2112500000003,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 197.3179170000003,
+              "elapsed_ms": 199.2112500000003,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -1440,7 +1440,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4007.1940410000025,
+              "elapsed_ms": 4028.0799160000024,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -1452,7 +1452,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 52.644749999999476,
+              "elapsed_ms": 49.87879200000316,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -1816,14 +1816,14 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 199.89104199999565,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.9534580000036,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 199.89104199999565,
+              "elapsed_ms": 198.9534580000036,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -1835,7 +1835,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4020.433708000004,
+              "elapsed_ms": 4025.6861659999995,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -1847,7 +1847,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 43.49124999999913,
+              "elapsed_ms": 44.80649999999878,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -1907,11 +1907,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "29802"
+                  "node_id": "30683"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "29844"
+                  "node_id": "30725"
                 }
               ]
             },
@@ -2069,14 +2069,14 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 198.46958299999824,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 199.39829199999804,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 198.46958299999824,
+              "elapsed_ms": 199.39829199999804,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -2088,7 +2088,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4015.5290410000016,
+              "elapsed_ms": 4031.861499999999,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -2100,7 +2100,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 44.13516600000003,
+              "elapsed_ms": 43.46566700000403,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -2300,14 +2300,14 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 199.046957999999,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 196.49708399999508,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 199.046957999999,
+              "elapsed_ms": 196.49708399999508,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -2319,7 +2319,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4011.4681659999987,
+              "elapsed_ms": 4025.7801670000044,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -2331,7 +2331,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 44.98216699999466,
+              "elapsed_ms": 44.90820800000074,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -2572,14 +2572,14 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 198.28366700000333,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.39237500000309,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 198.28366700000333,
+              "elapsed_ms": 198.39237500000309,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -2591,7 +2591,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4021.230125000002,
+              "elapsed_ms": 4036.201000000001,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -2603,7 +2603,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 44.747957999999926,
+              "elapsed_ms": 46.647209000002476,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -2790,14 +2790,14 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 204.2259170000034,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 219.92479199999798,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 204.2259170000034,
+              "elapsed_ms": 219.92479199999798,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -2809,7 +2809,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4018.9566669999986,
+              "elapsed_ms": 4037.4785830000037,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -2821,7 +2821,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 50.410791999995126,
+              "elapsed_ms": 45.905916000003344,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -2879,7 +2879,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "33794"
+                  "node_id": "34830"
                 }
               ]
             },
@@ -3087,14 +3087,14 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 200.1107919999995,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.67941699999938,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 200.1107919999995,
+              "elapsed_ms": 198.67941699999938,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -3106,7 +3106,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4036.6985419999983,
+              "elapsed_ms": 4028.8354580000014,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -3118,7 +3118,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 48.05991699999868,
+              "elapsed_ms": 47.38554099999601,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -3409,14 +3409,14 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 200.66783400000713,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 197.7158749999944,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 200.66783400000713,
+              "elapsed_ms": 197.7158749999944,
               "error": null,
               "action_evidence": null,
               "input_surface": "mouse",
@@ -3428,7 +3428,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4028.3486249999987,
+              "elapsed_ms": 4032.9912909999985,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -3440,7 +3440,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 42.74725000000035,
+              "elapsed_ms": 42.950625000012224,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -3742,11 +3742,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "29802"
+                  "node_id": "30683"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "29844"
+                  "node_id": "30725"
                 }
               ]
             },
@@ -3755,7 +3755,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "33794"
+                  "node_id": "34830"
                 }
               ]
             }
@@ -4779,35 +4779,35 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 74,
+          "observed_ms": 87.69999998807907,
           "measurement_mode": "navigation_timing",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 374.40000000596046,
+          "observed_ms": 354,
           "measurement_mode": "authenticated_fetch",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 511.31508399999984,
+          "observed_ms": 650.9902919999986,
           "measurement_mode": "pointer",
-          "quality_gate_passed": false,
+          "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 404.0591250000002,
+          "observed_ms": 378.2784580000002,
           "measurement_mode": "pointer",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 569.4289590000008,
+          "observed_ms": 605.567500000001,
           "measurement_mode": "pointer",
           "quality_gate_passed": true,
           "budget_ms": null,
@@ -4825,17 +4825,17 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 343.6339169999992,
+          "elapsed_ms": 404.5314170000056,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 343.6339169999992,
+              "elapsed_ms": 404.5314170000056,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -4844,7 +4844,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4015.565750000009,
+              "elapsed_ms": 4028.7608330000076,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -4856,7 +4856,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 54.57912500000384,
+              "elapsed_ms": 51.553625000000466,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -5122,17 +5122,17 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 615.9155830000091,
+          "elapsed_ms": 656.5094170000084,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 615.9155830000091,
-              "error": "could not hit-test Load more matching events",
+              "elapsed_ms": 656.5094170000084,
+              "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -5141,7 +5141,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10032.711374999999,
+              "elapsed_ms": 10042.287832999995,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -5153,7 +5153,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 358.7199580000015,
+              "elapsed_ms": 350.3249999999971,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -5173,19 +5173,19 @@
               "passed": true,
               "checked": 11,
               "focus_order": [
+                "board-tab-messages",
+                "board-tab-workspace",
+                "board-tab-timeline",
+                "board-tab-shipped",
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-47b03437-450e-4d2b-917b-7a87dc8d73fcGeneral agentrunning · managedCodex",
-                "Exact runtime links",
-                "pause",
-                "stop",
-                "More session actions including lifecycle controls",
-                "Copy exact Agent Home link"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                "Exact runtime links"
               ],
               "reverse_focus_order": [
-                "More session actions including lifecycle controls",
-                "stop",
-                "pause"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                null,
+                "Create durable agent"
               ],
               "activation": {
                 "supported": true,
@@ -5517,19 +5517,19 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 678.0746669999935,
+          "elapsed_ms": 669.1807499999995,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 678.0746669999935,
+              "elapsed_ms": 669.1807499999995,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "pointer"
               },
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -5538,7 +5538,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10219.790250000005,
+              "elapsed_ms": 10167.26000000001,
               "error": "five rendered search results readiness did not pass",
               "action_evidence": {
                 "focus_acquisition": "tab_navigation",
@@ -5554,7 +5554,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 285.68516599999566,
+              "elapsed_ms": 254.8607500000071,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -5578,7 +5578,7 @@
               "focus_order": [
                 "Filter conversation event kind",
                 "Search",
-                "tooloperator · operatorCodexAug 2, 11:48 AMquality-harnessquality benchmark mark",
+                "tooloperator · operatorCodexAug 2, 12:05 PMquality-harnessquality benchmark mark",
                 "shell",
                 "New shell",
                 "Interrupt",
@@ -5920,17 +5920,17 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 237.4935000000114,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.1078750000015,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 237.4935000000114,
+              "elapsed_ms": 198.1078750000015,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -5939,7 +5939,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4014.697709,
+              "elapsed_ms": 4026.7912080000096,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -5951,7 +5951,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 44.81433300000208,
+              "elapsed_ms": 45.89570900000399,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -6168,17 +6168,17 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 211.3830420000013,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 199.42608400000609,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 211.3830420000013,
+              "elapsed_ms": 199.42608400000609,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -6187,7 +6187,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4005.553,
+              "elapsed_ms": 4018.2682910000003,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -6199,7 +6199,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 45.0564999999915,
+              "elapsed_ms": 53.755457999999635,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -6563,17 +6563,17 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 207.90779199999815,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.11549999999988,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 207.90779199999815,
+              "elapsed_ms": 198.11549999999988,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -6582,7 +6582,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4016.0166670000035,
+              "elapsed_ms": 4037.422458000001,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -6594,7 +6594,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 47.20833300000231,
+              "elapsed_ms": 45.91449999999895,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -6654,11 +6654,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "69625"
+                  "node_id": "71503"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "69667"
+                  "node_id": "71545"
                 }
               ]
             },
@@ -6816,17 +6816,17 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 215.88133299999754,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 199.86999999999534,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 215.88133299999754,
+              "elapsed_ms": 199.86999999999534,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -6835,7 +6835,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4015.4223749999946,
+              "elapsed_ms": 4035.5605829999986,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -6847,7 +6847,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 43.438083000000915,
+              "elapsed_ms": 44.948291000007885,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -7037,7 +7037,7 @@
                   "tag": "span",
                   "class_name": "meter-label",
                   "text": "usage",
-                  "ratio": 2.94,
+                  "ratio": 2.89,
                   "required": 4.5
                 }
               ]
@@ -7047,17 +7047,17 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 216.4175419999956,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 251.58900000000722,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 216.4175419999956,
+              "elapsed_ms": 251.58900000000722,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -7066,7 +7066,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4035.315917,
+              "elapsed_ms": 4039.270875000002,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -7078,7 +7078,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 45.728166999993846,
+              "elapsed_ms": 48.89654099999461,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -7307,17 +7307,17 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 200.71641700000328,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 197.23083299999416,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 200.71641700000328,
+              "elapsed_ms": 197.23083299999416,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -7326,7 +7326,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4018.4625000000087,
+              "elapsed_ms": 4033.499416000006,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -7338,7 +7338,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 46.480458000005456,
+              "elapsed_ms": 44.89487499999814,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -7525,17 +7525,17 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 202.67087499999616,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 200.42691700000432,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 202.67087499999616,
+              "elapsed_ms": 200.42691700000432,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -7544,7 +7544,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4002.9167920000036,
+              "elapsed_ms": 4036.2704999999987,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -7556,7 +7556,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 45.35312500000873,
+              "elapsed_ms": 49.38612500000454,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -7614,7 +7614,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "74622"
+                  "node_id": "76494"
                 }
               ]
             },
@@ -7822,17 +7822,17 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 207.82850000000326,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 234.1050419999956,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 207.82850000000326,
+              "elapsed_ms": 234.1050419999956,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -7841,7 +7841,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4039.8454169999895,
+              "elapsed_ms": 4008.4449579999928,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -7853,7 +7853,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 44.91000000000349,
+              "elapsed_ms": 44.8933749999851,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -8144,17 +8144,17 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 210.7607919999864,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 198.08116599998903,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 0,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 210.7607919999864,
+              "elapsed_ms": 198.08116599998903,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -8163,7 +8163,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4003.4294590000063,
+              "elapsed_ms": 4011.936791999993,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -8175,7 +8175,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 44.19404199998826,
+              "elapsed_ms": 44.77337500001886,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -8444,11 +8444,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "69625"
+                  "node_id": "71503"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "69667"
+                  "node_id": "71545"
                 }
               ]
             },
@@ -8457,7 +8457,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "74622"
+                  "node_id": "76494"
                 }
               ]
             }
@@ -9148,7 +9148,7 @@
                   "tag": "span",
                   "class_name": "meter-label",
                   "text": "usage",
-                  "ratio": 2.94,
+                  "ratio": 2.89,
                   "required": 4.5
                 }
               ]
@@ -9474,35 +9474,35 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 77.59999999403954,
+          "observed_ms": 79.90000000596046,
           "measurement_mode": "navigation_timing",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 313.29999999701977,
+          "observed_ms": 339.29999999701977,
           "measurement_mode": "authenticated_fetch",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 615.9155830000091,
+          "observed_ms": 656.5094170000084,
           "measurement_mode": "pointer",
-          "quality_gate_passed": false,
+          "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 343.6339169999992,
+          "observed_ms": 404.5314170000056,
           "measurement_mode": "pointer",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 678.0746669999935,
+          "observed_ms": 669.1807499999995,
           "measurement_mode": "pointer",
           "quality_gate_passed": true,
           "budget_ms": null,
@@ -9520,17 +9520,17 @@
         {
           "name": "graph overview",
           "passed": false,
-          "elapsed_ms": 386.0403750000114,
+          "elapsed_ms": 363.3980830000073,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 386.0403750000114,
+              "elapsed_ms": 363.3980830000073,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -9539,7 +9539,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 4007.7892089999805,
+              "elapsed_ms": 4025.825291999994,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -9551,7 +9551,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.network .net-name').length === 18",
-              "elapsed_ms": 46.77270800000406,
+              "elapsed_ms": 54.703249999991385,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -9817,17 +9817,17 @@
         {
           "name": "durable transcript",
           "passed": false,
-          "elapsed_ms": 516.5815410000214,
+          "elapsed_ms": 640.5754169999855,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 516.5815410000214,
-              "error": "could not hit-test Load more matching events",
+              "elapsed_ms": 640.5754169999855,
+              "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -9836,7 +9836,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 10038.346707999997,
+              "elapsed_ms": 10020.125582999986,
               "error": "Agent Home readiness did not pass",
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -9848,7 +9848,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelectorAll('.ah-event').length >= 250",
-              "elapsed_ms": 337.90829200000735,
+              "elapsed_ms": 343.8177499999874,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -9868,19 +9868,19 @@
               "passed": true,
               "checked": 11,
               "focus_order": [
+                "board-tab-messages",
+                "board-tab-workspace",
+                "board-tab-timeline",
+                "board-tab-shipped",
                 "Create durable agent",
                 "INPUT",
-                "J1job-1-47b03437-450e-4d2b-917b-7a87dc8d73fcGeneral agentrunning · managedCodex",
-                "More session actions including lifecycle controls",
-                "Copy exact Agent Home link",
-                "Refresh Agent Home",
-                "Conversation",
-                "Terminal"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                "More session actions including lifecycle controls"
               ],
               "reverse_focus_order": [
-                "Conversation",
-                "Refresh Agent Home",
-                "Copy exact Agent Home link"
+                "J1job-1-55ea6518-e81b-49f2-ac1d-16fdaefcabd7General agentrunning · managedCodex",
+                null,
+                "Create durable agent"
               ],
               "activation": {
                 "supported": true,
@@ -10117,7 +10117,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10145,7 +10145,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:c69c1…",
+                  "text": "codex:92ade…",
                   "ratio": 2.86,
                   "required": 4.5
                 },
@@ -10159,7 +10159,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.38,
                   "required": 4.5
                 },
@@ -10201,7 +10201,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:c69c1…",
+                  "text": "codex:92ade…",
                   "ratio": 3.01,
                   "required": 4.5
                 }
@@ -10212,17 +10212,19 @@
         {
           "name": "conversation search",
           "passed": false,
-          "elapsed_ms": 179.59816600001068,
+          "elapsed_ms": 564.7097910000011,
           "performance_sample_mode": "pointer",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 179.59816600001068,
-              "error": "conversation search input could not receive focus",
-              "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "elapsed_ms": 564.7097910000011,
+              "error": null,
+              "action_evidence": {
+                "focus_acquisition": "pointer"
+              },
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -10231,7 +10233,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 10163.922250000003,
+              "elapsed_ms": 10128.838999999978,
               "error": "five rendered search results readiness did not pass",
               "action_evidence": {
                 "focus_acquisition": "tab_navigation",
@@ -10247,7 +10249,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "(() => {\n      const events = [...document.querySelectorAll('.ah-event')];\n      return events.length === 5 && events.every((event) => event.textContent?.includes('quality benchmark marker'))\n        && document.querySelector('.ah-search button[type=\"submit\"]')?.textContent?.trim() === 'Search';\n    })()",
-              "elapsed_ms": 240.77391699998407,
+              "elapsed_ms": 264.2752089999849,
               "error": null,
               "action_evidence": {
                 "focus_acquisition": "dom_fallback"
@@ -10271,7 +10273,7 @@
               "focus_order": [
                 "Filter conversation event kind",
                 "Search",
-                "tooloperator · operatorCodexAug 2, 11:48 AMquality-harnessquality benchmark mark",
+                "tooloperator · operatorCodexAug 2, 12:05 PMquality-harnessquality benchmark mark",
                 "agentboard-beta-release-browser▾",
                 "AI subscription usage",
                 "Board",
@@ -10522,7 +10524,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10550,7 +10552,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10578,7 +10580,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -10606,7 +10608,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 }
@@ -10617,17 +10619,17 @@
         {
           "name": "messages board view",
           "passed": false,
-          "elapsed_ms": 215.14941700000782,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 208.85274999999092,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 215.14941700000782,
+              "elapsed_ms": 208.85274999999092,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -10636,7 +10638,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 4021.1927500000165,
+              "elapsed_ms": 4025.2826249999925,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -10648,7 +10650,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'",
-              "elapsed_ms": 44.86099999997532,
+              "elapsed_ms": 46.6298329999845,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -10865,17 +10867,17 @@
         {
           "name": "workspace board view",
           "passed": false,
-          "elapsed_ms": 217.77154200000223,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 202.5517079999845,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 217.77154200000223,
+              "elapsed_ms": 202.5517079999845,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -10884,7 +10886,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 4033.3730000000214,
+              "elapsed_ms": 4022.550917000015,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -10896,7 +10898,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-workspace'",
-              "elapsed_ms": 53.68854200001806,
+              "elapsed_ms": 64.45837499998743,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -10940,7 +10942,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 158,
+              "checked": 157,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -11141,17 +11143,17 @@
         {
           "name": "timeline board view",
           "passed": false,
-          "elapsed_ms": 4180.713915999979,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 238.33124999998836,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4180.713915999979,
+              "elapsed_ms": 238.33124999998836,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -11160,7 +11162,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 4039.252374999982,
+              "elapsed_ms": 4018.867958000017,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -11172,7 +11174,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-timeline'",
-              "elapsed_ms": 47.65587499999674,
+              "elapsed_ms": 47.12787500000559,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -11228,11 +11230,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "112955"
+                  "node_id": "115233"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "112997"
+                  "node_id": "115275"
                 }
               ]
             },
@@ -11390,17 +11392,17 @@
         {
           "name": "shipped board view",
           "passed": false,
-          "elapsed_ms": 4185.443416000024,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 232.89470800000709,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
-              "passed": false,
+              "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4185.443416000024,
+              "elapsed_ms": 232.89470800000709,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -11409,7 +11411,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 4012.5326250000217,
+              "elapsed_ms": 4035.4728750000068,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -11421,7 +11423,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-shipped'",
-              "elapsed_ms": 49.34949999998207,
+              "elapsed_ms": 46.32579199998872,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -11621,17 +11623,17 @@
         {
           "name": "Open Work primary view",
           "passed": false,
-          "elapsed_ms": 212.6840830000001,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 200.44499999997788,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 212.6840830000001,
+              "elapsed_ms": 200.44499999997788,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -11640,7 +11642,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 4037.2440829999978,
+              "elapsed_ms": 4045.9877500000002,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -11652,7 +11654,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Open Work\")?.classList.contains('active'))",
-              "elapsed_ms": 53.084875000000466,
+              "elapsed_ms": 56.254833999992115,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -11693,7 +11695,7 @@
             },
             "screen_reader_tree": {
               "passed": true,
-              "checked": 166,
+              "checked": 170,
               "root_web_area": true,
               "navigation": true,
               "violations": []
@@ -11702,7 +11704,7 @@
               "passed": false,
               "checked": true,
               "scope": "opaque text on opaque solid computed backgrounds",
-              "unsupported_count": 20,
+              "unsupported_count": 21,
               "unsupported": [
                 {
                   "tag": "h1",
@@ -11803,6 +11805,11 @@
                   "tag": "button",
                   "class_name": "tab",
                   "reason": "translucent_background"
+                },
+                {
+                  "tag": "button",
+                  "class_name": "ow-button primary",
+                  "reason": "opacity_or_background_image"
                 }
               ],
               "violations": [
@@ -11868,6 +11875,13 @@
                   "text": "No filters applied",
                   "ratio": 2.86,
                   "required": 4.5
+                },
+                {
+                  "tag": "p",
+                  "class_name": "",
+                  "text": "Publish a valid contract to make it available to the operator queue.",
+                  "ratio": 4.47,
+                  "required": 4.5
                 }
               ]
             }
@@ -11876,17 +11890,17 @@
         {
           "name": "Organization primary view",
           "passed": false,
-          "elapsed_ms": 210.7400000000198,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 275.9214579999971,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 210.7400000000198,
+              "elapsed_ms": 275.9214579999971,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -11895,7 +11909,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 4044.4487500000105,
+              "elapsed_ms": 4032.6824579999957,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -11907,7 +11921,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Organization\")?.classList.contains('active'))",
-              "elapsed_ms": 46.70154199999524,
+              "elapsed_ms": 44.14895800000522,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -12089,17 +12103,17 @@
         {
           "name": "Roadmap primary view",
           "passed": false,
-          "elapsed_ms": 212.85179099999368,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 201.97783399999025,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 212.85179099999368,
+              "elapsed_ms": 201.97783399999025,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -12108,7 +12122,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 4017.5518750000047,
+              "elapsed_ms": 4020.503667000012,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -12120,7 +12134,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Roadmap\")?.classList.contains('active'))",
-              "elapsed_ms": 47.669582999980776,
+              "elapsed_ms": 46.66883300000336,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -12178,7 +12192,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "116697"
+                  "node_id": "119481"
                 }
               ]
             },
@@ -12381,17 +12395,17 @@
         {
           "name": "Settings primary view",
           "passed": false,
-          "elapsed_ms": 209.22212500000023,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 197.04891700000735,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 209.22212500000023,
+              "elapsed_ms": 197.04891700000735,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -12400,7 +12414,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 4008.019916999998,
+              "elapsed_ms": 4026.2580000000016,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -12412,7 +12426,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === \"Settings\")?.classList.contains('active'))",
-              "elapsed_ms": 49.63858299999265,
+              "elapsed_ms": 45.83054200001061,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -12703,17 +12717,17 @@
         {
           "name": "Board primary view",
           "passed": false,
-          "elapsed_ms": 220.3102910000016,
-          "performance_sample_mode": "pointer",
+          "elapsed_ms": 199.14199999999255,
+          "performance_sample_mode": "diagnostic_only",
           "horizontal_overflow_px": 149,
           "interaction_modes": {
             "pointer": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 220.3102910000016,
+              "elapsed_ms": 199.14199999999255,
               "error": null,
               "action_evidence": null,
-              "input_surface": "touch_with_compatibility_mouse",
+              "input_surface": "mouse_pointer_on_mobile_viewport",
               "counts_toward_pass": true,
               "performance_eligible": true,
               "diagnostic_only": false,
@@ -12722,7 +12736,7 @@
             "keyboard": {
               "passed": false,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 4019.0550839999923,
+              "elapsed_ms": 4017.9250410000095,
               "error": null,
               "action_evidence": null,
               "input_surface": "keyboard",
@@ -12734,7 +12748,7 @@
             "dom_fallback": {
               "passed": true,
               "readiness_asserted": "Boolean(document.querySelector('.board-section-tabs'))",
-              "elapsed_ms": 46.104833000019426,
+              "elapsed_ms": 43.43108300000313,
               "error": null,
               "action_evidence": null,
               "input_surface": "dom",
@@ -13052,11 +13066,11 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "112955"
+                  "node_id": "115233"
                 },
                 {
                   "role": "combobox",
-                  "node_id": "112997"
+                  "node_id": "115275"
                 }
               ]
             },
@@ -13065,7 +13079,7 @@
               "violations": [
                 {
                   "role": "combobox",
-                  "node_id": "116697"
+                  "node_id": "119481"
                 }
               ]
             }
@@ -13247,7 +13261,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13275,7 +13289,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:c69c1…",
+                  "text": "codex:92ade…",
                   "ratio": 2.86,
                   "required": 4.5
                 },
@@ -13289,7 +13303,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.38,
                   "required": 4.5
                 },
@@ -13331,7 +13345,7 @@
                 {
                   "tag": "code",
                   "class_name": "",
-                  "text": "codex:c69c1…",
+                  "text": "codex:92ade…",
                   "ratio": 3.01,
                   "required": 4.5
                 }
@@ -13427,7 +13441,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13455,7 +13469,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13483,7 +13497,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 },
@@ -13511,7 +13525,7 @@
                 {
                   "tag": "time",
                   "class_name": "",
-                  "text": "Aug 2, 11:48 AM",
+                  "text": "Aug 2, 12:05 PM",
                   "ratio": 3.21,
                   "required": 4.5
                 }
@@ -13706,6 +13720,13 @@
                   "class_name": "empty",
                   "text": "No filters applied",
                   "ratio": 2.86,
+                  "required": 4.5
+                },
+                {
+                  "tag": "p",
+                  "class_name": "",
+                  "text": "Publish a valid contract to make it available to the operator queue.",
+                  "ratio": 4.47,
                   "required": 4.5
                 }
               ]
@@ -13963,51 +13984,50 @@
       },
       "performance": {
         "startup": {
-          "observed_ms": 76,
+          "observed_ms": 74.1000000089407,
           "measurement_mode": "navigation_timing",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "snapshot_loading": {
-          "observed_ms": 329,
+          "observed_ms": 324,
           "measurement_mode": "authenticated_fetch",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "transcript_loading": {
-          "observed_ms": 516.5815410000214,
+          "observed_ms": 640.5754169999855,
           "measurement_mode": "pointer",
-          "quality_gate_passed": false,
+          "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "graph_view": {
-          "observed_ms": 386.0403750000114,
+          "observed_ms": 363.3980830000073,
           "measurement_mode": "pointer",
           "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         },
         "search": {
-          "observed_ms": 179.59816600001068,
+          "observed_ms": 564.7097910000011,
           "measurement_mode": "pointer",
-          "quality_gate_passed": false,
+          "quality_gate_passed": true,
           "budget_ms": null,
           "budget_source": "observation_only"
         }
       }
     }
   ],
-  "sha256": "594d6556d5b3c2def5d02a2dd75da9a79701d302ddbf04aed9faf59f4cfe8413",
+  "sha256": "eeb39a34c0a74b0edc84b54dd674a81d581ee1ef78eb2c7c0b7699f5bbbb5a21",
   "validation_errors": [
     "desktop failed accessible_names",
     "desktop failed keyboard_focus",
     "desktop failed screen_reader_tree",
     "desktop failed text_contrast",
     "desktop graph overview failed independent keyboard interaction",
-    "desktop durable transcript failed independent pointer interaction",
     "desktop durable transcript failed independent keyboard interaction",
     "desktop conversation search failed independent keyboard interaction",
     "desktop messages board view failed independent keyboard interaction",
@@ -14024,7 +14044,6 @@
     "tablet failed screen_reader_tree",
     "tablet failed text_contrast",
     "tablet graph overview failed independent keyboard interaction",
-    "tablet durable transcript failed independent pointer interaction",
     "tablet durable transcript failed independent keyboard interaction",
     "tablet conversation search failed independent keyboard interaction",
     "tablet messages board view failed independent keyboard interaction",
@@ -14042,15 +14061,11 @@
     "phone failed screen_reader_tree",
     "phone failed text_contrast",
     "phone graph overview failed independent keyboard interaction",
-    "phone durable transcript failed independent pointer interaction",
     "phone durable transcript failed independent keyboard interaction",
-    "phone conversation search failed independent pointer interaction",
     "phone conversation search failed independent keyboard interaction",
     "phone messages board view failed independent keyboard interaction",
     "phone workspace board view failed independent keyboard interaction",
-    "phone timeline board view failed independent pointer interaction",
     "phone timeline board view failed independent keyboard interaction",
-    "phone shipped board view failed independent pointer interaction",
     "phone shipped board view failed independent keyboard interaction",
     "phone Open Work primary view failed independent keyboard interaction",
     "phone Organization primary view failed independent keyboard interaction",
