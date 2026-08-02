@@ -1060,13 +1060,14 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const searchMatchesRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
 
   for (const section of ['work', 'discussions', 'knowledge', 'outcomes', 'activity']) {
+    const resetSection = section === 'work' ? 'activity' : 'work'
     await recordJourney(
       `${section} command center view`,
       (mode) => activateMode(client, mode, `#cc-section-tab-${section}`, section, viewport.mobile),
       `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-${section}'`,
       async () => {
-        await domActivate(client, '#cc-section-tab-agents')
-        await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-agents'`, `${section} reset state`)
+        await domActivate(client, `#cc-section-tab-${resetSection}`)
+        await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-${resetSection}'`, `${section} reset state`)
       },
     )
   }
