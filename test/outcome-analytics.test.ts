@@ -514,7 +514,7 @@ describe('budgets, confirmations and leader digests', () => {
     if (reserved.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-1', 'operator')
     service.consumeOperationExecution({
       id: 'budget-operation-1', executionKey: 'budget-execution-1', actor: 'runner',
-      providerTokens: 50, fanout: 6,
+      providerTokens: 50, contextTokens: 0, fanout: 6,
     })
     const cumulative = service.evaluateBudgets({
       boardId, teamId: 'team-1', jobId: 'job-1', fanout: 5,
@@ -523,7 +523,7 @@ describe('budgets, confirmations and leader digests', () => {
       .dimensions.find((item: any) => item.name === 'fanout')).toMatchObject({ used: 11, exceeded: true })
     expect(() => service.consumeOperationExecution({
       id: 'hard-race-operation', executionKey: 'hard-race-execution', actor: 'runner',
-      providerTokens: 100, fanout: 1,
+      providerTokens: 100, contextTokens: 0, fanout: 1,
     })).toThrow(/hard budget at execution/)
     const late = service.planOperation({
       id: 'budget-operation-2', boardId, operationKind: 'swarm', fanout: 1,
@@ -533,7 +533,7 @@ describe('budgets, confirmations and leader digests', () => {
     if (late.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-2', 'operator')
     expect(() => service.consumeOperationExecution({
       id: 'budget-operation-2', executionKey: 'budget-execution-2', actor: 'runner',
-      providerTokens: 100, fanout: 1,
+      providerTokens: 100, contextTokens: 0, fanout: 1,
     })).toThrow(/new confirmation/)
     expect(() => db.prepare(`UPDATE outcome_budget_policies SET max_provider_tokens=999999
       WHERE id='job-budget'`).run()).toThrow(/identity is immutable/)
@@ -549,21 +549,21 @@ describe('budgets, confirmations and leader digests', () => {
     expect(plan.status).toBe('awaiting_confirmation')
     expect(() => service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/requires explicit/)
     expect(service.confirmOperation('operation-1', 'operator').status).toBe('confirmed')
     expect(() => service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'wrong-execution', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/another execution/)
     expect(service.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toMatchObject({ status: 'confirmed', consumption: { operation_id: 'operation-1' } })
     const competingService = new OutcomeAnalyticsService(db)
     expect(() => competingService.consumeOperationExecution({
       id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
-      providerTokens: 100, fanout: 8,
+      providerTokens: 100, contextTokens: 0, fanout: 8,
     })).toThrow(/already consumed/)
     expect(() => db.prepare(`UPDATE outcome_operation_confirmations SET reason='changed'
       WHERE id='operation-1'`).run()).toThrow(/transition is invalid/)
@@ -575,7 +575,7 @@ describe('budgets, confirmations and leader digests', () => {
     expect(small.status).toBe('not_required')
     expect(() => service.consumeOperationExecution({
       id: 'operation-2', executionKey: 'native-execution-2', actor: 'runner',
-      providerTokens: 501, fanout: 2,
+      providerTokens: 501, contextTokens: 0, fanout: 2,
     })).toThrow(/new confirmation/)
     service.setBudget({
       id: 'context-warning', boardId, scopeKind: 'project', scopeId: String(boardId),

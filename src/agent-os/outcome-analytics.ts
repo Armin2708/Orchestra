@@ -703,7 +703,12 @@ export class OutcomeAnalyticsService {
       if (row.operation_kind !== 'planning_round' && actual.planning_round_tokens !== 0) {
         throw new ValidationError('planning round tokens require a planning operation')
       }
-      const actualTokenEnvelope = actual.provider_tokens + (actual.context_tokens ?? 0)
+      if (actual.context_tokens === null) {
+        throw new ConflictError(
+          'exact context tokens are required to consume operation authorization',
+        )
+      }
+      const actualTokenEnvelope = actual.provider_tokens + actual.context_tokens
       if (actual.fanout > Number(row.fanout)
         || actualTokenEnvelope > Number(row.estimated_tokens)
         || (row.operation_kind === 'planning_round'

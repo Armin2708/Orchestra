@@ -136,6 +136,46 @@ describe('outcome analytics focused registrar', () => {
       .toEqual({ count: 0 })
   })
 
+  it('preserves explicit unavailable context through budget evaluation', async () => {
+    const { server, boardId } = await fixture()
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/outcomes/budgets`,
+      headers: operator,
+      payload: {
+        id: 'api-context-budget', scopeKind: 'project', scopeId: String(boardId),
+        maxContextTokens: 100, enforcement: 'hard',
+      },
+    })
+    expect(created.statusCode, created.body).toBe(201)
+    const unavailable = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/outcomes/budgets/evaluate`,
+      headers: operator,
+      payload: { additionalContextTokens: null },
+    })
+    expect(unavailable.statusCode, unavailable.body).toBe(200)
+    expect(unavailable.json()).toMatchObject({
+      allowed: false,
+      projected: { context_tokens: null },
+      policies: [{
+        policy_id: 'api-context-budget', allowed: false,
+        dimensions: [{ name: 'context_tokens', used: null, available: false }],
+      }],
+    })
+    const exactZero = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/outcomes/budgets/evaluate`,
+      headers: operator,
+      payload: { additionalContextTokens: 0 },
+    })
+    expect(exactZero.statusCode, exactZero.body).toBe(200)
+    expect(exactZero.json()).toMatchObject({
+      allowed: true,
+      projected: { context_tokens: 0 },
+    })
+  })
+
   it('records scoped observations and exposes the derived dashboard contract', async () => {
     const { server, boardId, published } = await fixture()
     const usage = await server.inject({
@@ -207,7 +247,8 @@ describe('outcome analytics focused registrar', () => {
       method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
       headers: operator,
       payload: {
-        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000, fanout: 10,
+        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000,
+        contextTokens: 0, fanout: 10,
       },
     })
     expect(blocked.statusCode).toBe(409)
@@ -220,14 +261,18 @@ describe('outcome analytics focused registrar', () => {
     const callerSuppliedKey = await server.inject({
       method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
       headers: operator,
-      payload: { executionKey: 'api-native-execution', providerTokens: 5000, fanout: 10 },
+      payload: {
+        executionKey: 'api-native-execution', providerTokens: 5000,
+        contextTokens: 0, fanout: 10,
+      },
     })
     expect(callerSuppliedKey.statusCode).toBe(409)
     const authorized = await server.inject({
       method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
       headers: operator,
       payload: {
-        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000, fanout: 10,
+        executionKey: nativeOutcomeExecutionKey('api-job'), providerTokens: 5000,
+        contextTokens: 0, fanout: 10,
       },
     })
     expect(authorized.statusCode, authorized.body).toBe(200)

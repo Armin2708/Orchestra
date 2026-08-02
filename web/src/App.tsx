@@ -219,13 +219,16 @@ export function App() {
     let retry: number | undefined
     let refreshing = false
     let refreshQueued = false
+    let disposed = false
     const requestRefresh = async () => {
+      if (disposed) return
       if (refreshing) {
         refreshQueued = true
         return
       }
       refreshing = true
       const succeeded = await refresh()
+      if (disposed) return
       refreshing = false
       if (refreshQueued) {
         refreshQueued = false
@@ -234,6 +237,7 @@ export function App() {
       }
       if (!succeeded && retry === undefined) {
         retry = window.setTimeout(() => {
+          if (disposed) return
           retry = undefined
           void requestRefresh()
         }, 1_000)
@@ -242,6 +246,7 @@ export function App() {
     // Subscribe before the first snapshot. Once open, the refresh covers every event that
     // preceded it. Every reconnect refreshes again; failed snapshots retry until REST recovers.
     es.onopen = () => {
+      if (disposed) return
       if (retry !== undefined) {
         clearTimeout(retry)
         retry = undefined
@@ -250,15 +255,21 @@ export function App() {
     }
     const initialFallback = window.setTimeout(() => void requestRefresh(), 1_000)
     es.onmessage = () => {
+      if (disposed) return
       // debounce bursts of events into one refresh
       if (pending) return
       pending = window.setTimeout(() => {
+        if (disposed) return
         pending = undefined
         void requestRefresh()
       }, 300)
     }
-    es.onerror = () => setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
+    es.onerror = () => {
+      if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
+    }
     return () => {
+      disposed = true
+      refreshQueued = false
       es.close()
       clearTimeout(initialFallback)
       if (retry !== undefined) clearTimeout(retry)

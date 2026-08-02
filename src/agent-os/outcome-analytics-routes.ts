@@ -126,7 +126,10 @@ export const outcomeAnalyticsPlugin: FastifyPluginAsync<OutcomeAnalyticsRouteOpt
         jobId: optionalText(body.jobId, 'jobId'),
         teamId: optionalText(body.teamId, 'teamId'),
         additionalProviderTokens: optionalInteger(body.additionalProviderTokens, 'additionalProviderTokens'),
-        additionalContextTokens: optionalInteger(body.additionalContextTokens, 'additionalContextTokens'),
+        additionalContextTokens: optionalNullableInteger(
+          body.additionalContextTokens,
+          'additionalContextTokens',
+        ),
         fanout: optionalInteger(body.fanout, 'fanout'),
         planningRoundTokens: optionalInteger(body.planningRoundTokens, 'planningRoundTokens'),
       })
@@ -234,4 +237,9 @@ function optionalInteger(value: unknown, field: string): number | undefined {
     throw new ValidationError(`${field} must be a non-negative integer`)
   }
   return Number(value)
+}
+
+function optionalNullableInteger(value: unknown, field: string): number | null | undefined {
+  if (value === null) return null
+  return optionalInteger(value, field)
 }

@@ -25,8 +25,9 @@ without observed representative evidence.
   budget recheck. Confirmation is bound to a native execution key and can be consumed once;
   provisional fanout and provider/context counters cannot exceed the confirmed plan, and warning
   thresholds are re-evaluated before consumption. A separate immutable operation-context receipt
-  prevents the compatibility carrier zero from authorizing unknown native context: hard context
-  budgets fail closed and soft policies surface the unavailable dimension as a warning.
+  prevents the compatibility carrier zero from authorizing unknown native context. Operation
+  authorization requires an exact context count; budget evaluation preserves explicit `null`, hard
+  context budgets fail closed, and soft policies surface the unavailable dimension as a warning.
 - Canonical provider/session/job attribution, conservative billing derivation from retained
   provider-acceptance evidence verified through the canonical content-addressed evidence store,
   active-membership team derivation, bounded timestamps, and
@@ -61,8 +62,9 @@ without observed representative evidence.
   or same-file-with-different-range claim.
 - Board creation now emits an SSE invalidation exactly once from `/boards/resolve`. The app
   subscribes before its initial board fetch, refreshes on every stream open/reconnect, queues events
-  arriving during a snapshot, and retries failed snapshots while REST is unavailable; the redundant
-  30-second discovery poll remains removed.
+  arriving during a snapshot, and retries failed snapshots while REST is unavailable. Disposal
+  guards prevent an in-flight refresh from scheduling work after cleanup; the redundant 30-second
+  discovery poll remains removed.
 - A fail-closed remote-access classification synchronized to the canonical route inventory. The two
   outcome GET routes are sensitive, exact-board reads that remain denied to `DeviceSession` by
   default; all nine POST routes require the current production operator predicate and target a
@@ -91,34 +93,36 @@ without observed representative evidence.
 
 ## Bounded candidate checkpoint
 
-- Status: **READY FOR CENTRAL INTEGRATION**, not final-central ready.
+- Status: **CANDIDATE PENDING FINAL EXACT REVIEW**, not final-central ready.
 - Base: `b6dc067f7de66f7978b951d1e37ffb9c86ba9cfb`; central must integrate the accepted Lane B and
   Lane C ancestry before evaluating final-central readiness.
-- Independent remediation review target: P0=0, P1=0, P2=0. This marker must be withdrawn if the
-  exact candidate review or post-integration verification reports any unresolved finding.
+- Exact heads `d31bb8e` and `8837762` were rejected by independent review and are superseded by the
+  current remediation. A fresh exact candidate review must report P0=0, P1=0, P2=0 before this
+  marker can become ready for central integration.
 
 ## Evidence
 
 - Focused analytics/API/runtime/knowledge/native-Claude/UI/SSE/inventory coverage passed 9 files /
-  61 tests.
+  62 tests.
   It proves exact refresh linkage, ordinal non-inference, unavailable context-token propagation,
   exact accepted-versus-verified timing, changed-timestamp replay stability, reserved native-ID
   enforcement, subscribe-before-fetch startup, and exactly-once board-create events.
-- The complete repository suite passed 240 files / 2,006 tests in both default-parallel and
+- The complete repository suite passed 240 files / 2,007 tests in both default-parallel and
   `--maxWorkers=1` modes on Node 22.20.0 / npm 10.9.3.
 - Root TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
 - Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
   retains the existing advisory for a JavaScript chunk larger than 500 kB.
 - Root and web `npm audit --audit-level=moderate` report zero vulnerabilities.
-- Gitleaks 8.30.1 reports no findings across 791 commits or the 102.80 kB candidate diff.
-- GitNexus compare detection reports high aggregate risk across 15 affected execution flows, which
+- Gitleaks 8.30.1 reports no findings across 792 commits or the 114.27 kB candidate diff.
+- An exact-head GitNexus reindex maps 71 changed symbols across 20 files to seven affected execution
+  flows and reports high aggregate risk, which
   is expected for this cross-runtime/API/Knowledge Compiler/App candidate. The required pre-edit
   symbol analysis identified HIGH risk for `recordActivity` and `recordNormalizedProviderUsage`
   and CRITICAL risk for shared `buildServer`; those warnings were surfaced before remediation.
   The refreshed index has no PDG taint layer, so no clean taint claim is made.
 - Root and web dependency audits report zero vulnerabilities at moderate severity.
 - Graphify refreshed the deterministic code graph and semantically re-extracted the three changed
-  inventory/checkpoint artifacts. The verified graph contains 9,280 nodes / 22,360 edges / 338
+  inventory/checkpoint artifacts. The verified graph contains 9,288 nodes / 22,369 edges / 347
   communities, includes schema-v6 evidence, and contains no stale schema-v4 checkpoint node.
   `graphify-out/` remains an untracked verification artifact and is not part of this checkpoint
   commit.
