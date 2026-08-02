@@ -21,7 +21,10 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
-import { DeliveryTrackbookService } from './agent-os/delivery-trackbook.js'
+import {
+  DeliveryTrackbookService,
+  type DeliveryAutoshipIntent,
+} from './agent-os/delivery-trackbook.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { CODEX_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
@@ -467,23 +470,31 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   // Reconcile already-merged intents first, then restore the bounded unmerged outbox.
   // This runs only when autoship is enabled and never fabricates evidence from card status.
   if (autoshipEnabled()) {
-    deliveryTrackbook.reconcilePendingAutoshipIntents({
+    const reconciliation = deliveryTrackbook.reconcilePendingAutoshipIntents({
       actor: { type: 'operator', id: 'ship_queue_recovery' },
       limit: 200,
     })
-    for (const intent of deliveryTrackbook.pendingAutoshipIntents(undefined, 200)) {
+    // Consume this exact bounded snapshot. Pending-attempt events rotate attempted intents to the
+    // back of later queries; re-querying here could starve all 200 candidates until another restart.
+    for (const pending of reconciliation) {
+      if (pending.status !== 'pending') continue
+      const intent = pending.intent
       const candidate = db.prepare(`SELECT card.id, card.title, card.branch,
-          card.column_name, board.id AS board_id, board.project_path
+          card.column_name, board.id AS board_id, board.project_path,
+          (SELECT event.type FROM card_events event WHERE event.card_id=card.id
+            ORDER BY event.id DESC LIMIT 1) AS latest_event_type
         FROM cards card JOIN boards board ON board.id=card.board_id
         WHERE card.id=? AND card.board_id=?`).get(intent.card_id, intent.board_id) as any
-      if (!candidate || candidate.column_name !== 'done'
-        || candidate.branch !== intent.source_branch) continue
+      const recoverableState = candidate?.column_name === 'done'
+        || (candidate?.column_name === 'blocked' && candidate.latest_event_type === 'autoship_failed')
+      if (!candidate || !recoverableState || candidate.branch !== intent.source_branch) continue
       shipFor({ id: candidate.board_id, project_path: candidate.project_path }).enqueue({
         boardId: candidate.board_id,
         cardId: candidate.id,
         branch: candidate.branch,
         title: candidate.title,
-        worktree: null,
+        sourceCommit: intent.source_commit,
+        worktree: cardWorktree(intent.source_repository, candidate.id),
       })
     }
   }
@@ -762,6 +773,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         return { card: getCard(card.id), decision, held: true, reason: gate.held }
       }
       let delivery
+      let autoshipIntent: DeliveryAutoshipIntent | null = null
       try {
         delivery = deliveryLifecycle.accept({
           cardId: card.id,
@@ -774,7 +786,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         }
         deliveryLifecycle.assertDoneReady(card.id)
         if (wantShip) {
-          deliveryTrackbook.prepareAutoshipIntent(delivery.id, {
+          autoshipIntent = deliveryTrackbook.prepareAutoshipIntent(delivery.id, {
             actor: { type: 'operator', id: 'autoship_approval' },
             branch: card.branch,
             idempotencyKey: `autoship-intent:${card.board_id}:${card.id}:${delivery.id}`,
@@ -801,7 +813,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (wantShip) {
         if (gate.warn) logEvent(card.id, null, 'autoship_note', { warn: gate.warn })
         const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
-        shipFor(board).enqueue({ boardId: card.board_id, cardId: card.id, branch: card.branch, title: card.title, worktree: null })
+        if (!autoshipIntent) throw new Error('accepted delivery autoship intent is missing')
+        shipFor(board).enqueue({
+          boardId: card.board_id,
+          cardId: card.id,
+          branch: card.branch,
+          title: card.title,
+          sourceCommit: autoshipIntent.source_commit,
+          worktree: cardWorktree(autoshipIntent.source_repository, card.id),
+        })
       }
       const unlocked = card.milestone_id != null && card.step_order != null
         ? db.prepare(`SELECT id, title, column_name FROM cards WHERE milestone_id=? AND step_order > ? ORDER BY step_order LIMIT 1`)

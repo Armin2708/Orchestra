@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { lstatSync, realpathSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import type { ActorIdentity } from './agent-home-support.js'
 import { DeliveryReportService, deliveryReportGaps, type DeliveryReport } from './delivery-reports.js'
@@ -8,6 +8,7 @@ import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
 import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
+import { cardWorktree } from '../shipqueue.js'
 
 const MAX = Object.freeze({
   actor: 320,
@@ -617,6 +618,11 @@ export class DeliveryTrackbookService {
         replayChecked(replay, requestSha256, 'autoship completion')
         return this.autoshipResult(intent, replay)
       }
+      // Git cleanup is an externally visible precondition, not a best-effort consequence of
+      // recording success. Recheck it inside the immediate transaction so restart/manual paths
+      // cannot create a receipt, shipment, completion, or card repair while candidate plumbing
+      // remains registered under the immutable branch/card identity.
+      assertAutoshipCandidateCleaned(intent)
       const receipt = this.recordShipQueueReceipt({
         boardId: intent.board_id,
         cardId: intent.card_id,
@@ -1538,6 +1544,90 @@ function repositoryBranchCommit(repository: string, branch: string): string {
     ]), 'resolved branch commit')
   } catch {
     throw new ValidationError('autoship branch does not resolve in the exact board repository')
+  }
+}
+
+type RepositoryWorktree = {
+  path: string
+  head: string
+  branch: string | null
+}
+
+function repositoryWorktrees(repository: string): RepositoryWorktree[] {
+  let output: string
+  try {
+    output = gitEvidence(repository, ['worktree', 'list', '--porcelain', '-z'])
+  } catch {
+    throw new ValidationError('autoship candidate worktree registration could not be verified')
+  }
+  return output.split('\0\0').filter(Boolean).map((block) => {
+    const fields = block.split('\0').filter(Boolean)
+    const worktree = fields.find((field) => field.startsWith('worktree '))?.slice('worktree '.length)
+    const head = fields.find((field) => field.startsWith('HEAD '))?.slice('HEAD '.length)
+    const branch = fields.find((field) => field.startsWith('branch '))?.slice('branch '.length) ?? null
+    if (!worktree || !head) {
+      throw new ValidationError('autoship candidate worktree identity is incomplete')
+    }
+    return { path: worktree, head: fullCommit(head, 'registered worktree HEAD'), branch }
+  })
+}
+
+function localBranchCommit(repository: string, branch: string): string | null {
+  let output: string
+  try {
+    output = gitEvidence(repository, [
+      'for-each-ref', '--format=%(objectname)', '--count=2', `refs/heads/${gitBranch(branch)}`,
+    ])
+  } catch {
+    throw new ValidationError('autoship candidate branch cleanup could not be verified')
+  }
+  if (!output) return null
+  const commits = output.split(/\r?\n/).filter(Boolean)
+  if (commits.length !== 1) {
+    throw new ValidationError('autoship candidate branch identity is ambiguous')
+  }
+  return fullCommit(commits[0], 'autoship candidate branch commit')
+}
+
+function sameRegisteredPath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    return false
+  }
+}
+
+function assertAutoshipCandidateCleaned(intent: DeliveryAutoshipIntent): void {
+  const branchCommit = localBranchCommit(intent.source_repository, intent.source_branch)
+  if (branchCommit !== null) {
+    const identity = branchCommit === intent.source_commit ? 'accepted' : 'moved'
+    throw new ConflictError(`autoship ${identity} candidate branch cleanup is incomplete`)
+  }
+  const branchRef = `refs/heads/${intent.source_branch}`
+  const expectedPath = cardWorktree(intent.source_repository, intent.card_id)
+  const registered = repositoryWorktrees(intent.source_repository)
+  if (registered.some((entry) => entry.branch === branchRef)) {
+    throw new ConflictError('autoship candidate branch remains registered in a worktree')
+  }
+  const repositoryRoot = realpathSync(intent.source_repository)
+  if (registered.some((entry) => entry.head === intent.source_commit
+    && !sameRegisteredPath(entry.path, repositoryRoot))) {
+    // The schema predates a persisted worktree path. Once detached/moved, exact source HEAD is
+    // the only remaining durable identity; fail closed rather than treating that worktree as
+    // unrelated and recording completion while candidate bytes remain registered elsewhere.
+    throw new ConflictError('autoship accepted source commit remains registered in a worktree')
+  }
+  if (registered.some((entry) => sameRegisteredPath(entry.path, expectedPath))) {
+    throw new ConflictError('autoship candidate card worktree cleanup is incomplete')
+  }
+  try {
+    lstatSync(expectedPath)
+    throw new ConflictError('autoship candidate card worktree path remains unregistered')
+  } catch (error: any) {
+    if (error instanceof ConflictError) throw error
+    if (error?.code !== 'ENOENT') {
+      throw new ValidationError('autoship candidate card worktree path could not be verified')
+    }
   }
 }
 

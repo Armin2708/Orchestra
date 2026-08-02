@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,6 +15,8 @@ import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import { JobScheduler } from '../src/agent-os/scheduler.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
 import { openDb } from '../src/db.js'
+import { buildServer } from '../src/server.js'
+import { cardWorktree } from '../src/shipqueue.js'
 
 const actor = { type: 'operator' as const, id: 'ship_queue' }
 const roots: string[] = []
@@ -156,7 +158,7 @@ describe('delivery autoship intent migration 037', () => {
 })
 
 describe('durable autoship recovery', () => {
-  it('uses exact live lookup and rotates bounded recovery past 200 older attempts', () => {
+  it('uses one bounded startup snapshot without rotating the current candidate out of recovery', async () => {
     const setup = fixture()
     const at = '2026-08-02T00:00:00.000Z'
     const insertCard = setup.db.prepare(`INSERT INTO cards
@@ -164,7 +166,7 @@ describe('durable autoship recovery', () => {
     const insertReport = setup.db.prepare(`INSERT INTO delivery_reports
       (id, lineage_id, sequence, board_id, card_id, status, asked_snapshot, commits,
        created_by, created_at, updated_at)
-      VALUES (?, ?, 1, ?, ?, 'accepted', '{}', ?, 'test', ?, ?)`)
+      VALUES (?, ?, 1, ?, ?, 'accepted', ?, ?, 'test', ?, ?)`)
     const insertIntent = setup.db.prepare(`INSERT INTO delivery_autoship_intents
       (id, report_id, board_id, card_id, source_repository, source_branch,
        source_commit, destination, prepared_by, prepared_at, idempotency_key,
@@ -184,6 +186,7 @@ describe('durable autoship recovery', () => {
         reportId,
         setup.boardId,
         cardId,
+        JSON.stringify(setup.accepted.asked),
         JSON.stringify([setup.sourceCommit]),
         at,
         at,
@@ -220,7 +223,27 @@ describe('durable autoship recovery', () => {
     expect(setup.trackbook.pendingAutoshipIntents(setup.boardId, 1)).toEqual([current])
     expect(setup.trackbook.pendingAutoshipIntentForCard(setup.boardId, setup.cardId))
       .toEqual(current)
-  })
+
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge current bounded candidate')
+    setup.db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(setup.cardId)
+    const enqueued: any[] = []
+    const server = buildServer(setup.db, undefined, {
+      makeShipQueue: () => ({
+        enqueue: (candidate) => { enqueued.push(candidate); return { queued: true } },
+        status: () => null,
+      }),
+    })
+    expect(enqueued).toEqual([expect.objectContaining({
+      cardId: setup.cardId,
+      branch: current.source_branch,
+      sourceCommit: current.source_commit,
+      worktree: cardWorktree(setup.repository, setup.cardId),
+    })])
+    expect(setup.trackbook.pendingAutoshipIntents()).toContainEqual(current)
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    await server.close()
+  }, 60_000)
 
   it('survives restart after merge and reconciles receipt, shipment and completion exactly once', () => {
     const setup = fixture()
@@ -235,6 +258,12 @@ describe('durable autoship recovery', () => {
 
     git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge accepted delivery')
     const observedHead = git(setup.repository, 'rev-parse', 'HEAD')
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/candidate branch cleanup is incomplete/),
+      }),
+    ])
     expect(() => setup.trackbook.completeAutoshipIntent(intent.id, {
       actor,
       observedHeadCommit: setup.mainBeforeMerge,
@@ -252,6 +281,21 @@ describe('durable autoship recovery', () => {
     restartedDb.prepare("UPDATE cards SET column_name='blocked' WHERE id=?").run(setup.cardId)
     restartedDb.prepare(`INSERT INTO card_events (card_id, type, payload)
       VALUES (?, 'autoship_failed', '{}')`).run(setup.cardId)
+    expect(restarted.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/candidate branch cleanup is incomplete/),
+      }),
+    ])
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    expect(restartedDb.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId))
+      .toEqual({ column_name: 'blocked' })
+    git(setup.repository, 'branch', '-d', 'card-77')
     restartedDb.exec(`CREATE TRIGGER fail_autoship_card_restore
       BEFORE UPDATE OF column_name ON cards
       WHEN OLD.column_name='blocked' AND NEW.column_name='done'
@@ -310,5 +354,142 @@ describe('durable autoship recovery', () => {
       .toEqual({ column_name: 'done' })
     expect(() => restartedDb.prepare('DELETE FROM delivery_autoship_completions WHERE intent_id=?')
       .run(intent.id)).toThrow(/immutable/)
+  })
+
+  it('requires the exact card worktree path to be absent and preserves unrelated worktrees', () => {
+    const setup = fixture()
+    const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:worktree-proof',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge accepted delivery')
+    const candidateWorktree = cardWorktree(setup.repository, setup.cardId)
+    git(setup.repository, 'worktree', 'add', candidateWorktree, 'card-77')
+    git(candidateWorktree, 'checkout', '--detach', setup.sourceCommit)
+    git(setup.repository, 'branch', '-d', 'card-77')
+    git(setup.repository, 'branch', 'unrelated-recovery-work')
+    const unrelatedWorktree = path.join(setup.holder, 'unrelated-worktree')
+    git(setup.repository, 'worktree', 'add', unrelatedWorktree, 'unrelated-recovery-work')
+
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/accepted source commit remains registered/),
+      }),
+    ])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+
+    git(setup.repository, 'worktree', 'remove', candidateWorktree)
+    mkdirSync(candidateWorktree)
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/path remains unregistered/),
+      }),
+    ])
+    rmSync(candidateWorktree, { recursive: true })
+
+    const [completed] = setup.trackbook.reconcilePendingAutoshipIntents({ actor })
+    expect(completed?.status).toBe('completed')
+    expect(setup.trackbook.pendingAutoshipIntents()).toEqual([])
+    const registrations = git(setup.repository, 'worktree', 'list', '--porcelain')
+    expect(registrations).toContain(realpathSync(unrelatedWorktree))
+    expect(git(setup.repository, 'rev-parse', 'unrelated-recovery-work')).toBe(
+      git(setup.repository, 'rev-parse', 'main'),
+    )
+    expect(intent.source_commit).toBe(setup.sourceCommit)
+  })
+
+  it('keeps completion pending when the detached accepted worktree was moved off its canonical path', () => {
+    const setup = fixture()
+    setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:moved-detached-worktree',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before moved cleanup bypass')
+    const canonicalWorktree = cardWorktree(setup.repository, setup.cardId)
+    const movedWorktree = path.join(setup.holder, 'moved-detached-candidate')
+    git(setup.repository, 'worktree', 'add', canonicalWorktree, 'card-77')
+    git(canonicalWorktree, 'checkout', '--detach', setup.sourceCommit)
+    git(setup.repository, 'branch', '-d', 'card-77')
+    git(setup.repository, 'worktree', 'move', canonicalWorktree, movedWorktree)
+
+    expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        reason: expect.stringMatching(/accepted source commit remains registered/),
+      }),
+    ])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    expect(git(setup.repository, 'worktree', 'list', '--porcelain')).toContain(
+      realpathSync(movedWorktree),
+    )
+    expect(git(movedWorktree, 'rev-parse', 'HEAD')).toBe(setup.sourceCommit)
+  })
+
+  it('startup keeps merged work pending and requeues exact cleanup identity from done or autoship-failed', async () => {
+    const setup = fixture()
+    const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:startup-proof',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before daemon restart')
+    setup.db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(setup.cardId)
+    const firstEnqueued: any[] = []
+    const first = buildServer(setup.db, undefined, {
+      makeShipQueue: () => ({
+        enqueue: (candidate) => { firstEnqueued.push(candidate); return { queued: true } },
+        status: () => null,
+      }),
+    })
+    expect(firstEnqueued).toEqual([expect.objectContaining({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      branch: intent.source_branch,
+      sourceCommit: intent.source_commit,
+      worktree: cardWorktree(setup.repository, setup.cardId),
+    })])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    expect(git(setup.repository, 'rev-parse', 'card-77')).toBe(setup.sourceCommit)
+    await first.close()
+
+    setup.db.prepare("UPDATE cards SET column_name='blocked' WHERE id=?").run(setup.cardId)
+    setup.db.prepare(`INSERT INTO card_events (card_id, type, payload)
+      VALUES (?, 'autoship_failed', '{}')`).run(setup.cardId)
+    const retryEnqueued: any[] = []
+    const retry = buildServer(setup.db, undefined, {
+      makeShipQueue: () => ({
+        enqueue: (candidate) => { retryEnqueued.push(candidate); return { queued: true } },
+        status: () => null,
+      }),
+    })
+    expect(retryEnqueued).toEqual([expect.objectContaining({
+      branch: intent.source_branch,
+      sourceCommit: intent.source_commit,
+      worktree: cardWorktree(setup.repository, setup.cardId),
+    })])
+    expect(setup.db.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId))
+      .toEqual({ column_name: 'blocked' })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    await retry.close()
   })
 })
