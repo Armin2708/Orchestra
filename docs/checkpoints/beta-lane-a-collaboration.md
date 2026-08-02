@@ -97,3 +97,65 @@ covered the exact implementation head shown above.
 Clean at `f9cb54e4d03423d51df1a61d332fd01170c07fad`: no P0, P1, or P2 findings. The
 reviewer independently reran the two crash-consistency regression files (28 tests) and TypeScript
 checking, and confirmed the worktree evidence was clean.
+
+## Restart autoship remediation addendum
+
+Date: 2026-08-02
+
+This addendum supersedes the earlier clean-review conclusion above. A later independent review of
+the exact Lane A marker `743c155c031ef5066fb0f784fcea49d7c17aac6f` found one P1: startup
+reconciliation could create the canonical receipt, shipment, and completion and restore a blocked
+card while the accepted branch or its registered worktree still existed.
+
+### Delivered
+
+Verified remediation implementation head:
+`9690972cf292afe07d549f21b64f89c64ba5bab2`.
+
+- `completeAutoshipIntent` now checks cleanup inside the immediate completion transaction. The
+  exact accepted branch must be absent, the canonical card worktree path must be absent, and no
+  non-primary registered worktree may remain pinned to the immutable accepted source commit.
+- Restart ShipQueue recovery binds the immutable source commit, exact branch, canonical worktree
+  path, registered HEAD, and clean tracked/untracked state. It removes only that exact clean
+  worktree without force and CAS-deletes the branch with `git update-ref -d <ref> <accepted-sha>`.
+- Moved, reused, detached, dirty, missing, ambiguous, or unregistered candidate state fails closed.
+  Unrelated branches and worktrees are preserved, and no canonical receipt, shipment, completion,
+  or card repair is recorded.
+- Startup consumes one bounded reconciliation snapshot so attempt-event rotation cannot starve the
+  current 200 candidates. Cards blocked by the latest `autoship_failed` event remain retryable.
+- ShipQueue Git evidence ignores ambient `GIT_*` overrides and system/global Git configuration.
+- The full-history secret gate now permits only eight exact reviewed fixture fingerprints; no
+  commit-, path-, or rule-wide suppression was added.
+
+### Evidence
+
+Environment: Node `22.20.0`, npm `10.9.3`; no root or web `.env` file exists.
+
+| Gate | Exact result |
+|---|---|
+| Focused autoship restart/CAS suite | 3 files / 28 tests passed |
+| Focused cross-domain delivery suite | 12 files / 95 tests passed |
+| Complete default repository suite | 208 files / 1,783 tests passed in 115.48s |
+| Complete one-worker repository suite | 208 files / 1,783 tests passed in 280.46s |
+| Root TypeScript and production build | passed |
+| Web TypeScript and production build | passed |
+| Root and web dependency audits | zero vulnerabilities |
+| Gitleaks changed-file/staged scans | no findings |
+| Gitleaks full-history scan | 457 commits / 15.90 MB scanned; no findings |
+| GitNexus | `buildServer` CRITICAL (75 total / 58 direct), `ShipQueue` HIGH (104 total / 7 direct); exact remediation diff reviewed and covered by full lifecycle tests |
+| Graphify | refreshed to 8,157 nodes / 19,862 edges / 309 communities |
+| Independent remediation review | APPROVE; P0=0, P1=0, P2=0 |
+
+The independent reviewer reproduced the moved-detached bypass (`git worktree move` after detach and
+branch deletion), then verified the remediation keeps the intent pending with zero receipts, zero
+shipments, and zero completions. The committed regression preserves this exact exploit sequence.
+
+### Rollback and integration
+
+- Roll back the remediation by reverting the ready-marker commit and
+  `9690972cf292afe07d549f21b64f89c64ba5bab2`, then
+  `d7558476dd299fc8ad3866d417eefbfa208880bd` in reverse order.
+- Central integration must union the exact `.gitleaksignore` fingerprints with the release lane's
+  existing exact allowlist; it must not replace them with broad exceptions.
+- This checkpoint does not publish, tag, push, promote providers, alter backlog counts, or claim a
+  stable release.
