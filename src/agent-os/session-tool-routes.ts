@@ -19,6 +19,7 @@ import {
   type SessionToolPolicyRule,
   type ToolInvocationProvenance,
 } from './session-tools.js'
+import type { ActorIdentity } from './agent-home-support.js'
 
 export interface SessionToolRouteOptions extends FastifyPluginOptions {
   db: Database.Database
@@ -67,7 +68,10 @@ const idempotencyKey = (
 
 const actorId = (
   request: FastifyRequest,
-): string => text(request.orchestraPrincipal ?? 'operator', 'actor id')
+): ActorIdentity => ({
+  type: 'human',
+  id: text(request.orchestraPrincipal ?? 'operator', 'actor id'),
+})
 
 export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = async (
   app,
@@ -127,7 +131,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
             body.expected_revision ?? body.expectedRevision,
             'expected revision',
           ),
-          actorId: actorId(request),
+          actor: actorId(request),
           idempotencyKey: idempotencyKey(request, body),
         }),
       }
@@ -142,7 +146,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
       return {
         authorization: service.requestInvocation(request.params.id, {
           toolId: text(body.tool_id ?? body.toolId, 'tool id'),
-          actorId: actorId(request),
+          actor: actorId(request),
           requestId: optionalText(body.request_id ?? body.requestId) ?? undefined,
           idempotencyKey: idempotencyKey(request, body),
         }),
@@ -165,7 +169,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
         providerEventId: optionalText(body.provider_event_id ?? body.providerEventId),
         errorCode: optionalText(body.error_code ?? body.errorCode),
         observedAt: optionalText(body.observed_at ?? body.observedAt) ?? undefined,
-        actorId: actorId(request),
+        actor: actorId(request),
         idempotencyKey: idempotencyKey(request, body),
       })
       return reply.code(201).send({ invocation })

@@ -25,6 +25,7 @@ import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
 import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
 import { osApi, type Job } from './osApi'
+import { agentHomeApi, type AgentProfile } from './agentHomeApi'
 import './messages.css'
 import './agentOs.css'
 
@@ -46,6 +47,7 @@ export function App() {
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
   const hasConnectedRef = useRef(false)
   const [jobs, setJobs] = useState<Job[]>([])
+  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
   const [activeSavedView, setActiveSavedView] = useState<SavedCommandCenterView | null>(null)
   const [locationSearch, setLocationSearch] = useState(location.search)
   const [needsAuth, setNeedsAuth] = useState(false)
@@ -172,12 +174,16 @@ export function App() {
   const refresh = useCallback(async () => {
     try {
       const boards = await api('GET', '/boards')
-      const all = await Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`)))
+      const [all, nextJobs, nextProfiles] = await Promise.all([
+        Promise.all(boards.map((b: any) => api('GET', `/boards/${b.id}/snapshot`))),
+        Promise.all(boards.map((board: any) => osApi.listJobs(Number(board.id)).catch(() => []))),
+        Promise.all(boards.map((board: any) => agentHomeApi.listProfiles(Number(board.id)).catch(() => []))),
+      ])
       setSnaps(all)
       hasConnectedRef.current = true
       setConnectionState('live')
-      const nextJobs = await Promise.all(boards.map((board: any) => osApi.listJobs(Number(board.id)).catch(() => [])))
       setJobs(nextJobs.flat())
+      setAgentProfiles(nextProfiles.flat())
       setNeedsAuth(false)
       return boards
     } catch (e) {
@@ -213,13 +219,14 @@ export function App() {
   const commandCenterActive = view === 'board' || view === 'open-work'
   const { jobs: projectJobs, searchRecords } = commandCenterProjectProjection({
     snapshots: shown,
+    agentProfiles,
     jobs,
     savedView: activeSavedView,
   })
   const commandCounts = {
     work: shown.reduce((sum, snapshot) => sum + snapshot.cards.length, 0),
-    agents: shown.reduce((sum, snapshot) => sum
-      + snapshot.agents.filter((agent) => agent.status !== 'gone').length, 0),
+    agents: agentProfiles.filter((profile) => profile.status === 'active'
+      && shown.some((snapshot) => snapshot.board.id === profile.board_id)).length,
     activity: shown.reduce((sum, snapshot) => sum
       + snapshot.cards.length + snapshot.threads.length + snapshot.milestones.length, 0),
   }

@@ -116,9 +116,19 @@ describe('session tool routes', () => {
       WHERE kind='session.tool_invocation.recorded'`).all())).not.toContain('ROUTE-SECRET')
     expect(db.prepare(`SELECT actor_type, actor_id FROM os_events
       WHERE kind='session.tool_invocation.recorded'`).get()).toEqual({
-      actor_type: 'agent',
+      actor_type: 'human',
       actor_id: 'operator',
     })
+    expect(db.prepare(`SELECT kind, actor_type, actor_id FROM os_events
+      WHERE kind IN (
+        'session.tool_policy.updated',
+        'session.tool_approval.requested',
+        'session.tool_invocation.recorded'
+      ) ORDER BY rowid`).all()).toEqual([
+      { kind: 'session.tool_policy.updated', actor_type: 'human', actor_id: 'operator' },
+      { kind: 'session.tool_approval.requested', actor_type: 'human', actor_id: 'operator' },
+      { kind: 'session.tool_invocation.recorded', actor_type: 'human', actor_id: 'operator' },
+    ])
     db.close()
   })
 
@@ -176,7 +186,7 @@ describe('session tool routes', () => {
     expect(operator.statusCode).toBe(201)
     expect(db.prepare(`SELECT actor_type, actor_id FROM os_events
       WHERE kind='session.tool_invocation.recorded'`).get()).toEqual({
-      actor_type: 'agent',
+      actor_type: 'human',
       actor_id: 'operator',
     })
     expect(JSON.stringify(db.prepare(`SELECT actor_id, payload FROM os_events

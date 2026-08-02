@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { AttentionService, type AttentionItem } from './attention.js'
+import { actorIdentity, type ActorIdentity } from './agent-home-support.js'
 import { EventStore } from './event-store.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { parseJson } from './json.js'
@@ -85,13 +86,13 @@ export type SetSessionToolPolicyInput = {
   defaultDecision: ToolPolicyDecision
   rules?: readonly SessionToolPolicyRule[]
   expectedRevision: number
-  actorId: string
+  actor: ActorIdentity
   idempotencyKey: string
 }
 
 export type RequestToolInvocationInput = {
   toolId: string
-  actorId: string
+  actor: ActorIdentity
   requestId?: string
   idempotencyKey: string
 }
@@ -105,7 +106,7 @@ export type RecordToolInvocationInput = {
   providerEventId?: string | null
   errorCode?: string | null
   observedAt?: string
-  actorId: string
+  actor: ActorIdentity
   idempotencyKey: string
 }
 
@@ -138,6 +139,11 @@ const safeId = (value: unknown, name: string): string => {
     throw new ValidationError(`${name} is invalid`)
   }
   return value
+}
+
+const durableActor = (value: ActorIdentity, name: string): ActorIdentity & { id: string } => {
+  const actor = actorIdentity(value)
+  return { ...actor, id: safeId(actor.id, `${name} id`) }
 }
 
 const optionalSafeId = (value: unknown, name: string): string | null =>
@@ -409,7 +415,7 @@ export class SessionToolService {
     const session = this.#session(sessionId)
     const expectedRevision = nonNegativeInteger(input.expectedRevision, 'expected revision')
     const rules = normalizeRules(input.rules)
-    const actorId = safeId(input.actorId, 'tool policy actor')
+    const actor = durableActor(input.actor, 'tool policy actor')
     const idempotencyKey = safeId(input.idempotencyKey, 'idempotency key')
     const next = {
       schema_version: 1 as const,
@@ -417,7 +423,7 @@ export class SessionToolService {
       revision: expectedRevision + 1,
       default_decision: policyDecision(input.defaultDecision, 'default tool decision'),
       rules,
-      updated_by: actorId,
+      updated_by: actor.id,
     }
     const replay = this.#eventForIdempotency(
       session.board_id,
@@ -440,7 +446,7 @@ export class SessionToolService {
     }
     this.#events.append({
       boardId: session.board_id,
-      actor: { type: 'human', id: actorId },
+      actor,
       workspaceId: session.workspace_id,
       cardId: session.card_id,
       sessionId: session.id,
@@ -461,7 +467,7 @@ export class SessionToolService {
     const toolId = safeId(input.toolId, 'tool id')
     const tool = snapshot.tools.find((candidate) => candidate.id === toolId)
     if (!tool) throw new NotFoundError('tool is not available in this session')
-    const actorId = safeId(input.actorId, 'tool request actor')
+    const actor = durableActor(input.actor, 'tool request actor')
     const idempotencyKey = safeId(input.idempotencyKey, 'idempotency key')
     const requestId = input.requestId === undefined
       ? stableEventId('tool-approval', idempotencyKey)
@@ -493,7 +499,7 @@ export class SessionToolService {
 
     const event = this.#events.append({
       boardId: session.board_id,
-      actor: { type: 'agent', id: actorId },
+      actor,
       workspaceId: session.workspace_id,
       cardId: session.card_id,
       sessionId: session.id,
@@ -584,7 +590,7 @@ export class SessionToolService {
     }
     const event = this.#events.append({
       boardId: session.board_id,
-      actor: { type: 'agent', id: safeId(input.actorId, 'tool invocation actor') },
+      actor: durableActor(input.actor, 'tool invocation actor'),
       workspaceId: session.workspace_id,
       cardId: session.card_id,
       sessionId: session.id,

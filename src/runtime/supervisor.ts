@@ -254,8 +254,9 @@ export class RuntimeSupervisor {
     const known = await this.get(processId)
     if (!known) throw new Error(`process ${processId} not found`)
     if (terminalStatuses.has(known.status)) return known
-    const state = this.live(processId)
     const grace = Math.min(30_000, Math.max(0, Math.floor(graceMs)))
+    const state = this.states.get(processId)
+    if (!state) return this.stopPersistedProcess(known, grace)
     state.stopRequested = true
     await this.updateRecord(state, { status: 'stopping' })
     await this.emitFor(state, 'process.stopping', { graceMs: grace })
@@ -270,6 +271,134 @@ export class RuntimeSupervisor {
     if (!(await this.waitForExit(state, 2_000))) throw new Error(`process ${processId} did not exit after SIGKILL`)
     await this.flush(processId)
     return clone(state.record)
+  }
+
+  private async stopPersistedProcess(
+    record: ProcessRecord,
+    graceMs: number,
+  ): Promise<ProcessRecord> {
+    const pid = record.pid
+    if (!Number.isSafeInteger(pid) || pid === null || pid <= 1 || !record.startedAt) {
+      throw new Error(`persisted process ${record.id} lacks a verifiable process identity`)
+    }
+    const identity = await this.persistedProcessIdentity(record)
+    if (identity === 'exited') {
+      return this.persistedProcessStopped(record, pid, 'already-exited')
+    }
+    if (identity !== 'matched') {
+      throw new Error(`persisted process ${record.id} identity does not match pid ${pid}`)
+    }
+    await this.emit({
+      kind: 'process.stopping', processId: record.id, workspaceId: record.workspaceId,
+      at: new Date().toISOString(), payload: { graceMs, recovered: true, identity_verified: true },
+    })
+    this.signalPersistedProcess(pid, 'SIGTERM')
+    await this.emit({
+      kind: 'process.signal', processId: record.id, workspaceId: record.workspaceId,
+      at: new Date().toISOString(), payload: { signal: 'SIGTERM', reason: 'recovered-stop' },
+    })
+    if (!(await this.waitForPersistedExit(pid, graceMs))) {
+      this.signalPersistedProcess(pid, 'SIGKILL')
+      await this.emit({
+        kind: 'process.signal', processId: record.id, workspaceId: record.workspaceId,
+        at: new Date().toISOString(), payload: { signal: 'SIGKILL', reason: 'recovered-stop-timeout' },
+      })
+      if (!(await this.waitForPersistedExit(pid, 2_000))) {
+        throw new Error(`persisted process ${record.id} termination could not be observed`)
+      }
+    }
+    return this.persistedProcessStopped(record, pid, 'observed-exit')
+  }
+
+  private async persistedProcessIdentity(
+    record: ProcessRecord,
+  ): Promise<'matched' | 'mismatched' | 'exited'> {
+    const pid = record.pid!
+    if (!this.persistedProcessExists(pid)) return 'exited'
+    if (process.platform === 'win32') return 'mismatched'
+    try {
+      const observed = await this.command('ps', [
+        '-p', String(pid), '-o', 'lstart=', '-o', 'command=',
+      ])
+      const match = observed.stdout.trim().match(
+        /^(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/,
+      )
+      if (!match) return 'mismatched'
+      const observedStartedAt = Date.parse(match[1])
+      const expectedStartedAt = Date.parse(record.startedAt!)
+      if (!Number.isFinite(observedStartedAt) || !Number.isFinite(expectedStartedAt)
+        || Math.abs(observedStartedAt - expectedStartedAt) > 2_000) {
+        return 'mismatched'
+      }
+      const expectedExecutable = path.basename(
+        record.command.trim().split(/\s+/, 1)[0].replace(/^['"]|['"]$/g, ''),
+      )
+      if (!expectedExecutable || !match[2].includes(expectedExecutable)) return 'mismatched'
+      const expectedCwd = await realpath(record.cwd)
+      let observedCwd: string
+      if (process.platform === 'linux') {
+        observedCwd = await realpath(`/proc/${pid}/cwd`)
+      } else {
+        const cwd = await this.command('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'])
+        const pathLine = cwd.stdout.split('\n').find((line) => line.startsWith('n'))
+        if (!pathLine) return 'mismatched'
+        observedCwd = await realpath(pathLine.slice(1))
+      }
+      return observedCwd === expectedCwd ? 'matched' : 'mismatched'
+    } catch {
+      return this.persistedProcessExists(pid) ? 'mismatched' : 'exited'
+    }
+  }
+
+  private persistedProcessExists(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EPERM'
+    }
+  }
+
+  private signalPersistedProcess(pid: number, signal: NodeJS.Signals): void {
+    try {
+      process.kill(process.platform === 'win32' ? pid : -pid, signal)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+
+  private async waitForPersistedExit(pid: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (this.persistedProcessExists(pid)) {
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    return true
+  }
+
+  private async persistedProcessStopped(
+    record: ProcessRecord,
+    previousPid: number,
+    proof: 'already-exited' | 'observed-exit',
+  ): Promise<ProcessRecord> {
+    const current = await this.persistence.getProcess(record.id)
+    const stopped = current && terminalStatuses.has(current.status)
+      ? current
+      : await this.persistence.updateProcess(record.id, {
+        status: 'stopped', pid: null, endedAt: new Date().toISOString(), exitCode: null,
+      })
+    await this.emit({
+      kind: 'process.stopped', processId: stopped.id, workspaceId: stopped.workspaceId,
+      at: stopped.endedAt ?? new Date().toISOString(),
+      payload: {
+        previousPid,
+        recovered: true,
+        identity_verified: proof === 'observed-exit',
+        termination_observed: true,
+        termination_proof: proof,
+      },
+    })
+    return clone(stopped)
   }
 
   async restart(processId: OsId): Promise<ProcessRecord> {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '../web/src/api.js'
+import type { AgentProfile } from '../web/src/agentHomeApi.js'
 import {
   buildCommandCenterGraph,
   commandCenterDeepLink,
@@ -41,6 +42,26 @@ const snapshots: Snapshot[] = [{
   threads: [],
   ideas: [],
   milestones: [],
+}]
+
+const agentProfiles: AgentProfile[] = [{
+  id: 'managed-codex-profile:opaque-7f',
+  board_id: 7,
+  legacy_agent_id: 12,
+  name: 'runtime-operator',
+  role: 'runtime engineer',
+  default_provider: 'codex',
+  default_model: 'gpt-5.4',
+  default_effort: 'high',
+  default_access_profile: 'workspace_write',
+  capabilities: ['typescript', 'pty'],
+  owner_actor_type: 'human',
+  owner_actor_id: 'operator',
+  status: 'active',
+  provenance: {},
+  created_at: '2026-08-02T10:00:00Z',
+  updated_at: '2026-08-02T10:00:00Z',
+  archived_at: null,
 }]
 
 describe('command center navigation and presentation contracts', () => {
@@ -139,9 +160,9 @@ describe('command center global search and dependency truth', () => {
     expect(projectScopedJobs(snapshots, jobs).map((job) => job.id)).toEqual(['job-7'])
 
     const active = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-active-work')!
-    const projection = commandCenterProjectProjection({ snapshots, jobs, savedView: active })
+    const projection = commandCenterProjectProjection({ snapshots, agentProfiles, jobs, savedView: active })
     expect(projection.jobs.map((job) => job.id)).toEqual(['job-7'])
-    const records = commandCenterSearchRecords({ snapshots, jobs: projection.jobs })
+    const records = commandCenterSearchRecords({ snapshots, agentProfiles, jobs: projection.jobs })
     expect(records.some((record) => record.id === 'job:job-8')).toBe(false)
     expect(projection.searchRecords.map((record) => record.id)).toEqual(['job:job-7'])
     const review = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-needs-review')!
@@ -152,6 +173,7 @@ describe('command center global search and dependency truth', () => {
   it('searches agents, work, discussions, knowledge, and deliveries without enabling unavailable records', () => {
     const records = commandCenterSearchRecords({
       snapshots,
+      agentProfiles,
       discussions: [{
         id: 'discussion-1', boardId: 7, title: 'Restart plan', summary: 'Review daemon recovery.',
         status: 'open', type: 'plan', author: 'runtime-operator', updatedAt: '2026-08-02T10:00:00Z',
@@ -174,12 +196,12 @@ describe('command center global search and dependency truth', () => {
     })
     expect(new Set(records.map((record) => record.kind))).toEqual(new Set(['agent', 'work', 'discussion', 'knowledge', 'delivery']))
     expect(records.find((record) => record.kind === 'agent')).toMatchObject({
-      id: 'agent:7:legacy-agent:12',
-      href: '/?section=agents&board=7&agent=legacy-agent%3A12',
+      id: 'agent:7:managed-codex-profile:opaque-7f',
+      href: '/?section=agents&board=7&agent=managed-codex-profile%3Aopaque-7f',
     })
     expect(parseCommandCenterSelection(
       new URL(records.find((record) => record.kind === 'agent')!.href, 'http://orchestra.local').search,
-    ).agentId).toBe('legacy-agent:12')
+    ).agentId).toBe('managed-codex-profile:opaque-7f')
     expect(searchCommandCenter(records, 'runtime operator').map((record) => record.kind)).toContain('agent')
     expect(searchCommandCenter(records, 'raw bytes')).toMatchObject([{ kind: 'knowledge', unavailableReason: expect.stringContaining('unavailable') }])
     expect(searchCommandCenter(records, 'browser continuation')).toMatchObject([{ kind: 'delivery', status: 'Verified' }])

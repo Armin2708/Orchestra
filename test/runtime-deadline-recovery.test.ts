@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { JobMarketService } from '../src/agent-os/job-market.js'
 import { createAgentOsRuntime } from '../src/agent-os/runtime-integration.js'
@@ -9,6 +10,15 @@ const eventually = async (condition: () => boolean, timeoutMs = 5_000): Promise<
   while (!condition()) {
     if (Date.now() - started > timeoutMs) throw new Error('condition never became true')
     await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+const processExists = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 
@@ -140,4 +150,115 @@ describe('runtime deadline and cancellation recovery remediation', () => {
       db.close()
     }
   })
+
+  it('preserves then terminates a real cancelling shell process in daemon restart order', async () => {
+    if (process.platform === 'win32') return
+    const db = openDb(':memory:')
+    const repositoryPath = process.cwd()
+    const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES (?, 'real shell restart recovery')`).run(repositoryPath).lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES ('real-shell-workspace', ?, 'real shell', 'shared', ?, 'active')`)
+      .run(boardId, repositoryPath)
+    const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], {
+      cwd: repositoryPath,
+      detached: true,
+      stdio: 'ignore',
+    })
+    orphan.unref()
+    const orphanPid = orphan.pid!
+    await eventually(() => processExists(orphanPid))
+    const processId = 'real-shell-process'
+    db.prepare(`INSERT INTO processes (
+      id, workspace_id, name, command, cwd, status, pid, exit_code,
+      cols, rows, restartable, started_at, ended_at
+    ) VALUES (?, 'real-shell-workspace', 'real persisted shell process', ?, ?,
+      'running', ?, NULL, 120, 32, 1, ?, NULL)`)
+      .run(
+        processId,
+        `${process.execPath} -e setInterval`,
+        repositoryPath,
+        orphanPid,
+        new Date().toISOString(),
+      )
+    db.prepare(`INSERT INTO jobs (
+      id, board_id, workspace_id, provider, driver_id, status, attempts, max_attempts,
+      started_at
+    ) VALUES (
+      'real-shell-cancelling', ?, 'real-shell-workspace', 'shell', 'shell',
+      'cancelling', 1, 1, datetime('now')
+    )`).run(boardId)
+    db.prepare(`INSERT INTO agent_sessions (
+      id, workspace_id, provider, driver_id, external_id, status, context_json, job_id
+    ) VALUES (
+      'real-shell-session', 'real-shell-workspace', 'shell', 'shell', ?, 'running',
+      json_object('job_id', 'real-shell-cancelling'), 'real-shell-cancelling'
+    )`).run(processId)
+    const afterCrash = createAgentOsRuntime(db)
+
+    try {
+      expect(await afterCrash.reconcileLost()).toEqual([])
+      expect(db.prepare('SELECT status, pid FROM processes WHERE id=?').get(processId))
+        .toMatchObject({ status: 'running', pid: orphanPid })
+      expect(await afterCrash.reconcileJobs()).toEqual({
+        resumed: [],
+        recovered: ['real-shell-cancelling'],
+      })
+      await eventually(() => !processExists(orphanPid))
+      expect(afterCrash.scheduler.get('real-shell-cancelling')).toMatchObject({
+        status: 'cancelled',
+        error: null,
+      })
+      expect(db.prepare('SELECT status, pid FROM processes WHERE id=?').get(processId))
+        .toEqual({ status: 'stopped', pid: null })
+      expect(db.prepare(`SELECT payload FROM os_events
+        WHERE process_id=? AND kind='process.stopped'
+        ORDER BY rowid DESC LIMIT 1`).get(processId)).toMatchObject({
+        payload: expect.stringContaining('"termination_proof":"observed-exit"'),
+      })
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM jobs
+        WHERE status IN ('running','cancelling')`).get()).toEqual({ count: 0 })
+    } finally {
+      await afterCrash.shutdown()
+      if (processExists(orphanPid)) {
+        try { process.kill(-orphanPid, 'SIGKILL') } catch {}
+      }
+      db.close()
+    }
+  }, 15_000)
+
+  it('fails closed without signalling when a persisted pid identity does not match', async () => {
+    if (process.platform === 'win32') return
+    const db = openDb(':memory:')
+    const repositoryPath = process.cwd()
+    const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES (?, 'pid identity mismatch')`).run(repositoryPath).lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES ('pid-mismatch-workspace', ?, 'pid mismatch', 'shared', ?, 'active')`)
+      .run(boardId, repositoryPath)
+    const owner = createAgentOsRuntime(db)
+    const processRecord = await owner.supervisor.spawn({
+      workspaceId: 'pid-mismatch-workspace',
+      name: 'identity mismatch process',
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1_000)'],
+      cwd: repositoryPath,
+      shell: false,
+    })
+    db.prepare(`UPDATE processes SET started_at='2000-01-01T00:00:00.000Z' WHERE id=?`)
+      .run(processRecord.id)
+    const restarted = createAgentOsRuntime(db)
+
+    try {
+      await expect(restarted.supervisor.stop(processRecord.id))
+        .rejects.toThrow(/identity does not match/)
+      expect(processExists(processRecord.pid!)).toBe(true)
+      expect(db.prepare('SELECT status, pid FROM processes WHERE id=?').get(processRecord.id))
+        .toMatchObject({ status: 'running', pid: processRecord.pid })
+    } finally {
+      await owner.shutdown()
+      await restarted.shutdown()
+      db.close()
+    }
+  }, 15_000)
 })
