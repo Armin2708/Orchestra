@@ -222,6 +222,8 @@
       "process_output",
       "processes",
       "provider_acceptance_evidence",
+      "terminal_command_history",
+      "terminal_workspace_state",
       "workspace_assignments",
       "workspaces"
     ],
@@ -349,6 +351,8 @@
       "GET /api/v1/os/workspaces/:id/checkpoints",
       "GET /api/v1/os/workspaces/:id/context",
       "GET /api/v1/os/workspaces/:id/processes",
+      "GET /api/v1/os/workspaces/:id/terminal-history",
+      "GET /api/v1/os/workspaces/:id/terminal-selection",
       "PATCH /api/v1/os/agent-profiles/:id",
       "PATCH /api/v1/os/conversations/:id",
       "PATCH /api/v1/os/workspaces/:id",
@@ -389,6 +393,7 @@
       "POST /api/v1/os/organizations/:organizationId/coordination/:command",
       "POST /api/v1/os/organizations/:organizationId/core/:command",
       "POST /api/v1/os/policies/:id/evaluate",
+      "POST /api/v1/os/processes/:id/commands",
       "POST /api/v1/os/processes/:id/input",
       "POST /api/v1/os/processes/:id/resize",
       "POST /api/v1/os/processes/:id/restart",
@@ -409,7 +414,8 @@
       "PUT /api/v1/os/boards/:id/retention",
       "PUT /api/v1/os/cards/:id/contract",
       "PUT /api/v1/os/settings/agent-defaults",
-      "PUT /api/v1/os/workspaces/:id/context"
+      "PUT /api/v1/os/workspaces/:id/context",
+      "PUT /api/v1/os/workspaces/:id/terminal-selection"
     ],
     "compatibility": [
       "DELETE /api/v1/agents/:id",
@@ -732,10 +738,10 @@
   ],
   "ui_surfaces": [
     {
-      "id": "primary.board",
-      "classification": "legacy",
+      "id": "primary.command-center",
+      "classification": "canonical",
       "file": "web/src/App.tsx",
-      "evidence": ">Board</button>"
+      "evidence": ">Command center</button>"
     },
     {
       "id": "primary.roadmap",
@@ -747,7 +753,7 @@
       "id": "primary.open-work",
       "classification": "canonical",
       "file": "web/src/App.tsx",
-      "evidence": ">Open Work</button>"
+      "evidence": "<OpenWorkView"
     },
     {
       "id": "primary.organization",

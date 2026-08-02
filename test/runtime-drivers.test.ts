@@ -5,6 +5,7 @@ import {
   RuntimeSupervisor,
   ShellAgentDriver,
   type ClaudeConductorPort,
+  type ClaudePendingPermission,
   type ClaudeTranscriptLine,
   type PtyBackend,
   type PtyHandle,
@@ -85,6 +86,12 @@ describe('provider-neutral drivers', () => {
     const transcripts = new Map<number, ClaudeTranscriptLine[]>()
     const tasks: { id: number; text: string }[] = []
     const interrupted: number[] = []
+    const approvals: Array<{
+      id: number
+      requestId: string
+      behavior: string
+    }> = []
+    const permissions = new Map<number, ClaudePendingPermission[]>()
     const hires: Record<string, unknown>[] = []
     const conductor: ClaudeConductorPort = {
       isHired: (id) => live.has(id),
@@ -96,7 +103,15 @@ describe('provider-neutral drivers', () => {
         return { id, name: options.name, sdk_session: options.resumeSession ?? `sdk-${id}` }
       },
       task: (id, text) => { tasks.push({ id, text }); return live.has(id) },
-      transcript: (id) => ({ lines: transcripts.get(id) ?? [], working: null }),
+      transcript: (id) => ({
+        lines: transcripts.get(id) ?? [],
+        working: null,
+        permissions: permissions.get(id) ?? [],
+      }),
+      resolvePermission: (id, requestId, behavior) => {
+        approvals.push({ id, requestId, behavior })
+        return true
+      },
       interruptAgent: async (id) => { interrupted.push(id); return live.has(id) },
       fire: async (id) => live.delete(id),
     }
@@ -129,8 +144,55 @@ describe('provider-neutral drivers', () => {
     transcripts.get(1)!.push({ at: new Date().toISOString(), kind: 'tool', text: 'Bash(npm test)' })
     const iterator = driver.events(session.id)[Symbol.asyncIterator]()
     expect((await iterator.next()).value).toMatchObject({ type: 'tool', data: 'Bash(npm test)' })
+    await iterator.return?.()
+
+    transcripts.get(1)!.push({
+      at: new Date(Date.now() + 1).toISOString(),
+      kind: 'text',
+      text: 'continued after stream reconnect',
+    })
+    permissions.set(1, [{
+      id: 'approval-1',
+      tool: 'Write',
+      summary: 'Write a file',
+      title: 'Approve file write',
+      at: new Date(Date.now() + 2).toISOString(),
+    }])
+    const reconnected = driver.events(session.id)[Symbol.asyncIterator]()
+    expect((await reconnected.next()).value).toMatchObject({
+      seq: 2,
+      type: 'output',
+      data: 'continued after stream reconnect',
+    })
+    expect((await reconnected.next()).value).toMatchObject({
+      seq: 3,
+      type: 'tool',
+      data: 'Approve file write',
+      metadata: {
+        approval: true,
+        approvalRequest: {
+          requestId: 'approval-1',
+          kind: 'tool',
+          toolName: 'Write',
+        },
+      },
+    })
+    await expect(driver.resolveApproval(
+      session.id,
+      'approval-1',
+      'allow',
+    )).resolves.toBe(true)
+    expect(approvals).toEqual([{
+      id: 1,
+      requestId: 'approval-1',
+      behavior: 'allow',
+    }])
     await driver.stop(session.id)
-    expect((await iterator.next()).value).toMatchObject({ type: 'exit', data: 'Claude session stopped' })
+    expect((await reconnected.next()).value).toMatchObject({
+      seq: 4,
+      type: 'exit',
+      data: 'Claude session stopped',
+    })
   })
 
   it('attaches Claude sessions through injected identity and workspace resolvers', async () => {

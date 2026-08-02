@@ -51,7 +51,7 @@ export const CLAUDE_PROVIDER_LIFECYCLE_EVIDENCE_V1 = Object.freeze({
   follow_up: 'driver.send',
   fork: 'driver.forkSession_then_driver.launch',
   interrupt: 'driver.interrupt',
-  cancel: 'driver.interrupt',
+  cancel: 'driver.cancel',
   stop: 'driver.stop',
   attach: 'unsupported_authorized_attach_not_implemented_v1',
   resume: 'unsupported_durable_resume_not_implemented_v1',
@@ -63,6 +63,12 @@ export type ClaudeProviderDriverPortV1 = AgentDriver & {
     sessionId: string,
     options: ClaudeSessionForkOptions,
   ): Promise<ClaudeSessionForkResult>
+  resolveApproval(
+    sessionId: string,
+    requestId: string,
+    decision: 'allow' | 'deny',
+    message?: string,
+  ): Promise<boolean>
 }
 
 export type ClaudeProviderAdapterOptionsV1 = {
@@ -96,7 +102,7 @@ export type ClaudeProviderAdapterOptionsV1 = {
     parent: DriverSession,
     result: ClaudeSessionForkResult,
   ): MaybePromise<DriverLaunchRequest>
-  submitApproval(
+  submitApproval?(
     context: AgentDriverProviderSessionContextV1,
     decision: Readonly<ProviderApprovalDecisionV1>,
   ): MaybePromise<void>
@@ -456,6 +462,18 @@ export function createClaudeProviderAdapterV1(
   const driverBindings = new Map<string, DriverSessionBindingV1>()
   const pendingForkBindings = new Map<string, DriverSessionBindingV1>()
   let privateExecutable: PrivateExecutableObservationV1 | null = null
+  const submitApproval = options.submitApproval
+    ?? (async (
+      context: AgentDriverProviderSessionContextV1,
+      decision: Readonly<ProviderApprovalDecisionV1>,
+    ): Promise<void> => {
+      const resolved = await options.driver.resolveApproval(
+        context.driver_session.id,
+        decision.approval_id,
+        decision.decision === 'approve' ? 'allow' : 'deny',
+      )
+      if (!resolved) throw new Error('Claude approval is no longer pending')
+    })
   const bridgeDriver: AgentDriver = {
     id: options.driver.id,
     capabilities: () => options.driver.capabilities(),
@@ -463,6 +481,10 @@ export function createClaudeProviderAdapterV1(
     attach: (externalId) => options.driver.attach(externalId),
     send: (sessionId, text) => options.driver.send(sessionId, text),
     interrupt: (sessionId) => options.driver.interrupt(sessionId),
+    cancel: (sessionId) => {
+      if (!options.driver.cancel) throw new Error('Claude driver does not expose native cancellation')
+      return options.driver.cancel(sessionId)
+    },
     async stop(sessionId) {
       try {
         await options.driver.stop(sessionId)
@@ -637,7 +659,7 @@ export function createClaudeProviderAdapterV1(
       }
     },
     async submitApproval(context, decision) {
-      return options.submitApproval(context, decision)
+      return submitApproval(context, decision)
     },
     projectEvent: projectClaudeProviderEventV1,
     async usage(context) {

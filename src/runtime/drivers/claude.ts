@@ -22,6 +22,14 @@ export type ClaudeTranscriptLine = {
   text: string
 }
 
+export type ClaudePendingPermission = {
+  id: string
+  tool: string
+  summary: string
+  title?: string | null
+  at: string
+}
+
 export type ClaudeAgentHomeBinding = {
   agentHomeSessionId: string
   agentProfileId: string
@@ -98,7 +106,18 @@ export interface ClaudeConductorPort {
     agentHome?: ClaudeAgentHomeBinding
   }): ClaudeAgentRecord
   task(agentId: number, text: string): boolean
-  transcript(agentId: number): { lines: ClaudeTranscriptLine[]; working: unknown; info?: Record<string, unknown> }
+  transcript(agentId: number): {
+    lines: ClaudeTranscriptLine[]
+    working: unknown
+    info?: Record<string, unknown>
+    permissions?: ClaudePendingPermission[]
+  }
+  resolvePermission?(
+    agentId: number,
+    requestId: string,
+    behavior: 'allow' | 'deny',
+    message?: string,
+  ): boolean
   interruptAgent(agentId: number): Promise<boolean>
   fire(agentId: number): Promise<boolean>
   sessionAccounting?(agentId: number): { usage: { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }; costUsd: number } | null
@@ -116,7 +135,25 @@ type ClaudeSessionState = {
   session: DriverSession
   agentId: number
   cwd: string | null
+  sequence: number
+  seenEvents: Set<string>
+  seenEventOrder: string[]
+  seenApprovals: Set<string>
 }
+
+const sessionState = (
+  session: DriverSession,
+  agentId: number,
+  cwd: string | null,
+): ClaudeSessionState => ({
+  session,
+  agentId,
+  cwd,
+  sequence: 0,
+  seenEvents: new Set(),
+  seenEventOrder: [],
+  seenApprovals: new Set(),
+})
 
 export class ClaudeAgentDriverAdapter implements AgentDriver {
   readonly id = 'claude'
@@ -161,7 +198,10 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
       ...(agentHome ? { agentHome } : {}),
     })
     const session = this.toSession(agent, request.workspaceId)
-    this.sessions.set(session.id, { session, agentId: agent.id, cwd: request.cwd })
+    this.sessions.set(
+      session.id,
+      sessionState(session, agent.id, request.cwd),
+    )
     if (request.prompt && !this.options.conductor.task(agent.id, request.prompt))
       throw new Error(`Claude agent ${agent.id} rejected the initial prompt`)
     return session
@@ -179,7 +219,7 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     const cwd = typeof transcript.info?.cwd === 'string' && transcript.info.cwd.trim()
       ? transcript.info.cwd
       : null
-    this.sessions.set(session.id, { session, agentId: agent.id, cwd })
+    this.sessions.set(session.id, sessionState(session, agent.id, cwd))
     return session
   }
 
@@ -275,45 +315,93 @@ export class ClaudeAgentDriverAdapter implements AgentDriver {
     if (!(await this.options.conductor.interruptAgent(state.agentId))) throw new Error(`Claude session is not live: ${sessionId}`)
   }
 
+  async cancel(sessionId: string): Promise<void> {
+    await this.interrupt(sessionId)
+    await this.stop(sessionId)
+  }
+
   async stop(sessionId: string): Promise<void> {
     const state = this.required(sessionId)
     if (!(await this.options.conductor.fire(state.agentId))) throw new Error(`Claude session is not live: ${sessionId}`)
   }
 
+  async resolveApproval(
+    sessionId: string,
+    requestId: string,
+    decision: 'allow' | 'deny',
+    message?: string,
+  ): Promise<boolean> {
+    const state = this.required(sessionId)
+    const resolve = this.options.conductor.resolvePermission
+    if (!resolve) return false
+    return resolve(state.agentId, requestId, decision, message)
+  }
+
   async *events(sessionId: string): AsyncIterable<DriverEvent> {
     const state = this.required(sessionId)
-    let seq = 0
-    const seen = new Set<string>()
-    const seenOrder: string[] = []
-    while (this.options.conductor.isHired(state.agentId)) {
-      const transcript = this.options.conductor.transcript(state.agentId)
-      for (const line of transcript.lines) {
-        const fingerprint = `${line.at}\u0000${line.kind}\u0000${line.text}`
-        if (seen.has(fingerprint)) continue
-        seen.add(fingerprint)
-        seenOrder.push(fingerprint)
-        if (seenOrder.length > 2_000) seen.delete(seenOrder.shift()!)
-        yield {
-          sessionId,
-          seq: ++seq,
-          type: line.kind === 'error' ? 'error' : line.kind === 'status' ? 'status'
-            : line.kind === 'tool' || line.kind === 'tool_result' ? 'tool' : 'output',
-          at: line.at,
-          data: line.text,
-          metadata: { transcriptKind: line.kind },
+    let terminal = false
+    try {
+      while (this.options.conductor.isHired(state.agentId)) {
+        const transcript = this.options.conductor.transcript(state.agentId)
+        for (const line of transcript.lines) {
+          const fingerprint = `${line.at}\u0000${line.kind}\u0000${line.text}`
+          if (state.seenEvents.has(fingerprint)) continue
+          state.seenEvents.add(fingerprint)
+          state.seenEventOrder.push(fingerprint)
+          if (state.seenEventOrder.length > 2_000) {
+            state.seenEvents.delete(state.seenEventOrder.shift()!)
+          }
+          yield {
+            sessionId,
+            seq: ++state.sequence,
+            type: line.kind === 'error' ? 'error' : line.kind === 'status' ? 'status'
+              : line.kind === 'tool' || line.kind === 'tool_result' ? 'tool' : 'output',
+            at: line.at,
+            data: line.text,
+            metadata: { transcriptKind: line.kind },
+          }
         }
+        for (const permission of transcript.permissions ?? []) {
+          const requestId = permission.id.trim()
+          if (!requestId || state.seenApprovals.has(requestId)) continue
+          state.seenApprovals.add(requestId)
+          yield {
+            sessionId,
+            seq: ++state.sequence,
+            type: 'tool',
+            at: permission.at,
+            data: permission.title?.trim()
+              || permission.summary.trim()
+              || `${permission.tool} approval requested`,
+            metadata: {
+              transcriptKind: 'approval',
+              approval: true,
+              approvalRequest: {
+                requestId,
+                kind: 'tool',
+                toolName: permission.tool,
+              },
+            },
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs))
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs))
-    }
-    const accounting = this.options.conductor.sessionAccounting?.(state.agentId)
-    const tokens = accounting ? Object.values(accounting.usage).reduce((sum, value) => sum + Number(value || 0), 0) : 0
-    yield {
-      sessionId,
-      seq: ++seq,
-      type: 'exit',
-      at: new Date().toISOString(),
-      data: 'Claude session stopped',
-      metadata: { tokens, costUsd: accounting?.costUsd ?? 0 },
+      const accounting = this.options.conductor.sessionAccounting?.(state.agentId)
+      const tokens = accounting
+        ? Object.values(accounting.usage)
+          .reduce((sum, value) => sum + Number(value || 0), 0)
+        : 0
+      terminal = true
+      yield {
+        sessionId,
+        seq: ++state.sequence,
+        type: 'exit',
+        at: new Date().toISOString(),
+        data: 'Claude session stopped',
+        metadata: { tokens, costUsd: accounting?.costUsd ?? 0 },
+      }
+    } finally {
+      if (terminal) this.sessions.delete(sessionId)
     }
   }
 

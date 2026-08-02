@@ -1120,6 +1120,13 @@
 }
 
 @media (max-width: 820px) {
+  .ah-action,
+  .ah-action-menu summary,
+  .ah-export-menu summary,
+  .ah-panel-actions > button,
+  .ah-search > button,
+  .ah-header-actions .ah-icon-action { min-height: 44px; }
+  .ah-header-actions .ah-icon-action { width: 44px; height: 44px; }
   .agent-home { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .ah-rail {
     max-height: 135px;
@@ -1204,6 +1211,39 @@
   .ah-dialog { padding: 16px; }
   .ah-dialog-row { grid-template-columns: 1fr; }
 }
+
+.agent-tool-controls { display: grid; gap: 10px; padding: 12px; border: 1px solid #dedad2; border-radius: 10px; background: #faf9f6; }
+.agent-tool-controls__header,
+.agent-tool-provider,
+.agent-tool-card__identity { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.agent-tool-controls__eyebrow { margin: 0 0 2px; color: #716c62; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.agent-tool-controls h3,
+.agent-tool-controls h4,
+.agent-tool-controls p { margin: 0; }
+.agent-tool-controls__terminal-truth { max-width: 150px; color: #5f594f; font-size: 10px; text-align: right; }
+.agent-tool-provider,
+.agent-tool-drift,
+.agent-tool-card { padding: 9px; border: 1px solid #e2ded6; border-radius: 8px; background: #fff; }
+.agent-tool-provider > div { display: grid; gap: 2px; }
+.agent-tool-provider span,
+.agent-tool-card span,
+.agent-tool-card dt,
+.agent-tool-controls__privacy { color: #756f65; font-size: 10px; }
+.agent-tool-provider > div:last-of-type { text-align: right; }
+.agent-tool-provider > p { grid-column: 1 / -1; color: #8a3d2e; font-size: 10px; }
+.agent-tool-drift { border-color: #d8b76b; background: #fff9e8; font-size: 11px; }
+.agent-tool-drift ul,
+.agent-tool-approvals ul { margin: 5px 0 0; padding-left: 18px; }
+.agent-tool-list { display: grid; gap: 7px; margin-top: 5px; }
+.agent-tool-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin: 8px 0; }
+.agent-tool-card dl div { display: grid; gap: 1px; }
+.agent-tool-card dd { margin: 0; font-size: 11px; }
+.agent-tool-card label { display: grid; gap: 4px; font-size: 11px; font-weight: 650; }
+.agent-tool-card select { min-height: 34px; border: 1px solid #cfcac0; border-radius: 6px; background: #fff; color: #28251f; }
+.agent-tool-controls__error,
+.agent-tool-card__error { color: #9a2f27; font-size: 11px; }
+.agent-tool-controls__empty,
+.agent-tool-controls__privacy { line-height: 1.45; }
 
 @media (prefers-reduced-motion: reduce) {
   .ah-skeleton span,

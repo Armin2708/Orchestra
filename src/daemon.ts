@@ -1,8 +1,10 @@
 import type Database from 'better-sqlite3'
+import type { FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
@@ -13,6 +15,8 @@ import { ensureAgentToken, ensureToken } from './token.js'
 import { registerPush } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
+import { sessionToolPlugin } from './agent-os/session-tool-routes.js'
+import { TerminalSessionStateService } from './agent-os/terminal-session-state.js'
 import { OrchestrationService } from './agent-os/orchestration-service.js'
 import { acquireDaemonLease } from './agent-os/daemon-lease.js'
 import {
@@ -58,6 +62,8 @@ import {
   type AccessProfile,
 } from './provider-agent-manager.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
+import { createDeclaredProviderToolRegistry } from './tool-capabilities.js'
+import { inspectDeclaredProviderToolIntegrations } from './tool-readiness.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -68,6 +74,35 @@ export function port(): number { return Number(process.env.ORCHESTRA_PORT ?? 475
 export const baseUrl = () => `http://127.0.0.1:${port()}`
 
 export const authDisabled = () => process.env.ORCHESTRA_NO_AUTH === '1'
+
+export function ensureTerminalHistoryDigestKey(root = dataDir()): Buffer {
+  const keyPath = path.join(root, 'terminal-history.key')
+  try {
+    const existing = fs.readFileSync(keyPath)
+    if (existing.byteLength !== 32) throw new Error('terminal history key must contain exactly 32 bytes')
+    fs.chmodSync(keyPath, 0o600)
+    const verified = fs.readFileSync(keyPath)
+    if (verified.byteLength !== 32) throw new Error('terminal history key verification failed')
+    return verified
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const created = randomBytes(32)
+  try {
+    const descriptor = fs.openSync(keyPath, 'wx', 0o600)
+    try {
+      fs.writeFileSync(descriptor, created)
+    } finally {
+      fs.closeSync(descriptor)
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+  fs.chmodSync(keyPath, 0o600)
+  const verified = fs.readFileSync(keyPath)
+  if (verified.byteLength !== 32) throw new Error('terminal history key verification failed')
+  return verified
+}
 
 export interface ServeOptions { expose?: boolean }
 
@@ -217,6 +252,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
   const agentOs = createAgentOsRuntime(db)
+  const terminalSessionState = new TerminalSessionStateService(db, {
+    digestKey: ensureTerminalHistoryDigestKey(orchestraDataDir),
+  })
   const claudeNativeEventSink = new AgentHomeClaudeNativeEventSink(db)
   const scheduler = agentOs.scheduler
   const orchestration = new OrchestrationService(db, scheduler)
@@ -349,7 +387,38 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         orchestration,
         compatibilityFailureJournal,
         drivers: () => agentOs.descriptors(),
+        terminalSessionState,
+        resolveTerminalAccessContext: (request: FastifyRequest) => {
+          const address = request.raw.socket.remoteAddress ?? ''
+          const local = address === '::1'
+            || address.startsWith('127.')
+            || address.startsWith('::ffff:127.')
+          const operator = request.orchestraPrincipal === 'operator'
+          return {
+            authenticated: operator || request.orchestraPrincipal === 'agent',
+            principal: operator && local
+              ? 'local_operator'
+              : operator
+                ? 'remote_device'
+                : 'agent',
+            surface: local ? 'desktop' : 'unknown',
+            scopes: [],
+          }
+        },
       },
+    })
+    const toolIntegrations = inspectDeclaredProviderToolIntegrations({
+      scope: 'project',
+      roots: { cwd: process.cwd() },
+      pluginRoot: process.cwd(),
+    })
+    const toolSurface = createDeclaredProviderToolRegistry(undefined, toolIntegrations)
+    server.register(sessionToolPlugin, {
+      prefix: '/api/v1/os',
+      db,
+      registry: toolSurface.registry,
+      providerMatrix: toolSurface.matrix,
+      isOperator: (request: FastifyRequest) => request.orchestraPrincipal === 'operator',
     })
     registerPush(server)
   } catch (error) {

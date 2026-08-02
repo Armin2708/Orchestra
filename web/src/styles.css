@@ -815,7 +815,7 @@ textarea {
 /* ── Brand project picker ────────────────────────── */
 .brand-picker { position: relative; }
 .brand-btn { display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 0; text-align: left; }
-.brand-btn h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.brand-btn .brand-title { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
 .brand-caret { color: var(--ink-soft); font-size: 11px; }
 .brand-menu {
   position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; min-width: 240px;
@@ -1123,7 +1123,7 @@ textarea {
 @media (max-width: 768px) {
   .topbar { padding: 14px 16px; gap: 12px; flex-wrap: wrap; }
   .topbar-actions { width: 100%; margin-left: 0; align-items: stretch; flex-direction: column; gap: 8px; }
-  .topbar h1, .brand-btn h1 { font-size: 17px; }
+  .topbar h1, .brand-btn .brand-title { font-size: 17px; }
   .view-tabs { width: 100%; margin-left: 0; overflow-x: auto; }
   .sysmeter { width: 100%; gap: 14px; overflow-x: auto; padding-bottom: 2px; }
   .brand-menu { max-width: calc(100vw - 32px); }

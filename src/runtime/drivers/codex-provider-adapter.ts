@@ -91,7 +91,10 @@ export type CodexProviderAdapterOptionsV1 = {
     environment: NodeJS.ProcessEnv,
   ): string | null
   readExecutable?(resolvedPath: string): Uint8Array
-  readVersion?(resolvedPath: string): string | null
+  readVersion?(
+    resolvedPath: string,
+    minimalEnvironment: NodeJS.ProcessEnv,
+  ): string | null
   launchRequest?(
     context: ProviderAuthorizedLaunchContextV1,
   ): MaybePromise<DriverLaunchRequest>
@@ -140,10 +143,35 @@ const resolveExecutable = (
   return null
 }
 
-const readVersion = (resolvedPath: string): string | null => {
+const minimalVersionEnvironment = (
+  source: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = {}
+  for (const variable of [
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'SystemRoot',
+    'WINDIR',
+  ]) {
+    if (typeof source[variable] === 'string') {
+      environment[variable] = source[variable]
+    }
+  }
+  return environment
+}
+
+const readVersion = (
+  resolvedPath: string,
+  environment: NodeJS.ProcessEnv,
+): string | null => {
   try {
     const output = execFileSync(resolvedPath, ['--version'], {
       encoding: 'utf8',
+      env: environment,
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 3_000,
       windowsHide: true,
@@ -384,7 +412,12 @@ export function createCodexProviderAdapterV1(
     driver: options.driver,
     async discoverExecutable(): Promise<ProviderExecutableDiscoveryV1> {
       const resolvedPath = executableResolver(command, environment)
-      const rawVersion = resolvedPath ? versionReader(resolvedPath) : null
+      const rawVersion = resolvedPath
+        ? versionReader(
+            resolvedPath,
+            minimalVersionEnvironment(environment),
+          )
+        : null
       const compatibility = classifyCodexCliVersion(rawVersion)
       let executableFingerprint = sha256([
         'codex-executable-v1',
@@ -428,10 +461,12 @@ export function createCodexProviderAdapterV1(
         // Unknown is fail-closed by the provider contract.
       }
       let isExhausted = false
+      let rateLimitsObserved = false
       try {
         isExhausted = exhausted(await options.service.readRateLimits())
+        rateLimitsObserved = true
       } catch {
-        // Quota visibility is reported by usage; the no-overage mode remains fail-closed.
+        // Unknown quota state must not be represented as verified no-overage.
       }
       return {
         contract_version: 1,
@@ -440,7 +475,11 @@ export function createCodexProviderAdapterV1(
         executable_status: boundary.evidence.executable_status,
         auth_status: authStatus(account),
         automation_policy: 'allowed',
-        overage_status: isExhausted ? 'exhausted' : 'not_applicable',
+        overage_status: !rateLimitsObserved
+          ? 'unknown'
+          : isExhausted
+            ? 'exhausted'
+            : 'not_applicable',
         overage_consent: 'not_required',
         metering_status: 'not_required',
         cost_cap_status: 'not_required',

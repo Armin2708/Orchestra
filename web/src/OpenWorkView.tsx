@@ -150,11 +150,14 @@ export function OpenWorkView({
   }, [appliedFilters, load])
 
   useEffect(() => {
+    if ((remote.status === 'idle' || remote.status === 'loading') && remote.items.length === 0) {
+      return
+    }
     if (selectedCardId !== null && remote.items.some((item) => item.card_id === selectedCardId)) {
       return
     }
     setSelectedCardId(remote.items[0]?.card_id ?? null)
-  }, [remote.items, selectedCardId])
+  }, [remote.items, remote.status, selectedCardId])
 
   const selectedItem = remote.items.find((item) => item.card_id === selectedCardId) ?? null
   const counts = useMemo(() => openWorkCounts(remote.items), [remote.items])

@@ -67,6 +67,13 @@ import {
 import type {
   CompatibilityMigrationFailureJournal,
 } from './compatibility-migration-failure-journal.js'
+import {
+  evaluateTerminalAccess,
+  type TerminalAccessContext,
+  type TerminalAction,
+  type TerminalResource,
+} from './terminal-access-policy.js'
+import { TerminalSessionStateService } from './terminal-session-state.js'
 
 export interface ProcessRecord {
   id: string
@@ -143,6 +150,8 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   supportedProviders?: readonly string[]
   globalCapacity?: number
   perProfileCapacity?: number
+  terminalSessionState?: TerminalSessionStateService
+  resolveTerminalAccessContext?: (request: FastifyRequest) => TerminalAccessContext
 }
 
 export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsRouteOptions): void {
@@ -211,6 +220,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const jobMarket = new JobMarketService(db, events)
   const attention = new AttentionService(db)
   const policies = new PolicyEngine(db)
+  const restartingProcesses = new Set<string>()
   const context = new ContextStore(db)
   const commands = new CommandIdempotencyStore(db)
   const conflicts = new ComputedWorkspaceConflictService(db)
@@ -219,6 +229,30 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   const isOperator = options.isOperator ?? (() => true)
   const requireOperator = (request: FastifyRequest) => {
     if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')
+  }
+  const requireTerminalAccess = (
+    action: TerminalAction,
+    resource: TerminalResource,
+    request: FastifyRequest,
+  ) => {
+    const operator = isOperator(request)
+    const remoteAddress = request.raw.socket.remoteAddress ?? ''
+    const localSocket = remoteAddress === '127.0.0.1'
+      || remoteAddress === '::1'
+      || remoteAddress === '::ffff:127.0.0.1'
+    const context = options.resolveTerminalAccessContext?.(request) ?? {
+      // Reaching this plugin already means the server authentication hook
+      // accepted either an operator or agent principal. The operator predicate
+      // distinguishes mutation authority; it is not an authentication probe.
+      authenticated: true,
+      principal: operator && localSocket ? 'local_operator' : 'unknown',
+      surface: operator && localSocket ? 'desktop' : 'unknown',
+      scopes: [],
+    }
+    const decision = evaluateTerminalAccess(action, resource, context)
+    if (!decision.allowed) {
+      throw new ForbiddenError(`terminal access denied: ${decision.reason_code}`)
+    }
   }
   const requireCompatibilityTelemetryOperator = (request: FastifyRequest) => {
     if (!options.isOperator || !isOperator(request)) {
@@ -518,6 +552,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
 
   app.get<{ Params: { id: string } }>('/workspaces/:id/processes', async (request) => {
     requireWorkspace(workspaces, request.params.id)
+    requireTerminalAccess('view', { workspaceId: request.params.id }, request)
     const processes = listProcesses(db, request.params.id)
     const ports = await options.runtime?.listProcessPorts?.(request.params.id) ?? []
     const byProcess = new Map<string, number[]>()
@@ -529,6 +564,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process spawning requires the PTY runtime')
     const workspace = requireWorkspace(workspaces, request.params.id)
+    requireTerminalAccess('spawn', { workspaceId: workspace.id }, request)
     const body = objectBody(request.body)
     const interactive = body.interactive === true
     const requestedCommand = interactive ? null : requiredString(body.command, 'command')
@@ -546,14 +582,32 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return reply.code(201).send({ process })
   })
 
-  app.get<{ Params: { id: string } }>('/processes/:id', (request) => ({ process: requireProcess(db, request.params.id) }))
+  app.get<{ Params: { id: string } }>('/processes/:id', (request) => {
+    const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('view', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
+    return { process }
+  })
 
   app.post<{ Params: { id: string } }>('/processes/:id/restart', async (request, reply) => {
     requireOperator(request)
     if (!options.runtime?.restartProcess) throw new UnsupportedError('process restart requires the PTY runtime')
     const current = requireProcess(db, request.params.id)
+    requireTerminalAccess('restart', {
+      workspaceId: current.workspace_id,
+      processId: current.id,
+    }, request)
     if (!current.restartable) throw new ValidationError('process does not have a restart recipe')
-    const process = await options.runtime.restartProcess(current.id)
+    if (restartingProcesses.has(current.id)) throw new ConflictError('process restart is already in progress')
+    restartingProcesses.add(current.id)
+    let process
+    try {
+      process = await options.runtime.restartProcess(current.id)
+    } finally {
+      restartingProcesses.delete(current.id)
+    }
     const workspace = requireWorkspace(workspaces, process.workspace_id)
     events.append({ boardId: workspace.board_id, workspaceId: workspace.id, cardId: workspace.card_id,
       processId: process.id, kind: 'process.restart_requested', source: 'human', payload: { previous_process_id: current.id } })
@@ -561,7 +615,11 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   })
 
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>('/processes/:id/output', (request) => {
-    requireProcess(db, request.params.id)
+    const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('view', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
     const after = Math.max(0, Number(request.query.after) || 0)
     const limit = Math.min(2000, Math.max(1, Number(request.query.limit) || 500))
     const output = db.prepare(`SELECT seq, stream, data, created_at FROM process_output
@@ -573,6 +631,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process input requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('input', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
     const body = objectBody(request.body)
     const data = body.data ?? body.input
     if (typeof data !== 'string') throw new ValidationError('data must be a string')
@@ -585,6 +647,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process resize requires the PTY runtime')
     const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('resize', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
     const body = objectBody(request.body)
     const cols = boundedInteger(body.cols, process.cols, 20, 500, 'cols')
     const rows = boundedInteger(body.rows, process.rows, 5, 300, 'rows')
@@ -613,6 +679,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     requireOperator(request)
     if (!options.runtime) throw new UnsupportedError('process signals require the PTY runtime')
     const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('signal', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
     const body = objectBody(request.body)
     const signal = requiredString(body.signal, 'signal').toUpperCase()
     if (body.escalate === true) {
@@ -622,6 +692,97 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }
     await options.runtime.signalProcess(process.id, signal)
     return { ok: true, signal }
+  })
+
+  app.get<{ Params: { id: string } }>('/workspaces/:id/terminal-selection', (request) => {
+    requireWorkspace(workspaces, request.params.id)
+    requireTerminalAccess('view', { workspaceId: request.params.id }, request)
+    if (!options.terminalSessionState) {
+      throw new UnsupportedError('durable terminal selection is unavailable')
+    }
+    return { selection: options.terminalSessionState.getWorkspaceState(request.params.id) }
+  })
+
+  app.put<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/terminal-selection', (request) => {
+    requireOperator(request)
+    requireWorkspace(workspaces, request.params.id)
+    if (!options.terminalSessionState) {
+      throw new UnsupportedError('durable terminal selection is unavailable')
+    }
+    const body = objectBody(request.body)
+    const processId = body.process_id === null || body.processId === null
+      ? null
+      : requiredString(body.process_id ?? body.processId, 'process id')
+    requireTerminalAccess('select', {
+      workspaceId: request.params.id,
+      processId,
+    }, request)
+    return {
+      selection: options.terminalSessionState.selectProcess(request.params.id, processId),
+    }
+  })
+
+  app.get<{ Params: { id: string }; Querystring: {
+    process?: string
+    session?: string
+    after?: string
+    limit?: string
+  } }>('/workspaces/:id/terminal-history', (request) => {
+    requireWorkspace(workspaces, request.params.id)
+    requireTerminalAccess('history_read', { workspaceId: request.params.id }, request)
+    if (!options.terminalSessionState) {
+      throw new UnsupportedError('durable terminal history is unavailable')
+    }
+    return {
+      history: options.terminalSessionState.listHistory({
+        workspaceId: request.params.id,
+        processId: request.query.process,
+        sessionId: request.query.session,
+        afterSeq: Math.max(0, Number(request.query.after) || 0),
+        limit: Math.min(500, Math.max(1, Number(request.query.limit) || 100)),
+      }),
+    }
+  })
+
+  app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/commands', async (request, reply) => {
+    requireOperator(request)
+    if (!options.runtime) throw new UnsupportedError('command submission requires the PTY runtime')
+    if (!options.terminalSessionState) {
+      throw new UnsupportedError('durable terminal history is unavailable')
+    }
+    const process = requireProcess(db, request.params.id)
+    requireTerminalAccess('history_write', {
+      workspaceId: process.workspace_id,
+      processId: process.id,
+    }, request)
+    const body = objectBody(request.body)
+    const command = requiredString(body.command, 'command')
+    if (Buffer.byteLength(command) > 64 * 1024) {
+      throw new ValidationError('command exceeds the 64 KiB limit')
+    }
+    const retention = body.retention === undefined
+      ? 'hash_only'
+      : body.retention === 'hash_only' || body.retention === 'redacted_text'
+        ? body.retention
+        : (() => { throw new ValidationError('retention must be hash_only or redacted_text') })()
+    const sessionId = stringValue(body.session_id ?? body.sessionId) ?? null
+    if (sessionId) {
+      const session = db.prepare('SELECT workspace_id FROM agent_sessions WHERE id=?').get(sessionId) as
+        { workspace_id: string } | undefined
+      if (!session || session.workspace_id !== process.workspace_id) {
+        throw new ValidationError('session_id must identify a session in the process workspace')
+      }
+    }
+    const history = options.terminalSessionState.recordCommand({
+      workspaceId: process.workspace_id,
+      processId: process.id,
+      sessionId,
+      command,
+      source: 'human',
+      retention,
+    })
+    await options.runtime.writeProcessInput(process.id, `${command}\n`)
+    return reply.code(201).send({ history })
   })
 
   app.get<{ Params: { id: string }; Querystring: {

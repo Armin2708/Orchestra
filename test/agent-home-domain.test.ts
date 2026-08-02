@@ -995,7 +995,7 @@ describe('durable Agent Home domain', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(29)
+      .toBe(30)
     expect(db.prepare(`SELECT id, legacy_agent_id, name, provenance_json
       FROM agent_profiles ORDER BY legacy_agent_id`).all()).toEqual([
       expect.objectContaining({

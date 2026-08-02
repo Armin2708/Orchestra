@@ -417,7 +417,11 @@ export function defineAgentDriverProviderAdapterV1(
     },
     async cancel(sessionId) {
       const state = required(sessionId)
-      await options.driver.interrupt(state.driver_session.id)
+      if (!options.driver.cancel) {
+        throw new Error('provider driver does not expose native cancellation')
+      }
+      await options.driver.cancel(state.driver_session.id)
+      states.delete(sessionId)
     },
     async stop(sessionId) {
       const state = required(sessionId)

@@ -177,6 +177,10 @@ describe('Agent Home real runtime controls', () => {
       updateSession: async () => undefined,
       send: async () => undefined,
       interrupt: async () => undefined,
+      cancel: async (sessionId) => {
+        if (sessionId.includes('child')) releaseChildEvents?.()
+        else releaseSourceEvents?.()
+      },
       stop: async (sessionId) => {
         if (sessionId.includes('child')) releaseChildEvents?.()
         else releaseSourceEvents?.()
@@ -573,6 +577,10 @@ describe('Agent Home real runtime controls', () => {
         interrupts.push(sessionId)
         releaseInterrupt?.()
       },
+      cancel: async (sessionId) => {
+        stops.push(sessionId)
+        releaseEvents?.()
+      },
       stop: async (sessionId) => {
         stops.push(sessionId)
         releaseEvents?.()
@@ -704,6 +712,7 @@ describe('Agent Home real runtime controls', () => {
       updateSession: async (sessionId) => { updates.push(sessionId) },
       send: async () => undefined,
       interrupt: async () => undefined,
+      cancel: async () => { releaseStop?.() },
       stop: async () => { releaseStop?.() },
       events: async function* (sessionId) {
         yield {
@@ -784,6 +793,7 @@ describe('Agent Home real runtime controls', () => {
       }),
       send: async (_sessionId, text) => { sent.push(text) },
       interrupt: async () => undefined,
+      cancel: async () => { releaseStop?.() },
       stop: async () => { releaseStop?.() },
       events: async function* (sessionId) {
         await stopped

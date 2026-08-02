@@ -135,6 +135,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   const [headerError, setHeaderError] = useState<string | null>(null)
   const [openingShell, setOpeningShell] = useState(false)
   const [startingCommand, setStartingCommand] = useState(false)
+  const [restartingProcessId, setRestartingProcessId] = useState<string | null>(null)
   const [exportBusy, setExportBusy] = useState<'human' | 'json' | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
@@ -235,6 +236,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
       setSessionCapabilities(null)
       return
     }
+    setSessionCapabilities(null)
     let alive = true
     agentHomeApi.getSession(selectedSession.id)
       .then((details) => { if (alive) setSessionCapabilities(details.capabilities) })
@@ -584,11 +586,14 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const restartProcess = async (process: WorkspaceProcess) => {
+    if (restartingProcessId) return
+    setRestartingProcessId(String(process.id))
     try {
       const restarted = await osApi.restartProcess(process.id)
       setSelectedProcessId(String(restarted.id))
       await loadRuntime(true)
     } catch (error) { setHeaderError(messageFor(error, 'The process could not be restarted.')) }
+    finally { setRestartingProcessId(null) }
   }
 
   const exportConversation = async (format: 'human' | 'json') => {
@@ -766,6 +771,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                     <AgentTerminalPanel workspace={runtime.workspace} processes={runtime.processes}
                       process={selectedProcess} loading={runtime.status === 'loading'} error={runtime.error}
                       openingShell={openingShell} startingCommand={startingCommand}
+                      restartingProcessId={restartingProcessId}
                       onSelectProcess={(process) => setSelectedProcessId(String(process.id))}
                       onOpenShell={() => void openShell()} onRunCommand={runCommand}
                       onSignal={(process, signal) => void signalProcess(process, signal)}
@@ -804,6 +810,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                   <AgentTerminalPanel workspace={runtime.workspace} processes={runtime.processes}
                     process={selectedProcess} loading={runtime.status === 'loading'} error={runtime.error}
                     openingShell={openingShell} startingCommand={startingCommand}
+                    restartingProcessId={restartingProcessId}
                     onSelectProcess={(process) => setSelectedProcessId(String(process.id))}
                     onOpenShell={() => void openShell()} onRunCommand={runCommand}
                     onSignal={(process, signal) => void signalProcess(process, signal)}

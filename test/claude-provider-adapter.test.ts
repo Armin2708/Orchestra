@@ -47,6 +47,11 @@ type DriverCalls = {
   attached: string[]
   interrupted: string[]
   stopped: string[]
+  approvals: Array<{
+    sessionId: string
+    requestId: string
+    decision: 'allow' | 'deny'
+  }>
 }
 
 const fakeDriver = (
@@ -88,6 +93,10 @@ const fakeDriver = (
   async interrupt(sessionId): Promise<void> {
     calls.interrupted.push(sessionId)
   },
+  async cancel(sessionId): Promise<void> {
+    calls.interrupted.push(sessionId)
+    calls.stopped.push(sessionId)
+  },
   async stop(sessionId): Promise<void> {
     calls.stopped.push(sessionId)
   },
@@ -105,6 +114,10 @@ const fakeDriver = (
       },
     }
   },
+  async resolveApproval(sessionId, requestId, decision): Promise<boolean> {
+    calls.approvals.push({ sessionId, requestId, decision })
+    return true
+  },
 })
 
 const calls = (): DriverCalls => ({
@@ -112,6 +125,7 @@ const calls = (): DriverCalls => ({
   attached: [],
   interrupted: [],
   stopped: [],
+  approvals: [],
 })
 
 const createAdapter = (
@@ -179,7 +193,6 @@ const createAdapter = (
     boardId: 7,
     cwd: '/workspace',
   }),
-  submitApproval: () => undefined,
   usage: (context) => ({
     contract_version: 1,
     observed_at: '2026-07-29T12:00:00.000Z',
@@ -433,7 +446,7 @@ describe('Claude TOOL-014 provider adapter candidate', () => {
     })
     expect(CLAUDE_PROVIDER_LIFECYCLE_EVIDENCE_V1).toMatchObject({
       launch: 'driver.launch_after_provider_authorization',
-      cancel: 'driver.interrupt',
+      cancel: 'driver.cancel',
       resume: 'unsupported_durable_resume_not_implemented_v1',
       restart_recovery: 'unsupported_durable_resume_not_implemented_v1',
     })

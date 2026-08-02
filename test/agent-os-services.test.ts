@@ -149,6 +149,48 @@ describe('Agent OS core services', () => {
       .toEqual(expect.arrayContaining(['job.retry_queued', 'job.blocked']))
   })
 
+  it('fails closed when provider policy blocks an otherwise budgeted retry', async () => {
+    const { db, boardId } = fixture()
+    const executor: JobExecutor = {
+      supportedProviders: () => ['codex'],
+      execute: async () => ({ status: 'running' }),
+      retryDecision: () => ({ allowed: false, reason: 'automation_interactive_only' }),
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const job = scheduler.create({ boardId, provider: 'codex', maxAttempts: 2 })
+
+    await scheduler.tick()
+    expect(scheduler.complete(job.id, 'provider turn failed')).toMatchObject({
+      status: 'blocked',
+      attempts: 1,
+      error: 'provider turn failed; retry blocked: automation_interactive_only',
+    })
+    expect(new EventStore(db).listBoard(boardId).map((event) => event.kind))
+      .not.toContain('job.retry_queued')
+  })
+
+  it('defers launch when provider policy charges quarantined sessions to capacity', async () => {
+    const { db, boardId } = fixture()
+    const executed: string[] = []
+    const executor: JobExecutor = {
+      supportedProviders: () => ['codex'],
+      execute: async (job) => { executed.push(job.id); return { status: 'running' } },
+      capacityDecision: (_job, input) => ({
+        allowed: input.quarantinedSessions === 0,
+        reason: 'provider_session_capacity_exceeded',
+      }),
+    }
+    const scheduler = new JobScheduler(db, executor)
+    const quarantined = scheduler.create({ boardId, provider: 'codex' })
+    await scheduler.tick()
+    scheduler.quarantineCancellation(quarantined.id, 'native cancellation unconfirmed')
+    const queued = scheduler.create({ boardId, provider: 'codex' })
+
+    expect((await scheduler.tick()).deferred).toContain(queued.id)
+    expect(scheduler.get(queued.id)).toMatchObject({ status: 'queued' })
+    expect(executed).toEqual([quarantined.id])
+  })
+
   it('shares global launch capacity with legacy Conductor card launches', async () => {
     process.env.ORCHESTRA_MAX_LAUNCHED = '1'
     const { db, boardId, cardId } = fixture()
@@ -209,6 +251,31 @@ describe('Agent OS core services', () => {
     expect(db.prepare(`SELECT kind FROM os_events WHERE job_id=? AND kind IN ('job.cancelling','job.cancelled')
       ORDER BY rowid`).all(job.id)).toEqual([{ kind: 'job.cancelling' }, { kind: 'job.cancelled' }])
     expect(() => scheduler.complete(job.id)).toThrow(/only a running job/)
+  })
+
+  it('keeps restart-interrupted cancellation quarantined until provider confirmation', async () => {
+    process.env.ORCHESTRA_MAX_LAUNCHED = '1'
+    const { db, boardId } = fixture()
+    const executor: JobExecutor = {
+      supportedProviders: () => ['codex'],
+      execute: async () => ({ status: 'running' }),
+      cancel: async () => { throw new Error('daemon terminated before provider confirmation') },
+    }
+    const first = new JobScheduler(db, executor)
+    const job = first.create({ boardId, provider: 'codex' })
+    await first.tick()
+    await expect(first.cancel(job.id)).rejects.toThrow(/daemon terminated/)
+    expect(first.get(job.id)).toMatchObject({ status: 'cancelling' })
+
+    const restarted = new JobScheduler(db, executor)
+    expect(restarted.recover(job.id, 'daemon restart')).toMatchObject({ status: 'cancelling' })
+    const queued = restarted.create({ boardId, provider: 'codex' })
+    expect((await restarted.tick()).started).toEqual([])
+    expect(restarted.get(queued.id)).toMatchObject({ status: 'queued' })
+
+    expect(restarted.confirmCancellation(job.id, { provider_control_confirmed: true }))
+      .toMatchObject({ status: 'cancelled', error: null })
+    expect((await restarted.tick()).started).toEqual([queued.id])
   })
 
   it('records durable usage and blocks retries once their budget is exhausted', async () => {

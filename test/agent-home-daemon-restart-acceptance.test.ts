@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -244,6 +245,17 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
       },
     })
 
+    await waitForBrowserAcceptance({
+      port,
+      tokenPath,
+      boardId: board.id,
+      profileId: ids.profile,
+      conversationId: ids.conversation,
+      sessionId: ids.session,
+      jobId: ids.job,
+      workspaceId: ids.workspace,
+    })
+
     const continuation = await api(
       port,
       token,
@@ -313,7 +325,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
     await stopDaemon(daemon)
     activeDaemons.delete(daemon)
     expect(await portAvailable(port)).toBe(true)
-  }, 30_000)
+  }, process.env.AGENT_HOME_BROWSER_ACCEPTANCE_MANIFEST ? 180_000 : 60_000)
 })
 
 function daemonEnvironment(input: {
@@ -346,6 +358,28 @@ async function startDaemon(
   port: number,
   environment: NodeJS.ProcessEnv,
 ): Promise<DaemonHandle> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await startDaemonAttempt(port, environment)
+    } catch (error) {
+      lastError = error
+      const detail = error instanceof Error ? error.message : String(error)
+      // The complete parallel suite can delay the exact SDK-bundled binary's
+      // --version subprocess beyond the daemon's fixed three-second probe.
+      // Retry only that transient result. Every attempt still executes the
+      // real package binary; a genuinely absent install fails after 3 tries.
+      if (!detail.includes('SDK-bundled Claude CLI: unsupported (not found)') || attempt === 3) throw error
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100))
+    }
+  }
+  throw lastError
+}
+
+async function startDaemonAttempt(
+  port: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<DaemonHandle> {
   const child = spawn(daemonNode, [tsxCli, sourceCli, 'serve'], {
     cwd: repoRoot,
     env: environment,
@@ -362,20 +396,22 @@ async function startDaemon(
   }
   activeDaemons.add(handle)
 
-  await waitFor('daemon health', async () => {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
+      activeDaemons.delete(handle)
       throw new Error(`daemon exited before health check\n${handle.output()}`)
     }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(250),
       })
-      return response.ok && (await response.json()).ok === true
-    } catch {
-      return false
-    }
-  }, 10_000)
-  return handle
+      if (response.ok && (await response.json()).ok === true) return handle
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  await stopDaemon(handle, true)
+  throw new Error(`timed out waiting for daemon health\n${handle.output()}`)
 }
 
 async function stopDaemon(handle: DaemonHandle, force = false): Promise<void> {
@@ -525,6 +561,56 @@ function assertExactlyOnceOrdering(events: Json[]): void {
 
 function nativeMethodCount(events: Json[], method: string): number {
   return events.filter((event) => event.metadata?.native_method === method).length
+}
+
+async function waitForBrowserAcceptance(input: {
+  port: number
+  tokenPath: string
+  boardId: number
+  profileId: string
+  conversationId: string
+  sessionId: string
+  jobId: string
+  workspaceId: string
+}): Promise<void> {
+  const manifestPath = process.env.AGENT_HOME_BROWSER_ACCEPTANCE_MANIFEST?.trim()
+  if (!manifestPath) return
+  const continuePath = `${manifestPath}.continue`
+  const query = new URLSearchParams({
+    board: String(input.boardId),
+    agent: input.profileId,
+    conversation: input.conversationId,
+    session: input.sessionId,
+    job: input.jobId,
+    workspace: input.workspaceId,
+  })
+  writeFileSync(manifestPath, `${JSON.stringify({
+    schema_version: 1,
+    state: 'daemon_restarted_provider_resumed_browser_pending',
+    url: `http://127.0.0.1:${input.port}/?${query.toString()}`,
+    token_path: input.tokenPath,
+    continue_path: continuePath,
+    expected: {
+      projected_text: 'persisted before daemon restart',
+      profile_id: input.profileId,
+      conversation_id: input.conversationId,
+      session_id: input.sessionId,
+      job_id: input.jobId,
+      workspace_id: input.workspaceId,
+    },
+  }, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
+  try {
+    await waitFor('browser acceptance continuation', () => {
+      try {
+        return readFileSync(continuePath, 'utf8').trim() === 'accepted'
+      } catch {
+        return false
+      }
+    }, 120_000)
+  } finally {
+    rmSync(manifestPath, { force: true })
+    rmSync(continuePath, { force: true })
+  }
 }
 
 function readFakeCodexState(file: string): Json {

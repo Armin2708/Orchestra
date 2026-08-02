@@ -82,6 +82,12 @@ export interface JobExecutor {
   supportedProviders(): readonly string[]
   execute(job: Job): Promise<JobExecutionResult | void>
   cancel?(job: Job): Promise<void>
+  retryDecision?(job: Job): { allowed: boolean; reason: string }
+  capacityDecision?(job: Job, input: {
+    activeSessions: number
+    quarantinedSessions: number
+    capacity: number
+  }): { allowed: boolean; reason: string }
 }
 
 export interface SchedulerTick {
@@ -415,38 +421,68 @@ export class JobScheduler {
       const job = this.get(id)
       if (!job) throw new NotFoundError('job not found')
       if (job.status !== 'running') throw new ConflictError('only a running job can be completed')
-      const retry = Boolean(error) && job.attempts < job.max_attempts
+      const retryBudgetAvailable = Boolean(error) && job.attempts < job.max_attempts
+      const retryPolicy = retryBudgetAvailable
+        ? this.executor?.retryDecision?.(job)
+        : undefined
+      const retry = retryBudgetAvailable && (retryPolicy?.allowed ?? true)
+      const effectiveError = error && retryBudgetAvailable && retryPolicy && !retryPolicy.allowed
+        ? `${error}; retry blocked: ${retryPolicy.reason}`
+        : error
       const status = retry ? 'queued' : error ? 'blocked' : 'succeeded'
       const updated = this.db.prepare(`UPDATE jobs SET status=?, error=?, finished_at=?
-        WHERE id=? AND status='running'`).run(status, error ?? null, retry ? null : timestamp(), id)
+        WHERE id=? AND status='running'`).run(status, effectiveError ?? null, retry ? null : timestamp(), id)
       if (updated.changes !== 1) return this.get(id)!
       this.releaseLaunchState(job, retry ? 'reserved' : error ? 'failed' : 'released')
       this.appendJobEvent(job, retry ? 'job.retry_queued' : error ? 'job.blocked' : 'job.succeeded',
-        { error, attempt: job.attempts, ...detail })
+        { error: effectiveError, attempt: job.attempts, ...detail })
       return this.get(id)!
     })
     const completed = finish.immediate()
     const job = completed
     const retry = job.status === 'queued'
     if (error && !retry) this.attention.create({ boardId: job.board_id, workspaceId: job.workspace_id, cardId: job.card_id,
-      kind: 'job.blocked', severity: 'high', title: 'Job blocked', detail: error })
+      kind: 'job.blocked', severity: 'high', title: 'Job blocked', detail: job.error ?? error })
     return completed
   }
 
   recover(id: string, error: string): Job {
     const job = this.get(id)
     if (!job) throw new NotFoundError('job not found')
-    if (job.status === 'cancelling') {
-      const recover = this.db.transaction(() => {
-        this.db.prepare("UPDATE jobs SET status='cancelled', error=NULL, finished_at=? WHERE id=?").run(timestamp(), id)
-        this.releaseLaunchState(job, 'released')
-        this.appendJobEvent(job, 'job.cancelled', { recovered: true }, 'recovery')
-      })
-      recover.immediate()
-      return this.get(id)!
-    }
+    // A daemon restart is not provider-native cancellation evidence. Keep the
+    // session charged to capacity until the executor explicitly confirms it.
+    if (job.status === 'cancelling') return job
     if (job.status !== 'running') return job
     return this.complete(id, error, { recovered: true })
+  }
+
+  quarantineCancellation(id: string, error: string): Job {
+    const job = this.get(id)
+    if (!job) throw new NotFoundError('job not found')
+    if (!['running', 'cancelling'].includes(job.status)) return job
+    this.db.prepare(`UPDATE jobs SET status='cancelling', error=?, finished_at=NULL
+      WHERE id=? AND status IN ('running','cancelling')`).run(
+      `cancellation not confirmed: ${error}`,
+      id,
+    )
+    return this.get(id)!
+  }
+
+  confirmCancellation(id: string, detail: Record<string, unknown> = {}): Job {
+    const job = this.get(id)
+    if (!job) throw new NotFoundError('job not found')
+    if (job.status !== 'cancelling') {
+      throw new ConflictError('only a cancelling job can be confirmed cancelled')
+    }
+    const confirm = this.db.transaction(() => {
+      const updated = this.db.prepare(`UPDATE jobs SET status='cancelled',
+        error=NULL, finished_at=? WHERE id=? AND status='cancelling'`).run(timestamp(), id)
+      if (updated.changes !== 1) return
+      this.releaseLaunchState(job, 'released')
+      this.appendJobEvent(job, 'job.cancelled', detail, 'recovery')
+    })
+    confirm.immediate()
+    return this.get(id)!
   }
 
   recordUsage(id: string, tokens: number, cents: number): Job {
@@ -466,12 +502,13 @@ export class JobScheduler {
   private claim(id: string): 'claimed' | 'capacity' | 'workspace' | 'stale' {
     const reserve = this.db.transaction(() => {
       const current = this.db.prepare(`SELECT j.status, j.workspace_id, w.status AS workspace_status,
-        wa.isolation_mode FROM jobs j
+        j.provider, wa.isolation_mode FROM jobs j
         LEFT JOIN workspaces w ON w.id=j.workspace_id
         LEFT JOIN workspace_assignments wa ON wa.job_id=j.id WHERE j.id=?`).get(id) as {
           status: string
           workspace_id: string | null
           workspace_status: string | null
+          provider: string
           isolation_mode: string | null
         } | undefined
       if (current?.status !== 'queued') return 'stale' as const
@@ -489,6 +526,19 @@ export class JobScheduler {
           AND NOT EXISTS (SELECT 1 FROM agent_sessions s WHERE s.agent_id=a.id AND s.status IN ('starting','running','idle'))`)
         .get() as { count: number }).count
       if (running + legacyLaunched >= this.maxLaunched()) return 'capacity' as const
+      const providerCounts = this.db.prepare(`SELECT
+        SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN status='cancelling' THEN 1 ELSE 0 END) AS quarantined
+        FROM jobs WHERE provider=?`).get(current.provider) as {
+          active: number | null
+          quarantined: number | null
+        }
+      const capacityPolicy = this.executor?.capacityDecision?.(this.get(id)!, {
+        activeSessions: providerCounts.active ?? 0,
+        quarantinedSessions: providerCounts.quarantined ?? 0,
+        capacity: this.maxLaunched(),
+      })
+      if (capacityPolicy && !capacityPolicy.allowed) return 'capacity' as const
       const claimed = this.db.prepare(`UPDATE jobs SET status='running', attempts=attempts+1,
         started_at=?, finished_at=NULL, error=NULL WHERE id=? AND status='queued'`).run(timestamp(), id)
       if (claimed.changes !== 1) return 'stale' as const
