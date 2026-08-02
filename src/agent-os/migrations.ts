@@ -37,6 +37,10 @@ import {
   AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID,
   installOrganizationAssuranceSchema,
 } from './organization-assurance-migration.js'
+import {
+  AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID,
+  installDeliveryTrackbookSchema,
+} from './delivery-trackbook-migration.js'
 
 interface Migration {
   id: string
@@ -7518,6 +7522,20 @@ const migrations: Migration[] = [
         )
       }
       installOrganizationAssuranceSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID,
+    apply(db) {
+      const hasAssurance = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID)
+      if (!hasAssurance) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryTrackbookSchema(db)
     },
   },
 ]

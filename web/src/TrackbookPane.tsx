@@ -8,11 +8,14 @@ import {
   DeliveryPromise,
   DeliveryReport,
   EvidenceBundle,
+  JobDeliveryDetailModel,
   JsonObject,
+  osApi,
   OsEvent,
   parseJson,
   TaskContract,
 } from './osApi'
+import { DeliveryTrackbookFilterBar, JobDeliveryDetail, type DeliveryListFilter } from './JobDeliveryDetail'
 import { OsIcon, OsIconName } from './OsIcon'
 import { PaneFrame, PaneSkeleton, Resource } from './WorkspacePanes'
 
@@ -524,6 +527,12 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
 }) {
   const currentId = deliveries.data.current ? String(deliveries.data.current.id) : null
   const [selectedId, setSelectedId] = useState<string | null>(currentId)
+  const [filter, setFilter] = useState<DeliveryListFilter>('all')
+  const [jobDetail, setJobDetail] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    data: JobDeliveryDetailModel | null
+    error: string | null
+  }>({ status: 'idle', data: null, error: null })
   useEffect(() => { setSelectedId(currentId) }, [card?.id, currentId])
   const selected = deliveries.data.deliveries.find((delivery) => String(delivery.id) === selectedId)
     ?? deliveries.data.current ?? deliveries.data.deliveries[0] ?? null
@@ -537,6 +546,34 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
   const hasDeliveryData = deliveries.data.deliveries.length > 0 || deliveries.data.current !== null
   const isInitialLoading = ['idle', 'loading'].includes(deliveries.status) && !hasDeliveryData
   const isHardError = deliveries.status === 'error' && !hasDeliveryData
+  useEffect(() => {
+    if (selected?.job_id === null || selected?.job_id === undefined) {
+      setJobDetail({ status: 'idle', data: null, error: null })
+      return
+    }
+    let active = true
+    setJobDetail((previous) => ({ status: 'loading', data: previous.data, error: null }))
+    osApi.getJobDeliveryDetail(selected.job_id).then((data) => {
+      if (active) setJobDetail({ status: 'ready', data, error: null })
+    }, (error: unknown) => {
+      if (active) setJobDetail({ status: 'error', data: null,
+        error: error instanceof Error ? error.message : 'Job delivery detail could not load.' })
+    })
+    return () => { active = false }
+  }, [selected?.job_id])
+  const matchesFilter = (delivery: DeliveryReport, candidate: DeliveryListFilter) => candidate === 'all'
+    || (candidate === 'awaiting_review' && ['submitted', 'verified'].includes(delivery.status))
+    || (candidate === 'evidence_gaps' && (delivery.gaps.length > 0
+      || [...delivery.deliverable_results, ...delivery.criterion_results]
+        .some((result) => EVIDENCE_GAP_STATUSES.has(result.status))))
+    || (candidate === 'rejected' && delivery.status === 'rejected')
+    || (candidate === 'overridden' && [...delivery.deliverable_results, ...delivery.criterion_results]
+      .some((result) => result.override !== null))
+    || (candidate === 'shipped' && delivery.status === 'shipped')
+  const filteredDeliveries = deliveries.data.deliveries.filter((delivery) => matchesFilter(delivery, filter))
+  const filterCounts = Object.fromEntries((['all', 'awaiting_review', 'evidence_gaps', 'rejected', 'overridden', 'shipped'] as DeliveryListFilter[])
+    .map((candidate) => [candidate,
+      deliveries.data.deliveries.filter((delivery) => matchesFilter(delivery, candidate)).length]))
 
   return (
     <PaneFrame title="Trackbook" eyebrow={card ? `Task ${card.id} · Asked versus delivered` : 'Unlinked workspace'}
@@ -558,6 +595,8 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
             </dl> : <p>Waiting for the first submitted result.</p>}
           </section>
 
+          <DeliveryTrackbookFilterBar value={filter} onChange={setFilter} counts={filterCounts} />
+
           {selected && <div className="os-trackbook-lifecycle" aria-label="Delivery lifecycle timestamps">{lifecycleTimes(selected).map(([label, time, actor]) => (
             <span key={label}><b>{label}</b><time dateTime={time}>{normalizeTime(time)}</time>{actor && <small>by {actor}</small>}</span>
           ))}</div>}
@@ -568,8 +607,12 @@ export function TrackbookPane({ deliveries, evidence, contract, card }: {
           </div>
           <DeltaSection deliverables={deliverableRows} criteria={criterionRows} />
           <EvidenceTimeline timeline={timeline} state={evidence} historical={viewingHistorical} />
-          {deliveries.data.deliveries.length > 0 && (
-            <RevisionHistory deliveries={deliveries.data.deliveries} selectedId={selected ? String(selected.id) : null}
+          {jobDetail.status === 'loading' && !jobDetail.data && <div className="os-trackbook-loading"><PaneSkeleton /></div>}
+          {jobDetail.status === 'error' && <div className="os-pane-error" role="alert"><OsIcon name="attention" />
+            <strong>Exact job evidence could not load</strong><span>{jobDetail.error}</span></div>}
+          {jobDetail.data && <JobDeliveryDetail detail={jobDetail.data} />}
+          {filteredDeliveries.length > 0 && (
+            <RevisionHistory deliveries={filteredDeliveries} selectedId={selected ? String(selected.id) : null}
               currentId={currentId} onSelect={(delivery) => setSelectedId(String(delivery.id))} />
           )}
         </>}

@@ -20,6 +20,20 @@ export const AGENT_OS_DELIVERY_TRACKBOOK_TABLES = Object.freeze([
  */
 export function installDeliveryTrackbookSchema(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id TEXT PRIMARY KEY,
+      board_id INTEGER NOT NULL,
+      workspace_id TEXT,
+      card_id INTEGER,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      path TEXT,
+      content TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS delivery_verification_runs (
       id TEXT PRIMARY KEY,
       report_id TEXT NOT NULL REFERENCES delivery_reports(id) ON DELETE CASCADE,

@@ -49,6 +49,7 @@ import { registerTaskContractTemplateRoutes } from './contract-template-routes.j
 import { jobAssignmentPlugin } from './job-assignment-routes.js'
 import { openWorkPlugin } from './open-work-routes.js'
 import { organizationPlugin } from './organization-routes.js'
+import { deliveryTrackbookPlugin } from './delivery-trackbook-routes.js'
 import {
   AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
   AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
@@ -184,6 +185,11 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
     prefix: '/api/v1/os',
   })
   server.register(organizationPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(deliveryTrackbookPlugin, {
     db: options.db,
     isOperator: options.isOperator,
     prefix: '/api/v1/os',

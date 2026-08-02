@@ -1,72 +1,8 @@
 import React from 'react'
-import type { DeliveryOutcome, DeliveryPromise, DeliveryReport } from './osApi'
+import type { DeliveryOutcome, DeliveryPromise, JobDeliveryDetailModel } from './osApi'
 import './jobDeliveryDetail.css'
 
 export type DeliveryListFilter = 'all' | 'awaiting_review' | 'evidence_gaps' | 'rejected' | 'overridden' | 'shipped'
-
-export type JobDeliveryDetailModel = {
-  job: {
-    id: string | number
-    status: string
-    provider: string
-  }
-  requested: DeliveryReport['asked'] & { contract_version?: number; contract_updated_at?: string }
-  delivered: DeliveryReport
-  lineage: DeliveryReport[]
-  verification_runs: Array<{
-    id: string
-    command: string
-    cwd: string
-    environment: Record<string, string>
-    environment_sha256: string
-    exit_code: number
-    output_artifact_id: string
-    output_sha256: string
-    started_at: string
-    finished_at: string
-    recorded_by: string
-  }>
-  artifact_attestations: Array<{
-    id: string
-    artifact_id: string
-    content_sha256: string
-    byte_size: number
-    source_kind: string
-    source_locator: string
-    source_revision: string | null
-    builder: string
-    attestation_sha256: string
-  }>
-  review_comments: Array<{
-    id: string
-    criterion_id: string | null
-    deliverable_id: string | null
-    artifact_id: string
-    location: { path?: string; startLine?: number; endLine?: number; startByte?: number; endByte?: number }
-    body: string
-    author: string
-    created_at: string
-  }>
-  shipments: Array<{
-    id: string
-    source_repository: string
-    source_commit: string
-    destination: string
-    deployment_ref: string | null
-    manifest_sha256: string
-    shipped_by: string
-    shipped_at: string
-  }>
-  regressions: Array<{
-    id: string
-    summary: string
-    evidence_artifact_id: string
-    reopened_report_id: string
-    recorded_by: string
-    observed_at: string
-  }>
-  evidence_gaps: string[]
-}
 
 const FILTERS: Array<{ id: DeliveryListFilter; label: string }> = [
   { id: 'all', label: 'All' },
