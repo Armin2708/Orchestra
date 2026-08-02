@@ -15,10 +15,16 @@ import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const packageName = 'orchestra-board'
 const sha256Pattern = /^[0-9a-f]{64}$/
 const waitArray = new Int32Array(new SharedArrayBuffer(4))
+const rotatingPrimaryKeyTables = new Set([
+  // Reconciliation replaces bounded, generation-scoped success receipts after replay.
+  // The durable journal state/day seals and every canonical/user table remain strict.
+  'os_compatibility_failure_success_receipts',
+])
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message)
@@ -49,6 +55,7 @@ const artifactIdentity = (artifactPath) => {
   const stat = lstatSync(resolved)
   invariant(stat.isFile() && !stat.isSymbolicLink(), 'package artifact must be one regular file')
   invariant(stat.size > 0 && resolved.endsWith('.tgz'), 'package artifact must be a non-empty .tgz')
+  assertTarRegularEntries(resolved)
   return {
     path: resolved,
     filename: basename(resolved),
@@ -324,6 +331,205 @@ const captureDatabaseEvidence = (databasePath) => {
   }
 }
 
+const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`
+
+const canonicalSqlValue = (value) => {
+  if (Buffer.isBuffer(value)) return { type: 'blob', hex: value.toString('hex') }
+  if (typeof value === 'bigint') return { type: 'bigint', value: value.toString() }
+  return value
+}
+
+const canonicalPrimaryKey = (row, columns) => JSON.stringify(
+  columns.map((column) => canonicalSqlValue(row[column])),
+)
+
+const foreignKeySignature = (foreignKey) => JSON.stringify({
+  referenced_table: foreignKey.referenced_table,
+  from_columns: foreignKey.from_columns,
+  to_columns: foreignKey.to_columns,
+})
+
+const multiset = (values) => {
+  const counts = new Map()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  return counts
+}
+
+export const captureDatabasePreservation = (databasePath) => {
+  invariant(existsSync(databasePath), 'Orchestra database is missing')
+  const database = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try {
+    const tableNames = database.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type='table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all().map((row) => row.name)
+    const tables = tableNames.map((name) => {
+      const columns = database.prepare(`
+        SELECT cid, name, type, "notnull" AS not_null, dflt_value, pk
+        FROM pragma_table_info(?)
+        ORDER BY cid
+      `).all(name)
+      const columnDescriptors = columns.map((column) => ({
+        name: column.name,
+        type: column.type,
+        not_null: Number(column.not_null),
+        default_value: column.dflt_value,
+        primary_key_position: Number(column.pk),
+      }))
+      const primaryKeyColumns = columns
+        .filter((column) => Number(column.pk) > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk))
+        .map((column) => column.name)
+      const table = quoteIdentifier(name)
+      const rowCount = Number(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count)
+      let primaryKeys = []
+      if (primaryKeyColumns.length > 0) {
+        const selected = primaryKeyColumns.map(quoteIdentifier).join(', ')
+        const ordered = primaryKeyColumns.map(quoteIdentifier).join(', ')
+        primaryKeys = database.prepare(
+          `SELECT ${selected} FROM ${table} ORDER BY ${ordered}`,
+        ).all().map((row) => canonicalPrimaryKey(row, primaryKeyColumns))
+      }
+      const foreignKeyRows = database.prepare(`
+        SELECT id, seq, "table" AS referenced_table, "from" AS from_column,
+          "to" AS to_column
+        FROM pragma_foreign_key_list(?)
+        ORDER BY id, seq
+      `).all(name)
+      const groupedForeignKeys = new Map()
+      for (const row of foreignKeyRows) {
+        const foreignKey = groupedForeignKeys.get(row.id) ?? {
+          referenced_table: row.referenced_table,
+          from_columns: [],
+          to_columns: [],
+        }
+        foreignKey.from_columns.push(row.from_column)
+        foreignKey.to_columns.push(row.to_column)
+        groupedForeignKeys.set(row.id, foreignKey)
+      }
+      const foreignKeys = [...groupedForeignKeys.values()].map((foreignKey) => {
+        const relationships = database.prepare(`SELECT * FROM ${table}`).all().map((row) =>
+          JSON.stringify({
+            child_primary_key: primaryKeyColumns.map((column) => canonicalSqlValue(row[column])),
+            referenced_values: foreignKey.from_columns.map(
+              (column) => canonicalSqlValue(row[column]),
+            ),
+          })).sort()
+        return { ...foreignKey, relationships }
+      }).sort((left, right) => foreignKeySignature(left).localeCompare(foreignKeySignature(right)))
+      const noPrimaryKeyRowHashes = primaryKeyColumns.length === 0
+        ? database.prepare(`SELECT * FROM ${table}`).all().map((row) => sha256(JSON.stringify(
+            columnDescriptors.map((column) => canonicalSqlValue(row[column.name])),
+          ))).sort()
+        : []
+      return {
+        name,
+        columns: columnDescriptors,
+        row_count: rowCount,
+        primary_key_columns: primaryKeyColumns,
+        primary_keys: primaryKeys,
+        foreign_keys: foreignKeys,
+        no_primary_key_row_hashes: noPrimaryKeyRowHashes,
+      }
+    })
+    return { tables }
+  } finally {
+    database.close()
+  }
+}
+
+const preservationSummary = (snapshot) => ({
+  table_count: snapshot.tables.length,
+  row_count: snapshot.tables.reduce((total, table) => total + table.row_count, 0),
+  primary_key_count: snapshot.tables.reduce(
+    (total, table) => total + table.primary_keys.length,
+    0,
+  ),
+  foreign_key_relationship_count: snapshot.tables.reduce(
+    (total, table) => total + table.foreign_keys.reduce(
+      (tableTotal, foreignKey) => tableTotal + foreignKey.relationships.length,
+      0,
+    ),
+    0,
+  ),
+  no_primary_key_row_hash_count: snapshot.tables.reduce(
+    (total, table) => total + table.no_primary_key_row_hashes.length,
+    0,
+  ),
+  snapshot_sha256: sha256(JSON.stringify(snapshot)),
+})
+
+export const verifyDatabasePreservation = (databasePath, baseline, label) => {
+  const observed = captureDatabasePreservation(databasePath)
+  const observedTables = new Map(observed.tables.map((table) => [table.name, table]))
+  for (const expectedTable of baseline.tables) {
+    const observedTable = observedTables.get(expectedTable.name)
+    invariant(observedTable, `${label} dropped Orchestra table ${expectedTable.name}`)
+    invariant(
+      JSON.stringify(observedTable.primary_key_columns) ===
+        JSON.stringify(expectedTable.primary_key_columns),
+      `${label} changed the primary key of Orchestra table ${expectedTable.name}`,
+    )
+    const observedColumns = new Map(observedTable.columns.map((column) => [column.name, column]))
+    for (const expectedColumn of expectedTable.columns) {
+      invariant(
+        JSON.stringify(observedColumns.get(expectedColumn.name)) === JSON.stringify(expectedColumn),
+        `${label} removed or changed Orchestra column ${expectedTable.name}.${expectedColumn.name}`,
+      )
+    }
+    invariant(
+      observedTable.row_count >= expectedTable.row_count,
+      `${label} removed rows from Orchestra table ${expectedTable.name}`,
+    )
+    const observedKeys = new Set(observedTable.primary_keys)
+    for (const key of expectedTable.primary_keys) {
+      invariant(
+        rotatingPrimaryKeyTables.has(expectedTable.name) || observedKeys.has(key),
+        `${label} removed or replaced a primary-key identity in Orchestra table ${expectedTable.name}`,
+      )
+    }
+    const observedForeignKeys = new Map(
+      observedTable.foreign_keys.map((foreignKey) => [foreignKeySignature(foreignKey), foreignKey]),
+    )
+    for (const expectedForeignKey of expectedTable.foreign_keys) {
+      const signature = foreignKeySignature(expectedForeignKey)
+      const observedForeignKey = observedForeignKeys.get(signature)
+      invariant(
+        observedForeignKey,
+        `${label} removed a foreign-key relationship from Orchestra table ${expectedTable.name}`,
+      )
+      const observedRelationships = multiset(observedForeignKey.relationships)
+      for (const [relationship, expectedCount] of multiset(expectedForeignKey.relationships)) {
+        invariant(
+          (observedRelationships.get(relationship) ?? 0) >= expectedCount,
+          `${label} changed a foreign-key relationship in Orchestra table ${expectedTable.name}`,
+        )
+      }
+    }
+    const observedUnkeyedRows = multiset(observedTable.no_primary_key_row_hashes)
+    for (const [rowHash, expectedCount] of multiset(expectedTable.no_primary_key_row_hashes)) {
+      invariant(
+        (observedUnkeyedRows.get(rowHash) ?? 0) >= expectedCount,
+        `${label} changed a row without a primary key in Orchestra table ${expectedTable.name}`,
+      )
+    }
+  }
+  return {
+    ...preservationSummary(observed),
+    baseline_snapshot_sha256: preservationSummary(baseline).snapshot_sha256,
+    all_prior_tables_present: true,
+    all_protected_prior_primary_keys_present: true,
+    all_prior_foreign_key_relationships_present: true,
+    all_prior_columns_present: true,
+    all_prior_unkeyed_rows_present: true,
+    rotating_primary_key_tables: [...rotatingPrimaryKeyTables],
+    row_counts_non_decreasing: true,
+    passed: true,
+  }
+}
+
 const assertPreservedDomainData = (evidence, expected) => {
   invariant(evidence.integrity_check === 'ok', 'Orchestra database integrity check failed')
   invariant(evidence.schema_object_count > 0, 'Orchestra database schema is empty')
@@ -341,6 +547,18 @@ const assertPreservedDomainData = (evidence, expected) => {
     'preserved Orchestra agent is missing',
   )
   invariant(evidence.active_card_count > 0, 'preserved Orchestra active work is missing')
+}
+
+const assertExactCoreRowsPreserved = (evidence, baseline, label) => {
+  for (const collection of ['boards', 'cards', 'agents']) {
+    const observedRows = new Set(evidence[collection].map((row) => JSON.stringify(row)))
+    for (const row of baseline[collection]) {
+      invariant(
+        observedRows.has(JSON.stringify(row)),
+        `${label} changed or replaced a retained Orchestra ${collection} row`,
+      )
+    }
+  }
 }
 
 const exercisePackagedBackup = (
@@ -601,6 +819,7 @@ export async function runPackageLifecycle({
     )
     const beforeUpgrade = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(beforeUpgrade, expected)
+    const preservationBaseline = captureDatabasePreservation(databasePath)
 
     installArtifact(consumerDirectory, artifact.path)
     const candidateExecutable = executablePath(consumerDirectory)
@@ -624,6 +843,12 @@ export async function runPackageLifecycle({
     )
     const afterUpgrade = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(afterUpgrade, expected)
+    assertExactCoreRowsPreserved(afterUpgrade, beforeUpgrade, 'candidate upgrade')
+    const preservationAfterUpgrade = verifyDatabasePreservation(
+      databasePath,
+      preservationBaseline,
+      'candidate upgrade',
+    )
     invariant(
       afterUpgrade.user_version >= beforeUpgrade.user_version,
       'candidate upgrade reduced the Orchestra schema version',
@@ -647,6 +872,7 @@ export async function runPackageLifecycle({
       artifact_preserved: false,
       blocker: 'retained prior artifact with a different digest and version was not supplied',
     }
+    let preservationAfterRollback = null
     if (crossVersion) {
       installArtifact(consumerDirectory, previous.path)
       const rollbackExecutable = executablePath(consumerDirectory)
@@ -667,6 +893,12 @@ export async function runPackageLifecycle({
       )
       const afterRollback = captureDatabaseEvidence(databasePath)
       assertPreservedDomainData(afterRollback, expected)
+      assertExactCoreRowsPreserved(afterRollback, beforeUpgrade, 'application rollback')
+      preservationAfterRollback = verifyDatabasePreservation(
+        databasePath,
+        preservationBaseline,
+        'application rollback',
+      )
       invariant(
         afterRollback.user_version === afterUpgrade.user_version,
         'application rollback attempted to reverse the forward-only schema',
@@ -714,6 +946,12 @@ export async function runPackageLifecycle({
     )
     const afterUninstall = captureDatabaseEvidence(databasePath)
     assertPreservedDomainData(afterUninstall, expected)
+    assertExactCoreRowsPreserved(afterUninstall, beforeUpgrade, 'package uninstall')
+    const preservationAfterUninstall = verifyDatabasePreservation(
+      databasePath,
+      preservationBaseline,
+      'package uninstall',
+    )
     invariant(
       readFileSync(artifactMarkerPath, 'utf8') === artifactMarker,
       'Orchestra artifact was deleted or changed during uninstall',
@@ -773,6 +1011,12 @@ export async function runPackageLifecycle({
         schema_before: beforeUpgrade,
         schema_after_upgrade: afterUpgrade,
         schema_after_uninstall: afterUninstall,
+        database_continuity: {
+          baseline: preservationSummary(preservationBaseline),
+          after_upgrade: preservationAfterUpgrade,
+          after_rollback: preservationAfterRollback,
+          after_uninstall: preservationAfterUninstall,
+        },
         active_work_preserved: true,
         artifact_preserved: true,
         project_preserved: true,

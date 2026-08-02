@@ -12,9 +12,6 @@
     "QA-018/lane-a-tool-reports", "QA-018/lane-b-tool-reports", "QA-018/lane-c-tool-reports", "QA-018/lane-d-tool-reports", "QA-018/integrator-tool-reports"
   ],
   "required_statuses": {
-    "QA-001/discussion-lifecycle": "lane-dependent", "QA-001/team-planning-conflict-lifecycle": "lane-dependent", "QA-001/device-session-lifecycle": "lane-dependent",
-    "QA-011/team-planning-budget": "lane-dependent", "QA-011/team-conflict-resolution": "lane-dependent",
-    "QA-012/pairing-single-use-origin-expiry": "lane-dependent", "QA-012/device-scope-default-deny": "lane-dependent", "QA-012/selective-revoke-and-expiry": "lane-dependent", "QA-012/step-up-binding-and-replay": "lane-dependent",
     "QA-016/long-running-dogfood-daemon-provider-network": "lane-dependent",
     "QA-018/lane-a-tool-reports": "lane-dependent", "QA-018/lane-b-tool-reports": "lane-dependent", "QA-018/lane-c-tool-reports": "lane-dependent", "QA-018/lane-d-tool-reports": "lane-dependent", "QA-018/integrator-tool-reports": "lane-dependent"
   },
@@ -24,16 +21,20 @@
     "qa001-transition-matrix": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/beta-state-transition-matrix.test.ts"],
     "qa001-job-assignment": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/job-assignment-domain.test.ts"],
     "qa001-knowledge-migration": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/knowledge-migrations.test.ts"],
+    "qa001-lane-a-integrated": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/discussion-domain.test.ts", "test/discussion-api.test.ts", "test/team-planning-conflicts.test.ts"],
+    "qa001-lane-c-integrated": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/device-sessions.test.ts", "test/device-session-migration.test.ts", "test/remote-security-integration.test.ts"],
     "qa009-delivery": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/delivery-reports.test.ts", "test/delivery-api.test.ts"],
     "qa010-knowledge": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/knowledge-ingestion.test.ts", "test/knowledge-ingestion-security.test.ts", "test/knowledge-retrieval.test.ts"],
     "qa011-coordination": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/message-ui.test.ts", "test/organization-coordination.test.ts"],
+    "qa011-lane-a-integrated": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/team-planning-conflicts.test.ts", "test/organization-coordination.test.ts"],
+    "qa012-lane-c-integrated": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/device-sessions.test.ts", "test/remote-browser-security.test.ts", "test/remote-request-security.test.ts", "test/remote-security-integration.test.ts"],
     "qa016-interruption-prerequisites": ["node_modules/.bin/vitest", "run", "--reporter=json", "test/agent-home-daemon-restart-acceptance.test.ts", "test/codex-runtime-state-machines.test.ts", "test/provider-agent-manager.test.ts"]
   },
-  "future_command_ids": ["qa001-lane-a-future", "qa001-lane-c-future", "qa011-lane-a-future", "qa012-lane-c-future", "qa016-long-running-dogfood", "qa018-tool-reports"],
+  "future_command_ids": ["qa016-long-running-dogfood", "qa018-tool-reports"],
   "artifact_paths": [
-    "package.json", "package-lock.json", "docs/quality/beta-quality-matrix.json", "docs/quality/beta-quality-requirements.json", "docs/quality/beta-quality-evidence.schema.json", "docs/quality/beta-quality-tool-evidence.schema.json", "docs/quality/beta-quality-integration-manifest.schema.json", "scripts/check-beta-quality-matrix.mjs", "scripts/run-beta-quality-evidence.mjs", "test/beta-quality-matrix.test.ts",
+    "package.json", "package-lock.json", "docs/beta-release-operations.md", "docs/checkpoints/beta-lane-d-qa.md", "docs/quality/beta-quality-matrix.json", "docs/quality/beta-quality-requirements.json", "docs/quality/beta-quality-evidence.schema.json", "docs/quality/beta-quality-tool-evidence.schema.json", "docs/quality/beta-quality-integration-manifest.schema.json", "docs/quality/beta-quality-signature-receipt.schema.json", "scripts/beta-quality-signature.mjs", "scripts/beta-quality-trust-roots.json", "scripts/capture-graphify-status.mjs", "scripts/check-beta-quality-matrix.mjs", "scripts/run-beta-quality-evidence.mjs", "test/beta-quality-matrix.test.ts",
     "src/codex/client.ts", "src/codex/supervisor.ts", "src/runtime/supervisor.ts", "src/agent-os/agent-home-lifecycle.ts", "src/agent-os/job-market.ts", "src/agent-os/job-assignments.ts", "src/agent-os/delivery-reports.ts", "src/agent-os/migrations.ts", "src/agent-os/organization.ts",
-    "test/codex-runtime-state-machines.test.ts", "test/agent-home-controls.test.ts", "test/beta-state-transition-matrix.test.ts", "test/job-assignment-domain.test.ts", "test/knowledge-migrations.test.ts", "test/delivery-reports.test.ts", "test/delivery-api.test.ts", "test/knowledge-ingestion.test.ts", "test/knowledge-ingestion-security.test.ts", "test/knowledge-retrieval.test.ts", "test/message-ui.test.ts", "test/organization-coordination.test.ts", "test/agent-home-daemon-restart-acceptance.test.ts", "test/provider-agent-manager.test.ts"
+    "test/codex-runtime-state-machines.test.ts", "test/agent-home-controls.test.ts", "test/beta-state-transition-matrix.test.ts", "test/job-assignment-domain.test.ts", "test/knowledge-migrations.test.ts", "test/discussion-domain.test.ts", "test/discussion-api.test.ts", "test/team-planning-conflicts.test.ts", "test/device-sessions.test.ts", "test/device-session-migration.test.ts", "test/remote-browser-security.test.ts", "test/remote-request-security.test.ts", "test/remote-security-integration.test.ts", "test/delivery-reports.test.ts", "test/delivery-api.test.ts", "test/knowledge-ingestion.test.ts", "test/knowledge-ingestion-security.test.ts", "test/knowledge-retrieval.test.ts", "test/message-ui.test.ts", "test/organization-coordination.test.ts", "test/agent-home-daemon-restart-acceptance.test.ts", "test/provider-agent-manager.test.ts"
   ],
   "state_machine_discovery_sha256": "ebed304b129292f7a5b6a0fc65479119f2a1dfb30ea5160ec0f5d83c48ced981",
   "classified_state_machine_files": [

@@ -3,57 +3,98 @@ import baseline from '../docs/qa-browser-performance-baseline.json'
 import observation1 from '../docs/qa-evidence/browser-quality/observation-1.json'
 import observation2 from '../docs/qa-evidence/browser-quality/observation-2.json'
 import observation3 from '../docs/qa-evidence/browser-quality/observation-3.json'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ACCESSIBILITY_GATES,
   BETA_EXPERIENCE_BUDGETS_MS,
   BROWSER_BASELINE_SCHEMA_VERSION,
+  BROWSER_JOURNEYS,
+  BROWSER_OVERFLOW_AUDIT_EXPRESSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
+  EVIDENCE_MAX_ARRAY_LENGTH,
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_MAX_STRING_LENGTH,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  assertFinalBuildManifest,
+  compositeRgba,
   contrastRatio,
   checkedBudget,
   deriveRegressionBudgetMs,
   evidenceDigest,
+  finalizeBrowserEvidence,
+  finalizeValidatedBrowserEvidence,
+  navigateFreshInteractionMode,
   performanceSampleForJourney,
   redactEvidence,
+  canonicalRepositoryName,
+  resolveApprovedArtifactPath,
   resolveApprovedEvidencePath,
   validateBaselineAgainstCaptures,
+  validateArtifactIdentity,
   validateBuildSourceIdentity,
   validatePerformanceBaseline,
   validateBrowserQualityEvidence,
   verifiableDocumentDigest,
+  writeBrowserArtifact,
 } from '../scripts/lib/browser-quality.mjs'
 
+const chromeForDomFixture = [
+  process.env.ORCHESTRA_QA_CHROME,
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+].find((candidate): candidate is string => Boolean(candidate && existsSync(candidate)))
+
 const passingEvidence = () => {
+  const reset = (name: string, mode: string) => ({
+    strategy: 'fresh_page_navigation',
+    loader_sha256: evidenceDigest(`${name}:${mode}`),
+  })
   const evidence: any = {
   schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
   source: {
+    repository: 'agentboard',
     commit: 'a'.repeat(40),
+    source_status: 'clean',
+    binding_status: 'passed_preflight_and_final',
+    source_tree_sha256: 'd'.repeat(64),
+    build_manifest_sha256: 'e'.repeat(64),
     artifact_identity: { root_dist_sha256: 'b'.repeat(64), web_dist_sha256: 'c'.repeat(64) },
   },
   viewports: RESPONSIVE_VIEWPORTS.map((viewport) => ({
     ...viewport,
     horizontal_overflow_px: 0,
+    overflow_measurement: { visible_overflow_px: 0, document_extent_overflow_px: 0 },
     console_errors: [],
     page_errors: [],
     failed_requests: [],
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
-    readiness: { graph_agents_rendered: 18, transcript_events_rendered: 250, search_matches_rendered: 5 },
-    journeys: Array.from({ length: 12 }, (_, index) => ({
-      name: index === 0 ? 'conversation search' : `journey-${index}`,
+    readiness: { dependency_graph_nodes_rendered: 1, transcript_events_rendered: 250, search_matches_rendered: 5 },
+    journeys: BROWSER_JOURNEYS.map((name) => ({
+      name,
       interaction_modes: {
-        pointer: { passed: true, counts_toward_pass: true, elapsed_ms: 10, performance_eligible: true, diagnostic_only: false },
+        pointer: {
+          passed: true, counts_toward_pass: true, elapsed_ms: 10, performance_eligible: true,
+          diagnostic_only: false, reset: reset(name, 'pointer'),
+        },
         keyboard: {
           passed: true, counts_toward_pass: true, elapsed_ms: 20, performance_eligible: false, diagnostic_only: false,
-          action_evidence: index === 0 ? { focus_acquisition: 'tab_navigation', tab_events: 3 } : null,
+          action_evidence: { focus_acquisition: 'tab_navigation', programmatic_focus: false, tab_events: 3 },
+          reset: reset(name, 'keyboard'),
         },
-        dom_fallback: { passed: true, counts_toward_pass: false, elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
+        dom_fallback: {
+          passed: true, counts_toward_pass: false, elapsed_ms: 1, performance_eligible: false,
+          diagnostic_only: true, reset: reset(name, 'dom_fallback'),
+        },
       },
       elapsed_ms: 10,
-      performance_sample_mode: index === 0 ? 'pointer' : 'diagnostic_only',
+      performance_sample_mode: ['graph overview', 'durable transcript', 'conversation search'].includes(name)
+        ? 'pointer' : 'diagnostic_only',
       accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
@@ -66,8 +107,7 @@ const passingEvidence = () => {
     }])),
   })),
   }
-  evidence.sha256 = verifiableDocumentDigest(evidence)
-  return evidence
+  return finalizeBrowserEvidence(evidence, [])
 }
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
@@ -82,6 +122,12 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     ])
     expect(PERFORMANCE_SURFACES).toEqual([
       'startup', 'snapshot_loading', 'transcript_loading', 'graph_view', 'search',
+    ])
+    expect(BROWSER_JOURNEYS).toEqual([
+      'graph overview', 'durable transcript', 'conversation search',
+      'work command center view', 'discussions command center view', 'knowledge command center view',
+      'outcomes command center view', 'activity command center view',
+      'Organization primary view', 'Roadmap primary view', 'Settings primary view', 'Command center primary view',
     ])
   })
 
@@ -177,15 +223,43 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
 
   it('rejects dirty or stale source identity before trusting build artifacts', () => {
     const manifest = {
+      repository: 'agentboard',
       source_status: 'clean', source_commit: 'a'.repeat(40), source_tree_sha256: 'b'.repeat(64),
       source_checked_at: '2026-08-02T10:00:00.000Z', artifacts_built_at: '2026-08-02T10:00:01.000Z',
     }
     expect(validateBuildSourceIdentity(manifest, {
+      repository: 'agentboard',
       source_status: 'clean', source_commit: manifest.source_commit, source_tree_sha256: manifest.source_tree_sha256,
     })).toEqual([])
     expect(validateBuildSourceIdentity(manifest, {
+      repository: 'agentboard',
       source_status: 'dirty', source_commit: manifest.source_commit, source_tree_sha256: manifest.source_tree_sha256,
     })).toContain('tracked source tree is dirty')
+    expect(validateBuildSourceIdentity(manifest, {
+      repository: 'linked-worktree-name',
+      source_status: 'clean', source_commit: manifest.source_commit, source_tree_sha256: manifest.source_tree_sha256,
+    })).toContain('build manifest repository identity is stale')
+    expect(validateBuildSourceIdentity(manifest, {
+      repository: 'agentboard',
+      source_status: 'clean', source_commit: 'f'.repeat(40), source_tree_sha256: manifest.source_tree_sha256,
+    })).toContain('build manifest source commit is stale')
+    expect(validateArtifactIdentity({ artifact_identity: {
+      root_dist_sha256: 'c'.repeat(64), web_dist_sha256: 'd'.repeat(64),
+    } }, {
+      root_dist_sha256: 'c'.repeat(64), web_dist_sha256: 'e'.repeat(64),
+    })).toContain('build artifact web_dist_sha256 digest is stale')
+    expect(validateArtifactIdentity({ artifact_identity: {
+      root_dist_sha256: 'c'.repeat(64), web_dist_sha256: 'd'.repeat(64),
+    } }, {
+      root_dist_sha256: 'e'.repeat(64), web_dist_sha256: 'd'.repeat(64),
+    })).toContain('build artifact root_dist_sha256 digest is stale')
+    expect(canonicalRepositoryName('/workspace/agentboard/.git')).toBe('agentboard')
+    expect(canonicalRepositoryName('/workspace/agentboard.git')).toBe('agentboard.git')
+    const commonDir = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      cwd: process.cwd(), encoding: 'utf8',
+    })
+    expect(commonDir.status).toBe(0)
+    expect(canonicalRepositoryName(commonDir.stdout.trim())).toBe('agentboard')
   })
 
   it('confines retained observations to real non-symlink files in the approved directory', () => {
@@ -204,6 +278,112 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
+  it('confines runtime artifacts to the canonical root and writes them atomically', () => {
+    const root = mkdtempSync(join(tmpdir(), 'browser-runtime-artifact-'))
+    try {
+      const approved = join(root, 'artifacts', 'qa', 'browser-quality')
+      mkdirSync(approved, { recursive: true })
+      const target = join(approved, 'evidence.json')
+      expect(resolveApprovedArtifactPath(root, target)).toBe(join(realpathSync(root), 'artifacts', 'qa', 'browser-quality', 'evidence.json'))
+      expect(() => resolveApprovedArtifactPath(root, join(root, 'outside.json'))).toThrow(/outside/)
+      writeBrowserArtifact(root, target, { status: 'first' })
+      expect(() => writeBrowserArtifact(root, target, { invalid: 1n })).toThrow()
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ status: 'first' })
+      const oversized = Object.fromEntries(Array.from({ length: 600 }, (_, index) => [
+        `field_${index}`, 'x'.repeat(EVIDENCE_MAX_STRING_LENGTH),
+      ]))
+      expect(() => writeBrowserArtifact(root, target, oversized)).toThrow(/bounded retention size/)
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ status: 'first' })
+      writeBrowserArtifact(root, target, { status: 'replacement' })
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ status: 'replacement' })
+      expect(readdirSync(approved)).toEqual(['evidence.json'])
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('rejects symlinked artifact parents and existing symlink targets', () => {
+    const root = mkdtempSync(join(tmpdir(), 'browser-runtime-symlink-'))
+    try {
+      const approved = join(root, 'artifacts', 'qa', 'browser-quality')
+      const outside = join(root, 'outside')
+      mkdirSync(approved, { recursive: true })
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'target.json'), '{}')
+      symlinkSync(outside, join(approved, 'linked-parent'))
+      symlinkSync(join(outside, 'target.json'), join(approved, 'linked-target.json'))
+      expect(() => resolveApprovedArtifactPath(root, join(approved, 'linked-parent', 'capture.json'))).toThrow(/symlink/)
+      expect(() => resolveApprovedArtifactPath(root, join(approved, 'linked-target.json'))).toThrow(/symlink/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('rejects absolute artifact CLI arguments before any write', () => {
+    const absoluteOutput = join(process.cwd(), 'artifacts', 'qa', 'browser-quality', 'absolute-rejected.json')
+    rmSync(absoluteOutput, { force: true })
+    const result = spawnSync(process.execPath, [
+      'scripts/qa-browser-gates.mjs', '--capture-only', '--output', absoluteOutput,
+    ], { cwd: process.cwd(), encoding: 'utf8' })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('--output must be repository-relative')
+    expect(existsSync(absoluteOutput)).toBe(false)
+  })
+
+  it('rejects output and manifest aliases before they can overwrite provenance', () => {
+    const artifactRootRelative = join('artifacts', 'qa', 'browser-quality')
+    const artifactRoot = join(process.cwd(), artifactRootRelative)
+    const manifestRelative = join(artifactRootRelative, 'adversarial-alias-manifest.json')
+    const manifest = join(process.cwd(), manifestRelative)
+    const symlinkRelative = join(artifactRootRelative, 'adversarial-alias-link.json')
+    const symlink = join(process.cwd(), symlinkRelative)
+    const writeAliasRelative = join(artifactRootRelative, 'adversarial-write-alias.json')
+    const writeAlias = join(process.cwd(), writeAliasRelative)
+    const caseManifestRelative = join(artifactRootRelative, 'Adversarial-Case-Manifest.JSON')
+    const caseManifest = join(process.cwd(), caseManifestRelative)
+    const caseOutputRelative = join(artifactRootRelative, 'adversarial-case-manifest.json')
+    mkdirSync(artifactRoot, { recursive: true })
+    writeFileSync(manifest, '{}')
+    symlinkSync(manifest, symlink)
+    try {
+      const samePath = spawnSync(process.execPath, [
+        'scripts/qa-browser-gates.mjs', '--capture-only',
+        '--artifact-manifest', manifestRelative, '--output', manifestRelative,
+      ], { cwd: process.cwd(), encoding: 'utf8' })
+      expect(samePath.status).not.toBe(0)
+      expect(samePath.stderr).toContain('must resolve to distinct files')
+      expect(readFileSync(manifest, 'utf8')).toBe('{}')
+
+      const symlinkAlias = spawnSync(process.execPath, [
+        'scripts/qa-browser-gates.mjs', '--capture-only',
+        '--artifact-manifest', manifestRelative, '--output', symlinkRelative,
+      ], { cwd: process.cwd(), encoding: 'utf8' })
+      expect(symlinkAlias.status).not.toBe(0)
+      expect(symlinkAlias.stderr).toContain('may not use symlink components')
+      expect(readFileSync(manifest, 'utf8')).toBe('{}')
+
+      writeFileSync(writeAlias, '{"retained":true}')
+      const writeModeAlias = spawnSync(process.execPath, [
+        'scripts/qa-browser-gates.mjs', '--output', writeAliasRelative,
+        '--write-artifact-manifest', writeAliasRelative,
+      ], { cwd: process.cwd(), encoding: 'utf8' })
+      expect(writeModeAlias.status).not.toBe(0)
+      expect(writeModeAlias.stderr).toContain('must resolve to distinct files')
+      expect(readFileSync(writeAlias, 'utf8')).toBe('{"retained":true}')
+
+      writeFileSync(caseManifest, '{"case_retained":true}')
+      const caseFoldAlias = spawnSync(process.execPath, [
+        'scripts/qa-browser-gates.mjs', '--capture-only',
+        '--artifact-manifest', caseManifestRelative, '--output', caseOutputRelative,
+      ], { cwd: process.cwd(), encoding: 'utf8' })
+      expect(caseFoldAlias.status).not.toBe(0)
+      expect(caseFoldAlias.stderr).toContain('must resolve to distinct files')
+      expect(readFileSync(caseManifest, 'utf8')).toBe('{"case_retained":true}')
+    } finally {
+      rmSync(symlink, { force: true })
+      rmSync(manifest, { force: true })
+      rmSync(writeAlias, { force: true })
+      rmSync(caseManifest, { force: true })
+      rmSync(join(process.cwd(), caseOutputRelative), { force: true })
+    }
+  })
+
   it('redacts nested credentials, bearer values, assignments, and URL credentials before artifacts', () => {
     const redacted = redactEvidence({
       authorization: 'Bearer top-secret',
@@ -220,12 +400,22 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       },
     })
     expect(evidenceDigest(redacted)).toMatch(/^[a-f0-9]{64}$/)
+    expect(redactEvidence('x'.repeat(EVIDENCE_MAX_STRING_LENGTH + 10))).toHaveLength(EVIDENCE_MAX_STRING_LENGTH)
+    expect(redactEvidence(Array.from({ length: EVIDENCE_MAX_ARRAY_LENGTH + 10 }, (_, index) => index)))
+      .toHaveLength(EVIDENCE_MAX_ARRAY_LENGTH)
+    expect(redactEvidence('password: abc API_key=mixed Cookie=session Authorization=BasicValue https://user:pass@example.test')).toBe(
+      'password=[REDACTED] API_key=[REDACTED] Cookie=[REDACTED] Authorization=[REDACTED] https://[REDACTED]@example.test',
+    )
   })
 
-  it('calculates WCAG contrast ratios for opaque computed colors', () => {
+  it('calculates WCAG contrast ratios after alpha-compositing foregrounds', () => {
     expect(contrastRatio('rgb(0, 0, 0)', 'rgb(255, 255, 255)')).toBeCloseTo(21, 5)
     expect(contrastRatio('rgb(119, 119, 119)', 'rgb(255, 255, 255)')).toBeCloseTo(4.478, 2)
-    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgb(255, 255, 255)')).toBeNull()
+    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgb(255, 255, 255)')).toBeCloseTo(3.977, 2)
+    expect(compositeRgba('rgba(255, 255, 255, 0.5)', 'rgb(0, 0, 0)')).toEqual({
+      red: 127.5, green: 127.5, blue: 127.5, alpha: 1,
+    })
+    expect(contrastRatio('rgba(0, 0, 0, 0.5)', 'rgba(255, 255, 255, 0.5)')).toBeNull()
   })
 
   it('fails closed when a viewport, accessibility gate, performance surface, or redaction is absent', () => {
@@ -238,6 +428,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     incomplete.viewports[0].accessibility.keyboard_focus.passed = false
     delete incomplete.viewports[0].performance.search
     delete incomplete.viewports[1].performance.graph_view.quality_gate_passed
+    delete incomplete.source.source_tree_sha256
     ;(incomplete as any).token = 'unsafe'
     incomplete.sha256 = verifiableDocumentDigest(incomplete)
 
@@ -247,7 +438,214 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       'desktop failed keyboard_focus',
       'desktop is missing search performance evidence',
       'phone graph_view is missing quality-linked performance status',
+      'evidence source binding is incomplete',
       'evidence contains secret-shaped fields or values',
     ]))
+  })
+
+  it('rejects duplicate, missing, or unknown canonical journeys', () => {
+    for (const mutate of [
+      (evidence: any) => { evidence.viewports[0].journeys.pop() },
+      (evidence: any) => { evidence.viewports[0].journeys[11].name = evidence.viewports[0].journeys[0].name },
+      (evidence: any) => { evidence.viewports[0].journeys[11].name = 'invented journey' },
+      (evidence: any) => { evidence.viewports[0].journeys.reverse() },
+    ]) {
+      const evidence = passingEvidence()
+      mutate(evidence)
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence)).toContain('desktop journey inventory is not exact and unique')
+    }
+  })
+
+  it('rejects negative or non-finite overflow claims', () => {
+    for (const mutate of [
+      (viewport: any) => { viewport.horizontal_overflow_px = -1; viewport.overflow_measurement.visible_overflow_px = -1 },
+      (viewport: any) => { viewport.overflow_measurement.document_extent_overflow_px = -1 },
+      (viewport: any) => { viewport.horizontal_overflow_px = Number.NaN; viewport.overflow_measurement.visible_overflow_px = Number.NaN },
+      (viewport: any) => { viewport.horizontal_overflow_px = Number.POSITIVE_INFINITY; viewport.overflow_measurement.visible_overflow_px = Number.POSITIVE_INFINITY },
+      (viewport: any) => { viewport.horizontal_overflow_px = 0.5; viewport.overflow_measurement.visible_overflow_px = 0.5 },
+    ]) {
+      const evidence = passingEvidence()
+      mutate(evidence.viewports[0])
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence)).toContain('desktop has invalid overflow measurement provenance')
+    }
+  })
+
+  it('rejects self-digested evidence that exceeds bounded retention limits', () => {
+    const evidence = passingEvidence()
+    evidence.viewports[0].journeys[0].interaction_modes.pointer.error = 'x'.repeat(EVIDENCE_MAX_STRING_LENGTH + 1)
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence)).toContain('evidence exceeds bounded retention limits')
+    const oversized = passingEvidence()
+    oversized.extra = Object.fromEntries(Array.from({ length: 600 }, (_, index) => [
+      `field_${index}`, 'x'.repeat(EVIDENCE_MAX_STRING_LENGTH),
+    ]))
+    oversized.sha256 = verifiableDocumentDigest(oversized)
+    expect(validateBrowserQualityEvidence(oversized)).toContain('evidence exceeds bounded retention limits')
+    expect(EVIDENCE_MAX_BYTES).toBe(512 * 1024)
+  })
+
+  it('rejects missing, forged, or reused mode navigation isolation', () => {
+    for (const mutate of [
+      (journey: any) => { delete journey.interaction_modes.keyboard.reset },
+      (journey: any) => { journey.interaction_modes.pointer.reset.strategy = 'dom_setup' },
+      (journey: any) => {
+        journey.interaction_modes.keyboard.reset.loader_sha256 = journey.interaction_modes.pointer.reset.loader_sha256
+      },
+    ]) {
+      const evidence = passingEvidence()
+      mutate(evidence.viewports[0].journeys[0])
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      const errors = validateBrowserQualityEvidence(evidence)
+      expect(errors.some((error) => error.includes('fresh navigation isolation')
+        || error.includes('unique page lifecycles'))).toBe(true)
+    }
+  })
+
+  it('creates 36 distinct page loaders for the exact journey and mode inventory', async () => {
+    const navigations: string[] = []
+    let readinessChecks = 0
+    const client = {
+      send: async (method: string, { url }: { url: string }) => {
+        expect(method).toBe('Page.navigate')
+        navigations.push(url)
+        return { loaderId: `loader-${navigations.length}` }
+      },
+    }
+    const resets = []
+    for (const journey of BROWSER_JOURNEYS) {
+      for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
+        resets.push(await navigateFreshInteractionMode({
+          client,
+          url: `http://127.0.0.1/?journey=${encodeURIComponent(journey)}&mode=${mode}`,
+          name: journey,
+          mode,
+          waitForReady: async () => { readinessChecks += 1 },
+        }))
+      }
+    }
+    expect(navigations).toHaveLength(36)
+    expect(new Set(navigations)).toHaveLength(36)
+    expect(readinessChecks).toBe(36)
+    expect(new Set(resets.map((reset) => reset.loader_sha256))).toHaveLength(36)
+    expect(resets.every((reset) => reset.strategy === 'fresh_page_navigation')).toBe(true)
+  })
+
+  it('rejects artifact identity mutation between preflight and finalization', () => {
+    const initial = {
+      sha256: 'a'.repeat(64),
+      artifact_identity: { root_dist_sha256: 'b'.repeat(64), web_dist_sha256: 'c'.repeat(64) },
+    }
+    expect(() => assertFinalBuildManifest(initial, structuredClone(initial))).not.toThrow()
+    const mutated = structuredClone(initial)
+    mutated.artifact_identity.web_dist_sha256 = 'd'.repeat(64)
+    mutated.sha256 = 'e'.repeat(64)
+    expect(() => assertFinalBuildManifest(initial, mutated)).toThrow(/changed during browser verification/)
+  })
+
+  it('binds the retained gate outcome and error digest into the evidence digest', () => {
+    const passed = finalizeBrowserEvidence(passingEvidence(), [])
+    expect(passed.gate_result).toEqual({
+      status: 'passed', validation_error_count: 0, validation_errors_sha256: evidenceDigest([]),
+    })
+    expect(validateBrowserQualityEvidence(passed)).toEqual([])
+
+    const tampered = structuredClone(passed)
+    tampered.validation_errors = ['gate failed']
+    expect(tampered.sha256).toBe(passed.sha256)
+    expect(validateBrowserQualityEvidence(tampered)).toEqual(expect.arrayContaining([
+      'evidence digest is invalid', 'evidence gate result binding is invalid',
+    ]))
+
+    const removed = structuredClone(passed)
+    delete removed.gate_result
+    delete removed.validation_errors
+    removed.sha256 = verifiableDocumentDigest(removed)
+    expect(validateBrowserQualityEvidence(removed)).toContain('evidence gate result binding is missing')
+
+    const runnerCandidate = structuredClone(passed)
+    delete runnerCandidate.sha256
+    delete runnerCandidate.gate_result
+    delete runnerCandidate.validation_errors
+    const runnerResult = finalizeValidatedBrowserEvidence(
+      runnerCandidate,
+      (document) => validateBrowserQualityEvidence(document),
+    )
+    expect(runnerResult.gate_result.status).toBe('passed')
+    expect(runnerResult.validation_errors).toEqual([])
+    expect(validateBrowserQualityEvidence(runnerResult)).toEqual([])
+  })
+
+  it.skipIf(!chromeForDomFixture)('counts visible aria-hidden overflow but excludes a real clipped sr-only DOM box', () => {
+    const root = mkdtempSync(join(tmpdir(), 'browser-overflow-dom-'))
+    const html = join(root, 'fixture.html')
+    const profile = join(root, 'profile')
+    const script = `window.addEventListener('load', () => {
+      const result = eval(${JSON.stringify(BROWSER_OVERFLOW_AUDIT_EXPRESSION)});
+      document.body.setAttribute('data-audit', encodeURIComponent(JSON.stringify(result)));
+    });`
+    writeFileSync(html, `<!doctype html><style>
+      html,body{margin:0;width:100%;height:100%;overflow:visible}
+      #visible{position:absolute;left:780px;top:20px;width:100px;height:20px}
+      .sr-only{position:absolute;left:900px;top:40px;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    </style><body><div id="visible" aria-hidden="true">visible</div><div id="reader" class="sr-only">reader only</div><script>${script}</script></body>`)
+    try {
+      const result = spawnSync(chromeForDomFixture!, [
+        '--headless=new', '--no-sandbox', '--no-first-run', '--disable-gpu', '--window-size=800,600',
+        `--user-data-dir=${profile}`, '--dump-dom', `file://${html}`,
+      ], { encoding: 'utf8', timeout: 20_000 })
+      expect(result.status).toBe(0)
+      const encoded = result.stdout.match(/data-audit="([^"]+)"/)?.[1]
+      expect(encoded).toBeTruthy()
+      const audit = JSON.parse(decodeURIComponent(encoded!))
+      expect(audit.offenders.map((row: any) => row.id)).toContain('visible')
+      expect(audit.offenders.map((row: any) => row.id)).not.toContain('reader')
+      expect(audit.excluded_nonvisual_or_contained).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'reader', reason: 'own_zero_area_paint_clip' }),
+      ]))
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }, 30_000)
+
+  it('retains bounded fatal evidence when the manifest is missing or stale', () => {
+    const artifactRootRelative = join('artifacts', 'qa', 'browser-quality')
+    const artifactRoot = join(process.cwd(), artifactRootRelative)
+    mkdirSync(artifactRoot, { recursive: true })
+    const cases = [
+      { name: 'missing', manifest: join(artifactRootRelative, 'adversarial-missing-manifest.json') },
+      { name: 'stale', manifest: join(artifactRootRelative, 'adversarial-stale-manifest.json'), body: '{}' },
+    ]
+    try {
+      for (const testCase of cases) {
+        const output = join(artifactRoot, `adversarial-${testCase.name}-failure.json`)
+        const outputRelative = join(artifactRootRelative, `adversarial-${testCase.name}-failure.json`)
+        rmSync(output, { force: true })
+        rmSync(join(process.cwd(), testCase.manifest), { force: true })
+        if (testCase.body) writeFileSync(join(process.cwd(), testCase.manifest), testCase.body)
+        const result = spawnSync(process.execPath, [
+          'scripts/qa-browser-gates.mjs', '--capture-only',
+          '--artifact-manifest', testCase.manifest, '--output', outputRelative,
+        ], { cwd: process.cwd(), encoding: 'utf8' })
+        expect(result.status).not.toBe(0)
+        expect(existsSync(output)).toBe(true)
+        const evidence = JSON.parse(readFileSync(output, 'utf8'))
+        expect(evidence.incomplete).toBe(true)
+        expect(evidence.source.binding_status).toBe('failed_or_unavailable')
+        expect(evidence.source.artifact_identity).toBeNull()
+        expect(evidence.diagnostics.manifest_error).toMatch(testCase.name === 'missing' ? /missing build manifest/ : /schema version/)
+        expect(Buffer.byteLength(readFileSync(output))).toBeLessThanOrEqual(EVIDENCE_MAX_BYTES)
+      }
+    } finally {
+      for (const testCase of cases) {
+        rmSync(join(process.cwd(), testCase.manifest), { force: true })
+        rmSync(join(artifactRoot, `adversarial-${testCase.name}-failure.json`), { force: true })
+      }
+    }
+  })
+
+  it('locks actual runner source against retaining raw response or page content', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts', 'qa-browser-gates.mjs'), 'utf8')
+    expect(source).not.toContain('response.status}: ${String(text)')
+    expect(source).not.toContain('text: text.slice')
   })
 })

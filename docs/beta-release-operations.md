@@ -14,16 +14,21 @@ hooks, Claude and Codex plugin manifests, and the environment compatibility cont
 `scripts/package-install-smoke.mjs` records:
 
 - the source commit, package filename, byte count, SHA-256, npm shasum and npm integrity;
+- a point-of-packaging Git check proving `HEAD` equals that commit, the tracked tree is clean, and
+  every packaged non-build input is tracked at that commit;
 - the complete npm file inventory and required runtime assets;
 - a second, scripts-disabled pack whose bytes must match exactly;
 - an isolated install/upgrade/uninstall report that queries the real Orchestra SQLite schema,
-  active card, agent and retained artifact before and after the lifecycle; and
+  active card, agent and retained artifact before and after the lifecycle, preserves the exact
+  core rows, and proves that every pre-upgrade table and primary-key identity survives; and
 - a moderate/high/critical-zero dependency audit of the clean consumer's resolved production
   graph, bound to the consumer lockfile digest.
 
 The artifact secret scan runs against the extracted retained package. The publish boundary then
 checks the uploaded artifact identity, exact workflow run, tag/version, complete CI evidence and
 tarball digest before copying the same bytes to `verified.tgz`.
+Every tarball boundary rejects symlink, hardlink, device and FIFO entries before extraction or
+content reads; only regular files and directories are accepted.
 
 ## Local retained-artifact rehearsal
 
@@ -68,6 +73,9 @@ and then exercises the installed daemon. The separate minimal CLI smoke keeps al
 
 Do not point `CI_EVIDENCE_DIR`, `ORCHESTRA_HOME`, or lifecycle fixtures at a real user directory.
 The harness creates and removes only its own temporary consumer roots.
+The packaging command rejects a mismatched `CI_EVIDENCE_SHA`, any staged or unstaged tracked source
+change, and an untracked non-build file that npm attempts to include. Generated `dist/` and
+`web/dist/` assets remain allowed only because the reviewed build clears and recreates those trees.
 
 ## Beta channel and staged flags
 
@@ -128,3 +136,60 @@ host, every supported macOS tuple, credentialed native-provider journeys, protec
 review approval, or cross-version upgrade/rollback unless a distinct retained prior artifact is
 provided. Those remain final release gates and must cite the retained artifact digest rather than a
 rebuilt equivalent.
+
+## QA-018 signed integration evidence
+
+`QA-018` uses a purpose-separated trust boundary from package publication and prior-artifact
+rollback. It does not reuse `scripts/prior-artifact-trust-roots.json`. Its production public keys
+live only in `scripts/beta-quality-trust-roots.json`, which is intentionally empty during beta
+preparation. The verifier has no signing operation and accepts no private key, environment trust
+override, or CLI trust override.
+
+At the final clean integrator HEAD, prepare one external staging directory containing:
+
+- a schema-v2 integration manifest with purpose `orchestra-beta-quality-integration-v1`, repository
+  `Armin2708/Orchestra`, base `0dd3dd43b9f376370ee73a9e2fe4725974caaae8`, exact integrator
+  commit, `authorization_scope: "qa-018-evidence-only"`, and
+  `public_release_authorized: false`;
+- exactly five slice entries for Lane A, B, C, D, and the integrator, including source checkpoints,
+  accepted remediation checkpoints, exact tool request/report/raw-artifact digests, signed
+  HIGH/CRITICAL dispositions, and zero unresolved P0/P1/P2 findings; and
+- a detached receipt signed outside the repository over the domain-separated canonical
+  attestation described by `docs/quality/beta-quality-signature-receipt.schema.json`.
+
+The exact human input still required is an independently controlled Ed25519 **public** key PEM,
+its SHA-256 SPKI key ID, the reviewer's durable identity, an explicit active/revoked status, and a
+matching detached signature for the final manifest bytes. Pinning that public key is a reviewed
+source change. Never place the private key, seed, signing command output, or secret material in the
+repository or evidence directory.
+
+Retain GitNexus requests exactly as invoked through `mcp__gitnexus__impact` and
+`mcp__gitnexus__detect_changes`, including their real repository/worktree identity and native
+argument casing. Run `graphify update .`, retain its raw stdout and exit code, then produce the
+status receipt with:
+
+```sh
+node scripts/capture-graphify-status.mjs \
+  --graph <repo-relative-graph> \
+  --manifest <repo-relative-manifest> \
+  --tested-commit <exact-head>
+```
+
+Graphify 0.8.39 has no native `status` command; evidence claiming such an invocation is invalid.
+
+After those inputs are reviewed and pinned, run from the clean exact HEAD with the supported
+Node/npm toolchain:
+
+```sh
+node scripts/run-beta-quality-evidence.mjs \
+  --output-dir /absolute/new/evidence-directory \
+  --qa018-manifest /absolute/staging/integration-manifest.json \
+  --qa018-receipt /absolute/staging/signature-receipt.json
+```
+
+The runner copies the supplied manifest/receipt pair and their explicitly signed inventory into
+the fresh retained evidence directory. It cannot manufacture or repair evidence. It emits the five
+`QA-018` case results only after the checker independently validates the Ed25519 signature, Git
+ancestry and markers, raw artifacts, exact requests, dispositions, and findings. The final release
+checker repeats the same verification. A valid QA-018 receipt authorizes evidence closure only; it
+never authorizes npm publication, tagging, a GitHub release, beta promotion, or stable.

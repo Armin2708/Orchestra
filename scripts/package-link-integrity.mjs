@@ -76,6 +76,14 @@ export function verifyPackagedMarkdownLinks({ root, files }) {
       if (!definitions.has(reference)) undefinedReferences.push(`${source} -> [${reference}]`)
       else targets.push(definitions.get(reference))
     }
+    const shortcutContents = contents
+      .replace(/^\s{0,3}\[[^\]]+\]:\s*.*$/gm, '')
+      .replace(/!?\[[^\]]*\]\([^)]+\)/g, '')
+      .replace(/!?\[[^\]]+\]\[[^\]]*\]/g, '')
+    for (const match of shortcutContents.matchAll(/!?\[([^\]\n]+)\]/g)) {
+      const reference = normalizeReference(match[1])
+      if (definitions.has(reference)) targets.push(definitions.get(reference))
+    }
 
     for (const rawTarget of targets) {
       const target = localTarget(rawTarget)

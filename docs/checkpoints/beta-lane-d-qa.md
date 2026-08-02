@@ -101,21 +101,39 @@ with zero affected processes. Graphify refreshed the code graph to 7,214 nodes /
 
 ## Final raw-receipt and runner hardening
 
-- `QA-018` is deliberately impossible to close with the current runner. It rejects legacy lane
-  report flags, emits no `QA-018` case results, and the release checker always records that a
-  reviewed verifier upgrade plus an externally signed integration receipt is required.
-- The future receipt contract retains raw GitNexus impact and `detect_changes` output plus raw
-  Graphify update/status, graph, and manifest artifacts. Every invocation argv, tool version,
-  base, range, marker, commit, path, and output digest is explicit. The checker recomputes retained
-  hashes and validates raw semantic fields rather than trusting receipt summary counts.
-- A separately pinned integration-manifest schema binds both tool receipts for each lane to the
-  same ready commit and exact beta base/range/marker. Arbitrary ancestors are not accepted. Lane
-  ready commits are intentionally not pinned before final integration.
-- The checker verifies the manifest against Git itself: every ready commit must exist, descend
-  from `0dd3dd4`, be an ancestor of exact integrator HEAD, and contain the declared marker in its
-  real subject/body. The external receipt signature is only a schema field today and is explicitly
-  **not cryptographically verifiable**; this is why `QA-018` remains impossible until a reviewed
-  signature verifier and trusted key policy are added.
+- `QA-018` now has a reviewed-verifier implementation path, but remains open in production. The
+  runner accepts only one externally prepared v2 integration manifest and one detached QA-only
+  receipt. It rejects legacy per-lane flags and emits no `QA-018` case results unless the checker
+  independently verifies the signature, exact Git history, complete slice inventory, raw evidence,
+  risk dispositions, and zero unresolved P0/P1/P2 findings.
+- The receipt contract retains raw GitNexus impact and `detect_changes` output plus raw Graphify
+  update output, captured status, graph, and manifest artifacts. Every exact request, tool version, base, range,
+  marker, commit, path, and output digest is explicit. The checker recomputes retained hashes and
+  validates raw semantic fields rather than trusting receipt summary counts.
+- GitNexus request envelopes preserve the configured MCP method names, camelCase impact arguments,
+  and explicit repository/worktree identity. Graphify 0.8.39 has no `status` subcommand, so the
+  contract retains raw `graphify update .` stdout and uses the pinned project-owned
+  `scripts/capture-graphify-status.mjs` command to bind exact HEAD and graph/manifest byte digests.
+  It never accepts fabricated output from a nonexistent `graphify status` command.
+- A separately pinned v2 integration-manifest schema binds Lane A, B, C, D, and the integrator as
+  an exact five-slice inventory. Each slice identifies its source checkpoint, every accepted
+  remediation checkpoint, final accepted commit, both tool-report byte digests, the digest of its
+  exact requests, and every raw-artifact path/digest. Arbitrary ancestors and marker substitution
+  are not accepted. Lane ready commits remain external inputs until final integration.
+- The checker verifies the manifest against Git itself: every source/remediation commit must exist,
+  descend from `0dd3dd4`, be ordered monotonically, be an ancestor of exact integrator HEAD, and
+  contain the lane-specific marker in its real subject/body. HIGH/CRITICAL impact results require
+  one signed independent-review disposition bound to the exact request and accepted checkpoint.
+- `scripts/beta-quality-signature.mjs` verifies a detached Ed25519 receipt over a domain-separated
+  canonical attestation. It binds purpose, repository, exact manifest byte digest, integrator HEAD,
+  signing time, and `qa-018-evidence-only` scope. Signer identity comes only from the pinned public
+  trust root; a receipt cannot self-name its signer. Both manifest and verifier enforce
+  `public_release_authorized: false`.
+- `scripts/beta-quality-trust-roots.json` intentionally contains zero production keys. No private
+  key, signing command, environment override, CLI trust override, or generated signature exists in
+  this repository. Production verification therefore fails closed and `QA-018` remains open until
+  a human supplies and reviews the public trust input and matching detached signature described in
+  the release operations guide. Ephemeral Ed25519 keys are used only inside adversarial tests.
 - Vitest evidence now requires `passed === total` and zero failed, pending, skipped, and todo tests
   in both retained JSON and the release rerun.
 - Evidence creation requires a fresh mode-0700 directory outside the repository by realpath. It
@@ -128,3 +146,21 @@ with zero affected processes. Graphify refreshed the code graph to 7,214 nodes /
   `idempotency-key` header at `test/session-tool-routes.test.ts:83` in commit `3c79b69`. Only that
   exact commit:path:rule:line fingerprint was added; the strict allowlist test and the 621-commit
   `--all` scan both pass with zero findings.
+
+## QA-018 verifier upgrade checkpoint
+
+The mechanism is implemented without claiming the gate. Its adversarial suite covers empty
+production trust, valid test-local Ed25519 verification, unknown/revoked keys, signature and
+manifest tampering, wrong repository/base/HEAD/scope, attempted public-release authorization,
+artifact traversal/symlinks/digest changes, remediation-marker substitution, missing signed
+HIGH/CRITICAL dispositions, and unverified QA-018 case injection. The exact final integration
+manifest and human signature do not exist yet, so all five QA-018 matrix cases remain open.
+
+## Integrated Lane A/C command binding addendum
+
+The Lane D stack based on central `36f3602` replaces the four Lane A/C future placeholders with
+exact integrated Vitest commands. Discussion/Team, DeviceSession, team budget/conflict, and remote
+pairing/scope/revoke/step-up commands independently passed 17, 38, 15, and 65 tests. This closes
+the placeholder-binding gap only; the cases remain exact-evidence prerequisites until the final
+clean-head runner reproduces them. QA-016 long-running dogfood and production-signed QA-018 remain
+open, and Lane B is not part of this stack checkpoint.

@@ -10,9 +10,9 @@
     { "item": "QA-001", "case": "delivery-report-negative-transition-matrix", "status": "prerequisite", "command_ids": ["qa001-transition-matrix"] },
     { "item": "QA-001", "case": "organization-membership-negative-transition-matrix", "status": "prerequisite", "command_ids": ["qa001-transition-matrix"] },
     { "item": "QA-001", "case": "knowledge-context-build-lifecycle", "status": "prerequisite", "command_ids": ["qa001-knowledge-migration"] },
-    { "item": "QA-001", "case": "discussion-lifecycle", "status": "lane-dependent", "lane": "A", "command_ids": ["qa001-lane-a-future"] },
-    { "item": "QA-001", "case": "team-planning-conflict-lifecycle", "status": "lane-dependent", "lane": "A", "command_ids": ["qa001-lane-a-future"] },
-    { "item": "QA-001", "case": "device-session-lifecycle", "status": "lane-dependent", "lane": "C", "command_ids": ["qa001-lane-c-future"] },
+    { "item": "QA-001", "case": "discussion-lifecycle", "status": "prerequisite", "command_ids": ["qa001-lane-a-integrated"] },
+    { "item": "QA-001", "case": "team-planning-conflict-lifecycle", "status": "prerequisite", "command_ids": ["qa001-lane-a-integrated"] },
+    { "item": "QA-001", "case": "device-session-lifecycle", "status": "prerequisite", "command_ids": ["qa001-lane-c-integrated"] },
 
     { "item": "QA-009", "case": "criterion-evidence", "status": "prerequisite", "command_ids": ["qa009-delivery"] },
     { "item": "QA-009", "case": "rejection-revision", "status": "prerequisite", "command_ids": ["qa009-delivery"] },
@@ -27,13 +27,13 @@
 
     { "item": "QA-011", "case": "intentional-fanout", "status": "prerequisite", "command_ids": ["qa011-coordination"] },
     { "item": "QA-011", "case": "no-automated-ack-loop", "status": "prerequisite", "command_ids": ["qa011-coordination"] },
-    { "item": "QA-011", "case": "team-planning-budget", "status": "lane-dependent", "lane": "A", "command_ids": ["qa011-lane-a-future"] },
-    { "item": "QA-011", "case": "team-conflict-resolution", "status": "lane-dependent", "lane": "A", "command_ids": ["qa011-lane-a-future"] },
+    { "item": "QA-011", "case": "team-planning-budget", "status": "prerequisite", "command_ids": ["qa011-lane-a-integrated"] },
+    { "item": "QA-011", "case": "team-conflict-resolution", "status": "prerequisite", "command_ids": ["qa011-lane-a-integrated"] },
 
-    { "item": "QA-012", "case": "pairing-single-use-origin-expiry", "status": "lane-dependent", "lane": "C", "command_ids": ["qa012-lane-c-future"] },
-    { "item": "QA-012", "case": "device-scope-default-deny", "status": "lane-dependent", "lane": "C", "command_ids": ["qa012-lane-c-future"] },
-    { "item": "QA-012", "case": "selective-revoke-and-expiry", "status": "lane-dependent", "lane": "C", "command_ids": ["qa012-lane-c-future"] },
-    { "item": "QA-012", "case": "step-up-binding-and-replay", "status": "lane-dependent", "lane": "C", "command_ids": ["qa012-lane-c-future"] },
+    { "item": "QA-012", "case": "pairing-single-use-origin-expiry", "status": "prerequisite", "command_ids": ["qa012-lane-c-integrated"] },
+    { "item": "QA-012", "case": "device-scope-default-deny", "status": "prerequisite", "command_ids": ["qa012-lane-c-integrated"] },
+    { "item": "QA-012", "case": "selective-revoke-and-expiry", "status": "prerequisite", "command_ids": ["qa012-lane-c-integrated"] },
+    { "item": "QA-012", "case": "step-up-binding-and-replay", "status": "prerequisite", "command_ids": ["qa012-lane-c-integrated"] },
 
     { "item": "QA-016", "case": "daemon-mid-session-prerequisite", "status": "prerequisite", "command_ids": ["qa016-interruption-prerequisites"] },
     { "item": "QA-016", "case": "provider-disconnect-prerequisite", "status": "prerequisite", "command_ids": ["qa016-interruption-prerequisites"] },
