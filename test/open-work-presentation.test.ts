@@ -19,6 +19,7 @@ import {
   contractDraftFromEnvelope,
   contractEditorStatus,
   contractVersionIsStale,
+  filterOpenWorkResponse,
   initialOpenWorkState,
   mapBackendValidation,
   nextStableId,
@@ -277,6 +278,7 @@ describe('Open Work query and protocol', () => {
 
   it('serializes filters in a stable, exact query without locale-sensitive ordering', () => {
     expect(serializeOpenWorkFilters({
+      boardId: 7,
       repository: ' /work/orchestra ',
       capabilities: ['ui', 'typescript', 'ui', ''],
       priority: -4,
@@ -285,13 +287,14 @@ describe('Open Work query and protocol', () => {
       maxCostCents: 700,
       maxTimeSeconds: 7_200,
     })).toBe(
-      'repository=%2Fwork%2Forchestra&capability=typescript&capability=ui&priority=-4'
+      'board_id=7&repository=%2Fwork%2Forchestra&capability=typescript&capability=ui&priority=-4'
       + '&dependency_readiness=blocked&max_tokens=20000&max_cost_cents=700&max_time_seconds=7200',
     )
     expect(() => serializeOpenWorkFilters({
       ...defaultOpenWorkFilters(),
       maxTokens: -1,
     })).toThrow(/maxTokens/)
+    expect(() => serializeOpenWorkFilters(defaultOpenWorkFilters(0))).toThrow(/boardId/)
   })
 
   it('fails closed on invalid fields instead of coercing them', () => {
@@ -327,11 +330,11 @@ describe('Open Work query and protocol', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
     await openWorkApi.list({
-      ...defaultOpenWorkFilters(),
+      ...defaultOpenWorkFilters(7),
       capabilities: ['ui', 'typescript'],
     })
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/os/open-work?capability=typescript&capability=ui',
+      '/api/v1/os/open-work?board_id=7&capability=typescript&capability=ui',
       expect.objectContaining({
         method: 'GET',
         headers: { authorization: 'Bearer operator-token' },
@@ -494,6 +497,47 @@ describe('deterministic Open Work presentation', () => {
     expect(openWorkCounts(items)).toEqual({ total: 2, ready: 1, blocked: 1, matched: 1 })
   })
 
+  it('keeps Open Work data and saved-view collections inside the selected project', () => {
+    const mixed = openWorkFixture()
+    mixed.items[0].dependencies.push({
+      card_id: 99,
+      title: 'Private card from another project',
+      state: 'open',
+      blocking_reason: 'Must never leak across projects.',
+      completion_condition: 'card_done',
+      readiness: 'blocked',
+    })
+    mixed.items.push({ ...structuredClone(mixed.items[0]), card_id: 99, board_id: 8, title: 'Other project' })
+    mixed.graph.nodes.push({
+      card_id: 99,
+      board_id: 8,
+      title: 'Other project',
+      state: 'open',
+      readiness: 'ready',
+      blocking_reasons: [],
+    })
+
+    const scoped = filterOpenWorkResponse(mixed, { boardId: 7 })
+    expect(scoped.items.map((item) => item.card_id)).toEqual([42, 43])
+    expect(scoped.items.flatMap((item) => item.dependencies).map((item) => item.card_id))
+      .not.toContain(99)
+    expect(new Set(scoped.graph.nodes.map((node) => node.board_id))).toEqual(new Set([7]))
+
+    const blocked = filterOpenWorkResponse(mixed, {
+      boardId: 7,
+      filters: { status: 'blocked' },
+    })
+    expect(blocked.items.map((item) => item.card_id)).toEqual([43])
+    expect(filterOpenWorkResponse(mixed, {
+      boardId: 7,
+      query: 'Build typescript',
+    }).items.map((item) => item.card_id)).toEqual([42])
+    expect(filterOpenWorkResponse(mixed, {
+      boardId: 7,
+      filters: { status: 'running,assigned' },
+    }).items).toEqual([])
+  })
+
   it('retains previous results as explicitly stale after a refresh failure', () => {
     const loaded = openWorkReducer(initialOpenWorkState(), { type: 'load' })
     expect(loaded.phase).toBe('loading')
@@ -512,6 +556,7 @@ describe('deterministic Open Work presentation', () => {
 
   it('builds stable filter chips and list inputs', () => {
     const filters = {
+      boardId: 7,
       repository: '/work/orchestra',
       capabilities: ['ui', 'typescript', 'ui'],
       priority: -4,

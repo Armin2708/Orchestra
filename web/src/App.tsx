@@ -12,10 +12,11 @@ import {
 } from './CommandCenterSurfaces'
 import {
   commandCenterDeepLink,
-  commandCenterSearchRecords,
+  commandCenterProjectProjection,
   legacyCommandCenterRedirect,
   parseCommandCenterSelection,
   type CommandCenterSection,
+  type SavedCommandCenterView,
 } from './commandCenterModel'
 import { RoadmapView } from './RoadmapView'
 import { NeedsYou } from './NeedsYou'
@@ -45,6 +46,7 @@ export function App() {
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
   const hasConnectedRef = useRef(false)
   const [jobs, setJobs] = useState<Job[]>([])
+  const [activeSavedView, setActiveSavedView] = useState<SavedCommandCenterView | null>(null)
   const [locationSearch, setLocationSearch] = useState(location.search)
   const [needsAuth, setNeedsAuth] = useState(false)
   const [focus, setFocus] = useState<number | 'all'>(() => {
@@ -120,6 +122,8 @@ export function App() {
     localStorage.setItem('orchestra-view', view)
     localStorage.setItem('orchestra-board-tab', boardTab)
   }, [view, boardTab])
+
+  useEffect(() => setActiveSavedView(null), [focus])
 
   // a notification tap lands on /?board=<id>[&card=<id>] — focus that board;
   // the card param is picked up by ProjectGrid once snapshots arrive
@@ -206,14 +210,16 @@ export function App() {
   const cards = snaps.flatMap((s) => s.cards)
   const visible = focus === 'all' ? snaps : snaps.filter((s) => s.board.id === focus)
   const shown = visible.length > 0 ? visible : snaps // focused board was removed — fall back
-  const openMessages = shown.reduce((sum, snap) => sum + snap.open_questions.length, 0)
   const commandCenterActive = view === 'board' || view === 'open-work'
-  const searchRecords = commandCenterSearchRecords({ snapshots: shown, jobs })
+  const { jobs: projectJobs, searchRecords } = commandCenterProjectProjection({
+    snapshots: shown,
+    jobs,
+    savedView: activeSavedView,
+  })
   const commandCounts = {
     work: shown.reduce((sum, snapshot) => sum + snapshot.cards.length, 0),
     agents: shown.reduce((sum, snapshot) => sum
       + snapshot.agents.filter((agent) => agent.status !== 'gone').length, 0),
-    discussions: openMessages,
     activity: shown.reduce((sum, snapshot) => sum
       + snapshot.cards.length + snapshot.threads.length + snapshot.milestones.length, 0),
   }
@@ -276,16 +282,22 @@ export function App() {
            ? connectionState === 'offline'
              ? <CommandCenterState kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
              : <GettingStarted onSettings={() => pickView('settings')} />
-           : <CommandCenter
+           : <CommandCenter key={focus === 'all' ? 'all-projects' : `project-${focus}`}
               projectName={focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Orchestra'}
               projectId={focus === 'all' ? null : shown[0]?.board.id ?? null}
               section={commandSection}
               counts={commandCounts}
               searchRecords={searchRecords}
-               onNavigate={pickCommandSection}
+               currentFilters={activeSavedView?.filters ?? {}}
+               onNavigate={(section) => {
+                 setActiveSavedView(null)
+                 pickCommandSection(section)
+               }}
                onOpenHref={openCommandHref}
+               onApplySavedView={setActiveSavedView}
                connectionState={connectionState}
-              attentionControl={<NeedsYou boards={snaps.map((snapshot) => snapshot.board)} onOpen={(item) => {
+              attentionControl={<NeedsYou boards={snaps.map((snapshot) => snapshot.board)}
+                readOnly={connectionState !== 'live'} onOpen={(item) => {
                 if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
                  const href = commandCenterDeepLink(location.search, {
                    section: 'agents',
@@ -297,7 +309,8 @@ export function App() {
              >
                {commandSection === 'work'
                  ? commandSelection.jobId
-                   ? <CanonicalJobRoute key={commandSelection.jobId} jobId={commandSelection.jobId} snaps={shown}
+                   ? projectJobs.some((job) => String(job.id) === commandSelection.jobId)
+                     ? <CanonicalJobRoute key={commandSelection.jobId} jobId={commandSelection.jobId} snaps={shown}
                        stale={connectionState !== 'live'}
                        onOpenAgent={(lifecycle) => openCommandHref(commandCenterDeepLink(location.search, {
                          section: 'agents', boardId: lifecycle.job.board_id,
@@ -308,8 +321,14 @@ export function App() {
                          section: 'agents', boardId: lifecycle.job.board_id,
                          workspaceId: String(lifecycle.workspace.id),
                        }, { pathname: location.pathname, hash: location.hash }))} />
+                     : <CommandCenterState kind="error" detail="This job does not belong to the selected project." />
                    : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Open Work"><span /><span /><span /></div>}>
-                       <OpenWorkView key={locationSearch} initialSelectedCardId={commandSelection.cardId ?? undefined} />
+                       <OpenWorkView key={`${locationSearch}:${activeSavedView?.id ?? 'all'}`}
+                         initialSelectedCardId={commandSelection.cardId ?? undefined}
+                         boardId={focus === 'all' ? null : shown[0]?.board.id ?? null}
+                         collectionQuery={activeSavedView?.section === 'work' ? activeSavedView.query : ''}
+                         collectionFilters={activeSavedView?.section === 'work' ? activeSavedView.filters : undefined}
+                         readOnly={connectionState !== 'live'} />
                      </React.Suspense>
                  : commandSection === 'agents'
                    ? <CanonicalAgentHome key={locationSearch} snaps={shown} onChange={refresh} locationSearch={locationSearch} />

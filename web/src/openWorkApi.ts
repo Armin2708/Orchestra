@@ -15,6 +15,7 @@ export type JobMarketStatus =
   | 'archived'
 
 export type OpenWorkFilters = {
+  boardId: number | null
   repository: string
   capabilities: string[]
   priority: number | null
@@ -296,6 +297,7 @@ export class OpenWorkProtocolError extends Error {
 }
 
 const emptyFilters: OpenWorkFilters = {
+  boardId: null,
   repository: '',
   capabilities: [],
   priority: null,
@@ -305,8 +307,9 @@ const emptyFilters: OpenWorkFilters = {
   maxTimeSeconds: null,
 }
 
-export const defaultOpenWorkFilters = (): OpenWorkFilters => ({
+export const defaultOpenWorkFilters = (boardId: number | null = null): OpenWorkFilters => ({
   ...emptyFilters,
+  boardId,
   capabilities: [],
 })
 
@@ -324,7 +327,9 @@ const queryInteger = (value: number | null, name: string, minimum = 0) => {
 
 export const serializeOpenWorkFilters = (filters: OpenWorkFilters): string => {
   const params = new URLSearchParams()
+  const boardId = queryInteger(filters.boardId ?? null, 'boardId', 1)
   const repository = filters.repository.trim()
+  if (boardId !== null) params.set('board_id', boardId)
   if (repository) params.set('repository', repository)
   for (const capability of stableUnique(filters.capabilities)) {
     params.append('capability', capability)

@@ -120,6 +120,74 @@ export const stableOpenWorkGraph = (graph: OpenWorkGraph): OpenWorkGraph => ({
     || compareText(left.blocking_reason, right.blocking_reason)),
 })
 
+const savedViewValues = (value: string | undefined) => new Set(
+  (value ?? '').split(',').map((item) => item.trim().toLocaleLowerCase()).filter(Boolean),
+)
+
+export const filterOpenWorkResponse = (
+  response: OpenWorkResponse,
+  options: {
+    boardId: number | null
+    query?: string
+    filters?: Readonly<Record<string, string>>
+  },
+): OpenWorkResponse => {
+  const boardItems = options.boardId === null
+    ? response.items
+    : response.items.filter((item) => item.board_id === options.boardId)
+  const boardNodes = options.boardId === null
+    ? response.graph.nodes
+    : response.graph.nodes.filter((node) => node.board_id === options.boardId)
+  const boardCardIds = new Set([
+    ...boardItems.map((item) => item.card_id),
+    ...boardNodes.map((node) => node.card_id),
+  ])
+  const safeItems = boardItems.map((item) => ({
+    ...item,
+    dependencies: item.dependencies.filter((dependency) => boardCardIds.has(dependency.card_id)),
+    critical_path: item.critical_path.map((path) => ({
+      ...path,
+      path: path.path.filter((node) => boardCardIds.has(node.card_id)),
+    })).filter((path) => path.path.length > 0),
+  }))
+  const terms = (options.query ?? '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const filters = options.filters ?? {}
+  const supportedFilterKeys = new Set(['status'])
+  const unknownFilter = Object.entries(filters)
+    .some(([key, value]) => value.trim() && !supportedFilterKeys.has(key))
+  const statuses = savedViewValues(filters.status)
+  const items = unknownFilter ? [] : safeItems.filter((item) => {
+    const matchesStatus = statuses.size === 0
+      || statuses.has(item.status)
+      || statuses.has(item.dependency_readiness)
+    if (!matchesStatus) return false
+    if (terms.length === 0) return true
+    const haystack = [
+      item.title,
+      item.repository,
+      item.selected_agent?.name ?? '',
+      ...item.constraints.required_capabilities,
+    ].join(' ').toLocaleLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  })
+  const visibleCardIds = new Set(items.flatMap((item) => [
+    item.card_id,
+    ...item.dependencies.map((dependency) => dependency.card_id),
+    ...item.critical_path.flatMap((path) => path.path.map((node) => node.card_id)),
+  ]))
+  return {
+    items,
+    graph: {
+      nodes: boardNodes.filter((node) => visibleCardIds.has(node.card_id)),
+      edges: response.graph.edges.filter((edge) =>
+        boardCardIds.has(edge.from_card_id)
+        && boardCardIds.has(edge.to_card_id)
+        && visibleCardIds.has(edge.from_card_id)
+        && visibleCardIds.has(edge.to_card_id)),
+    },
+  }
+}
+
 export type FilterChip = {
   key: string
   label: string

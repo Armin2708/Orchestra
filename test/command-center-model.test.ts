@@ -3,11 +3,14 @@ import type { Snapshot } from '../web/src/api.js'
 import {
   buildCommandCenterGraph,
   commandCenterDeepLink,
+  commandCenterProjectProjection,
   commandCenterSearchRecords,
   commandCenterStatus,
+  filterCommandCenterSearchRecords,
   legacyCommandCenterRedirect,
   parseCommandCenterSelection,
   parseSavedCommandCenterViews,
+  projectScopedJobs,
   readCommandCenterPreferences,
   searchCommandCenter,
   DEFAULT_COMMAND_CENTER_VIEWS,
@@ -118,6 +121,34 @@ describe('command center navigation and presentation contracts', () => {
 })
 
 describe('command center global search and dependency truth', () => {
+  it('keeps jobs project-scoped and makes built-in saved-view filters control real records', () => {
+    const jobs = [
+      {
+        id: 'job-7', board_id: 7, card_id: 41, workspace_id: null, provider: 'codex',
+        model: 'gpt-5.4', priority: 1, status: 'running', attempts: 1, max_attempts: 1,
+        budget_tokens: null, budget_cents: null, scheduled_at: '2026-08-02T10:00:00Z',
+        started_at: null, finished_at: null, error: null,
+      },
+      {
+        id: 'job-8', board_id: 8, card_id: 88, workspace_id: null, provider: 'claude',
+        model: 'sonnet', priority: 1, status: 'submitted', attempts: 1, max_attempts: 1,
+        budget_tokens: null, budget_cents: null, scheduled_at: '2026-08-02T10:00:00Z',
+        started_at: null, finished_at: null, error: null,
+      },
+    ]
+    expect(projectScopedJobs(snapshots, jobs).map((job) => job.id)).toEqual(['job-7'])
+
+    const active = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-active-work')!
+    const projection = commandCenterProjectProjection({ snapshots, jobs, savedView: active })
+    expect(projection.jobs.map((job) => job.id)).toEqual(['job-7'])
+    const records = commandCenterSearchRecords({ snapshots, jobs: projection.jobs })
+    expect(records.some((record) => record.id === 'job:job-8')).toBe(false)
+    expect(projection.searchRecords.map((record) => record.id)).toEqual(['job:job-7'])
+    const review = DEFAULT_COMMAND_CENTER_VIEWS.find((view) => view.id === 'preset-needs-review')!
+    expect(filterCommandCenterSearchRecords(records, review.filters)).toEqual([])
+    expect(filterCommandCenterSearchRecords(records, { invented: 'value' })).toEqual([])
+  })
+
   it('searches agents, work, discussions, knowledge, and deliveries without enabling unavailable records', () => {
     const records = commandCenterSearchRecords({
       snapshots,

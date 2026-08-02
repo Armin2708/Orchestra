@@ -23,9 +23,12 @@ const ONBOARDING_KEY = 'orchestra-command-center-onboarding'
 const sectionLabel = (section: CommandCenterSection) =>
   COMMAND_CENTER_SECTIONS.find((item) => item.id === section)?.label ?? section
 
-const savedViewsFromBrowser = () => typeof window === 'undefined'
+const savedViewsStorageKey = (projectId: number | null) =>
+  `${SAVED_VIEWS_KEY}:${projectId === null ? 'all-projects' : `project-${projectId}`}`
+
+const savedViewsFromBrowser = (projectId: number | null) => typeof window === 'undefined'
   ? []
-  : parseSavedCommandCenterViews(window.localStorage.getItem(SAVED_VIEWS_KEY))
+  : parseSavedCommandCenterViews(window.localStorage.getItem(savedViewsStorageKey(projectId)))
 
 const preferencesFromBrowser = () => typeof window === 'undefined'
   ? readCommandCenterPreferences(null)
@@ -64,7 +67,9 @@ export function CommandCenter({
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeResult, setActiveResult] = useState(0)
   const [preferences, setPreferences] = useState<CommandCenterPreferences>(preferencesFromBrowser)
-  const [savedViews, setSavedViews] = useState<SavedCommandCenterView[]>(savedViewsFromBrowser)
+  const [savedViews, setSavedViews] = useState<SavedCommandCenterView[]>(
+    () => savedViewsFromBrowser(projectId),
+  )
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const navRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -75,8 +80,8 @@ export function CommandCenter({
   }, [preferences])
 
   useEffect(() => {
-    window.localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(savedViews))
-  }, [savedViews])
+    window.localStorage.setItem(savedViewsStorageKey(projectId), JSON.stringify(savedViews))
+  }, [projectId, savedViews])
 
   useEffect(() => {
     if (window.localStorage.getItem(ONBOARDING_KEY) !== 'complete') setOnboardingOpen(true)
@@ -212,8 +217,7 @@ export function CommandCenter({
                 onOpen={openResult} />
             )}
           </div>
-          <div className="cc-attention-control" aria-disabled={connectionState === 'offline'}
-            {...(connectionState === 'offline' ? { inert: '' } : {})}>
+          <div className="cc-attention-control">
             {attentionControl}
           </div>
           <button className="cc-icon-button" type="button" onClick={openOnboarding}
@@ -280,15 +284,15 @@ export function CommandCenter({
       </header>
 
       {connectionState === 'offline' && (
-        <div className="cc-offline-banner" role="alert">
+        <div className="cc-offline-banner" id="cc-offline-notice" role="alert">
           <OsIcon name="attention" />
           <div><strong>Orchestra is offline</strong><span>Saved state remains visible. Mutating controls are disabled until the daemon reconnects.</span></div>
         </div>
       )}
       <main id="command-center-content" className="cc-content" role="tabpanel"
         aria-labelledby={`cc-section-tab-${section}`} tabIndex={-1}
-        aria-disabled={connectionState === 'offline'}
-        {...(connectionState === 'offline' ? { inert: '' } : {})}>
+        aria-describedby={connectionState === 'offline' ? 'cc-offline-notice' : undefined}
+        data-read-only={connectionState === 'offline' || undefined}>
         {children}
       </main>
 

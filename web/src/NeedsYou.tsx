@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from './api'
-import { AttentionItem, osApi } from './osApi'
+import { AttentionItem, osApi, type OsId } from './osApi'
 import { OsIcon } from './OsIcon'
 import { useModalFocusTrap } from './useModalFocusTrap'
 
@@ -17,9 +17,20 @@ const relativeTime = (value: string) => {
   return `${Math.floor(seconds / 86400)}d`
 }
 
-export function NeedsYou({ boards, onOpen }: {
+export const resolveAttentionItem = async (
+  itemId: OsId,
+  readOnly: boolean,
+  resolver: (id: OsId) => Promise<unknown> = osApi.resolveAttention,
+) => {
+  if (readOnly) return false
+  await resolver(itemId)
+  return true
+}
+
+export function NeedsYou({ boards, onOpen, readOnly = false }: {
   boards: BoardRef[]
   onOpen?: (item: AttentionItem) => void
+  readOnly?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<AttentionItem[]>([])
@@ -76,10 +87,11 @@ export function NeedsYou({ boards, onOpen }: {
   const urgent = items.filter((item) => item.severity === 'critical' || item.severity === 'high').length
 
   const resolve = async (item: AttentionItem) => {
+    if (readOnly) return
     const id = String(item.id)
     setResolving((current) => new Set(current).add(id))
     try {
-      await osApi.resolveAttention(item.id)
+      await resolveAttentionItem(item.id, readOnly)
       setItems((current) => current.filter((candidate) => String(candidate.id) !== id))
       setError(null)
     } catch (resolveError) {
@@ -155,7 +167,8 @@ export function NeedsYou({ boards, onOpen }: {
                             Open workspace <OsIcon name="external" size={13} />
                           </button>
                         )}
-                        <button className="os-resolve-button" onClick={() => resolve(item)} disabled={busy}>
+                        <button className="os-resolve-button" onClick={() => resolve(item)}
+                          disabled={readOnly || busy} aria-disabled={readOnly || undefined}>
                           <OsIcon name="check" size={14} /> {busy ? 'Resolving' : 'Resolve'}
                         </button>
                       </div>
