@@ -27,6 +27,24 @@ describe('outcome dashboard UI contract', () => {
     expect(component).toContain('setDashboard(null)')
     expect(component).toContain('activeBoard.current !== requestedBoard')
     expect(component).toContain('dashboard.board_id !== boardId')
+    const dashboardSetup = component.slice(
+      component.indexOf('useEffect(() => {'),
+      component.indexOf('const qualityTone'),
+    )
+    expect(dashboardSetup.indexOf('new EventSource(streamUrl())'))
+      .toBeLessThan(dashboardSetup.indexOf('void requestRefresh()'))
+    expect(dashboardSetup).toContain('stream.onopen = () =>')
+    expect(dashboardSetup).toContain('refreshQueued = true')
+    expect(dashboardSetup).toContain('if (!succeeded && retry === undefined)')
+    expect(dashboardSetup).toContain('let disposed = false')
+    expect(dashboardSetup).toContain('disposed = true')
+    const dashboardAfterLoad = dashboardSetup.slice(
+      dashboardSetup.indexOf('const succeeded = await load(!initialRequest)'),
+    )
+    expect(dashboardAfterLoad.indexOf('if (disposed) return'))
+      .toBeLessThan(dashboardAfterLoad.indexOf('if (!succeeded && retry === undefined)'))
+    expect(dashboardSetup).toContain('window.clearTimeout(initialFallback)')
+    expect(dashboardSetup).toContain('if (retry !== undefined) window.clearTimeout(retry)')
     expect(app).toContain('new EventSource(streamUrl())')
     expect(app).not.toContain('setInterval(refresh, 30_000)')
     const setup = app.slice(app.indexOf('// a single stream for everything'), app.indexOf('if (needsAuth) return <Login'))

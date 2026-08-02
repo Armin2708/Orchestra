@@ -80,7 +80,6 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const refreshTimer = useRef<number | null>(null)
   const activeBoard = useRef(boardId)
   activeBoard.current = boardId
 
@@ -89,13 +88,15 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
     if (!quiet) setLoading(true)
     try {
       const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
-      if (activeBoard.current !== requestedBoard) return
+      if (activeBoard.current !== requestedBoard) return false
       if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
       setDashboard(next)
       setError(null)
+      return true
     } catch (reason) {
-      if (activeBoard.current !== requestedBoard) return
+      if (activeBoard.current !== requestedBoard) return false
       setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
+      return false
     } finally {
       if (!quiet && activeBoard.current === requestedBoard) setLoading(false)
     }
@@ -105,18 +106,65 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
     setDashboard(null)
     setError(null)
     setLoading(true)
-    void load()
     const stream = new EventSource(streamUrl())
+    let pending: number | undefined
+    let retry: number | undefined
+    let refreshing = false
+    let refreshQueued = false
+    let initialRequest = true
+    let disposed = false
+    const requestRefresh = async () => {
+      if (disposed) return
+      if (refreshing) {
+        refreshQueued = true
+        return
+      }
+      refreshing = true
+      const succeeded = await load(!initialRequest)
+      initialRequest = false
+      if (disposed) return
+      refreshing = false
+      if (refreshQueued) {
+        refreshQueued = false
+        void requestRefresh()
+        return
+      }
+      if (!succeeded && retry === undefined) {
+        retry = window.setTimeout(() => {
+          if (disposed) return
+          retry = undefined
+          void requestRefresh()
+        }, 1_000)
+      }
+    }
+    stream.onopen = () => {
+      if (disposed) return
+      if (retry !== undefined) {
+        window.clearTimeout(retry)
+        retry = undefined
+      }
+      void requestRefresh()
+    }
+    const initialFallback = window.setTimeout(() => void requestRefresh(), 1_000)
     stream.onmessage = (event) => {
+      if (disposed) return
       let payload: { board_id?: number; type?: string }
       try { payload = JSON.parse(event.data) as { board_id?: number; type?: string } } catch { return }
       if (payload.board_id !== boardId || payload.type !== 'outcome_analytics') return
-      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
-      refreshTimer.current = window.setTimeout(() => void load(true), 250)
+      if (pending !== undefined) window.clearTimeout(pending)
+      pending = window.setTimeout(() => {
+        if (disposed) return
+        pending = undefined
+        void requestRefresh()
+      }, 250)
     }
     return () => {
+      disposed = true
+      refreshQueued = false
       stream.close()
-      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+      window.clearTimeout(initialFallback)
+      if (retry !== undefined) window.clearTimeout(retry)
+      if (pending !== undefined) window.clearTimeout(pending)
     }
   }, [load])
 
