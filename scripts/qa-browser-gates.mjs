@@ -868,7 +868,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
-    await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
+    const resetUrl = `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`
+    await client.send('Page.navigate', { url: resetUrl })
+    await waitFor(
+      client,
+      `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`,
+      `${name} ${mode} isolated reset`,
+    )
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
     const deadline = performance.now() + readinessTimeoutMs
