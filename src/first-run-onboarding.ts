@@ -9,6 +9,9 @@ import {
   type HookScope,
   type HookProvider,
 } from './install.js'
+import {
+  DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1,
+} from './declared-provider-compatibility.js'
 import { FIRST_RELEASE_PROVIDER_MANIFESTS_V1 } from './provider-manifests.js'
 
 export const FIRST_RUN_CONFIG_SCHEMA_VERSION = 1 as const
@@ -33,6 +36,7 @@ export type FirstRunBlocker = {
     | 'project_not_absolute'
     | 'project_not_found'
     | 'provider_not_release_supported'
+    | 'provider_acceptance_not_ready'
     | 'provider_mode_not_supported'
     | 'provider_api_not_implemented'
     | 'provider_api_consent_required'
@@ -52,6 +56,11 @@ export type FirstRunPlan = {
     billing_mode: 'personal_subscription' | 'usage_priced_api'
     support_state: 'supported' | 'unknown' | 'unsupported' | 'policy_blocked'
     support_reason: string | null
+    declared_acceptance: {
+      real_matrix_state: 'missing' | 'passed'
+      support_claim: 'blocked' | 'ready'
+      blocker_codes: readonly string[]
+    }
   }
   hooks: {
     scope: FirstRunHookChoice
@@ -164,6 +173,14 @@ const providerManifest = (providerId: FirstRunProviderId) => {
   return manifest
 }
 
+const providerDeclaration = (providerId: FirstRunProviderId) => {
+  const declaration = DECLARED_PROVIDER_COMPATIBILITY_CONTRACT_V1.providers.find(
+    (candidate) => candidate.provider_id === providerId,
+  )
+  if (!declaration) throw new Error(`provider declaration is missing: ${providerId}`)
+  return declaration
+}
+
 export const buildFirstRunPlan = (
   answers: FirstRunAnswers,
   deps: FirstRunPlanDeps = {},
@@ -172,6 +189,7 @@ export const buildFirstRunPlan = (
   const hooks = answers.hook_scope ?? 'off'
   const telemetry = answers.telemetry ?? 'off'
   const manifest = providerManifest(answers.provider_id)
+  const declaration = providerDeclaration(answers.provider_id)
   const manifestModeId = mode === 'native_subscription'
     ? 'native_subscription'
     : 'native_api_key'
@@ -199,6 +217,16 @@ export const buildFirstRunPlan = (
     blockers.push({
       code: 'provider_not_release_supported',
       detail: `${manifest.display_name} is ${manifest.release_state}; exact release acceptance evidence is still required.`,
+    })
+  }
+  if (declaration.acceptance.real_matrix_state !== 'passed'
+    || declaration.acceptance.support_claim !== 'ready'
+    || declaration.acceptance.blocker_codes.length !== 0) {
+    blockers.push({
+      code: 'provider_acceptance_not_ready',
+      detail: `${manifest.display_name} remains blocked by declared_provider_matrix: ${
+        declaration.acceptance.blocker_codes.join(', ') || 'retained acceptance is unavailable'
+      }.`,
     })
   }
   if (selectedMode.support.state !== 'supported') {
@@ -248,6 +276,11 @@ export const buildFirstRunPlan = (
       support_reason: 'reason_code' in selectedMode.support
         ? selectedMode.support.reason_code
         : null,
+      declared_acceptance: {
+        real_matrix_state: declaration.acceptance.real_matrix_state,
+        support_claim: declaration.acceptance.support_claim,
+        blocker_codes: declaration.acceptance.blocker_codes,
+      },
     },
     hooks: { scope: hooks, capability_state: hookCapability },
     defaults,

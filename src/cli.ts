@@ -9,6 +9,10 @@ import { pairUrl, startRemote, stopRemote } from './remote.js'
 import { messageBody } from './msgsafe.js'
 import { registerAgentOsCommands } from './agent-os-cli.js'
 import { registerDoctorCommand } from './doctor-cli.js'
+import { registerFirstRunCommands } from './first-run-cli.js'
+import {
+  createCentralFirstRunDemoLaunchGate,
+} from './first-run-central-integration.js'
 import qrcode from 'qrcode-terminal'
 
 const program = new Command().name('orchestra').version(VERSION)
@@ -335,5 +339,9 @@ program.command('uninstall')
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 registerDoctorCommand(program)
+registerFirstRunCommands(program, {
+  api,
+  demoLaunchGate: createCentralFirstRunDemoLaunchGate(),
+})
 
 program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
