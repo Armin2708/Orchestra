@@ -4,6 +4,10 @@ This matrix is the current BASE-010 compatibility candidate for Orchestra. It de
 what has actually been exercised; it is not a claim that the complete product is plug-and-play or
 ready for public release.
 
+The labels below apply to the named evidence layer. A validated executable/protocol tuple is not a
+validated managed-provider release, and a host-observed toolchain is not a clean-machine package
+lifecycle. The release decision remains fail-closed when those layers disagree.
+
 Labels mean:
 
 - **Validated** — the exact version and platform scope has an observed host, compatibility-container,
@@ -27,11 +31,17 @@ are not combined into untested Cartesian products.
 
 ## Managed providers
 
-| Surface | Validated | Experimental | Unsupported |
-|---|---|---|---|
-| Codex managed runtime | Codex CLI `0.144.6`; `codex app-server`; stdio JSONL; the checked-in 671-file protocol digest | none | every other CLI version, a missing command, or unparseable version output |
-| Claude managed runtime | `@anthropic-ai/claude-agent-sdk` `0.3.212`, its native optional package `0.3.212`, and that package's executable reporting Claude Code `2.1.212` | none | another or missing SDK/native package/executable version |
-| Ambient Claude CLI | none | host-observed `2.1.170` (PATH-resolved) and `2.1.217` (alternate install), version commands only | not a managed-runtime requirement; missing is reported but does not block managed Claude |
+No provider is release-validated at integrated code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. The table separates deterministic implementation
+compatibility from the managed beta support decision.
+
+| Surface | Implementation tuple | Managed beta support |
+|---|---|---|
+| Codex managed runtime | Candidate adapter for Codex CLI `0.144.6`, `codex app-server`, stdio JSONL, and the checked-in 671-file protocol digest | **Unsupported** until an exact clean-profile native-subscription acceptance matrix passes; every other CLI version also fails closed |
+| Claude managed runtime | Deterministic SDK/native tuple `@anthropic-ai/claude-agent-sdk` `0.3.212`, native package `0.3.212`, bundled Claude Code `2.1.212` | **Unsupported** until subscription automation policy authority and an exact clean-profile native acceptance matrix exist |
+| Qwen Code | Credential-safe discovery and an explicit interactive-only personal-plan policy boundary | **Unsupported**; no accepted managed adapter/version/platform tuple and autonomous personal-plan policy remains blocked |
+| Kimi Code | Candidate ACP implementation with an explicit Extra Usage consent boundary | **Unsupported**; no accepted native login/overage/cap matrix |
+| Ambient Claude CLI | Host-observed `2.1.170` and `2.1.217` version commands only | Experimental raw-terminal use; not a managed-runtime support claim |
 
 Orchestra's Claude conductor does not set `pathToClaudeCodeExecutable`, so SDK `0.3.212` uses its
 built-in executable. Doctor resolves the actual platform-native optional package and runs that
@@ -79,9 +89,11 @@ is still pending, Codex remains candidate/unsupported, and no production support
 
 ## First-release provider candidates not yet supported
 
-These providers are in the product target, but no exact Orchestra adapter/version/platform tuple
-has passed. They remain **Unsupported** for managed launch until the reopened BASE-010 matrix and
-the provider acceptance gates close.
+All four providers are in the product target, but none has passed the complete exact
+provider/adapter/mode/billing/credential/version/platform/source/eight-gate acceptance contract.
+Claude, Codex, Qwen and Kimi therefore remain **Unsupported** for managed beta launch. Installed
+CLIs remain usable as ordinary terminal programs; installation or a version probe is not release
+acceptance.
 
 | Provider target | Verified upstream account path | Current Orchestra status |
 |---|---|---|
@@ -95,11 +107,11 @@ evidence.
 
 ## Operating systems
 
-| Platform | Label | Observed scope |
+| Platform | Evidence label | Observed scope |
 |---|---|---|
-| macOS `26.5.1` (Darwin `25.5.0`) / arm64 + Node `22.20.0` + npm `10.9.3` | Validated | focused/full tests, TypeScript, production builds, exact provider doctor on the 2026-07-25 host |
+| macOS `26.5.1` (Darwin `25.5.0`) / arm64 + Node `22.20.0` + npm `10.9.3` | Host-observed | focused/full tests, TypeScript, production builds and provider doctor; not the clean final-artifact lifecycle required by QA-017 |
 | Other macOS releases/architectures/toolchain combinations | Experimental | dependency artifacts or individual component evidence only |
-| Ubuntu `24.04` x64/glibc + Node `22.20.0` + npm `10.9.3` | Validated | repository CI is pinned to this exact operating system and toolchain |
+| Ubuntu `24.04` x64/glibc + Node `22.20.0` + npm `10.9.3` | CI-observed | repository CI/toolchain evidence only; no retained final-artifact clean install/upgrade/uninstall matrix |
 | WSL/WSL2, including Ubuntu `24.04` | Experimental | upstream provider support only; no observed Orchestra terminal/browser/provider gate |
 | Other Linux distributions, musl, arm64, or another toolchain combination | Experimental | dependency artifacts or individual component evidence only |
 | Windows | Unsupported | no clean-machine, native PTY, browser, or managed-provider acceptance gate |
@@ -143,6 +155,6 @@ registering managed runtimes. An unvalidated core environment stops startup with
 After that core gate, unsupported, missing, or unparseable Codex versions leave Codex visible but
 unavailable; no app-server process or authentication request is attempted.
 
-Login-state detection does not replace real credentialed Claude/Codex session acceptance.
-Clean-machine install/upgrade/uninstall, desktop/phone acceptance, credentialed provider journeys,
-and release provenance remain separate public-release gates.
+Login-state detection does not replace real credentialed provider acceptance. Clean-machine
+install/upgrade/uninstall on macOS and Linux, desktop/phone acceptance, every claimed provider's
+native-subscription journey, and release provenance remain separate beta gates.

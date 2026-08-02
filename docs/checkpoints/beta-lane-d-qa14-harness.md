@@ -102,3 +102,10 @@ Browser claim was made. The retained fatal document has internal digest
 `e6eb5ec2ff1a49595ded8b1b5c9516acacf35c363e074444cfdfdff3371d734f` and file SHA-256
 `505460c8d5be53198560c21ea635ab4c04d926caccba7063bce106dc45f6c136`.
 QA-014 remains open.
+
+## Final-integration observation — 2026-08-02
+
+There is no newer passing capture at exact central code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. HTTP 429 remains the latest fail-closed diagnostic,
+not final evidence. QA-014 is open, a fresh QA-015 capture is absent, and tablet, phone, and in-app
+Browser journeys remain unclaimed.

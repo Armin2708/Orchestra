@@ -1,45 +1,86 @@
 # Remote pairing, scopes, tunnels, and lost-device response
 
-Status: design and operator boundary. Secure remote beta remains owned by Lane C and is unavailable
-until its DeviceSession gates pass.
+Status: integrated secure-remote implementation contract at code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. DeviceSession and operations tests pass in the
+accepted Lane C lineage, but exact-candidate iOS/Android installed-PWA evidence, `REM-017`,
+`REM-GATE`, and public remote-beta approval remain open.
+
+Secure remote beta remains unavailable for release until those exact-candidate native journeys
+and the remaining remote gate are accepted.
 
 ## Current boundary
 
-The existing `orchestra remote` command is a legacy preview. Its QR contains a reusable master
-operator bearer, browser storage retains that bearer, and there is no named, scoped, expiring,
-key-bound, individually revocable DeviceSession. It must not be presented as secure pairing or
-used for sensitive beta work.
+Remote browsers do not receive or accept the reusable local owner token. A non-loopback browser
+must redeem one short-lived, single-use, origin-bound PairingTicket into a named DeviceSession.
+The credential is stored only as a hash and P-256 key binding; its scopes, board grants, expiry,
+last-seen state and revocation audit are durable. Legacy token URL values and browser storage are
+rejected and scrubbed on remote origins.
 
-The first-run defaults therefore keep remote access and remote terminal writes off. The onboarding
-plan exposes the missing controls but cannot enable them.
+The remote shell is deliberately narrower than the local operator application. It exposes only
+classified board summaries, no-tool messages, bounded agent controls, approval decisions and
+terminal views/actions that the exact DeviceSession grant permits. Raw local settings, broad
+snapshots, context, exports, provider credentials and the owner-token login surface are not mounted
+for DeviceSession principals.
 
-## Required secure pairing flow
+## Pairing and scopes
 
-Lane C must supply a one-time, short-lived PairingTicket that yields a named DeviceSession containing
-only a credential hash/key binding, explicit scopes, expiry, last-seen and revocation audit data.
-The master token must never enter a URL, QR payload, browser storage, log, referrer, analytics event,
-push notification, or diagnostics bundle.
+Start private access from a trusted local session and grant only the required boards and scopes:
 
-Scopes must separate viewing from mutations, approvals, terminal write, destructive operations and
-administration. Terminal write, destructive work and admin require explicit step-up. Every remote
-mutation is attributable to one device.
+```sh
+orchestra remote --board 1 --scope observe --scope message --scope approve
+```
+
+The default transport is a private Tailscale exposure. Public Cloudflare exposure requires both
+`ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1` and the explicit `--public` CLI confirmation. Transport security
+does not replace application authorization.
+
+Scopes are closed and independent: `observe`, `stream`, `message`, `approve`, `agent-control`,
+`terminal-write`, and `admin`. Agent control, terminal write, privileged approval and administration
+also require fresh step-up bound to the exact action, resource, request digest and nonce. Terminal
+access is view-only without `terminal-write`; offline mode is visibly stale/read-only and queues no
+mutation.
+
+Every remote mutation retains device attribution. Push subscriptions and preferences are bound to
+one DeviceSession, use generic notification text and same-origin allowlisted destinations, and are
+removed atomically when that device is revoked.
 
 ## Tunnel choices
 
-- Loopback remains the default and recovery surface.
-- A private tailnet is preferred after DeviceSession authorization exists; TLS or a private network
-  is transport, not application authorization.
-- A public tunnel is an explicit advanced action with an independent kill switch, never a fallback.
-- The current Cloudflare quick-tunnel path and host-wide `tailscale serve reset` behavior are legacy
-  preview mechanics, not release-ready ownership isolation.
+- Loopback remains the default management and recovery surface.
+- A private tailnet is preferred for remote use.
+- Public tunnelling is an explicit advanced action with a separate kill switch; it is never a
+  fallback when private transport or provider readiness fails.
+- `orchestra remote --stop` stops only verified Orchestra-owned tunnel state.
 
 ## Lost device
 
-From a trusted local loopback session: revoke only the affected DeviceSession, terminate its streams
-and grants, remove its push subscription, purge its authenticated cache, and verify that it cannot
-read or mutate after reconnect. Revoking one phone must not rotate unrelated devices, stop the daemon,
-or restore the master-token QR flow. If only the legacy preview was used, stop the tunnel, rotate the
-master credential, clear affected browser storage, and assume any captured bearer is compromised.
+From another trusted DeviceSession with the required admin step-up, selectively revoke the lost
+device. Revocation closes its credentials, grants, step-up authority, streams, push subscriptions
+and authenticated browser cache without rotating unrelated devices or stopping local recovery.
+
+If selective administration is unavailable, use the local emergency boundary:
+
+```sh
+orchestra remote --rollback REVOKE_ALL_REMOTE_AUTHORITY \
+  --reason 'lost device or suspected theft'
+```
+
+This durably disables remote access, revokes pairing/device/stream/step-up/push/grant authority,
+purges caches on contact and stops only verified Orchestra-owned tunnel state. After local review,
+permit fresh pairing without restoring old authority:
+
+```sh
+orchestra remote --enable-new-pairing ENABLE_NEW_REMOTE_PAIRING
+```
+
+## Evidence boundary
+
+Source and adversarial tests cover expiry, replay, board/resource scope, step-up, selective revoke,
+held-stream closure, unrelated-device survival, offline destructive rejection, credential rotation,
+push removal and emergency rollback. Historical simulator images are explicitly non-gating. A fresh
+run from the one retained exact candidate must still prove iOS and Android installation,
+relaunch/reconnect, persistent authority, offline behavior and revoke before native remote gates can
+close.
 
 The authoritative abuse cases and controls are
 [remote-mobile-threat-model.md](remote-mobile-threat-model.md) and

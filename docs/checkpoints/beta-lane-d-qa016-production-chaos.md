@@ -79,3 +79,9 @@ external network, dirty user worktree, or clean-machine release environment. The
 
 Revert the lane commits. The change adds tests and documentation only; it does not change runtime
 code, migrations, package version, public state, user data, or release artifacts.
+
+## Central integration observation — 2026-08-02
+
+Marker `4aad984` is an ancestor of exact central code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`, so the bounded harness is available in the integrated
+tree. It is not elapsed real-provider dogfood; QA-016 and REL-009 remain open.

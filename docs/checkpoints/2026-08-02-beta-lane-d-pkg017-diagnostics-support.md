@@ -77,3 +77,13 @@ must receive a fresh exact-SHA review.
   validate public distribution or close provider/platform/release gates.
 - PKG-017 can be credited as a locally actionable product seam only after exact-candidate review and
   central integration. Public support and release readiness remain open.
+
+## Central integration observation — 2026-08-02
+
+Marker `786aeb9` was integrated by `a2a9ff9` and is an ancestor of exact central code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. The local owner route, UI, and CLI now form an
+actionable exact-byte support seam.
+
+PKG-017 can reconcile locally after the final exact-head tests and review, but this does not add an
+upload destination, SLA, public promise, provider/platform acceptance, or any other release gate.
+Operator review remains required before any support case leaves the local machine.

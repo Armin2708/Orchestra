@@ -1,7 +1,9 @@
 # Upgrade and compatibility notes
 
-Status: candidate operator notes and local schema checks. PKG-015 remains open until retained-package
-clean install/upgrade/uninstall/data-preservation automation passes against supported versions.
+Status: integrated operator notes and fail-closed lifecycle automation at code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. Local same-source lifecycle rehearsals pass, but
+PKG-015 remains open, as does QA-017: no distinct signed prior package and no exact final-artifact
+clean macOS/Linux install, upgrade, uninstall and data-preservation matrix exist.
 
 Before upgrading, retain the exact current version/commit, create and restore-test an offline
 SQLite backup, preserve worktrees separately, and keep provider hooks quiesced for the entire
@@ -19,9 +21,13 @@ After upgrade:
 6. retain the old artifact and verified backup through the observation window.
 
 Package rollback and data rollback are different. A compatible old package may run only against a
-copy whose forward schema it explicitly supports. Never delete migration markers, columns,
-canonical records or evidence to make a downgrade appear compatible. Restoring an older backup is
-an offline recovery decision that discards later writes and must be explicit.
+copy whose forward schema it explicitly supports. The release harness requires a different-version,
+different-digest prior tarball plus exact-commit evidence and a maintainer signature rooted in the
+reviewed `scripts/prior-artifact-trust-roots.json` public-key list. That production list is empty
+during preparation, so a synthetic prior, same-artifact reinstall, unsigned receipt or test-local
+key cannot close the gate. Never delete migration markers, columns, canonical records or evidence
+to make a downgrade appear compatible. Restoring an older backup is an offline recovery decision
+that discards later writes and must be explicit.
 
 The first-run and provider compatibility checks fail closed on unknown major versions. Provider
 readiness is re-evaluated after upgrade because executable provenance, login, billing and acceptance

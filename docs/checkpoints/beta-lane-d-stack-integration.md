@@ -80,3 +80,15 @@ candidate, close external gates, change the package version, or perform a public
   evidence, and stop for human public-key/signature review.
 - Re-run QA-014 on the final App/navigation/runtime composition; this harness changes no product UI
   and its current HTTP 429 is an open product/fixture stability condition, not a passing matrix.
+
+## Superseding central integration observation — 2026-08-02
+
+Exact code integration `58fc112a94c2253dd04f2ba617a6477b11d3d966` contains the accepted
+Lane B work, packaging/QA stack, bounded QA-016 marker, integrated PKG-017 diagnostics/support
+slice, and accepted live metrics slice. This supersedes the historical missing-Lane-B and
+missing-slice observations above; it does not promote any rehearsal tarball to a retained
+candidate.
+
+Final exact-head QA, fresh QA-014/QA-015 capture, long-running QA-016 dogfood, signed QA-018
+evidence, a distinct signed prior artifact, clean-OS lifecycle evidence, provider-native
+acceptance, and all public/version approval gates remain open.

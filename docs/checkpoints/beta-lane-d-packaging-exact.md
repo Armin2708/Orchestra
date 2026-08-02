@@ -111,3 +111,14 @@ byte-identical at SHA-256
 (1,207,466 bytes). The release gate correctly remained incomplete without a distinct signed prior
 artifact/evidence bundle. These bytes are diagnostic, not the final retained beta candidate; Lane B
 and the remaining central slices must be integrated before one final artifact is created.
+
+## Central code-integration observation — 2026-08-02
+
+The packaging ancestry is present at exact central code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966` together with accepted Lanes A–C, the bounded QA-016
+slice, integrated PKG-017 diagnostics/support, and live metrics. The prior rehearsals remain
+diagnostic and are not the retained candidate.
+
+Retain a candidate only after final documentation and evidence reconciliation at a clean exact
+head. PKG-001, PKG-015, QA-017, and PKG-GATE remain open. Package version remains `0.1.0`, and any
+version change, tag, publication, or release requires explicit human approval.

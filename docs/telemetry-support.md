@@ -2,17 +2,19 @@
 
 ## Telemetry boundary
 
-Orchestra has two different telemetry classes:
+At integrated code head `58fc112a94c2253dd04f2ba617a6477b11d3d966`, Orchestra keeps two
+different telemetry classes:
 
-- local injected-context counters already stored in the local database; and
-- optional external product telemetry, introduced by this lane's strict envelope.
+- local operational, provider-usage, outcome and context counters stored in the local database; and
+- optional external product telemetry represented by a strict envelope.
 
 External telemetry is **off by default**. Opting in permits only four event names and enum-only
 properties: onboarding, doctor, lifecycle-demo and support-bundle outcomes. Installation identity
 is a one-way SHA-256 of a local random seed. The envelope accepts no arbitrary strings, paths,
 project/card/session/device identifiers, prompts, transcripts, commands, file names, credentials,
-provider payloads, PTY output or error bodies. No transport is registered by this lane; the Lane D
-integrator must keep capture inert unless an approved destination and privacy review exist.
+provider payloads, PTY output or error bodies. No transport is registered for external telemetry at
+this head. Capture remains inert unless a destination, consent/deletion policy and privacy review
+are explicitly approved.
 
 Local counters are not silently converted into external events. Provider runtime network calls and
 the documented Claude usage-window check are separate product behavior.

@@ -1,8 +1,34 @@
 # Beta artifact, upgrade, rollback, and hotfix operations
 
-Status: **implementation contract, not a publication claim**. No npm package, tag, GitHub release,
-or stable promotion is authorized by this document. Public actions still require the exact-artifact
-evidence bundle and explicit human approval.
+Status: **integrated implementation contract at code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`, not a candidate-artifact or publication claim**.
+No npm package, tag, GitHub release, version change or stable promotion is authorized by this
+document. Public actions still require the exact-artifact evidence bundle and explicit human
+approval.
+
+## Current integrated gate state
+
+- Accepted Lane A, B and C ancestry plus Lane D packaging, QA harnesses, production-bound chaos,
+  diagnostics-backed support and live outcome analytics are present in the code tree.
+- `PKG-017` has a local owner-only, consent-gated, exact-byte diagnostics/support export. It has no
+  upload transport or public support promise.
+- Production-bound `OPS-CHAOS-01` through `OPS-CHAOS-04` evidence is a bounded engineering gate,
+  not the elapsed real-provider dogfood required by `QA-016` and `REL-009`.
+- The repaired browser harness has no passing final-head capture. The latest integrated diagnostic
+  fails closed at HTTP 429 before viewport completion, so QA-014 and fresh QA-015 evidence remain
+  open; tablet, phone and in-app Browser are unclaimed.
+- Exact context-injection token totals and model acknowledgements remain unavailable. Managed
+  Claude `Read` duplicate evidence is partial, and representative MET-015/MET-GATE evidence does
+  not exist.
+- Both production trust-root lists are intentionally empty. QA-018 needs a reviewed external
+  public key and detached signature; real cross-version rollback needs a separately trusted signed
+  prior artifact.
+- Every provider remains unsupported for managed beta release pending its exact native acceptance
+  and policy evidence. Clean final-artifact macOS/Linux lifecycle evidence is also absent.
+
+These open gates survive any local test pass. They must be carried into the final candidate
+checkpoint and approval packet without being converted to zeros, inferred passes or prose-only
+evidence.
 
 ## Release boundary
 

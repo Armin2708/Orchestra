@@ -1,12 +1,13 @@
 # Agent OS surface inventory
 
-Status: current runtime inventory plus Beta Lane A's Delivery Trackbook, managed Knowledge Compiler,
+Status: compatibility-contract inventory plus Beta Lane A's Delivery Trackbook, managed Knowledge Compiler,
 Discussions, Teams, planning, and durable conflict resolution surfaces,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work, collaboration, knowledge, team,
-delivery, and outcome-analytics surfaces, observed at exact code head
-`3f8aed8a3b5af29c2dcbfaec634277cd32473034`.
+delivery, remote DeviceSession, operations, diagnostics-backed support, production-chaos evidence,
+and outcome-analytics surfaces, observed against exact code integration
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
@@ -17,9 +18,9 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 167 | 3 | 10 | 17 | 197 |
-| Registered HTTP routes | 168 | 29 | 25 | 9 | 231 |
-| CLI command families/subcommands | 94 | 5 | 18 | 20 | 137 |
+| SQLite application tables | 170 | 3 | 10 | 17 | 200 |
+| Contract-scoped registered HTTP routes | 168 | 29 | 25 | 9 | 231 |
+| Contract-scoped CLI command families/subcommands | 94 | 5 | 18 | 20 | 137 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -137,6 +138,9 @@ ShipQueue receipts, attributed ContextUse evidence, and the durable autoship out
 `src/agent-os/delivery-shipment-integrity-migration.ts`,
 `src/agent-os/knowledge-context-use-actual-migration.ts`, and
 `src/agent-os/delivery-autoship-intent-migration.ts`.
+DeviceSession, credential, grant, step-up, stream, push and remote audit state is defined by
+`src/agent-os/device-session-migration.ts` and `src/remote-security-schema.ts`. Operations recovery,
+outbox, retention and compaction state is defined by `src/agent-os/operations-recovery.ts`.
 
 ### Canonical
 
@@ -154,6 +158,7 @@ ShipQueue receipts, attributed ContextUse evidence, and the durable autoship out
 | Coordination and risk control | `os_team_interactions`, `os_responsibility_assignments`, `os_objectives`, `os_team_goals`, `os_capacity_snapshots`, `os_message_envelopes`, `os_decision_records`, `os_escalations`, `os_risk_evaluations`, `os_participation_history`, `os_control_approvals` |
 | Assurance and learning | `os_trace_nodes`, `os_trace_edges`, `os_provenance_attestations`, `os_quality_gate_definitions`, `os_quality_gate_runs`, `os_quality_gate_results`, `os_quality_gate_overrides`, `os_metric_definitions`, `os_scorecards`, `os_metric_observations`, `os_calibration_reviews`, `os_access_certifications`, `os_review_appeals`, `os_incidents`, `os_incident_timeline`, `os_postmortems`, `os_corrective_actions`, `os_knowledge_promotions` |
 | Outcome analytics | `outcome_analytics_schema`, `outcome_analytics_secrets`, `outcome_usage_observations`, `outcome_usage_context_receipts`, `outcome_usage_provider_bindings`, `outcome_activity_observations`, `outcome_context_refresh_receipts`, `outcome_budget_policies`, `outcome_operation_confirmations`, `outcome_operation_bindings`, `outcome_operation_consumptions`, `outcome_operation_context_receipts`, `outcome_operation_usage_links`, `outcome_operation_usage_reconciliations`, `outcome_team_digests`, `outcome_benchmark_observations`, `outcome_benchmark_evidence_bindings` |
+| Secure remote authority | `os_device_sessions`, `os_device_credentials`, `os_device_proof_replays`, `os_pairing_tickets`, `os_pairing_ticket_resources`, `os_remote_resource_grants`, `os_remote_step_up_grants`, `os_remote_stream_tickets`, `os_remote_mutation_audit`, `os_remote_security_events`, `os_remote_rate_limits`, `os_remote_messages`, `os_remote_push_subscriptions`, `os_remote_notification_preferences`, `os_remote_control_state` |
 
 ### Compatibility
 
@@ -201,6 +206,13 @@ The extractor reads literal Fastify `get/post/put/patch/delete` registrations fr
 `src/agent-os/team-planning-routes.ts`, and `src/agent-os/outcome-analytics-routes.ts`. The seven
 session action routes are expanded from
 `AGENT_HOME_SESSION_ACTIONS` in `src/agent-os/agent-home-lifecycle.ts:39`.
+
+This 231-route compatibility inventory is deliberately scoped to the `route_sources` array in the
+machine manifest. Separately registered secure-remote, operations/support and session-tool routes
+are current integrated surfaces documented by their own closed authorization contracts; they are
+not silently counted in this historical compatibility tripwire. The final release review must use
+the dedicated remote/operations route tests in addition to this extractor rather than presenting
+231 as the entire daemon route count.
 
 ### Canonical routes
 
@@ -467,8 +479,11 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 137 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
-`src/job-assignment-cli.ts`. The compact human map is:
+The exact 137 compatibility-contract command paths are machine-checked from `src/cli.ts`,
+`src/agent-os-cli.ts`, and `src/job-assignment-cli.ts`. Separately registered current commands
+include `doctor`, `onboard`, `lifecycle-demo`, and `ops support-case`; their focused tests and
+operator docs are additional release evidence rather than being silently folded into the 137-count
+historical extractor. The compact human map is:
 
 | Class | Command surface |
 |---|---|
@@ -553,9 +568,10 @@ Run:
 The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
-2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
+2. extracts every contract-scoped literal HTTP route, applies Agent OS prefixes, expands session
    actions, and exact-compares all 231 signatures;
-3. extracts every Commander root/subcommand and exact-compares all 137 command paths;
+3. extracts every command in the manifest's three scoped Commander sources and exact-compares all
+   137 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;

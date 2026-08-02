@@ -1,6 +1,9 @@
 # Local data, backup, restore, reset, and migration
 
-Status: operator contract for beta evaluation. It does not claim an automated backup command.
+Status: integrated local backup/verification/restore contract at code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. The reviewed script and `orchestra ops` commands
+operate on explicit local state only; final retained-artifact cross-version rollback remains open
+without a distinct signed prior artifact.
 
 ## Ownership and locations
 
@@ -45,6 +48,19 @@ Record the resolved state root before stopping the daemon; do not assume a later
 environment. Run the command from the exact retained source/artifact checkout so the reviewed script
 is the one producing the backup.
 
+The integrated CLI also exposes bounded state-root operations:
+
+```sh
+orchestra ops backup
+orchestra ops verify-backup /absolute/state-root/backups/<manifest>.json
+orchestra ops restore /absolute/state-root/backups/<manifest>.json
+```
+
+Backup manifests bind database bytes, checksums and compatibility information required by the
+restore guard. Restore requires quiescence, rejects traversal/symlinks and incompatible or invalid
+evidence, preserves the failed state, and uses durable ownership/lease checks before the daemon may
+resume. These commands do not back up external Git worktrees and do not prove package downgrade.
+
 Never paste a database, WAL/SHM file, bearer, provider session, transcript, or worktree content into
 a support report.
 
@@ -52,17 +68,20 @@ a support report.
 
 Restore is explicit and offline. Preserve the failed state first, verify the selected backup and
 its compatible application version, keep all writers stopped, restore into an absent target, run
-foreign-key/integrity checks, and perform one controlled restart. Do not merge two state roots.
+foreign-key/integrity checks, and perform one controlled restart. The CLI enforces the same
+quiescence and evidence boundary; it does not merge two state roots.
 
 A safe reset is a recoverable retirement: with the daemon and hooks quiesced, move the entire state
 root to a new absent backup path. Do not recursively delete it. Resetting state does not delete,
-commit, archive, or recover external worktrees. Credentials and device sessions, once Lane C
-exists, require their own revocation workflow.
+commit, archive, or recover external worktrees. Credentials and DeviceSessions require their own
+revocation workflow.
 
 ## Migrations and downgrade
 
 Schema migrations are idempotent, additive, and forward-only. Unknown or partial schemas fail
 closed. Feature rollback does not run a down migration or delete canonical evidence. Downgrade is
-allowed only by an explicitly compatible prior application against a verified copy, or by an
-offline restore after accepting the loss of every post-backup write. See
+allowed only by an explicitly compatible, provenance-verified prior application against a verified
+copy, or by an offline restore after accepting the loss of every post-backup write. The release
+gate still requires a distinct prior tarball whose evidence is rooted in a reviewed production
+public key; test-local signatures and same-artifact reinstall do not satisfy it. See
 [agent-os-forward-migrations.md](agent-os-forward-migrations.md) for the concrete DOM-017 contract.

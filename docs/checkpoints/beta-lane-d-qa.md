@@ -164,3 +164,13 @@ pairing/scope/revoke/step-up commands independently passed 17, 38, 15, and 65 te
 the placeholder-binding gap only; the cases remain exact-evidence prerequisites until the final
 clean-head runner reproduces them. QA-016 long-running dogfood and production-signed QA-018 remain
 open, and Lane B is not part of this stack checkpoint.
+
+## Central integration observation — 2026-08-02
+
+Exact central code head `58fc112a94c2253dd04f2ba617a6477b11d3d966` contains Lane B, the
+bounded QA-016 harness, integrated PKG-017 diagnostics/support, and accepted live metrics. The
+historical missing-Lane-B statement above is superseded.
+
+QA-016 real-duration provider dogfood remains open. QA-018 still lacks the exact final signed
+manifest and accepted production trust key. The final clean runner must recompute all evidence
+digests and results rather than inherit this checkpoint's observations.

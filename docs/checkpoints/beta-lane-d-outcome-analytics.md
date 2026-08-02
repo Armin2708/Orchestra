@@ -169,3 +169,14 @@ without observed representative evidence.
   in the comparison response until the integrator records and reviews representative evidence.
 - The route classification is a conservative threat-control contract, not a claim that
   `DeviceSession`, pairing, revocation, or remote step-up is implemented. REM-GATE remains open.
+
+## Central integration observation — 2026-08-02
+
+The accepted analytics history through marker `77400ba` is present at exact central code head
+`58fc112a94c2253dd04f2ba617a6477b11d3d966`. The historical caveat that `DeviceSession` was absent
+is superseded: the integrated outcome routes remain device-default-deny.
+
+The open metrics evidence is unchanged. Exact context-token/model acknowledgements are unavailable;
+exploration attribution is partial and currently limited to the managed Claude `Read` evidence;
+native high-fanout production, repository polling reconciliation, MET-015 retained-artifact
+comparison, and MET-GATE remain open.
