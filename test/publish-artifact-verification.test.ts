@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { verifyPublishArtifact } from '../scripts/verify-publish-artifact.mjs'
+import { verifyPriorArtifactEvidence } from '../scripts/prior-artifact-evidence.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const contract = JSON.parse(
@@ -95,6 +96,106 @@ const fixture = () => {
   ])
   const tarballBytes = fs.readFileSync(tarballPath)
   const packageSha256 = hash('sha256', tarballBytes, 'hex')
+
+  const priorVersion = '0.1.0-beta.0'
+  const priorCommitSha = 'f'.repeat(40)
+  const priorStagingDirectory = path.join(directory, 'prior-staging')
+  const priorEmbeddedDirectory = path.join(priorStagingDirectory, 'package')
+  fs.cpSync(embeddedDirectory, priorEmbeddedDirectory, { recursive: true })
+  writeJson(path.join(priorEmbeddedDirectory, 'package.json'), {
+    ...sourcePackage,
+    version: priorVersion,
+  })
+  const priorTarballName = 'orchestra-board-0.1.0-beta.0.tgz'
+  const priorTarballPath = path.join(packageDirectory, priorTarballName)
+  execFileSync('tar', ['-czf', priorTarballPath, '-C', priorStagingDirectory, 'package'])
+  const priorBytes = fs.readFileSync(priorTarballPath)
+  const priorSha256 = hash('sha256', priorBytes, 'hex')
+  const priorWorkflowRun = {
+    repository: 'owner/orchestra',
+    event: 'workflow_dispatch',
+    ref: 'refs/heads/internal-retained',
+    run_id: '77',
+    run_attempt: '1',
+  }
+  const priorRequiredGates = [
+    'exact-commit',
+    'package-artifact',
+    'package-secret-scan',
+    'package-upload',
+  ]
+  const priorMetadata = {
+    commit_sha: priorCommitSha,
+    package_name: sourcePackage.name,
+    package_version: priorVersion,
+    filename: priorTarballName,
+    bytes: priorBytes.byteLength,
+    sha256: priorSha256,
+    npm_integrity: `sha512-${hash('sha512', priorBytes, 'base64')}`,
+    npm_shasum: hash('sha1', priorBytes, 'hex'),
+    provenance: { source_commit: priorCommitSha, builder: 'npm pack' },
+    file_manifest: requiredPackageFiles.map((entry) => ({ path: entry })),
+  }
+  const priorManifestPath = path.join(packageDirectory, 'prior-evidence-manifest.json')
+  writeJson(priorManifestPath, {
+    schema_version: 1,
+    backlog_item: 'QA-019',
+    commit_sha: priorCommitSha,
+    result: 'passed',
+    workflow_run: priorWorkflowRun,
+    contract: { workflow: '.github/workflows/ci.yml', required_gates: priorRequiredGates },
+    summary: {
+      required: priorRequiredGates.length,
+      passed: priorRequiredGates.length,
+      failed: 0,
+      missing: 0,
+      unexpected: 0,
+      sha_consistent: true,
+      package_consistent: true,
+      package_upload_evidence_present: true,
+    },
+    gates: priorRequiredGates.map((gate_id) => ({
+      schema_version: 1,
+      commit_sha: priorCommitSha,
+      gate_id,
+      status: 'passed',
+      exit_code: 0,
+      details: gate_id === 'package-upload'
+        ? { action_outcome: 'success', artifact_id: '77', artifact_digest: '9'.repeat(64) }
+        : {},
+    })),
+    package_artifact: priorMetadata,
+  })
+  const priorReceiptPath = path.join(packageDirectory, 'prior-retained-artifact-receipt.json')
+  writeJson(priorReceiptPath, {
+    schema_version: 1,
+    kind: 'retained-internal',
+    decision: 'trusted',
+    source_commit: priorCommitSha,
+    evidence_manifest_sha256: hash('sha256', fs.readFileSync(priorManifestPath), 'hex'),
+    workflow_run: priorWorkflowRun,
+    artifact: {
+      name: sourcePackage.name,
+      version: priorVersion,
+      filename: priorTarballName,
+      bytes: priorBytes.byteLength,
+      sha256: priorSha256,
+      npm_shasum: hash('sha1', priorBytes, 'hex'),
+      npm_integrity: `sha512-${hash('sha512', priorBytes, 'base64')}`,
+    },
+    trust: {
+      approved_at: '2026-08-02T00:00:00.000Z',
+      approved_by: 'release-maintainer',
+      approval_id: 'internal-baseline-77',
+      exact_commit_ci_passed: true,
+      rationale: 'Explicitly trusted retained internal baseline.',
+    },
+  })
+  const priorEvidence = verifyPriorArtifactEvidence({
+    artifactPath: priorTarballPath,
+    manifestPath: priorManifestPath,
+    receiptPath: priorReceiptPath,
+  })
   const metadata = {
     schema_version: 1,
     commit_sha: commitSha,
@@ -116,16 +217,33 @@ const fixture = () => {
     },
     lifecycle: {
       schema_version: 2,
+      local_rehearsal_passed: true,
       passed: true,
+      release_gate: {
+        status: 'passed',
+        prior_evidence_verified: true,
+        upgrade_passed: true,
+        rollback_passed: true,
+      },
+      retained_prior_evidence_files: [
+        priorTarballName,
+        'prior-evidence-manifest.json',
+        'prior-retained-artifact-receipt.json',
+      ],
       artifact: { sha256: packageSha256, version: sourcePackage.version },
-      previous_artifact: { sha256: 'd'.repeat(64), version: '0.1.0-beta.0' },
+      previous_artifact: {
+        filename: priorTarballName,
+        sha256: priorSha256,
+        version: priorVersion,
+        evidence: priorEvidence,
+      },
       upgrade: {
         observed: true,
         passed: true,
         mode: 'prior-artifact-upgrade',
         prior_version: '0.1.0-beta.0',
         candidate_version: sourcePackage.version,
-        prior_sha256: 'd'.repeat(64),
+        prior_sha256: priorSha256,
         candidate_sha256: packageSha256,
         digests_differ: true,
         versions_differ: true,
@@ -261,6 +379,9 @@ const fixture = () => {
     sourcePackagePath,
     tarballPath,
     tarballName,
+    priorTarballPath,
+    priorManifestPath,
+    priorReceiptPath,
     manifestPath,
     metadata,
     manifest,
@@ -311,6 +432,9 @@ describe('exact package publish verification', () => {
       evidence_artifact_digest: evidenceArtifactDigest,
       workflow_run_id: '303',
       workflow_run_attempt: '1',
+      prior_package_sha256: sample.metadata.lifecycle.previous_artifact.sha256,
+      prior_source_commit: 'f'.repeat(40),
+      prior_trust_kind: 'retained-internal',
     })
     expect(JSON.parse(
       fs.readFileSync(path.join(sample.outputDirectory, 'verification-receipt.json'), 'utf8'),
@@ -343,7 +467,7 @@ describe('exact package publish verification', () => {
     fs.copyFileSync(sample.tarballPath, path.join(sample.packageDirectory, 'unexpected.tgz'))
 
     expect(() => verifyPublishArtifact(sample.arguments))
-      .toThrow('package artifact must contain exactly one .tgz')
+      .toThrow('package artifact contains missing or unexpected files')
   })
 
   it('rejects package bytes changed after test and digest evidence', () => {
@@ -417,16 +541,44 @@ describe('exact package publish verification', () => {
 
   it('rejects same-artifact reinstall presented as upgrade evidence', () => {
     const sample = fixture()
-    sample.metadata.lifecycle.previous_artifact.sha256 = sample.metadata.sha256
-    sample.metadata.lifecycle.previous_artifact.version = sample.metadata.package_version
     sample.metadata.lifecycle.upgrade.prior_sha256 = sample.metadata.sha256
     sample.metadata.lifecycle.upgrade.prior_version = sample.metadata.package_version
     sample.metadata.lifecycle.upgrade.digests_differ = false
     sample.metadata.lifecycle.upgrade.versions_differ = false
+    sample.metadata.lifecycle.upgrade.mode = 'same-artifact-idempotency'
     rewriteMetadata(sample)
 
     expect(() => verifyPublishArtifact(sample.arguments))
       .toThrow('package clean-consumer lifecycle evidence is incomplete')
+  })
+
+  it('rejects a functional synthetic prior tarball that is not bound to its retained receipt', () => {
+    const sample = fixture()
+    const syntheticRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-synthetic-prior-'))
+    temporaryDirectories.push(syntheticRoot)
+    const syntheticPackage = path.join(syntheticRoot, 'package')
+    fs.mkdirSync(syntheticPackage)
+    writeJson(path.join(syntheticPackage, 'package.json'), {
+      name: 'orchestra-board',
+      version: '0.1.0-beta.0',
+      bin: { orchestra: './dist/cli.js' },
+    })
+    fs.mkdirSync(path.join(syntheticPackage, 'dist'))
+    fs.writeFileSync(path.join(syntheticPackage, 'dist', 'cli.js'), 'console.log("functional")\n')
+    execFileSync('tar', ['-czf', sample.priorTarballPath, '-C', syntheticRoot, 'package'])
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow(/prior package (byte count|SHA-256|inventory)/)
+  })
+
+  it('rejects a prior receipt that is not cryptographically bound to the evidence manifest', () => {
+    const sample = fixture()
+    const receipt = JSON.parse(fs.readFileSync(sample.priorReceiptPath, 'utf8'))
+    receipt.evidence_manifest_sha256 = '0'.repeat(64)
+    writeJson(sample.priorReceiptPath, receipt)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('prior receipt is not bound to evidence')
   })
 
   it('rejects missing rollback, wrong installed version, or moderate vulnerabilities', () => {

@@ -277,6 +277,11 @@ describe('QA-019 exact-commit CI contract', () => {
         cli_version: '0.1.0',
         passed: true,
       },
+      lifecycle: {
+        local_rehearsal_passed: true,
+        release_gate: { status: 'passed' },
+        passed: true,
+      },
     }
     const manifest = createEvidenceManifest({
       contract,
@@ -306,6 +311,29 @@ describe('QA-019 exact-commit CI contract', () => {
     })
     expect(manifest.gates.map((gate: EvidenceRecord) => gate.gate_id))
       .toEqual(contract.required_gates)
+
+    const noPriorArtifact = structuredClone(packageArtifact)
+    noPriorArtifact.lifecycle.release_gate.status = 'incomplete'
+    noPriorArtifact.lifecycle.passed = false
+    const noPriorManifest = createEvidenceManifest({
+      contract,
+      expectedSha: commitSha,
+      records,
+      packageArtifact: noPriorArtifact,
+      generatedAt: '2026-07-25T00:00:02.000Z',
+      workflowRun: { run_id: '1', run_attempt: '1' },
+    })
+    expect(noPriorManifest).toMatchObject({
+      result: 'failed',
+      summary: { package_consistent: false },
+      package_artifact: {
+        lifecycle: {
+          local_rehearsal_passed: true,
+          release_gate: { status: 'incomplete' },
+          passed: false,
+        },
+      },
+    })
   })
 
   it('fails closed for missing, failed, or cross-commit evidence while remaining serializable', () => {

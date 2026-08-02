@@ -41,9 +41,19 @@ consumer, installs and removes Claude and Codex hooks independently with provide
 reinstalls/upgrades, audits dependencies, uninstalls the package, and proves that the SQLite schema,
 active work, retained artifacts, unrelated provider configuration and project files survive. To
 exercise a real cross-version upgrade and rollback, set `ORCHESTRA_PREVIOUS_PACKAGE` to a retained,
-previously verified tarball with a different version and digest. Without it, the harness reports a
-same-artifact idempotency rehearsal; both the upgrade and rollback gates remain open, and the
-publication verifier rejects the evidence.
+previously verified tarball with a different version and digest, and set
+`ORCHESTRA_PREVIOUS_PACKAGE_EVIDENCE` to its exact-commit evidence directory. That directory must
+contain `manifest.json` and `retained-artifact-receipt.json`; published provenance may additionally
+use `verification-receipt.json`. The receipt cryptographically binds the tarball SHA-256, npm
+shasum/integrity, exact source commit, package identity and CI workflow/run to either verified npm
+provenance or an explicitly approved retained-internal baseline. A functional or synthetic tarball
+without that binding is rejected before installation.
+
+Without a distinct verified prior artifact, the harness may report `local_rehearsal_passed: true`,
+but `release_gate.status` is `incomplete` and top-level `passed` is false. CI retains the diagnostic
+artifact while recording the package-artifact gate as incomplete/failed; neither the exact-commit
+manifest nor publication boundary may convert same-artifact idempotency into release-readiness
+evidence.
 
 The Orchestra package is required to define no `preinstall`, `install`, or `postinstall` script.
 Reviewed native dependencies such as SQLite and PTY bindings still require their own install

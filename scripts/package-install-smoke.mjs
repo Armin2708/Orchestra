@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -152,10 +153,35 @@ try {
   rmSync(reproductionDirectory, { recursive: true, force: true })
 }
 
+const previousArtifactPath = process.env.ORCHESTRA_PREVIOUS_PACKAGE?.trim() || undefined
+const previousEvidenceDirectory =
+  process.env.ORCHESTRA_PREVIOUS_PACKAGE_EVIDENCE?.trim() || undefined
 const lifecycle = await runPackageLifecycle({
   artifactPath: packagePath,
-  previousArtifactPath: process.env.ORCHESTRA_PREVIOUS_PACKAGE?.trim() || undefined,
+  previousArtifactPath,
+  previousEvidenceDirectory,
 })
+
+if (lifecycle.passed) {
+  const retainedPriorFiles = [
+    [previousArtifactPath, basename(previousArtifactPath)],
+    [join(previousEvidenceDirectory, 'manifest.json'), 'prior-evidence-manifest.json'],
+    [
+      join(previousEvidenceDirectory, 'retained-artifact-receipt.json'),
+      'prior-retained-artifact-receipt.json',
+    ],
+  ]
+  if (lifecycle.previous_artifact.evidence.trust_kind === 'published-provenance') {
+    retainedPriorFiles.push([
+      join(previousEvidenceDirectory, 'verification-receipt.json'),
+      'prior-verification-receipt.json',
+    ])
+  }
+  for (const [source, filename] of retainedPriorFiles) {
+    copyFileSync(source, join(packageDirectory, filename))
+  }
+  lifecycle.retained_prior_evidence_files = retainedPriorFiles.map(([, filename]) => filename)
+}
 
 const smokeDirectory = mkdtempSync(join(tmpdir(), 'orchestra-package-smoke-'))
 try {
@@ -236,4 +262,11 @@ try {
   )
 } finally {
   rmSync(smokeDirectory, { recursive: true, force: true })
+}
+
+if (!lifecycle.passed) {
+  console.error(
+    `package artifact built; release prerequisite incomplete: ${lifecycle.release_gate.blocker}`,
+  )
+  process.exitCode = 2
 }

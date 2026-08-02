@@ -20,19 +20,8 @@ const regularFile = (path, label) => {
   invariant(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0, `${label} must be a regular file`)
 }
 
-try {
-  invariant(
-    process.argv.length === 4,
-    'usage: scan-package-artifact.mjs <package-directory> <gitleaks-executable>',
-  )
-  const packageDirectory = resolve(process.argv[2])
-  const scanner = resolve(process.argv[3])
-  regularFile(scanner, 'gitleaks executable')
-  const tarballs = readdirSync(packageDirectory).filter((entry) => entry.endsWith('.tgz'))
-  invariant(tarballs.length === 1, 'package directory must contain exactly one tarball')
-  const tarball = join(packageDirectory, tarballs[0])
+const scanTarball = (scanner, tarball, requireCompleteReview) => {
   regularFile(tarball, 'package tarball')
-
   const listing = spawnSync('tar', ['-tzf', tarball], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
@@ -54,12 +43,6 @@ try {
     })
     invariant(unpack.status === 0, unpack.stderr.trim() || 'package tarball extraction failed')
     invariant(existsSync(join(extracted, 'package', 'package.json')), 'extracted package manifest is missing')
-    invariant(reviewedContract.schema_version === 1, 'artifact secret-review schema is unsupported')
-    const scannerVersion = spawnSync(scanner, ['version'], { encoding: 'utf8' })
-    invariant(
-      scannerVersion.status === 0 && scannerVersion.stdout.trim() === reviewedContract.scanner_version,
-      'artifact scanner version does not match the reviewed contract',
-    )
     const reportPath = join(extracted, 'gitleaks-report.json')
     const scanRoot = join(extracted, 'package')
     const scan = spawnSync(
@@ -89,18 +72,67 @@ try {
       )
       observed.add(`${relativePath}:${ruleId}:${line}`)
     }
-    invariant(
-      reviewedContract.entries.every((entry) =>
-        observed.has(`${entry.path}:${entry.rule_id}:${entry.line}`)),
-      'artifact secret-review entries are stale or no longer observed',
-    )
-    console.log(
-      `artifact secret scan passed for ${basename(tarball)} (${entries.length} entries, ` +
-      `${findings.length} exact reviewed false positive${findings.length === 1 ? '' : 's'})`,
-    )
+    if (requireCompleteReview) {
+      invariant(
+        reviewedContract.entries.every((entry) =>
+          observed.has(`${entry.path}:${entry.rule_id}:${entry.line}`)),
+        'artifact secret-review entries are stale or no longer observed',
+      )
+    }
+    return { entries: entries.length, findings: findings.length }
   } finally {
     rmSync(extracted, { recursive: true, force: true })
   }
+}
+
+try {
+  invariant(
+    process.argv.length === 4,
+    'usage: scan-package-artifact.mjs <package-directory> <gitleaks-executable>',
+  )
+  const packageDirectory = resolve(process.argv[2])
+  const scanner = resolve(process.argv[3])
+  regularFile(scanner, 'gitleaks executable')
+  invariant(reviewedContract.schema_version === 1, 'artifact secret-review schema is unsupported')
+  const scannerVersion = spawnSync(scanner, ['version'], { encoding: 'utf8' })
+  invariant(
+    scannerVersion.status === 0 && scannerVersion.stdout.trim() === reviewedContract.scanner_version,
+    'artifact scanner version does not match the reviewed contract',
+  )
+
+  const metadata = JSON.parse(readFileSync(join(packageDirectory, 'package-metadata.json'), 'utf8'))
+  const candidateName = String(metadata.filename ?? '')
+  const priorName = metadata.lifecycle?.passed === true
+    ? String(metadata.lifecycle?.previous_artifact?.filename ?? '')
+    : null
+  const expectedTarballs = [candidateName, ...(priorName ? [priorName] : [])].sort()
+  const tarballs = readdirSync(packageDirectory).filter((entry) => entry.endsWith('.tgz')).sort()
+  invariant(
+    JSON.stringify(tarballs) === JSON.stringify(expectedTarballs),
+    'package directory tarballs do not match lifecycle metadata',
+  )
+
+  const candidate = scanTarball(scanner, join(packageDirectory, candidateName), true)
+  const prior = priorName ? scanTarball(scanner, join(packageDirectory, priorName), false) : null
+  const looseReport = join(packageDirectory, '.gitleaks-loose-report.json')
+  const looseScan = spawnSync(
+    scanner,
+    [
+      'dir', '.', '--redact', '--no-banner', '--report-format', 'json',
+      '--report-path', looseReport,
+    ],
+    { cwd: packageDirectory, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+  )
+  const looseFindings = existsSync(looseReport) ? JSON.parse(readFileSync(looseReport, 'utf8')) : []
+  rmSync(looseReport, { force: true })
+  invariant(looseScan.status === 0, 'loose artifact metadata or receipts contain a secret finding')
+  invariant(Array.isArray(looseFindings) && looseFindings.length === 0, 'loose artifact scan is invalid')
+
+  console.log(
+    `artifact secret scan passed for ${basename(candidateName)} (${candidate.entries} entries, ` +
+    `${candidate.findings} exact reviewed false positive${candidate.findings === 1 ? '' : 's'}` +
+    `${prior ? `; prior ${basename(priorName)} ${prior.entries} entries` : ''})`,
+  )
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exitCode = 1

@@ -132,7 +132,7 @@ jobs:
           node scripts/exact-commit-evidence.mjs run beta-release-contract --
           npm run release:contract
 
-      - name: Build, digest, and install-smoke the package artifact
+      - name: Build package and evaluate retained-prior release prerequisites
         continue-on-error: true
         run: >-
           node scripts/exact-commit-evidence.mjs run package-artifact --

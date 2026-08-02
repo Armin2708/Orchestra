@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
 
 const packageName = 'orchestra-board'
 const sha256Pattern = /^[0-9a-f]{64}$/
@@ -423,15 +424,43 @@ const auditInstalledArtifact = (consumerDirectory, runAudit) => {
 export async function runPackageLifecycle({
   artifactPath,
   previousArtifactPath,
+  previousEvidenceDirectory,
+  previousEvidenceManifestPath,
+  previousEvidenceReceiptPath,
+  previousPublishReceiptPath,
   reportPath,
   keepTemporary = false,
   runAudit = true,
 } = {}) {
   const artifact = artifactIdentity(artifactPath)
   const artifactManifest = artifactPackageManifest(artifact.path)
+  invariant(
+    !previousArtifactPath ||
+      previousEvidenceDirectory ||
+      (previousEvidenceManifestPath && previousEvidenceReceiptPath),
+    'ORCHESTRA_PREVIOUS_PACKAGE requires machine-verifiable prior exact-commit evidence',
+  )
+  invariant(
+    previousArtifactPath ||
+      !(previousEvidenceDirectory || previousEvidenceManifestPath || previousEvidenceReceiptPath),
+    'prior evidence cannot be supplied without ORCHESTRA_PREVIOUS_PACKAGE',
+  )
   const previous = previousArtifactPath ? artifactIdentity(previousArtifactPath) : artifact
   const previousManifest = artifactPackageManifest(previous.path)
+  const previousEvidence = previousArtifactPath
+    ? verifyPriorArtifactEvidence({
+        artifactPath: previous.path,
+        evidenceDirectory: previousEvidenceDirectory,
+        manifestPath: previousEvidenceManifestPath,
+        receiptPath: previousEvidenceReceiptPath,
+        publishReceiptPath: previousPublishReceiptPath,
+      })
+    : {
+        verified: false,
+        blocker: 'a distinct prior artifact and machine-verifiable evidence bundle were not supplied',
+      }
   const crossVersion =
+    previousEvidence.verified === true &&
     previous.path !== artifact.path &&
     previous.sha256 !== artifact.sha256 &&
     previousManifest.version !== artifactManifest.version
@@ -650,6 +679,7 @@ export async function runPackageLifecycle({
         ? null
         : 'cross-version upgrade requires a retained prior artifact with a different digest and version',
     }
+    const releasePassed = crossVersion && rollback.passed && audit.passed
     const report = {
       schema_version: 2,
       package_name: packageName,
@@ -663,6 +693,7 @@ export async function runPackageLifecycle({
         filename: previous.filename,
         sha256: previous.sha256,
         version: previousManifest.version,
+        evidence: previousEvidence,
       },
       idempotency_reinstall: {
         observed: !crossVersion,
@@ -699,7 +730,18 @@ export async function runPackageLifecycle({
       },
       package_removed: true,
       audit,
-      passed: true,
+      local_rehearsal_passed: true,
+      release_gate: {
+        status: releasePassed ? 'passed' : 'incomplete',
+        prior_evidence_verified: previousEvidence.verified === true,
+        upgrade_passed: upgrade.passed,
+        rollback_passed: rollback.passed,
+        blocker: releasePassed
+          ? null
+          : previousEvidence.blocker ?? upgrade.blocker ?? rollback.blocker ??
+            (audit.passed ? null : 'clean-consumer moderate+ audit evidence is missing'),
+      },
+      passed: releasePassed,
     }
     invariant(sha256Pattern.test(report.artifact.sha256), 'artifact digest is invalid')
     if (reportPath) {
@@ -721,15 +763,21 @@ if (isCli) {
     const report = await runPackageLifecycle({
       artifactPath: process.argv[2],
       previousArtifactPath: process.argv[3],
+      previousEvidenceDirectory:
+        process.env.ORCHESTRA_PREVIOUS_PACKAGE_EVIDENCE?.trim() || undefined,
       reportPath: process.env.ORCHESTRA_PACKAGE_LIFECYCLE_REPORT,
       keepTemporary: process.env.ORCHESTRA_KEEP_LIFECYCLE_TEMP === '1',
     })
     console.log(
-      `package lifecycle passed for ${report.artifact.filename}; ` +
+      `package lifecycle local rehearsal passed for ${report.artifact.filename}; ` +
       `upgrade=${report.upgrade.observed ? 'observed' : 'open'}; ` +
       `rollback=${report.rollback.observed ? 'observed' : 'open'} ` +
       `(${report.artifact.sha256})`,
     )
+    if (!report.passed) {
+      console.error(`release prerequisite incomplete: ${report.release_gate.blocker}`)
+      process.exitCode = 2
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1

@@ -370,7 +370,10 @@ export function createEvidenceManifest({
     packageArtifact.commit_sha === expectedSha &&
     sha256Pattern.test(String(packageArtifact.sha256 ?? '')) &&
     packageArtifact.install_smoke?.passed === true &&
-    packageArtifact.install_smoke?.cli_version === packageArtifact.package_version
+    packageArtifact.install_smoke?.cli_version === packageArtifact.package_version &&
+    packageArtifact.lifecycle?.local_rehearsal_passed === true &&
+    packageArtifact.lifecycle?.release_gate?.status === 'passed' &&
+    packageArtifact.lifecycle?.passed === true
   const requiredPassed = orderedGates.every((record) =>
     record.schema_version === 1 &&
     record.status === 'passed' &&

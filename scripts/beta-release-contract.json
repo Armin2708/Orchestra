@@ -52,6 +52,8 @@
       "exact_commit",
       "byte_reproducibility",
       "clean_consumer_lifecycle",
+      "verified_prior_exact_commit_receipt",
+      "cross_version_upgrade_and_rollback",
       "dependency_audit_moderate_high_critical_zero",
       "artifact_secret_scan",
       "publish_boundary_receipt"

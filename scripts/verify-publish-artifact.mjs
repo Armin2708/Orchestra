@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -178,17 +179,44 @@ export function verifyPublishArtifact({
   const resolvedEvidenceDirectory = resolve(evidenceDirectory)
   const resolvedOutputDirectory = resolve(outputDirectory)
   const packageFiles = exactRegularFiles(resolvedPackageDirectory, 'package artifact')
-  const tarballs = packageFiles.filter((file) => file.endsWith('.tgz'))
-  invariant(tarballs.length === 1, 'package artifact must contain exactly one .tgz')
-  const tarballName = tarballs[0]
+  invariant(packageFiles.includes('package-metadata.json'), 'package artifact metadata is missing')
+  const metadata = readJson(
+    join(resolvedPackageDirectory, 'package-metadata.json'),
+    'package metadata',
+  )
+  const tarballName = String(metadata.filename ?? '')
+  const priorTarballName = String(metadata.lifecycle?.previous_artifact?.filename ?? '')
+  invariant(
+    basename(tarballName) === tarballName && tarballName.endsWith('.tgz'),
+    'package metadata candidate filename is invalid',
+  )
+  invariant(
+    basename(priorTarballName) === priorTarballName &&
+      priorTarballName.endsWith('.tgz') &&
+      priorTarballName !== tarballName,
+    'package metadata prior filename is invalid',
+  )
+  const priorEvidenceFiles = [
+    priorTarballName,
+    'prior-evidence-manifest.json',
+    'prior-retained-artifact-receipt.json',
+    ...(metadata.lifecycle?.previous_artifact?.evidence?.trust_kind === 'published-provenance'
+      ? ['prior-verification-receipt.json']
+      : []),
+  ]
   const expectedPackageFiles = [
     tarballName,
     `${tarballName}.sha256`,
     'package-metadata.json',
+    ...priorEvidenceFiles,
   ].sort()
   invariant(
     sameJson(packageFiles, expectedPackageFiles),
     'package artifact contains missing or unexpected files',
+  )
+  invariant(
+    sameJson(metadata.lifecycle?.retained_prior_evidence_files, priorEvidenceFiles),
+    'package metadata prior-evidence inventory does not match retained files',
   )
   const evidenceFiles = exactRegularFiles(resolvedEvidenceDirectory, 'evidence artifact')
   invariant(
@@ -204,10 +232,6 @@ export function verifyPublishArtifact({
   )
   const tarballBytes = readFileSync(tarballPath)
   const actualSha256 = sha256(tarballBytes)
-  const metadata = readJson(
-    join(resolvedPackageDirectory, 'package-metadata.json'),
-    'package metadata',
-  )
   const checksum = readFileSync(
     join(resolvedPackageDirectory, `${tarballName}.sha256`),
     'utf8',
@@ -248,13 +272,32 @@ export function verifyPublishArtifact({
       metadata.reproducibility?.scripts_disabled_for_second_pack === true,
     'package byte reproducibility evidence is incomplete',
   )
+  const verifiedPrior = verifyPriorArtifactEvidence({
+    artifactPath: join(resolvedPackageDirectory, priorTarballName),
+    manifestPath: join(resolvedPackageDirectory, 'prior-evidence-manifest.json'),
+    receiptPath: join(resolvedPackageDirectory, 'prior-retained-artifact-receipt.json'),
+    publishReceiptPath: metadata.lifecycle?.previous_artifact?.evidence?.trust_kind ===
+      'published-provenance'
+      ? join(resolvedPackageDirectory, 'prior-verification-receipt.json')
+      : undefined,
+  })
+  invariant(
+    sameJson(verifiedPrior, metadata.lifecycle?.previous_artifact?.evidence),
+    'prior artifact evidence summary does not match the retained cryptographic receipts',
+  )
   invariant(
     metadata.lifecycle?.schema_version === 2 &&
+      metadata.lifecycle?.local_rehearsal_passed === true &&
       metadata.lifecycle?.passed === true &&
+      metadata.lifecycle?.release_gate?.status === 'passed' &&
+      metadata.lifecycle?.release_gate?.prior_evidence_verified === true &&
+      metadata.lifecycle?.release_gate?.upgrade_passed === true &&
+      metadata.lifecycle?.release_gate?.rollback_passed === true &&
       metadata.lifecycle?.artifact?.sha256 === actualSha256 &&
       metadata.lifecycle?.artifact?.version === metadata.package_version &&
       metadata.lifecycle?.previous_artifact?.sha256 !== actualSha256 &&
       metadata.lifecycle?.previous_artifact?.version !== metadata.package_version &&
+      metadata.lifecycle?.previous_artifact?.evidence?.verified === true &&
       metadata.lifecycle?.upgrade?.observed === true &&
       metadata.lifecycle?.upgrade?.passed === true &&
       metadata.lifecycle?.upgrade?.mode === 'prior-artifact-upgrade' &&
@@ -424,6 +467,11 @@ export function verifyPublishArtifact({
     evidence_artifact_id: evidenceId,
     evidence_artifact_digest: evidenceDigest,
     evidence_manifest_sha256: sha256(manifestBytes),
+    prior_package_sha256: verifiedPrior.artifact.sha256,
+    prior_source_commit: verifiedPrior.source_commit,
+    prior_evidence_manifest_sha256: verifiedPrior.evidence_manifest_sha256,
+    prior_retained_receipt_sha256: verifiedPrior.receipt_sha256,
+    prior_trust_kind: verifiedPrior.trust_kind,
     workflow_run_id: runId,
     workflow_run_attempt: runAttempt,
   }

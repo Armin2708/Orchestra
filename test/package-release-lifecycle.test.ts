@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,12 +15,12 @@ afterEach(() => {
   }
 })
 
-const fixturePackage = () => {
+const fixturePackage = (version = '0.1.0-beta.1') => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-fixture-'))
   temporaryDirectories.push(directory)
   fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
     name: 'orchestra-board',
-    version: '0.1.0-beta.1',
+    version,
     type: 'module',
     bin: { orchestra: './cli.js' },
   }))
@@ -31,7 +32,7 @@ const rw=(file,install,p)=>{fs.mkdirSync(path.dirname(file),{recursive:true});co
 const database=()=>{fs.mkdirSync(state,{recursive:true});const db=new DatabaseSync(path.join(state,'orchestra.db'));db.exec(\`CREATE TABLE IF NOT EXISTS boards(id INTEGER PRIMARY KEY,project_path TEXT UNIQUE,name TEXT);CREATE TABLE IF NOT EXISTS agents(id INTEGER PRIMARY KEY,board_id INTEGER,name TEXT,status TEXT DEFAULT 'active');CREATE TABLE IF NOT EXISTS cards(id INTEGER PRIMARY KEY,board_id INTEGER,title TEXT,column_name TEXT,owner_agent_id INTEGER);\`);return db};
 const ensureBoard=(db)=>{const project=fs.realpathSync(process.cwd());db.prepare('INSERT OR IGNORE INTO boards(project_path,name) VALUES(?,?)').run(project,path.basename(project));return db.prepare('SELECT * FROM boards WHERE project_path=?').get(project)};
 const snapshot=(db)=>{const board=ensureBoard(db);const agents=db.prepare('SELECT * FROM agents WHERE board_id=? ORDER BY id').all(board.id);const cards=db.prepare(\`SELECT c.id,c.title,c.column_name AS column,a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.board_id=? ORDER BY c.id\`).all(board.id);return {board,agents,cards}};
-if(args[0]==='--version') console.log('0.1.0-beta.1');
+if(args[0]==='--version') console.log('${version}');
 else if(args[0]==='doctor') console.log('{"schema_version":1,"validated_toolchains":[]}');
 else if(args[0]==='install'){const p=provider();rw(p==='claude'?path.join(home,'.claude','settings.json'):path.join(codex,'hooks.json'),true,p)}
 else if(args[0]==='uninstall'){const p=provider();rw(p==='claude'?path.join(home,'.claude','settings.json'):path.join(codex,'hooks.json'),false,p)}
@@ -51,12 +52,102 @@ else process.exitCode=1;
   return path.join(directory, report[0].filename)
 }
 
+const exactPriorEvidence = (artifactPath: string, version: string) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-prior-evidence-'))
+  temporaryDirectories.push(directory)
+  const bytes = fs.readFileSync(artifactPath)
+  const sha = (algorithm: string, encoding: 'hex' | 'base64' = 'hex') =>
+    createHash(algorithm).update(bytes).digest(encoding)
+  const inventory = execFileSync('tar', ['-tzf', artifactPath], { encoding: 'utf8' })
+    .split(/\r?\n/)
+    .filter((entry) => entry.startsWith('package/') && !entry.endsWith('/'))
+    .map((entry) => entry.slice('package/'.length))
+    .sort()
+  const workflowRun = {
+    repository: 'owner/orchestra',
+    event: 'workflow_dispatch',
+    ref: 'refs/heads/internal-retained',
+    run_id: '71',
+    run_attempt: '1',
+  }
+  const commitSha = '7'.repeat(40)
+  const requiredGates = ['exact-commit', 'package-artifact', 'package-secret-scan', 'package-upload']
+  const metadata = {
+    commit_sha: commitSha,
+    package_name: 'orchestra-board',
+    package_version: version,
+    filename: path.basename(artifactPath),
+    bytes: bytes.byteLength,
+    sha256: sha('sha256'),
+    npm_shasum: sha('sha1'),
+    npm_integrity: `sha512-${sha('sha512', 'base64')}`,
+    provenance: { source_commit: commitSha, builder: 'npm pack' },
+    file_manifest: inventory.map((entry) => ({ path: entry })),
+  }
+  const manifest = {
+    schema_version: 1,
+    backlog_item: 'QA-019',
+    commit_sha: commitSha,
+    result: 'passed',
+    workflow_run: workflowRun,
+    contract: { workflow: '.github/workflows/ci.yml', required_gates: requiredGates },
+    summary: {
+      required: requiredGates.length,
+      passed: requiredGates.length,
+      failed: 0,
+      missing: 0,
+      unexpected: 0,
+      sha_consistent: true,
+      package_consistent: true,
+      package_upload_evidence_present: true,
+    },
+    gates: requiredGates.map((gate_id) => ({
+      schema_version: 1,
+      commit_sha: commitSha,
+      gate_id,
+      status: 'passed',
+      exit_code: 0,
+      details: gate_id === 'package-upload'
+        ? { action_outcome: 'success', artifact_id: '71', artifact_digest: '8'.repeat(64) }
+        : {},
+    })),
+    package_artifact: metadata,
+  }
+  const manifestPath = path.join(directory, 'manifest.json')
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  const receipt = {
+    schema_version: 1,
+    kind: 'retained-internal',
+    decision: 'trusted',
+    source_commit: commitSha,
+    evidence_manifest_sha256: createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex'),
+    workflow_run: workflowRun,
+    artifact: { name: 'orchestra-board', version, filename: path.basename(artifactPath),
+      bytes: bytes.byteLength, sha256: sha('sha256'), npm_shasum: sha('sha1'),
+      npm_integrity: `sha512-${sha('sha512', 'base64')}` },
+    trust: {
+      approved_at: '2026-08-02T00:00:00.000Z',
+      approved_by: 'release-maintainer',
+      approval_id: 'internal-baseline-71',
+      exact_commit_ci_passed: true,
+      rationale: 'Retained internal baseline for cross-version lifecycle verification.',
+    },
+  }
+  fs.writeFileSync(
+    path.join(directory, 'retained-artifact-receipt.json'),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+  )
+  return directory
+}
+
 describe('QA-017 package lifecycle harness', () => {
   it('exercises installed doctor, daemon, web, hooks, idempotency, uninstall, and real DB preservation', async () => {
     const report = await runPackageLifecycle({ artifactPath: fixturePackage(), runAudit: false })
     expect(report).toMatchObject({
       schema_version: 2,
-      passed: true,
+      passed: false,
+      local_rehearsal_passed: true,
+      release_gate: { status: 'incomplete', prior_evidence_verified: false },
       installed_version: '0.1.0-beta.1',
       upgraded_version: '0.1.0-beta.1',
       package_install_scripts_absent: true,
@@ -75,6 +166,36 @@ describe('QA-017 package lifecycle harness', () => {
       audit: { executed: false },
     })
   }, 20_000)
+
+  it('requires exact evidence and passes release only after verified cross-version rollback', async () => {
+    const previous = fixturePackage('0.1.0-beta.0')
+    const candidate = fixturePackage('0.1.0-beta.1')
+
+    await expect(runPackageLifecycle({
+      artifactPath: candidate,
+      previousArtifactPath: previous,
+      runAudit: false,
+    })).rejects.toThrow('requires machine-verifiable prior exact-commit evidence')
+
+    const report = await runPackageLifecycle({
+      artifactPath: candidate,
+      previousArtifactPath: previous,
+      previousEvidenceDirectory: exactPriorEvidence(previous, '0.1.0-beta.0'),
+    })
+    expect(report).toMatchObject({
+      local_rehearsal_passed: true,
+      passed: true,
+      previous_artifact: { evidence: { verified: true, trust_kind: 'retained-internal' } },
+      upgrade: { observed: true, passed: true, mode: 'prior-artifact-upgrade' },
+      rollback: { observed: true, passed: true },
+      release_gate: {
+        status: 'passed',
+        prior_evidence_verified: true,
+        upgrade_passed: true,
+        rollback_passed: true,
+      },
+    })
+  }, 30_000)
 
   it('fails when a recursively packaged Markdown link target is absent', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-package-links-'))
