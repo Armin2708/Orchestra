@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
 import { manifestContractBinding } from './exact-commit-contract.mjs'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -113,6 +114,7 @@ const exactRegularFiles = (directory, label) => {
 }
 
 const tarballPackageJson = (tarball) => {
+  assertTarRegularEntries(tarball)
   const extracted = spawnSync('tar', ['-xOf', tarball, 'package/package.json'], {
     encoding: 'utf8',
     maxBuffer: maxJsonBytes,
@@ -281,6 +283,13 @@ export function verifyPublishArtifact({
     'package provenance does not match the release commit and builder',
   )
   invariant(
+    metadata.source_identity?.expected_commit === commitSha &&
+      metadata.source_identity?.observed_commit === commitSha &&
+      metadata.source_identity?.tracked_source_clean === true &&
+      metadata.source_identity?.packaged_nonbuild_inputs_tracked === true,
+    'package source identity is not exact and clean',
+  )
+  invariant(
     metadata.reproducibility?.byte_identical === true &&
       metadata.reproducibility?.second_pack_sha256 === actualSha256 &&
       metadata.reproducibility?.scripts_disabled_for_second_pack === true,
@@ -339,6 +348,9 @@ export function verifyPublishArtifact({
       metadata.lifecycle?.data_preservation?.actual_orchestra_database === true &&
       metadata.lifecycle?.data_preservation?.active_work_preserved === true &&
       metadata.lifecycle?.data_preservation?.artifact_preserved === true &&
+      metadata.lifecycle?.data_preservation?.database_continuity?.after_upgrade?.passed === true &&
+      metadata.lifecycle?.data_preservation?.database_continuity?.after_rollback?.passed === true &&
+      metadata.lifecycle?.data_preservation?.database_continuity?.after_uninstall?.passed === true &&
       validPackagedBackupEvidence(metadata.lifecycle?.data_preservation?.packaged_backup) &&
       metadata.lifecycle?.data_preservation?.schema_before?.integrity_check === 'ok' &&
       metadata.lifecycle?.data_preservation?.schema_after_upgrade?.integrity_check === 'ok' &&

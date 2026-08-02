@@ -241,6 +241,12 @@ const fixture = () => {
     file_manifest: requiredPackageFiles.map((entry) => ({ path: entry, size: 1, mode: 420 })),
     release_channel: { name: 'beta', opt_in: true, stable_promotion: false },
     provenance: { source_commit: commitSha, builder: 'npm pack' },
+    source_identity: {
+      expected_commit: commitSha,
+      observed_commit: commitSha,
+      tracked_source_clean: true,
+      packaged_nonbuild_inputs_tracked: true,
+    },
     reproducibility: {
       byte_identical: true,
       second_pack_sha256: packageSha256,
@@ -311,6 +317,11 @@ const fixture = () => {
         actual_orchestra_database: true,
         active_work_preserved: true,
         artifact_preserved: true,
+        database_continuity: {
+          after_upgrade: { passed: true },
+          after_rollback: { passed: true },
+          after_uninstall: { passed: true },
+        },
         packaged_backup: {
           script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
           database_sha256: 'b'.repeat(64),
@@ -519,6 +530,15 @@ describe('exact package publish verification', () => {
 
     expect(() => verifyPublishArtifact(sample.arguments))
       .toThrow('package metadata byte count does not match')
+  })
+
+  it('rejects metadata that is not bound to one clean exact source tree', () => {
+    const sample = fixture()
+    sample.metadata.source_identity.tracked_source_clean = false
+    rewriteMetadata(sample)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('package source identity is not exact and clean')
   })
 
   it('rejects a package upload identity that differs from the evidence manifest', () => {

@@ -14,16 +14,21 @@ hooks, Claude and Codex plugin manifests, and the environment compatibility cont
 `scripts/package-install-smoke.mjs` records:
 
 - the source commit, package filename, byte count, SHA-256, npm shasum and npm integrity;
+- a point-of-packaging Git check proving `HEAD` equals that commit, the tracked tree is clean, and
+  every packaged non-build input is tracked at that commit;
 - the complete npm file inventory and required runtime assets;
 - a second, scripts-disabled pack whose bytes must match exactly;
 - an isolated install/upgrade/uninstall report that queries the real Orchestra SQLite schema,
-  active card, agent and retained artifact before and after the lifecycle; and
+  active card, agent and retained artifact before and after the lifecycle, preserves the exact
+  core rows, and proves that every pre-upgrade table and primary-key identity survives; and
 - a moderate/high/critical-zero dependency audit of the clean consumer's resolved production
   graph, bound to the consumer lockfile digest.
 
 The artifact secret scan runs against the extracted retained package. The publish boundary then
 checks the uploaded artifact identity, exact workflow run, tag/version, complete CI evidence and
 tarball digest before copying the same bytes to `verified.tgz`.
+Every tarball boundary rejects symlink, hardlink, device and FIFO entries before extraction or
+content reads; only regular files and directories are accepted.
 
 ## Local retained-artifact rehearsal
 
@@ -68,6 +73,9 @@ and then exercises the installed daemon. The separate minimal CLI smoke keeps al
 
 Do not point `CI_EVIDENCE_DIR`, `ORCHESTRA_HOME`, or lifecycle fixtures at a real user directory.
 The harness creates and removes only its own temporary consumer roots.
+The packaging command rejects a mismatched `CI_EVIDENCE_SHA`, any staged or unstaged tracked source
+change, and an untracked non-build file that npm attempts to include. Generated `dist/` and
+`web/dist/` assets remain allowed only because the reviewed build clears and recreates those trees.
 
 ## Beta channel and staged flags
 

@@ -5,6 +5,7 @@ import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync }
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message)
@@ -22,6 +23,7 @@ const regularFile = (path, label) => {
 
 const scanTarball = (scanner, tarball, requireCompleteReview) => {
   regularFile(tarball, 'package tarball')
+  assertTarRegularEntries(tarball)
   const listing = spawnSync('tar', ['-tzf', tarball], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,

@@ -3,8 +3,13 @@ import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runPackageLifecycle } from '../scripts/package-lifecycle-smoke.mjs'
+import {
+  captureDatabasePreservation,
+  verifyDatabasePreservation,
+} from '../scripts/package-lifecycle-smoke.mjs'
 import { verifyPackagedMarkdownLinks } from '../scripts/package-link-integrity.mjs'
 import {
   canonicalJson,
@@ -210,6 +215,10 @@ describe('QA-017 package lifecycle harness', () => {
       data_preservation: {
         actual_orchestra_database: true,
         active_work_preserved: true,
+        database_continuity: {
+          after_upgrade: { passed: true, all_protected_prior_primary_keys_present: true },
+          after_uninstall: { passed: true, all_protected_prior_primary_keys_present: true },
+        },
         packaged_backup: {
           script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
           integrity_check: 'ok',
@@ -283,6 +292,93 @@ describe('QA-017 package lifecycle harness', () => {
     })).toEqual({ markdown_files: 3, local_links_checked: 2, passed: true })
   })
 
+  it('rejects replaced primary-key identities and dropped tables during preservation checks', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-db-'))
+    temporaryDirectories.push(directory)
+    const databasePath = path.join(directory, 'orchestra.db')
+    const database = new Database(databasePath)
+    database.exec(`
+      CREATE TABLE boards(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE retained_notes(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE parents(id INTEGER PRIMARY KEY);
+      CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
+      INSERT INTO boards(id, name) VALUES(1, 'project');
+      INSERT INTO retained_notes(id, body) VALUES('note-1', 'preserve');
+      INSERT INTO parents(id) VALUES(1), (2);
+      INSERT INTO children(id, parent_id) VALUES(1, 1);
+    `)
+    database.close()
+    const baseline = captureDatabasePreservation(databasePath)
+
+    const replaced = new Database(databasePath)
+    replaced.exec(`
+      PRAGMA foreign_keys=OFF;
+      UPDATE boards SET id=101 WHERE id=1;
+    `)
+    replaced.close()
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('removed or replaced a primary-key identity in Orchestra table boards')
+
+    const restored = new Database(databasePath)
+    restored.exec(`
+      UPDATE boards SET id=1 WHERE id=101;
+      DROP TABLE retained_notes;
+    `)
+    restored.close()
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('dropped Orchestra table retained_notes')
+  })
+
+  it('rejects a foreign-key reassignment even when all primary keys and counts survive', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-fk-'))
+    temporaryDirectories.push(directory)
+    const databasePath = path.join(directory, 'orchestra.db')
+    const database = new Database(databasePath)
+    database.exec(`
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE parents(id INTEGER PRIMARY KEY);
+      CREATE TABLE children(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
+      INSERT INTO parents(id) VALUES(1), (2);
+      INSERT INTO children(id, parent_id) VALUES(1, 1);
+    `)
+    const baseline = captureDatabasePreservation(databasePath)
+    database.exec('UPDATE children SET parent_id=2 WHERE id=1')
+    database.close()
+
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('changed a foreign-key relationship in Orchestra table children')
+  })
+
+  it('rejects removed columns and changed rows without primary keys', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-shape-'))
+    temporaryDirectories.push(directory)
+    const databasePath = path.join(directory, 'orchestra.db')
+    const database = new Database(databasePath)
+    database.exec(`
+      CREATE TABLE records(id INTEGER PRIMARY KEY, retained_relation TEXT NOT NULL);
+      CREATE TABLE unkeyed_records(value TEXT NOT NULL);
+      INSERT INTO records(id, retained_relation) VALUES(1, 'keep');
+      INSERT INTO unkeyed_records(value) VALUES('keep');
+    `)
+    const baseline = captureDatabasePreservation(databasePath)
+    database.exec('ALTER TABLE records DROP COLUMN retained_relation')
+    expect(() => verifyDatabasePreservation(databasePath, baseline, 'candidate upgrade'))
+      .toThrow('removed or changed Orchestra column records.retained_relation')
+    database.close()
+
+    const secondDatabasePath = path.join(directory, 'unkeyed.db')
+    const second = new Database(secondDatabasePath)
+    second.exec(`
+      CREATE TABLE unkeyed_records(value TEXT NOT NULL);
+      INSERT INTO unkeyed_records(value) VALUES('keep');
+    `)
+    const secondBaseline = captureDatabasePreservation(secondDatabasePath)
+    second.exec("UPDATE unkeyed_records SET value='changed'")
+    second.close()
+    expect(() => verifyDatabasePreservation(secondDatabasePath, secondBaseline, 'candidate upgrade'))
+      .toThrow('changed a row without a primary key in Orchestra table unkeyed_records')
+  })
+
   it('checks reference, HTML, and root-relative links while ignoring examples', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-package-link-forms-'))
     temporaryDirectories.push(directory)
@@ -311,5 +407,22 @@ describe('QA-017 package lifecycle harness', () => {
       root: directory,
       files: new Set(['README.md', 'docs/guide.md', 'docs/policy.md']),
     })).toThrow('undefined references')
+  })
+
+  it('checks shortcut reference definitions instead of silently skipping them', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-package-shortcut-links-'))
+    temporaryDirectories.push(directory)
+    fs.writeFileSync(path.join(directory, 'README.md'), '[Guide]\n\n[Guide]: missing.md\n')
+
+    expect(() => verifyPackagedMarkdownLinks({
+      root: directory,
+      files: new Set(['README.md']),
+    })).toThrow('README.md -> missing.md')
+
+    fs.writeFileSync(path.join(directory, 'missing.md'), '# Guide\n')
+    expect(verifyPackagedMarkdownLinks({
+      root: directory,
+      files: new Set(['README.md', 'missing.md']),
+    })).toEqual({ markdown_files: 2, local_links_checked: 1, passed: true })
   })
 })

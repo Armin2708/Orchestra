@@ -10,6 +10,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { manifestContractBinding } from './exact-commit-contract.mjs'
+import { verifyPackageSourceIdentity } from './package-source-identity.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -123,7 +124,7 @@ export async function runEvidenceGate(gateIdInput, command, args) {
   return exitCode
 }
 
-export function verifyExactCommit(gateIdInput, expectedShaInput) {
+export function verifyExactCommit(gateIdInput, expectedShaInput, cwdInput = process.cwd()) {
   const gateId = requireGateId(gateIdInput)
   const expectedSha = evidenceSha(expectedShaInput)
   const directory = evidenceDirectory()
@@ -138,19 +139,33 @@ export function verifyExactCommit(gateIdInput, expectedShaInput) {
   writeJsonAtomic(outputPath, record)
 
   const result = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd: process.cwd(),
+    cwd: cwdInput,
     encoding: 'utf8',
   })
   const observedSha = String(result.stdout ?? '').trim().toLowerCase()
-  const passed = result.status === 0 && observedSha === expectedSha
+  let sourceIdentity = null
+  let sourceIdentityError = null
+  if (result.status === 0 && observedSha === expectedSha) {
+    try {
+      sourceIdentity = verifyPackageSourceIdentity({ cwd: cwdInput, expectedSha })
+    } catch (error) {
+      sourceIdentityError = error instanceof Error ? error.message : String(error)
+    }
+  }
+  const passed = result.status === 0 && observedSha === expectedSha && sourceIdentity !== null
   const details = {
     expected_sha: expectedSha,
     observed_sha: shaPattern.test(observedSha) ? observedSha : null,
+    tracked_source_clean: sourceIdentity?.tracked_source_clean === true,
+    source_identity_error: sourceIdentityError,
   }
   writeJsonAtomic(outputPath, completedRecord(record, passed ? 0 : 1, details))
 
   if (!passed) {
-    console.error(`checkout mismatch: expected ${expectedSha}, observed ${observedSha || 'unavailable'}`)
+    console.error(
+      sourceIdentityError ??
+      `checkout mismatch: expected ${expectedSha}, observed ${observedSha || 'unavailable'}`,
+    )
   } else {
     console.log(`exact checkout verified at ${expectedSha}`)
   }
@@ -370,10 +385,20 @@ export function createEvidenceManifest({
     packageArtifact !== null &&
     packageArtifact.commit_sha === expectedSha &&
     sha256Pattern.test(String(packageArtifact.sha256 ?? '')) &&
+    packageArtifact.source_identity?.expected_commit === expectedSha &&
+    packageArtifact.source_identity?.observed_commit === expectedSha &&
+    packageArtifact.source_identity?.tracked_source_clean === true &&
+    packageArtifact.source_identity?.packaged_nonbuild_inputs_tracked === true &&
     packageArtifact.install_smoke?.passed === true &&
     packageArtifact.install_smoke?.cli_version === packageArtifact.package_version &&
     packageArtifact.lifecycle?.local_rehearsal_passed === true &&
     packageArtifact.lifecycle?.release_gate?.status === 'passed' &&
+    packageArtifact.lifecycle?.release_gate?.prior_evidence_verified === true &&
+    packageArtifact.lifecycle?.release_gate?.upgrade_passed === true &&
+    packageArtifact.lifecycle?.release_gate?.rollback_passed === true &&
+    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_upgrade?.passed === true &&
+    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_rollback?.passed === true &&
+    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_uninstall?.passed === true &&
     packageArtifact.lifecycle?.passed === true
   const requiredPassed = orderedGates.every((record) =>
     record.schema_version === 1 &&
