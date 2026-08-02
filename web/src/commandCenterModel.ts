@@ -413,14 +413,15 @@ export function commandCenterSearchRecords(input: {
   const records: CommandCenterSearchRecord[] = []
   for (const snapshot of input.snapshots) {
     for (const agent of snapshot.agents.filter((item) => item.status !== 'gone')) {
+      const profileId = `legacy-agent:${agent.id}`
       records.push({
-        id: `agent:${snapshot.board.id}:${agent.id}`,
+        id: `agent:${snapshot.board.id}:${profileId}`,
         kind: 'agent',
         title: agent.name,
         description: `${agent.provider ?? 'Provider unavailable'} · ${boardNames.get(snapshot.board.id)}`,
         status: commandCenterStatus('agent', agent.status).label,
         boardId: snapshot.board.id,
-        href: commandCenterDeepLink('', { section: 'agents', boardId: snapshot.board.id, agentId: String(agent.id) }),
+        href: commandCenterDeepLink('', { section: 'agents', boardId: snapshot.board.id, agentId: profileId }),
         keywords: [agent.provider ?? '', agent.model ?? '', ...(agent.capabilities ?? [])],
       })
     }

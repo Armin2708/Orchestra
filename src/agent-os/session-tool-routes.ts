@@ -67,14 +67,7 @@ const idempotencyKey = (
 
 const actorId = (
   request: FastifyRequest,
-  body: Record<string, unknown>,
-): string => text(
-  body.actor_id
-    ?? body.actorId
-    ?? request.orchestraPrincipal
-    ?? 'operator',
-  'actor id',
-)
+): string => text(request.orchestraPrincipal ?? 'operator', 'actor id')
 
 export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = async (
   app,
@@ -88,7 +81,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
   const isOperator = options.isOperator ?? (() => false)
   const requireOperator = (request: FastifyRequest) => {
     if (!isOperator(request)) {
-      throw new ForbiddenError('operator authorization is required for tool policy changes')
+      throw new ForbiddenError('operator authorization is required for managed session tool mutations')
     }
   }
 
@@ -134,7 +127,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
             body.expected_revision ?? body.expectedRevision,
             'expected revision',
           ),
-          actorId: actorId(request, body),
+          actorId: actorId(request),
           idempotencyKey: idempotencyKey(request, body),
         }),
       }
@@ -144,11 +137,12 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
   app.post<{ Params: { id: string }; Body: unknown }>(
     '/sessions/:id/tools/authorize',
     (request) => {
+      requireOperator(request)
       const body = recordBody(request.body)
       return {
         authorization: service.requestInvocation(request.params.id, {
           toolId: text(body.tool_id ?? body.toolId, 'tool id'),
-          actorId: actorId(request, body),
+          actorId: actorId(request),
           requestId: optionalText(body.request_id ?? body.requestId) ?? undefined,
           idempotencyKey: idempotencyKey(request, body),
         }),
@@ -159,6 +153,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
   app.post<{ Params: { id: string }; Body: unknown }>(
     '/sessions/:id/tools/invocations',
     (request, reply) => {
+      requireOperator(request)
       const body = recordBody(request.body)
       const status = text(body.status, 'tool invocation status') as ToolInvocationProvenance['status']
       const invocation = service.recordInvocation(request.params.id, {
@@ -170,7 +165,7 @@ export const sessionToolPlugin: FastifyPluginAsync<SessionToolRouteOptions> = as
         providerEventId: optionalText(body.provider_event_id ?? body.providerEventId),
         errorCode: optionalText(body.error_code ?? body.errorCode),
         observedAt: optionalText(body.observed_at ?? body.observedAt) ?? undefined,
-        actorId: actorId(request, body),
+        actorId: actorId(request),
         idempotencyKey: idempotencyKey(request, body),
       })
       return reply.code(201).send({ invocation })
