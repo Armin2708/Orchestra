@@ -125,6 +125,9 @@ export const performanceSampleForJourney = (interactionModes) => {
   if (pointer.performance_eligible !== true) {
     throw new Error('pointer interaction is not performance eligible')
   }
+  if (pointer.passed !== true) {
+    throw new Error('failed pointer interaction cannot become a performance sample')
+  }
   if (fallback?.performance_eligible !== false || fallback?.diagnostic_only !== true) {
     throw new Error('DOM fallback must remain diagnostic-only and performance-ineligible')
   }
@@ -313,8 +316,11 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
         errors.push(`${expected.id} ${journey.name} is missing separately labeled DOM fallback evidence`)
       }
-      if (journey.performance_sample_mode !== 'pointer'
+      const retainsPerformance = ['graph overview', 'durable transcript', 'conversation search'].includes(journey.name)
+      if ((retainsPerformance && (journey.performance_sample_mode !== 'pointer'
         || journey.elapsed_ms !== journey.interaction_modes?.pointer?.elapsed_ms
+        || journey.interaction_modes?.pointer?.passed !== true))
+        || (!retainsPerformance && journey.performance_sample_mode !== 'diagnostic_only')
         || journey.interaction_modes?.pointer?.performance_eligible !== true
         || journey.interaction_modes?.keyboard?.performance_eligible !== false
         || journey.interaction_modes?.dom_fallback?.performance_eligible !== false

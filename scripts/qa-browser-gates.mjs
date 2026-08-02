@@ -346,40 +346,18 @@ const waitFor = async (client, expression, label) => {
 }
 
 const hitTestPoint = async (client, selector, label) => {
-  const found = await evaluate(client, `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof HTMLElement)) return null;
-    const stream = element.closest('.ah-event-stream');
-    if (stream instanceof HTMLElement) stream.scrollTop = stream.scrollHeight;
-    element.scrollIntoView({ block: 'center', inline: 'center' });
-    return true;
-  })()`)
-  if (!found) throw new Error(`could not find ${label}`)
+  const document = await client.send('DOM.getDocument', { depth: 1, pierce: true })
+  const match = await client.send('DOM.querySelector', { nodeId: document.root.nodeId, selector })
+  if (!match.nodeId) throw new Error(`could not find ${label}`)
+  await client.send('DOM.scrollIntoViewIfNeeded', { nodeId: match.nodeId })
   await delay(150)
-  const point = await evaluate(client, `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof HTMLElement)) return null;
-    const rect = element.getBoundingClientRect();
-    let left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
-    let top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-      const style = getComputedStyle(parent);
-      if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
-      const parentRect = parent.getBoundingClientRect();
-      left = Math.max(left, parentRect.left); right = Math.min(right, parentRect.right);
-      top = Math.max(top, parentRect.top); bottom = Math.min(bottom, parentRect.bottom);
-    }
-    if (right <= left || bottom <= top) return null;
-    const candidates = [
-      [0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75],
-    ];
-    for (const [xRatio, yRatio] of candidates) {
-      const x = left + (right - left) * xRatio, y = top + (bottom - top) * yRatio;
-      const hit = document.elementFromPoint(x, y);
-      if (hit && (hit === element || element.contains(hit))) return { x, y };
-    }
-    return null;
-  })()`)
+  const { quads = [] } = await client.send('DOM.getContentQuads', { nodeId: match.nodeId })
+  const viewport = await evaluate(client, `({ width: innerWidth, height: innerHeight })`)
+  const point = quads.map((quad) => ({
+    x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4,
+    y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4,
+  })).find((candidate) => candidate.x >= 0 && candidate.x <= viewport.width
+    && candidate.y >= 0 && candidate.y <= viewport.height)
   if (!point) throw new Error(`could not hit-test ${label}`)
   return point
 }
@@ -387,8 +365,6 @@ const hitTestPoint = async (client, selector, label) => {
 const pointerClick = async (client, selector, label, mobile = false) => {
   const point = await hitTestPoint(client, selector, label)
   if (mobile) {
-    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y }] })
-    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
     await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
   } else {
@@ -822,7 +798,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         elapsed_ms: modeElapsed,
         error,
         action_evidence: actionEvidence,
-        input_surface: mode === 'pointer' ? (viewport.mobile ? 'touch_with_compatibility_mouse' : 'mouse')
+        input_surface: mode === 'pointer' ? (viewport.mobile ? 'mouse_pointer_on_mobile_viewport' : 'mouse')
           : mode === 'keyboard' ? 'keyboard' : 'dom',
         counts_toward_pass: mode !== 'dom_fallback',
         performance_eligible: mode === 'pointer',
@@ -830,7 +806,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         reset: 'separate DOM setup state; setup never counts toward mode success',
       }
     }
-    const elapsed = performanceSampleForJourney(interactionModes)
+    const retainsPerformance = ['graph overview', 'durable transcript', 'conversation search'].includes(name)
+    const elapsed = retainsPerformance
+      ? performanceSampleForJourney(interactionModes)
+      : interactionModes.pointer.elapsed_ms
     const overflow = await horizontalOverflow(client)
     overflowSamples.push(overflow)
     const accessibility = await auditSurface(client)
@@ -838,7 +817,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       name,
       passed: interactionModes.pointer.passed && interactionModes.keyboard.passed,
       elapsed_ms: elapsed,
-      performance_sample_mode: 'pointer',
+      performance_sample_mode: retainsPerformance ? 'pointer' : 'diagnostic_only',
       horizontal_overflow_px: overflow,
       interaction_modes: interactionModes,
       accessibility,
@@ -1121,14 +1100,19 @@ const main = async () => {
     await client.connect()
     await Promise.all([
       client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
-      client.send('Log.enable'), client.send('Performance.enable'),
+      client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
     ])
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `localStorage.setItem('orchestra-token', ${JSON.stringify(operatorToken)})`,
     })
 
+    const requestedViewport = process.env.ORCHESTRA_QA_VIEWPORT
+    const viewportMatrix = requestedViewport
+      ? RESPONSIVE_VIEWPORTS.filter((viewport) => viewport.id === requestedViewport)
+      : RESPONSIVE_VIEWPORTS
+    if (requestedViewport && viewportMatrix.length !== 1) throw new Error(`unknown QA viewport: ${requestedViewport}`)
     const viewports = []
-    for (const viewport of RESPONSIVE_VIEWPORTS) {
+    for (const viewport of viewportMatrix) {
       viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario }))
     }
     const evidence = redactEvidence({

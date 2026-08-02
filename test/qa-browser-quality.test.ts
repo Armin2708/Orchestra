@@ -53,7 +53,7 @@ const passingEvidence = () => {
         dom_fallback: { passed: true, counts_toward_pass: false, elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
       },
       elapsed_ms: 10,
-      performance_sample_mode: 'pointer',
+      performance_sample_mode: index === 0 ? 'pointer' : 'diagnostic_only',
       accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
@@ -161,7 +161,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
 
   it('never permits DOM fallback timing to enter retained performance samples', () => {
     const interactionModes = {
-      pointer: { elapsed_ms: 137, performance_eligible: true },
+      pointer: { elapsed_ms: 137, performance_eligible: true, passed: true },
       keyboard: { elapsed_ms: 211, performance_eligible: false },
       dom_fallback: { elapsed_ms: 1, performance_eligible: false, diagnostic_only: true },
     }
@@ -170,6 +170,9 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(performanceSampleForJourney(interactionModes)).toBe(137)
     interactionModes.dom_fallback.performance_eligible = true
     expect(() => performanceSampleForJourney(interactionModes)).toThrow(/diagnostic-only/)
+    interactionModes.dom_fallback.performance_eligible = false
+    interactionModes.pointer.passed = false
+    expect(() => performanceSampleForJourney(interactionModes)).toThrow(/failed pointer/)
   })
 
   it('rejects dirty or stale source identity before trusting build artifacts', () => {
