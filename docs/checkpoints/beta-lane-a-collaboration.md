@@ -160,7 +160,68 @@ shipments, and zero completions. The committed regression preserves this exact e
 - This checkpoint does not publish, tag, push, promote providers, alter backlog counts, or claim a
   stable release.
 
-## Ignored-worktree preservation remediation addendum
+## Current durable moved-worktree identity remediation addendum
+
+Date: 2026-08-02
+
+This addendum supersedes ready marker `ab3375cc11451f50a605b0e3286200ee7407fb61`.
+Final central review found a further P1: a candidate worktree could detach, move away from its
+canonical path, advance to another commit, and survive restart because completion only recognized a
+moved worktree while its HEAD still equalled the accepted source commit.
+
+Verified remediation implementation head:
+`549e900bc26d5a8a5342dd7c983829857dedb5bf`.
+
+### Delivered
+
+- Migration `038-delivery-autoship-worktree-identity` adds immutable canonical path, absolute Git
+  administration directory, absolute common directory, and administration directory device/inode
+  identity to every new autoship intent. Existing populated 037 rows retain null identity and fail
+  closed; no synthetic identity or completion evidence is backfilled.
+- Intent preparation requires exactly one canonical registered candidate worktree on the accepted
+  branch and source commit, then persists its durable identity in the same transaction and request
+  hash as the outbox record.
+- Completion checks the saved administration directory device/inode independently of current path,
+  branch attachment, HEAD, tracked state, untracked state, or ignored state. The exact candidate
+  therefore remains identifiable after detach, move, commit advancement, and dirtiness.
+- Branch presence and any canonical-path presence/reuse remain independent blockers. A genuinely
+  unrelated worktree may reuse a released Git administration path only when its device/inode differs;
+  it is preserved and does not block completion.
+- The real restart regression performs detach, branch deletion, worktree move, detached HEAD
+  advancement, tracked modification, untracked content, and ignored `.env`/artifact creation. The
+  daemon keeps the intent pending, blocks the card, preserves all worktree content, and records zero
+  receipts, shipments, or completions.
+
+### Evidence
+
+Environment: Node `22.20.0`, npm `10.9.3`.
+
+| Gate | Exact result |
+|---|---|
+| Independent focused remediation matrix | 6 files / 71 tests passed |
+| Migration-count focused verification | 2 files / 54 tests passed |
+| Complete default repository suite | 208 files / 1,788 tests passed in 136.27s |
+| Complete one-worker repository suite | 208 files / 1,788 tests passed in 357.11s |
+| Root TypeScript and production build | passed; CLI bundle 3.16 MB |
+| Web TypeScript and production build | passed |
+| Root and web dependency audits | zero vulnerabilities |
+| Gitleaks staged scan | no findings |
+| Gitleaks implementation full-history scan | 462 commits / 15.93 MB scanned; no findings |
+| GitNexus | known `ShipQueue` HIGH and `buildServer` CRITICAL paths were warned and tested; stale staged detection mapped 2 of 12 changed files and therefore was not accepted as a low-risk conclusion |
+| Graphify | refreshed to 8,176 nodes / 19,896 edges / 304 communities |
+| Independent final review | APPROVE; P0=0, P1=0, P2=0 |
+
+### Rollback and integration
+
+- Revert the new ready marker and `549e900bc26d5a8a5342dd7c983829857dedb5bf` before reverting
+  earlier remediation commits.
+- Migration 038 is an authoritative central migration seam. Integration must preserve its ordering
+  after 037 and reconcile any competing migration number without dropping durable identity fields,
+  the insert guard, or legacy-null fail-closed behavior.
+- This checkpoint does not publish, tag, push, promote providers, alter backlog counts, or claim a
+  stable release.
+
+## Ignored-worktree preservation remediation addendum (historical; precedes the current addendum above)
 
 Date: 2026-08-02
 
