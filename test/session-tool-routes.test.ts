@@ -7,6 +7,7 @@ import {
   type ToolCapability,
 } from '../src/tool-capabilities.js'
 import { sessionToolPlugin } from '../src/agent-os/session-tool-routes.js'
+import { buildServer } from '../src/server.js'
 
 const servers: ReturnType<typeof Fastify>[] = []
 afterEach(async () => {
@@ -89,7 +90,7 @@ describe('session tool routes', () => {
     const approval = await server.inject({
       method: 'POST',
       url: '/api/v1/os/sessions/route-session/tools/authorize',
-      headers: { 'idempotency-key': 'route-authorize-1' },
+      headers: { 'x-operator': '1', 'idempotency-key': 'route-authorize-1' },
       payload: { tool_id: 'native:test-tool', request_id: 'route-approval-1', actor_id: 'agent-1' },
     })
     expect(approval.statusCode).toBe(200)
@@ -101,7 +102,7 @@ describe('session tool routes', () => {
     const provenance = await server.inject({
       method: 'POST',
       url: '/api/v1/os/sessions/route-session/tools/invocations',
-      headers: { 'idempotency-key': 'route-invocation-1' },
+      headers: { 'x-operator': '1', 'idempotency-key': 'route-invocation-1' },
       payload: {
         tool_id: 'native:test-tool', status: 'failed', actor_id: 'agent-1',
         arguments: { token: 'ROUTE-SECRET' }, error_code: 'provider_failed',
@@ -113,6 +114,73 @@ describe('session tool routes', () => {
     })
     expect(JSON.stringify(db.prepare(`SELECT payload FROM os_events
       WHERE kind='session.tool_invocation.recorded'`).all())).not.toContain('ROUTE-SECRET')
+    expect(db.prepare(`SELECT actor_type, actor_id FROM os_events
+      WHERE kind='session.tool_invocation.recorded'`).get()).toEqual({
+      actor_type: 'agent',
+      actor_id: 'operator',
+    })
+    db.close()
+  })
+
+  it('rejects the shared agent bearer across sessions and ignores a spoofed body actor', async () => {
+    const db = openDb(':memory:')
+    const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/route-tools-auth', 'route tools auth')`).run().lastInsertRowid)
+    db.prepare(`INSERT INTO workspaces (id, board_id, name, kind, root_path, status)
+      VALUES ('route-auth-workspace', ?, 'route auth', 'shared', '/route-tools-auth', 'active')`).run(boardId)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, provider, status, mode, access_profile)
+      VALUES
+        ('route-auth-session-a', 'route-auth-workspace', 'codex', 'running', 'managed', 'workspace_write'),
+        ('route-auth-session-b', 'route-auth-workspace', 'codex', 'running', 'managed', 'workspace_write')`).run()
+    const server = buildServer(db, undefined, {
+      token: 'route-operator-token',
+      agentToken: 'route-shared-agent-token',
+    })
+    servers.push(server)
+    server.register(sessionToolPlugin, {
+      db,
+      registry: new ToolCapabilityRegistry([tool]),
+      providerMatrix: buildDeclaredProviderCapabilityMatrix(),
+      isOperator: (request) => request.orchestraPrincipal === 'operator',
+      prefix: '/api/v1/os',
+    })
+    await server.ready()
+
+    for (const sessionId of ['route-auth-session-a', 'route-auth-session-b']) {
+      const sharedAgent = { authorization: 'Bearer route-shared-agent-token' }
+      const authorization = await server.inject({
+        method: 'POST',
+        url: `/api/v1/os/sessions/${sessionId}/tools/authorize`,
+        headers: { ...sharedAgent, 'idempotency-key': `shared-authorize-${sessionId}` },
+        payload: { tool_id: tool.id, actor_id: 'spoofed-profile' },
+      })
+      const invocation = await server.inject({
+        method: 'POST',
+        url: `/api/v1/os/sessions/${sessionId}/tools/invocations`,
+        headers: { ...sharedAgent, 'idempotency-key': `shared-invocation-${sessionId}` },
+        payload: { tool_id: tool.id, status: 'completed', actor_id: 'spoofed-profile' },
+      })
+      expect([authorization.statusCode, invocation.statusCode]).toEqual([403, 403])
+    }
+
+    const operator = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/sessions/route-auth-session-a/tools/invocations',
+      headers: {
+        authorization: 'Bearer route-operator-token',
+        'idempotency-key': 'operator-invocation-session-a',
+      },
+      payload: { tool_id: tool.id, status: 'completed', actor_id: 'spoofed-profile' },
+    })
+    expect(operator.statusCode).toBe(201)
+    expect(db.prepare(`SELECT actor_type, actor_id FROM os_events
+      WHERE kind='session.tool_invocation.recorded'`).get()).toEqual({
+      actor_type: 'agent',
+      actor_id: 'operator',
+    })
+    expect(JSON.stringify(db.prepare(`SELECT actor_id, payload FROM os_events
+      WHERE kind='session.tool_invocation.recorded'`).all())).not.toContain('spoofed-profile')
     db.close()
   })
 })

@@ -142,6 +142,13 @@ describe('command center global search and dependency truth', () => {
       }],
     })
     expect(new Set(records.map((record) => record.kind))).toEqual(new Set(['agent', 'work', 'discussion', 'knowledge', 'delivery']))
+    expect(records.find((record) => record.kind === 'agent')).toMatchObject({
+      id: 'agent:7:legacy-agent:12',
+      href: '/?section=agents&board=7&agent=legacy-agent%3A12',
+    })
+    expect(parseCommandCenterSelection(
+      new URL(records.find((record) => record.kind === 'agent')!.href, 'http://orchestra.local').search,
+    ).agentId).toBe('legacy-agent:12')
     expect(searchCommandCenter(records, 'runtime operator').map((record) => record.kind)).toContain('agent')
     expect(searchCommandCenter(records, 'raw bytes')).toMatchObject([{ kind: 'knowledge', unavailableReason: expect.stringContaining('unavailable') }])
     expect(searchCommandCenter(records, 'browser continuation')).toMatchObject([{ kind: 'delivery', status: 'Verified' }])

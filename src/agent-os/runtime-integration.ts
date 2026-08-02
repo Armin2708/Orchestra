@@ -1710,7 +1710,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           ? this.drivers.get(sessionRow.driver_id ?? sessionRow.provider)
           : undefined
         let blocker = 'daemon restarted before provider cancellation was confirmed'
-        if (sessionRow?.external_id && driver?.cancel) {
+        const shellStopFallback = job.provider === 'shell' && !!driver
+          && !driver.cancel && driver.capabilities().stop
+        if (sessionRow?.external_id && driver && (driver.cancel || shellStopFallback)) {
           try {
             let attached = await driver.attach(sessionRow.external_id)
             if (!attached && driver.recover) {
@@ -1745,13 +1747,16 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
                 blocker = `provider cancellation recovery rejected: ${bindingError}`
               } else {
                 const result = await executeBoundedProviderControl(
-                  () => driver.cancel!(attached.id),
+                  driver.cancel
+                    ? () => driver.cancel!(attached.id)
+                    : () => driver.stop(attached.id),
                   10_000,
                 )
                 if (result.state === 'confirmed') {
                   this.scheduler.confirmCancellation(job.id, {
                     recovered: true,
                     provider_control_confirmed: true,
+                    shell_stop_fallback: shellStopFallback,
                   })
                   this.markSessionStopped(sessionRow.id)
                   recovered.push(job.id)
@@ -1764,7 +1769,9 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
             blocker = error instanceof Error ? error.message : String(error)
           }
         } else if (!driver?.cancel) {
-          blocker = `${job.provider} does not expose provider-native cancellation recovery`
+          blocker = job.provider === 'shell'
+            ? 'shell cancellation recovery does not expose a bounded stop fallback'
+            : `${job.provider} does not expose provider-native cancellation recovery`
         }
         this.scheduler.quarantineCancellation(job.id, blocker)
         recovered.push(job.id)
@@ -2041,6 +2048,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     const driver = this.drivers.require(job.driver_id)
     const capabilities = driver.capabilities()
     const timeoutMs = this.timeBudgetMilliseconds(job)
+    const deadlineAt = timeoutMs === null ? null : Date.now() + timeoutMs
     const policyDriver = contractAwareRuntimeDriver(driver)
     if (timeoutMs !== null && policyDriver) {
       const decision = policyDriver.runtimePolicy({
@@ -2153,9 +2161,80 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           },
         }
     let session: DriverSession
-    try { session = await driver.launch(request) }
+    let launchPromise: Promise<DriverSession> | null = null
+    let launchTimedOut = false
+    try {
+      const launchBudgetMs = deadlineAt === null
+        ? null
+        : Math.max(0, deadlineAt - Date.now())
+      if (launchBudgetMs === 0) {
+        throw new Error('job time budget exhausted before provider launch started')
+      }
+      launchPromise = driver.launch(request)
+      if (launchBudgetMs === null) {
+        session = await launchPromise
+      } else {
+        let launchTimeout: NodeJS.Timeout | undefined
+        const deadline = new Promise<never>((_resolve, reject) => {
+          launchTimeout = setTimeout(() => {
+            launchTimedOut = true
+            const detail = `job time budget exhausted while provider launch remained pending after ${launchBudgetMs}ms`
+            this.scheduler?.quarantineCancellation(job.id, detail)
+            reject(new Error(detail))
+          }, launchBudgetMs)
+          launchTimeout.unref?.()
+        })
+        try {
+          session = await Promise.race([launchPromise, deadline])
+        } finally {
+          if (launchTimeout) clearTimeout(launchTimeout)
+        }
+      }
+    }
     catch (error) {
       if (managedAgentId) this.markManagedAgentGone(managedAgentId)
+      if (launchTimedOut && launchPromise) {
+        void launchPromise.then(async (lateSession) => {
+          if (!lateSession.id.trim()) {
+            this.scheduler?.quarantineCancellation(
+              job.id,
+              'timed-out provider launch returned an invalid session identity',
+            )
+            return
+          }
+          const cleanup = await executeBoundedProviderControl(
+            () => driver.stop(lateSession.id),
+            10_000,
+          )
+          if (cleanup.state !== 'confirmed') {
+            this.scheduler?.quarantineCancellation(
+              job.id,
+              `timed-out provider launch cleanup failed: ${cleanup.reason_code}: ${cleanup.detail}`,
+            )
+            return
+          }
+          if (this.scheduler?.get(job.id)?.status === 'cancelling') {
+            this.scheduler.confirmCancellation(job.id, {
+              timeout: true,
+              late_launch_stopped: true,
+            })
+          }
+        }, () => {
+          if (this.scheduler?.get(job.id)?.status === 'cancelling') {
+            this.scheduler.confirmCancellation(job.id, {
+              timeout: true,
+              late_launch_rejected: true,
+            })
+          }
+        }).catch((cleanupError) => {
+          this.scheduler?.quarantineCancellation(
+            job.id,
+            `timed-out provider launch cleanup crashed: ${
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            }`,
+          )
+        })
+      }
       throw error
     }
     const providerBindingError = providerSessionBindingError({
@@ -2319,7 +2398,10 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       throw error
     }
     this.live.set(job.id, { driver, session })
-    void this.watch(job, sessionId, driver, session, 0, 0, timeoutMs)
+    const watchTimeoutMs = deadlineAt === null
+      ? null
+      : Math.max(0, deadlineAt - Date.now())
+    void this.watch(job, sessionId, driver, session, 0, 0, watchTimeoutMs)
     return { status: 'running', detail: { session_id: sessionId, driver_session_id: session.id, workspace_id: workspace.id } }
   }
 
