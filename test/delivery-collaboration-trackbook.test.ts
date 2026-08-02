@@ -85,6 +85,97 @@ describe('delivery collaboration Trackbook migration', () => {
         'delivery_shipments','delivery_regressions'
       ) ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name)
     expect(names).toHaveLength(5)
+    const deleteGuards = setup.db.prepare(`SELECT name FROM sqlite_master
+      WHERE type='trigger' AND name LIKE 'delivery_%_delete_guard'`).all()
+    expect(deleteGuards).toHaveLength(6)
+  })
+
+  it('prevents direct and cascading deletion of every immutable proof ledger', () => {
+    const setup = fixture()
+    const verification = setup.trackbook.recordVerificationRun(setup.submitted.id, {
+      actor: agent,
+      command: 'npm test -- delivery-collaboration-trackbook',
+      cwd: '/repo',
+      environment: { CI: '1' },
+      exitCode: 0,
+      outputArtifactId: setup.output.id,
+      startedAt: '2026-08-02T08:00:00.000Z',
+      finishedAt: '2026-08-02T08:00:01.000Z',
+      idempotencyKey: 'verify:immutable-delete',
+    })
+    const [attestation] = setup.trackbook.artifactAttestations(setup.submitted.id)
+    const comment = setup.trackbook.addReviewComment(setup.submitted.id, {
+      actor: operator,
+      criterionId: 'proof',
+      artifactId: setup.output.id,
+      location: { path: 'focused-tests.txt', startLine: 1, endLine: 2 },
+      body: 'Retain this exact proof with the report.',
+      idempotencyKey: 'comment:immutable-delete',
+    })
+    expect(() => setup.db.prepare('DELETE FROM delivery_reports WHERE id=?').run(setup.submitted.id))
+      .toThrow(/immutable/)
+    expect(() => setup.db.prepare('DELETE FROM cards WHERE id=?').run(setup.cardId))
+      .toThrow(/immutable/)
+    const accepted = verifyAndAccept(setup)
+    const shipment = setup.trackbook.ship(accepted.id, {
+      actor: operator,
+      sourceRepository: '/repo',
+      sourceCommit: SOURCE_COMMIT,
+      destination: 'beta',
+      artifactAttestationIds: [attestation!.id],
+      shippedAt: '2026-08-02T09:00:00.000Z',
+      idempotencyKey: 'ship:immutable-delete',
+    })
+    const regressionArtifact = new ArtifactStore(setup.db).create({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      kind: 'regression_report',
+      name: 'immutable-regression.txt',
+      content: 'A reproducible regression.',
+    })
+    setup.trackbook.attestArtifact(accepted.id, {
+      actor: operator,
+      artifactId: regressionArtifact.id,
+      sourceKind: 'external',
+      sourceLocator: 'beta:immutable-regression',
+      builder: 'operator-observation',
+      idempotencyKey: 'attest:immutable-regression',
+    })
+    const regression = setup.trackbook.reopenAfterRegression(accepted.id, {
+      actor: operator,
+      shipmentId: shipment.id,
+      evidenceArtifactId: regressionArtifact.id,
+      summary: 'Proof must survive reopening.',
+      observedAt: '2026-08-02T10:00:00.000Z',
+      idempotencyKey: 'regression:immutable-delete',
+    })
+
+    const immutableRows = [
+      ['delivery_verification_runs', verification.id],
+      ['delivery_artifact_attestations', attestation!.id],
+      ['delivery_review_comments', comment.id],
+      ['delivery_shipments', shipment.id],
+      ['delivery_regressions', regression.id],
+    ] as const
+    for (const [table, id] of immutableRows) {
+      expect(() => setup.db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id)).toThrow(/immutable/)
+    }
+    expect(() => setup.db.prepare('DELETE FROM artifacts WHERE id=?').run(setup.output.id))
+      .toThrow(/immutable/)
+
+    const before = Object.fromEntries(immutableRows.map(([table]) => [
+      table,
+      (setup.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
+    ]))
+    expect(() => setup.db.prepare('DELETE FROM delivery_reports WHERE id=?').run(accepted.id))
+      .toThrow(/immutable|FOREIGN KEY constraint/)
+    expect(() => setup.db.prepare('DELETE FROM cards WHERE id=?').run(setup.cardId))
+      .toThrow(/immutable|FOREIGN KEY constraint/)
+    expect(Object.fromEntries(immutableRows.map(([table]) => [
+      table,
+      (setup.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
+    ]))).toEqual(before)
+    expect(setup.reports.get(accepted.id).id).toBe(accepted.id)
   })
 })
 

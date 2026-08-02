@@ -11,6 +11,15 @@ export const AGENT_OS_DELIVERY_TRACKBOOK_TABLES = Object.freeze([
   'delivery_regressions',
 ] as const)
 
+export const AGENT_OS_DELIVERY_TRACKBOOK_DELETE_GUARDS = Object.freeze([
+  'delivery_verification_runs_delete_guard',
+  'delivery_artifact_attestations_delete_guard',
+  'delivery_review_comments_delete_guard',
+  'delivery_shipments_delete_guard',
+  'delivery_regressions_delete_guard',
+  'delivery_attested_artifacts_delete_guard',
+] as const)
+
 /**
  * Installs the additive Delivery Trackbook provenance schema.
  *
@@ -143,25 +152,54 @@ export function installDeliveryTrackbookSchema(db: Database.Database): void {
     BEFORE UPDATE ON delivery_verification_runs BEGIN
       SELECT RAISE(ABORT, 'delivery verification runs are immutable');
     END;
+    CREATE TRIGGER IF NOT EXISTS delivery_verification_runs_delete_guard
+    BEFORE DELETE ON delivery_verification_runs BEGIN
+      SELECT RAISE(ABORT, 'delivery verification runs are immutable');
+    END;
     CREATE TRIGGER IF NOT EXISTS delivery_artifact_attestations_immutable
     BEFORE UPDATE ON delivery_artifact_attestations BEGIN
+      SELECT RAISE(ABORT, 'delivery artifact attestations are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS delivery_artifact_attestations_delete_guard
+    BEFORE DELETE ON delivery_artifact_attestations BEGIN
       SELECT RAISE(ABORT, 'delivery artifact attestations are immutable');
     END;
     CREATE TRIGGER IF NOT EXISTS delivery_review_comments_immutable
     BEFORE UPDATE ON delivery_review_comments BEGIN
       SELECT RAISE(ABORT, 'delivery review comments are immutable');
     END;
+    CREATE TRIGGER IF NOT EXISTS delivery_review_comments_delete_guard
+    BEFORE DELETE ON delivery_review_comments BEGIN
+      SELECT RAISE(ABORT, 'delivery review comments are immutable');
+    END;
     CREATE TRIGGER IF NOT EXISTS delivery_shipments_immutable
     BEFORE UPDATE ON delivery_shipments BEGIN
+      SELECT RAISE(ABORT, 'delivery shipments are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS delivery_shipments_delete_guard
+    BEFORE DELETE ON delivery_shipments BEGIN
       SELECT RAISE(ABORT, 'delivery shipments are immutable');
     END;
     CREATE TRIGGER IF NOT EXISTS delivery_regressions_immutable
     BEFORE UPDATE ON delivery_regressions BEGIN
       SELECT RAISE(ABORT, 'delivery regressions are immutable');
     END;
+    CREATE TRIGGER IF NOT EXISTS delivery_regressions_delete_guard
+    BEFORE DELETE ON delivery_regressions BEGIN
+      SELECT RAISE(ABORT, 'delivery regressions are immutable');
+    END;
     CREATE TRIGGER IF NOT EXISTS delivery_attested_artifacts_immutable
     BEFORE UPDATE OF board_id, workspace_id, card_id, kind, name, mime_type, path, content, metadata
       ON artifacts
+    WHEN EXISTS (
+      SELECT 1 FROM delivery_artifact_attestations attestation
+      WHERE attestation.artifact_id=OLD.id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'attested delivery artifacts are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS delivery_attested_artifacts_delete_guard
+    BEFORE DELETE ON artifacts
     WHEN EXISTS (
       SELECT 1 FROM delivery_artifact_attestations attestation
       WHERE attestation.artifact_id=OLD.id
@@ -179,5 +217,10 @@ export function assertDeliveryTrackbookSchema(db: Database.Database): void {
     WHERE type='table' AND name LIKE 'delivery_%'`).all() as Array<{ name: string }>).map((row) => row.name))
   for (const table of AGENT_OS_DELIVERY_TRACKBOOK_TABLES) {
     if (!tables.has(table)) throw new Error(`delivery Trackbook migration is missing ${table}`)
+  }
+  const triggers = new Set((db.prepare(`SELECT name FROM sqlite_master
+    WHERE type='trigger'`).all() as Array<{ name: string }>).map((row) => row.name))
+  for (const trigger of AGENT_OS_DELIVERY_TRACKBOOK_DELETE_GUARDS) {
+    if (!triggers.has(trigger)) throw new Error(`delivery Trackbook migration is missing ${trigger}`)
   }
 }
