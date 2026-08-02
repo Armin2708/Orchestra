@@ -2,8 +2,12 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const EXPECTED_FINGERPRINTS = [
+  '479e67a01b60f39976f41363521a706bb76e39d2:test/organization-coordination.test.ts:generic-api-key:144',
+  '085b180b8f696eb0c0e5352fd0b696ba2563d147:test/command-idempotency-coverage.test.ts:generic-api-key:217',
   '6fbf6171f06111604151b1ee23f1b09461cf2560:test/agent-home-domain.test.ts:private-key:418',
   '6fbf6171f06111604151b1ee23f1b09461cf2560:test/agent-os-migrations.test.ts:private-key:154',
+  '6d8235922a88200c4856ee424e5ee00820de02b1:test/agent-home-domain.test.ts:private-key:418',
+  '6d8235922a88200c4856ee424e5ee00820de02b1:test/agent-os-migrations.test.ts:private-key:154',
   '1b1dfbee2f2d4969e5a9351caaa97e2926366d02:test/projected-text-redaction.test.ts:private-key:22',
 ]
 
@@ -17,7 +21,7 @@ describe('gitleaks ignore policy', () => {
     expect(fingerprints).toEqual(EXPECTED_FINGERPRINTS)
     for (const fingerprint of fingerprints) {
       expect(fingerprint).toMatch(
-        /^[0-9a-f]{40}:test\/(?:agent-home-domain|agent-os-migrations|projected-text-redaction)\.test\.ts:private-key:\d+$/,
+        /^[0-9a-f]{40}:test\/(?:(?:agent-home-domain|agent-os-migrations|projected-text-redaction)\.test\.ts:private-key|(?:organization-coordination|command-idempotency-coverage)\.test\.ts:generic-api-key):\d+$/,
       )
     }
   })
