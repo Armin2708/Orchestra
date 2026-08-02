@@ -1,6 +1,6 @@
 # Beta Lane D browser quality checkpoint
 
-Marker: `[beta-lane-d-browser-remediated]`
+Marker: `[beta-lane-d-browser-final-remediated]`
 
 Status: **QA-015 evidence gate implemented; QA-013 and QA-014 remain open**
 
@@ -21,6 +21,10 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
 - Every one of the 36 journey/viewport combinations records accessible-name, forward/reverse
   keyboard/focus, Chrome AX-tree and opaque-background contrast evidence. Agent Home also checks
   modal keyboard activation, reverse focus trapping, Escape close and focus restoration.
+- Pointer/touch, keyboard and DOM fallback now run from separate reset states. Each mode has its
+  own readiness assertion and result. DOM fallback is labeled `counts_toward_pass: false` and can
+  never make a failed pointer or keyboard journey pass. The new observations truthfully retain the
+  independent failures under QA-014.
 - Navigation attempts hit-tested mouse/touch and keyboard activation before its deterministic DOM
   fallback. Search types through DevTools keyboard events and exercises the real React form/search
   flow. The interaction method and any fallback remain visible in source and evidence.
@@ -32,6 +36,12 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
 - Normal mode requires an explicit `--baseline`, a valid baseline digest, retained observation
   digests, exact viewports/surfaces and finite `budget_ms` values whose `budget_source` is
   `checked_observation`. Capture mode emits observations only and cannot self-budget.
+- Baseline samples, p95 and budgets are recomputed directly from every retained observation during
+  validation; changing claimed values and recomputing the self-digest still fails.
+- Retained paths must resolve to real non-symlink files inside
+  `docs/qa-evidence/browser-quality/`; absolute, escaping and symlink paths fail closed.
+- Manifest creation refuses dirty tracked source, hashes every tracked file with SHA-256, builds
+  both artifacts after that clean-source check, and records the bounded ignored runtime directories.
 - The build manifest binds the tested `dist/` and `web/dist/` trees to exact Git HEAD plus recursive
   SHA-256 artifact digests. Missing, stale or changed artifacts fail before Chrome starts.
 - Evidence defaults to `artifacts/qa/browser-quality/evidence.json`, outside the disposable runtime,
@@ -55,15 +65,15 @@ slow run:
 
 Each checked budget is the lower of its experience ceiling and the regression bound
 `max(2 × observed p95, observed p95 + 150 ms)`. The retained baseline digest is
-`1b3a04d54cb919fd716f9d64f65bba8f3585ba6f000a7c2ae0affc89831084ae`.
+`113aa164fbfd59c60e24f31034fe61ba7961d1333e73affeed502e98390a59fb`.
 
 Retained observation evidence/file digests:
 
 | Observation | Evidence SHA-256 | File SHA-256 |
 |---|---|---|
-| 1 | `0cb933e409c563086b028e4c41c135bf988277f60de414dd6aa85ac221267f45` | `e40d13f8a2ec72be141a20455b2512331e23bd1b7c9e25ba8616d7fc957edf7d` |
-| 2 | `2b55c8cf1133bffa53397f40628fb4df7b66d6aa0ca4ec3848174707d8ca087a` | `f9598978a367527b673a65dd1042f685db1ff8304fde3980331477ff9debd12d` |
-| 3 | `ac5c8208df18f719804cd90b44db0fbccc45c11640bbc49c555c45b2a1ef42ad` | `88f0c8d054b1be9889501c4b85630efe444a87a911acca6ad74b3da1da355277` |
+| 1 | `97d2029c4aa02265121b6baef121f13c2712c6975e6b0d9c6e28fca9ae343b3b` | `d34a3b5fdf24bde18d36470d571b124e04d9c1c1a16a20c1885c99ae69183332` |
+| 2 | `7b998236dca0d9fccc953c448caa120812841cff20c0c2294944171fc74cb9a2` | `97f224d4605511c13d3400e5beab8ca301d766f1ee105ca10d1eabfc34324b51` |
+| 3 | `b31800a70b3244bda7d9d0a2f2dbb193e784d0428e16e24d3f635761b6951625` | `64b8d9d7cb271211ccfdfc0214735e183785ab989ab75fe328e8aee340a0f978` |
 
 The checked rerun used those budgets and passed all 15 performance comparisons:
 

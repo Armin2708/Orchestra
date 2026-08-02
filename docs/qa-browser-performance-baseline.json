@@ -4,7 +4,7 @@
   "status": "checked_observation",
   "budget_source": "checked_observation",
   "source": {
-    "commit": "93cfec47f9c9ccce12583873328b86867ee975f7",
+    "commit": "1c62fca1ec85e18849c9f77ed1d66a2a9c02d837",
     "artifact_identity": {
       "root_dist_sha256": "24f5841f314b1b9240ff34c3519c568e76fbbce300a23ec43b371f29a36a8d84",
       "web_dist_sha256": "9c73c5dac73fa0534b097e25201ec878774930d0efe406844ba1d4806a668112"
@@ -21,18 +21,18 @@
   "capture_artifacts": [
     {
       "path": "docs/qa-evidence/browser-quality/observation-1.json",
-      "sha256": "0cb933e409c563086b028e4c41c135bf988277f60de414dd6aa85ac221267f45",
-      "file_sha256": "e40d13f8a2ec72be141a20455b2512331e23bd1b7c9e25ba8616d7fc957edf7d"
+      "sha256": "97d2029c4aa02265121b6baef121f13c2712c6975e6b0d9c6e28fca9ae343b3b",
+      "file_sha256": "d34a3b5fdf24bde18d36470d571b124e04d9c1c1a16a20c1885c99ae69183332"
     },
     {
       "path": "docs/qa-evidence/browser-quality/observation-2.json",
-      "sha256": "2b55c8cf1133bffa53397f40628fb4df7b66d6aa0ca4ec3848174707d8ca087a",
-      "file_sha256": "f9598978a367527b673a65dd1042f685db1ff8304fde3980331477ff9debd12d"
+      "sha256": "7b998236dca0d9fccc953c448caa120812841cff20c0c2294944171fc74cb9a2",
+      "file_sha256": "97f224d4605511c13d3400e5beab8ca301d766f1ee105ca10d1eabfc34324b51"
     },
     {
       "path": "docs/qa-evidence/browser-quality/observation-3.json",
-      "sha256": "ac5c8208df18f719804cd90b44db0fbccc45c11640bbc49c555c45b2a1ef42ad",
-      "file_sha256": "88f0c8d054b1be9889501c4b85630efe444a87a911acca6ad74b3da1da355277"
+      "sha256": "b31800a70b3244bda7d9d0a2f2dbb193e784d0428e16e24d3f635761b6951625",
+      "file_sha256": "64b8d9d7cb271211ccfdfc0214735e183785ab989ab75fe328e8aee340a0f978"
     }
   ],
   "viewports": [
@@ -43,59 +43,59 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            74.80000001192093,
-            78.59999999403954,
-            74.90000000596046
+            82.29999999701977,
+            97.70000000298023,
+            84.69999998807907
           ],
-          "observed_p95_ms": 78.59999999403954,
-          "budget_ms": 229,
+          "observed_p95_ms": 97.70000000298023,
+          "budget_ms": 248,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 229,
+          "regression_budget_ms": 248,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            362.29999999701977,
-            360.8999999910593,
-            361.5
+            550.9000000059605,
+            493.8999999910593,
+            410.30000001192093
           ],
-          "observed_p95_ms": 362.29999999701977,
-          "budget_ms": 725,
+          "observed_p95_ms": 550.9000000059605,
+          "budget_ms": 1102,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 725,
+          "regression_budget_ms": 1102,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            2661.714709,
-            2797.6181249999995,
-            2776.883666
+            161.1168749999988,
+            166.91462500000125,
+            208.04058299999997
           ],
-          "observed_p95_ms": 2797.6181249999995,
-          "budget_ms": 3500,
+          "observed_p95_ms": 208.04058299999997,
+          "budget_ms": 417,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 5596,
+          "regression_budget_ms": 417,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            351.0689170000005,
-            346.50541699999985,
-            347.37533299999996
+            4.384958999999981,
+            7.058208999999806,
+            5.369832999999744
           ],
-          "observed_p95_ms": 351.0689170000005,
-          "budget_ms": 703,
+          "observed_p95_ms": 7.058208999999806,
+          "budget_ms": 158,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 703,
+          "regression_budget_ms": 158,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            191.55454199999986,
-            205.35149999999976,
-            188.08449999999993
+            181.9405829999996,
+            205.23545800000102,
+            183.4361659999995
           ],
-          "observed_p95_ms": 205.35149999999976,
+          "observed_p95_ms": 205.23545800000102,
           "budget_ms": 411,
           "experience_budget_ms": 750,
           "regression_budget_ms": 411,
@@ -110,62 +110,62 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            80.70000000298023,
-            84.8999999910593,
-            81.20000000298023
+            76.29999999701977,
+            78.3999999910593,
+            78.29999999701977
           ],
-          "observed_p95_ms": 84.8999999910593,
-          "budget_ms": 235,
+          "observed_p95_ms": 78.3999999910593,
+          "budget_ms": 229,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 235,
+          "regression_budget_ms": 229,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            449.5,
-            675.9000000059605,
-            468.5
+            442.90000000596046,
+            456.20000000298023,
+            446.79999999701977
           ],
-          "observed_p95_ms": 675.9000000059605,
-          "budget_ms": 1352,
+          "observed_p95_ms": 456.20000000298023,
+          "budget_ms": 913,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 1352,
+          "regression_budget_ms": 913,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            2869.2604169999995,
-            2847.6984169999996,
-            2884.2261659999986
+            195.6166250000024,
+            203.38216600000305,
+            209.84766599999784
           ],
-          "observed_p95_ms": 2884.2261659999986,
-          "budget_ms": 3500,
+          "observed_p95_ms": 209.84766599999784,
+          "budget_ms": 420,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 5769,
+          "regression_budget_ms": 420,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            568.554709,
-            350.9754580000008,
-            363.51037499999984
+            3.601083000001381,
+            3.9350830000003043,
+            4.4560420000016165
           ],
-          "observed_p95_ms": 568.554709,
-          "budget_ms": 1000,
+          "observed_p95_ms": 4.4560420000016165,
+          "budget_ms": 155,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 1138,
+          "regression_budget_ms": 155,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            204.19074999999975,
-            197.43812500000058,
-            256.0987909999985
+            190.0524170000026,
+            196.270708,
+            190.91245799999888
           ],
-          "observed_p95_ms": 256.0987909999985,
-          "budget_ms": 513,
+          "observed_p95_ms": 196.270708,
+          "budget_ms": 393,
           "experience_budget_ms": 750,
-          "regression_budget_ms": 513,
+          "regression_budget_ms": 393,
           "budget_source": "checked_observation"
         }
       }
@@ -177,66 +177,66 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            328,
-            598.9000000059605,
-            190.80000001192093
+            77.5,
+            73.5,
+            81.70000000298023
           ],
-          "observed_p95_ms": 598.9000000059605,
-          "budget_ms": 1198,
+          "observed_p95_ms": 81.70000000298023,
+          "budget_ms": 232,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 1198,
+          "regression_budget_ms": 232,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            637,
-            981.2000000029802,
-            858.8999999910593
+            455.3999999910593,
+            323.1000000089407,
+            448.30000001192093
           ],
-          "observed_p95_ms": 981.2000000029802,
-          "budget_ms": 1963,
+          "observed_p95_ms": 455.3999999910593,
+          "budget_ms": 911,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 1963,
+          "regression_budget_ms": 911,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            2648.7143749999996,
-            2654.5211249999993,
-            2675.144957999999
+            170.4987089999995,
+            205.86587500000314,
+            173.39745799999946
           ],
-          "observed_p95_ms": 2675.144957999999,
-          "budget_ms": 3500,
+          "observed_p95_ms": 205.86587500000314,
+          "budget_ms": 412,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 5351,
+          "regression_budget_ms": 412,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            346.9985829999987,
-            350.9944579999992,
-            394.69487499999923
+            3.735459000003175,
+            3.6607090000034077,
+            3.7186670000010054
           ],
-          "observed_p95_ms": 394.69487499999923,
-          "budget_ms": 790,
+          "observed_p95_ms": 3.735459000003175,
+          "budget_ms": 154,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 790,
+          "regression_budget_ms": 154,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            182.92308400000184,
-            180.70116699999926,
-            177.90554199999679
+            178.60216699999728,
+            176.61925000000338,
+            171.71737500000017
           ],
-          "observed_p95_ms": 182.92308400000184,
-          "budget_ms": 366,
+          "observed_p95_ms": 178.60216699999728,
+          "budget_ms": 358,
           "experience_budget_ms": 750,
-          "regression_budget_ms": 366,
+          "regression_budget_ms": 358,
           "budget_source": "checked_observation"
         }
       }
     }
   ],
-  "sha256": "1b3a04d54cb919fd716f9d64f65bba8f3585ba6f000a7c2ae0affc89831084ae"
+  "sha256": "113aa164fbfd59c60e24f31034fe61ba7961d1333e73affeed502e98390a59fb"
 }
