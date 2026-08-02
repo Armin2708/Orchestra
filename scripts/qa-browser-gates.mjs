@@ -728,8 +728,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
-    await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}` })
-    await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.board-section-tabs'))`, `${name} ${mode} reset`)
+    await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
   }
   const modeReady = async (expression) => {
     const deadline = Date.now() + 5_000
@@ -757,6 +756,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         elapsed_ms: modeElapsed,
         error,
         counts_toward_pass: mode !== 'dom_fallback',
+        reset: 'separate DOM setup state; setup never counts toward mode success',
       }
     }
     const overflow = await horizontalOverflow(client)
@@ -832,6 +832,8 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         && document.querySelector('.ah-search button[type="submit"]')?.textContent?.trim() === 'Search';
     })()`,
     async () => {
+      await domActivate(client, '#board-tab-messages')
+      await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'`, 'search reset away from Agent Home')
       await domActivate(client, '#board-tab-agents')
       await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'search reset Agent Home')
       for (let page = 0; page < 20; page += 1) {
