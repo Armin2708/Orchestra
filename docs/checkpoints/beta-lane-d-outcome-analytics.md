@@ -102,6 +102,8 @@ without observed representative evidence.
   Lane C ancestry before evaluating final-central readiness.
 - Exact heads `d31bb8e`, `8837762`, `183aa7e`, `575c9c7`, and `e3cd863` were rejected by independent
   review and are superseded by exact code head `882ab288ccb9890a29c098720a16fa99601ee421`.
+- Docs marker `4152d27` was rejected because it froze volatile graph counts and is superseded by
+  this count-free evidence marker; the accepted code head is unchanged.
 - Fresh independent exact-code review accepted `882ab288ccb9890a29c098720a16fa99601ee421`
   with **P0=0, P1=0, P2=0** across every required provenance, authorization, unavailable-context,
   replay, SSE lifecycle, schema, route-inventory, and gate closure.
@@ -124,17 +126,18 @@ without observed representative evidence.
 - Root and web `npm audit --audit-level=high` report zero vulnerabilities.
 - At exact code head `882ab288`, Gitleaks 8.30.1 reports no findings across 800 commits / 30.10 MB
   of full-history content or the candidate diff.
-- The exact-code GitNexus index contains 15,217 nodes / 43,764 edges / 966 clusters / 250 flows.
-  `detect_changes(scope="compare", base_ref="b6dc067f…")` maps 26 changed symbols across 21 files
-  to two affected App flows and reports MEDIUM aggregate risk. The required pre-edit
+- Independent exact review conservatively reports HIGH aggregate GitNexus risk for this
+  cross-runtime/API/Knowledge Compiler/App candidate. Volatile graph and changed-symbol counts are
+  intentionally not frozen in this tracked marker; they are regenerated after the docs commit.
+  The required pre-edit
   symbol analysis identified HIGH risk for `recordActivity` and `recordNormalizedProviderUsage`
   and CRITICAL risk for shared `buildServer`; those warnings were surfaced before remediation.
   The refreshed index has no PDG taint layer, so no clean taint claim is made.
-- The deterministic Graphify artifact has `built_at_commit` exactly `882ab288…`, contains 9,300
-  nodes / 22,388 edges / 332 communities after semantic replacement of the three changed
-  inventory/checkpoint artifacts, includes schema-v6 evidence, and has no stale schema-v4
-  checkpoint node. `graphify-out/` remains an untracked verification artifact and is not part of
-  this checkpoint commit.
+- The deterministic Graphify artifact is regenerated after the docs marker, including semantic
+  replacement of the three changed inventory/checkpoint artifacts. It includes schema-v6 evidence
+  and has no stale schema-v4 checkpoint node. Volatile counts and `built_at_commit` are verified in
+  the untracked artifact rather than recursively frozen in this checkpoint commit; `graphify-out/`
+  is not part of the commit.
 - The controlled unit suite proves the quality guard, but is not representative product evidence.
 
 ## Remaining
