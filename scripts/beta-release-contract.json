@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "channel": {
+    "name": "beta",
+    "npm_dist_tag": "beta",
+    "opt_in": true,
+    "stable_promotion_allowed": false,
+    "public_action_requires_human_approval": true
+  },
+  "versioning": {
+    "semver_prerelease_required": true,
+    "tag_must_equal_v_plus_package_version": true,
+    "stable_version_forbidden_on_beta_channel": true,
+    "current_source_version_change_requires_human_approval": true
+  },
+  "artifact": {
+    "single_retained_tarball": true,
+    "rebuild_after_verification": false,
+    "required_digests": [
+      "sha256",
+      "npm_shasum",
+      "npm_integrity"
+    ],
+    "required_assets": [
+      "daemon_cli_bundle",
+      "web_application",
+      "runtime_hooks",
+      "claude_plugin_manifest",
+      "codex_plugin_manifest",
+      "environment_contract"
+    ],
+    "verification": [
+      "exact_commit",
+      "byte_reproducibility",
+      "clean_consumer_lifecycle",
+      "dependency_audit_high_critical_zero",
+      "artifact_secret_scan",
+      "publish_boundary_receipt"
+    ]
+  },
+  "stages": [
+    {
+      "name": "internal",
+      "cohort": "maintainers",
+      "migration_flags_default_on": false
+    },
+    {
+      "name": "canary",
+      "cohort": "named_opt_in_testers",
+      "migration_flags_default_on": false
+    },
+    {
+      "name": "beta",
+      "cohort": "public_opt_in",
+      "migration_flags_default_on": false
+    }
+  ],
+  "promotion_requires": [
+    "exact_release_commit_ci_green",
+    "retained_artifact_verified",
+    "clean_macos_lifecycle",
+    "clean_linux_lifecycle",
+    "declared_provider_acceptance",
+    "security_review",
+    "rollback_drill",
+    "human_release_approval"
+  ],
+  "rollback": {
+    "triggers": [
+      "data_loss_or_corruption",
+      "credential_or_authorization_failure",
+      "unbounded_resource_or_token_use",
+      "install_or_upgrade_failure_above_cohort_threshold",
+      "provider_or_runtime_regression",
+      "unresolved_p0_or_p1"
+    ],
+    "actions": [
+      "stop_promotion",
+      "disable_only_the_affected_new_work_control",
+      "retain_forward_only_data_and_audit_history",
+      "restore_the_previous_verified_application_artifact",
+      "verify_data_integrity_and_active_work",
+      "publish_a_redacted_incident_update"
+    ],
+    "forbidden": [
+      "schema_down_migration",
+      "silent_provider_or_billing_fallback",
+      "automatic_user_data_deletion",
+      "rebuilding_the_previous_artifact"
+    ]
+  },
+  "hotfix": {
+    "branch_from": "exact_affected_release_commit",
+    "required_gates": "same_as_beta_release",
+    "new_artifact_and_provenance_required": true,
+    "skip_tests_allowed": false,
+    "direct_public_mutation_allowed": false
+  },
+  "public_actions": [
+    "push_public_main",
+    "publish_npm",
+    "create_tag",
+    "create_github_release",
+    "promote_stable"
+  ]
+}

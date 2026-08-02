@@ -23,9 +23,14 @@ const artifactIdPattern = /^[1-9][0-9]*$/
 const maxJsonBytes = 1024 * 1024
 const requiredPackageFiles = [
   'README.md',
+  '.claude-plugin/plugin.json',
+  '.codex-plugin/plugin.json',
   'dist/cli.js',
   'environment-compatibility.json',
+  'hooks/codex-hooks.json',
+  'hooks/hooks.json',
   'package.json',
+  'docs/beta-release-operations.md',
   'web/dist/index.html',
 ]
 
@@ -94,6 +99,20 @@ const tarballPackageJson = (tarball) => {
   } catch {
     throw new Error('package artifact contains an invalid package/package.json')
   }
+}
+
+const tarballFileInventory = (tarball) => {
+  const listed = spawnSync('tar', ['-tzf', tarball], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  invariant(listed.status === 0, listed.stderr.trim() || 'package artifact inventory is unreadable')
+  const files = listed.stdout.split(/\r?\n/).filter(Boolean).filter((entry) => !entry.endsWith('/'))
+  invariant(
+    files.every((entry) => entry.startsWith('package/') && !entry.split('/').includes('..')),
+    'package artifact inventory contains an unsafe path',
+  )
+  return files.map((entry) => entry.slice('package/'.length)).sort()
 }
 
 const expectedManifestContract = (contract) => ({
@@ -207,6 +226,52 @@ export function verifyPublishArtifact({
     sameJson(metadata.required_files, requiredPackageFiles),
     'package metadata required-file inventory does not match the release contract',
   )
+  invariant(Array.isArray(metadata.file_manifest), 'package file manifest is missing')
+  const manifestPaths = metadata.file_manifest.map((entry) => entry?.path).sort()
+  invariant(
+    sameJson(manifestPaths, tarballFileInventory(tarballPath)),
+    'package file manifest does not match the retained tarball',
+  )
+  invariant(
+    metadata.release_channel?.name === 'beta' &&
+      metadata.release_channel?.opt_in === true &&
+      metadata.release_channel?.stable_promotion === false,
+    'package metadata is not an opt-in beta artifact',
+  )
+  invariant(
+    metadata.provenance?.source_commit === commitSha && metadata.provenance?.builder === 'npm pack',
+    'package provenance does not match the release commit and builder',
+  )
+  invariant(
+    metadata.reproducibility?.byte_identical === true &&
+      metadata.reproducibility?.second_pack_sha256 === actualSha256 &&
+      metadata.reproducibility?.scripts_disabled_for_second_pack === true,
+    'package byte reproducibility evidence is incomplete',
+  )
+  invariant(
+    metadata.lifecycle?.passed === true &&
+      metadata.lifecycle?.artifact?.sha256 === actualSha256 &&
+      metadata.lifecycle?.package_install_scripts_absent === true &&
+      metadata.lifecycle?.dependency_install_scripts_allowed === true &&
+      metadata.lifecycle?.provider_hooks_reversible === true &&
+      metadata.lifecycle?.state_preserved_after_upgrade === true &&
+      metadata.lifecycle?.state_preserved_after_uninstall === true &&
+      metadata.lifecycle?.project_preserved_after_uninstall === true &&
+      metadata.lifecycle?.package_removed === true &&
+      metadata.lifecycle?.runtime?.doctor_contract === true &&
+      metadata.lifecycle?.runtime?.daemon_health === true &&
+      metadata.lifecycle?.runtime?.web_index_served === true &&
+      metadata.lifecycle?.audit?.executed === true &&
+      metadata.lifecycle?.audit?.high === 0 &&
+      metadata.lifecycle?.audit?.critical === 0 &&
+      metadata.lifecycle?.audit?.passed === true,
+    'package clean-consumer lifecycle evidence is incomplete',
+  )
+  invariant(
+    metadata.markdown_links?.passed === true &&
+      metadata.markdown_links?.markdown_files > 0,
+    'packaged Markdown link verification did not pass',
+  )
   invariant(metadata.install_smoke?.passed === true, 'package install smoke did not pass')
   invariant(
     metadata.install_smoke?.scripts_disabled === true,
@@ -218,6 +283,10 @@ export function verifyPublishArtifact({
   )
 
   const sourcePackage = readJson(resolve(sourcePackagePath), 'source package manifest')
+  invariant(
+    /^\d+\.\d+\.\d+-[0-9A-Za-z][0-9A-Za-z.-]*$/.test(String(sourcePackage.version ?? '')),
+    'beta publication requires an explicit SemVer prerelease package version',
+  )
   invariant(tag === `v${sourcePackage.version}`, 'tag does not match the source package version')
   invariant(ref === `refs/tags/${tag}`, 'workflow ref does not match the release tag')
   invariant(metadata.package_name === sourcePackage.name, 'package name does not match source')

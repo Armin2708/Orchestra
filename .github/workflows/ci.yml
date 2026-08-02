@@ -126,11 +126,25 @@ jobs:
           node scripts/exact-commit-evidence.mjs run doctor --
           node dist/cli.js doctor --provider both --json --compatibility-only
 
+      - name: Verify the opt-in beta release and rollback contract
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run beta-release-contract --
+          npm run release:contract
+
       - name: Build, digest, and install-smoke the package artifact
         continue-on-error: true
         run: >-
           node scripts/exact-commit-evidence.mjs run package-artifact --
           node scripts/package-install-smoke.mjs
+
+      - name: Scan the exact retained package artifact for secrets
+        continue-on-error: true
+        run: >-
+          node scripts/exact-commit-evidence.mjs run package-secret-scan --
+          node scripts/scan-package-artifact.mjs
+          "$CI_EVIDENCE_DIR/package"
+          "$CI_EVIDENCE_DIR/tools/gitleaks"
 
       - name: Upload the exact package artifact
         id: package_upload
@@ -180,12 +194,13 @@ jobs:
           test "$EVIDENCE_UPLOAD_OUTCOME" = "success"
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')
     needs: test
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
+    environment: npm-beta
     steps:
       - name: Check out the exact tested tag commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,6 +246,6 @@ jobs:
       - name: Publish only the verified tarball bytes
         run: >-
           npm publish "$RUNNER_TEMP/orchestra-release/verified/verified.tgz"
-          --ignore-scripts --provenance --access public
+          --ignore-scripts --provenance --access public --tag beta
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

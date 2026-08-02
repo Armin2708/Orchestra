@@ -16,6 +16,18 @@ const packageArtifactId = '101'
 const packageArtifactDigest = 'b'.repeat(64)
 const evidenceArtifactId = '202'
 const evidenceArtifactDigest = 'c'.repeat(64)
+const requiredPackageFiles = [
+  'README.md',
+  '.claude-plugin/plugin.json',
+  '.codex-plugin/plugin.json',
+  'dist/cli.js',
+  'environment-compatibility.json',
+  'hooks/codex-hooks.json',
+  'hooks/hooks.json',
+  'package.json',
+  'docs/beta-release-operations.md',
+  'web/dist/index.html',
+]
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -56,7 +68,7 @@ const fixture = () => {
 
   const sourcePackage = {
     name: 'orchestra-board',
-    version: '0.1.0',
+    version: '0.1.0-beta.1',
     bin: { orchestra: './dist/cli.js' },
     scripts: {
       prepack:
@@ -65,16 +77,21 @@ const fixture = () => {
   }
   const sourcePackagePath = path.join(directory, 'source-package.json')
   writeJson(sourcePackagePath, sourcePackage)
-  writeJson(path.join(embeddedDirectory, 'package.json'), sourcePackage)
+  for (const relative of requiredPackageFiles) {
+    const target = path.join(embeddedDirectory, relative)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    if (relative === 'package.json') writeJson(target, sourcePackage)
+    else fs.writeFileSync(target, relative.endsWith('.md') ? '# fixture\n' : '{}\n')
+  }
 
-  const tarballName = 'orchestra-board-0.1.0.tgz'
+  const tarballName = 'orchestra-board-0.1.0-beta.1.tgz'
   const tarballPath = path.join(packageDirectory, tarballName)
   execFileSync('tar', [
     '-czf',
     tarballPath,
     '-C',
     stagingDirectory,
-    'package/package.json',
+    'package',
   ])
   const tarballBytes = fs.readFileSync(tarballPath)
   const packageSha256 = hash('sha256', tarballBytes, 'hex')
@@ -88,13 +105,29 @@ const fixture = () => {
     sha256: packageSha256,
     npm_integrity: `sha512-${hash('sha512', tarballBytes, 'base64')}`,
     npm_shasum: hash('sha1', tarballBytes, 'hex'),
-    required_files: [
-      'README.md',
-      'dist/cli.js',
-      'environment-compatibility.json',
-      'package.json',
-      'web/dist/index.html',
-    ],
+    required_files: requiredPackageFiles,
+    file_manifest: requiredPackageFiles.map((entry) => ({ path: entry, size: 1, mode: 420 })),
+    release_channel: { name: 'beta', opt_in: true, stable_promotion: false },
+    provenance: { source_commit: commitSha, builder: 'npm pack' },
+    reproducibility: {
+      byte_identical: true,
+      second_pack_sha256: packageSha256,
+      scripts_disabled_for_second_pack: true,
+    },
+    lifecycle: {
+      passed: true,
+      artifact: { sha256: packageSha256 },
+      package_install_scripts_absent: true,
+      dependency_install_scripts_allowed: true,
+      provider_hooks_reversible: true,
+      state_preserved_after_upgrade: true,
+      state_preserved_after_uninstall: true,
+      project_preserved_after_uninstall: true,
+      package_removed: true,
+      runtime: { doctor_contract: true, daemon_health: true, web_index_served: true },
+      audit: { executed: true, high: 0, critical: 0, passed: true },
+    },
+    markdown_links: { markdown_files: 2, local_links_checked: 0, passed: true },
     install_smoke: {
       scripts_disabled: true,
       cli_version: sourcePackage.version,
@@ -139,7 +172,7 @@ const fixture = () => {
     workflow_run: {
       repository: 'owner/orchestra',
       event: 'push',
-      ref: 'refs/tags/v0.1.0',
+      ref: 'refs/tags/v0.1.0-beta.1',
       run_id: '303',
       run_attempt: '1',
     },
@@ -178,10 +211,10 @@ const fixture = () => {
       outputDirectory,
       sourcePackagePath,
       expectedSha: commitSha,
-      expectedTag: 'v0.1.0',
+      expectedTag: 'v0.1.0-beta.1',
       expectedRepository: 'owner/orchestra',
       expectedEvent: 'push',
-      expectedRef: 'refs/tags/v0.1.0',
+      expectedRef: 'refs/tags/v0.1.0-beta.1',
       expectedRunId: '303',
       expectedRunAttempt: '1',
       packageArtifactId,
@@ -203,9 +236,9 @@ describe('exact package publish verification', () => {
     expect(result.receipt).toMatchObject({
       schema_version: 1,
       commit_sha: commitSha,
-      tag: 'v0.1.0',
+      tag: 'v0.1.0-beta.1',
       package_name: 'orchestra-board',
-      package_version: '0.1.0',
+      package_version: '0.1.0-beta.1',
       package_sha256: sample.metadata.sha256,
       package_artifact_id: packageArtifactId,
       package_artifact_digest: packageArtifactDigest,
@@ -289,9 +322,22 @@ describe('exact package publish verification', () => {
 
     expect(() => verifyPublishArtifact({
       ...sample.arguments,
-      expectedTag: 'v0.1.1',
-      expectedRef: 'refs/tags/v0.1.1',
+      expectedTag: 'v0.1.1-beta.1',
+      expectedRef: 'refs/tags/v0.1.1-beta.1',
     })).toThrow('tag does not match the source package version')
+  })
+
+  it('rejects a stable-looking version at the beta publication boundary', () => {
+    const sample = fixture()
+    const sourcePackage = JSON.parse(fs.readFileSync(sample.sourcePackagePath, 'utf8'))
+    sourcePackage.version = '0.1.0'
+    writeJson(sample.sourcePackagePath, sourcePackage)
+
+    expect(() => verifyPublishArtifact({
+      ...sample.arguments,
+      expectedTag: 'v0.1.0',
+      expectedRef: 'refs/tags/v0.1.0',
+    })).toThrow('beta publication requires an explicit SemVer prerelease package version')
   })
 
   it('rejects any non-passing retained evidence manifest', () => {

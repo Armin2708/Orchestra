@@ -131,11 +131,7 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(contract.codex_cli_version).toBe('0.144.6')
     expect(contract.artifact_retention_days).toBe(30)
     expect(contract.accepted_moderate_packages_by_gate).toEqual({
-      'dependency-audit-root': [
-        '@anthropic-ai/claude-agent-sdk',
-        '@hono/node-server',
-        '@modelcontextprotocol/sdk',
-      ],
+      'dependency-audit-root': [],
       'dependency-audit-web': [],
     })
     expect(contract.required_gates).toHaveLength(new Set(contract.required_gates).size)
@@ -173,6 +169,10 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(packageSmoke).toContain("'--ignore-scripts'")
     expect(packageSmoke).toContain("'dist/cli.js'")
     expect(packageSmoke).toContain("'web/dist/index.html'")
+    expect(packageSmoke).toContain("'.claude-plugin/plugin.json'")
+    expect(packageSmoke).toContain("'.codex-plugin/plugin.json'")
+    expect(packageSmoke).toContain('runPackageLifecycle')
+    expect(packageSmoke).toContain('byte_identical')
     expect(packageSmoke).toContain('package-metadata.json')
     expect(evidenceScript).not.toContain('process.env.OPENAI_API_KEY')
     expect(evidenceScript).not.toContain('process.env.ANTHROPIC_API_KEY')
@@ -194,6 +194,9 @@ describe('QA-019 exact-commit CI contract', () => {
       'npm publish "$RUNNER_TEMP/orchestra-release/verified/verified.tgz"',
     )
     expect(publishJob).toContain('--ignore-scripts --provenance --access public')
+    expect(publishJob).toContain('--tag beta')
+    expect(publishJob).toContain("contains(github.ref_name, '-')")
+    expect(publishJob).toContain('environment: npm-beta')
     expect(publishJob).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
     expect(publishJob).not.toContain('npm ci')
     expect(publishJob).not.toContain('npm pack')

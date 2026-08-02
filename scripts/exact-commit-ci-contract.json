@@ -12,11 +12,7 @@
     "linux_x64_archive_sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
   },
   "accepted_moderate_packages_by_gate": {
-    "dependency-audit-root": [
-      "@anthropic-ai/claude-agent-sdk",
-      "@hono/node-server",
-      "@modelcontextprotocol/sdk"
-    ],
+    "dependency-audit-root": [],
     "dependency-audit-web": []
   },
   "action_pins": [
@@ -61,7 +57,9 @@
     "codex-protocol",
     "e2e",
     "doctor",
+    "beta-release-contract",
     "package-artifact",
+    "package-secret-scan",
     "package-upload"
   ]
 }
