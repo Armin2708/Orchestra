@@ -93,3 +93,31 @@ lane processes are drained. These candidate artifacts are evidence inputs, not b
 - Node `22.20.0` and npm `10.9.3`: 35 focused tests and 221 adjacent onboarding/backup/install/
   doctor/provider tests pass; root and web TypeScript/production builds pass. The support adapter
   still requires Lane C's actual-byte verifier, and PKG-014/PKG-015 remain open as documented.
+
+## Final trust-boundary remediation evidence
+
+- First-run apply now reconstructs the complete plan from allowlisted safe identifiers and the
+  immutable current provider manifest, requires deep equality, and only then evaluates readiness.
+  Exact current candidate plans remain blocked; forged cleared-blocker Codex and Qwen plans and
+  mutated runtime, billing, defaults or advanced controls fail before config or hook writes.
+- Project hook files are physically contained below the selected project root. Global Claude and
+  Codex files are physically contained below home or explicit `CODEX_HOME`. Every parent component
+  is checked as a real directory, so `.claude`/`.codex` parent symlink escapes fail before a lock or
+  target write.
+- Multi-provider hook writes resolve and lock every target in deterministic path order before any
+  snapshot. Locks remain held through commit or rollback; rollback uses exact ownership/CAS and
+  refuses to overwrite unrelated edits. A contended later provider cannot cause a delayed rollback
+  to undo a subsequent successful two-provider install.
+- Lifecycle sample validation walks every physical path component and rejects parent or final
+  symlinks before launch authorization or API mutation. On POSIX, committed hook/config renames,
+  hook/config removals and lifecycle-lock create/remove operations `fsync` their containing
+  directories; no Windows directory-metadata crash-durability claim is made.
+- Node `22.20.0` and npm `10.9.3`: 38 focused tests and 224 adjacent onboarding/backup/install/
+  doctor/provider tests pass. Root/web TypeScript and production builds, shell checks, staged secret
+  scan and exact change-scope review are recorded at the final lane commit. The support adapter still
+  requires Lane C's actual-byte verifier, and PKG-014/PKG-015 remain open as documented.
+- The complete one-worker repository suite passes at 193 files/1,730 tests. The complete default-
+  parallel run passed 192 files/1,729 tests and timed out only the 5-second DOM-019 compatibility-
+  instrumentation case under scheduler pressure; that exact file then passed 19/19 in isolation.
+  This isolated lane evidence does not replace the central integrator's drained-process, exact-head
+  default-parallel and one-worker reruns after Lanes A-C are merged.

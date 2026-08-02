@@ -143,8 +143,25 @@ const demoScope = (projectRoot: string, requested?: string): {
     const relative = path.relative(canonicalRoot, resolved)
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue
     try {
-      if (!fs.lstatSync(resolved).isFile()) continue
-      return { projectRoot: canonicalRoot, relativePath: relative.split(path.sep).join('/') }
+      let current = canonicalRoot
+      const components = relative.split(path.sep)
+      for (const [index, component] of components.entries()) {
+        if (!component || component === '.' || component === '..') throw new Error('invalid component')
+        current = path.join(current, component)
+        const stat = fs.lstatSync(current)
+        if (stat.isSymbolicLink()) throw new Error('symlink component')
+        if (index < components.length - 1 && !stat.isDirectory()) throw new Error('non-directory parent')
+        if (index === components.length - 1 && !stat.isFile()) throw new Error('sample is not a file')
+      }
+      const physicalFile = fs.realpathSync(current)
+      const physicalRelative = path.relative(canonicalRoot, physicalFile)
+      if (!physicalRelative || physicalRelative.startsWith('..') || path.isAbsolute(physicalRelative)) {
+        throw new Error('sample escaped physical project root')
+      }
+      return {
+        projectRoot: canonicalRoot,
+        relativePath: physicalRelative.split(path.sep).join('/'),
+      }
     } catch {}
   }
   throw new Error('demo requires an existing safe sample file in the selected project')
@@ -204,9 +221,19 @@ const acquireLifecycleDemoLock = (
     if ((fs.fstatSync(descriptor).mode & 0o777) !== 0o600) {
       throw new Error('lifecycle demo lock mode did not verify as 600')
     }
+    if (process.platform !== 'win32') {
+      const directoryDescriptor = fs.openSync(lockDirectory, fs.constants.O_RDONLY)
+      try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+    }
   } catch (error) {
     fs.closeSync(descriptor)
-    if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath)
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath)
+      if (process.platform !== 'win32') {
+        const directoryDescriptor = fs.openSync(lockDirectory, fs.constants.O_RDONLY)
+        try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+      }
+    }
     throw error
   } finally {
     try { fs.closeSync(descriptor) } catch {}
@@ -220,6 +247,10 @@ const acquireLifecycleDemoLock = (
       throw new Error('lifecycle demo lock changed concurrently; refusing to remove it')
     }
     fs.unlinkSync(lockPath)
+    if (process.platform !== 'win32') {
+      const directoryDescriptor = fs.openSync(lockDirectory, fs.constants.O_RDONLY)
+      try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+    }
     if (fs.existsSync(lockPath)) throw new Error('lifecycle demo lock release did not verify')
   }
 }

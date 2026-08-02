@@ -29,10 +29,22 @@ defaults are:
 
 Run `onboard --json` to inspect the plan without applying it. `onboard --apply` fails before writing
 configuration or hooks when any blocker exists. Because no provider is release-validated on this
-lane, current plans are inspection-only. Once Lane B supplies a validated provider/mode and supported
-hook capability, applying saves an owner-only `onboarding.json` under `ORCHESTRA_HOME` before the
-explicit provider-specific hook step; configuration failure cannot activate hooks, and hook failure
-rolls the verified configuration back.
+lane, current plans are inspection-only. Apply never trusts the returned plan as an authority: it
+rebuilds the complete plan from its safe provider/mode/project/hook/telemetry identifiers and the
+current immutable provider manifest, then requires an exact match. Clearing blockers or forging
+provider, billing, runtime, capability, defaults or advanced-control fields cannot enable writes.
+Once a future manifest contains independently verified support, applying writes an owner-only
+`onboarding.json` and provider hook files in one held hook transaction; failures restore only bytes
+and modes still owned by that transaction, while unrelated concurrent edits are preserved and
+reported for operator reconciliation.
+
+Managed hook targets are physically contained below the selected project root for project scope and
+below the physical home/`CODEX_HOME` root for global scope. Every existing parent component must be a
+real directory; `.claude` or `.codex` parent symlinks are rejected. Multi-provider changes resolve
+all targets and acquire all writer locks in deterministic order before taking snapshots. On POSIX,
+committed renames and removals are followed by a containing-directory `fsync`; Windows receives the
+same exact-byte/mode checks but this document makes no crash-durability guarantee for directory
+metadata there.
 
 ## Provider truth
 

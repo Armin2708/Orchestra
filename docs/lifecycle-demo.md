@@ -12,7 +12,9 @@ orchestra lifecycle-demo --project /absolute/path/to/a/test-repository --json
 
 The selected project must already contain a safe sample file (`README.md`, `package.json`,
 `.gitignore`, or an explicitly validated relative file). The demo does not point the WorkContract at
-a nonexistent repository path.
+a nonexistent repository path. It resolves the physical project root, walks every sample-path
+component with `lstat`, rejects symlinked parents and final symlinks, and confirms the final file's
+real path remains inside that physical root before making any API request.
 
 Inspect the returned card and its immutable Requested/Asked state. `--launch` is disabled unless
 central integration injects a gate that returns both a current ready doctor attestation and the
@@ -26,6 +28,9 @@ the complete marker/provider transaction before its first API call. A concurrent
 closed, while the canonical Job endpoint's durable idempotency key protects the final launch write.
 An unset `ORCHESTRA_HOME` resolves from an absolute home directory; a relative or explicitly empty
 value is rejected before API mutation.
+On POSIX, lifecycle lock creation and removal also `fsync` the containing directory. Windows keeps
+the exclusive-lock and exact-token checks, without a documented directory-metadata crash-durability
+guarantee.
 
 The real lifecycle is:
 

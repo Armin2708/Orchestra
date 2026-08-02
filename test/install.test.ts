@@ -5,8 +5,7 @@ import path from 'node:path'
 import {
   hookSettingsPath,
   installHooks,
-  restoreHookSettingsAfterFailedInstall,
-  snapshotHookSettings,
+  runHookInstallTransaction,
   uninstallHooks,
 } from '../src/install.js'
 
@@ -18,13 +17,19 @@ const write = (file: string, value: any) => {
 }
 
 describe('provider hook installation', () => {
-  it('keeps the legacy Claude call signature idempotent and preserves existing hooks', () => {
-    const file = path.join(temp(), 'settings.json')
+  it('installs Claude idempotently and preserves existing hooks', () => {
+    const home = temp()
+    const file = path.join(home, 'settings.json')
+    const options = {
+      provider: 'claude' as const,
+      settingsPaths: { claude: file },
+      roots: { home },
+    }
     write(file, {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: 'afplay done.aiff' }] }] },
     })
-    installHooks('global', file)
-    installHooks('global', file)
+    installHooks('global', options)
+    installHooks('global', options)
 
     const settings = read(file)
     expect(settings.hooks.SessionStart).toHaveLength(1)
@@ -32,7 +37,7 @@ describe('provider hook installation', () => {
     expect(JSON.stringify(settings)).toContain('orchestra hook post-tool-use --provider claude')
     expect(settings.hooks.SessionEnd).toHaveLength(1)
 
-    uninstallHooks('global', file)
+    uninstallHooks('global', options)
     const removed = read(file)
     expect(JSON.stringify(removed)).not.toContain('orchestra hook')
     expect(removed.hooks.Stop).toHaveLength(1)
@@ -103,42 +108,60 @@ describe('provider hook installation', () => {
   })
 
   it('treats old provider-less Orchestra entries as Claude during upgrades and uninstall', () => {
-    const file = path.join(temp(), 'settings.json')
+    const home = temp()
+    const file = path.join(home, 'settings.json')
+    const options = {
+      provider: 'claude' as const,
+      settingsPaths: { claude: file },
+      roots: { home },
+    }
     write(file, {
       hooks: {
         SessionStart: [{ hooks: [{ type: 'command', command: 'orchestra hook session-start' }] }],
       },
     })
 
-    installHooks('global', file)
+    installHooks('global', options)
     expect(read(file).hooks.SessionStart).toHaveLength(1)
-    uninstallHooks('global', file)
+    uninstallHooks('global', options)
     expect(read(file).hooks.SessionStart).toBeUndefined()
   })
 
   it('refuses a contended writer lock without changing existing bytes or mode', () => {
-    const file = path.join(temp(), 'settings.json')
+    const home = temp()
+    const file = path.join(home, 'settings.json')
+    const options = {
+      provider: 'claude' as const,
+      settingsPaths: { claude: file },
+      roots: { home },
+    }
     const original = '{"description":"exact bytes"}\n'
     write(file, { description: 'placeholder' })
     fs.writeFileSync(file, original)
     fs.chmodSync(file, 0o640)
     fs.writeFileSync(`${file}.orchestra.lock`, 'another writer\n', { mode: 0o600 })
 
-    expect(() => installHooks('global', file)).toThrow('locked by another writer')
+    expect(() => installHooks('global', options)).toThrow('locked by another writer')
     expect(fs.readFileSync(file, 'utf8')).toBe(original)
     expect(fs.statSync(file).mode & 0o777).toBe(0o640)
   })
 
   it('refuses rollback over an unrecognized concurrent edit', () => {
-    const file = path.join(temp(), 'settings.json')
-    write(file, { description: 'before' })
-    const snapshot = snapshotHookSettings('global', 'claude', {
+    const home = temp()
+    const file = path.join(home, 'settings.json')
+    const options = {
+      provider: 'claude' as const,
       settingsPaths: { claude: file },
-    })
-    fs.writeFileSync(file, JSON.stringify({ description: 'concurrent owner' }))
+      roots: { home },
+    }
+    write(file, { description: 'before' })
+    const concurrent = JSON.stringify({ description: 'concurrent owner' })
 
-    expect(() => restoreHookSettingsAfterFailedInstall(snapshot, 'claude'))
-      .toThrow('changed concurrently; refusing rollback')
+    expect(() => runHookInstallTransaction('global', options, (transaction) => {
+      installHooks('global', options, transaction)
+      fs.writeFileSync(file, concurrent)
+      throw new Error('simulated downstream failure')
+    })).toThrow('cleanup was incomplete')
     expect(read(file)).toEqual({ description: 'concurrent owner' })
   })
 
@@ -159,6 +182,11 @@ describe('provider hook installation', () => {
     expect(fs.readFileSync(claudePath, 'utf8')).toBe(claudeBytes)
     expect(fs.statSync(claudePath).mode & 0o777).toBe(0o640)
     expect(fs.readFileSync(codexPath, 'utf8')).toBe(codexBytes)
+
+    fs.unlinkSync(`${codexPath}.orchestra.lock`)
+    installHooks('global', { provider: 'both', roots: { home } })
+    expect(JSON.stringify(read(claudePath))).toContain('--provider claude')
+    expect(JSON.stringify(read(codexPath))).toContain('--provider codex')
   })
 
   it.skipIf(process.platform === 'win32')('never follows or replaces a provider settings symlink', () => {
@@ -168,8 +196,59 @@ describe('provider hook installation', () => {
     fs.writeFileSync(target, '{"description":"outside owner"}\n')
     fs.symlinkSync(target, link)
 
-    expect(() => installHooks('global', link)).toThrow('regular non-symlink file')
+    expect(() => installHooks('global', {
+      provider: 'claude',
+      settingsPaths: { claude: link },
+      roots: { home: root },
+    })).toThrow('regular non-symlink file')
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true)
     expect(fs.readFileSync(target, 'utf8')).toBe('{"description":"outside owner"}\n')
+    expect(fs.existsSync(`${link}.orchestra.lock`)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('releases every acquired provider lock when a later snapshot fails', () => {
+    const home = temp()
+    const claudePath = hookSettingsPath('global', 'claude', { home })
+    const codexPath = hookSettingsPath('global', 'codex', { home })
+    const outside = path.join(temp(), 'outside-hooks.json')
+    const claudeBytes = '{"description":"preserve first provider"}\n'
+    fs.mkdirSync(path.dirname(claudePath), { recursive: true })
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true })
+    fs.writeFileSync(claudePath, claudeBytes)
+    fs.writeFileSync(outside, '{"description":"outside owner"}\n')
+    fs.symlinkSync(outside, codexPath)
+
+    expect(() => installHooks('global', { provider: 'both', roots: { home } }))
+      .toThrow('regular non-symlink file')
+    expect(fs.readFileSync(claudePath, 'utf8')).toBe(claudeBytes)
+    expect(fs.lstatSync(codexPath).isSymbolicLink()).toBe(true)
+    expect(fs.existsSync(`${claudePath}.orchestra.lock`)).toBe(false)
+    expect(fs.existsSync(`${codexPath}.orchestra.lock`)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a project .codex parent symlink escape', () => {
+    const cwd = temp()
+    const outside = temp()
+    fs.symlinkSync(outside, path.join(cwd, '.codex'))
+
+    expect(() => installHooks('project', { provider: 'codex', roots: { cwd } }))
+      .toThrow('parent component must be a physical directory')
+    expect(fs.existsSync(path.join(outside, 'hooks.json'))).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects global .claude and .codex parent symlink escapes', () => {
+    const claudeHome = temp()
+    const codexHome = temp()
+    const claudeOutside = temp()
+    const codexOutside = temp()
+    fs.symlinkSync(claudeOutside, path.join(claudeHome, '.claude'))
+    fs.symlinkSync(codexOutside, path.join(codexHome, '.codex'))
+
+    expect(() => installHooks('global', { provider: 'claude', roots: { home: claudeHome } }))
+      .toThrow('parent component must be a physical directory')
+    expect(() => installHooks('global', { provider: 'codex', roots: { home: codexHome } }))
+      .toThrow('parent component must be a physical directory')
+    expect(fs.existsSync(path.join(claudeOutside, 'settings.json'))).toBe(false)
+    expect(fs.existsSync(path.join(codexOutside, 'hooks.json'))).toBe(false)
   })
 })

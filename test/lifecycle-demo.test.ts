@@ -253,4 +253,19 @@ describe('real lifecycle demo', () => {
     }, { orchestraHome: '' })).rejects.toThrow('ORCHESTRA_HOME must be')
     expect(api).not.toHaveBeenCalled()
   })
+
+  it.skipIf(process.platform === 'win32')('rejects a sample parent symlink escape before API mutation', async () => {
+    const root = project()
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-lifecycle-outside-'))
+    fs.writeFileSync(path.join(outside, 'secret.md'), 'outside project\n')
+    fs.symlinkSync(outside, path.join(root, 'docs'))
+    const api = vi.fn()
+
+    await expect(runLifecycleDemo(api, {
+      project_root: root,
+      provider: 'codex',
+      sample_path: 'docs/secret.md',
+    }, { orchestraHome: stateHome() })).rejects.toThrow('existing safe sample file')
+    expect(api).not.toHaveBeenCalled()
+  })
 })

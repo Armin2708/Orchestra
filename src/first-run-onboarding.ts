@@ -1,10 +1,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import {
   installHooks,
-  restoreHookSettingsAfterFailedInstall,
-  snapshotHookSettings,
+  runHookInstallTransaction,
   type HookScope,
   type HookProvider,
 } from './install.js'
@@ -348,14 +349,38 @@ const writeVerifiedText = (
   mode: number,
 ): void => {
   const directory = path.dirname(file)
-  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.tmp`)
+  const temporary = path.join(
+    directory,
+    `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`,
+  )
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+  let descriptor: number | null = null
   try {
-    fs.writeFileSync(temporary, serialized, { mode, flag: 'wx' })
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+        | (fs.constants.O_NOFOLLOW ?? 0),
+      mode,
+    )
+    fs.writeFileSync(descriptor, serialized)
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    descriptor = null
     fs.renameSync(temporary, file)
     fs.chmodSync(file, mode)
+    if (process.platform !== 'win32') {
+      const directoryDescriptor = fs.openSync(directory, fs.constants.O_RDONLY)
+      try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+    }
   } finally {
-    if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
+    if (descriptor !== null) fs.closeSync(descriptor)
+    if (fs.existsSync(temporary)) {
+      fs.unlinkSync(temporary)
+      if (process.platform !== 'win32') {
+        const directoryDescriptor = fs.openSync(directory, fs.constants.O_RDONLY)
+        try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+      }
+    }
   }
   if (fs.readFileSync(file, 'utf8') !== serialized) {
     throw new Error(`configuration changed while writing ${file}`)
@@ -381,6 +406,31 @@ export const applyFirstRunPlan = (
   plan: FirstRunPlan,
   deps: ApplyFirstRunPlanDeps = {},
 ): FirstRunConfigV1 => {
+  if (!plainRecord(plan)
+    || !plainRecord(plan.provider)
+    || !plainRecord(plan.hooks)
+    || !plainRecord(plan.defaults)
+    || typeof plan.project_root !== 'string'
+    || !FIRST_RUN_PROVIDER_IDS.includes(plan.provider.id as FirstRunProviderId)
+    || !['native_subscription', 'provider_api'].includes(String(plan.provider.mode))
+    || !['off', 'project', 'global'].includes(String(plan.hooks.scope))
+    || !['off', 'redacted'].includes(String(plan.defaults.telemetry))) {
+    throw new Error('first-run plan identifiers are invalid; no files were changed')
+  }
+  const canonicalPlan = buildFirstRunPlan({
+    project_root: plan.project_root,
+    provider_id: plan.provider.id as FirstRunProviderId,
+    execution_mode: plan.provider.mode as FirstRunExecutionMode,
+    hook_scope: plan.hooks.scope as FirstRunHookChoice,
+    telemetry: plan.defaults.telemetry as FirstRunTelemetryChoice,
+    // API consent is not a safe persisted identifier. API-mode plans therefore
+    // remain blocked until an independently authenticated consent receipt exists.
+    acknowledge_usage_priced_api: false,
+  })
+  if (!isDeepStrictEqual(plan, canonicalPlan)) {
+    throw new Error('first-run plan is stale or forged relative to the current provider manifest')
+  }
+  plan = canonicalPlan
   if (plan.blockers.length > 0 || !plan.ready_for_managed_launch) {
     throw new Error('first-run plan is blocked; no configuration or hooks were changed')
   }
@@ -425,12 +475,6 @@ export const applyFirstRunPlan = (
     : plan.provider.id === 'claude' || plan.provider.id === 'codex'
       ? plan.provider.id
       : (() => { throw new Error('provider hooks are unavailable') })()
-  const hookSnapshot = hookProvider && plan.hooks.scope !== 'off'
-    ? snapshotHookSettings(plan.hooks.scope, hookProvider, {
-        provider: hookProvider,
-        roots: { cwd: plan.project_root },
-      })
-    : null
   const configFile = deps.configPath ?? firstRunConfigPath()
   if (!path.isAbsolute(configFile)) {
     throw new Error('first-run configuration path must be absolute')
@@ -450,25 +494,30 @@ export const applyFirstRunPlan = (
     try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
   }
   try {
-    writeFirstRunConfig(configFile, config)
     if (plan.hooks.scope !== 'off' && hookProvider) {
-      ;(deps.installProviderHooks ?? installHooks)(plan.hooks.scope, {
+      const hookOptions = {
         provider: hookProvider,
         roots: { cwd: plan.project_root },
+      } as const
+      runHookInstallTransaction(plan.hooks.scope, hookOptions, (transaction) => {
+        writeFirstRunConfig(configFile, config)
+        ;(deps.installProviderHooks ?? installHooks)(
+          plan.hooks.scope as HookScope,
+          hookOptions,
+          transaction,
+        )
+        if (currentConfig() !== serialized) {
+          throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
+        }
       })
-    }
-    if (currentConfig() !== serialized) {
-      throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
+    } else {
+      writeFirstRunConfig(configFile, config)
+      if (currentConfig() !== serialized) {
+        throw new Error(`first-run configuration changed during apply: ${configFile}`)
+      }
     }
   } catch (error) {
     const rollbackErrors: unknown[] = []
-    if (hookSnapshot && hookProvider) {
-      try {
-        restoreHookSettingsAfterFailedInstall(hookSnapshot, hookProvider)
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError)
-      }
-    }
     const current = currentConfig()
     const unchanged = previous ? current === previous.content : current === null
     if (current !== serialized && !unchanged) {
@@ -482,6 +531,10 @@ export const applyFirstRunPlan = (
           writeVerifiedText(configFile, previous.content, previous.mode)
         } else {
           fs.unlinkSync(configFile)
+          if (process.platform !== 'win32') {
+            const directoryDescriptor = fs.openSync(path.dirname(configFile), fs.constants.O_RDONLY)
+            try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+          }
           if (fs.existsSync(configFile)) {
             throw new Error('new config rollback did not verify')
           }
