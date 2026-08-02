@@ -1,9 +1,14 @@
 import type Database from 'better-sqlite3'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ArtifactStore } from '../src/agent-os/artifact-store.js'
 import { DeliveryReportService, type DeliveryReport } from '../src/agent-os/delivery-reports.js'
 import { installDeliveryTrackbookSchema } from '../src/agent-os/delivery-trackbook-migration.js'
+import { installDeliveryShipmentIntegritySchema } from '../src/agent-os/delivery-shipment-integrity-migration.js'
 import { deliveryTrackbookPlugin } from '../src/agent-os/delivery-trackbook-routes.js'
 import { DeliveryTrackbookService } from '../src/agent-os/delivery-trackbook.js'
 import { EventStore } from '../src/agent-os/event-store.js'
@@ -16,18 +21,52 @@ const agent = { type: 'agent' as const, id: 'worker-3' }
 const SOURCE_COMMIT = 'a'.repeat(40)
 const databases: Database.Database[] = []
 const servers: FastifyInstance[] = []
+const repositories: string[] = []
 
 afterEach(async () => {
   await Promise.allSettled(servers.splice(0).map((server) => server.close()))
   while (databases.length) databases.pop()!.close()
+  while (repositories.length) rmSync(repositories.pop()!, { recursive: true, force: true })
 })
 
-function fixture() {
+type TestRepository = { root: string; head: string }
+
+function git(root: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', root, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim()
+}
+
+function repository(objectFormat: 'sha1' | 'sha256' = 'sha1'): TestRepository {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'orchestra-delivery-shipment-'))
+  repositories.push(root)
+  git(root, 'init', `--object-format=${objectFormat}`, '-b', 'main')
+  git(root, 'config', 'user.email', 'delivery@example.test')
+  git(root, 'config', 'user.name', 'Delivery Test')
+  writeFileSync(path.join(root, 'README.md'), '# Delivery shipment\n')
+  git(root, 'add', 'README.md')
+  git(root, 'commit', '-m', 'initial delivery')
+  return { root: realpathSync(root), head: git(root, 'rev-parse', 'HEAD') }
+}
+
+function commit(repositoryState: TestRepository, name: string): string {
+  writeFileSync(path.join(repositoryState.root, name), `${name}\n`)
+  git(repositoryState.root, 'add', name)
+  git(repositoryState.root, 'commit', '-m', `add ${name}`)
+  repositoryState.head = git(repositoryState.root, 'rev-parse', 'HEAD')
+  return repositoryState.head
+}
+
+function fixture(repositoryState?: TestRepository) {
   const db = openDb(':memory:')
   databases.push(db)
   installDeliveryTrackbookSchema(db)
-  const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES ('/repo', 'Delivery')")
-    .run().lastInsertRowid)
+  installDeliveryShipmentIntegritySchema(db)
+  const projectPath = repositoryState?.root ?? '/repo'
+  const sourceCommit = repositoryState?.head ?? SOURCE_COMMIT
+  const boardId = Number(db.prepare("INSERT INTO boards (project_path, name) VALUES (?, 'Delivery')")
+    .run(projectPath).lastInsertRowid)
   const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
     VALUES (?, 'Ship Trackbook', 'Prove requested versus delivered')`).run(boardId).lastInsertRowid)
   const contract = new TaskContractService(db).put(cardId, {
@@ -58,11 +97,25 @@ function fixture() {
     summary: 'Implemented the requested Delivery Trackbook slice.',
     deliveredItems: [{ deliverableId: 'trackbook', status: 'delivered' }],
     changedFiles: ['src/agent-os/delivery-trackbook.ts'],
-    commits: [SOURCE_COMMIT],
+    commits: [sourceCommit],
     artifactIds: [output.id],
   })
   const trackbook = new DeliveryTrackbookService(db)
-  return { db, boardId, cardId, contract, job, reports, submitted, output, trackbook }
+  return { db, boardId, cardId, contract, job, reports, submitted, output, trackbook, sourceCommit }
+}
+
+function observeShipment(
+  setup: ReturnType<typeof fixture>,
+  idempotencyKey: string,
+  observedHeadCommit = setup.sourceCommit,
+) {
+  return setup.trackbook.recordShipQueueReceipt({
+    boardId: setup.boardId,
+    cardId: setup.cardId,
+    sourceCommit: setup.sourceCommit,
+    observedHeadCommit,
+    idempotencyKey,
+  })
 }
 
 function verifyAndAccept(setup: ReturnType<typeof fixture>): DeliveryReport {
@@ -76,22 +129,24 @@ function verifyAndAccept(setup: ReturnType<typeof fixture>): DeliveryReport {
 }
 
 describe('delivery collaboration Trackbook migration', () => {
-  it('replays safely and installs the five additive provenance tables', () => {
+  it('replays both migrations safely and installs the observed receipt schema', () => {
     const setup = fixture()
     expect(() => installDeliveryTrackbookSchema(setup.db)).not.toThrow()
+    expect(() => installDeliveryShipmentIntegritySchema(setup.db)).not.toThrow()
     const names = (setup.db.prepare(`SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
         'delivery_verification_runs','delivery_artifact_attestations','delivery_review_comments',
-        'delivery_shipments','delivery_regressions'
+        'delivery_shipment_receipts','delivery_shipments','delivery_regressions'
       ) ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name)
-    expect(names).toHaveLength(5)
+    expect(names).toHaveLength(6)
     const deleteGuards = setup.db.prepare(`SELECT name FROM sqlite_master
       WHERE type='trigger' AND name LIKE 'delivery_%_delete_guard'`).all()
-    expect(deleteGuards).toHaveLength(6)
+    expect(deleteGuards).toHaveLength(7)
   })
 
   it('prevents direct and cascading deletion of every immutable proof ledger', () => {
-    const setup = fixture()
+    const repositoryState = repository()
+    const setup = fixture(repositoryState)
     const verification = setup.trackbook.recordVerificationRun(setup.submitted.id, {
       actor: agent,
       command: 'npm test -- delivery-collaboration-trackbook',
@@ -117,13 +172,11 @@ describe('delivery collaboration Trackbook migration', () => {
     expect(() => setup.db.prepare('DELETE FROM cards WHERE id=?').run(setup.cardId))
       .toThrow(/immutable/)
     const accepted = verifyAndAccept(setup)
+    const receipt = observeShipment(setup, 'receipt:immutable-delete')
     const shipment = setup.trackbook.ship(accepted.id, {
       actor: operator,
-      sourceRepository: '/repo',
-      sourceCommit: SOURCE_COMMIT,
-      destination: 'beta',
+      receiptId: receipt.id,
       artifactAttestationIds: [attestation!.id],
-      shippedAt: '2026-08-02T09:00:00.000Z',
       idempotencyKey: 'ship:immutable-delete',
     })
     const regressionArtifact = new ArtifactStore(setup.db).create({
@@ -154,6 +207,7 @@ describe('delivery collaboration Trackbook migration', () => {
       ['delivery_verification_runs', verification.id],
       ['delivery_artifact_attestations', attestation!.id],
       ['delivery_review_comments', comment.id],
+      ['delivery_shipment_receipts', receipt.id],
       ['delivery_shipments', shipment.id],
       ['delivery_regressions', regression.id],
     ] as const
@@ -338,38 +392,93 @@ describe('review, rejection, revision and exact locations', () => {
 })
 
 describe('canonical shipping and regression reopen', () => {
+  it('accepts a full 64-character SHA only when a SHA-256 board repository resolves it', () => {
+    const repositoryState = repository('sha256')
+    expect(repositoryState.head).toMatch(/^[a-f0-9]{64}$/)
+    const setup = fixture(repositoryState)
+    expect(observeShipment(setup, 'receipt:sha256')).toMatchObject({
+      source_commit: repositoryState.head,
+      observed_head_commit: repositoryState.head,
+    })
+  })
+
+  it('rejects abbreviated, foreign, stale and non-root shipment assertions before minting a receipt', () => {
+    const repositoryState = repository()
+    const setup = fixture(repositoryState)
+    expect(() => setup.trackbook.recordShipQueueReceipt({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      sourceCommit: repositoryState.head.slice(0, 12),
+      observedHeadCommit: repositoryState.head,
+      idempotencyKey: 'receipt:abbreviated',
+    })).toThrow(/full 40- or 64-character/)
+
+    const foreignRepository = repository()
+    const foreignCommit = commit(foreignRepository, 'foreign.txt')
+    expect(() => setup.trackbook.recordShipQueueReceipt({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      sourceCommit: foreignCommit,
+      observedHeadCommit: repositoryState.head,
+      idempotencyKey: 'receipt:foreign',
+    })).toThrow(/does not resolve in the exact board repository/)
+
+    const staleCommit = repositoryState.head
+    commit(repositoryState, 'later.txt')
+    expect(() => setup.trackbook.recordShipQueueReceipt({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      sourceCommit: staleCommit,
+      observedHeadCommit: staleCommit,
+      idempotencyKey: 'receipt:stale',
+    })).toThrow(/observed board repository HEAD/)
+
+    const nestedRepository = repository()
+    const nested = path.join(nestedRepository.root, 'nested')
+    mkdirSync(nested)
+    const nestedSetup = fixture({ root: nested, head: nestedRepository.head })
+    expect(() => nestedSetup.trackbook.recordShipQueueReceipt({
+      boardId: nestedSetup.boardId,
+      cardId: nestedSetup.cardId,
+      sourceCommit: nestedRepository.head,
+      observedHeadCommit: nestedRepository.head,
+      idempotencyKey: 'receipt:nested',
+    })).toThrow(/exact repository root/)
+  })
+
   it('records a provenance manifest distinct from git history and reopens one immutable child after regression', () => {
-    const setup = fixture()
+    const repositoryState = repository()
+    const setup = fixture(repositoryState)
     const accepted = verifyAndAccept(setup)
     const attestation = setup.trackbook.attestArtifact(accepted.id, {
       actor: operator,
       artifactId: setup.output.id,
       sourceKind: 'file',
       sourceLocator: 'artifacts/focused-tests.txt',
-      sourceRevision: SOURCE_COMMIT,
+      sourceRevision: setup.sourceCommit,
       builder: 'vitest',
       parameters: { mode: 'focused' },
       environment: { CI: '1' },
       provenance: { job_id: setup.job.id, report_id: accepted.id },
       idempotencyKey: 'attest:focused',
     })
+    const observedHeadCommit = commit(repositoryState, 'merged-main.txt')
+    const receipt = observeShipment(setup, 'receipt:beta-1', observedHeadCommit)
     const shipInput = {
       actor: operator,
-      sourceRepository: '/repo',
-      sourceCommit: SOURCE_COMMIT,
-      destination: 'beta',
-      deploymentRef: 'release/beta-1',
+      receiptId: receipt.id,
       artifactAttestationIds: [attestation.id],
-      shippedAt: '2026-08-02T09:00:00.000Z',
       idempotencyKey: 'ship:beta-1',
     }
     const shipment = setup.trackbook.ship(accepted.id, shipInput)
     expect(setup.trackbook.ship(accepted.id, shipInput)).toEqual(shipment)
     expect(shipment).toMatchObject({
       report_id: accepted.id,
-      source_repository: '/repo',
-      source_commit: SOURCE_COMMIT,
-      destination: 'beta',
+      receipt_id: receipt.id,
+      source_repository: repositoryState.root,
+      source_commit: setup.sourceCommit,
+      observed_head_commit: observedHeadCommit,
+      destination: 'main',
       artifact_attestations: [expect.objectContaining({
         id: attestation.id,
         artifact_id: setup.output.id,
@@ -378,10 +487,29 @@ describe('canonical shipping and regression reopen', () => {
       })],
       manifest_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
-    expect(() => setup.trackbook.ship(accepted.id, { ...shipInput, destination: 'production' }))
+    expect(receipt).toMatchObject({
+      receipt_kind: 'ship_queue',
+      board_id: setup.boardId,
+      card_id: setup.cardId,
+      source_repository: repositoryState.root,
+      source_commit: setup.sourceCommit,
+      observed_head_commit: observedHeadCommit,
+      destination: 'main',
+      observed_by: 'ship_queue',
+      receipt_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(() => setup.trackbook.ship(accepted.id, { ...shipInput, artifactAttestationIds: [] }))
       .toThrow(/idempotency key.*different input/)
     expect(() => setup.db.prepare('UPDATE delivery_shipments SET destination=? WHERE id=?')
       .run('tampered', shipment.id)).toThrow(/immutable/)
+    expect(() => setup.db.prepare(`INSERT INTO delivery_shipments
+      (id, report_id, board_id, card_id, job_id, source_repository, source_commit,
+       destination, deployment_ref, artifact_attestations_json, manifest_sha256,
+       shipped_by, shipped_at, idempotency_key, request_sha256, created_at)
+      SELECT 'caller-only', report_id, board_id, card_id, job_id, source_repository, source_commit,
+        destination, deployment_ref, artifact_attestations_json, manifest_sha256,
+        shipped_by, shipped_at, 'caller-only', request_sha256, created_at
+      FROM delivery_shipments WHERE id=?`).run(shipment.id)).toThrow(/exact observed ShipQueue receipt/)
 
     const regressionArtifact = new ArtifactStore(setup.db).create({
       boardId: setup.boardId,
@@ -426,13 +554,20 @@ describe('canonical shipping and regression reopen', () => {
   })
 
   it('fails closed when shipping an uncited commit or an older delivery revision', () => {
-    const setup = fixture()
+    const repositoryState = repository()
+    const setup = fixture(repositoryState)
     const accepted = verifyAndAccept(setup)
+    const uncitedCommit = commit(repositoryState, 'uncited.txt')
+    const receipt = setup.trackbook.recordShipQueueReceipt({
+      boardId: setup.boardId,
+      cardId: setup.cardId,
+      sourceCommit: uncitedCommit,
+      observedHeadCommit: uncitedCommit,
+      idempotencyKey: 'receipt:uncited',
+    })
     expect(() => setup.trackbook.ship(accepted.id, {
       actor: operator,
-      sourceRepository: '/repo',
-      sourceCommit: 'b'.repeat(40),
-      destination: 'beta',
+      receiptId: receipt.id,
       idempotencyKey: 'ship:uncited',
     })).toThrow(/must be cited/)
   })
@@ -507,12 +642,24 @@ describe('Delivery Trackbook authenticated route boundary', () => {
       url: `/api/v1/os/deliveries/${accepted.id}/ship`,
       headers: { authorization: 'Bearer agent', 'idempotency-key': 'route:ship' },
       payload: {
-        source_repository: '/repo',
-        source_commit: SOURCE_COMMIT,
-        destination: 'beta',
+        receipt_id: 'receipt-not-visible-to-agent',
       },
     })
     expect(unauthorized.statusCode).toBe(403)
     expect(unauthorized.json().error).toMatch(/operator authorization/)
+
+    const callerAsserted = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/deliveries/${accepted.id}/ship`,
+      headers: { authorization: 'Bearer operator', 'idempotency-key': 'route:asserted-ship' },
+      payload: {
+        receipt_id: 'receipt-not-enough',
+        source_repository: '/repo',
+        source_commit: SOURCE_COMMIT,
+        destination: 'main',
+      },
+    })
+    expect(callerAsserted.statusCode).toBe(400)
+    expect(callerAsserted.json().error).toMatch(/observed from the ShipQueue receipt/)
   })
 })

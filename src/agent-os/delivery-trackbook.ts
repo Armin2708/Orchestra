@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import type { ActorIdentity } from './agent-home-support.js'
 import { DeliveryReportService, deliveryReportGaps, type DeliveryReport } from './delivery-reports.js'
@@ -16,15 +18,13 @@ const MAX = Object.freeze({
   idempotencyKey: 512,
   locator: 4_096,
   text: 20_000,
-  repository: 4_096,
-  destination: 1_024,
   attestations: 200,
   list: 200,
 })
 
 const SENSITIVE_ENV_KEY = /(?:^|_)(?:authorization|cookie|credential|password|passwd|private|secret|session|token)(?:_|$)/i
 const HEX_SHA256 = /^[a-f0-9]{64}$/
-const GIT_OBJECT = /^[a-f0-9]{7,64}$/i
+const FULL_GIT_COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i
 
 export type DeliveryTrackbookFilter =
   | 'all'
@@ -97,11 +97,13 @@ export interface DeliveryReviewComment {
 export interface DeliveryShipment {
   id: string
   report_id: string
+  receipt_id: string | null
   board_id: number
   card_id: number
   job_id: string | null
   source_repository: string
   source_commit: string
+  observed_head_commit: string | null
   destination: string
   deployment_ref: string | null
   artifact_attestations: Array<{
@@ -113,6 +115,24 @@ export interface DeliveryShipment {
   manifest_sha256: string
   shipped_by: string
   shipped_at: string
+  idempotency_key: string
+  request_sha256: string
+  created_at: string
+}
+
+export interface DeliveryShipmentReceipt {
+  id: string
+  receipt_kind: 'ship_queue'
+  board_id: number
+  card_id: number
+  source_repository: string
+  source_commit: string
+  observed_head_commit: string
+  destination: 'main'
+  deployment_ref: string | null
+  observed_by: 'ship_queue'
+  observed_at: string
+  receipt_sha256: string
   idempotency_key: string
   request_sha256: string
   created_at: string
@@ -192,12 +212,17 @@ export interface AddReviewCommentInput {
 
 export interface ShipDeliveryInput {
   actor: ActorIdentity
-  sourceRepository: string
-  sourceCommit: string
-  destination: string
-  deploymentRef?: string | null
+  receiptId: string
   artifactAttestationIds?: string[]
-  shippedAt?: string
+  idempotencyKey: string
+}
+
+/** Internal observation produced after ShipQueue has merged and read the board repository HEAD. */
+export interface RecordShipQueueReceiptInput {
+  boardId: number
+  cardId: number
+  sourceCommit: string
+  observedHeadCommit: string
   idempotencyKey: string
 }
 
@@ -388,7 +413,74 @@ export class DeliveryTrackbookService {
     return this.reports.revise(identifier(reportId, 'reportId'), { actor: actorKey(actorIdentity(actor)) })
   }
 
+  recordShipQueueReceipt(input: RecordShipQueueReceiptInput): DeliveryShipmentReceipt {
+    this.requireShipmentIntegritySchema()
+    const boardId = positiveInteger(input.boardId, 'boardId')
+    const cardId = positiveInteger(input.cardId, 'cardId')
+    const sourceCommit = fullCommit(input.sourceCommit, 'sourceCommit')
+    const observedHeadCommit = fullCommit(input.observedHeadCommit, 'observedHeadCommit')
+    const idempotencyKey = bounded(input.idempotencyKey, 'idempotencyKey', MAX.idempotencyKey)
+    const requestSha256 = hashJson({
+      receipt_kind: 'ship_queue',
+      board_id: boardId,
+      card_id: cardId,
+      source_commit: sourceCommit,
+      observed_head_commit: observedHeadCommit,
+      destination: 'main',
+    })
+    const replay = this.shipmentReceiptByKey(idempotencyKey)
+    if (replay) return replayChecked(replay, requestSha256, 'shipment receipt')
+
+    const sourceRepository = exactBoardRepository(this.db, boardId, cardId)
+    const observedHead = repositoryHead(sourceRepository)
+    if (observedHead !== observedHeadCommit) {
+      throw new ValidationError('observedHeadCommit must equal the observed board repository HEAD')
+    }
+    const resolvedSourceCommit = repositoryCommit(sourceRepository, sourceCommit)
+    if (resolvedSourceCommit !== sourceCommit) {
+      throw new ValidationError('shipment sourceCommit must be a full commit SHA resolved in the board repository')
+    }
+    if (!repositoryContainsCommit(sourceRepository, sourceCommit, observedHeadCommit)) {
+      throw new ValidationError('shipment sourceCommit must be an ancestor of the observed board repository HEAD')
+    }
+    const duplicate = this.shipmentReceiptByObservation(boardId, cardId, sourceCommit, observedHeadCommit)
+    if (duplicate) return duplicate
+
+    const observedAt = timestamp()
+    const receipt = {
+      receipt_kind: 'ship_queue' as const,
+      board_id: boardId,
+      card_id: cardId,
+      source_repository: sourceRepository,
+      source_commit: sourceCommit,
+      observed_head_commit: observedHeadCommit,
+      destination: 'main' as const,
+      deployment_ref: null,
+      observed_by: 'ship_queue' as const,
+      observed_at: observedAt,
+    }
+    const receiptSha256 = hashJson(receipt)
+    const create = this.db.transaction(() => {
+      const prior = this.shipmentReceiptByKey(idempotencyKey)
+      if (prior) return replayChecked(prior, requestSha256, 'shipment receipt')
+      const observed = this.shipmentReceiptByObservation(boardId, cardId, sourceCommit, observedHeadCommit)
+      if (observed) return observed
+      const id = randomUUID()
+      const createdAt = timestamp()
+      this.db.prepare(`INSERT INTO delivery_shipment_receipts
+        (id, receipt_kind, board_id, card_id, source_repository, source_commit, observed_head_commit,
+         destination, deployment_ref, observed_by, observed_at, receipt_sha256,
+         idempotency_key, request_sha256, created_at)
+        VALUES (?, 'ship_queue', ?, ?, ?, ?, ?, 'main', NULL, 'ship_queue', ?, ?, ?, ?, ?)`)
+        .run(id, boardId, cardId, sourceRepository, sourceCommit, observedHeadCommit, observedAt,
+          receiptSha256, idempotencyKey, requestSha256, createdAt)
+      return this.shipmentReceiptByKey(idempotencyKey)!
+    })
+    return create.immediate()
+  }
+
   ship(reportId: string, input: ShipDeliveryInput): DeliveryShipment {
+    this.requireShipmentIntegritySchema()
     const report = this.reports.get(identifier(reportId, 'reportId'))
     if (report.status !== 'accepted') throw new ConflictError('only an accepted delivery can be shipped')
     const current = report.job_id
@@ -396,17 +488,19 @@ export class DeliveryTrackbookService {
       : this.reports.currentForCard(report.card_id)
     if (current?.id !== report.id) throw new ConflictError('only the current accepted delivery revision can be shipped')
     const actor = actorIdentity(input.actor)
-    const sourceRepository = bounded(input.sourceRepository, 'sourceRepository', MAX.repository)
-    const sourceCommit = bounded(input.sourceCommit, 'sourceCommit', 64).toLowerCase()
-    if (!GIT_OBJECT.test(sourceCommit)) throw new ValidationError('sourceCommit must be an exact hexadecimal git object id')
+    const receipt = this.shipmentReceipt(identifier(input.receiptId, 'receiptId'))
+    if (receipt.board_id !== report.board_id || receipt.card_id !== report.card_id) {
+      throw new ValidationError('shipment receipt belongs to a different board or card')
+    }
+    const sourceRepository = receipt.source_repository
+    const sourceCommit = receipt.source_commit
     if (!deliveryCitesCommit(report, sourceCommit)) {
       throw new ValidationError('shipment sourceCommit must be cited by the accepted delivery')
     }
-    const destination = bounded(input.destination, 'destination', MAX.destination)
-    const deploymentRef = optionalBounded(input.deploymentRef, 'deploymentRef', MAX.locator)
+    const destination = receipt.destination
+    const deploymentRef = receipt.deployment_ref
     const idempotencyKey = bounded(input.idempotencyKey, 'idempotencyKey', MAX.idempotencyKey)
-    const priorShipment = this.shipmentByKey(report.id, idempotencyKey)
-    const shippedAt = iso(input.shippedAt ?? priorShipment?.shipped_at ?? timestamp(), 'shippedAt')
+    const shippedAt = receipt.observed_at
     const attestationIds = uniqueIdentifiers(input.artifactAttestationIds ?? [], 'artifactAttestationIds', MAX.attestations)
     const attestations = attestationIds.map((id) => {
       const attestation = this.db.prepare(`SELECT id, report_id, artifact_id, content_sha256, attestation_sha256
@@ -428,6 +522,10 @@ export class DeliveryTrackbookService {
       board_id: report.board_id,
       card_id: report.card_id,
       job_id: report.job_id,
+      receipt_id: receipt.id,
+      receipt_kind: receipt.receipt_kind,
+      receipt_sha256: receipt.receipt_sha256,
+      observed_head_commit: receipt.observed_head_commit,
       source_repository: sourceRepository,
       source_commit: sourceCommit,
       destination,
@@ -445,15 +543,17 @@ export class DeliveryTrackbookService {
       const id = randomUUID()
       const createdAt = timestamp()
       this.db.prepare(`INSERT INTO delivery_shipments
-        (id, report_id, board_id, card_id, job_id, source_repository, source_commit,
+        (id, report_id, receipt_id, board_id, card_id, job_id, source_repository, source_commit,
          destination, deployment_ref, artifact_attestations_json, manifest_sha256,
          shipped_by, shipped_at, idempotency_key, request_sha256, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, report.id, report.board_id, report.card_id, report.job_id, sourceRepository,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, report.id, receipt.id, report.board_id, report.card_id, report.job_id, sourceRepository,
           sourceCommit, destination, deploymentRef, canonicalJson(attestations), manifestSha256,
           actorKey(actor), shippedAt, idempotencyKey, requestSha256, createdAt)
       this.appendEvent(report, actor, 'delivery.shipped', id, {
         shipment_id: id,
+        receipt_id: receipt.id,
+        receipt_sha256: receipt.receipt_sha256,
         source_repository: sourceRepository,
         source_commit: sourceCommit,
         destination,
@@ -587,8 +687,17 @@ export class DeliveryTrackbookService {
   }
 
   shipments(reportId: string): DeliveryShipment[] {
-    return (this.db.prepare(`SELECT * FROM delivery_shipments WHERE report_id=?
-      ORDER BY shipped_at, rowid`).all(reportId) as Record<string, unknown>[]).map(mapShipment)
+    if (!this.hasShipmentIntegritySchema()) {
+      return (this.db.prepare(`SELECT shipment.*, NULL AS receipt_id, NULL AS observed_head_commit
+        FROM delivery_shipments shipment WHERE shipment.report_id=?
+        ORDER BY shipment.shipped_at, shipment.rowid`)
+        .all(reportId) as Record<string, unknown>[]).map(mapShipment)
+    }
+    return (this.db.prepare(`SELECT shipment.*, receipt.observed_head_commit
+      FROM delivery_shipments shipment
+      LEFT JOIN delivery_shipment_receipts receipt ON receipt.id=shipment.receipt_id
+      WHERE shipment.report_id=? ORDER BY shipment.shipped_at, shipment.rowid`)
+      .all(reportId) as Record<string, unknown>[]).map(mapShipment)
   }
 
   regressions(lineageId: string): DeliveryRegression[] {
@@ -741,6 +850,20 @@ export class DeliveryTrackbookService {
     if (row.count !== 5) throw new Error('delivery Trackbook migration 030 is not installed')
   }
 
+  private hasShipmentIntegritySchema(): boolean {
+    const table = this.db.prepare(`SELECT 1 FROM sqlite_master
+      WHERE type='table' AND name='delivery_shipment_receipts'`).get()
+    if (!table) return false
+    return (this.db.prepare(`PRAGMA table_info(delivery_shipments)`).all() as Array<{ name: string }>)
+      .some((column) => column.name === 'receipt_id')
+  }
+
+  private requireShipmentIntegritySchema(): void {
+    if (!this.hasShipmentIntegritySchema()) {
+      throw new Error('delivery shipment integrity migration 035 is not installed')
+    }
+  }
+
   private verificationByKey(reportId: string, key: string): DeliveryVerificationRun | null {
     const row = this.db.prepare('SELECT * FROM delivery_verification_runs WHERE report_id=? AND idempotency_key=?')
       .get(reportId, key) as Record<string, unknown> | undefined
@@ -759,8 +882,37 @@ export class DeliveryTrackbookService {
     return row ? mapReviewComment(row) : null
   }
 
+  private shipmentReceipt(id: string): DeliveryShipmentReceipt {
+    const row = this.db.prepare('SELECT * FROM delivery_shipment_receipts WHERE id=?')
+      .get(id) as Record<string, unknown> | undefined
+    if (!row) throw new NotFoundError('shipment receipt not found')
+    return mapShipmentReceipt(row)
+  }
+
+  private shipmentReceiptByKey(key: string): DeliveryShipmentReceipt | null {
+    const row = this.db.prepare(`SELECT * FROM delivery_shipment_receipts
+      WHERE receipt_kind='ship_queue' AND idempotency_key=?`).get(key) as Record<string, unknown> | undefined
+    return row ? mapShipmentReceipt(row) : null
+  }
+
+  private shipmentReceiptByObservation(
+    boardId: number,
+    cardId: number,
+    sourceCommit: string,
+    observedHeadCommit: string,
+  ): DeliveryShipmentReceipt | null {
+    const row = this.db.prepare(`SELECT * FROM delivery_shipment_receipts
+      WHERE receipt_kind='ship_queue' AND board_id=? AND card_id=?
+        AND source_commit=? AND observed_head_commit=? AND destination='main'`)
+      .get(boardId, cardId, sourceCommit, observedHeadCommit) as Record<string, unknown> | undefined
+    return row ? mapShipmentReceipt(row) : null
+  }
+
   private shipmentByKey(reportId: string, key: string): DeliveryShipment | null {
-    const row = this.db.prepare('SELECT * FROM delivery_shipments WHERE report_id=? AND idempotency_key=?')
+    const row = this.db.prepare(`SELECT shipment.*, receipt.observed_head_commit
+      FROM delivery_shipments shipment
+      LEFT JOIN delivery_shipment_receipts receipt ON receipt.id=shipment.receipt_id
+      WHERE shipment.report_id=? AND shipment.idempotency_key=?`)
       .get(reportId, key) as Record<string, unknown> | undefined
     return row ? mapShipment(row) : null
   }
@@ -834,17 +986,39 @@ function mapShipment(row: Record<string, unknown>): DeliveryShipment {
   return {
     id: String(row.id),
     report_id: String(row.report_id),
+    receipt_id: nullableString(row.receipt_id),
     board_id: Number(row.board_id),
     card_id: Number(row.card_id),
     job_id: nullableString(row.job_id),
     source_repository: String(row.source_repository),
     source_commit: String(row.source_commit),
+    observed_head_commit: nullableString(row.observed_head_commit),
     destination: String(row.destination),
     deployment_ref: nullableString(row.deployment_ref),
     artifact_attestations: parseJson<DeliveryShipment['artifact_attestations']>(row.artifact_attestations_json, []),
     manifest_sha256: String(row.manifest_sha256),
     shipped_by: String(row.shipped_by),
     shipped_at: String(row.shipped_at),
+    idempotency_key: String(row.idempotency_key),
+    request_sha256: String(row.request_sha256),
+    created_at: String(row.created_at),
+  }
+}
+
+function mapShipmentReceipt(row: Record<string, unknown>): DeliveryShipmentReceipt {
+  return {
+    id: String(row.id),
+    receipt_kind: 'ship_queue',
+    board_id: Number(row.board_id),
+    card_id: Number(row.card_id),
+    source_repository: String(row.source_repository),
+    source_commit: String(row.source_commit),
+    observed_head_commit: String(row.observed_head_commit),
+    destination: 'main',
+    deployment_ref: nullableString(row.deployment_ref),
+    observed_by: 'ship_queue',
+    observed_at: String(row.observed_at),
+    receipt_sha256: String(row.receipt_sha256),
     idempotency_key: String(row.idempotency_key),
     request_sha256: String(row.request_sha256),
     created_at: String(row.created_at),
@@ -892,6 +1066,80 @@ function deliveryCitesCommit(report: DeliveryReport, commit: string): boolean {
   if (report.commits.some((value) => value.toLowerCase() === commit)) return true
   return [...report.deliverable_results, ...report.criterion_results].some((result) =>
     result.evidence_refs.some((evidence) => evidence.kind === 'commit' && evidence.ref.toLowerCase() === commit))
+}
+
+function fullCommit(value: unknown, field: string): string {
+  const commit = bounded(value, field, 64).toLowerCase()
+  if (!FULL_GIT_COMMIT.test(commit)) {
+    throw new ValidationError(`${field} must be a full 40- or 64-character hexadecimal commit SHA`)
+  }
+  return commit
+}
+
+function exactBoardRepository(db: Database.Database, boardId: number, cardId: number): string {
+  const row = db.prepare(`SELECT board.project_path
+    FROM cards card JOIN boards board ON board.id=card.board_id
+    WHERE board.id=? AND card.id=?`).get(boardId, cardId) as { project_path: string } | undefined
+  if (!row) throw new NotFoundError('shipment card was not found on the board')
+  try {
+    const configured = realpathSync(row.project_path)
+    const root = realpathSync(gitEvidence(configured, ['rev-parse', '--show-toplevel']))
+    if (root !== configured) {
+      throw new ValidationError('shipment board path must be the exact repository root')
+    }
+    return root
+  } catch (error) {
+    if (error instanceof ValidationError) throw error
+    throw new ValidationError('shipment board repository could not be verified')
+  }
+}
+
+function repositoryHead(repository: string): string {
+  let head: string
+  try {
+    head = gitEvidence(repository, ['rev-parse', '--verify', 'HEAD^{commit}']).toLowerCase()
+  } catch {
+    throw new ValidationError('shipment board repository HEAD could not be resolved')
+  }
+  return fullCommit(head, 'observed repository HEAD')
+}
+
+function repositoryCommit(repository: string, commit: string): string {
+  try {
+    return fullCommit(
+      gitEvidence(repository, ['rev-parse', '--verify', '--end-of-options', `${commit}^{commit}`]),
+      'resolved sourceCommit',
+    )
+  } catch {
+    throw new ValidationError('shipment sourceCommit does not resolve in the exact board repository')
+  }
+}
+
+function repositoryContainsCommit(repository: string, sourceCommit: string, observedHeadCommit: string): boolean {
+  try {
+    gitEvidence(repository, ['merge-base', '--is-ancestor', sourceCommit, observedHeadCommit])
+    return true
+  } catch {
+    return false
+  }
+}
+
+function gitEvidence(repository: string, args: string[]): string {
+  const environment = { ...process.env }
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith('GIT_')) delete environment[key]
+  }
+  environment.GIT_CONFIG_NOSYSTEM = '1'
+  environment.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null'
+  environment.GIT_NO_REPLACE_OBJECTS = '1'
+  environment.GIT_OPTIONAL_LOCKS = '0'
+  return execFileSync('git', ['-C', repository, ...args], {
+    encoding: 'utf8',
+    env: environment,
+    maxBuffer: 65_536,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 15_000,
+  }).trim()
 }
 
 function reviewLocation(value: DeliveryReviewLocation, artifact: ArtifactRow): DeliveryReviewLocation {

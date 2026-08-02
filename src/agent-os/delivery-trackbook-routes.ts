@@ -133,15 +133,11 @@ export const deliveryTrackbookPlugin: FastifyPluginAsync<DeliveryTrackbookRouteO
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/ship', (request, reply) => {
-    const body = safeBody(request.body)
+    const body = shipmentBody(request.body)
     const shipment = service.ship(request.params.id, {
       actor: operatorActor(request, options),
-      sourceRepository: requiredString(body.source_repository ?? body.sourceRepository, 'source_repository'),
-      sourceCommit: requiredString(body.source_commit ?? body.sourceCommit, 'source_commit'),
-      destination: requiredString(body.destination, 'destination'),
-      deploymentRef: optionalString(body.deployment_ref ?? body.deploymentRef),
+      receiptId: requiredString(body.receipt_id ?? body.receiptId, 'receipt_id'),
       artifactAttestationIds: stringArray(body.artifact_attestation_ids ?? body.artifactAttestationIds, 'artifact_attestation_ids'),
-      shippedAt: optionalString(body.shipped_at ?? body.shippedAt),
       idempotencyKey: idempotencyKey(request, body),
     })
     return reply.code(201).send({ shipment })
@@ -192,6 +188,19 @@ function safeBody(value: unknown): Record<string, unknown> {
   for (const key of ['actor', 'actor_id', 'actorId', 'recorded_by', 'recordedBy', 'author', 'shipped_by', 'shippedBy']) {
     if (Object.hasOwn(body, key)) {
       throw new ValidationError(`${key} is server-derived and must not appear in the request body`)
+    }
+  }
+  return body
+}
+
+function shipmentBody(value: unknown): Record<string, unknown> {
+  const body = safeBody(value)
+  for (const key of [
+    'source_repository', 'sourceRepository', 'source_commit', 'sourceCommit',
+    'destination', 'deployment_ref', 'deploymentRef', 'shipped_at', 'shippedAt',
+  ]) {
+    if (Object.hasOwn(body, key)) {
+      throw new ValidationError(`${key} is observed from the ShipQueue receipt and must not appear in the request body`)
     }
   }
   return body
