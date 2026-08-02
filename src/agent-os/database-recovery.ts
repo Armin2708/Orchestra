@@ -247,6 +247,9 @@ export async function restoreDatabaseBackup(input: {
 
   let quarantinePath: string | null = null
   try {
+    if (!(await input.isQuiesced())) {
+      throw new Error('database restore lost its quiescence proof before replacement')
+    }
     try {
       await lstat(destinationPath)
       const stamp = (input.now ?? new Date()).toISOString().replace(/[:.]/gu, '-')

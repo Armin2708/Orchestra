@@ -1,7 +1,8 @@
 # Beta Lane C recovery and operations foundation
 
-Status: integrated and verified for `OPS-002` through `OPS-008`, `OPS-019`, `OPS-020`, and
-`OPS-GATE`. This checkpoint does not update authoritative backlog counts.
+Status: implementation integrated for `OPS-002` through `OPS-008`, `OPS-019`, and `OPS-020`.
+Production transition-chaos acceptance for `OPS-002` and `OPS-GATE` remains open. This checkpoint
+does not update authoritative backlog counts.
 
 ## Delivered boundary
 
@@ -50,7 +51,10 @@ central routes:
 - SQLite online backup into unpublished partial files;
 - integrity, foreign-key, byte-size, database SHA-256, schema SHA-256, and migration-inventory
   SHA-256 verification before publication or restore;
-- restore only after an injected daemon/provider-hook quiescence proof;
+- restore only after an owner-only clean-shutdown receipt binds the exact database identity to a
+  recorded exited daemon PID, released lease, and completed provider-runtime/hook shutdown;
+- one exclusive state-transition lock serializes daemon startup with restore, so a new daemon
+  cannot claim SQLite authority during database replacement;
 - recoverable quarantine of replaced database, WAL, and SHM state;
 - recoverable backup retirement instead of deletion;
 - repository/worktree/branch/cwd validation through argv-only Git calls;
@@ -60,19 +64,20 @@ central routes:
 
 | Item | Foundation/evidence |
 |---|---|
-| `OPS-002` | Close/reopen outbox lease recovery, persisted reconciliation state, and startup coordinator that opens admission only after all reconciliation stages |
+| `OPS-002` | Close/reopen outbox lease recovery, persisted reconciliation state, and startup ordering have focused coverage. Production every-transition `OPS-CHAOS-01`–`04` acceptance remains open because the generic contract was only executed against `DenyAllProbe`. |
 | `OPS-003` | One immediate reconciliation transaction revokes duplicate/orphan authority, requeues within attempt budget, blocks exhausted/missing-workspace jobs, marks dead PTYs lost, and releases only stale leases; runtime test proves startup ordering |
 | `OPS-004` | `transact`, durable non-overlapping outbox worker, bounded adapter delivery, leased retries, exponential bounded backoff, dead-letter terminal state |
 | `OPS-005` | Content-bound `(consumer,event_id)` receipts and stable delivery idempotency keys |
-| `OPS-006` | Online backup, offline restore, migration/schema/database checksums, corruption rejection, recoverable quarantine |
+| `OPS-006` | Online backup, offline restore, migration/schema/database checksums, corruption rejection, recoverable quarantine, and a real CLI lifecycle test that blocks wrong-port/connection-reset restore attempts while the recorded daemon is live |
 | `OPS-007` | Per-board four-category policy and scheduler; lossless event compression; recoverable PTY/artifact compaction; transcript duration handed to existing Agent Home retention service |
 | `OPS-008` | Registered worktree, exact branch, cwd containment, realpath/symlink defense, no shell command construction |
 | `OPS-019` | Stable-code-only failure classification and fixed retry/fail-closed/operator dispositions; raw messages remain evidence, never policy input |
 | `OPS-020` | Freeze admission synchronously, stop producers, bounded settle and deadline actions, bounded flush, idempotent shutdown result, proof no late launch callback executes, and fatal non-clean authority-release guard |
-| `OPS-GATE` | Multi-job orphan test preserves one healthy active job while recovering duplicates/exhausted/missing state; outbox restart test proves one stable delivery identity |
+| `OPS-GATE` | **Open.** Focused multi-job/orphan/outbox tests pass, but no production adapter executes the complete four-case chaos contract at every claimed transition. |
 
-Focused evidence is in `test/operations-recovery.test.ts`, `test/operations-runtime.test.ts`, and
-`test/database-recovery.test.ts`.
+Focused evidence is in `test/operations-recovery.test.ts`, `test/operations-runtime.test.ts`,
+`test/database-recovery.test.ts`, and `test/database-restore-cli-quiescence.test.ts`. These tests
+do not substitute for the still-open production chaos adapter.
 
 ## Root integration contract
 
@@ -94,9 +99,11 @@ Focused evidence is in `test/operations-recovery.test.ts`, `test/operations-runt
    `OperationsRetentionPolicy.transcript_days`. Bind `authorizeCompaction` to consume current,
    named local-admin command evidence and its durable audit event; absent/invalid evidence leaves
    retained content untouched.
-5. Expose backup/verify/restore/retire as local operator commands. Restore must prove daemon PID
-   exit, persistent health-offline state, and hook/provider quiescence before passing
-   `isQuiesced`.
+5. Expose backup/verify/restore/retire as local operator commands. Restore must acquire the shared
+   state-transition lock, verify the owner-only receipt against the exact database identity,
+   prove the recorded PID has exited, require an absent daemon PID file and lease, and retain the
+   lock through replacement. A health URL, wrong port, timeout, reset, or operator flag is never
+   quiescence evidence.
 6. Put `OperationsRuntimeCoordinator.admitLaunch` at central launch admission and invoke `close()`
    on signal/upgrade. Keep ordinary mutation admission behind the same
    `SafeShutdownCoordinator`. Release the lease and close SQLite only when
@@ -112,7 +119,8 @@ Focused evidence is in `test/operations-recovery.test.ts`, `test/operations-runt
 - External notification exactly-once behavior depends on the downstream adapter honoring the
   stable idempotency key; delivery is intentionally at least once across the acknowledgement
   window.
-- The repository lifecycle-transition chaos matrix, live SIGKILL recovery, and active multi-agent
-  reconciliation passed after integration.
+- Focused live SIGKILL and active multi-agent reconciliation tests passed. The repository
+  lifecycle-transition chaos matrix remains unproven against a production adapter, so
+  `OPS-002` release acceptance and `OPS-GATE` remain open.
 - Backup restore is offline by contract; it must not be exposed through a remotely scoped device
   route.

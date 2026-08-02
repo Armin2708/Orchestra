@@ -1,9 +1,11 @@
 # Beta Lane C — phone, PWA, push, and device-management evidence
 
-Status: integrated and verified; no authoritative backlog counts changed
+Status: implementation integrated; native acceptance incomplete; `REM-017` and `REM-GATE` remain
+open; no authoritative backlog counts changed
 
 Scope: `REM-008`, `REM-011`, `REM-012`, `REM-013`, `REM-014`, `REM-015`,
-`REM-016`, `REM-017`, `REM-019`, `REM-020`, and the phone-UX `MILE-D` summary.
+`REM-016`, `REM-019`, `REM-020`, and the phone-UX `MILE-D` implementation summary. `REM-017` is
+included as an open acceptance item, not a completed item.
 
 ## TLDR
 
@@ -15,9 +17,12 @@ action phone dock for monitor, message, approve, and pause/stop navigation. Agen
 and PTY input/resize/signal/restart controls remain view-only unless the daemon reports both the
 required scope and an exact active action/resource-bound step-up grant.
 
-Lane-root route integration, DeviceSession-bound push, iOS/Android secure-context runs,
-offline/revoke propagation, lost-device tests, and independent security review are complete. The
-combined gate evidence is recorded in `docs/checkpoints/beta-lane-c-remote-ops.md`.
+Lane-root route integration, DeviceSession-bound push, offline/revoke propagation, and lost-device
+automated tests are implemented. Historical native observations show iOS Safari pairing and an
+Android emulator installed/offline/revoked sequence, but they predate the ready marker and are not
+exact-artifact bound. They do not prove iOS PWA installation, relaunch/reconnect, or persistent
+credential storage, so the combined gate remains open in
+`docs/checkpoints/beta-lane-c-remote-ops.md`.
 
 ## Threat-control coverage
 
@@ -27,8 +32,8 @@ combined gate evidence is recorded in `docs/checkpoints/beta-lane-c-remote-ops.m
 | `TGT-004`, `TGT-016`, `TGT-017`, `REM-011`, `AC-06`, `AC-12` | Paired non-loopback browsers never render owner Login or load legacy owner surfaces. The dedicated shell consumes field-minimized classified routes; message retries retain one bounded idempotency key; strict remote CSP is integrated. | remote shell, API, browser-security, production AC and native viewport evidence | The deliberately looser loopback owner style policy must never weaken remote script or framing policy. |
 | `TGT-009`, `REM-011`, `AC-12` | Private networking is the presented default; public exposure requires explicit double confirmation; ownership, health and origin are verified before reuse/stop. | remote UI, CLI and tunnel tests | Public exposure remains an explicitly accepted operator risk. |
 | `TGT-013`, `REM-012`–`REM-014`, `AC-11`, `AC-17` | Per-device severity, quiet hours, generic/content preview controls, DeviceSession-bound subscriptions/fanout, same-origin allowlisted paths, and atomic revoke cleanup are integrated. | `web/public/sw-push.js`; web-push and integration tests; AC-11/17 | Web Push remains at-least-once across a provider acknowledgement window and uses the stable delivery identity. |
-| `TGT-010`, `REM-015`–`REM-017`, `AC-09`, `AC-10` | Offline banner says stale/read-only, all new remote mutations disable offline, the worker has no mutation queue/sync/outbox, authenticated APIs are network-only, and legacy API caches purge on activate/revoke contact. | PWA tests; Android standalone secure-PWA offline/revoke run | Physical-device regression remains recommended for future OS/keychain/push changes. |
-| `TGT-016`, `REM-019` | Bottom phone dock exposes Monitor, Message, Approve, and Pause/stop destinations with 44px+ safe-area-aware targets. Existing Agent Home retains phone lifecycle actions. | phone dock and mobile Agent Home tests; iOS 26.5 and Android 36.1 native viewport runs | None beyond normal physical-device regression. |
+| `TGT-010`, `REM-015`, `REM-016`, `AC-09`, `AC-10` (`REM-017` open) | Offline banner says stale/read-only, all new remote mutations disable offline, the worker has no mutation queue/sync/outbox, authenticated APIs are network-only, and legacy API caches purge on activate/revoke contact. | automated PWA tests; historical Android installed/offline/revoke images are retained as non-gating | Fresh exact-artifact iOS and Android installation, relaunch/reconnect and persistent-authority evidence is required. |
+| `TGT-016`, `REM-019` | Bottom phone dock exposes Monitor, Message, Approve, and Pause/stop destinations with 44px+ safe-area-aware targets. Existing Agent Home retains phone lifecycle actions. | phone dock and mobile Agent Home tests; historical iOS Safari and Android viewport observations | Exact-artifact cross-platform acceptance remains part of open `REM-017`. |
 | `TGT-004`, `TGT-005`, `TGT-017`, `REM-020`, `AC-06`, `AC-14` | Unknown/missing authority fails closed. Agent prompts require `agent-control`; terminal writes require `terminal-write`; privileged actions require exact active resource/digest/nonce-bound step-up. | remote policy, terminal/cockpit panels, production route/service-boundary tests | User verification remains intentionally interactive and cannot be queued or bypassed offline. |
 
 ## Integrated API contract
@@ -74,13 +79,16 @@ preserves the staged key plus pending issued authority until recovery or explici
   matrix, `pwa`, auth, mobile Agent Home, AgentTerminal controls, ProcessTerminal state).
 - Backend TypeScript bundle: passed.
 - Production web build: passed (Vite transformed 83 modules).
-- Integrated native QA: iOS 26.5 paired Safari and Android 36.1 secure standalone PWA passed;
-  Android also proved offline read-only and post-revoke authority purge. Exact evidence is in the
-  combined Lane C checkpoint.
+- Historical native QA: iOS 26.5 Safari pairing and Android 36.1 installed/offline/revoked UI were
+  observed on a dirty base worktree. Retained PNGs and their verifier are under
+  `docs/evidence/beta-lane-c-native-historical/`; the manifest says `exact_marker_bound: false`.
+  No retained evidence proves iOS installation/relaunch/persistence or an Android post-revoke
+  IndexedDB count of zero.
 
 ## MILE-D phone UX summary
 
-`MILE-D Phone UX handles attention, messaging, approval and safe control` is complete on the
-integrated lane. The phone information architecture, classified routes, push, safe deep links,
-offline read-only behavior, selective revoke, and fail-closed privileged controls passed production
-tests and native iOS/Android secure-context runs. Independent review has zero unresolved P0/P1/P2.
+The `MILE-D` phone UX implementation covers attention, messaging, approval, safe control,
+classified routes, push, safe deep links, offline read-only behavior, selective revoke, and
+fail-closed privileged controls in automated tests. Its cross-platform acceptance box remains open
+with `REM-017`; no zero-finding or native-gate claim is made before exact-head independent review
+and a fresh retained-artifact run on both platforms.

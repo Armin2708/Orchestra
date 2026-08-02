@@ -1,7 +1,8 @@
 # Remote and mobile beta
 
-Status: Beta Lane C candidate. `REM-GATE` is satisfied only by the exact evidence recorded in the
-lane checkpoint; this is not a public-release or plug-and-play claim.
+Status: Beta Lane C implementation candidate. `REM-017` and `REM-GATE` remain open pending a fresh
+iOS and Android run against one retained exact integrated artifact; this is not a public-release
+or plug-and-play claim.
 
 ## Security boundary
 

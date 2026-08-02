@@ -1,4 +1,13 @@
-Beta Lane C native platform evidence — 2026-08-02
+Beta Lane C historical native platform observations — 2026-08-02
+
+Status
+- Historical, non-gating evidence only.
+- Capture base HEAD: 0dd3dd43b9f376370ee73a9e2fe4725974caaae8.
+- Capture tree state: dirty and uncommitted.
+- Later ready marker: 2e29f9d7fa5b11283e54542b3c8dc187d5d701fe.
+- exact_marker_bound: false.
+- exact_artifact_digest: none.
+- REM-017 and REM-GATE remain open.
 
 Scope
 - Worktree: /Users/arminrad/Desktop/agentboard-beta-remote-ops
@@ -9,7 +18,7 @@ Scope
 - iOS: iPhone 17 Pro simulator, iOS 26.5
 - Android: Medium Phone emulator, Android 36.1
 
-Reproducible checks (ticket and credential values intentionally withheld)
+Historical procedure notes (ticket and credential values intentionally withheld)
 1. Build the current root and web production assets on Node 22.20.0.
 2. Start the current dist/cli.js with isolated ORCHESTRA_HOME and ORCHESTRA_PORT=4777.
 3. Put a locally trusted TLS proxy on 4443 forwarding byte-for-byte to 127.0.0.1:4777.
@@ -26,9 +35,10 @@ Reproducible checks (ticket and credential values intentionally withheld)
    Offline · read-only
    Live state may be stale. Messages, approvals, controls, and terminal input are disabled and will
    not be queued.
-9. Re-enable the network and revoke only the Android session through the local-owner API. Verify
-   Android session+credential are revoked, installed app renders Pairing required, authority store
-   count is zero, and the iPhone session+credential remain active and usable.
+9. Re-enable the network and revoke only the Android session through the local-owner API. The
+   procedure called for verifying revoked session/credential, Pairing required, zero authority
+   records, and an unaffected iPhone. Retained bytes prove the UI states only; no retained raw
+   evidence proves the IndexedDB count of zero.
 
 Redacted results
 device                      session   credential
@@ -38,14 +48,28 @@ Linux armv81 · 2026-08-02   revoked   revoked
 Android resumed activity
 com.android.chrome/org.chromium.chrome.browser.webapps.WebappActivity
 
-Evidence image SHA-256 (temporary capture names; hashes make the reviewed run immutable)
-811d62a6305607d4a0dc34552e7e9acc0deb86323c3c48db1c69a06a20ad0c6e  iOS paired
-2274adcef731715bfaa4e6b6a44cc5a980c9d349ad3e6e030c5bbab6f77c30cc  independent iOS paired
-443ee5722ef9cccf4fcf275a6478f1282e5355b5fbb96f2f52ff9e8740ebc4ff  Android installed paired
-6e433add43759c525dea0a9090e556c2de9e904131eba06fd19994edab556391  Android offline read-only
-39aa9c3a557188150e479913466c86c7e2116cbaf75d139391fbfb8e8daa924d  Android post-revoke
+Retained evidence image SHA-256
+811d62a6305607d4a0dc34552e7e9acc0deb86323c3c48db1c69a06a20ad0c6e  ios-safari-paired.png
+2274adcef731715bfaa4e6b6a44cc5a980c9d349ad3e6e030c5bbab6f77c30cc  ios-safari-menu.png
+443ee5722ef9cccf4fcf275a6478f1282e5355b5fbb96f2f52ff9e8740ebc4ff  android-installed-paired.png
+6e433add43759c525dea0a9090e556c2de9e904131eba06fd19994edab556391  android-offline-read-only.png
+39aa9c3a557188150e479913466c86c7e2116cbaf75d139391fbfb8e8daa924d  android-revoked.png
 
-The simulator run does not substitute for the production AC suite. AC-01–20 separately executes
+The bytes, exact sizes, dimensions, original observation times, and limitations are recorded in
+docs/evidence/beta-lane-c-native-historical/manifest.json and verified by
+scripts/verify-beta-lane-c-native-evidence.mjs. The manifest deliberately states
+exact_marker_bound=false. Hashes preserve the bytes; they do not bind the dirty capture tree to the
+later marker or any retained release artifact.
+
+Limitations
+- iOS evidence shows paired Safari only. ios-safari-menu.png is Safari's menu and does not show
+  Add to Home Screen.
+- No retained evidence proves iOS PWA installation, relaunch/reconnect, or persistent authority.
+- No retained raw evidence proves the Android post-revoke IndexedDB authority count was zero.
+- The authority database and broad session logs are intentionally not retained.
+- A fresh run against one exact retained integrated artifact is required to close REM-017.
+
+The historical simulator run does not substitute for the production AC suite. AC-01–20 separately executes
 buildServer, durable SQLite, held SSE sockets, shipped workers and production helper boundaries;
 AC-04, AC-09, AC-10 and AC-13 cover replay, expiry, offline mutation rejection, cache purge and
 unrelated-device survival deterministically.

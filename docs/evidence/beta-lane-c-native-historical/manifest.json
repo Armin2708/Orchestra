@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "evidence_id": "beta-lane-c-native-historical-2026-08-02",
+  "classification": "historical-non-gating",
+  "capture_base_head": "0dd3dd43b9f376370ee73a9e2fe4725974caaae8",
+  "capture_tree_state": "dirty-uncommitted",
+  "later_ready_marker": "2e29f9d7fa5b11283e54542b3c8dc187d5d701fe",
+  "exact_marker_bound": false,
+  "exact_artifact_digest": null,
+  "claims_supported": [
+    "iOS Safari displayed a paired named device session and scoped shell",
+    "Android emulator displayed an installed paired application state",
+    "Android emulator displayed an offline read-only state",
+    "Android emulator displayed Pairing required after revoke"
+  ],
+  "claims_not_supported": [
+    "exact-marker or exact-artifact acceptance",
+    "iOS PWA installation",
+    "iOS PWA relaunch or reconnect",
+    "iOS persistent credential storage",
+    "post-revoke IndexedDB authority count of zero",
+    "REM-017 completion",
+    "REM-GATE completion"
+  ],
+  "files": [
+    {
+      "path": "android-installed-paired.png",
+      "bytes": 210755,
+      "width": 1080,
+      "height": 2400,
+      "sha256": "443ee5722ef9cccf4fcf275a6478f1282e5355b5fbb96f2f52ff9e8740ebc4ff",
+      "source_observed_at": "2026-08-02T13:31:14+02:00"
+    },
+    {
+      "path": "android-offline-read-only.png",
+      "bytes": 239292,
+      "width": 1080,
+      "height": 2400,
+      "sha256": "6e433add43759c525dea0a9090e556c2de9e904131eba06fd19994edab556391",
+      "source_observed_at": "2026-08-02T13:31:49+02:00"
+    },
+    {
+      "path": "android-revoked.png",
+      "bytes": 123572,
+      "width": 1080,
+      "height": 2400,
+      "sha256": "39aa9c3a557188150e479913466c86c7e2116cbaf75d139391fbfb8e8daa924d",
+      "source_observed_at": "2026-08-02T13:32:41+02:00"
+    },
+    {
+      "path": "ios-safari-menu.png",
+      "bytes": 428129,
+      "width": 1206,
+      "height": 2622,
+      "sha256": "2274adcef731715bfaa4e6b6a44cc5a980c9d349ad3e6e030c5bbab6f77c30cc",
+      "source_observed_at": "2026-08-02T13:37:31+02:00"
+    },
+    {
+      "path": "ios-safari-paired.png",
+      "bytes": 370563,
+      "width": 1206,
+      "height": 2622,
+      "sha256": "811d62a6305607d4a0dc34552e7e9acc0deb86323c3c48db1c69a06a20ad0c6e",
+      "source_observed_at": "2026-08-02T13:25:14+02:00"
+    }
+  ]
+}

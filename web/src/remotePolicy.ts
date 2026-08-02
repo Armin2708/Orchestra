@@ -87,12 +87,13 @@ const notExpired = (value: string, now: number): boolean => {
   return Number.isFinite(parsed) && parsed > now
 }
 
-export function remoteSessionIsActive(session: RemoteDeviceSession | null, now = Date.now()): boolean {
-  return Boolean(
-    session
+export function remoteSessionIsActive(
+  session: RemoteDeviceSession | null,
+  now = Date.now(),
+): session is RemoteDeviceSession {
+  return session !== null
     && notExpired(session.expires_at, now)
-    && notExpired(session.credential_expires_at, now),
-  )
+    && notExpired(session.credential_expires_at, now)
 }
 
 export function hasRemoteScope(
@@ -130,7 +131,7 @@ export function remoteCanUse(
   resourceId?: string,
   now = Date.now(),
 ): boolean {
-  if (!online || !hasRemoteScope(session, scope, now)) return false
+  if (!session || !online || !hasRemoteScope(session, scope, now)) return false
   if (scope === 'observe' || scope === 'stream' || scope === 'message' || scope === 'approve') return true
   if (!resourceType || !resourceId) return false
   return hasMatchingStepUp(session, scope, resourceType, resourceId, now)

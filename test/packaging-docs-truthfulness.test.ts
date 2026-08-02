@@ -30,7 +30,8 @@ describe('packaging documentation truthfulness', () => {
     expect(remote).toContain('never the master')
     expect(remote).toContain('individually revocable')
     expect(remote).toContain('REVOKE_ALL_REMOTE_AUTHORITY')
-    expect(remote).toContain('`REM-GATE` is satisfied only by the exact evidence')
+    expect(remote).toContain('`REM-017` and `REM-GATE` remain open')
+    expect(remote).not.toContain('`REM-GATE` is satisfied')
   })
 
   it('keeps state retirement recoverable and distinguishes local telemetry', () => {

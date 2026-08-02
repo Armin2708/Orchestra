@@ -1,7 +1,8 @@
 # Operations, diagnostics, and privacy hardening
 
-Status: Beta Lane C integrated implementation contract. The central daemon wiring and gate
-evidence are recorded in `docs/checkpoints/beta-lane-c-remote-ops.md`.
+Status: Beta Lane C integrated implementation contract. Central daemon wiring and the explicitly
+open production-chaos/`OPS-GATE` status are recorded in
+`docs/checkpoints/beta-lane-c-remote-ops.md`.
 
 ## TLDR
 

@@ -73,6 +73,11 @@ import {
   OperationsRuntimeCoordinator,
   type OperationsRuntimeObservation,
 } from './agent-os/operations-runtime.js'
+import {
+  acquireStateTransitionGuard,
+  invalidateDaemonQuiescenceReceipt,
+  writeDaemonQuiescenceReceipt,
+} from './agent-os/database-quiescence.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -221,10 +226,19 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const orchestraDataDir = dataDir()
-  const db = openDb(path.join(orchestraDataDir, 'orchestra.db'))
+  const databasePath = path.join(orchestraDataDir, 'orchestra.db')
+  const startupTransition = acquireStateTransitionGuard(orchestraDataDir, 'daemon-start')
+  let db: Database.Database
+  let lease: ReturnType<typeof acquireDaemonLease>
+  try {
+    invalidateDaemonQuiescenceReceipt(orchestraDataDir)
+    db = openDb(databasePath)
+    lease = acquireDaemonLease(db)
+  } finally {
+    startupTransition.release()
+  }
   const token = authDisabled() ? undefined : ensureToken()
   const agentToken = authDisabled() ? undefined : ensureAgentToken()
-  const lease = acquireDaemonLease(db)
   let compatibilityFailureJournal:
     ReturnType<typeof openCompatibilityMigrationFailureJournal> | undefined
   let unbindCompatibilityFailureJournal: (() => void) | undefined
@@ -337,17 +351,22 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       })
     : null
   let runtimesClosed = false
-  const shutdownRuntimes = async () => {
-    if (runtimesClosed) return
+  let runtimeShutdownProven = false
+  const shutdownRuntimes = async (): Promise<boolean> => {
+    if (runtimesClosed) return runtimeShutdownProven
     runtimesClosed = true
-    await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
-    await codexDriver.detachAll().catch(() => undefined)
-    codexDriver.dispose()
-    codexProvider.dispose()
-    await codexSupervisor.stop().catch(() => undefined)
-    unbindCompatibilityFailureJournal?.()
+    const failures: unknown[] = []
+    const settled = await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
+    failures.push(...settled.filter((result) => result.status === 'rejected').map((result) => result.reason))
+    try { await codexDriver.detachAll() } catch (error) { failures.push(error) }
+    try { codexDriver.dispose() } catch (error) { failures.push(error) }
+    try { codexProvider.dispose() } catch (error) { failures.push(error) }
+    try { await codexSupervisor.stop() } catch (error) { failures.push(error) }
+    try { unbindCompatibilityFailureJournal?.() } catch (error) { failures.push(error) }
     unbindCompatibilityFailureJournal = undefined
-    compatibilityFailureJournal?.close()
+    try { compatibilityFailureJournal?.close() } catch (error) { failures.push(error) }
+    runtimeShutdownProven = failures.length === 0
+    return runtimeShutdownProven
   }
   let codexReady = false
   let server: ReturnType<typeof buildServer>
@@ -632,8 +651,18 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     process.off('SIGINT', close)
     const report = await operationsCoordinator.close()
     assertOperationsShutdownClean(report)
-    await shutdownRuntimes()
+    operationsRuntime.close()
+    const providerHooksInactive = await shutdownRuntimes()
+    if (!providerHooksInactive) throw new Error('provider runtime and hook shutdown could not be proven')
     lease.release()
+    db.close()
+    writeDaemonQuiescenceReceipt({
+      stateRoot: orchestraDataDir,
+      databasePath,
+      daemonPid: process.pid,
+      daemonLeaseOwnerId: lease.ownerId,
+      providerHooksInactive,
+    })
   })
   let coordinatorStarted = false
   try {
@@ -684,6 +713,6 @@ export async function ensureDaemon(): Promise<boolean> {
 
 export function stopDaemon(): boolean {
   const pidFile = path.join(dataDir(), 'daemon.pid')
-  try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM'); fs.unlinkSync(pidFile); return true }
+  try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM'); return true }
   catch { return false }
 }

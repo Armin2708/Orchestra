@@ -59,7 +59,7 @@ describe('independent remote security and operations adversarial contract', () =
     expect(results.every(({ status, error }) => status === 'failed' && typeof error === 'string')).toBe(true)
   })
 
-  test('executes crash, survivor-race, outbox, and dependency-fault chaos cases', async () => {
+  test('enumerates chaos cases and proves a deny-all probe fails; this is not OPS-GATE evidence', async () => {
     expect(OPERATIONS_CHAOS_IDS).toEqual([
       'OPS-CHAOS-01',
       'OPS-CHAOS-02',
@@ -69,6 +69,7 @@ describe('independent remote security and operations adversarial contract', () =
     const results = await runOperationsChaosContract(new DenyAllProbe())
     expect(results.map(({ id }) => id)).toEqual(OPERATIONS_CHAOS_IDS)
     expect(results.every(({ status }) => status === 'failed')).toBe(true)
+    expect(results.every(({ error }) => typeof error === 'string' && error.length > 0)).toBe(true)
   })
 
   test('retains the release-gate expectations the harness is designed to prove', () => {

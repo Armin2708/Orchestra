@@ -28,6 +28,7 @@ import {
   retireDatabaseBackups,
   verifyDatabaseBackup,
 } from './agent-os/database-recovery.js'
+import { acquireDatabaseRestoreQuiescenceGuard } from './agent-os/database-quiescence.js'
 import { OperationsRetentionService } from './agent-os/operations-recovery.js'
 import {
   ProtectedCredentialVault,
@@ -153,22 +154,24 @@ ops.command('verify-backup <manifest>').action(async (manifest) => {
   console.log(JSON.stringify(await verifyDatabaseBackup(manifest), null, 2))
 })
 ops.command('restore <manifest>')
-  .requiredOption('--confirm-quiesced', 'confirm the daemon and provider hooks are stopped')
+  .requiredOption('--confirm-quiesced', 'require a recorded clean daemon/provider shutdown proof')
   .action(async (manifest, o) => {
     if (!o.confirmQuiesced) throw new Error('restore requires --confirm-quiesced')
     const stateRoot = dataDir()
-    const restored = await restoreDatabaseBackup({
-      manifestPath: manifest,
-      stateRoot,
-      destinationPath: path.join(stateRoot, 'orchestra.db'),
-      isQuiesced: async () => {
-        try {
-          const response = await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(300) })
-          return (await response.json() as { live?: unknown }).live !== true
-        } catch { return true }
-      },
-    })
-    console.log(JSON.stringify(restored, null, 2))
+    const destinationPath = path.join(stateRoot, 'orchestra.db')
+    const quiescence = acquireDatabaseRestoreQuiescenceGuard({ stateRoot, destinationPath })
+    try {
+      const restored = await restoreDatabaseBackup({
+        manifestPath: manifest,
+        stateRoot,
+        destinationPath,
+        isQuiesced: quiescence.verify,
+      })
+      quiescence.consume()
+      console.log(JSON.stringify(restored, null, 2))
+    } finally {
+      quiescence.release()
+    }
   })
 ops.command('retire-backups')
   .option('--root <directory>', 'backup root under the Orchestra state directory')

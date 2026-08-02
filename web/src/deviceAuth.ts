@@ -183,7 +183,10 @@ const base64url = (value: ArrayBuffer | Uint8Array): string => {
   return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '')
 }
 
-const utf8 = (value: string): Uint8Array => new TextEncoder().encode(value)
+// TextEncoder always allocates an ArrayBuffer-backed view. Keep that fact in the type so the
+// stricter WebCrypto BufferSource declarations do not widen it to SharedArrayBuffer.
+const utf8 = (value: string): Uint8Array<ArrayBuffer> =>
+  new TextEncoder().encode(value) as Uint8Array<ArrayBuffer>
 
 export async function remoteMutationDigest(value: unknown): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', utf8(JSON.stringify(value)))
