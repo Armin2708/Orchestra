@@ -138,6 +138,47 @@ export interface DeliveryShipmentReceipt {
   created_at: string
 }
 
+export interface DeliveryAutoshipIntent {
+  id: string
+  report_id: string
+  board_id: number
+  card_id: number
+  job_id: string | null
+  source_repository: string
+  source_branch: string
+  source_commit: string
+  destination: 'main'
+  prepared_by: string
+  prepared_at: string
+  idempotency_key: string
+  request_sha256: string
+  created_at: string
+}
+
+export interface DeliveryAutoshipCompletion {
+  id: string
+  intent_id: string
+  receipt_id: string
+  shipment_id: string
+  observed_head_commit: string
+  completed_by: string
+  completed_at: string
+  idempotency_key: string
+  request_sha256: string
+  created_at: string
+}
+
+export interface DeliveryAutoshipResult {
+  intent: DeliveryAutoshipIntent
+  receipt: DeliveryShipmentReceipt
+  shipment: DeliveryShipment
+  completion: DeliveryAutoshipCompletion
+}
+
+export type DeliveryAutoshipReconciliation =
+  | { status: 'completed'; result: DeliveryAutoshipResult }
+  | { status: 'pending'; intent: DeliveryAutoshipIntent; reason: string }
+
 export interface DeliveryRegression {
   id: string
   report_id: string
@@ -224,6 +265,24 @@ export interface RecordShipQueueReceiptInput {
   sourceCommit: string
   observedHeadCommit: string
   idempotencyKey: string
+}
+
+export interface PrepareAutoshipIntentInput {
+  actor: ActorIdentity
+  branch: string
+  idempotencyKey: string
+}
+
+export interface CompleteAutoshipIntentInput {
+  actor: ActorIdentity
+  observedHeadCommit?: string
+  idempotencyKey: string
+}
+
+export interface ReconcileAutoshipIntentsInput {
+  actor: ActorIdentity
+  boardId?: number
+  limit?: number
 }
 
 export interface ReopenAfterRegressionInput {
@@ -411,6 +470,195 @@ export class DeliveryTrackbookService {
 
   reviseRejected(reportId: string, actor: ActorIdentity): DeliveryReport {
     return this.reports.revise(identifier(reportId, 'reportId'), { actor: actorKey(actorIdentity(actor)) })
+  }
+
+  /** Persists accepted delivery evidence before ShipQueue is allowed to enqueue the branch. */
+  prepareAutoshipIntent(reportId: string, input: PrepareAutoshipIntentInput): DeliveryAutoshipIntent {
+    this.requireAutoshipIntentSchema()
+    const report = this.reports.get(identifier(reportId, 'reportId'))
+    if (report.status !== 'accepted') throw new ConflictError('autoship requires an accepted delivery')
+    const current = report.job_id
+      ? this.reports.currentForJob(report.job_id)
+      : this.reports.currentForCard(report.card_id)
+    if (current?.id !== report.id) throw new ConflictError('autoship requires the current accepted delivery revision')
+    const actor = actorIdentity(input.actor)
+    const branch = gitBranch(input.branch)
+    if (branch === 'main') throw new ValidationError('autoship source branch must not be main')
+    const card = this.db.prepare('SELECT branch FROM cards WHERE id=? AND board_id=?')
+      .get(report.card_id, report.board_id) as { branch: string | null } | undefined
+    if (!card || card.branch !== branch) throw new ValidationError('autoship branch must equal the card branch')
+    const sourceRepository = exactBoardRepository(this.db, report.board_id, report.card_id)
+    const sourceCommit = repositoryBranchCommit(sourceRepository, branch)
+    if (!deliveryCitesCommit(report, sourceCommit)) {
+      throw new ValidationError('autoship branch commit must be cited by the accepted delivery')
+    }
+    const idempotencyKey = bounded(input.idempotencyKey, 'idempotencyKey', MAX.idempotencyKey)
+    const preparedBy = actorKey(actor)
+    const requestSha256 = hashJson({
+      report_id: report.id,
+      board_id: report.board_id,
+      card_id: report.card_id,
+      job_id: report.job_id,
+      source_repository: sourceRepository,
+      source_branch: branch,
+      source_commit: sourceCommit,
+      destination: 'main',
+      prepared_by: preparedBy,
+    })
+    const replay = this.autoshipIntentByKey(idempotencyKey)
+    if (replay) return replayChecked(replay, requestSha256, 'autoship intent')
+    if (this.autoshipIntentByReport(report.id)) {
+      throw new ConflictError('accepted delivery already has an autoship intent')
+    }
+
+    const prepare = this.db.transaction(() => {
+      const prior = this.autoshipIntentByKey(idempotencyKey)
+      if (prior) return replayChecked(prior, requestSha256, 'autoship intent')
+      if (this.autoshipIntentByReport(report.id)) {
+        throw new ConflictError('accepted delivery already has an autoship intent')
+      }
+      const id = randomUUID()
+      const preparedAt = timestamp()
+      this.db.prepare(`INSERT INTO delivery_autoship_intents
+        (id, report_id, board_id, card_id, job_id, source_repository, source_branch,
+         source_commit, destination, prepared_by, prepared_at, idempotency_key,
+         request_sha256, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'main', ?, ?, ?, ?, ?)`).run(
+        id, report.id, report.board_id, report.card_id, report.job_id, sourceRepository,
+        branch, sourceCommit, preparedBy, preparedAt, idempotencyKey, requestSha256, preparedAt,
+      )
+      this.appendEvent(report, actor, 'delivery.autoship_intent_prepared', id, {
+        autoship_intent_id: id,
+        source_repository: sourceRepository,
+        source_branch: branch,
+        source_commit: sourceCommit,
+        destination: 'main',
+      }, preparedAt)
+      return this.autoshipIntentByKey(idempotencyKey)!
+    })
+    return prepare.immediate()
+  }
+
+  pendingAutoshipIntents(boardId?: number, limit = 100): DeliveryAutoshipIntent[] {
+    this.requireAutoshipIntentSchema()
+    const scopedBoardId = boardId === undefined ? null : positiveInteger(boardId, 'boardId')
+    const boundedLimit = Math.min(MAX.list, Math.max(1, integer(limit, 'limit')))
+    return (this.db.prepare(`SELECT intent.* FROM delivery_autoship_intents intent
+      LEFT JOIN delivery_autoship_completions completion ON completion.intent_id=intent.id
+      WHERE completion.id IS NULL AND (@board_id IS NULL OR intent.board_id=@board_id)
+      ORDER BY intent.prepared_at, intent.rowid LIMIT @limit`).all({
+      board_id: scopedBoardId,
+      limit: boundedLimit,
+    }) as Record<string, unknown>[]).map(mapAutoshipIntent)
+  }
+
+  /** Completes a durable intent only after exact main HEAD contains its immutable source commit. */
+  completeAutoshipIntent(intentId: string, input: CompleteAutoshipIntentInput): DeliveryAutoshipResult {
+    this.requireAutoshipIntentSchema()
+    const intent = this.autoshipIntent(identifier(intentId, 'intentId'))
+    const completed = this.autoshipCompletionForIntent(intent.id)
+    if (completed) return this.autoshipResult(intent, completed)
+    const report = this.reports.get(intent.report_id)
+    if (report.status !== 'accepted') throw new ConflictError('autoship intent delivery is no longer accepted')
+    const current = report.job_id
+      ? this.reports.currentForJob(report.job_id)
+      : this.reports.currentForCard(report.card_id)
+    if (current?.id !== report.id) throw new ConflictError('autoship intent delivery is no longer current')
+    const actor = actorIdentity(input.actor)
+    const completedBy = actorKey(actor)
+    const sourceRepository = exactBoardRepository(this.db, intent.board_id, intent.card_id)
+    if (sourceRepository !== intent.source_repository) {
+      throw new ValidationError('autoship intent repository no longer matches the exact board repository')
+    }
+    if (repositoryBranchName(sourceRepository) !== 'main') {
+      throw new ValidationError('autoship reconciliation requires the board repository to be on main')
+    }
+    const observedHeadCommit = repositoryHead(sourceRepository)
+    if (input.observedHeadCommit !== undefined
+      && fullCommit(input.observedHeadCommit, 'observedHeadCommit') !== observedHeadCommit) {
+      throw new ValidationError('observedHeadCommit must equal the exact current board repository HEAD')
+    }
+    if (repositoryCommit(sourceRepository, intent.source_commit) !== intent.source_commit
+      || !repositoryContainsCommit(sourceRepository, intent.source_commit, observedHeadCommit)) {
+      throw new ConflictError('autoship source commit is not contained in the exact current board repository HEAD')
+    }
+    const idempotencyKey = bounded(input.idempotencyKey, 'idempotencyKey', MAX.idempotencyKey)
+    const requestSha256 = hashJson({
+      intent_id: intent.id,
+      observed_head_commit: observedHeadCommit,
+      completed_by: completedBy,
+    })
+
+    const complete = this.db.transaction(() => {
+      const existing = this.autoshipCompletionForIntent(intent.id)
+      if (existing) return this.autoshipResult(intent, existing)
+      const replay = this.autoshipCompletionByKey(idempotencyKey)
+      if (replay) {
+        replayChecked(replay, requestSha256, 'autoship completion')
+        return this.autoshipResult(intent, replay)
+      }
+      const receipt = this.recordShipQueueReceipt({
+        boardId: intent.board_id,
+        cardId: intent.card_id,
+        sourceCommit: intent.source_commit,
+        observedHeadCommit,
+        idempotencyKey: `autoship-intent-receipt:${intent.id}:${observedHeadCommit}`,
+      })
+      const shipment = this.ship(report.id, {
+        actor,
+        receiptId: receipt.id,
+        artifactAttestationIds: this.artifactAttestations(report.id).map((item) => item.id),
+        idempotencyKey: `autoship-intent-shipment:${intent.id}`,
+      })
+      const id = randomUUID()
+      const completedAt = timestamp()
+      this.db.prepare(`INSERT INTO delivery_autoship_completions
+        (id, intent_id, receipt_id, shipment_id, observed_head_commit, completed_by,
+         completed_at, idempotency_key, request_sha256, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, intent.id, receipt.id, shipment.id, observedHeadCommit, completedBy,
+        completedAt, idempotencyKey, requestSha256, completedAt,
+      )
+      this.appendEvent(report, actor, 'delivery.autoship_intent_completed', id, {
+        autoship_intent_id: intent.id,
+        autoship_completion_id: id,
+        shipment_receipt_id: receipt.id,
+        shipment_id: shipment.id,
+        source_commit: intent.source_commit,
+        observed_head_commit: observedHeadCommit,
+      }, completedAt)
+      return this.autoshipResult(intent, this.autoshipCompletionForIntent(intent.id)!)
+    })
+    return complete.immediate()
+  }
+
+  /** Bounded startup/manual recovery. Non-merged intents remain durable and pending. */
+  reconcilePendingAutoshipIntents(input: ReconcileAutoshipIntentsInput): DeliveryAutoshipReconciliation[] {
+    const actor = actorIdentity(input.actor)
+    const intents = this.pendingAutoshipIntents(input.boardId, input.limit ?? 100)
+    return intents.map((intent) => {
+      try {
+        const head = repositoryHead(intent.source_repository)
+        if (repositoryBranchName(intent.source_repository) !== 'main'
+          || !repositoryContainsCommit(intent.source_repository, intent.source_commit, head)) {
+          return { status: 'pending' as const, intent, reason: 'source commit is not on exact current main HEAD' }
+        }
+        return {
+          status: 'completed' as const,
+          result: this.completeAutoshipIntent(intent.id, {
+            actor,
+            observedHeadCommit: head,
+            idempotencyKey: `autoship-intent-reconcile:${intent.id}:${head}`,
+          }),
+        }
+      } catch (error) {
+        return {
+          status: 'pending' as const,
+          intent,
+          reason: error instanceof Error ? error.message.slice(0, 1_000) : 'autoship reconciliation failed',
+        }
+      }
+    })
   }
 
   recordShipQueueReceipt(input: RecordShipQueueReceiptInput): DeliveryShipmentReceipt {
@@ -864,6 +1112,65 @@ export class DeliveryTrackbookService {
     }
   }
 
+  private hasAutoshipIntentSchema(): boolean {
+    const rows = this.db.prepare(`SELECT name FROM sqlite_master
+      WHERE type='table' AND name IN ('delivery_autoship_intents','delivery_autoship_completions')`)
+      .all() as Array<{ name: string }>
+    return rows.length === 2
+  }
+
+  private requireAutoshipIntentSchema(): void {
+    this.requireShipmentIntegritySchema()
+    if (!this.hasAutoshipIntentSchema()) {
+      throw new Error('delivery autoship intent migration 037 is not installed')
+    }
+  }
+
+  private autoshipIntent(id: string): DeliveryAutoshipIntent {
+    const row = this.db.prepare('SELECT * FROM delivery_autoship_intents WHERE id=?')
+      .get(id) as Record<string, unknown> | undefined
+    if (!row) throw new NotFoundError('autoship intent not found')
+    return mapAutoshipIntent(row)
+  }
+
+  private autoshipIntentByKey(key: string): DeliveryAutoshipIntent | null {
+    const row = this.db.prepare('SELECT * FROM delivery_autoship_intents WHERE idempotency_key=?')
+      .get(key) as Record<string, unknown> | undefined
+    return row ? mapAutoshipIntent(row) : null
+  }
+
+  private autoshipIntentByReport(reportId: string): DeliveryAutoshipIntent | null {
+    const row = this.db.prepare('SELECT * FROM delivery_autoship_intents WHERE report_id=?')
+      .get(reportId) as Record<string, unknown> | undefined
+    return row ? mapAutoshipIntent(row) : null
+  }
+
+  private autoshipCompletionForIntent(intentId: string): DeliveryAutoshipCompletion | null {
+    const row = this.db.prepare('SELECT * FROM delivery_autoship_completions WHERE intent_id=?')
+      .get(intentId) as Record<string, unknown> | undefined
+    return row ? mapAutoshipCompletion(row) : null
+  }
+
+  private autoshipCompletionByKey(key: string): DeliveryAutoshipCompletion | null {
+    const row = this.db.prepare('SELECT * FROM delivery_autoship_completions WHERE idempotency_key=?')
+      .get(key) as Record<string, unknown> | undefined
+    return row ? mapAutoshipCompletion(row) : null
+  }
+
+  private autoshipResult(
+    intent: DeliveryAutoshipIntent,
+    completion: DeliveryAutoshipCompletion,
+  ): DeliveryAutoshipResult {
+    const shipment = this.shipmentById(completion.shipment_id)
+    if (!shipment) throw new Error('autoship completion shipment is missing')
+    return {
+      intent,
+      receipt: this.shipmentReceipt(completion.receipt_id),
+      shipment,
+      completion,
+    }
+  }
+
   private verificationByKey(reportId: string, key: string): DeliveryVerificationRun | null {
     const row = this.db.prepare('SELECT * FROM delivery_verification_runs WHERE report_id=? AND idempotency_key=?')
       .get(reportId, key) as Record<string, unknown> | undefined
@@ -914,6 +1221,14 @@ export class DeliveryTrackbookService {
       LEFT JOIN delivery_shipment_receipts receipt ON receipt.id=shipment.receipt_id
       WHERE shipment.report_id=? AND shipment.idempotency_key=?`)
       .get(reportId, key) as Record<string, unknown> | undefined
+    return row ? mapShipment(row) : null
+  }
+
+  private shipmentById(id: string): DeliveryShipment | null {
+    const row = this.db.prepare(`SELECT shipment.*, receipt.observed_head_commit
+      FROM delivery_shipments shipment
+      LEFT JOIN delivery_shipment_receipts receipt ON receipt.id=shipment.receipt_id
+      WHERE shipment.id=?`).get(id) as Record<string, unknown> | undefined
     return row ? mapShipment(row) : null
   }
 
@@ -1025,6 +1340,40 @@ function mapShipmentReceipt(row: Record<string, unknown>): DeliveryShipmentRecei
   }
 }
 
+function mapAutoshipIntent(row: Record<string, unknown>): DeliveryAutoshipIntent {
+  return {
+    id: String(row.id),
+    report_id: String(row.report_id),
+    board_id: Number(row.board_id),
+    card_id: Number(row.card_id),
+    job_id: nullableString(row.job_id),
+    source_repository: String(row.source_repository),
+    source_branch: String(row.source_branch),
+    source_commit: String(row.source_commit),
+    destination: 'main',
+    prepared_by: String(row.prepared_by),
+    prepared_at: String(row.prepared_at),
+    idempotency_key: String(row.idempotency_key),
+    request_sha256: String(row.request_sha256),
+    created_at: String(row.created_at),
+  }
+}
+
+function mapAutoshipCompletion(row: Record<string, unknown>): DeliveryAutoshipCompletion {
+  return {
+    id: String(row.id),
+    intent_id: String(row.intent_id),
+    receipt_id: String(row.receipt_id),
+    shipment_id: String(row.shipment_id),
+    observed_head_commit: String(row.observed_head_commit),
+    completed_by: String(row.completed_by),
+    completed_at: String(row.completed_at),
+    idempotency_key: String(row.idempotency_key),
+    request_sha256: String(row.request_sha256),
+    created_at: String(row.created_at),
+  }
+}
+
 function mapRegression(row: Record<string, unknown>): DeliveryRegression {
   return {
     id: String(row.id),
@@ -1121,6 +1470,36 @@ function repositoryContainsCommit(repository: string, sourceCommit: string, obse
     return true
   } catch {
     return false
+  }
+}
+
+function gitBranch(value: unknown): string {
+  const branch = bounded(value, 'branch', 255)
+  try {
+    if (gitEvidence('.', ['check-ref-format', '--branch', branch]) !== branch) {
+      throw new Error('normalized branch differs')
+    }
+  } catch {
+    throw new ValidationError('branch must be an exact local git branch name')
+  }
+  return branch
+}
+
+function repositoryBranchCommit(repository: string, branch: string): string {
+  try {
+    return fullCommit(gitEvidence(repository, [
+      'rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`,
+    ]), 'resolved branch commit')
+  } catch {
+    throw new ValidationError('autoship branch does not resolve in the exact board repository')
+  }
+}
+
+function repositoryBranchName(repository: string): string {
+  try {
+    return bounded(gitEvidence(repository, ['symbolic-ref', '--short', 'HEAD']), 'repository branch', 255)
+  } catch {
+    throw new ValidationError('shipment board repository must have an attached branch HEAD')
   }
 }
 

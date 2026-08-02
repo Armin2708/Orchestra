@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
@@ -146,6 +146,29 @@ export class ShipQueue {
     return null
   }
 
+  private async branchExists(branch: string): Promise<boolean> {
+    try {
+      await this.git(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async cleanupCandidate(branch: string, worktree: string | null): Promise<void> {
+    const registered = await this.worktreeFor(branch)
+    if (registered) {
+      if (worktree) {
+        const [expected, actual] = await Promise.all([realpath(worktree), realpath(registered)])
+        if (expected !== actual) throw new Error(`registered worktree does not match candidate for ${branch}`)
+      }
+      await this.git(['worktree', 'remove', '--force', registered])
+    }
+    if (await this.worktreeFor(branch)) throw new Error(`worktree cleanup incomplete for ${branch}`)
+    if (await this.branchExists(branch)) await this.git(['branch', '-d', branch])
+    if (await this.branchExists(branch)) throw new Error(`branch cleanup incomplete for ${branch}`)
+  }
+
   private async ship(c: ShipCandidate): Promise<{ status: 'shipped' | 'failed' | 'skipped'; hash?: string; reason?: string; detail?: string }> {
     let sha: string
     try {
@@ -186,11 +209,12 @@ export class ShipQueue {
       const agentWorktree = c.worktree ?? await this.worktreeFor(c.branch)
       await this.git(['merge', '--no-ff', sha, '-m', subject])
       const hash = (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
-      await this.hooks.recordShipped(c.cardId, hash)
 
-      // the branch and its worktree become invisible plumbing once main has the work
-      if (agentWorktree) { try { await this.git(['worktree', 'remove', '--force', agentWorktree]) } catch { /* already gone */ } }
-      try { await this.git(['branch', '-d', c.branch]) } catch { /* deleted or unmerged-elsewhere — leave it */ }
+      // Do not expose success while branch plumbing can still race consumers. Cleanup remains
+      // conservative (`branch -d`) and any incomplete cleanup fails the queue item after merge;
+      // the durable autoship intent can then reconcile the exact observed main HEAD on restart.
+      await this.cleanupCandidate(c.branch, agentWorktree)
+      await this.hooks.recordShipped(c.cardId, hash)
       return { status: 'shipped', hash }
     } finally {
       try { await this.git(['worktree', 'remove', '--force', tmp]) } catch { /* not registered */ }

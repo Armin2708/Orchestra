@@ -76,6 +76,30 @@ it('ships a green branch: --no-ff merge on main, shipped recorded, branch delete
   expect(branches).toBe('') // merged branch cleaned up
 }, 30000)
 
+it('does not expose shipment success until the candidate worktree and branch are both gone', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-71', { 'cleanup-order.txt': 'safe\n' })
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-agent-worktree-'))
+  const worktree = path.join(holder, 'card-71')
+  await git(dir, 'worktree', 'add', worktree, 'card-71')
+  let recordObservedCleanup = false
+  const h = harness(dir, {
+    recordShipped: async () => {
+      const worktrees = (await git(dir, 'worktree', 'list', '--porcelain')).stdout
+      const branch = (await git(dir, 'branch', '--list', 'card-71')).stdout.trim()
+      expect(worktrees).not.toContain(worktree)
+      expect(branch).toBe('')
+      recordObservedCleanup = true
+    },
+  })
+
+  h.q.enqueue({ ...cand(71, 'card-71'), worktree })
+  await until(() => h.events.some((event) => ['shipped', 'failed'].includes(event.type)))
+
+  expect(h.failures).toEqual([])
+  expect(recordObservedCleanup).toBe(true)
+}, 30000)
+
 it('a red suite leaves main untouched, keeps the branch, and reports the output', async () => {
   const dir = await mkRepo()
   const before = (await git(dir, 'rev-parse', 'HEAD')).stdout.trim()
