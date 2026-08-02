@@ -19,6 +19,7 @@ export interface UsageObservationInput {
   boardId: number
   sessionId: string
   jobId: string
+  operationId?: string | null
   teamId?: string | null
   provider: string
   billingMode: BillingMode
@@ -176,6 +177,19 @@ interface JobScope {
   session_profile_id: string | null
   job_created_at: string
   session_created_at: string
+  session_context_json: string
+}
+
+interface ProviderEvidenceBinding {
+  evidence_id: string
+  provider_id: string
+  adapter_id: string
+  mode_id: string
+  runtime_mode: string
+  billing_mode: 'personal_subscription' | 'usage_priced_api'
+  platform: string
+  source_commit: string
+  evidence_sha256: string
 }
 
 interface BudgetRow {
@@ -206,10 +220,12 @@ export class OutcomeAnalyticsService {
       'observed at',
     )
     const canonicalProvider = this.canonicalProvider(scope, input.provider)
-    const canonicalBilling = this.canonicalBillingMode(canonicalProvider, observedAt)
-    if (billingMode(input.billingMode) !== canonicalBilling) {
+    const canonicalBilling = this.canonicalBillingMode(scope, canonicalProvider, observedAt)
+    if (billingMode(input.billingMode) !== canonicalBilling.mode) {
       throw new ValidationError('billing mode is not supported by canonical provider evidence')
     }
+    const operationId = input.operationId == null
+      ? null : identifier(input.operationId, 'operation id')
     const normalized = {
       id,
       board_id: positiveBoard(input.boardId),
@@ -218,7 +234,9 @@ export class OutcomeAnalyticsService {
       job_id: identifier(input.jobId, 'job id'),
       contract_ref: this.contractRef(scope),
       provider: canonicalProvider,
-      billing_mode: canonicalBilling,
+      billing_mode: canonicalBilling.mode,
+      operation_id: operationId,
+      provider_evidence_id: canonicalBilling.binding?.evidence_id ?? null,
       cached_input_semantics: cachedSemantics(input.cachedInputSemantics),
       input_tokens: count(input.inputTokens, 'input tokens'),
       cached_input_tokens: count(input.cachedInputTokens, 'cached input tokens'),
@@ -244,20 +262,44 @@ export class OutcomeAnalyticsService {
     if (providerTotal < minimumTotal) {
       throw new ValidationError('provider total tokens are inconsistent with the token split')
     }
+    const consumption = operationId === null ? null : this.operationUsageConsumption(
+      operationId, normalized.id, normalized.board_id, normalized.team_id, normalized.job_id,
+      providerTotal, normalized.context_injection_tokens, observedAt,
+    )
     const hash = requestHash({ ...normalized, provider_total_tokens: providerTotal })
     const prior = this.replayed('outcome_usage_observations', normalized.id, hash)
     if (prior) return prior
     const createdAt = now()
-    this.db.prepare(`INSERT INTO outcome_usage_observations
-      (id, request_sha256, board_id, team_id, session_id, job_id, contract_ref,
-       provider, billing_mode, cached_input_semantics, input_tokens, cached_input_tokens,
-       output_tokens, thinking_tokens, context_injection_tokens, provider_total_tokens,
-       observed_at, created_at)
-      VALUES (@id, @request_sha256, @board_id, @team_id, @session_id, @job_id,
-       @contract_ref, @provider, @billing_mode, @cached_input_semantics, @input_tokens,
-       @cached_input_tokens, @output_tokens, @thinking_tokens, @context_injection_tokens,
-       @provider_total_tokens, @observed_at, @created_at)`)
-      .run({ ...normalized, request_sha256: hash, provider_total_tokens: providerTotal, created_at: createdAt })
+    const transaction = this.db.transaction(() => {
+      this.db.prepare(`INSERT INTO outcome_usage_observations
+        (id, request_sha256, board_id, team_id, session_id, job_id, contract_ref,
+         provider, billing_mode, cached_input_semantics, input_tokens, cached_input_tokens,
+         output_tokens, thinking_tokens, context_injection_tokens, provider_total_tokens,
+         observed_at, created_at)
+        VALUES (@id, @request_sha256, @board_id, @team_id, @session_id, @job_id,
+         @contract_ref, @provider, @billing_mode, @cached_input_semantics, @input_tokens,
+         @cached_input_tokens, @output_tokens, @thinking_tokens, @context_injection_tokens,
+         @provider_total_tokens, @observed_at, @created_at)`)
+        .run({ ...normalized, request_sha256: hash, provider_total_tokens: providerTotal, created_at: createdAt })
+      if (canonicalBilling.binding) {
+        this.db.prepare(`INSERT INTO outcome_usage_provider_bindings
+          (usage_id, evidence_id, provider_id, adapter_id, mode_id, runtime_mode,
+           billing_mode, platform, source_commit, evidence_sha256, created_at)
+          VALUES (@usage_id, @evidence_id, @provider_id, @adapter_id, @mode_id,
+           @runtime_mode, @billing_mode, @platform, @source_commit, @evidence_sha256,
+           @created_at)`).run({
+          usage_id: normalized.id,
+          ...canonicalBilling.binding,
+          created_at: createdAt,
+        })
+      }
+      if (consumption) {
+        this.db.prepare(`INSERT INTO outcome_operation_usage_links
+          (operation_id, usage_id, linked_at) VALUES (?, ?, ?)`)
+          .run(consumption.operation_id, normalized.id, createdAt)
+      }
+    })
+    transaction.immediate()
     return this.row('outcome_usage_observations', normalized.id)
   }
 
@@ -524,7 +566,8 @@ export class OutcomeAnalyticsService {
       planning_round_tokens: count(input.planningRoundTokens ?? 0, 'planning round tokens'),
     }
     const transaction = this.db.transaction(() => {
-      const row = this.db.prepare(`SELECT confirmation.*, binding.execution_sha256
+      const row = this.db.prepare(`SELECT confirmation.*, binding.execution_sha256,
+          binding.confirmation_required
         FROM outcome_operation_confirmations confirmation
         JOIN outcome_operation_bindings binding ON binding.operation_id=confirmation.id
         WHERE confirmation.id=?`).get(operationId) as Record<string, unknown> | undefined
@@ -532,12 +575,25 @@ export class OutcomeAnalyticsService {
       if (row.execution_sha256 !== executionSha256) {
         throw new ConflictError('operation authorization is bound to another execution')
       }
+      if (String(row.requested_at) > consumedAt) {
+        throw new ValidationError('operation cannot execute before it was planned')
+      }
       if (String(row.expires_at) <= consumedAt) throw new ConflictError('operation authorization expired')
       if (row.status !== 'not_required' && row.status !== 'confirmed') {
         throw new ConflictError('operation requires explicit confirmation')
       }
       if (this.db.prepare(`SELECT 1 FROM outcome_operation_consumptions WHERE operation_id=?`)
         .get(operationId)) throw new ConflictError('operation authorization is already consumed')
+      if (row.operation_kind !== 'planning_round' && actual.planning_round_tokens !== 0) {
+        throw new ValidationError('planning round tokens require a planning operation')
+      }
+      const actualTokenEnvelope = actual.provider_tokens + actual.context_tokens
+      if (actual.fanout > Number(row.fanout)
+        || actualTokenEnvelope > Number(row.estimated_tokens)
+        || (row.operation_kind === 'planning_round'
+          && actual.planning_round_tokens > Number(row.estimated_tokens))) {
+        throw new ConflictError('actual operation exceeds its confirmed plan; a new confirmation is required')
+      }
       const evaluation = this.evaluateBudgets({
         boardId: Number(row.board_id),
         teamId: row.team_id == null ? null : String(row.team_id),
@@ -549,6 +605,13 @@ export class OutcomeAnalyticsService {
       })
       if (evaluation.allowed !== true) {
         throw new ConflictError('operation exceeds a hard budget at execution')
+      }
+      const actualWarning = evaluation.warning === true
+        || actual.fanout >= DEFAULT_HIGH_FANOUT
+        || (row.operation_kind === 'planning_round'
+          && actual.planning_round_tokens >= DEFAULT_COSTLY_PLANNING_TOKENS)
+      if (actualWarning && row.status !== 'confirmed') {
+        throw new ConflictError('actual operation requires a new explicit confirmation')
       }
       this.db.prepare(`INSERT INTO outcome_operation_consumptions
         (operation_id, board_id, team_id, job_id, provider_tokens, context_tokens,
@@ -629,19 +692,37 @@ export class OutcomeAnalyticsService {
       ...evidence.metrics,
       evidence_ref: evidenceRef,
       observed_at: evidence.observed_at,
+      artifact_sha256: evidence.binding.artifact_sha256,
+      verifier_ref: evidence.binding.verifier_ref,
+      provenance_sha256: evidence.binding.provenance_sha256,
     }
     const hash = requestHash(normalized)
     const prior = this.replayed('outcome_benchmark_observations', normalized.id, hash)
-    if (prior) return prior
+    if (prior) {
+      if (!this.benchmarkEvidenceCurrent(normalized.id)) {
+        throw new ConflictError('benchmark evidence artifact changed after observation')
+      }
+      return prior
+    }
     try {
-      this.db.prepare(`INSERT INTO outcome_benchmark_observations
-        (id, request_sha256, board_id, suite_key, scenario_key, variant,
-         provider_tokens, context_tokens, accepted_deliveries, quality_milli,
-         duration_ms, evidence_ref, observed_at, created_at)
-        VALUES (@id, @request_sha256, @board_id, @suite_key, @scenario_key,
-         @variant, @provider_tokens, @context_tokens, @accepted_deliveries,
-         @quality_milli, @duration_ms, @evidence_ref, @observed_at, @created_at)`)
-        .run({ ...normalized, request_sha256: hash, created_at: now() })
+      const createdAt = now()
+      const transaction = this.db.transaction(() => {
+        this.db.prepare(`INSERT INTO outcome_benchmark_observations
+          (id, request_sha256, board_id, suite_key, scenario_key, variant,
+           provider_tokens, context_tokens, accepted_deliveries, quality_milli,
+           duration_ms, evidence_ref, observed_at, created_at)
+          VALUES (@id, @request_sha256, @board_id, @suite_key, @scenario_key,
+           @variant, @provider_tokens, @context_tokens, @accepted_deliveries,
+           @quality_milli, @duration_ms, @evidence_ref, @observed_at, @created_at)`)
+          .run({ ...normalized, request_sha256: hash, created_at: createdAt })
+        this.db.prepare(`INSERT INTO outcome_benchmark_evidence_bindings
+          (observation_id, artifact_id, artifact_sha256, evidence_version,
+           verifier_ref, provenance_sha256, artifact_created_at, created_at)
+          VALUES (@observation_id, @artifact_id, @artifact_sha256, @evidence_version,
+           @verifier_ref, @provenance_sha256, @artifact_created_at, @created_at)`)
+          .run({ observation_id: normalized.id, ...evidence.binding, created_at: createdAt })
+      })
+      transaction.immediate()
     } catch (error) {
       if (String(error).includes('UNIQUE constraint failed')) {
         throw new ConflictError('benchmark scenario variant is already recorded')
@@ -659,6 +740,7 @@ export class OutcomeAnalyticsService {
       .all(boardId, suiteKey) as Array<Record<string, unknown>>
     const scenarios = new Map<string, { before?: Record<string, unknown>; after?: Record<string, unknown> }>()
     for (const row of rows) {
+      row.evidence_current = this.benchmarkEvidenceCurrent(String(row.id))
       const scenario = scenarios.get(String(row.scenario_key)) ?? {}
       scenario[row.variant as 'before' | 'after'] = row
       scenarios.set(String(row.scenario_key), scenario)
@@ -666,6 +748,14 @@ export class OutcomeAnalyticsService {
     const comparisons = [...scenarios.entries()].map(([scenarioKey, pair]) => {
       if (!pair.before || !pair.after) {
         return { scenario_key: scenarioKey, complete: false, passed: false, reason: 'missing_variant' }
+      }
+      if (pair.before.evidence_current !== true || pair.after.evidence_current !== true) {
+        return {
+          scenario_key: scenarioKey,
+          complete: false,
+          passed: false,
+          reason: 'evidence_not_current',
+        }
       }
       const beforeAccepted = numberValue(pair.before.accepted_deliveries)
       const afterAccepted = numberValue(pair.after.accepted_deliveries)
@@ -836,7 +926,8 @@ export class OutcomeAnalyticsService {
         session.driver_id AS session_driver_id,
         job.assigned_profile_id AS job_profile_id,
         COALESCE(session.assigned_profile_id, session.profile_id) AS session_profile_id,
-        job.created_at AS job_created_at, session.created_at AS session_created_at
+        job.created_at AS job_created_at, session.created_at AS session_created_at,
+        session.context_json AS session_context_json
       FROM jobs job JOIN agent_sessions session ON session.id=?
       WHERE job.id=?`).get(sessionId, jobId) as JobScope | undefined
     if (!row) throw new NotFoundError('job or session not found')
@@ -846,6 +937,10 @@ export class OutcomeAnalyticsService {
     }
     if (row.job_provider !== row.session_provider) {
       throw new ValidationError('canonical job and session providers disagree')
+    }
+    if (!row.job_driver_id || !row.session_driver_id
+      || row.job_driver_id !== row.session_driver_id) {
+      throw new ValidationError('canonical job and session drivers are missing or disagree')
     }
     if (row.job_profile_id && row.session_profile_id
       && row.job_profile_id !== row.session_profile_id) {
@@ -878,15 +973,77 @@ export class OutcomeAnalyticsService {
     return scope.job_provider
   }
 
-  private canonicalBillingMode(provider: string, observedAt: string): BillingMode {
-    const rows = this.db.prepare(`SELECT DISTINCT billing_mode FROM provider_acceptance_evidence
-      WHERE provider_id=? AND observed_at<=? ORDER BY billing_mode`)
-      .all(provider, observedAt) as Array<{ billing_mode: string }>
-    if (rows.length !== 1) return 'unknown'
-    const mode = rows[0]?.billing_mode
-    if (mode === 'personal_subscription') return 'subscription'
-    if (mode === 'usage_priced_api') return 'api'
-    return 'unknown'
+  private canonicalBillingMode(
+    scope: JobScope,
+    provider: string,
+    observedAt: string,
+  ): { mode: BillingMode; binding: ProviderEvidenceBinding | null } {
+    let context: unknown
+    try { context = JSON.parse(scope.session_context_json) } catch {
+      throw new ValidationError('canonical session context is invalid')
+    }
+    const declared = context && typeof context === 'object' && !Array.isArray(context)
+      ? (context as Record<string, unknown>).provider_acceptance : undefined
+    if (declared === undefined) return { mode: 'unknown', binding: null }
+    if (!declared || typeof declared !== 'object' || Array.isArray(declared)) {
+      throw new ValidationError('canonical provider acceptance binding is invalid')
+    }
+    const tuple = declared as Record<string, unknown>
+    const evidenceId = identifier(tuple.evidence_id, 'provider evidence id')
+    const evidence = this.db.prepare(`SELECT id, provider_id, adapter_id, mode_id,
+        runtime_mode, billing_mode, platform, source_commit, observed_at,
+        matrix_json, matrix_sha256, artifact_sha256
+      FROM provider_acceptance_evidence WHERE id=?`).get(evidenceId) as {
+        id: string; provider_id: string; adapter_id: string; mode_id: string
+        runtime_mode: string; billing_mode: string; platform: string; source_commit: string
+        observed_at: string; matrix_sha256: string; artifact_sha256: string
+        matrix_json: string
+      } | undefined
+    if (!evidence) throw new ValidationError('canonical provider acceptance evidence is missing')
+    let acceptanceMatrix: unknown
+    try { acceptanceMatrix = JSON.parse(evidence.matrix_json) } catch { acceptanceMatrix = null }
+    const gates = acceptanceMatrix && typeof acceptanceMatrix === 'object'
+      ? (acceptanceMatrix as Record<string, unknown>).gates : null
+    if (!gates || typeof gates !== 'object' || Array.isArray(gates)
+      || Object.values(gates as Record<string, unknown>).length === 0
+      || Object.values(gates as Record<string, unknown>).some((gate) => {
+        if (!gate || typeof gate !== 'object' || Array.isArray(gate)) return true
+        const record = gate as Record<string, unknown>
+        return record.state !== 'passed'
+          || !Array.isArray(record.evidence_refs) || record.evidence_refs.length === 0
+      })) {
+      throw new ValidationError('canonical provider evidence has not passed every acceptance gate')
+    }
+    const expected = {
+      evidence_id: evidence.id,
+      provider_id: evidence.provider_id,
+      adapter_id: evidence.adapter_id,
+      mode_id: evidence.mode_id,
+      runtime_mode: evidence.runtime_mode,
+      platform: evidence.platform,
+      source_commit: evidence.source_commit,
+    }
+    if (canonical(tuple) !== canonical(expected)
+      || evidence.provider_id !== provider
+      || evidence.adapter_id !== scope.job_driver_id
+      || evidence.adapter_id !== scope.session_driver_id
+      || String(evidence.observed_at) > observedAt) {
+      throw new ValidationError('canonical provider acceptance tuple does not match the job and session')
+    }
+    const nativeMode = evidence.billing_mode === 'personal_subscription'
+      ? 'subscription' : evidence.billing_mode === 'usage_priced_api' ? 'api' : null
+    if (!nativeMode) throw new ValidationError('canonical provider billing evidence is invalid')
+    const binding: ProviderEvidenceBinding = {
+      ...expected,
+      billing_mode: evidence.billing_mode as ProviderEvidenceBinding['billing_mode'],
+      evidence_sha256: requestHash({
+        ...expected,
+        billing_mode: evidence.billing_mode,
+        matrix_sha256: evidence.matrix_sha256,
+        artifact_sha256: evidence.artifact_sha256,
+      }),
+    }
+    return { mode: nativeMode, binding }
   }
 
   private validScopedTimestamp(value: string, scope: JobScope, field: string): string {
@@ -939,17 +1096,22 @@ export class OutcomeAnalyticsService {
     boardId: number,
     evidenceRef: string,
     claimed: Record<string, unknown>,
-  ): { metrics: Record<string, unknown>; observed_at: string } {
+  ): {
+    metrics: Record<string, unknown>
+    observed_at: string
+    binding: {
+      artifact_id: string; artifact_sha256: string; evidence_version: number
+      verifier_ref: string; provenance_sha256: string; artifact_created_at: string
+    }
+  } {
     const artifactId = evidenceRef.startsWith('artifact:') ? evidenceRef.slice('artifact:'.length) : evidenceRef
-    const artifact = this.db.prepare(`SELECT kind, metadata, created_at FROM artifacts
-      WHERE id=? AND board_id=?`).get(artifactId, boardId) as {
-        kind: string; metadata: string; created_at: string
-      } | undefined
-    if (!artifact || !['benchmark', 'test_report', 'verification'].includes(artifact.kind)) {
+    const artifact = this.db.prepare(`SELECT * FROM artifacts WHERE id=? AND board_id=?`)
+      .get(artifactId, boardId) as Record<string, unknown> | undefined
+    if (!artifact || !['benchmark', 'test_report', 'verification'].includes(String(artifact.kind))) {
       throw new ValidationError('benchmark evidence must reference a same-board verification artifact')
     }
     let parsed: unknown
-    try { parsed = JSON.parse(artifact.metadata) } catch { parsed = null }
+    try { parsed = JSON.parse(String(artifact.metadata)) } catch { parsed = null }
     const metrics = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>).outcome_benchmark : null
     if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) {
@@ -959,11 +1121,102 @@ export class OutcomeAnalyticsService {
     if (canonical(claimed) !== canonical(canonicalMetrics)) {
       throw new ValidationError('benchmark observation disagrees with canonical artifact evidence')
     }
+    const envelope = parsed as Record<string, unknown>
+    const evidence = envelope.outcome_benchmark_evidence
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+      throw new ValidationError('benchmark artifact lacks verified evidence provenance')
+    }
+    const evidenceRecord = evidence as Record<string, unknown>
+    if (evidenceRecord.version !== 1) {
+      throw new ValidationError('benchmark evidence version is invalid')
+    }
+    const verifierRef = bounded(evidenceRecord.verifier_ref, 'benchmark verifier ref')
+    const provenance = evidenceRecord.provenance
+    if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) {
+      throw new ValidationError('benchmark evidence provenance is invalid')
+    }
+    const sourceCommit = (provenance as Record<string, unknown>).source_commit
+    if (typeof sourceCommit !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(sourceCommit)) {
+      throw new ValidationError('benchmark evidence source commit is invalid')
+    }
     const observedAt = timestamp(artifact.created_at, 'artifact created at')
     if (Date.parse(observedAt) > Date.now() + 5 * 60_000) {
       throw new ValidationError('benchmark artifact time is in the future')
     }
-    return { metrics: canonicalMetrics, observed_at: observedAt }
+    return {
+      metrics: canonicalMetrics,
+      observed_at: observedAt,
+      binding: {
+        artifact_id: artifactId,
+        artifact_sha256: this.artifactDigest(artifact),
+        evidence_version: 1,
+        verifier_ref: verifierRef,
+        provenance_sha256: requestHash(provenance),
+        artifact_created_at: observedAt,
+      },
+    }
+  }
+
+  private benchmarkEvidenceCurrent(observationId: string): boolean {
+    const binding = this.db.prepare(`SELECT * FROM outcome_benchmark_evidence_bindings
+      WHERE observation_id=?`).get(observationId) as Record<string, unknown> | undefined
+    if (!binding) return false
+    const artifact = this.db.prepare(`SELECT * FROM artifacts WHERE id=?`)
+      .get(binding.artifact_id) as Record<string, unknown> | undefined
+    return artifact !== undefined
+      && Number(binding.evidence_version) === 1
+      && String(binding.artifact_sha256) === this.artifactDigest(artifact)
+      && String(binding.artifact_created_at) === timestamp(artifact.created_at, 'artifact created at')
+  }
+
+  private artifactDigest(artifact: Record<string, unknown>): string {
+    return requestHash({
+      id: artifact.id,
+      board_id: artifact.board_id,
+      workspace_id: artifact.workspace_id,
+      card_id: artifact.card_id,
+      kind: artifact.kind,
+      name: artifact.name,
+      mime_type: artifact.mime_type,
+      path: artifact.path,
+      content: artifact.content,
+      metadata: artifact.metadata,
+      created_at: artifact.created_at,
+    })
+  }
+
+  private operationUsageConsumption(
+    operationId: string,
+    usageId: string,
+    boardId: number,
+    teamId: string | null,
+    jobId: string,
+    providerTokens: number,
+    contextTokens: number,
+    observedAt: string,
+  ): { operation_id: string } {
+    const consumption = this.db.prepare(`SELECT consumption.*,
+        link.usage_id AS linked_usage_id
+      FROM outcome_operation_consumptions consumption
+      LEFT JOIN outcome_operation_usage_links link ON link.operation_id=consumption.operation_id
+      WHERE consumption.operation_id=?`).get(operationId) as Record<string, unknown> | undefined
+    if (!consumption) throw new ValidationError('operation usage requires a consumed execution')
+    if (consumption.linked_usage_id != null && String(consumption.linked_usage_id) !== usageId) {
+      throw new ConflictError('operation execution is already linked to canonical usage')
+    }
+    if (Number(consumption.board_id) !== boardId
+      || String(consumption.job_id ?? '') !== jobId
+      || (consumption.team_id == null ? null : String(consumption.team_id)) !== teamId) {
+      throw new ValidationError('operation usage scope does not match its consumed execution')
+    }
+    if (Number(consumption.provider_tokens) !== providerTokens
+      || Number(consumption.context_tokens) !== contextTokens) {
+      throw new ValidationError('canonical usage does not match the consumed execution counters')
+    }
+    if (String(consumption.consumed_at) > observedAt) {
+      throw new ValidationError('canonical usage predates its consumed execution')
+    }
+    return { operation_id: operationId }
   }
 
   private validateBudgetScope(boardId: number, kind: BudgetScopeKind, id: string): void {
@@ -1041,11 +1294,16 @@ export class OutcomeAnalyticsService {
         COALESCE(SUM(context_injection_tokens),0) AS context_tokens
       FROM outcome_usage_observations WHERE board_id=?${predicate}`)
       .get(...values) as Record<string, unknown>
-    const operations = this.db.prepare(`SELECT COALESCE(SUM(provider_tokens),0) AS provider_tokens,
-        COALESCE(SUM(context_tokens),0) AS context_tokens,
-        COALESCE(SUM(fanout),0) AS fanout,
-        COALESCE(SUM(planning_round_tokens),0) AS planning_round_tokens
-      FROM outcome_operation_consumptions WHERE board_id=?${predicate}`)
+    const operations = this.db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN link.operation_id IS NULL
+          THEN consumption.provider_tokens ELSE 0 END),0) AS provider_tokens,
+        COALESCE(SUM(CASE WHEN link.operation_id IS NULL
+          THEN consumption.context_tokens ELSE 0 END),0) AS context_tokens,
+        COALESCE(SUM(consumption.fanout),0) AS fanout,
+        COALESCE(SUM(consumption.planning_round_tokens),0) AS planning_round_tokens
+      FROM outcome_operation_consumptions consumption
+      LEFT JOIN outcome_operation_usage_links link ON link.operation_id=consumption.operation_id
+      WHERE consumption.board_id=?${predicate}`)
       .get(...values) as Record<string, unknown>
     return {
       provider_tokens: numberValue(usage.provider_tokens) + numberValue(operations.provider_tokens),

@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type Database from 'better-sqlite3'
 
-export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 2
+export const OUTCOME_ANALYTICS_SCHEMA_VERSION = 3
 
 const TABLE_COLUMNS = Object.freeze({
   outcome_usage_observations: [
@@ -43,6 +43,18 @@ const TABLE_COLUMNS = Object.freeze({
     'operation_id', 'board_id', 'team_id', 'job_id', 'provider_tokens',
     'context_tokens', 'fanout', 'planning_round_tokens', 'consumed_by', 'consumed_at',
   ],
+  outcome_operation_usage_links: [
+    'operation_id', 'usage_id', 'linked_at',
+  ],
+  outcome_usage_provider_bindings: [
+    'usage_id', 'evidence_id', 'provider_id', 'adapter_id', 'mode_id',
+    'runtime_mode', 'billing_mode', 'platform', 'source_commit',
+    'evidence_sha256', 'created_at',
+  ],
+  outcome_benchmark_evidence_bindings: [
+    'observation_id', 'artifact_id', 'artifact_sha256', 'evidence_version',
+    'verifier_ref', 'provenance_sha256', 'artifact_created_at', 'created_at',
+  ],
 } as const)
 
 const REQUIRED_TRIGGERS = Object.freeze([
@@ -56,11 +68,15 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'outcome_secret_delete_guard',
   'outcome_binding_immutable_update',
   'outcome_consumption_immutable_update',
+  'outcome_operation_usage_link_immutable_update',
+  'outcome_usage_provider_binding_immutable_update',
+  'outcome_benchmark_evidence_binding_immutable_update',
 ] as const)
 
 const OWNED_SCHEMA_OBJECTS = /^outcome_/u
 
 const REQUIRED_SQL_FRAGMENTS = Object.freeze({
+  outcome_analytics_schema: ['singleton=1', 'version>=1', 'length(schema_sha256)=64'],
   outcome_usage_observations: [
     "billing_mode IN ('subscription','api','unknown')",
     'REFERENCES boards(id) ON DELETE CASCADE',
@@ -70,10 +86,20 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
     'REFERENCES boards(id) ON DELETE CASCADE',
     "category NOT IN ('exploration.file_read','exploration.duplicate')",
   ],
+  outcome_budget_policies: [
+    "scope_kind IN ('project','team','job')", "enforcement IN ('soft','hard')",
+    'max_provider_tokens IS NOT NULL OR max_context_tokens IS NOT NULL',
+  ],
   outcome_operation_confirmations: [
     "status IN ('not_required','awaiting_confirmation','confirmed','expired')",
     'expires_at>requested_at',
   ],
+  outcome_team_digests: ['json_valid(metrics_json)', 'window_end>window_start'],
+  outcome_benchmark_observations: [
+    "variant IN ('before','after')", 'quality_milli BETWEEN 0 AND 1000',
+    'UNIQUE(board_id, suite_key, scenario_key, variant)',
+  ],
+  outcome_analytics_secrets: ['singleton=1', 'length(hmac_key_hex)=64'],
   outcome_operation_bindings: [
     'REFERENCES outcome_operation_confirmations(id) ON DELETE CASCADE',
     'confirmation_required IN (0,1)',
@@ -81,6 +107,20 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
   outcome_operation_consumptions: [
     'REFERENCES outcome_operation_confirmations(id) ON DELETE CASCADE',
     'planning_round_tokens BETWEEN 0 AND 1000000000000',
+  ],
+  outcome_operation_usage_links: [
+    'REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE',
+    'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
+  ],
+  outcome_usage_provider_bindings: [
+    'REFERENCES outcome_usage_observations(id) ON DELETE CASCADE',
+    'REFERENCES provider_acceptance_evidence(id) ON DELETE RESTRICT',
+    'evidence_sha256 NOT GLOB',
+  ],
+  outcome_benchmark_evidence_bindings: [
+    'REFERENCES outcome_benchmark_observations(id) ON DELETE CASCADE',
+    'REFERENCES artifacts(id) ON DELETE RESTRICT',
+    'evidence_version=1',
   ],
   outcome_confirmation_update_guard: [
     'BEFORE UPDATE ON outcome_operation_confirmations',
@@ -90,6 +130,99 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
     'BEFORE UPDATE ON outcome_budget_policies',
     'outcome budget identity is immutable',
   ],
+  outcome_usage_immutable_update: [
+    'BEFORE UPDATE ON outcome_usage_observations', 'outcome usage observation is immutable',
+  ],
+  outcome_activity_immutable_update: [
+    'BEFORE UPDATE ON outcome_activity_observations', 'outcome activity observation is immutable',
+  ],
+  outcome_digest_immutable_update: [
+    'BEFORE UPDATE ON outcome_team_digests', 'outcome team digest is immutable',
+  ],
+  outcome_benchmark_immutable_update: [
+    'BEFORE UPDATE ON outcome_benchmark_observations', 'outcome benchmark observation is immutable',
+  ],
+  outcome_secret_update_guard: [
+    'BEFORE UPDATE ON outcome_analytics_secrets', 'outcome analytics secret is immutable',
+  ],
+  outcome_secret_delete_guard: [
+    'BEFORE DELETE ON outcome_analytics_secrets', 'outcome analytics secret is required',
+  ],
+  outcome_binding_immutable_update: [
+    'BEFORE UPDATE ON outcome_operation_bindings', 'outcome operation binding is immutable',
+  ],
+  outcome_consumption_immutable_update: [
+    'BEFORE UPDATE ON outcome_operation_consumptions', 'outcome operation consumption is immutable',
+  ],
+  outcome_operation_usage_link_immutable_update: [
+    'BEFORE UPDATE ON outcome_operation_usage_links', 'outcome operation usage link is immutable',
+  ],
+  outcome_usage_provider_binding_immutable_update: [
+    'BEFORE UPDATE ON outcome_usage_provider_bindings', 'outcome provider evidence binding is immutable',
+  ],
+  outcome_benchmark_evidence_binding_immutable_update: [
+    'BEFORE UPDATE ON outcome_benchmark_evidence_bindings',
+    'outcome benchmark evidence binding is immutable',
+  ],
+} as const)
+
+const EXPECTED_FOREIGN_KEYS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  outcome_analytics_schema: [],
+  outcome_usage_observations: [
+    'boards:board_id:id:CASCADE', 'os_teams:team_id:id:SET NULL',
+    'agent_sessions:session_id:id:CASCADE', 'jobs:job_id:id:CASCADE',
+  ],
+  outcome_activity_observations: [
+    'boards:board_id:id:CASCADE', 'os_teams:team_id:id:SET NULL',
+    'agent_sessions:session_id:id:CASCADE', 'jobs:job_id:id:CASCADE',
+  ],
+  outcome_budget_policies: ['boards:board_id:id:CASCADE'],
+  outcome_operation_confirmations: [
+    'boards:board_id:id:CASCADE', 'os_teams:team_id:id:SET NULL', 'jobs:job_id:id:CASCADE',
+  ],
+  outcome_team_digests: [
+    'boards:board_id:id:CASCADE', 'os_teams:team_id:id:CASCADE',
+    'agent_profiles:leader_profile_id:id:SET NULL',
+  ],
+  outcome_benchmark_observations: ['boards:board_id:id:CASCADE'],
+  outcome_analytics_secrets: [],
+  outcome_operation_bindings: [
+    'outcome_operation_confirmations:operation_id:id:CASCADE',
+  ],
+  outcome_operation_consumptions: [
+    'boards:board_id:id:CASCADE', 'jobs:job_id:id:CASCADE',
+    'outcome_operation_confirmations:operation_id:id:CASCADE', 'os_teams:team_id:id:SET NULL',
+  ],
+  outcome_operation_usage_links: [
+    'outcome_operation_consumptions:operation_id:operation_id:CASCADE',
+    'outcome_usage_observations:usage_id:id:CASCADE',
+  ],
+  outcome_usage_provider_bindings: [
+    'outcome_usage_observations:usage_id:id:CASCADE',
+    'provider_acceptance_evidence:evidence_id:id:RESTRICT',
+  ],
+  outcome_benchmark_evidence_bindings: [
+    'outcome_benchmark_observations:observation_id:id:CASCADE',
+    'artifacts:artifact_id:id:RESTRICT',
+  ],
+})
+
+const EXPECTED_INDEXES = Object.freeze({
+  idx_outcome_usage_board_time: ['0', '0', 'board_id,observed_at,id'],
+  idx_outcome_usage_job: ['0', '0', 'board_id,job_id,observed_at,id'],
+  idx_outcome_usage_team: ['0', '1', 'board_id,team_id,observed_at,id'],
+  idx_outcome_activity_board_category: ['0', '0', 'board_id,category,occurred_at,id'],
+  idx_outcome_activity_job: ['0', '1', 'board_id,job_id,occurred_at,id'],
+  idx_outcome_budget_active_scope: ['1', '1', 'board_id,scope_kind,scope_id'],
+  idx_outcome_confirmation_board_status: ['0', '0', 'board_id,status,expires_at'],
+  idx_outcome_digest_team_window: ['0', '0', 'board_id,team_id,window_end,id'],
+  idx_outcome_benchmark_suite: ['0', '0', 'board_id,suite_key,scenario_key,variant'],
+  idx_outcome_consumption_board: ['0', '0', 'board_id,consumed_at,operation_id'],
+  idx_outcome_consumption_team: ['0', '1', 'board_id,team_id,consumed_at,operation_id'],
+  idx_outcome_consumption_job: ['0', '1', 'board_id,job_id,consumed_at,operation_id'],
+  idx_outcome_operation_usage_unique: ['1', '0', 'usage_id'],
+  idx_outcome_usage_provider_evidence: ['0', '0', 'evidence_id,usage_id'],
+  idx_outcome_benchmark_evidence_artifact: ['0', '0', 'artifact_id,observation_id'],
 } as const)
 
 /**
@@ -98,6 +231,22 @@ const REQUIRED_SQL_FRAGMENTS = Object.freeze({
  */
 export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
   const migrate = db.transaction(() => {
+    const markerExists = db.prepare(`SELECT 1 FROM sqlite_master
+      WHERE type='table' AND name='outcome_analytics_schema'`).get()
+    const current = markerExists
+      ? db.prepare(`SELECT version, schema_sha256 FROM outcome_analytics_schema
+          WHERE singleton=1`).get() as { version: number; schema_sha256: string } | undefined
+      : undefined
+    if (!markerExists && db.prepare(`SELECT 1 FROM sqlite_master
+      WHERE name LIKE 'outcome_%' LIMIT 1`).get()) {
+      throw new Error('outcome analytics schema exists without an authoritative marker')
+    }
+    if (current && ![1, 2, OUTCOME_ANALYTICS_SCHEMA_VERSION].includes(current.version)) {
+      throw new Error('outcome analytics schema marker is incompatible')
+    }
+    if (current && current.version >= 2 && current.schema_sha256 !== actualSchemaDigest(db)) {
+      throw new Error('outcome analytics schema marker is incompatible')
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS outcome_analytics_schema (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -296,6 +445,50 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         ON outcome_operation_consumptions(board_id, job_id, consumed_at, operation_id)
         WHERE job_id IS NOT NULL;
 
+      CREATE TABLE IF NOT EXISTS outcome_operation_usage_links (
+        operation_id TEXT PRIMARY KEY
+          REFERENCES outcome_operation_consumptions(operation_id) ON DELETE CASCADE,
+        usage_id TEXT NOT NULL REFERENCES outcome_usage_observations(id) ON DELETE CASCADE,
+        linked_at TEXT NOT NULL CHECK(strftime('%s', linked_at) IS NOT NULL)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_outcome_operation_usage_unique
+        ON outcome_operation_usage_links(usage_id);
+
+      CREATE TABLE IF NOT EXISTS outcome_usage_provider_bindings (
+        usage_id TEXT PRIMARY KEY REFERENCES outcome_usage_observations(id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL REFERENCES provider_acceptance_evidence(id) ON DELETE RESTRICT,
+        provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 128),
+        adapter_id TEXT NOT NULL CHECK(length(adapter_id) BETWEEN 1 AND 128),
+        mode_id TEXT NOT NULL CHECK(length(mode_id) BETWEEN 1 AND 128),
+        runtime_mode TEXT NOT NULL CHECK(runtime_mode IN ('native_cli','provider_api')),
+        billing_mode TEXT NOT NULL
+          CHECK(billing_mode IN ('personal_subscription','usage_priced_api')),
+        platform TEXT NOT NULL CHECK(length(platform) BETWEEN 1 AND 128),
+        source_commit TEXT NOT NULL CHECK(length(source_commit) IN (40,64)
+          AND source_commit NOT GLOB '*[^0-9a-f]*'),
+        evidence_sha256 TEXT NOT NULL CHECK(length(evidence_sha256)=64
+          AND evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL)
+      );
+      CREATE INDEX IF NOT EXISTS idx_outcome_usage_provider_evidence
+        ON outcome_usage_provider_bindings(evidence_id, usage_id);
+
+      CREATE TABLE IF NOT EXISTS outcome_benchmark_evidence_bindings (
+        observation_id TEXT PRIMARY KEY
+          REFERENCES outcome_benchmark_observations(id) ON DELETE CASCADE,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE RESTRICT,
+        artifact_sha256 TEXT NOT NULL CHECK(length(artifact_sha256)=64
+          AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+        evidence_version INTEGER NOT NULL CHECK(evidence_version=1),
+        verifier_ref TEXT NOT NULL CHECK(length(verifier_ref) BETWEEN 1 AND 1000),
+        provenance_sha256 TEXT NOT NULL CHECK(length(provenance_sha256)=64
+          AND provenance_sha256 NOT GLOB '*[^0-9a-f]*'),
+        artifact_created_at TEXT NOT NULL CHECK(strftime('%s', artifact_created_at) IS NOT NULL),
+        created_at TEXT NOT NULL CHECK(strftime('%s', created_at) IS NOT NULL)
+      );
+      CREATE INDEX IF NOT EXISTS idx_outcome_benchmark_evidence_artifact
+        ON outcome_benchmark_evidence_bindings(artifact_id, observation_id);
+
       CREATE TRIGGER IF NOT EXISTS outcome_usage_immutable_update
         BEFORE UPDATE ON outcome_usage_observations BEGIN
           SELECT RAISE(ABORT, 'outcome usage observation is immutable');
@@ -368,6 +561,18 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
         BEFORE UPDATE ON outcome_operation_consumptions BEGIN
           SELECT RAISE(ABORT, 'outcome operation consumption is immutable');
         END;
+      CREATE TRIGGER IF NOT EXISTS outcome_operation_usage_link_immutable_update
+        BEFORE UPDATE ON outcome_operation_usage_links BEGIN
+          SELECT RAISE(ABORT, 'outcome operation usage link is immutable');
+        END;
+      CREATE TRIGGER IF NOT EXISTS outcome_usage_provider_binding_immutable_update
+        BEFORE UPDATE ON outcome_usage_provider_bindings BEGIN
+          SELECT RAISE(ABORT, 'outcome provider evidence binding is immutable');
+        END;
+      CREATE TRIGGER IF NOT EXISTS outcome_benchmark_evidence_binding_immutable_update
+        BEFORE UPDATE ON outcome_benchmark_evidence_bindings BEGIN
+          SELECT RAISE(ABORT, 'outcome benchmark evidence binding is immutable');
+        END;
 
       DROP TRIGGER IF EXISTS outcome_usage_immutable_delete;
       DROP TRIGGER IF EXISTS outcome_activity_immutable_delete;
@@ -375,11 +580,6 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
       DROP TRIGGER IF EXISTS outcome_benchmark_immutable_delete;
     `)
 
-    const current = db.prepare(`SELECT version, schema_sha256 FROM outcome_analytics_schema
-      WHERE singleton=1`).get() as { version: number; schema_sha256: string } | undefined
-    if (current && current.version !== 1 && current.version !== OUTCOME_ANALYTICS_SCHEMA_VERSION) {
-      throw new Error('outcome analytics schema marker is incompatible')
-    }
     const secret = db.prepare(`SELECT hmac_key_hex FROM outcome_analytics_secrets WHERE singleton=1`)
       .get() as { hmac_key_hex: string } | undefined
     const key = secret?.hmac_key_hex ?? randomBytes(32).toString('hex')
@@ -401,13 +601,13 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
           END`)
       }
     }
-    assertOutcomeAnalyticsSchema(db)
+    assertOutcomeAnalyticsSchema(db, false)
     const schemaDigest = actualSchemaDigest(db)
     if (!current) {
       db.prepare(`INSERT INTO outcome_analytics_schema
         (singleton, version, schema_sha256, applied_at) VALUES (1, ?, ?, ?)`)
         .run(OUTCOME_ANALYTICS_SCHEMA_VERSION, schemaDigest, new Date().toISOString())
-    } else if (current.version === 1) {
+    } else if (current.version < OUTCOME_ANALYTICS_SCHEMA_VERSION) {
       db.prepare(`UPDATE outcome_analytics_schema
         SET version=?, schema_sha256=?, applied_at=? WHERE singleton=1`)
         .run(OUTCOME_ANALYTICS_SCHEMA_VERSION, schemaDigest, new Date().toISOString())
@@ -418,7 +618,10 @@ export function applyOutcomeAnalyticsMigration(db: Database.Database): void {
   migrate.immediate()
 }
 
-export function assertOutcomeAnalyticsSchema(db: Database.Database): void {
+export function assertOutcomeAnalyticsSchema(
+  db: Database.Database,
+  verifyMarker = true,
+): void {
   for (const [table, expected] of Object.entries(TABLE_COLUMNS)) {
     const actual = db.prepare(`SELECT name FROM pragma_table_info(?) ORDER BY cid`)
       .all(table).map((row) => String((row as { name: string }).name))
@@ -430,7 +633,8 @@ export function assertOutcomeAnalyticsSchema(db: Database.Database): void {
   const triggers = new Set((db.prepare(`SELECT name FROM sqlite_master
     WHERE type='trigger' AND name LIKE 'outcome_%'`).all() as Array<{ name: string }>)
     .map((row) => row.name))
-  if (REQUIRED_TRIGGERS.some((name) => !triggers.has(name))) {
+  if (triggers.size !== REQUIRED_TRIGGERS.length
+    || REQUIRED_TRIGGERS.some((name) => !triggers.has(name))) {
     throw new Error('outcome analytics schema is incompatible (triggers)')
   }
   for (const [name, fragments] of Object.entries(REQUIRED_SQL_FRAGMENTS)) {
@@ -440,15 +644,31 @@ export function assertOutcomeAnalyticsSchema(db: Database.Database): void {
       throw new Error(`outcome analytics schema is incompatible (${name} SQL)`)
     }
   }
-  const foreignKeys = db.prepare(`SELECT "table", "from", "to", on_delete
-    FROM pragma_foreign_key_list('outcome_operation_consumptions') ORDER BY "from"`).all() as Array<{ table: string; from: string; to: string; on_delete: string }>
-  const expected = new Set([
-    'boards:board_id:id:CASCADE', 'jobs:job_id:id:CASCADE',
-    'outcome_operation_confirmations:operation_id:id:CASCADE', 'os_teams:team_id:id:SET NULL',
-  ])
-  if (foreignKeys.length !== expected.size || foreignKeys.some((key) =>
-    !expected.has(`${key.table}:${key.from}:${key.to}:${key.on_delete}`))) {
-    throw new Error('outcome analytics schema is incompatible (foreign keys)')
+  for (const [table, spec] of Object.entries(EXPECTED_FOREIGN_KEYS)) {
+    const foreignKeys = db.prepare(`SELECT "table", "from", "to", on_delete
+      FROM pragma_foreign_key_list(?)`).all(table) as Array<{
+        table: string; from: string; to: string; on_delete: string
+      }>
+    const expected = new Set(spec)
+    if (foreignKeys.length !== expected.size || foreignKeys.some((key) =>
+      !expected.has(`${key.table}:${key.from}:${key.to}:${key.on_delete}`))) {
+      throw new Error(`outcome analytics schema is incompatible (${table} foreign keys)`)
+    }
+  }
+  const explicitIndexes = db.prepare(`SELECT name FROM sqlite_master
+    WHERE type='index' AND name LIKE 'idx_outcome_%' ORDER BY name`).all() as Array<{ name: string }>
+  if (explicitIndexes.length !== Object.keys(EXPECTED_INDEXES).length) {
+    throw new Error('outcome analytics schema is incompatible (indexes)')
+  }
+  for (const [name, [unique, partial, columns]] of Object.entries(EXPECTED_INDEXES)) {
+    const index = db.prepare(`SELECT "unique", partial FROM pragma_index_list(?) WHERE name=?`)
+      .get(indexTable(db, name), name) as { unique: number; partial: number } | undefined
+    const actualColumns = (db.prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`)
+      .all(name) as Array<{ name: string }>).map((column) => column.name).join(',')
+    if (!index || String(index.unique) !== unique || String(index.partial) !== partial
+      || actualColumns !== columns) {
+      throw new Error(`outcome analytics schema is incompatible (${name} index)`)
+    }
   }
   const forbiddenDeleteTriggers = db.prepare(`SELECT name FROM sqlite_master
     WHERE type='trigger' AND name IN (
@@ -458,6 +678,20 @@ export function assertOutcomeAnalyticsSchema(db: Database.Database): void {
   if (forbiddenDeleteTriggers.length > 0) {
     throw new Error('outcome analytics schema is incompatible (retention)')
   }
+  if (verifyMarker) {
+    const marker = db.prepare(`SELECT version, schema_sha256 FROM outcome_analytics_schema
+      WHERE singleton=1`).get() as { version: number; schema_sha256: string } | undefined
+    if (!marker || marker.version !== OUTCOME_ANALYTICS_SCHEMA_VERSION
+      || marker.schema_sha256 !== actualSchemaDigest(db)) {
+      throw new Error('outcome analytics schema marker is incompatible')
+    }
+  }
+}
+
+function indexTable(db: Database.Database, name: string): string {
+  const row = db.prepare(`SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?`)
+    .get(name) as { tbl_name: string } | undefined
+  return row?.tbl_name ?? ''
 }
 
 function actualSchemaDigest(db: Database.Database): string {

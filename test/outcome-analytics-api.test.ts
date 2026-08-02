@@ -33,14 +33,16 @@ async function fixture() {
   db.prepare(`INSERT INTO jobs
     (id, board_id, card_id, workspace_id, provider, priority, status, attempts,
      max_attempts, scheduled_at, started_at, created_at, spent_tokens, spent_cents,
-     contract_version)
+     contract_version, driver_id)
     VALUES ('api-job', ?, ?, 'api-workspace', 'codex', 1, 'running', 1, 2,
       '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z',
-      '2026-08-01T10:00:00.000Z', 0, 0, 2)`).run(boardId, cardId)
+      '2026-08-01T10:00:00.000Z', 0, 0, 2, 'codex-app-server')`).run(boardId, cardId)
   db.prepare(`INSERT INTO agent_sessions
-    (id, workspace_id, provider, status, context_json, job_id, created_at, updated_at)
+    (id, workspace_id, provider, status, context_json, job_id, created_at, updated_at,
+     driver_id)
     VALUES ('api-session', 'api-workspace', 'codex', 'running', '{}', 'api-job',
-      '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z')`).run()
+      '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z',
+      'codex-app-server')`).run()
   const server = Fastify()
   const published: unknown[] = []
   server.decorateRequest('orchestraPrincipal', 'operator')
@@ -162,6 +164,10 @@ describe('outcome analytics focused registrar', () => {
           suite_key: 'api-suite', scenario_key: 'scenario', variant,
           provider_tokens: tokens, context_tokens: 0, accepted_deliveries: 1,
           quality_milli: quality, duration_ms: 1000,
+        }, outcome_benchmark_evidence: {
+          version: 1,
+          verifier_ref: `api-test:${variant}`,
+          provenance: { source_commit: 'c'.repeat(40), command: 'api benchmark' },
         } }),
       )
       const response = await server.inject({
