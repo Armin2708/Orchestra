@@ -10,6 +10,12 @@ import {
   applyOutcomeAnalyticsMigration,
   assertOutcomeAnalyticsSchema,
 } from '../src/agent-os/outcome-analytics-migration.js'
+import {
+  DECLARED_PROVIDER_ACCEPTANCE_GATE_IDS_V1,
+  ProviderAdapterRegistryV1,
+  type DeclaredProviderAcceptanceMatrixV1,
+} from '../src/provider-adapter-registry.js'
+import { ProviderAcceptanceEvidenceStoreV1 } from '../src/provider-acceptance-evidence-store.js'
 
 const START = '2026-08-01T10:00:00.000Z'
 const FIRST = '2026-08-01T10:01:00.000Z'
@@ -41,7 +47,8 @@ function fixture() {
     .run(boardId, cardId, START, START, START)
   db.prepare(`INSERT INTO agent_sessions
     (id, workspace_id, provider, model, status, context_json, created_at, updated_at, job_id)
-    VALUES ('session-1', 'workspace-1', 'codex', 'gpt', 'running', '{}', ?, ?, 'job-1')`)
+    VALUES ('session-1', 'workspace-1', 'codex', 'gpt', 'running', '{}', ?, ?,
+      'job-1')`)
     .run(START, START)
   db.prepare(`INSERT INTO os_organizations
     (id, board_id, organization_key, name, mission, status, created_at, updated_at)
@@ -59,9 +66,8 @@ const usage = (boardId: number, overrides: Partial<UsageObservationInput> = {}):
   boardId,
   sessionId: 'session-1',
   jobId: 'job-1',
-  teamId: 'team-1',
   provider: 'codex',
-  billingMode: 'subscription',
+  billingMode: 'unknown',
   cachedInputSemantics: 'subset',
   inputTokens: 1_000,
   cachedInputTokens: 600,
@@ -101,7 +107,7 @@ describe('outcome analytics migration and privacy boundary', () => {
     expect(() => applyOutcomeAnalyticsMigration(db)).toThrow(/schema marker is incompatible/)
   })
 
-  it('makes usage and activity observations immutable at the database boundary', () => {
+  it('makes observations update-immutable, retention-deletable and HMAC pseudonymous', () => {
     const { db, boardId, service } = fixture()
     service.recordUsage(usage(boardId))
     const read = {
@@ -112,12 +118,39 @@ describe('outcome analytics migration and privacy boundary', () => {
     expect(service.recordActivity(read).id).toBe('read-1')
     expect(() => db.prepare(`UPDATE outcome_usage_observations SET output_tokens=0
       WHERE id='usage-1'`).run()).toThrow(/immutable/)
-    expect(() => db.prepare(`DELETE FROM outcome_activity_observations WHERE id='read-1'`).run())
-      .toThrow(/immutable/)
     const activity = db.prepare(`SELECT * FROM outcome_activity_observations WHERE id='read-1'`)
       .get() as Record<string, unknown>
     expect(activity.resource_sha256).toMatch(/^[a-f0-9]{64}$/)
     expect(JSON.stringify(activity)).not.toContain('/secret/project/file.ts')
+    const second = fixture()
+    second.service.recordActivity({ ...read, boardId: second.boardId })
+    const secondHash = second.db.prepare(`SELECT resource_sha256 FROM outcome_activity_observations
+      WHERE id='read-1'`).pluck().get()
+    expect(secondHash).not.toBe(activity.resource_sha256)
+    expect(db.prepare(`DELETE FROM outcome_activity_observations WHERE id='read-1'`).run().changes)
+      .toBe(1)
+    expect(() => db.prepare(`DELETE FROM outcome_analytics_secrets WHERE singleton=1`).run())
+      .toThrow(/secret is required/)
+    second.db.close()
+  })
+
+  it('allows board retention cascades and detects owned schema SQL drift', () => {
+    const { db, service } = fixture()
+    const emptyBoard = Number(db.prepare(`INSERT INTO boards(project_path, name)
+      VALUES ('/retention', 'Retention')`).run().lastInsertRowid)
+    service.recordActivity({ id: 'board-only', boardId: emptyBoard, category: 'coordination.wake' })
+    expect(db.prepare(`DELETE FROM boards WHERE id=?`).run(emptyBoard).changes).toBe(1)
+    expect(db.prepare(`SELECT COUNT(*) FROM outcome_activity_observations`).pluck().get()).toBe(0)
+    const drifted = fixture()
+    drifted.db.exec(`CREATE INDEX outcome_unexpected_index ON outcome_usage_observations(id)`)
+    expect(() => applyOutcomeAnalyticsMigration(drifted.db)).toThrow(/schema marker is incompatible/)
+    drifted.db.close()
+    const forged = fixture()
+    forged.db.exec(`DROP TRIGGER outcome_budget_update_guard;
+      CREATE TRIGGER outcome_budget_update_guard BEFORE UPDATE ON outcome_budget_policies
+      BEGIN SELECT RAISE(ABORT, 'forged'); END`)
+    expect(() => assertOutcomeAnalyticsSchema(forged.db)).toThrow(/budget_update_guard SQL/)
+    forged.db.close()
   })
 })
 
@@ -130,19 +163,47 @@ describe('durable scoped token and outcome attribution', () => {
       session_id: 'session-1',
       job_id: 'job-1',
       contract_ref: expect.stringMatching(/^card:\d+:v3$/),
-      team_id: 'team-1',
+      team_id: null,
       input_tokens: 1_000,
       cached_input_tokens: 600,
       output_tokens: 300,
       thinking_tokens: 100,
       context_injection_tokens: 200,
-      billing_mode: 'subscription',
+      billing_mode: 'unknown',
     })
     expect(service.recordUsage(usage(boardId))).toEqual(recorded)
     expect(db.prepare(`SELECT COUNT(*) AS count FROM outcome_usage_observations`).get())
       .toEqual({ count: 1 })
     expect(() => service.recordUsage(usage(boardId, { outputTokens: 299 })))
       .toThrow(ConflictError)
+  })
+
+  it('derives subscription billing only from retained provider acceptance evidence', () => {
+    const { db, boardId, service } = fixture()
+    const matrix: DeclaredProviderAcceptanceMatrixV1 = {
+      contract_version: 1,
+      provider_id: 'codex',
+      adapter_id: 'codex-app-server',
+      adapter_version: '1.0.0',
+      mode_id: 'native_subscription',
+      runtime_mode: 'native_cli',
+      billing_mode: 'personal_subscription',
+      credential_kind: 'provider_account_session',
+      executable_version: '0.144.6',
+      platform: 'darwin-arm64',
+      source_commit: 'a'.repeat(40),
+      observed_at: START,
+      gates: Object.fromEntries(DECLARED_PROVIDER_ACCEPTANCE_GATE_IDS_V1.map((gateId) => [
+        gateId, { state: 'passed' as const, evidence_refs: [`evidence/${gateId}.json`] },
+      ])) as DeclaredProviderAcceptanceMatrixV1['gates'],
+    }
+    new ProviderAcceptanceEvidenceStoreV1(db).record(
+      new ProviderAdapterRegistryV1(), matrix,
+      { artifact_ref: 'evidence/codex/subscription.json', artifact_sha256: 'b'.repeat(64) },
+    )
+    expect(service.recordUsage(usage(boardId, {
+      id: 'subscription-usage', billingMode: 'subscription',
+    }))).toMatchObject({ billing_mode: 'subscription', provider: 'codex' })
   })
 
   it('fails closed for cross-scope identity and inconsistent provider semantics', () => {
@@ -167,6 +228,19 @@ describe('durable scoped token and outcome attribution', () => {
     }))).toThrow(/provider total tokens/)
     expect(() => service.recordUsage(usage(boardId, { thinkingTokens: 301 })))
       .toThrow(/thinking tokens/)
+    expect(() => service.recordUsage(usage(boardId, { provider: 'other' })))
+      .toThrow(/canonical job and session/)
+    expect(() => service.recordUsage(usage(boardId, { billingMode: 'subscription' })))
+      .toThrow(/canonical provider evidence/)
+    expect(() => service.recordUsage(usage(boardId, { observedAt: '2026-07-31T10:00:00.000Z' })))
+      .toThrow(/predates/)
+    expect(() => service.recordActivity({
+      id: 'contaminated-team', boardId, teamId: 'team-1', category: 'coordination.wake',
+    })).toThrow(/canonical agent profile/)
+    expect(() => service.recordActivity({
+      id: 'future-activity', boardId, category: 'coordination.wake',
+      occurredAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    })).toThrow(/future/)
   })
 
   it('derives tokens per accepted delivery, cache reuse, speed, retries and overrides', () => {
@@ -198,6 +272,10 @@ describe('durable scoped token and outcome attribution', () => {
       category: 'exploration.duplicate', quantity: 1, resourceIdentity: 'src/a.ts',
       occurredAt: FIRST,
     })
+    db.prepare(`INSERT INTO os_events
+      (id, board_id, workspace_id, session_id, job_id, kind, source, payload, created_at)
+      VALUES ('retry-1', ?, 'workspace-1', 'session-1', 'job-1', 'job.retry_queued',
+        'scheduler', '{}', ?)`).run(boardId, FIRST)
     const dashboard = service.dashboard(boardId, {
       since: '2026-08-01T09:00:00.000Z', until: '2026-08-01T11:00:00.000Z',
     }) as any
@@ -214,8 +292,18 @@ describe('durable scoped token and outcome attribution', () => {
       average_ms_to_first_useful_result: 60_000,
       average_ms_to_verified_delivery: 600_000,
     })
-    expect(dashboard.quality).toMatchObject({ accepted: 1, retries: 1, human_overrides: 1 })
+    expect(dashboard.quality).toMatchObject({
+      accepted: 1, retries: 1, retry_source: 'os_events', human_overrides: 1,
+    })
     expect(dashboard.by_job[0]).toMatchObject({ job_id: 'job-1', accepted: 1 })
+    const beforeAcceptance = service.dashboard(boardId, {
+      since: START, until: ACCEPTED,
+    }) as any
+    expect(beforeAcceptance.usage).toMatchObject({
+      accepted_deliveries: 0, accepted_delivery_tokens: 0, tokens_per_accepted_delivery: null,
+    })
+    expect(beforeAcceptance.by_job[0]).toMatchObject({ accepted: 0 })
+    expect(beforeAcceptance.quality).toMatchObject({ retries: 1 })
   })
 })
 
@@ -247,6 +335,31 @@ describe('budgets, confirmations and leader digests', () => {
     expect(blocked.allowed).toBe(false)
     expect(blocked.policies.find((item: any) => item.policy_id === 'job-budget'))
       .toMatchObject({ exceeded: true, allowed: false })
+    const reserved = service.planOperation({
+      id: 'budget-operation-1', boardId, operationKind: 'swarm', fanout: 6,
+      estimatedTokens: 50, reason: 'Bounded batch', requestedBy: 'operator',
+      executionKey: 'budget-execution-1', teamId: 'team-1', jobId: 'job-1',
+    })
+    if (reserved.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-1', 'operator')
+    service.consumeOperationExecution({
+      id: 'budget-operation-1', executionKey: 'budget-execution-1', actor: 'runner',
+      providerTokens: 50, fanout: 6,
+    })
+    const cumulative = service.evaluateBudgets({
+      boardId, teamId: 'team-1', jobId: 'job-1', fanout: 5,
+    }) as any
+    expect(cumulative.policies.find((item: any) => item.policy_id === 'project-budget')
+      .dimensions.find((item: any) => item.name === 'fanout')).toMatchObject({ used: 11, exceeded: true })
+    const late = service.planOperation({
+      id: 'budget-operation-2', boardId, operationKind: 'swarm', fanout: 1,
+      estimatedTokens: 10, reason: 'Late execution', requestedBy: 'operator',
+      executionKey: 'budget-execution-2', teamId: 'team-1', jobId: 'job-1',
+    })
+    if (late.status === 'awaiting_confirmation') service.confirmOperation('budget-operation-2', 'operator')
+    expect(() => service.consumeOperationExecution({
+      id: 'budget-operation-2', executionKey: 'budget-execution-2', actor: 'runner',
+      providerTokens: 100, fanout: 1,
+    })).toThrow(/hard budget at execution/)
     expect(() => db.prepare(`UPDATE outcome_budget_policies SET max_provider_tokens=999999
       WHERE id='job-budget'`).run()).toThrow(/identity is immutable/)
   })
@@ -256,17 +369,32 @@ describe('budgets, confirmations and leader digests', () => {
     const plan = service.planOperation({
       id: 'operation-1', boardId, operationKind: 'swarm', fanout: 8,
       estimatedTokens: 10_000, reason: 'Run independent reviews', requestedBy: 'operator',
-      teamId: 'team-1', jobId: 'job-1', ttlSeconds: 900,
+      executionKey: 'native-execution-1', teamId: 'team-1', jobId: 'job-1', ttlSeconds: 900,
     })
     expect(plan.status).toBe('awaiting_confirmation')
-    expect(() => service.assertOperationAuthorized('operation-1')).toThrow(/requires explicit/)
+    expect(() => service.consumeOperationExecution({
+      id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
+      providerTokens: 100, fanout: 8,
+    })).toThrow(/requires explicit/)
     expect(service.confirmOperation('operation-1', 'operator').status).toBe('confirmed')
-    expect(service.assertOperationAuthorized('operation-1').status).toBe('confirmed')
+    expect(() => service.consumeOperationExecution({
+      id: 'operation-1', executionKey: 'wrong-execution', actor: 'runner',
+      providerTokens: 100, fanout: 8,
+    })).toThrow(/another execution/)
+    expect(service.consumeOperationExecution({
+      id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
+      providerTokens: 100, fanout: 8,
+    })).toMatchObject({ status: 'confirmed', consumption: { operation_id: 'operation-1' } })
+    expect(() => service.consumeOperationExecution({
+      id: 'operation-1', executionKey: 'native-execution-1', actor: 'runner',
+      providerTokens: 100, fanout: 8,
+    })).toThrow(/already consumed/)
     expect(() => db.prepare(`UPDATE outcome_operation_confirmations SET reason='changed'
       WHERE id='operation-1'`).run()).toThrow(/transition is invalid/)
     const small = service.planOperation({
       id: 'operation-2', boardId, operationKind: 'swarm', fanout: 2,
       estimatedTokens: 500, reason: 'Pair review', requestedBy: 'operator',
+      executionKey: 'native-execution-2',
     })
     expect(small.status).toBe('not_required')
   })
@@ -274,15 +402,15 @@ describe('budgets, confirmations and leader digests', () => {
   it('creates a compact metrics-only team digest without activity payloads', () => {
     const { db, boardId, service } = fixture()
     service.recordActivity({
-      id: 'wake-1', boardId, teamId: 'team-1', category: 'coordination.wake',
+      id: 'wake-1', boardId, category: 'coordination.wake',
       quantity: 4, occurredAt: FIRST,
     })
     const digest = service.createTeamDigest({
       id: 'digest-1', boardId, teamId: 'team-1',
       windowStart: START, windowEnd: ACCEPTED,
     })
-    expect(JSON.parse(String(digest.metrics_json))).toEqual({ 'coordination.wake': 4 })
-    expect(digest.source_count).toBe(4)
+    expect(JSON.parse(String(digest.metrics_json))).toEqual({})
+    expect(digest.source_count).toBe(0)
     expect(() => db.prepare(`UPDATE outcome_team_digests SET source_count=0
       WHERE id='digest-1'`).run()).toThrow(/immutable/)
   })
@@ -295,13 +423,31 @@ describe('quality-aware controlled benchmarks', () => {
     id: `${scenario}-${variant}`, boardId, suiteKey: 'controlled-suite', scenarioKey: scenario,
     variant, providerTokens: values.tokens, contextTokens: 0,
     acceptedDeliveries: values.accepted, qualityMilli: values.quality,
-    durationMs: 1_000, evidenceRef: `artifact://${scenario}/${variant}`, observedAt: FIRST,
+    durationMs: 1_000, evidenceRef: `artifact:${scenario}-${variant}-artifact`, observedAt: FIRST,
   })
 
+  const attest = (db: Database.Database, input: ReturnType<typeof observation>) => {
+    const metrics = {
+      suite_key: input.suiteKey, scenario_key: input.scenarioKey, variant: input.variant,
+      provider_tokens: input.providerTokens, context_tokens: input.contextTokens,
+      accepted_deliveries: input.acceptedDeliveries, quality_milli: input.qualityMilli,
+      duration_ms: input.durationMs,
+    }
+    db.prepare(`INSERT INTO artifacts
+      (id, board_id, kind, name, metadata, created_at)
+      VALUES (?, ?, 'benchmark', ?, ?, ?)`).run(
+      input.evidenceRef.slice('artifact:'.length), input.boardId,
+      `${input.scenarioKey}-${input.variant}`, JSON.stringify({ outcome_benchmark: metrics }), FIRST,
+    )
+  }
+
   it('passes only paired scenarios with lower tokens and non-declining quality', () => {
-    const { boardId, service } = fixture()
-    service.recordBenchmark(observation(boardId, 'healthy', 'before', { tokens: 1_000, accepted: 1, quality: 900 }))
-    service.recordBenchmark(observation(boardId, 'healthy', 'after', { tokens: 700, accepted: 1, quality: 920 }))
+    const { db, boardId, service } = fixture()
+    const before = observation(boardId, 'healthy', 'before', { tokens: 1_000, accepted: 1, quality: 900 })
+    const after = observation(boardId, 'healthy', 'after', { tokens: 700, accepted: 1, quality: 920 })
+    attest(db, before); attest(db, after)
+    service.recordBenchmark(before)
+    service.recordBenchmark(after)
     const comparison = service.benchmarkComparison(boardId, 'controlled-suite') as any
     expect(comparison).toMatchObject({ complete: true, passed: true, gate_claimed: false })
     expect(comparison.comparisons[0]).toMatchObject({
@@ -310,14 +456,30 @@ describe('quality-aware controlled benchmarks', () => {
   })
 
   it('never reports success when tokens fall but quality or accepted deliveries decline', () => {
-    const { boardId, service } = fixture()
-    service.recordBenchmark(observation(boardId, 'quality-drop', 'before', { tokens: 1_000, accepted: 2, quality: 950 }))
-    service.recordBenchmark(observation(boardId, 'quality-drop', 'after', { tokens: 300, accepted: 1, quality: 800 }))
+    const { db, boardId, service } = fixture()
+    const before = observation(boardId, 'quality-drop', 'before', { tokens: 1_000, accepted: 2, quality: 950 })
+    const after = observation(boardId, 'quality-drop', 'after', { tokens: 300, accepted: 1, quality: 800 })
+    attest(db, before); attest(db, after)
+    service.recordBenchmark(before)
+    service.recordBenchmark(after)
     const comparison = service.benchmarkComparison(boardId, 'controlled-suite') as any
     expect(comparison.passed).toBe(false)
     expect(comparison.comparisons[0]).toMatchObject({
       quality_guard_passed: false, passed: false, reason: 'quality_declined',
     })
+  })
+
+  it('rejects unattested quality and timestamps', () => {
+    const { db, boardId, service } = fixture()
+    const canonicalInput = observation(boardId, 'tamper', 'before', {
+      tokens: 1_000, accepted: 1, quality: 900,
+    })
+    attest(db, canonicalInput)
+    expect(() => service.recordBenchmark({ ...canonicalInput, qualityMilli: 950 }))
+      .toThrow(/disagrees with canonical artifact/)
+    expect(() => service.recordBenchmark({
+      ...canonicalInput, id: 'tamper-time', observedAt: ACCEPTED,
+    })).toThrow(/must match canonical artifact time/)
   })
 
   it('does not overclaim MET-GATE from deterministic unit evidence', () => {

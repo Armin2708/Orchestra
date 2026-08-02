@@ -12,6 +12,7 @@ import {
   type BenchmarkObservationInput,
   type BudgetPolicyInput,
   type OperationPlanInput,
+  type OperationExecutionInput,
   type UsageObservationInput,
 } from './outcome-analytics.js'
 
@@ -158,9 +159,18 @@ export const outcomeAnalyticsPlugin: FastifyPluginAsync<OutcomeAnalyticsRouteOpt
     },
   )
 
-  app.get<{ Params: { operationId: string } }>(
-    '/outcomes/operations/:operationId/authorization',
-    (request) => ({ result: service.assertOperationAuthorized(request.params.operationId) }),
+  app.post<{ Params: { operationId: string }; Body: unknown }>(
+    '/outcomes/operations/:operationId/consume',
+    (request) => {
+      const body = operatorBody(request, request.body)
+      const result = service.consumeOperationExecution({
+        ...body,
+        id: request.params.operationId,
+        actor: request.orchestraPrincipal ?? 'operator',
+      } as unknown as OperationExecutionInput)
+      changed(Number(result.board_id), 'operation.consumed', result.id)
+      return { result }
+    },
   )
 
   app.post<{ Params: { boardId: string }; Body: unknown }>(

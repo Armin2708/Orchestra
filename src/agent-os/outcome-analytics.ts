@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { applyOutcomeAnalyticsMigration } from './outcome-analytics-migration.js'
@@ -67,9 +67,22 @@ export interface OperationPlanInput {
   estimatedTokens: number
   reason: string
   requestedBy: string
+  /** Opaque native execution identity. Only its SHA-256 digest is persisted. */
+  executionKey: string
   teamId?: string | null
   jobId?: string | null
   ttlSeconds?: number
+}
+
+export interface OperationExecutionInput {
+  id: string
+  executionKey: string
+  actor: string
+  providerTokens: number
+  contextTokens?: number
+  fanout: number
+  planningRoundTokens?: number
+  at?: string
 }
 
 export interface BenchmarkObservationInput {
@@ -155,6 +168,14 @@ interface JobScope {
   session_job_id: string | null
   session_workspace_id: string
   job_workspace_id: string
+  job_provider: string
+  session_provider: string
+  job_driver_id: string | null
+  session_driver_id: string | null
+  job_profile_id: string | null
+  session_profile_id: string | null
+  job_created_at: string
+  session_created_at: string
 }
 
 interface BudgetRow {
@@ -177,15 +198,27 @@ export class OutcomeAnalyticsService {
   recordUsage(input: UsageObservationInput): Record<string, unknown> {
     const scope = this.jobScope(input.boardId, input.jobId, input.sessionId)
     const id = identifier(input.id)
+    const observedAt = this.validScopedTimestamp(
+      this.observationTimestamp(
+        'outcome_usage_observations', id, 'observed_at', input.observedAt, 'observed at',
+      ),
+      scope,
+      'observed at',
+    )
+    const canonicalProvider = this.canonicalProvider(scope, input.provider)
+    const canonicalBilling = this.canonicalBillingMode(canonicalProvider, observedAt)
+    if (billingMode(input.billingMode) !== canonicalBilling) {
+      throw new ValidationError('billing mode is not supported by canonical provider evidence')
+    }
     const normalized = {
       id,
       board_id: positiveBoard(input.boardId),
-      team_id: this.optionalTeam(input.boardId, input.teamId),
+      team_id: this.canonicalTeam(input.boardId, input.teamId, scope, observedAt),
       session_id: identifier(input.sessionId, 'session id'),
       job_id: identifier(input.jobId, 'job id'),
       contract_ref: this.contractRef(scope),
-      provider: bounded(input.provider, 'provider', 100),
-      billing_mode: billingMode(input.billingMode),
+      provider: canonicalProvider,
+      billing_mode: canonicalBilling,
       cached_input_semantics: cachedSemantics(input.cachedInputSemantics),
       input_tokens: count(input.inputTokens, 'input tokens'),
       cached_input_tokens: count(input.cachedInputTokens, 'cached input tokens'),
@@ -195,9 +228,7 @@ export class OutcomeAnalyticsService {
         input.contextInjectionTokens ?? 0,
         'context injection tokens',
       ),
-      observed_at: this.observationTimestamp(
-        'outcome_usage_observations', id, 'observed_at', input.observedAt, 'observed at',
-      ),
+      observed_at: observedAt,
     }
     if (normalized.thinking_tokens > normalized.output_tokens) {
       throw new ValidationError('thinking tokens cannot exceed output tokens')
@@ -236,29 +267,38 @@ export class OutcomeAnalyticsService {
     const jobId = input.jobId == null ? null : identifier(input.jobId, 'job id')
     const sessionId = input.sessionId == null ? null : identifier(input.sessionId, 'session id')
     let contractRef: string | null = null
+    let scope: JobScope | null = null
     if ((jobId === null) !== (sessionId === null)) {
       throw new ValidationError('job id and session id must be supplied together')
     }
-    if (jobId && sessionId) contractRef = this.contractRef(this.jobScope(boardId, jobId, sessionId))
+    if (jobId && sessionId) {
+      scope = this.jobScope(boardId, jobId, sessionId)
+      contractRef = this.contractRef(scope)
+    }
     const category = activityCategory(input.category)
     const resource = input.resourceIdentity == null
       ? null : bounded(input.resourceIdentity, 'resource identity', 4_096)
     if ((category === 'exploration.file_read' || category === 'exploration.duplicate') && !resource) {
       throw new ValidationError('exploration observations require a resource identity')
     }
+    const occurredAt = this.observationTimestamp(
+      'outcome_activity_observations', id, 'occurred_at', input.occurredAt, 'occurred at',
+    )
+    if (Date.parse(occurredAt) > Date.now() + 5 * 60_000) {
+      throw new ValidationError('occurred at is in the future')
+    }
+    if (scope) this.validScopedTimestamp(occurredAt, scope, 'occurred at')
     const normalized = {
       id,
       board_id: boardId,
-      team_id: this.optionalTeam(boardId, input.teamId),
+      team_id: this.canonicalTeam(boardId, input.teamId, scope, occurredAt),
       session_id: sessionId,
       job_id: jobId,
       contract_ref: contractRef,
       category,
       quantity: positiveCount(input.quantity ?? 1, 'quantity'),
-      resource_sha256: resource === null ? null : sha256(resource),
-      occurred_at: this.observationTimestamp(
-        'outcome_activity_observations', id, 'occurred_at', input.occurredAt, 'occurred at',
-      ),
+      resource_sha256: resource === null ? null : this.resourceHmac(resource),
+      occurred_at: occurredAt,
     }
     const hash = requestHash(normalized)
     const prior = this.replayed('outcome_activity_observations', normalized.id, hash)
@@ -346,8 +386,8 @@ export class OutcomeAnalyticsService {
       const dimensions = [
         dimension('provider_tokens', used.provider_tokens + projections.provider_tokens, policy.max_provider_tokens, policy.warning_milli),
         dimension('context_tokens', used.context_tokens + projections.context_tokens, policy.max_context_tokens, policy.warning_milli),
-        dimension('fanout', projections.fanout, policy.max_fanout, policy.warning_milli),
-        dimension('planning_round_tokens', projections.planning_round_tokens, policy.max_planning_round_tokens, policy.warning_milli),
+        dimension('fanout', used.fanout + projections.fanout, policy.max_fanout, policy.warning_milli),
+        dimension('planning_round_tokens', used.planning_round_tokens + projections.planning_round_tokens, policy.max_planning_round_tokens, policy.warning_milli),
       ].filter((item) => item.limit !== null)
       const exceeded = dimensions.some((item) => item.exceeded)
       return {
@@ -387,6 +427,7 @@ export class OutcomeAnalyticsService {
       estimated_tokens: count(input.estimatedTokens, 'estimated tokens'),
       reason: bounded(input.reason, 'reason'),
       requested_by: bounded(input.requestedBy, 'requested by', 256),
+      execution_sha256: sha256(bounded(input.executionKey, 'execution key', 4_096)),
       ttl_seconds: positiveCount(input.ttlSeconds ?? 900, 'ttl seconds', 86_400),
     }
     const evaluation = this.evaluateBudgets({
@@ -424,20 +465,28 @@ export class OutcomeAnalyticsService {
     }
     const hash = requestHash({
       ...persisted,
+      execution_sha256: normalized.execution_sha256,
       requested_at: undefined,
       expires_at: undefined,
       ttl_seconds: normalized.ttl_seconds,
     })
     const prior = this.replayed('outcome_operation_confirmations', persisted.id, hash)
     if (prior) return prior
-    this.db.prepare(`INSERT INTO outcome_operation_confirmations
-      (id, request_sha256, board_id, team_id, job_id, operation_kind, fanout,
-       estimated_tokens, reason, status, requested_by, requested_at, confirmed_by,
-       confirmed_at, expires_at)
-      VALUES (@id, @request_sha256, @board_id, @team_id, @job_id, @operation_kind,
-       @fanout, @estimated_tokens, @reason, @status, @requested_by, @requested_at,
-       @confirmed_by, @confirmed_at, @expires_at)`)
-      .run({ ...persisted, request_sha256: hash })
+    const transaction = this.db.transaction(() => {
+      this.db.prepare(`INSERT INTO outcome_operation_confirmations
+        (id, request_sha256, board_id, team_id, job_id, operation_kind, fanout,
+         estimated_tokens, reason, status, requested_by, requested_at, confirmed_by,
+         confirmed_at, expires_at)
+        VALUES (@id, @request_sha256, @board_id, @team_id, @job_id, @operation_kind,
+         @fanout, @estimated_tokens, @reason, @status, @requested_by, @requested_at,
+         @confirmed_by, @confirmed_at, @expires_at)`)
+        .run({ ...persisted, request_sha256: hash })
+      this.db.prepare(`INSERT INTO outcome_operation_bindings
+        (operation_id, execution_sha256, confirmation_required, created_at)
+        VALUES (?, ?, ?, ?)`)
+        .run(persisted.id, normalized.execution_sha256, confirmationRequired ? 1 : 0, requestedAt)
+    })
+    transaction.immediate()
     return this.row('outcome_operation_confirmations', persisted.id)
   }
 
@@ -463,14 +512,58 @@ export class OutcomeAnalyticsService {
     return this.row('outcome_operation_confirmations', normalizedId)
   }
 
-  assertOperationAuthorized(id: string, at = now()): Record<string, unknown> {
-    const row = this.row('outcome_operation_confirmations', identifier(id))
-    const checkedAt = timestamp(at, 'checked at')
-    if (String(row.expires_at) <= checkedAt) throw new ConflictError('operation authorization expired')
-    if (row.status !== 'not_required' && row.status !== 'confirmed') {
-      throw new ConflictError('operation requires explicit confirmation')
+  consumeOperationExecution(input: OperationExecutionInput): Record<string, unknown> {
+    const operationId = identifier(input.id)
+    const executionSha256 = sha256(bounded(input.executionKey, 'execution key', 4_096))
+    const actor = bounded(input.actor, 'actor', 256)
+    const consumedAt = timestamp(input.at ?? now(), 'consumed at')
+    const actual = {
+      provider_tokens: count(input.providerTokens, 'provider tokens'),
+      context_tokens: count(input.contextTokens ?? 0, 'context tokens'),
+      fanout: positiveCount(input.fanout, 'fanout'),
+      planning_round_tokens: count(input.planningRoundTokens ?? 0, 'planning round tokens'),
     }
-    return row
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare(`SELECT confirmation.*, binding.execution_sha256
+        FROM outcome_operation_confirmations confirmation
+        JOIN outcome_operation_bindings binding ON binding.operation_id=confirmation.id
+        WHERE confirmation.id=?`).get(operationId) as Record<string, unknown> | undefined
+      if (!row) throw new NotFoundError('outcome operation not found')
+      if (row.execution_sha256 !== executionSha256) {
+        throw new ConflictError('operation authorization is bound to another execution')
+      }
+      if (String(row.expires_at) <= consumedAt) throw new ConflictError('operation authorization expired')
+      if (row.status !== 'not_required' && row.status !== 'confirmed') {
+        throw new ConflictError('operation requires explicit confirmation')
+      }
+      if (this.db.prepare(`SELECT 1 FROM outcome_operation_consumptions WHERE operation_id=?`)
+        .get(operationId)) throw new ConflictError('operation authorization is already consumed')
+      const evaluation = this.evaluateBudgets({
+        boardId: Number(row.board_id),
+        teamId: row.team_id == null ? null : String(row.team_id),
+        jobId: row.job_id == null ? null : String(row.job_id),
+        additionalProviderTokens: actual.provider_tokens,
+        additionalContextTokens: actual.context_tokens,
+        fanout: actual.fanout,
+        planningRoundTokens: actual.planning_round_tokens,
+      })
+      if (evaluation.allowed !== true) {
+        throw new ConflictError('operation exceeds a hard budget at execution')
+      }
+      this.db.prepare(`INSERT INTO outcome_operation_consumptions
+        (operation_id, board_id, team_id, job_id, provider_tokens, context_tokens,
+         fanout, planning_round_tokens, consumed_by, consumed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(operationId, row.board_id, row.team_id, row.job_id, actual.provider_tokens,
+          actual.context_tokens, actual.fanout, actual.planning_round_tokens, actor, consumedAt)
+      return {
+        ...row,
+        execution_sha256: undefined,
+        consumption: this.db.prepare(`SELECT * FROM outcome_operation_consumptions
+          WHERE operation_id=?`).get(operationId),
+      }
+    })
+    return transaction.immediate()
   }
 
   createTeamDigest(input: {
@@ -511,22 +604,31 @@ export class OutcomeAnalyticsService {
 
   recordBenchmark(input: BenchmarkObservationInput): Record<string, unknown> {
     const id = identifier(input.id)
-    const normalized = {
-      id,
-      board_id: positiveBoard(input.boardId),
-      suite_key: identifier(input.suiteKey, 'suite key'),
-      scenario_key: identifier(input.scenarioKey, 'scenario key'),
-      variant: input.variant === 'before' || input.variant === 'after'
-        ? input.variant : invalid<'before'>('benchmark variant is invalid'),
+    const boardId = positiveBoard(input.boardId)
+    const suiteKey = identifier(input.suiteKey, 'suite key')
+    const scenarioKey = identifier(input.scenarioKey, 'scenario key')
+    const variant = input.variant === 'before' || input.variant === 'after'
+      ? input.variant : invalid<'before'>('benchmark variant is invalid')
+    const evidenceRef = bounded(input.evidenceRef, 'evidence ref')
+    const evidence = this.benchmarkEvidence(boardId, evidenceRef, {
+      suite_key: suiteKey,
+      scenario_key: scenarioKey,
+      variant,
       provider_tokens: count(input.providerTokens, 'provider tokens'),
       context_tokens: count(input.contextTokens, 'context tokens'),
       accepted_deliveries: count(input.acceptedDeliveries, 'accepted deliveries', 1_000_000),
       quality_milli: count(input.qualityMilli, 'quality milli', 1_000),
       duration_ms: count(input.durationMs, 'duration ms', 31_536_000_000),
-      evidence_ref: bounded(input.evidenceRef, 'evidence ref'),
-      observed_at: this.observationTimestamp(
-        'outcome_benchmark_observations', id, 'observed_at', input.observedAt, 'observed at',
-      ),
+    })
+    if (input.observedAt !== undefined && timestamp(input.observedAt, 'observed at') !== evidence.observed_at) {
+      throw new ValidationError('benchmark observed at must match canonical artifact time')
+    }
+    const normalized = {
+      id,
+      board_id: boardId,
+      ...evidence.metrics,
+      evidence_ref: evidenceRef,
+      observed_at: evidence.observed_at,
     }
     const hash = requestHash(normalized)
     const prior = this.replayed('outcome_benchmark_observations', normalized.id, hash)
@@ -621,11 +723,11 @@ export class OutcomeAnalyticsService {
         AND accepted_at>=? AND accepted_at<?`).get(boardId, since, until) as { count: number }
     const acceptedUsage = this.db.prepare(`SELECT COALESCE(SUM(usage.provider_total_tokens),0) AS tokens
       FROM outcome_usage_observations usage
-      WHERE usage.board_id=? AND EXISTS (
+      WHERE usage.board_id=? AND usage.observed_at>=? AND usage.observed_at<? AND EXISTS (
         SELECT 1 FROM delivery_reports report
         WHERE report.board_id=usage.board_id AND report.job_id=usage.job_id
           AND report.status='accepted' AND report.accepted_at>=? AND report.accepted_at<?
-      )`).get(boardId, since, until) as { tokens: number }
+      )`).get(boardId, since, until, since, until) as { tokens: number }
     const delivery = this.deliveryMetrics(boardId, since, until)
     const activities = this.activityCounts(boardId, since, until)
     const firstUseful = this.averageDuration(boardId, since, until, 'first_useful')
@@ -637,11 +739,12 @@ export class OutcomeAnalyticsService {
           SELECT 1 FROM delivery_reports report
           WHERE report.board_id=usage.board_id AND report.job_id=usage.job_id
             AND report.status='accepted'
+            AND report.accepted_at>=? AND report.accepted_at<?
         ) THEN 1 ELSE 0 END) AS accepted
       FROM outcome_usage_observations usage
       WHERE usage.board_id=? AND usage.observed_at>=? AND usage.observed_at<?
       GROUP BY usage.job_id, usage.contract_ref ORDER BY provider_tokens DESC, usage.job_id`)
-      .all(boardId, since, until)
+      .all(since, until, boardId, since, until)
     const byTeam = this.db.prepare(`SELECT team_id,
         COALESCE(SUM(provider_total_tokens),0) AS provider_tokens,
         COALESCE(SUM(context_injection_tokens),0) AS context_tokens
@@ -662,8 +765,8 @@ export class OutcomeAnalyticsService {
       const dimensions = [
         dimension('provider_tokens', used.provider_tokens, policy.max_provider_tokens, policy.warning_milli),
         dimension('context_tokens', used.context_tokens, policy.max_context_tokens, policy.warning_milli),
-        dimension('fanout', 0, policy.max_fanout, policy.warning_milli),
-        dimension('planning_round_tokens', 0, policy.max_planning_round_tokens, policy.warning_milli),
+        dimension('fanout', used.fanout, policy.max_fanout, policy.warning_milli),
+        dimension('planning_round_tokens', used.planning_round_tokens, policy.max_planning_round_tokens, policy.warning_milli),
       ].filter((item) => item.limit !== null)
       const exceeded = dimensions.some((item) => item.exceeded)
       return {
@@ -728,13 +831,25 @@ export class OutcomeAnalyticsService {
     const boardId = positiveBoard(boardIdInput)
     const row = this.db.prepare(`SELECT job.board_id, job.card_id, job.contract_version,
         session.job_id AS session_job_id, session.workspace_id AS session_workspace_id,
-        job.workspace_id AS job_workspace_id
+        job.workspace_id AS job_workspace_id, job.provider AS job_provider,
+        session.provider AS session_provider, job.driver_id AS job_driver_id,
+        session.driver_id AS session_driver_id,
+        job.assigned_profile_id AS job_profile_id,
+        COALESCE(session.assigned_profile_id, session.profile_id) AS session_profile_id,
+        job.created_at AS job_created_at, session.created_at AS session_created_at
       FROM jobs job JOIN agent_sessions session ON session.id=?
       WHERE job.id=?`).get(sessionId, jobId) as JobScope | undefined
     if (!row) throw new NotFoundError('job or session not found')
     if (row.board_id !== boardId || row.session_job_id !== jobId
       || row.session_workspace_id !== row.job_workspace_id) {
       throw new ValidationError('usage scope does not match the canonical job and session')
+    }
+    if (row.job_provider !== row.session_provider) {
+      throw new ValidationError('canonical job and session providers disagree')
+    }
+    if (row.job_profile_id && row.session_profile_id
+      && row.job_profile_id !== row.session_profile_id) {
+      throw new ValidationError('canonical job and session profiles disagree')
     }
     return row
   }
@@ -753,6 +868,102 @@ export class OutcomeAnalyticsService {
       WHERE team.id=? AND organization.board_id=?`).get(id, boardId)
     if (!row) throw new ValidationError('team is outside the board')
     return id
+  }
+
+  private canonicalProvider(scope: JobScope, claimed: unknown): string {
+    const provider = bounded(claimed, 'provider', 100)
+    if (provider !== scope.job_provider || provider !== scope.session_provider) {
+      throw new ValidationError('provider does not match the canonical job and session')
+    }
+    return scope.job_provider
+  }
+
+  private canonicalBillingMode(provider: string, observedAt: string): BillingMode {
+    const rows = this.db.prepare(`SELECT DISTINCT billing_mode FROM provider_acceptance_evidence
+      WHERE provider_id=? AND observed_at<=? ORDER BY billing_mode`)
+      .all(provider, observedAt) as Array<{ billing_mode: string }>
+    if (rows.length !== 1) return 'unknown'
+    const mode = rows[0]?.billing_mode
+    if (mode === 'personal_subscription') return 'subscription'
+    if (mode === 'usage_priced_api') return 'api'
+    return 'unknown'
+  }
+
+  private validScopedTimestamp(value: string, scope: JobScope, field: string): string {
+    const minimum = Math.max(Date.parse(scope.job_created_at), Date.parse(scope.session_created_at))
+    const parsed = Date.parse(value)
+    if (parsed < minimum) throw new ValidationError(`${field} predates the canonical job or session`)
+    if (parsed > Date.now() + 5 * 60_000) throw new ValidationError(`${field} is in the future`)
+    return value
+  }
+
+  private canonicalTeam(
+    boardId: number,
+    claimed: unknown,
+    scope: JobScope | null,
+    observedAt: string,
+  ): string | null {
+    const profileId = scope?.job_profile_id ?? scope?.session_profile_id ?? null
+    if (!profileId) {
+      if (claimed !== undefined && claimed !== null && claimed !== '') {
+        throw new ValidationError('team cannot be attributed without a canonical agent profile')
+      }
+      return null
+    }
+    const rows = this.db.prepare(`SELECT membership.team_id FROM os_team_memberships membership
+      JOIN os_organizations organization ON organization.id=membership.organization_id
+      WHERE membership.agent_profile_id=? AND organization.board_id=?
+        AND membership.state='active' AND julianday(membership.effective_from)<=julianday(?)
+        AND (membership.effective_until IS NULL OR julianday(membership.effective_until)>julianday(?))
+      ORDER BY membership.team_id`)
+      .all(profileId, boardId, observedAt, observedAt) as Array<{ team_id: string }>
+    if (claimed !== undefined && claimed !== null && claimed !== '') {
+      const teamId = identifier(claimed, 'team id')
+      if (!rows.some((row) => row.team_id === teamId)) {
+        throw new ValidationError('team is not an active canonical membership for the agent')
+      }
+      return teamId
+    }
+    return rows.length === 1 ? rows[0]!.team_id : null
+  }
+
+  private resourceHmac(resource: string): string {
+    const secret = this.db.prepare(`SELECT hmac_key_hex FROM outcome_analytics_secrets
+      WHERE singleton=1`).get() as { hmac_key_hex: string } | undefined
+    if (!secret) throw new Error('outcome analytics privacy key is unavailable')
+    return createHmac('sha256', Buffer.from(secret.hmac_key_hex, 'hex'))
+      .update(resource, 'utf8').digest('hex')
+  }
+
+  private benchmarkEvidence(
+    boardId: number,
+    evidenceRef: string,
+    claimed: Record<string, unknown>,
+  ): { metrics: Record<string, unknown>; observed_at: string } {
+    const artifactId = evidenceRef.startsWith('artifact:') ? evidenceRef.slice('artifact:'.length) : evidenceRef
+    const artifact = this.db.prepare(`SELECT kind, metadata, created_at FROM artifacts
+      WHERE id=? AND board_id=?`).get(artifactId, boardId) as {
+        kind: string; metadata: string; created_at: string
+      } | undefined
+    if (!artifact || !['benchmark', 'test_report', 'verification'].includes(artifact.kind)) {
+      throw new ValidationError('benchmark evidence must reference a same-board verification artifact')
+    }
+    let parsed: unknown
+    try { parsed = JSON.parse(artifact.metadata) } catch { parsed = null }
+    const metrics = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).outcome_benchmark : null
+    if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) {
+      throw new ValidationError('benchmark artifact lacks canonical outcome metrics')
+    }
+    const canonicalMetrics = metrics as Record<string, unknown>
+    if (canonical(claimed) !== canonical(canonicalMetrics)) {
+      throw new ValidationError('benchmark observation disagrees with canonical artifact evidence')
+    }
+    const observedAt = timestamp(artifact.created_at, 'artifact created at')
+    if (Date.parse(observedAt) > Date.now() + 5 * 60_000) {
+      throw new ValidationError('benchmark artifact time is in the future')
+    }
+    return { metrics: canonicalMetrics, observed_at: observedAt }
   }
 
   private validateBudgetScope(boardId: number, kind: BudgetScopeKind, id: string): void {
@@ -819,17 +1030,29 @@ export class OutcomeAnalyticsService {
   }
 
   private budgetUsage(boardId: number, policy: BudgetRow, teamId: string | null, jobId: string | null): {
-    provider_tokens: number; context_tokens: number
+    provider_tokens: number; context_tokens: number; fanout: number; planning_round_tokens: number
   } {
     let predicate = ''
     let value: string | null = null
     if (policy.scope_kind === 'team') { predicate = ' AND team_id=?'; value = teamId ?? policy.scope_id }
     if (policy.scope_kind === 'job') { predicate = ' AND job_id=?'; value = jobId ?? policy.scope_id }
-    const row = this.db.prepare(`SELECT COALESCE(SUM(provider_total_tokens),0) AS provider_tokens,
+    const values = value === null ? [boardId] : [boardId, value]
+    const usage = this.db.prepare(`SELECT COALESCE(SUM(provider_total_tokens),0) AS provider_tokens,
         COALESCE(SUM(context_injection_tokens),0) AS context_tokens
       FROM outcome_usage_observations WHERE board_id=?${predicate}`)
-      .get(...(value === null ? [boardId] : [boardId, value])) as Record<string, unknown>
-    return { provider_tokens: numberValue(row.provider_tokens), context_tokens: numberValue(row.context_tokens) }
+      .get(...values) as Record<string, unknown>
+    const operations = this.db.prepare(`SELECT COALESCE(SUM(provider_tokens),0) AS provider_tokens,
+        COALESCE(SUM(context_tokens),0) AS context_tokens,
+        COALESCE(SUM(fanout),0) AS fanout,
+        COALESCE(SUM(planning_round_tokens),0) AS planning_round_tokens
+      FROM outcome_operation_consumptions WHERE board_id=?${predicate}`)
+      .get(...values) as Record<string, unknown>
+    return {
+      provider_tokens: numberValue(usage.provider_tokens) + numberValue(operations.provider_tokens),
+      context_tokens: numberValue(usage.context_tokens) + numberValue(operations.context_tokens),
+      fanout: numberValue(operations.fanout),
+      planning_round_tokens: numberValue(operations.planning_round_tokens),
+    }
   }
 
   private activityCounts(boardId: number, since: string, until: string, teamId?: string): Record<string, number> {
@@ -863,8 +1086,8 @@ export class OutcomeAnalyticsService {
       WHERE report.board_id=? AND report.updated_at>=? AND report.updated_at<?
         AND (deliverable.override_actor IS NOT NULL OR criterion.override_actor IS NOT NULL)`)
       .get(boardId, since, until) as { count: number }
-    const retries = this.db.prepare(`SELECT COALESCE(SUM(CASE WHEN attempts>1 THEN attempts-1 ELSE 0 END),0) AS count
-      FROM jobs WHERE board_id=? AND created_at>=? AND created_at<?`)
+    const retries = this.db.prepare(`SELECT COUNT(*) AS count FROM os_events
+      WHERE board_id=? AND kind='job.retry_queued' AND created_at>=? AND created_at<?`)
       .get(boardId, since, until) as { count: number }
     const total = numberValue(reports.reports)
     return {
@@ -873,6 +1096,7 @@ export class OutcomeAnalyticsService {
       rejected: numberValue(reports.rejected),
       evidence_gaps: numberValue(reports.evidence_gaps),
       retries: numberValue(retries.count),
+      retry_source: 'os_events',
       human_overrides: numberValue(overrides.count),
       rejection_rate: total === 0 ? null : numberValue(reports.rejected) / total,
       evidence_gap_rate: total === 0 ? null : numberValue(reports.evidence_gaps) / total,

@@ -38,8 +38,9 @@ async function fixture() {
       '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z',
       '2026-08-01T10:00:00.000Z', 0, 0, 2)`).run(boardId, cardId)
   db.prepare(`INSERT INTO agent_sessions
-    (id, workspace_id, provider, status, context_json, job_id)
-    VALUES ('api-session', 'api-workspace', 'codex', 'running', '{}', 'api-job')`).run()
+    (id, workspace_id, provider, status, context_json, job_id, created_at, updated_at)
+    VALUES ('api-session', 'api-workspace', 'codex', 'running', '{}', 'api-job',
+      '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z')`).run()
   const server = Fastify()
   const published: unknown[] = []
   server.decorateRequest('orchestraPrincipal', 'operator')
@@ -82,7 +83,7 @@ describe('outcome analytics focused registrar', () => {
       headers: operator,
       payload: {
         id: 'api-usage', sessionId: 'api-session', jobId: 'api-job', provider: 'codex',
-        billingMode: 'subscription', cachedInputSemantics: 'subset',
+        billingMode: 'unknown', cachedInputSemantics: 'subset',
         inputTokens: 900, cachedInputTokens: 400, outputTokens: 100,
         thinkingTokens: 20, contextInjectionTokens: 80, providerTotalTokens: 1000,
         observedAt: '2026-08-01T10:01:00.000Z',
@@ -126,12 +127,15 @@ describe('outcome analytics focused registrar', () => {
       payload: {
         id: 'api-operation', operationKind: 'swarm', fanout: 10,
         estimatedTokens: 5000, reason: 'Parallel review', jobId: 'api-job',
+        executionKey: 'api-native-execution',
       },
     })
     expect(planned.statusCode, planned.body).toBe(201)
     expect(planned.json().result.status).toBe('awaiting_confirmation')
     const blocked = await server.inject({
-      method: 'GET', url: '/api/v1/os/outcomes/operations/api-operation/authorization',
+      method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
+      headers: operator,
+      payload: { executionKey: 'api-native-execution', providerTokens: 5000, fanout: 10 },
     })
     expect(blocked.statusCode).toBe(409)
     const confirmed = await server.inject({
@@ -141,14 +145,25 @@ describe('outcome analytics focused registrar', () => {
     expect(confirmed.statusCode, confirmed.body).toBe(200)
     expect(confirmed.json().result.status).toBe('confirmed')
     const authorized = await server.inject({
-      method: 'GET', url: '/api/v1/os/outcomes/operations/api-operation/authorization',
+      method: 'POST', url: '/api/v1/os/outcomes/operations/api-operation/consume',
+      headers: operator,
+      payload: { executionKey: 'api-native-execution', providerTokens: 5000, fanout: 10 },
     })
     expect(authorized.statusCode, authorized.body).toBe(200)
   })
 
   it('publishes quality-aware benchmark comparison without claiming the beta gate', async () => {
-    const { server, boardId } = await fixture()
+    const { server, db, boardId } = await fixture()
     for (const [variant, tokens, quality] of [['before', 1000, 950], ['after', 600, 900]] as const) {
+      const artifactId = `api-benchmark-${variant}-artifact`
+      db.prepare(`INSERT INTO artifacts(id, board_id, kind, name, metadata, created_at)
+        VALUES (?, ?, 'benchmark', ?, ?, '2026-08-01T10:01:00.000Z')`).run(
+        artifactId, boardId, variant, JSON.stringify({ outcome_benchmark: {
+          suite_key: 'api-suite', scenario_key: 'scenario', variant,
+          provider_tokens: tokens, context_tokens: 0, accepted_deliveries: 1,
+          quality_milli: quality, duration_ms: 1000,
+        } }),
+      )
       const response = await server.inject({
         method: 'POST', url: `/api/v1/os/boards/${boardId}/outcomes/benchmarks`,
         headers: operator,
@@ -156,7 +171,7 @@ describe('outcome analytics focused registrar', () => {
           id: `api-benchmark-${variant}`, suiteKey: 'api-suite', scenarioKey: 'scenario',
           variant, providerTokens: tokens, contextTokens: 0, acceptedDeliveries: 1,
           qualityMilli: quality, durationMs: 1000,
-          evidenceRef: `artifact://api/${variant}`,
+          evidenceRef: `artifact:${artifactId}`, observedAt: '2026-08-01T10:01:00.000Z',
         },
       })
       expect(response.statusCode, response.body).toBe(201)

@@ -30,6 +30,7 @@ type Dashboard = {
     rejected: number
     evidence_gaps: number
     retries: number
+    retry_source: 'os_events'
     human_overrides: number
     rejection_rate: number | null
     evidence_gap_rate: number | null
@@ -70,24 +71,36 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const refreshTimer = useRef<number | null>(null)
+  const activeBoard = useRef(boardId)
+  activeBoard.current = boardId
 
   const load = useCallback(async (quiet = false) => {
+    const requestedBoard = boardId
     if (!quiet) setLoading(true)
     try {
-      const next = await api('GET', `/os/boards/${boardId}/outcomes/dashboard`) as Dashboard
+      const next = await api('GET', `/os/boards/${requestedBoard}/outcomes/dashboard`) as Dashboard
+      if (activeBoard.current !== requestedBoard) return
+      if (next.board_id !== requestedBoard) throw new Error('Outcome dashboard returned another board')
       setDashboard(next)
       setError(null)
     } catch (reason) {
+      if (activeBoard.current !== requestedBoard) return
       setError(reason instanceof Error ? reason.message : 'Outcome dashboard could not load')
     } finally {
-      if (!quiet) setLoading(false)
+      if (!quiet && activeBoard.current === requestedBoard) setLoading(false)
     }
   }, [boardId])
 
   useEffect(() => {
+    setDashboard(null)
+    setError(null)
+    setLoading(true)
     void load()
     const stream = new EventSource(streamUrl())
-    stream.onmessage = () => {
+    stream.onmessage = (event) => {
+      let payload: { board_id?: number; type?: string }
+      try { payload = JSON.parse(event.data) as { board_id?: number; type?: string } } catch { return }
+      if (payload.board_id !== boardId || payload.type !== 'outcome_analytics') return
       if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
       refreshTimer.current = window.setTimeout(() => void load(true), 250)
     }
@@ -103,6 +116,9 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
     return 'healthy'
   }, [dashboard])
 
+  if (dashboard && dashboard.board_id !== boardId) {
+    return <div className="outcome-dashboard-state" aria-live="polite">Loading outcome evidence…</div>
+  }
   if (loading && !dashboard) return <div className="outcome-dashboard-state" aria-live="polite">Loading outcome evidence…</div>
   if (error && !dashboard) return <div className="outcome-dashboard-state error" role="alert">{error}</div>
   if (!dashboard) return null

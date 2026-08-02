@@ -18,6 +18,10 @@ describe('outcome dashboard UI contract', () => {
     expect(component).toContain('new EventSource(streamUrl())')
     expect(component).not.toContain('setInterval')
     expect(component).toContain('stream.close()')
+    expect(component).toContain("payload.board_id !== boardId || payload.type !== 'outcome_analytics'")
+    expect(component).toContain('setDashboard(null)')
+    expect(component).toContain('activeBoard.current !== requestedBoard')
+    expect(component).toContain('dashboard.board_id !== boardId')
   })
 
   it('has responsive, focus-visible and reduced-motion behavior', () => {
