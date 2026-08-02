@@ -399,6 +399,73 @@ export function searchCommandCenter(
     .map(({ record }) => record)
 }
 
+const savedFilterValues = (value: string) => value.split(',')
+  .map((item) => item.trim().toLocaleLowerCase())
+  .filter(Boolean)
+
+export function filterCommandCenterSearchRecords(
+  records: readonly CommandCenterSearchRecord[],
+  filters: Readonly<Record<string, string>>,
+): CommandCenterSearchRecord[] {
+  const active = Object.entries(filters).filter(([, value]) => value.trim())
+  if (active.length === 0) return [...records]
+  return records.filter((record) => active.every(([key, value]) => {
+    const expected = savedFilterValues(value)
+    if (key === 'status') {
+      const domain: CommandCenterStatusDomain = record.kind === 'agent'
+        ? 'agent'
+        : record.kind === 'discussion'
+          ? 'discussion'
+          : record.kind === 'delivery'
+            ? 'delivery'
+            : 'job'
+      const actual = record.status?.toLocaleLowerCase() ?? ''
+      return expected.some((statusValue) =>
+        actual === statusValue
+        || actual === commandCenterStatus(domain, statusValue).label.toLocaleLowerCase())
+    }
+    if (key === 'type') {
+      const keywords = new Set(record.keywords.map((item) => item.toLocaleLowerCase()))
+      return expected.some((typeValue) => keywords.has(typeValue))
+    }
+    return false
+  }))
+}
+
+export function projectScopedJobs(
+  snapshots: readonly Snapshot[],
+  jobs: readonly Job[],
+): Job[] {
+  const boardIds = new Set(snapshots.map((snapshot) => snapshot.board.id))
+  return jobs.filter((job) => boardIds.has(job.board_id))
+}
+
+export function commandCenterProjectProjection(input: {
+  snapshots: readonly Snapshot[]
+  jobs: readonly Job[]
+  savedView?: SavedCommandCenterView | null
+}) {
+  const jobs = projectScopedJobs(input.snapshots, input.jobs)
+  const allSearchRecords = commandCenterSearchRecords({ snapshots: input.snapshots, jobs })
+  const kindForSection: Partial<Record<CommandCenterSection, CommandCenterSearchKind>> = {
+    work: 'work',
+    agents: 'agent',
+    discussions: 'discussion',
+    knowledge: 'knowledge',
+  }
+  const savedKind = input.savedView ? kindForSection[input.savedView.section] : undefined
+  const sectionRecords = savedKind
+    ? allSearchRecords.filter((record) => record.kind === savedKind)
+    : allSearchRecords
+  return {
+    jobs,
+    searchRecords: filterCommandCenterSearchRecords(
+      sectionRecords,
+      input.savedView?.filters ?? {},
+    ),
+  }
+}
+
 const deliverySummary = (delivery: DeliveryReport) =>
   delivery.human_summary || delivery.summary || delivery.gaps[0] || 'Delivery evidence'
 

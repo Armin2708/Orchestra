@@ -238,7 +238,8 @@ describe('Open Work component contract', () => {
 
   it('keeps unsafe workflow transitions locked in the component source contract', () => {
     expect(viewSource).not.toContain('dangerouslySetInnerHTML')
-    expect(viewSource).toContain('disabled={busy !== null || !editor.localReady || editor.dirty}')
+    expect(viewSource).toContain('disabled={readOnly || busy !== null || !editor.localReady || editor.dirty}')
+    expect(viewSource).toContain('if (readOnly) return')
     expect(viewSource).toContain('setPreviewSourceMarketVersion(marketVersion)')
     expect(viewSource).toContain('Save this draft before generating a publish preview.')
     expect(viewSource).toContain('contractVersionIsStale(')

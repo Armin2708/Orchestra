@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CommandCenter,
   CommandCenterWalkthrough,
@@ -12,6 +12,7 @@ import {
   DependencyVisualization,
 } from '../web/src/CommandCenterSurfaces.js'
 import { commandCenterStatus } from '../web/src/commandCenterModel.js'
+import { resolveAttentionItem } from '../web/src/NeedsYou.js'
 
 const requireFromWeb = createRequire(new URL('../web/package.json', import.meta.url))
 const { createElement } = requireFromWeb('react') as {
@@ -31,7 +32,7 @@ describe('unified command center component contract', () => {
       projectName: 'Orchestra',
       projectId: 7,
       section: 'work',
-      counts: { work: 4, agents: 2, discussions: 0, knowledge: 0, activity: 11 },
+      counts: { work: 4, agents: 2, knowledge: 0, activity: 11 },
       searchRecords: [],
       connectionState: 'offline',
       onNavigate: () => undefined,
@@ -49,6 +50,12 @@ describe('unified command center component contract', () => {
     expect(markup).toContain('role="tablist"')
     expect(markup).toContain('role="tabpanel"')
     expect(markup).toContain('Skip to project content')
+    expect(markup).toContain('Canonical work')
+    expect(markup).toContain('data-read-only="true"')
+    expect(markup).toContain('aria-describedby="cc-offline-notice"')
+    expect(markup).not.toContain('inert')
+    expect(markup).not.toMatch(/>Discussions<b>/)
+    expect(shellSource).toContain('savedViewsStorageKey(projectId)')
   })
 
   it('renders all state variants with actionable semantics', () => {
@@ -62,6 +69,17 @@ describe('unified command center component contract', () => {
       expect(markup).toContain('Retry')
       expect(markup).toMatch(/role="(alert|status)"/)
     }
+  })
+
+  it('keeps offline attention state readable while fail-closing resolution mutations', async () => {
+    const resolver = vi.fn(async () => undefined)
+    await expect(resolveAttentionItem('attention-1', true, resolver)).resolves.toBe(false)
+    expect(resolver).not.toHaveBeenCalled()
+    await expect(resolveAttentionItem('attention-1', false, resolver)).resolves.toBe(true)
+    expect(resolver).toHaveBeenCalledWith('attention-1')
+    expect(appSource).toContain("readOnly={connectionState !== 'live'}")
+    expect(appSource).toContain('commandCenterProjectProjection({')
+    expect(appSource).toContain('boardId={focus === \'all\' ? null')
   })
 
   it('keeps canonical Discussions explicitly unavailable instead of relabeling Messages', () => {

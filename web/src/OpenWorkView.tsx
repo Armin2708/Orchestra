@@ -39,6 +39,7 @@ import {
   formatCents,
   formatDuration,
   formatInteger,
+  filterOpenWorkResponse,
   initialOpenWorkState,
   isMatchStale,
   mapBackendValidation,
@@ -57,6 +58,10 @@ type OpenWorkViewProps = {
   initialData?: OpenWorkResponse
   initialSelectedCardId?: number
   initialContract?: ContractEnvelope | null
+  boardId?: number | null
+  collectionQuery?: string
+  collectionFilters?: Readonly<Record<string, string>>
+  readOnly?: boolean
 }
 
 type FilterFormState = {
@@ -75,6 +80,8 @@ type Resource<T> = {
   error: string | null
   stale: boolean
 }
+
+const EMPTY_COLLECTION_FILTERS: Readonly<Record<string, string>> = Object.freeze({})
 
 const resource = <T,>(data: T | null = null): Resource<T> => ({
   status: data === null ? 'idle' : 'ready',
@@ -96,7 +103,8 @@ const filterFormFromFilters = (filters: OpenWorkFilters): FilterFormState => ({
   maxTimeSeconds: filters.maxTimeSeconds === null ? '' : String(filters.maxTimeSeconds),
 })
 
-const filtersFromForm = (form: FilterFormState): OpenWorkFilters => ({
+const filtersFromForm = (form: FilterFormState, boardId: number | null): OpenWorkFilters => ({
+  boardId,
   repository: form.repository,
   capabilities: splitListInput(form.capabilities),
   priority: numberInput(form.priority),
@@ -111,22 +119,43 @@ const messageFor = (error: unknown) =>
 
 const nullableNumber = (value: string) => value === '' ? null : Number(value)
 
+const defaultFiltersForView = (
+  boardId: number | null,
+  collectionFilters: Readonly<Record<string, string>>,
+) => {
+  const filters = defaultOpenWorkFilters(boardId)
+  const statuses = new Set((collectionFilters.status ?? '')
+    .split(',').map((value) => value.trim().toLocaleLowerCase()).filter(Boolean))
+  if (statuses.size === 1 && statuses.has('blocked')) filters.dependencyReadiness = 'blocked'
+  if (statuses.size === 1 && statuses.has('ready')) filters.dependencyReadiness = 'ready'
+  return filters
+}
+
 export function OpenWorkView({
   client = openWorkApi,
   initialData,
   initialSelectedCardId,
   initialContract = null,
+  boardId = null,
+  collectionQuery = '',
+  collectionFilters = EMPTY_COLLECTION_FILTERS,
+  readOnly = false,
 }: OpenWorkViewProps) {
+  const initialResponse = initialData === undefined ? undefined : filterOpenWorkResponse(initialData, {
+    boardId,
+    query: collectionQuery,
+    filters: collectionFilters,
+  })
   const [remote, dispatchRemote] = useReducer(
     openWorkReducer,
-    initialData,
+    initialResponse,
     initialOpenWorkState,
   )
   const [appliedFilters, setAppliedFilters] = useState<OpenWorkFilters>(
-    defaultOpenWorkFilters,
+    () => defaultFiltersForView(boardId, collectionFilters),
   )
   const [filterForm, setFilterForm] = useState<FilterFormState>(() =>
-    filterFormFromFilters(defaultOpenWorkFilters()))
+    filterFormFromFilters(defaultFiltersForView(boardId, collectionFilters)))
   const [selectedCardId, setSelectedCardId] = useState<number | null>(
     initialSelectedCardId ?? initialData?.items[0]?.card_id ?? null,
   )
@@ -136,28 +165,38 @@ export function OpenWorkView({
     const sequence = ++loadSequence.current
     dispatchRemote({ type: 'load' })
     try {
-      const response = await client.list(filters)
+      const response = filterOpenWorkResponse(await client.list(filters), {
+        boardId,
+        query: collectionQuery,
+        filters: collectionFilters,
+      })
       if (sequence === loadSequence.current) dispatchRemote({ type: 'loaded', response })
     } catch (error) {
       if (sequence === loadSequence.current) {
         dispatchRemote({ type: 'failed', error: messageFor(error) })
       }
     }
-  }, [client])
+  }, [boardId, client, collectionFilters, collectionQuery])
+
+  useEffect(() => {
+    const next = defaultFiltersForView(boardId, collectionFilters)
+    setFilterForm(filterFormFromFilters(next))
+    setAppliedFilters(next)
+  }, [boardId, collectionFilters])
 
   useEffect(() => {
     void load(appliedFilters)
   }, [appliedFilters, load])
 
   useEffect(() => {
-    if ((remote.status === 'idle' || remote.status === 'loading') && remote.items.length === 0) {
+    if ((remote.phase === 'idle' || remote.phase === 'loading') && remote.items.length === 0) {
       return
     }
     if (selectedCardId !== null && remote.items.some((item) => item.card_id === selectedCardId)) {
       return
     }
     setSelectedCardId(remote.items[0]?.card_id ?? null)
-  }, [remote.items, remote.status, selectedCardId])
+  }, [remote.items, remote.phase, selectedCardId])
 
   const selectedItem = remote.items.find((item) => item.card_id === selectedCardId) ?? null
   const counts = useMemo(() => openWorkCounts(remote.items), [remote.items])
@@ -167,11 +206,11 @@ export function OpenWorkView({
 
   const submitFilters = (event: FormEvent) => {
     event.preventDefault()
-    setAppliedFilters(filtersFromForm(filterForm))
+    setAppliedFilters(filtersFromForm(filterForm, boardId))
   }
 
   const clearFilters = () => {
-    const cleared = defaultOpenWorkFilters()
+    const cleared = defaultFiltersForView(boardId, collectionFilters)
     setFilterForm(filterFormFromFilters(cleared))
     setAppliedFilters(cleared)
   }
@@ -194,6 +233,13 @@ export function OpenWorkView({
           <div><dt>Matched</dt><dd>{counts.matched}</dd></div>
         </dl>
       </header>
+
+      {readOnly && (
+        <div className="ow-state-banner stale" role="status">
+          <OsIcon name="attention" />
+          <div><strong>Saved state is read only</strong><span>Reconnect Orchestra to edit contracts, match agents, or start jobs.</span></div>
+        </div>
+      )}
 
       <OpenWorkFilterForm
         form={filterForm}
@@ -254,6 +300,7 @@ export function OpenWorkView({
               initialContract={initialContract?.contract.card_id === selectedItem.card_id
                 ? initialContract
                 : null}
+              readOnly={readOnly}
               onRefresh={() => void load(appliedFilters)}
               onConflict={(error) => dispatchRemote({ type: 'conflict', error })}
             />
@@ -447,6 +494,7 @@ function OpenWorkDetail({
   graph,
   client,
   initialContract,
+  readOnly,
   onRefresh,
   onConflict,
 }: {
@@ -454,6 +502,7 @@ function OpenWorkDetail({
   graph: OpenWorkGraph
   client: OpenWorkClient
   initialContract: ContractEnvelope | null
+  readOnly: boolean
   onRefresh: () => void
   onConflict: (error: string) => void
 }) {
@@ -576,6 +625,7 @@ function OpenWorkDetail({
             key={`${contract.data.contract.version}:${contract.data.job_market.market_version}`}
             envelope={contract.data}
             client={client}
+            readOnly={readOnly}
             onEnvelope={(next) => {
               setContract({ status: 'ready', data: next, error: null, stale: false })
               setConflict(null)
@@ -588,6 +638,7 @@ function OpenWorkDetail({
             item={item}
             marketVersion={contract.data.job_market.market_version}
             client={client}
+            readOnly={readOnly}
             onConflict={handleConflict}
             onQueueRefresh={onRefresh}
           />
@@ -686,12 +737,14 @@ function DependencyPanel({ item, graph }: { item: OpenWorkItem; graph: OpenWorkG
 function ContractEditor({
   envelope,
   client,
+  readOnly,
   onEnvelope,
   onConflict,
   onActionNotice,
 }: {
   envelope: ContractEnvelope
   client: OpenWorkClient
+  readOnly: boolean
   onEnvelope: (next: ContractEnvelope) => void
   onConflict: (error: unknown) => boolean
   onActionNotice: (message: string | null) => void
@@ -728,6 +781,7 @@ function ContractEditor({
   }
 
   const run = async (action: 'save' | 'preview' | 'publish') => {
+    if (readOnly) return
     setError(null)
     setNotice(null)
     if (!editor.localReady) {
@@ -815,7 +869,7 @@ function ContractEditor({
         event.preventDefault()
         void run('save')
       }}>
-        <fieldset>
+        <fieldset disabled={readOnly}>
           <legend>Scope</legend>
           <div className="ow-form-grid two">
             <label className="wide">
@@ -874,7 +928,7 @@ function ContractEditor({
           </div>
         </fieldset>
 
-        <fieldset>
+        <fieldset disabled={readOnly}>
           <legend>Deliverables</legend>
           {fieldError('deliverables') && <p className="ow-fieldset-error">{fieldError('deliverables')}</p>}
           <ol className="ow-editor-records">
@@ -942,7 +996,7 @@ function ContractEditor({
           </button>
         </fieldset>
 
-        <fieldset>
+        <fieldset disabled={readOnly}>
           <legend>Acceptance criteria</legend>
           {fieldError('criteria') && <p className="ow-fieldset-error">{fieldError('criteria')}</p>}
           <ol className="ow-editor-records criteria">
@@ -975,7 +1029,7 @@ function ContractEditor({
           </button>
         </fieldset>
 
-        <fieldset>
+        <fieldset disabled={readOnly}>
           <legend>Dependencies</legend>
           {fieldError('dependencies') && <p className="ow-fieldset-error">{fieldError('dependencies')}</p>}
           <ol className="ow-editor-records dependencies">
@@ -1051,7 +1105,7 @@ function ContractEditor({
           </button>
         </fieldset>
 
-        <fieldset>
+        <fieldset disabled={readOnly}>
           <legend>Constraints and budgets</legend>
           <div className="ow-form-grid two">
             <LineListField
@@ -1134,17 +1188,17 @@ function ContractEditor({
         )}
 
         <footer className="ow-contract-actions">
-          <button type="submit" className="ow-button" disabled={busy !== null || !editor.localReady}>
+          <button type="submit" className="ow-button" disabled={readOnly || busy !== null || !editor.localReady}>
             {busy === 'save' ? 'Saving' : 'Save draft'}
           </button>
           <button type="button" className="ow-button"
-            disabled={busy !== null || !editor.localReady || editor.dirty}
+            disabled={readOnly || busy !== null || !editor.localReady || editor.dirty}
             onClick={() => void run('preview')}>
             <OsIcon name="evidence" size={14} />
             {busy === 'preview' ? 'Generating' : 'Generate backend preview'}
           </button>
           <button type="button" className="ow-button primary"
-            disabled={busy !== null || !editor.publishReady}
+            disabled={readOnly || busy !== null || !editor.publishReady}
             onClick={() => void run('publish')}>
             {busy === 'publish' ? 'Publishing' : 'Publish contract'}
           </button>
@@ -1378,12 +1432,14 @@ function AssignmentPanel({
   item,
   marketVersion,
   client,
+  readOnly,
   onConflict,
   onQueueRefresh,
 }: {
   item: OpenWorkItem
   marketVersion: number
   client: OpenWorkClient
+  readOnly: boolean
   onConflict: (error: unknown) => boolean
   onQueueRefresh: () => void
 }) {
@@ -1398,6 +1454,7 @@ function AssignmentPanel({
   })
 
   const findMatch = async () => {
+    if (readOnly) return
     setMatch({ status: 'loading', data: null, error: null, stale: false })
     setDispatch(resource())
     setConfirmOpen(false)
@@ -1420,7 +1477,7 @@ function AssignmentPanel({
   }
 
   const startJob = async () => {
-    if (!match.data || !confirmed || stale || !match.data.decision_sha256) return
+    if (readOnly || !match.data || !confirmed || stale || !match.data.decision_sha256) return
     const retainedKey = idempotencyKey ?? createDispatchIdempotencyKey(
       item.card_id,
       match.data.decision_sha256,
@@ -1481,7 +1538,7 @@ function AssignmentPanel({
 
       <div className="ow-match-actions">
         <button type="button" className="ow-button"
-          disabled={item.dependency_readiness === 'blocked' || match.status === 'loading'}
+          disabled={readOnly || item.dependency_readiness === 'blocked' || match.status === 'loading'}
           onClick={() => void findMatch()}>
           <OsIcon name="process" size={14} />
           {match.status === 'loading' ? 'Evaluating capacity' : 'Find eligible match'}
@@ -1492,7 +1549,7 @@ function AssignmentPanel({
       {match.status === 'error' && (
         <div className="ow-inline-error" role="alert">
           {match.error}
-          <button type="button" onClick={() => void findMatch()}>Retry match</button>
+          <button type="button" disabled={readOnly} onClick={() => void findMatch()}>Retry match</button>
         </div>
       )}
 
@@ -1505,7 +1562,7 @@ function AssignmentPanel({
                 <strong>Match is stale</strong>
                 <span>The contract market version changed. Generate a new match.</span>
               </div>
-              <button type="button" onClick={() => void findMatch()}>Refresh match</button>
+              <button type="button" disabled={readOnly} onClick={() => void findMatch()}>Refresh match</button>
             </div>
           )}
 
@@ -1586,7 +1643,7 @@ function AssignmentPanel({
             </ol>
           </details>
 
-          {dispatchable && !stale && !dispatch.data && (
+          {!readOnly && dispatchable && !stale && !dispatch.data && (
             <div className="ow-confirmation">
               {!confirmOpen ? (
                 <button type="button" className="ow-button primary"
@@ -1636,7 +1693,7 @@ function AssignmentPanel({
       {dispatch.status === 'error' && (
         <div className="ow-inline-error" role="alert">
           <strong>Job start failed.</strong> {dispatch.error}
-          <button type="button" disabled={!confirmed} onClick={() => void startJob()}>
+          <button type="button" disabled={readOnly || !confirmed} onClick={() => void startJob()}>
             Retry with the same key
           </button>
         </div>
