@@ -91,8 +91,30 @@ does not close `QA-001`, `QA-016`, or `QA-018`; the final integrator must produc
 exact-head evidence set after all lane commits are integrated.
 
 Verification used Node 22.20.0/npm 10.9.3: the current-base gate passed, the focused matrix suite
-passed 11/11 tests, and the affected QA surface passed 34 suites / 164 tests. Root/web TypeScript
+passed 15/15 tests, and the affected QA surface passed 34 suites / 168 tests with zero pending,
+skipped, or todo tests. Root/web TypeScript
 checks and production builds passed. GitNexus classified the nine-file staged change as LOW risk
 with zero affected processes. Graphify refreshed the code graph to 7,214 nodes / 17,186 edges /
 273 communities; this code-only refresh is not a semantic `QA-018` report. `npm audit
 --audit-level=high` passed while still reporting two existing moderate transitive findings.
+
+## Final raw-receipt and runner hardening
+
+- `QA-018` is deliberately impossible to close with the current runner. It rejects legacy lane
+  report flags, emits no `QA-018` case results, and the release checker always records that a
+  reviewed verifier upgrade plus an externally signed integration receipt is required.
+- The future receipt contract retains raw GitNexus impact and `detect_changes` output plus raw
+  Graphify update/status, graph, and manifest artifacts. Every invocation argv, tool version,
+  base, range, marker, commit, path, and output digest is explicit. The checker recomputes retained
+  hashes and validates raw semantic fields rather than trusting receipt summary counts.
+- A separately pinned integration-manifest schema binds both tool receipts for each lane to the
+  same ready commit and exact beta base/range/marker. Arbitrary ancestors are not accepted. Lane
+  ready commits are intentionally not pinned before final integration.
+- Vitest evidence now requires `passed === total` and zero failed, pending, skipped, and todo tests
+  in both retained JSON and the release rerun.
+- Evidence creation requires a fresh mode-0700 directory outside the repository by realpath. It
+  rejects symlink path components and pre-existing outputs; files are created mode 0600 through
+  exclusive temporary writes and atomic hard-link publication, which cannot follow or overwrite a
+  pre-existing symlink.
+- Malformed contract, evidence, receipt, and tool payload shapes return structured failures. The
+  focused adversarial suite now covers these constraints; all 37 matrix cases remain open.

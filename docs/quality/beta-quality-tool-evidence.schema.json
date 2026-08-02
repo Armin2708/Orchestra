@@ -4,34 +4,49 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "tool", "lane", "tested_commit", "impact", "detect_changes", "unresolved_findings"],
+      "required": ["schema_version", "tool", "lane", "tested_commit", "base_ref", "range", "ready_marker", "tool_version", "invocation_argv", "raw_impact", "raw_detect_changes", "unresolved_findings"],
       "properties": {
-        "schema_version": { "const": 1 },
+        "schema_version": { "const": 2 },
         "tool": { "const": "gitnexus" },
-        "lane": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
-        "tested_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-        "impact": { "type": "object", "additionalProperties": false, "required": ["risk", "targets", "affected_symbols", "affected_processes", "affected_modules"], "properties": { "risk": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] }, "targets": { "type": "integer", "minimum": 1 }, "affected_symbols": { "type": "integer", "minimum": 0 }, "affected_processes": { "type": "integer", "minimum": 0 }, "affected_modules": { "type": "integer", "minimum": 0 } } },
-        "detect_changes": { "type": "object", "additionalProperties": false, "required": ["risk", "changed_files", "changed_symbols", "affected_processes"], "properties": { "risk": { "enum": ["low", "medium", "high", "critical"] }, "changed_files": { "type": "integer", "minimum": 1 }, "changed_symbols": { "type": "integer", "minimum": 0 }, "affected_processes": { "type": "integer", "minimum": 0 } } },
+        "lane": { "$ref": "#/$defs/lane" },
+        "tested_commit": { "$ref": "#/$defs/commit" },
+        "base_ref": { "$ref": "#/$defs/commit" },
+        "range": { "type": "string", "minLength": 82 },
+        "ready_marker": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "invocation_argv": { "type": "object", "additionalProperties": false, "required": ["impact", "detect_changes"], "properties": { "impact": { "$ref": "#/$defs/argv" }, "detect_changes": { "$ref": "#/$defs/argv" } } },
+        "raw_impact": { "$ref": "#/$defs/artifact" },
+        "raw_detect_changes": { "$ref": "#/$defs/artifact" },
         "unresolved_findings": { "$ref": "#/$defs/findings" }
       }
     },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "tool", "lane", "tested_commit", "operation", "source_commit", "graph_sha256", "manifest_sha256", "updated_sources", "unresolved_findings"],
+      "required": ["schema_version", "tool", "lane", "tested_commit", "base_ref", "range", "ready_marker", "tool_version", "invocation_argv", "raw_update", "raw_status", "graph_artifact", "manifest_artifact", "unresolved_findings"],
       "properties": {
-        "schema_version": { "const": 1 },
+        "schema_version": { "const": 2 },
         "tool": { "const": "graphify" },
-        "lane": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
-        "tested_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-        "operation": { "const": "update" },
-        "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-        "graph_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "updated_sources": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "lane": { "$ref": "#/$defs/lane" },
+        "tested_commit": { "$ref": "#/$defs/commit" },
+        "base_ref": { "$ref": "#/$defs/commit" },
+        "range": { "type": "string", "minLength": 82 },
+        "ready_marker": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "invocation_argv": { "type": "object", "additionalProperties": false, "required": ["update", "status"], "properties": { "update": { "$ref": "#/$defs/argv" }, "status": { "$ref": "#/$defs/argv" } } },
+        "raw_update": { "$ref": "#/$defs/artifact" },
+        "raw_status": { "$ref": "#/$defs/artifact" },
+        "graph_artifact": { "$ref": "#/$defs/artifact" },
+        "manifest_artifact": { "$ref": "#/$defs/artifact" },
         "unresolved_findings": { "$ref": "#/$defs/findings" }
       }
     }
   ],
-  "$defs": { "findings": { "type": "object", "additionalProperties": false, "required": ["p0", "p1", "p2"], "properties": { "p0": { "const": 0 }, "p1": { "const": 0 }, "p2": { "const": 0 } } } }
+  "$defs": {
+    "lane": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "argv": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } },
+    "artifact": { "type": "object", "additionalProperties": false, "required": ["path", "output_sha256"], "properties": { "path": { "type": "string", "minLength": 1 }, "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
+    "findings": { "type": "object", "additionalProperties": false, "required": ["p0", "p1", "p2"], "properties": { "p0": { "const": 0 }, "p1": { "const": 0 }, "p2": { "const": 0 } } }
+  }
 }

@@ -1,20 +1,28 @@
 import { createHash } from 'node:crypto'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_EVIDENCE_SCHEMA,
+  DEFAULT_INTEGRATION_MANIFEST_SCHEMA,
   DEFAULT_MATRIX,
   DEFAULT_REQUIREMENTS,
   DEFAULT_ROOT,
   DEFAULT_TOOL_EVIDENCE_SCHEMA,
+  PINNED_EVIDENCE_SCHEMA_SHA256,
+  PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
+  PINNED_REQUIREMENTS_SHA256,
+  PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
+  REQUIRED_BETA_BASE,
   discoverStateMachineFiles,
   evaluateBetaQualityMatrix,
   stateMachineDiscoveryDigest,
 } from '../scripts/check-beta-quality-matrix.mjs'
 
 const temporaryDirectories: string[] = []
+const temporaryRoot = fs.realpathSync(os.tmpdir())
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -23,11 +31,18 @@ afterEach(() => {
 })
 
 function temporaryFile(name: string, content: string): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beta-quality-contract-'))
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-contract-'))
   temporaryDirectories.push(directory)
   const file = path.join(directory, name)
   fs.writeFileSync(file, content, 'utf8')
   return file
+}
+
+function writeJson(directory: string, name: string, value: unknown): { path: string; sha256: string } {
+  const file = path.join(directory, name)
+  const content = JSON.stringify(value)
+  fs.writeFileSync(file, content, 'utf8')
+  return { path: name, sha256: createHash('sha256').update(content).digest('hex') }
 }
 
 const matrix = () => JSON.parse(fs.readFileSync(DEFAULT_MATRIX, 'utf8')) as {
@@ -93,7 +108,7 @@ describe('beta quality coverage contract', () => {
     expect(movedResult.errors).toContain('quality matrix digest differs from the pinned immutable digest')
   })
 
-  it('pins the complete matrix, requirement manifest, and both evidence schemas', () => {
+  it('pins the complete matrix, requirement manifest, and all evidence schemas', () => {
     const requirements = temporaryFile(
       'requirements.json',
       `${fs.readFileSync(DEFAULT_REQUIREMENTS, 'utf8')} `,
@@ -123,10 +138,20 @@ describe('beta quality coverage contract', () => {
       mode: 'current-base',
       toolSchemaPath: toolSchema,
     }).errors).toContain('tool evidence schema digest differs from the pinned immutable digest')
+
+    const integrationSchema = temporaryFile(
+      'integration-schema.json',
+      `${fs.readFileSync(DEFAULT_INTEGRATION_MANIFEST_SCHEMA, 'utf8')} `,
+    )
+    expect(evaluateBetaQualityMatrix({
+      root: DEFAULT_ROOT,
+      mode: 'current-base',
+      integrationSchemaPath: integrationSchema,
+    }).errors).toContain('integration manifest schema digest differs from the pinned immutable digest')
   })
 
   it('discovers enum, arrow transition, lowercase transitions, workflow setter, and SQL evasions', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beta-quality-discovery-'))
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-discovery-'))
     temporaryDirectories.push(root)
     fs.mkdirSync(path.join(root, 'src'), { recursive: true })
     const fixtures = {
@@ -145,7 +170,7 @@ describe('beta quality coverage contract', () => {
   })
 
   it('changes the discovery digest when an existing classified file gains a candidate', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'beta-quality-existing-file-'))
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-existing-file-'))
     temporaryDirectories.push(root)
     fs.mkdirSync(path.join(root, 'src'), { recursive: true })
     const file = path.join(root, 'src', 'existing.ts')
@@ -177,6 +202,10 @@ describe('beta quality coverage contract', () => {
       tested_commit: '0'.repeat(40),
       requirements_sha256: '0'.repeat(64),
       schema_sha256: '0'.repeat(64),
+      tool_schema_sha256: '0'.repeat(64),
+      integration_schema_sha256: '0'.repeat(64),
+      qa018_closure_supported: false,
+      integration_manifest: null,
       artifacts: [],
       commands: [],
       case_results: [],
@@ -195,6 +224,7 @@ describe('beta quality coverage contract', () => {
       'evidence report requirements digest mismatch',
       'evidence report schema digest mismatch',
       'evidence report tool schema digest mismatch',
+      'evidence report integration schema digest mismatch',
       'missing or altered lane_a gitnexus report',
       'missing or altered integrator graphify report',
     ]))
@@ -222,8 +252,11 @@ describe('beta quality coverage contract', () => {
       requirements_sha256: '0'.repeat(64),
       schema_sha256: '0'.repeat(64),
       tool_schema_sha256: '0'.repeat(64),
+      integration_schema_sha256: '0'.repeat(64),
+      qa018_closure_supported: false,
+      integration_manifest: null,
       artifacts: [],
-      commands: [{ id: 'qa001-runtime', argv: ['node_modules/.bin/vitest', 'run', '--reporter=json', 'test/codex-runtime-state-machines.test.ts'], exit_code: 0, log_path: '../outside.json', log_sha256: '0'.repeat(64), test_files: 1, tests: 1, failed: 0 }],
+      commands: [{ id: 'qa001-runtime', argv: ['node_modules/.bin/vitest', 'run', '--reporter=json', 'test/codex-runtime-state-machines.test.ts'], exit_code: 0, log_path: '../outside.json', log_sha256: '0'.repeat(64), test_files: 1, tests: 1, passed: 1, failed: 0, pending: 0, skipped: 0, todo: 0 }],
       case_results: [],
       tool_reports: { lane_a: laneReports, lane_b: laneReports, lane_c: laneReports, lane_d: laneReports, integrator: laneReports },
     }))
@@ -234,7 +267,7 @@ describe('beta quality coverage contract', () => {
   })
 
   it('rejects schema-invalid empty tool payloads instead of accepting self-hashes', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beta-quality-tool-schema-'))
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-tool-schema-'))
     temporaryDirectories.push(directory)
     const payload = path.join(directory, 'empty-tool.json')
     fs.writeFileSync(payload, '{}', 'utf8')
@@ -248,6 +281,9 @@ describe('beta quality coverage contract', () => {
       requirements_sha256: '0'.repeat(64),
       schema_sha256: '0'.repeat(64),
       tool_schema_sha256: '0'.repeat(64),
+      integration_schema_sha256: '0'.repeat(64),
+      qa018_closure_supported: false,
+      integration_manifest: null,
       artifacts: [], commands: [], case_results: [],
       tool_reports: { lane_a: laneReports, lane_b: laneReports, lane_c: laneReports, lane_d: laneReports, integrator: laneReports },
     }), 'utf8')
@@ -255,5 +291,119 @@ describe('beta quality coverage contract', () => {
     const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
     expect(result.errors.some((error) => error.startsWith('lane_a gitnexus report schema validation failed:'))).toBe(true)
     expect(result.errors).toContain('invalid identity binding for lane_a gitnexus report')
+  })
+
+  it('returns structured errors for invalid contract and evidence root shapes', () => {
+    expect(() => evaluateBetaQualityMatrix({
+      root: DEFAULT_ROOT,
+      requirementsPath: temporaryFile('null-requirements.json', 'null'),
+    })).not.toThrow()
+    expect(evaluateBetaQualityMatrix({
+      root: DEFAULT_ROOT,
+      requirementsPath: temporaryFile('array-requirements.json', '[]'),
+    }).errors).toContain('requirements manifest schema/required arrays are empty or invalid')
+    expect(evaluateBetaQualityMatrix({
+      root: DEFAULT_ROOT,
+      matrixPath: temporaryFile('null-matrix.json', 'null'),
+    }).errors).toContain('matrix schema is invalid or empty')
+
+    const malformedShape = temporaryFile('shape-evidence.json', JSON.stringify({
+      schema_version: 1,
+      tested_commit: '0'.repeat(40),
+      requirements_sha256: PINNED_REQUIREMENTS_SHA256,
+      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256,
+      tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
+      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
+      qa018_closure_supported: false,
+      integration_manifest: [], artifacts: {}, commands: {}, case_results: {}, tool_reports: null,
+    }))
+    expect(() => evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: malformedShape })).not.toThrow()
+    expect(evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: malformedShape }).errors)
+      .toContain('evidence report schema/version arrays are empty or invalid')
+  })
+
+  it('rejects pending, skipped, and todo tests even when Vitest reports success', () => {
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-incomplete-vitest-'))
+    temporaryDirectories.push(directory)
+    const log = writeJson(directory, 'qa001-runtime.json', {
+      success: true, numFailedTests: 0, numPendingTests: 1, numTodoTests: 1,
+      numPassedTests: 1, numTotalTests: 3, numTotalTestSuites: 1,
+      testResults: [{ assertionResults: [{ status: 'passed' }, { status: 'skipped' }, { status: 'todo' }] }],
+    })
+    const report = path.join(directory, 'evidence.json')
+    fs.writeFileSync(report, JSON.stringify({
+      schema_version: 1,
+      tested_commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim(),
+      requirements_sha256: PINNED_REQUIREMENTS_SHA256,
+      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256,
+      tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
+      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256,
+      qa018_closure_supported: false, integration_manifest: null, artifacts: [],
+      commands: [{ id: 'qa001-runtime', argv: ['node_modules/.bin/vitest', 'run', '--reporter=json', 'test/codex-runtime-state-machines.test.ts'], exit_code: 0, log_path: log.path, log_sha256: log.sha256, test_files: 1, tests: 3, passed: 1, failed: 0, pending: 1, skipped: 1, todo: 1 }],
+      case_results: [], tool_reports: {},
+    }), 'utf8')
+
+    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
+    expect(result.errors).toContain('command qa001-runtime has incomplete, skipped, pending, todo, or failing tests')
+    expect(result.errors).toContain('command qa001-runtime result does not match its complete Vitest JSON artifact')
+  })
+
+  it('rejects pre-existing and symlinked output directories and refuses QA-018 receipt flags', () => {
+    const runner = path.join(DEFAULT_ROOT, 'scripts/run-beta-quality-evidence.mjs')
+    const existing = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-existing-output-'))
+    temporaryDirectories.push(existing)
+    const existingRun = spawnSync(process.execPath, [runner, '--output-dir', existing], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
+    expect(`${existingRun.stderr}${existingRun.stdout}`).toContain('evidence output directory must not already exist')
+
+    const realParent = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-real-parent-'))
+    temporaryDirectories.push(realParent)
+    const linkParent = `${realParent}-link`
+    fs.symlinkSync(realParent, linkParent, 'dir')
+    temporaryDirectories.push(linkParent)
+    const symlinkRun = spawnSync(process.execPath, [runner, '--output-dir', path.join(linkParent, 'evidence')], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
+    expect(`${symlinkRun.stderr}${symlinkRun.stdout}`).toContain('evidence output parent must be a real, existing, non-symlink directory')
+
+    const unsupported = spawnSync(process.execPath, [runner, '--output-dir', path.join(temporaryRoot, `beta-quality-unsupported-${Date.now()}`), '--lane-a-gitnexus-report', 'receipt.json'], { cwd: DEFAULT_ROOT, encoding: 'utf8' })
+    expect(`${unsupported.stderr}${unsupported.stdout}`).toContain('current runner cannot close QA-018')
+  })
+
+  it('rejects lane tool pairs that do not match one exact signed ready commit', () => {
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, 'beta-quality-lane-binding-'))
+    temporaryDirectories.push(directory)
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DEFAULT_ROOT, encoding: 'utf8' }).trim()
+    const marker = { lane_a: '[beta-lane-a-ready]', lane_b: '[beta-lane-b-ready]', lane_c: '[beta-lane-c-ready]', lane_d: '[beta-lane-d-ready]', integrator: '[beta-release-candidate]' } as const
+    const lanes = Object.fromEntries(Object.entries(marker).map(([lane, readyMarker]) => [lane, {
+      ready_commit: head, base_ref: REQUIRED_BETA_BASE, range: `${REQUIRED_BETA_BASE}..${head}`,
+      ready_marker: readyMarker, gitnexus_version: '1.0.0', graphify_version: '1.0.0',
+    }]))
+    const manifest = writeJson(directory, 'integration.json', {
+      schema_version: 1, base_ref: REQUIRED_BETA_BASE, integrator_commit: head, lanes,
+      external_receipt: { signer: 'release-integrator', signed_at: '2026-08-02T00:00:00Z', signature: 'a'.repeat(64), verification: 'external-human-required' },
+    })
+    const missing = { path: 'missing.json', output_sha256: '0'.repeat(64) }
+    const gitReceipt = writeJson(directory, 'lane-a-gitnexus.json', {
+      schema_version: 2, tool: 'gitnexus', lane: 'lane_a', tested_commit: head, base_ref: REQUIRED_BETA_BASE,
+      range: `${REQUIRED_BETA_BASE}..${head}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
+      invocation_argv: { impact: ['gitnexus', 'impact'], detect_changes: ['gitnexus', 'detect_changes', REQUIRED_BETA_BASE] },
+      raw_impact: missing, raw_detect_changes: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+    })
+    const graphReceipt = writeJson(directory, 'lane-a-graphify.json', {
+      schema_version: 2, tool: 'graphify', lane: 'lane_a', tested_commit: REQUIRED_BETA_BASE, base_ref: REQUIRED_BETA_BASE,
+      range: `${REQUIRED_BETA_BASE}..${REQUIRED_BETA_BASE}`, ready_marker: marker.lane_a, tool_version: '1.0.0',
+      invocation_argv: { update: ['graphify', 'update', '.'], status: ['graphify', 'status'] }, raw_update: missing,
+      raw_status: missing, graph_artifact: missing, manifest_artifact: missing, unresolved_findings: { p0: 0, p1: 0, p2: 0 },
+    })
+    const report = path.join(directory, 'evidence.json')
+    fs.writeFileSync(report, JSON.stringify({
+      schema_version: 1, tested_commit: head, requirements_sha256: PINNED_REQUIREMENTS_SHA256,
+      schema_sha256: PINNED_EVIDENCE_SCHEMA_SHA256, tool_schema_sha256: PINNED_TOOL_EVIDENCE_SCHEMA_SHA256,
+      integration_schema_sha256: PINNED_INTEGRATION_MANIFEST_SCHEMA_SHA256, qa018_closure_supported: false,
+      integration_manifest: manifest, artifacts: [], commands: [], case_results: [],
+      tool_reports: { lane_a: { gitnexus: { tested_commit: head, ...gitReceipt }, graphify: { tested_commit: REQUIRED_BETA_BASE, ...graphReceipt } } },
+    }), 'utf8')
+
+    const result = evaluateBetaQualityMatrix({ root: DEFAULT_ROOT, mode: 'release', evidenceReport: report })
+    expect(result.errors).toContain('lane_a graphify report does not match the signed integration manifest')
+    expect(result.errors).toContain('QA-018 remains impossible in this runner: integrator-signed external raw tool receipts require a reviewed verifier upgrade')
   })
 })

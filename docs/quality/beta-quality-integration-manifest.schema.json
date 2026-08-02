@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "base_ref", "integrator_commit", "lanes", "external_receipt"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "base_ref": { "$ref": "#/$defs/commit" },
+    "integrator_commit": { "$ref": "#/$defs/commit" },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"],
+      "properties": {
+        "lane_a": { "$ref": "#/$defs/lane" },
+        "lane_b": { "$ref": "#/$defs/lane" },
+        "lane_c": { "$ref": "#/$defs/lane" },
+        "lane_d": { "$ref": "#/$defs/lane" },
+        "integrator": { "$ref": "#/$defs/lane" }
+      }
+    },
+    "external_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signer", "signed_at", "signature", "verification"],
+      "properties": {
+        "signer": { "type": "string", "minLength": 1 },
+        "signed_at": { "type": "string", "format": "date-time" },
+        "signature": { "type": "string", "minLength": 32 },
+        "verification": { "const": "external-human-required" }
+      }
+    }
+  },
+  "$defs": {
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "lane": { "type": "object", "additionalProperties": false, "required": ["ready_commit", "base_ref", "range", "ready_marker", "gitnexus_version", "graphify_version"], "properties": { "ready_commit": { "$ref": "#/$defs/commit" }, "base_ref": { "$ref": "#/$defs/commit" }, "range": { "type": "string", "minLength": 82 }, "ready_marker": { "type": "string", "minLength": 1 }, "gitnexus_version": { "type": "string", "minLength": 1 }, "graphify_version": { "type": "string", "minLength": 1 } } }
+  }
+}
