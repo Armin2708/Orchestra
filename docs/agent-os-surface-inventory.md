@@ -5,7 +5,7 @@ Discussions, Teams, planning, and durable conflict resolution surfaces,
 DOM-014's focused service-boundary topology, DOM-015's server composition boundary, and DOM-016's
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work surface, observed at exact code head
-`9e95c63`.
+`f9cb54e`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is
