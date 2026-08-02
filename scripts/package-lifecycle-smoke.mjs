@@ -86,8 +86,19 @@ const artifactPackageManifest = (artifactPath) => {
   return manifest
 }
 
-const waitForHttp = (url, expectedPattern) => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+const availablePort = () => {
+  const probe = run(process.execPath, [
+    '-e',
+    "const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})",
+  ])
+  const selected = Number(probe.stdout.trim())
+  invariant(Number.isInteger(selected) && selected > 0, 'could not reserve a runtime smoke port')
+  return selected
+}
+
+const waitForHttp = (url, expectedPattern, exited) => {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (exited()) throw new Error(`installed runtime exited before serving ${url}`)
     const response = spawnSync(
       'curl',
       ['--fail', '--silent', '--show-error', '--max-time', '1', url],
@@ -115,7 +126,7 @@ const exerciseInstalledRuntime = (executable, projectDirectory, environment) => 
     'installed doctor returned an invalid environment contract',
   )
 
-  const port = 20_000 + ((process.pid + Date.now()) % 20_000)
+  const port = availablePort()
   const runtimeEnvironment = { ...environment, ORCHESTRA_PORT: String(port) }
   const daemon = spawn(executable, ['serve'], {
     cwd: projectDirectory,
@@ -123,17 +134,33 @@ const exerciseInstalledRuntime = (executable, projectDirectory, environment) => 
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let daemonError = ''
+  let daemonOutput = ''
   daemon.stderr.on('data', (chunk) => { daemonError += String(chunk) })
+  daemon.stdout.on('data', (chunk) => { daemonOutput += String(chunk) })
   try {
-    const health = waitForHttp(`http://127.0.0.1:${port}/health`, /"ok"\s*:\s*true/)
-    const web = waitForHttp(`http://127.0.0.1:${port}/`, /<html|<!doctype html/i)
+    const exited = () => daemon.exitCode !== null || daemon.signalCode !== null
+    const health = waitForHttp(
+      `http://127.0.0.1:${port}/health`,
+      /"ok"\s*:\s*true/,
+      exited,
+    )
+    const web = waitForHttp(
+      `http://127.0.0.1:${port}/`,
+      /<html|<!doctype html/i,
+      exited,
+    )
     return {
       doctor_contract: true,
       daemon_health: JSON.parse(health).ok === true,
       web_index_served: /<html|<!doctype html/i.test(web),
     }
   } catch (error) {
-    throw new Error(`${error instanceof Error ? error.message : String(error)}${daemonError ? `: ${daemonError.trim()}` : ''}`)
+    const diagnostics = [daemonError.trim(), daemonOutput.trim()].filter(Boolean).join(' | ')
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}` +
+      `${diagnostics ? `: ${diagnostics}` : ''}` +
+      ` (exit=${daemon.exitCode ?? 'running'}, signal=${daemon.signalCode ?? 'none'})`,
+    )
   } finally {
     daemon.kill('SIGTERM')
   }
