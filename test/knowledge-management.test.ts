@@ -204,7 +204,7 @@ describe('Knowledge management freshness and human controls', () => {
 })
 
 describe('reviewable exact-source promotion', () => {
-  it('promotes only a committed canonical accepted-answer artifact after operator review', () => {
+  it('rejects generic accepted-answer requests even when committed JSON self-asserts acceptance', () => {
     const root = repository()
     const artifact = canonicalKnowledgeJson({ schema_version: 1, kind: 'discussion_answer',
       key: 'discussion:one:post:answer:v1', title: 'Use the focused service',
@@ -213,28 +213,17 @@ describe('reviewable exact-source promotion', () => {
     const head = commitFile(root, 'knowledge/accepted.json', artifact, 'accepted answer artifact')
     const db = addBoard(root)
     const service = new KnowledgeManagementService(db)
-    const promotion = service.createPromotion({ board_id: 1, kind: 'accepted_answer',
+    expect(() => service.createPromotion({ board_id: 1, kind: 'accepted_answer' as never,
       payload: { repository_key: 'orchestra', base_commit_sha: head, observed_at: AT,
         entries: [{ path: 'knowledge/accepted.json', start_line: 1, end_line: 1,
-          expected_source_sha256: sha(artifact) }] }, requested_by: 'agent:answerer',
-      idempotency_key: 'promote-answer', requested_at: AT })
-    expect(promotion).toMatchObject({ status: 'pending', kind: 'accepted_answer' })
+          expected_source_sha256: sha(artifact) }] } as never, requested_by: 'agent:answerer',
+      idempotency_key: 'promote-answer', requested_at: AT }))
+      .toThrow(/promotion kind/u)
     expect(db.prepare('SELECT count(*) AS count FROM knowledge_sources').get()).toEqual({ count: 0 })
-    expect(() => db.prepare(`UPDATE knowledge_promotion_requests SET status='promoted',
-      reviewed_by='forged', review_reason='status only', reviewed_at=? WHERE id=?`)
-      .run(LATER, promotion.id)).toThrow(/transition is invalid/u)
-
-    const result = service.reviewPromotion({ board_id: 1, promotion_id: String(promotion.id),
-      decision: 'promote', actor: { type: 'operator', id: 'human' },
-      reason: 'Reviewed the exact committed post artifact.', reviewed_at: LATER })
-    expect(result.status).toBe('promoted')
-    expect(result.source_ids).toHaveLength(1)
-    expect(db.prepare('SELECT source_kind FROM knowledge_sources').get())
-      .toEqual({ source_kind: 'discussion_answer' })
     db.close()
   })
 
-  it('rejects status-only/arbitrary text and stale or tampered exact-source evidence', () => {
+  it('rejects status-only arbitrary accepted-answer payloads', () => {
     const root = repository()
     const artifact = canonicalKnowledgeJson({ schema_version: 1, kind: 'discussion_answer',
       key: 'discussion:two:post:answer:v1', title: 'Exact answer', content: 'Exact reviewed content.',
@@ -242,21 +231,33 @@ describe('reviewable exact-source promotion', () => {
     const head = commitFile(root, 'knowledge/answer.json', artifact, 'answer')
     const db = addBoard(root)
     const service = new KnowledgeManagementService(db)
-    expect(() => service.createPromotion({ board_id: 1, kind: 'accepted_answer',
+    expect(() => service.createPromotion({ board_id: 1, kind: 'accepted_answer' as never,
       payload: { repository_key: 'orchestra', base_commit_sha: head, observed_at: AT,
         status: 'accepted', content: 'arbitrary text' } as never,
-      requested_by: 'agent', idempotency_key: 'status-only' })).toThrow(/promotion entries/u)
-
-    const tampered = service.createPromotion({ board_id: 1, kind: 'accepted_answer',
-      payload: { repository_key: 'orchestra', base_commit_sha: head, observed_at: AT,
-        entries: [{ path: 'knowledge/answer.json', start_line: 1, end_line: 1,
-          expected_source_sha256: 'f'.repeat(64) }] }, requested_by: 'agent',
-      idempotency_key: 'tampered', requested_at: AT })
-    expect(() => service.reviewPromotion({ board_id: 1, promotion_id: String(tampered.id),
-      decision: 'promote', actor: { type: 'operator', id: 'human' }, reason: 'Review.',
-      reviewed_at: LATER })).toThrow()
+      requested_by: 'agent', idempotency_key: 'status-only' })).toThrow(/promotion kind/u)
+    const legacyId = `kp_${'c'.repeat(64)}`
+    const legacyPayload = canonicalKnowledgeJson({
+      repository_key: 'orchestra',
+      base_commit_sha: head,
+      observed_at: AT,
+      status: 'accepted',
+      content: 'self-asserted arbitrary text',
+    })
+    db.prepare(`INSERT INTO knowledge_promotion_requests
+      (id, board_id, kind, payload_json, payload_sha256, requested_by,
+       idempotency_key, request_sha256, requested_at)
+      VALUES (?, 1, 'accepted_answer', ?, ?, 'legacy-requester', 'legacy-answer', ?, ?)`)
+      .run(legacyId, legacyPayload, sha(legacyPayload), 'd'.repeat(64), AT)
+    expect(() => service.reviewPromotion({
+      board_id: 1,
+      promotion_id: legacyId,
+      decision: 'promote',
+      actor: { type: 'operator', id: 'human' },
+      reason: 'A status label is not immutable Discussion review evidence.',
+      reviewed_at: LATER,
+    })).toThrow(/canonical Discussion acceptance and review evidence/u)
+    expect(service.listPromotions(1).find((item) => item.id === legacyId)?.status).toBe('pending')
     expect(db.prepare('SELECT count(*) AS count FROM knowledge_sources').get()).toEqual({ count: 0 })
-    expect(service.listPromotions(1).find((item) => item.id === tampered.id)?.status).toBe('pending')
     db.close()
   })
 })

@@ -11,6 +11,7 @@ import { OrganizationService } from '../src/agent-os/organization.js'
 import { JobScheduler } from '../src/agent-os/scheduler.js'
 import { CanonicalConflictKnowledgeAdapter } from '../src/agent-os/team-conflict-knowledge.js'
 import { canonicalKnowledgeJson } from '../src/agent-os/knowledge-contracts.js'
+import { KnowledgeService } from '../src/agent-os/knowledge-service.js'
 import { AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID } from '../src/agent-os/team-collaboration-review-migration.js'
 import {
   AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
@@ -478,7 +479,8 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       expect(value.service.reviewConflictKnowledgeCandidate(rejectInput))
         .toMatchObject({ status: 'rejected', replayed: true })
 
-      const acceptedConflict = resolveConflictFixture(value, 'accept')
+      const rawSecret = ['ghp', '12345678901234567890'].join('_')
+      const acceptedConflict = resolveConflictFixture(value, `accept-${rawSecret}`)
       const acceptedCandidate = value.service.requestConflictKnowledgePromotion({
         conflictId: String(acceptedConflict.id),
         summary: 'UNTRUSTED CANDIDATE SUMMARY MUST NOT ENTER CHUNK CONTENT',
@@ -511,17 +513,53 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
       expect(source).toMatchObject({
         source_kind: 'decision',
         source_revision: acceptedCandidate.source_sha256,
-        content_sha256: acceptedCandidate.source_sha256,
         freshness_policy: 'manual_until_superseded',
+        redaction_state: 'redacted',
       })
-      expect(JSON.parse(String(source.provenance_json))).toMatchObject({
+      const provenance = JSON.parse(String(source.provenance_json)) as Record<string, unknown>
+      expect(provenance).toMatchObject({
         base_commit_sha: repository.head,
         adapter_id: 'conflict-resolution-promotion',
       })
-      expect(chunk.content).toBe(canonicalKnowledgeJson(
-        accepted.exact_source as Record<string, unknown>,
-      ))
+      expect(String(chunk.content)).toContain('[REDACTED]')
+      expect(String(chunk.content)).not.toContain(rawSecret)
+      expect(source.content_sha256).toBe(chunk.content_sha256)
+      expect(source.content_sha256).not.toBe(acceptedCandidate.source_sha256)
+      expect(canonicalKnowledgeJson(accepted.exact_source as Record<string, unknown>))
+        .toContain(rawSecret)
       expect(String(chunk.content)).not.toContain('UNTRUSTED CANDIDATE SUMMARY')
+      const retrieved = new KnowledgeService(value.db).retrieve({
+        version: 1,
+        board_id: value.boardId,
+        access_scope: { kind: 'board' },
+        targets: {
+          board_id: value.boardId,
+          workspace_id: null,
+          card_id: value.cardId,
+          contract_ref: null,
+          contract_version: null,
+          contract_snapshot_sha256: null,
+          job_id: null,
+          profile_id: null,
+          session_id: null,
+          delivery_report_id: null,
+        },
+        repository_key: String(provenance.repository_key),
+        base_commit_sha: repository.head,
+        source_revisions: [],
+        source_kinds: ['decision'],
+        freshness_states: ['fresh'],
+        redaction_states: ['redacted'],
+        content_states: ['present'],
+        ingest_states: ['active'],
+        paths: [],
+        path_prefixes: [],
+        symbols: [],
+        query: 'Retain exact causal evidence',
+        limit: 10,
+      })
+      expect(retrieved.results.map((item) => item.citation.chunk_id))
+        .toContain(accepted.knowledge_chunk_id)
       expect(value.service.getTeam(String(value.plan.id))).toMatchObject({
         conflicts: expect.arrayContaining([
           expect.objectContaining({

@@ -1,7 +1,4 @@
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import path from 'node:path'
 import type Database from 'better-sqlite3'
 import {
   canonicalKnowledgeJson,
@@ -13,8 +10,10 @@ import type {
   DiscussionKnowledgePromotionAdapter,
   DiscussionKnowledgePromotionEvidence,
 } from './discussions.js'
+import { resolveBoardKnowledgeRepository } from './knowledge-board-repository.js'
 import { KnowledgeService } from './knowledge-service.js'
 import type { KnowledgeChunk, KnowledgeSource } from './knowledge-types.js'
+import { redactSensitiveText } from './structured-redaction.js'
 
 export type DiscussionKnowledgePromotionErrorCode =
   | 'invalid_evidence'
@@ -117,24 +116,32 @@ implements DiscussionKnowledgePromotionAdapter {
       const retained = this.loadPromotion(claim.promotionId)
       this.verifyScope(retained, claim)
       this.verifyAcceptedSource(retained, claim)
+      this.verifyRequest(retained, claim)
       this.verifyReview(retained, claim)
 
       const locator = normalizeKnowledgeLocator(retained.source_uri)
-      const sourceRevision = `${retained.acceptance_event_id}@${retained.artifact_sha256}`
-      const repositoryKey = `discussion-board/${retained.board_id}`
-      const repositoryHead = repositoryRevision(retained.project_path)
+      const sourceRevision = `${retained.acceptance_event_id}@sha256:${retained.post_content_sha256}`
+      const repository = resolveBoardKnowledgeRepository(this.db, retained.board_id)
+      const repositoryKey = repository.repositoryKey
+      const repositoryHead = repository.head
       const observedAt = retained.reviewed_at!
+      const redactedTitle = redactSensitiveText(retained.discussion_title)
+      const redactedContent = redactSensitiveText(retained.post_body)
+      if (!redactedTitle.value || !redactedContent.value) fail('invalid_evidence')
+      const persistedContentHash = sha256(redactedContent.value)
+      const redactionState = redactedTitle.changed || redactedContent.changed
+        ? 'redacted' as const : 'none' as const
       const sourceWithoutId: Omit<KnowledgeSource, 'id'> = {
         source_kind: 'discussion_answer',
         trust_class: 'evidence',
-        title: retained.discussion_title,
+        title: redactedTitle.value,
         locator,
         normalized_locator: locator,
         source_revision: sourceRevision,
-        content_sha256: retained.post_content_sha256,
+        content_sha256: persistedContentHash,
         freshness_policy: 'manual_until_superseded',
         freshness_state: 'fresh',
-        redaction_state: 'none',
+        redaction_state: redactionState,
         content_state: 'present',
         ingest_state: 'active',
         access_scope: { kind: 'board' },
@@ -170,7 +177,7 @@ implements DiscussionKnowledgePromotionAdapter {
           source_kind: sourceWithoutId.source_kind,
           normalized_locator: locator,
           source_revision: sourceRevision,
-          content_sha256: retained.post_content_sha256,
+          content_sha256: persistedContentHash,
         }),
       }
       const sourceRange = {
@@ -182,11 +189,11 @@ implements DiscussionKnowledgePromotionAdapter {
       const chunkWithoutId: Omit<KnowledgeChunk, 'id'> = {
         source_id: source.id,
         ordinal: 0,
-        content: retained.post_body,
-        content_sha256: retained.post_content_sha256,
-        character_count: retained.post_body.length,
-        byte_count: Buffer.byteLength(retained.post_body, 'utf8'),
-        estimated_tokens: Math.max(1, Math.ceil(retained.post_body.length / 4)),
+        content: redactedContent.value,
+        content_sha256: persistedContentHash,
+        character_count: redactedContent.value.length,
+        byte_count: Buffer.byteLength(redactedContent.value, 'utf8'),
+        estimated_tokens: Math.max(1, Math.ceil(redactedContent.value.length / 4)),
         source_range: sourceRange,
         symbol: null,
         created_at: observedAt,
@@ -196,18 +203,27 @@ implements DiscussionKnowledgePromotionAdapter {
         id: knowledgeChunkId({
           source_id: source.id,
           ordinal: 0,
-          content_sha256: retained.post_content_sha256,
+          content_sha256: persistedContentHash,
           source_range: sourceRange,
         }),
       }
 
       const persistedSource = this.knowledge.putSource(source)
       const persistedChunk = this.knowledge.putChunk(retained.board_id, chunk)
+      this.knowledge.synchronizeRetrievalIndex({
+        board_id: retained.board_id,
+        indexed_at: observedAt,
+      })
       this.verifyAcceptedSource(this.loadPromotion(claim.promotionId), claim)
       return {
         promotion_id: retained.promotion_id,
         source_ids: [persistedSource.id],
         chunk_ids: [persistedChunk.id],
+        repository_key: repositoryKey,
+        repository_head_sha: repositoryHead,
+        raw_source_content_sha256: retained.post_content_sha256,
+        persisted_content_sha256: persistedContentHash,
+        redaction_state: redactionState,
       }
     }).immediate()
   }
@@ -361,6 +377,42 @@ implements DiscussionKnowledgePromotionAdapter {
       fail('promotion_not_reviewed')
     }
   }
+
+  private verifyRequest(
+    retained: PromotionEvidenceRow,
+    claim: DiscussionKnowledgePromotionEvidence,
+  ): void {
+    const request = this.db.prepare(`SELECT board_id, discussion_id, post_id,
+        event_type, event_version, actor_type, actor_id, payload_json
+      FROM os_discussion_events
+      WHERE discussion_id=? AND post_id=?
+        AND event_type='discussion.promotion.requested'
+        AND json_extract(payload_json, '$.promotion_id')=?
+      ORDER BY rowid DESC LIMIT 1`).get(
+      claim.discussionId,
+      claim.postId,
+      claim.promotionId,
+    ) as ReviewEventRow | undefined
+    const expectedPayload = canonicalKnowledgeJson({
+      promotion_id: claim.promotionId,
+      source_uri: claim.sourceUri,
+      source_content_sha256: claim.sourceContentSha256,
+      artifact_sha256: claim.artifactSha256,
+      acceptance_event_id: claim.acceptanceEventId,
+    })
+    if (
+      !request
+      || request.board_id !== claim.boardId
+      || request.discussion_id !== claim.discussionId
+      || request.post_id !== claim.postId
+      || request.event_version !== 1
+      || request.actor_type !== retained.requested_by_type
+      || request.actor_id !== retained.requested_by_id
+      || request.payload_json !== expectedPayload
+    ) {
+      fail('promotion_source_mismatch')
+    }
+  }
 }
 
 function validatedEvidence(
@@ -394,36 +446,6 @@ function nonEmpty(value: unknown): value is string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
-}
-
-function repositoryRevision(projectPath: string): string {
-  try {
-    const environment = { ...process.env }
-    for (const key of Object.keys(environment)) {
-      if (key.startsWith('GIT_')) delete environment[key]
-    }
-    environment.GIT_CONFIG_NOSYSTEM = '1'
-    environment.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null'
-    environment.GIT_NO_REPLACE_OBJECTS = '1'
-    environment.GIT_OPTIONAL_LOCKS = '0'
-    const run = (args: string[]) => execFileSync('git', ['-C', projectPath, ...args], {
-      encoding: 'utf8',
-      env: environment,
-      maxBuffer: 1_000_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 15_000,
-    }).trim()
-    const root = run(['rev-parse', '--show-toplevel'])
-    if (fs.realpathSync(path.resolve(root)) !== fs.realpathSync(path.resolve(projectPath))) {
-      fail('invalid_evidence')
-    }
-    const head = run(['rev-parse', '--verify', 'HEAD'])
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(head)) fail('invalid_evidence')
-    return head
-  } catch (error) {
-    if (error instanceof DiscussionKnowledgePromotionError) throw error
-    fail('invalid_evidence')
-  }
 }
 
 function fail(code: DiscussionKnowledgePromotionErrorCode): never {

@@ -6,6 +6,7 @@ import type { ActorIdentity } from './agent-home-support.js'
 import { ConflictError, NotFoundError, ValidationError } from './errors.js'
 import { EventStore } from './event-store.js'
 import { parseJson, timestamp } from './json.js'
+import { redactStructuredValue } from './structured-redaction.js'
 
 export const PLANNING_TEAM_ROLES = Object.freeze([
   'facilitator',
@@ -66,7 +67,14 @@ export interface ConflictKnowledgePromotionAdapter {
     exactSource: Record<string, unknown>
     sourceSha256: string
     reviewedAt: string
-  }): { sourceId: string; chunkId: string; repositoryHeadSha: string }
+  }): {
+    sourceId: string
+    chunkId: string
+    repositoryHeadSha: string
+    repositoryKey: string
+    persistedContentSha256: string
+    redactionState: 'none' | 'redacted'
+  }
 }
 
 export interface PlanningParticipantInput {
@@ -1680,9 +1688,12 @@ export class PlanningTeamService {
     sourceId: string
     chunkId: string
     repositoryHeadSha: string
+    repositoryKey: string
+    persistedContentSha256: string
+    redactionState: 'none' | 'redacted'
   }): void {
     const retained = this.db.prepare(`SELECT source.source_kind, source.normalized_locator,
-        source.source_revision, source.content_sha256, source.access_scope_json,
+        source.source_revision, source.content_sha256, source.redaction_state, source.access_scope_json,
         source.targets_json, source.provenance_json,
         chunk.content, chunk.content_sha256 AS chunk_content_sha256
       FROM knowledge_sources source
@@ -1704,13 +1715,16 @@ export class PlanningTeamService {
       || retained.source_kind !== 'decision'
       || retained.normalized_locator !== expectedLocator
       || retained.source_revision !== input.sourceSha256
-      || retained.content_sha256 !== input.sourceSha256
-      || retained.chunk_content_sha256 !== input.sourceSha256
-      || retained.content !== stableJson(input.exactSource)
+      || retained.content_sha256 !== input.persistedContentSha256
+      || retained.chunk_content_sha256 !== input.persistedContentSha256
+      || sha256(String(retained.content)) !== input.persistedContentSha256
+      || retained.content !== stableJson(redactStructuredValue(input.exactSource).value)
+      || retained.redaction_state !== input.redactionState
       || !accessScope || accessScope.kind !== 'board'
       || !targets || Number(targets.board_id) !== input.boardId
       || nullableNumber(targets.card_id) !== input.cardId
       || !provenance || provenance.base_commit_sha !== input.repositoryHeadSha
+      || provenance.repository_key !== input.repositoryKey
       || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(input.repositoryHeadSha)) {
       throw new ConflictError('canonical conflict Knowledge promotion evidence is incomplete')
     }

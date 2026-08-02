@@ -10,6 +10,10 @@ import {
   CanonicalDiscussionKnowledgePromotionAdapter,
   DiscussionKnowledgePromotionError,
 } from '../src/agent-os/discussion-knowledge-promotion.js'
+import { KnowledgeCompiler } from '../src/agent-os/knowledge-compiler.js'
+import { KNOWLEDGE_COMPILER_CONTRACT_VERSION } from '../src/agent-os/knowledge-compiler-contracts.js'
+import { KnowledgeService } from '../src/agent-os/knowledge-service.js'
+import { CONTEXT_SECTIONS } from '../src/agent-os/knowledge-types.js'
 import {
   DiscussionService,
   type DiscussionKnowledgePromotionEvidence,
@@ -56,6 +60,8 @@ describe('canonical Discussion to Knowledge promotion', () => {
       expect(created.statusCode, created.body).toBe(201)
       const discussionId = created.json().discussion.id as string
       const rootPostId = created.json().posts[0].id as string
+      const rawSecret = ['ghp', '12345678901234567890'].join('_')
+      const answerBody = `Verify the live accepted post with token ${rawSecret} before persistence.`
 
       const answered = await command(server, 'answerer', 'answer', {
         method: 'POST',
@@ -63,7 +69,7 @@ describe('canonical Discussion to Knowledge promotion', () => {
         payload: {
           parent_post_id: rootPostId,
           kind: 'answer',
-          body: 'Verify the live accepted post and its acceptance event before persistence.',
+          body: answerBody,
         },
       })
       expect(answered.statusCode, answered.body).toBe(201)
@@ -99,21 +105,100 @@ describe('canonical Discussion to Knowledge promotion', () => {
       const result = JSON.parse(reviewed.json().promotion.knowledge_result_json) as {
         source_ids: string[]
         chunk_ids: string[]
+        repository_key: string
+        repository_head_sha: string
+        raw_source_content_sha256: string
+        persisted_content_sha256: string
+        redaction_state: string
       }
       expect(result.source_ids).toHaveLength(1)
       expect(result.chunk_ids).toHaveLength(1)
-      expect(db.prepare(`SELECT source_kind, content_sha256, freshness_policy
+      expect(result.raw_source_content_sha256).toBe(contentHash)
+      expect(result.persisted_content_sha256).not.toBe(contentHash)
+      expect(result.redaction_state).toBe('redacted')
+      expect(db.prepare(`SELECT source_kind, content_sha256, freshness_policy, redaction_state,
+          json_extract(provenance_json, '$.repository_key') AS repository_key
         FROM knowledge_sources WHERE board_id=? AND id=?`)
         .get(boardId, result.source_ids[0])).toEqual({
         source_kind: 'discussion_answer',
-        content_sha256: contentHash,
+        content_sha256: result.persisted_content_sha256,
         freshness_policy: 'manual_until_superseded',
+        redaction_state: 'redacted',
+        repository_key: result.repository_key,
       })
-      expect(db.prepare(`SELECT content, content_sha256 FROM knowledge_chunks
-        WHERE board_id=? AND id=?`).get(boardId, result.chunk_ids[0])).toEqual({
-        content: 'Verify the live accepted post and its acceptance event before persistence.',
-        content_sha256: contentHash,
+      const persistedChunk = db.prepare(`SELECT content, content_sha256 FROM knowledge_chunks
+        WHERE board_id=? AND id=?`).get(boardId, result.chunk_ids[0]) as
+        { content: string; content_sha256: string }
+      expect(persistedChunk.content).toContain('[REDACTED]')
+      expect(persistedChunk.content).not.toContain(rawSecret)
+      expect(persistedChunk.content_sha256).toBe(result.persisted_content_sha256)
+      expect(db.prepare('SELECT body FROM os_discussion_posts WHERE id=?').get(postId))
+        .toEqual({ body: answerBody })
+
+      const knowledge = new KnowledgeService(db)
+      const targets = {
+        board_id: boardId,
+        workspace_id: null,
+        card_id: null,
+        contract_ref: null,
+        contract_version: null,
+        contract_snapshot_sha256: null,
+        job_id: null,
+        profile_id: null,
+        session_id: null,
+        delivery_report_id: null,
+      }
+      const retrieved = knowledge.retrieve({
+        version: 1,
+        board_id: boardId,
+        access_scope: { kind: 'board' },
+        targets,
+        repository_key: result.repository_key,
+        base_commit_sha: result.repository_head_sha,
+        source_revisions: [],
+        source_kinds: ['discussion_answer'],
+        freshness_states: ['fresh'],
+        redaction_states: ['redacted'],
+        content_states: ['present'],
+        ingest_states: ['active'],
+        paths: [],
+        path_prefixes: [],
+        symbols: [],
+        query: 'Verify live accepted post',
+        limit: 10,
       })
+      expect(retrieved.results.map((item) => item.citation.chunk_id)).toContain(result.chunk_ids[0])
+
+      const sectionBudget = { max_tokens: 4_000, max_characters: 30_000 }
+      const compiled = new KnowledgeCompiler(knowledge, knowledge.retrieve.bind(knowledge)).compile({
+        version: KNOWLEDGE_COMPILER_CONTRACT_VERSION,
+        board_id: boardId,
+        access_scope: { kind: 'board' },
+        targets,
+        repository_key: result.repository_key,
+        base_commit_sha: result.repository_head_sha,
+        task: {
+          objective: 'Verify the live accepted post before persistence',
+          criteria: [{ id: 'accepted-source', text: 'Use exact accepted source evidence', required: true }],
+          files: [],
+          symbols: [],
+          recent_work: [],
+        },
+        budget: {
+          max_tokens: 12_000,
+          max_characters: 100_000,
+          sections: Object.fromEntries(CONTEXT_SECTIONS.map((section) => [section, sectionBudget])),
+        },
+        pinned_chunk_ids: [result.chunk_ids[0]],
+        adapter_signals: [],
+        previous_context: null,
+        created_at: '2026-08-02T08:00:00.000Z',
+      })
+      expect(compiled.build.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ chunk_id: result.chunk_ids[0], decision: 'selected' }),
+      ]))
+      expect(compiled.documents.some((document) => document.content.includes('[REDACTED]'))).toBe(true)
+      expect(compiled.documents.every((document) => !document.content.includes(rawSecret))).toBe(true)
       const browse = await server.inject({
         method: 'GET',
         url: `/api/v1/os/boards/${boardId}/knowledge`,
@@ -121,7 +206,7 @@ describe('canonical Discussion to Knowledge promotion', () => {
       expect(browse.statusCode, browse.body).toBe(200)
       expect(browse.json().knowledge).toEqual([
         expect.objectContaining({
-          content: 'Verify the live accepted post and its acceptance event before persistence.',
+          content: persistedChunk.content,
           citation: expect.objectContaining({ source_id: result.source_ids[0] }),
         }),
       ])

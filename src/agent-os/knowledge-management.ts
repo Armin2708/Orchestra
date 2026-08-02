@@ -9,7 +9,6 @@ import { KnowledgeService } from './knowledge-service.js'
 import { installKnowledgeManagementSchema } from './knowledge-management-migration.js'
 import type { KnowledgeFreshnessState, KnowledgeSourceKind } from './knowledge-types.js'
 
-const SHA256 = /^[a-f0-9]{64}$/u
 const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 const SOURCE_ID = /^ks_[a-f0-9]{64}$/u
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
@@ -35,18 +34,6 @@ export interface KnowledgeControlInput {
   created_at?: string
 }
 
-export interface AcceptedAnswerPromotionPayload {
-  repository_key: string
-  base_commit_sha: string
-  observed_at: string
-  entries: Array<{
-    path: string
-    start_line: number
-    end_line: number
-    expected_source_sha256: string
-  }>
-}
-
 export interface VerifiedDeliveryPromotionPayload {
   repository_key: string
   base_commit_sha: string
@@ -64,8 +51,8 @@ export interface VerifiedDeliveryPromotionPayload {
 
 export interface CreatePromotionInput {
   board_id: number
-  kind: 'accepted_answer' | 'verified_delivery'
-  payload: AcceptedAnswerPromotionPayload | VerifiedDeliveryPromotionPayload
+  kind: 'verified_delivery'
+  payload: VerifiedDeliveryPromotionPayload
   requested_by: string
   idempotency_key: string
   requested_at?: string
@@ -174,12 +161,6 @@ function sourceId(value: unknown, field = 'source id'): string {
 function commit(value: unknown, field: string): string {
   const result = text(value, field, 64)
   if (!COMMIT.test(result)) invalid(field)
-  return result
-}
-
-function sha(value: unknown, field: string): string {
-  const result = text(value, field, 64)
-  if (!SHA256.test(result)) invalid(field)
   return result
 }
 
@@ -492,28 +473,24 @@ export class KnowledgeManagementService {
       if (row.status !== 'pending') return row
       let sources: string[] = []
       if (input.decision === 'promote') {
-        const payload = JSON.parse(String(row.payload_json)) as
-          AcceptedAnswerPromotionPayload | VerifiedDeliveryPromotionPayload
+        if (row.kind !== 'verified_delivery') {
+          throw new KnowledgeManagementError(
+            'evidence_rejected',
+            'accepted answers require canonical Discussion acceptance and review evidence',
+          )
+        }
+        const payload = JSON.parse(String(row.payload_json)) as VerifiedDeliveryPromotionPayload
         const root = this.boardRoot(boardId)
-        const report = row.kind === 'accepted_answer'
-          ? this.knowledge.ingestAcceptedKnowledge({
-              board_id: boardId,
-              repository_key: payload.repository_key,
-              repository_root: root,
-              base_commit_sha: payload.base_commit_sha,
-              observed_at: payload.observed_at,
-              entries: (payload as AcceptedAnswerPromotionPayload).entries,
-            })
-          : this.knowledge.ingestVerifiedDelivery({
-              board_id: boardId,
-              repository_key: payload.repository_key,
-              repository_root: root,
-              base_commit_sha: payload.base_commit_sha,
-              observed_at: payload.observed_at,
-              report_id: (payload as VerifiedDeliveryPromotionPayload).report_id,
-              source_commit_sha: (payload as VerifiedDeliveryPromotionPayload).source_commit_sha,
-              gotchas: (payload as VerifiedDeliveryPromotionPayload).gotchas,
-            })
+        const report = this.knowledge.ingestVerifiedDelivery({
+          board_id: boardId,
+          repository_key: payload.repository_key,
+          repository_root: root,
+          base_commit_sha: payload.base_commit_sha,
+          observed_at: payload.observed_at,
+          report_id: payload.report_id,
+          source_commit_sha: payload.source_commit_sha,
+          gotchas: payload.gotchas,
+        })
         sources = report.sources.map((source) => source.id)
         for (const source of sources) {
           this.db.prepare(`INSERT INTO knowledge_promotion_sources
@@ -700,31 +677,14 @@ export class KnowledgeManagementService {
   private validatePromotionPayload(
     kind: CreatePromotionInput['kind'],
     value: CreatePromotionInput['payload'],
-  ): AcceptedAnswerPromotionPayload | VerifiedDeliveryPromotionPayload {
-    if (kind !== 'accepted_answer' && kind !== 'verified_delivery') invalid('promotion kind')
+  ): VerifiedDeliveryPromotionPayload {
+    if (kind !== 'verified_delivery') invalid('promotion kind')
     const payload = value as unknown as Record<string, unknown>
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) invalid('promotion payload')
     const common = {
       repository_key: text(payload.repository_key, 'repository key', 256),
       base_commit_sha: commit(payload.base_commit_sha, 'base commit'),
       observed_at: timestamp(payload.observed_at, 'observed at'),
-    }
-    if (kind === 'accepted_answer') {
-      if (!Array.isArray(payload.entries) || payload.entries.length < 1 || payload.entries.length > 64) {
-        invalid('promotion entries')
-      }
-      return {
-        ...common,
-        entries: payload.entries.map((raw) => {
-          const entry = raw as Record<string, unknown>
-          return {
-            path: text(entry.path, 'source path', 4096),
-            start_line: integer(entry.start_line, 'start line'),
-            end_line: integer(entry.end_line, 'end line'),
-            expected_source_sha256: sha(entry.expected_source_sha256, 'source hash'),
-          }
-        }),
-      }
     }
     const delivery = payload as Record<string, unknown>
     return {

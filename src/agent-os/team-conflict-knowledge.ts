@@ -1,23 +1,21 @@
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
 import type Database from 'better-sqlite3'
 import {
   canonicalKnowledgeJson,
   knowledgeChunkId,
   knowledgeSourceId,
 } from './knowledge-contracts.js'
-import { KnowledgeStore } from './knowledge-store.js'
+import { resolveBoardKnowledgeRepository } from './knowledge-board-repository.js'
+import { KnowledgeService } from './knowledge-service.js'
 import type { KnowledgeChunk, KnowledgeSource } from './knowledge-types.js'
+import { redactSensitiveText, redactStructuredValue } from './structured-redaction.js'
 import type { ConflictKnowledgePromotionAdapter } from './team-planning.js'
 
-const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
-
 export class CanonicalConflictKnowledgeAdapter implements ConflictKnowledgePromotionAdapter {
-  private readonly store: KnowledgeStore
+  private readonly knowledge: KnowledgeService
 
   constructor(private readonly db: Database.Database) {
-    this.store = new KnowledgeStore(db)
+    this.knowledge = new KnowledgeService(db)
   }
 
   promoteConflictResolution(input: {
@@ -29,25 +27,39 @@ export class CanonicalConflictKnowledgeAdapter implements ConflictKnowledgePromo
     exactSource: Record<string, unknown>
     sourceSha256: string
     reviewedAt: string
-  }): { sourceId: string; chunkId: string; repositoryHeadSha: string } {
-    const content = canonicalKnowledgeJson(input.exactSource)
-    if (sha256(content) !== input.sourceSha256) {
+  }): {
+    sourceId: string
+    chunkId: string
+    repositoryHeadSha: string
+    repositoryKey: string
+    persistedContentSha256: string
+    redactionState: 'none' | 'redacted'
+  } {
+    const rawContent = canonicalKnowledgeJson(input.exactSource)
+    if (sha256(rawContent) !== input.sourceSha256) {
       throw new Error('conflict knowledge exact source changed before promotion')
     }
-    const repository = this.repository(input.boardId)
+    const redactedSource = redactStructuredValue(input.exactSource)
+    const content = canonicalKnowledgeJson(redactedSource.value)
+    const persistedContentSha256 = sha256(content)
+    const redactedTitle = redactSensitiveText(input.title)
+    if (!redactedTitle.value) throw new Error('conflict knowledge title is invalid')
+    const redactionState = redactedSource.changed || redactedTitle.changed
+      ? 'redacted' as const : 'none' as const
+    const repository = resolveBoardKnowledgeRepository(this.db, input.boardId)
     const normalizedLocator =
       `conflicts/${input.conflictId}/resolutions/${input.resolutionId}.json`
     const sourceWithoutId: Omit<KnowledgeSource, 'id'> = {
       source_kind: 'decision',
       trust_class: 'evidence',
-      title: input.title,
+      title: redactedTitle.value,
       locator: normalizedLocator,
       normalized_locator: normalizedLocator,
       source_revision: input.sourceSha256,
-      content_sha256: input.sourceSha256,
+      content_sha256: persistedContentSha256,
       freshness_policy: 'manual_until_superseded',
       freshness_state: 'fresh',
-      redaction_state: 'none',
+      redaction_state: redactionState,
       content_state: 'present',
       ingest_state: 'active',
       access_scope: { kind: 'board' },
@@ -64,7 +76,7 @@ export class CanonicalConflictKnowledgeAdapter implements ConflictKnowledgePromo
         delivery_report_id: null,
       },
       provenance: {
-        repository_key: `board:${input.boardId}`,
+        repository_key: repository.repositoryKey,
         base_commit_sha: repository.head,
         worktree_state_hash: null,
         relative_root: '.',
@@ -96,7 +108,7 @@ export class CanonicalConflictKnowledgeAdapter implements ConflictKnowledgePromo
       source_id: source.id,
       ordinal: 0,
       content,
-      content_sha256: input.sourceSha256,
+      content_sha256: persistedContentSha256,
       character_count: content.length,
       byte_count: Buffer.byteLength(content, 'utf8'),
       estimated_tokens: Math.max(1, Math.ceil(content.length / 4)),
@@ -109,50 +121,30 @@ export class CanonicalConflictKnowledgeAdapter implements ConflictKnowledgePromo
       id: knowledgeChunkId({
         source_id: source.id,
         ordinal: 0,
-        content_sha256: input.sourceSha256,
+        content_sha256: persistedContentSha256,
         source_range: range,
       }),
     }
-    this.store.putSource(source)
-    this.store.putChunk(input.boardId, chunk)
-    return { sourceId: source.id, chunkId: chunk.id, repositoryHeadSha: repository.head }
-  }
-
-  private repository(boardId: number): { root: string; head: string } {
-    const board = this.db.prepare('SELECT project_path FROM boards WHERE id=?').get(boardId) as
-      { project_path: string } | undefined
-    if (!board) throw new Error('conflict knowledge board was not found')
-    let root: string
-    try {
-      root = git(board.project_path, ['rev-parse', '--show-toplevel']).trim()
-      if (fs.realpathSync(root) !== fs.realpathSync(board.project_path)) {
-        throw new Error('repository root mismatch')
+    return this.db.transaction(() => {
+      if (sha256(canonicalKnowledgeJson(input.exactSource)) !== input.sourceSha256) {
+        throw new Error('conflict knowledge exact source changed before persistence')
       }
-    } catch {
-      throw new Error('conflict knowledge repository evidence could not be verified')
-    }
-    const head = git(root, ['rev-parse', '--verify', 'HEAD']).trim()
-    if (!COMMIT.test(head)) throw new Error('conflict knowledge repository head is invalid')
-    return { root, head }
+      const sourceResult = this.knowledge.putSource(source)
+      const chunkResult = this.knowledge.putChunk(input.boardId, chunk)
+      this.knowledge.synchronizeRetrievalIndex({
+        board_id: input.boardId,
+        indexed_at: input.reviewedAt,
+      })
+      return {
+        sourceId: sourceResult.id,
+        chunkId: chunkResult.id,
+        repositoryHeadSha: repository.head,
+        repositoryKey: repository.repositoryKey,
+        persistedContentSha256,
+        redactionState,
+      }
+    }).immediate()
   }
-}
-
-function git(root: string, args: string[]): string {
-  const environment = { ...process.env }
-  for (const key of Object.keys(environment)) {
-    if (key.startsWith('GIT_')) delete environment[key]
-  }
-  environment.GIT_CONFIG_NOSYSTEM = '1'
-  environment.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null'
-  environment.GIT_NO_REPLACE_OBJECTS = '1'
-  environment.GIT_OPTIONAL_LOCKS = '0'
-  return execFileSync('git', ['-C', root, ...args], {
-    encoding: 'utf8',
-    env: environment,
-    maxBuffer: 65_536,
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 15_000,
-  })
 }
 
 function sha256(value: string): string {

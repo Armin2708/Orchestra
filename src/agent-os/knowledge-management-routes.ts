@@ -82,12 +82,13 @@ async (app, options) => {
   app.post<{ Params: { boardId: string }; Body: unknown }>(
     '/boards/:boardId/knowledge/promotions',
     (request, reply) => {
+      requireOperator(request, isOperator)
       const body = objectBody(request.body)
       const result = service.createPromotion({
         board_id: positiveId(request.params.boardId, 'board id'),
         kind: requiredText(body.kind, 'kind') as CreatePromotionInput['kind'],
         payload: body.payload as CreatePromotionInput['payload'],
-        requested_by: request.orchestraPrincipal ?? 'agent',
+        requested_by: exactPrincipal(request),
         idempotency_key: idempotency(request, body),
       })
       return reply.code(201).send({ result })
@@ -103,7 +104,7 @@ async (app, options) => {
         board_id: positiveId(request.params.boardId, 'board id'),
         promotion_id: request.params.promotionId,
         decision: requiredText(body.decision, 'decision') as 'promote' | 'reject',
-        actor: { type: 'operator', id: request.orchestraPrincipal ?? 'operator' },
+        actor: { type: 'operator', id: exactPrincipal(request) },
         reason: requiredText(body.reason, 'reason'),
       })
       return reply.code(201).send({ result })
@@ -144,6 +145,13 @@ function requireOperator(
   if (!isOperator(request)) {
     throw new ForbiddenError('operator authorization is required for knowledge controls')
   }
+}
+
+function exactPrincipal(request: FastifyRequest): string {
+  if (typeof request.orchestraPrincipal !== 'string' || !request.orchestraPrincipal.trim()) {
+    throw new ForbiddenError('exact operator identity is required for knowledge promotion')
+  }
+  return request.orchestraPrincipal.trim()
 }
 
 function idempotency(request: FastifyRequest, body: Record<string, unknown>): string {

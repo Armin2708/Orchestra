@@ -9,7 +9,7 @@ import { DeliveryReportService } from '../src/agent-os/delivery-reports.js'
 import { canonicalKnowledgeJson } from '../src/agent-os/knowledge-contracts.js'
 import {
   KnowledgeSourceIngestor,
-  type AcceptedKnowledgeIngestionInput,
+  type AcceptedDecisionKnowledgeIngestionInput,
   type StructuralKnowledgeIngestionInput,
 } from '../src/agent-os/knowledge-source-ingestion.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
@@ -194,29 +194,21 @@ function acceptedDelivery(
 }
 
 describe('knowledge source ingestion', () => {
-  it('ingests committed accepted discussion answers and durable decisions', () => {
+  it('ingests committed durable decisions but rejects discussion-answer artifacts', () => {
     const fixture = repositoryFixture()
     const accepted = [{
       schema_version: 1 as const,
       kind: 'decision' as const,
       key: 'decision:repository-scope',
       title: 'Repository-scoped knowledge ingestion',
-      content: 'Keep knowledge ingestion repository-scoped.',
-      accepted_at: OBSERVED_AT,
-      accepted_by: 'release-reviewer',
-    }, {
-      schema_version: 1 as const,
-      kind: 'discussion_answer' as const,
-      key: 'discussion:knowledge-ingestion',
-      title: 'Accepted knowledge ingestion answer',
-      content: 'Use exact committed citations and redact ghp_12345678901234567890.',
+      content: 'Keep knowledge ingestion repository-scoped and redact ghp_12345678901234567890.',
       accepted_at: OBSERVED_AT,
       accepted_by: 'release-reviewer',
     }].map((artifact) => canonicalKnowledgeJson(artifact)).join('\n')
     write(fixture.root, 'docs/accepted-knowledge.md', `${accepted}\n`)
     const head = commit(fixture.root, 'record accepted knowledge')
     const { db, boardId } = boardDb(fixture.root)
-    const input: AcceptedKnowledgeIngestionInput = {
+    const input: AcceptedDecisionKnowledgeIngestionInput = {
       board_id: boardId,
       repository_key: 'example/knowledge-source',
       repository_root: fixture.root,
@@ -224,20 +216,15 @@ describe('knowledge source ingestion', () => {
       observed_at: OBSERVED_AT,
       entries: [{
         path: 'docs/accepted-knowledge.md',
-        start_line: 2,
-        end_line: 2,
-        expected_source_sha256: sha256(accepted.split('\n')[1]),
-      }, {
-        path: 'docs/accepted-knowledge.md',
         start_line: 1,
         end_line: 1,
         expected_source_sha256: sha256(accepted.split('\n')[0]),
       }],
     }
 
-    const report = new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge(input)
+    const report = new KnowledgeSourceIngestor(db).ingestAcceptedDecision(input)
     expect(report.sources.map((source) => source.source_kind))
-      .toEqual(['decision', 'discussion_answer'])
+      .toEqual(['decision'])
     expect(report.sources.every((source) =>
       source.trust_class === 'evidence'
       && source.source_revision === head
@@ -251,17 +238,11 @@ describe('knowledge source ingestion', () => {
         interpretation: 'data_only',
         kind: 'decision',
       }),
-      expect.objectContaining({
-        accepted_by: 'release-reviewer',
-        confidence_micros: 1_000_000,
-        interpretation: 'data_only',
-        kind: 'discussion_answer',
-      }),
     ]))
     expect(JSON.stringify(envelopes)).not.toContain('ghp_12345678901234567890')
     expect(JSON.stringify(envelopes)).toContain('[REDACTED]')
 
-    const replay = new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge({
+    const replay = new KnowledgeSourceIngestor(db).ingestAcceptedDecision({
       ...input,
       observed_at: LATER_AT,
       entries: [...input.entries].reverse(),
@@ -271,7 +252,7 @@ describe('knowledge source ingestion', () => {
     expect(replay.sources.every((source) => source.created_at === OBSERVED_AT))
       .toBe(true)
 
-    expect(() => new KnowledgeSourceIngestor(db).ingestAcceptedKnowledge({
+    expect(() => new KnowledgeSourceIngestor(db).ingestAcceptedDecision({
       ...input,
       entries: [{
         path: 'src/service.ts',
@@ -283,7 +264,29 @@ describe('knowledge source ingestion', () => {
       }],
     })).toThrow(expect.objectContaining({ code: 'evidence_mismatch' }))
     expect(db.prepare('SELECT COUNT(*) AS count FROM knowledge_sources').get())
-      .toEqual({ count: 2 })
+      .toEqual({ count: 1 })
+
+    const discussionArtifact = canonicalKnowledgeJson({
+      schema_version: 1,
+      kind: 'discussion_answer',
+      key: 'discussion:knowledge-ingestion',
+      title: 'Self-asserted answer',
+      content: 'A committed label is not canonical Discussion acceptance evidence.',
+      accepted_at: OBSERVED_AT,
+      accepted_by: 'self-asserted-requester',
+    })
+    write(fixture.root, 'docs/discussion-answer.json', discussionArtifact)
+    const discussionHead = commit(fixture.root, 'record non-canonical discussion answer')
+    expect(() => new KnowledgeSourceIngestor(db).ingestAcceptedDecision({
+      ...input,
+      base_commit_sha: discussionHead,
+      entries: [{
+        path: 'docs/discussion-answer.json',
+        start_line: 1,
+        end_line: 1,
+        expected_source_sha256: sha256(discussionArtifact),
+      }],
+    })).toThrow(expect.objectContaining({ code: 'evidence_mismatch' }))
   })
 
   it('retains deterministic exact structural citations, authors, and relationships', () => {
