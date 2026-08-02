@@ -731,7 +731,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     await waitFor(client, `document.readyState === 'complete'`, `${name} ${mode} reset`)
   }
   const modeReady = async (expression) => {
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + 750
     while (Date.now() < deadline) {
       if (await evaluate(client, expression)) return true
       await delay(40)
