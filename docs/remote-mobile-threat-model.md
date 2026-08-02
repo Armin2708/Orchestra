@@ -2,7 +2,7 @@
 
 Status: REM-001 candidate
 
-Observed code: `11c1691654094e74dbe9fc53f073aa602e5ae7bb`
+Observed code: `b5ba7b848083028c2174bd109b0ccd6d33e316c2`
 
 Machine-readable companion: `docs/remote-mobile-threat-control-matrix.json`
 
@@ -93,7 +93,7 @@ The target default message scope therefore terminates in a no-tool discussion/Q&
 
 ### Sensitive reads
 
-The baseline inventory has 66 GET routes: 49 canonical, 3 compatibility, 9 legacy, and 5 infrastructure. They are not all equivalent. Health and the static shell are public bootstrap surfaces; process output, transcripts, conversations, assignment history, context, search/export, contract-template previews, Open Work, live approval detail, settings, and system/provider information can reveal source, prompts, commands, paths, usage, or credentials.
+The baseline inventory has 68 GET routes: 51 canonical, 3 compatibility, 9 legacy, and 5 infrastructure. They are not all equivalent. Health and the static shell are public bootstrap surfaces; process output, transcripts, conversations, assignment history, context, search/export, contract-template previews, Open Work, outcome dashboards and benchmark comparisons, live approval detail, settings, and system/provider information can reveal source, prompts, commands, paths, usage, or credentials.
 
 Some handlers bound pagination, validate object existence, or require the generic operator. There is no DeviceSession policy that classifies each read by scope, board/workspace/agent/process resource, field allowlist, data sensitivity, cache behavior, and reauthentication need. A default `observe` scope that only denies mutations would still enable raw-output exposure, cross-resource identifier attacks, and newly added GET routes.
 
@@ -309,7 +309,7 @@ For approvals, the `approve` scope can permit safe review and `deny`/`cancel` of
 
 The authorization layer must default-deny every `DeviceSession` request, not only mutations. A newly added route of any method remains unavailable until it has explicit scope, resource, field, data-class, cache, step-up, audit, and abuse classification. Compatibility, legacy, canonical, and infrastructure routes all pass through the same decision point.
 
-The observed baseline has 66 GET routes—49 canonical, 3 compatibility, 9 legacy, and 5 infrastructure—and 110 non-GET routes—64 canonical, 26 compatibility, 16 legacy, and 4 infrastructure. These are drift tripwires, not grant lists. Any surface-count change forces the model and future centralized policy to be reviewed.
+The observed baseline has 68 GET routes—51 canonical, 3 compatibility, 9 legacy, and 5 infrastructure—and 119 non-GET routes—73 canonical, 26 compatibility, 16 legacy, and 4 infrastructure. These are drift tripwires, not grant lists. Any surface-count change forces the model and future centralized policy to be reviewed.
 
 | Scope | Default phone | Intended access | Always excluded or elevated |
 | --- | --- | --- | --- |
@@ -332,6 +332,16 @@ Every device read is classified before its handler executes:
 | Redacted observe | Allowlisted board summary, agent/delivery status, redacted conversation, process status | `observe` plus exact resource grant, server-side field allowlist/redaction, bounded pagination, no shared sensitive cache |
 | Sensitive content | Raw process output/transcript, context, search/export, live approval detail, settings/system detail | Unavailable remotely by default; separately approved purpose, stricter minimization, exact object authorization, reauthentication where warranted, no offline cache |
 | Secret or withheld | Credentials, raw environment, raw approval parameters, withheld reasoning | Never returned to a remote DeviceSession |
+
+The outcome-analytics surface is classified explicitly rather than inheriting authority from its
+HTTP methods. Both dashboard GET routes are `sensitive_content` and default-deny for a
+`DeviceSession`; a future remote view would require `observe` plus an explicit board grant, exact
+`boardId` object authorization, a minimized response allowlist, and no authenticated-device cache.
+All nine outcome POST routes require the production operator predicate before request-body parsing
+or service execution. Their future device policy remains default-deny with `admin` scope and
+user-verifying step-up. This includes budget evaluation as well as evidence ingestion, budgets,
+digests, operation planning, confirmation, and consumption; a route being computational does not
+make it a read.
 
 Object authorization is not satisfied by knowing an id. Board, workspace, agent, session, conversation, process, approval, delivery, and export identifiers must belong to the device's explicit resource grant. Parent/child relationships are checked server-side at the service boundary. Field filtering happens before serialization, streaming, caching, push, or audit.
 
@@ -508,6 +518,10 @@ The JSON matrix is the canonical structured register for REM-001. The Markdown i
 - every evidence marker remains in current source;
 - all structured ids appear in this document;
 - both GET and non-GET route counts remain synchronized with the baseline inventory;
+- every canonical outcome route has exactly one read or mutation classification, and no
+  `DeviceSession` receives implicit outcome authority;
+- every outcome mutation rejects a remote device principal before body validation, including
+  budget evaluation;
 - default-deny covers every device request, and the current direct message-to-live-agent flow remains explicitly modeled;
 - the absence of an anti-framing policy remains a failing baseline marker until the control is implemented;
 - DeviceSession and PairingTicket are still explicitly classified as unimplemented at this baseline;

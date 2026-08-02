@@ -120,7 +120,7 @@ export const outcomeAnalyticsPlugin: FastifyPluginAsync<OutcomeAnalyticsRouteOpt
   app.post<{ Params: { boardId: string }; Body: unknown }>(
     '/boards/:boardId/outcomes/budgets/evaluate',
     (request) => {
-      const body = objectBody(request.body)
+      const body = operatorBody(request, request.body)
       return service.evaluateBudgets({
         boardId: positiveId(request.params.boardId, 'board id'),
         jobId: optionalText(body.jobId, 'jobId'),

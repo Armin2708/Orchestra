@@ -90,6 +90,26 @@ type ThreatMatrix = {
     mutation_rules: Array<{ family: string; required_scope: string; step_up: string }>
     invariants: string[]
   }
+  outcome_route_policy: {
+    posture: string
+    current_authority: string
+    reads: Array<{
+      route: string
+      data_class: string
+      required_scope: string
+      resource_boundary: string
+      cache_policy: string
+      device_default: string
+    }>
+    mutations: Array<{
+      route: string
+      family: string
+      current_required_principal: string
+      target_scope: string
+      step_up: string
+      device_default: string
+    }>
+  }
   observed_read_surface: {
     inventory_file: string
     total_get_routes: number
@@ -369,6 +389,36 @@ describe('REM-001 remote/mobile threat model', () => {
     expect(actualMutations).toEqual(matrix.observed_mutation_surface.by_classification)
     expect(Object.values(actualMutations).reduce((sum, count) => sum + count, 0))
       .toBe(matrix.observed_mutation_surface.total_non_get_routes)
+  })
+
+  it('classifies every outcome route without granting a DeviceSession implicit access', () => {
+    const inventoryRoutes = inventory.http_routes.canonical
+      .filter((route) => route.includes('/outcomes/'))
+      .sort()
+    const classified = [
+      ...matrix.outcome_route_policy.reads.map(({ route }) => route),
+      ...matrix.outcome_route_policy.mutations.map(({ route }) => route),
+    ].sort()
+    expect(matrix.outcome_route_policy.posture).toBe('default_deny_for_device_principals')
+    expect(classified).toEqual(inventoryRoutes)
+    expectUnique('outcome route classifications', classified)
+    expect(matrix.outcome_route_policy.reads).toHaveLength(2)
+    for (const rule of matrix.outcome_route_policy.reads) {
+      expect(rule.route).toMatch(/^GET /)
+      expect(rule.data_class).toBe('sensitive_content')
+      expect(rule.required_scope).toBe('observe_plus_explicit_board_grant')
+      expect(rule.resource_boundary).toContain('Exact boardId')
+      expect(rule.cache_policy).toBe('no_authenticated_device_cache')
+      expect(rule.device_default).toBe('deny')
+    }
+    expect(matrix.outcome_route_policy.mutations).toHaveLength(9)
+    for (const rule of matrix.outcome_route_policy.mutations) {
+      expect(rule.route).toMatch(/^POST /)
+      expect(rule.current_required_principal).toBe('operator')
+      expect(rule.target_scope).toBe('admin')
+      expect(rule.step_up).toBe('required')
+      expect(rule.device_default).toBe('deny')
+    }
   })
 
   it('keeps DeviceSession and PairingTicket classified as targets at this baseline', () => {

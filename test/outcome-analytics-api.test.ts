@@ -7,6 +7,7 @@ import { outcomeAnalyticsPlugin } from '../src/agent-os/outcome-analytics-routes
 import { nativeOutcomeExecutionKey } from '../src/agent-os/outcome-analytics-runtime.js'
 
 const operator = { authorization: 'Bearer operator' }
+const remoteDevice = { authorization: 'Bearer device:remote-1' }
 const servers: FastifyInstance[] = []
 const databases: Database.Database[] = []
 
@@ -46,11 +47,18 @@ async function fixture() {
       'codex-app-server')`).run()
   const server = Fastify()
   const published: unknown[] = []
-  server.decorateRequest('orchestraPrincipal', 'operator')
+  server.decorateRequest('orchestraPrincipal', null)
+  server.addHook('preValidation', async (request) => {
+    request.orchestraPrincipal = request.headers.authorization === operator.authorization
+      ? 'operator'
+      : request.headers.authorization === remoteDevice.authorization
+        ? 'device:remote-1'
+        : null
+  })
   await server.register(outcomeAnalyticsPlugin, {
     prefix: '/api/v1/os',
     db,
-    isOperator: (request: FastifyRequest) => request.headers.authorization === 'Bearer operator',
+    isOperator: (request: FastifyRequest) => request.orchestraPrincipal === 'operator',
     publish: (event) => { published.push(event) },
   })
   await server.ready()
@@ -59,6 +67,35 @@ async function fixture() {
 }
 
 describe('outcome analytics focused registrar', () => {
+  it('denies every outcome mutation to a remote device principal before body validation', async () => {
+    const { server, boardId } = await fixture()
+    const routes = [
+      `/api/v1/os/boards/${boardId}/outcomes/usage`,
+      `/api/v1/os/boards/${boardId}/outcomes/activity`,
+      `/api/v1/os/boards/${boardId}/outcomes/benchmarks`,
+      `/api/v1/os/boards/${boardId}/outcomes/budgets`,
+      `/api/v1/os/boards/${boardId}/outcomes/budgets/evaluate`,
+      `/api/v1/os/boards/${boardId}/outcomes/digests`,
+      `/api/v1/os/boards/${boardId}/outcomes/operations`,
+      '/api/v1/os/outcomes/operations/device-denied/confirm',
+      '/api/v1/os/outcomes/operations/device-denied/consume',
+    ]
+    for (const url of routes) {
+      const response = await server.inject({
+        method: 'POST', url, headers: remoteDevice, payload: {},
+      })
+      expect(response.statusCode, `${url}: ${response.body}`).toBe(403)
+      expect(response.json()).toMatchObject({ code: 'forbidden' })
+    }
+    const operatorEvaluation = await server.inject({
+      method: 'POST',
+      url: `/api/v1/os/boards/${boardId}/outcomes/budgets/evaluate`,
+      headers: operator,
+      payload: {},
+    })
+    expect(operatorEvaluation.statusCode, operatorEvaluation.body).toBe(200)
+  })
+
   it('fails closed for mutations while keeping the dashboard readable', async () => {
     const { server, boardId } = await fixture()
     const forbidden = await server.inject({

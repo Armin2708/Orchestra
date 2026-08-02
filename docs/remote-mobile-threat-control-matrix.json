@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "11c1691654094e74dbe9fc53f073aa602e5ae7bb",
+  "observed_at_commit": "b5ba7b848083028c2174bd109b0ccd6d33e316c2",
   "backlog_item": "REM-001",
   "classification": "threat_model_only",
   "posture": "functional_beta_not_safe_remote_beta",
@@ -411,7 +411,7 @@
     {
       "id": "CUR-006",
       "status": "partial",
-      "description": "The daemon distinguishes operator and managed-agent principals, and multiple high-risk compatibility and PTY handlers explicitly require the operator principal; this is not a per-device, scope-based policy.",
+      "description": "The daemon distinguishes operator and managed-agent principals, and multiple high-risk compatibility, PTY, and outcome-analytics mutation handlers explicitly require the operator principal; this is not a per-device, scope-based policy.",
       "evidence": [
         {
           "file": "src/server.ts",
@@ -420,6 +420,10 @@
         {
           "file": "src/agent-os/routes.ts",
           "contains": "if (!isOperator(request)) throw new ForbiddenError('operator authorization is required for this action')"
+        },
+        {
+          "file": "src/agent-os/outcome-analytics-routes.ts",
+          "contains": "const body = operatorBody(request, request.body)"
         }
       ]
     },
@@ -983,7 +987,8 @@
           "workspace context",
           "search or export",
           "live approval detail",
-          "system or settings detail"
+          "system or settings detail",
+          "outcome dashboard or benchmark comparison"
         ],
         "required_scope": "observe_plus_explicit_resource_grant_or_more_specific_scope",
         "requirements": "Unavailable remotely by default; separately approved views require purpose binding, stricter field minimization, recent reauthentication where risk warrants, no offline cache, and exact object authorization."
@@ -1025,6 +1030,11 @@
         "family": "device_tunnel_settings_policy_retention_provider_plugin_mcp_access",
         "required_scope": "admin",
         "step_up": "required"
+      },
+      {
+        "family": "outcome_evidence_budget_and_execution_control",
+        "required_scope": "admin",
+        "step_up": "required"
       }
     ],
     "invariants": [
@@ -1032,11 +1042,107 @@
       "Remote-origin message text cannot gain terminal, agent-control, approval, or admin authority by being relayed through a tool-capable agent."
     ]
   },
+  "outcome_route_policy": {
+    "posture": "default_deny_for_device_principals",
+    "current_authority": "Every outcome POST route requires the production operator predicate before parsing or service execution. The two GET routes remain broad master-operator reads today and are not granted to a future DeviceSession by their HTTP method.",
+    "reads": [
+      {
+        "route": "GET /api/v1/os/boards/:boardId/outcomes/dashboard",
+        "data_class": "sensitive_content",
+        "required_scope": "observe_plus_explicit_board_grant",
+        "resource_boundary": "Exact boardId plus server-side board-scoped query; job, contract, team, budget, delivery-quality, and usage fields require a future minimized allowlist.",
+        "cache_policy": "no_authenticated_device_cache",
+        "device_default": "deny"
+      },
+      {
+        "route": "GET /api/v1/os/boards/:boardId/outcomes/benchmarks/:suiteKey",
+        "data_class": "sensitive_content",
+        "required_scope": "observe_plus_explicit_board_grant",
+        "resource_boundary": "Exact boardId and suiteKey; benchmark quality, duration, token, evidence, and comparison fields require a future minimized allowlist.",
+        "cache_policy": "no_authenticated_device_cache",
+        "device_default": "deny"
+      }
+    ],
+    "mutations": [
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/usage",
+        "family": "outcome_evidence_write",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/activity",
+        "family": "outcome_evidence_write",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/benchmarks",
+        "family": "outcome_evidence_write",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/digests",
+        "family": "outcome_evidence_write",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/budgets",
+        "family": "outcome_budget_control",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/budgets/evaluate",
+        "family": "outcome_budget_evaluation",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/boards/:boardId/outcomes/operations",
+        "family": "outcome_execution_control",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/outcomes/operations/:operationId/confirm",
+        "family": "outcome_execution_control",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      },
+      {
+        "route": "POST /api/v1/os/outcomes/operations/:operationId/consume",
+        "family": "outcome_execution_control",
+        "current_required_principal": "operator",
+        "target_scope": "admin",
+        "step_up": "required",
+        "device_default": "deny"
+      }
+    ]
+  },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 66,
+    "total_get_routes": 68,
     "by_classification": {
-      "canonical": 49,
+      "canonical": 51,
       "compatibility": 3,
       "legacy": 9,
       "infrastructure": 5
@@ -1045,9 +1151,9 @@
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 110,
+    "total_non_get_routes": 119,
     "by_classification": {
-      "canonical": 64,
+      "canonical": 73,
       "compatibility": 26,
       "legacy": 16,
       "infrastructure": 4

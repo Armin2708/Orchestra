@@ -40,6 +40,10 @@ without observed representative evidence.
 - A focused Fastify registrar and an event-driven responsive React dashboard. Mutations emit one
   payload-free `outcome_analytics` invalidation event through the inherited Orchestra bus or an
   injected publisher; the dashboard debounces that stream and introduces no snapshot poll.
+- A fail-closed remote-access classification synchronized to the canonical route inventory. The two
+  outcome GET routes are sensitive, exact-board reads that remain denied to `DeviceSession` by
+  default; all nine POST routes require the current production operator predicate and target a
+  future `admin` plus step-up policy. The budget-evaluation POST is now covered by the same guard.
 
 ## Root integration
 
@@ -61,9 +65,21 @@ without observed representative evidence.
 
 ## Evidence
 
-- Focused backend/service/API/UI-contract suite: 3 files, 23 tests (parallel and one-worker).
+- Focused analytics/API/runtime, baseline-documentation, and remote-threat suite passed 5 files /
+  42 tests and covers all 11 outcome routes, including exact no-unclassified-route drift and
+  remote-device denial before body validation.
+- The broader relevant regression suite passed 14 files / 125 tests in both default-parallel and
+  one-worker modes.
 - Root TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
-- Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3.
+- Web TypeScript and production build pass on Node 22.20.0 / npm 10.9.3; the production build
+  retains the existing advisory for a JavaScript chunk larger than 500 kB.
+- Root and web `npm audit --audit-level=moderate` report zero vulnerabilities.
+- Gitleaks 8.30.1 reports no findings across 759 commits or the candidate diff.
+- GitNexus PDG re-index and change detection completed; its high-risk flag reflects the shared
+  registrar symbol, while the inspected change is the fail-closed guard on one POST route. The
+  route file has no persisted taint finding, subject to GitNexus's documented analysis limits.
+- `graphify update .` refreshed the 8,305-node / 19,572-edge code graph; `graphify-out/` remains an
+  untracked verification artifact and is not part of this checkpoint commit.
 - The controlled unit suite proves the quality guard, but is not representative product evidence.
 
 ## Remaining
@@ -88,3 +104,5 @@ without observed representative evidence.
   suite.
 - MET-GATE remains open. `representative_evidence_observed` and `gate_claimed` are hard-coded false
   in the comparison response until the integrator records and reviews representative evidence.
+- The route classification is a conservative threat-control contract, not a claim that
+  `DeviceSession`, pairing, revocation, or remote step-up is implemented. REM-GATE remains open.
