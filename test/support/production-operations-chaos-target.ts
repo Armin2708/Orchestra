@@ -35,10 +35,23 @@ const LIFECYCLE_TRANSITIONS = new Set([
 type Fault = 'disk-full' | 'database-locked' | 'provider-unavailable' | 'git-conflict'
 
 type ActiveFixture = {
-  jobId: string
+  jobId: string | null
+  cardId: number
   sessionId: string | null
   processId: string | null
   child: ChildProcess | null
+}
+
+type LifecycleEvidence = {
+  contracts: number
+  queuedJobs: number
+  runningJobs: number
+  startingSessions: number
+  runningSessions: number
+  startingProcesses: number
+  runningProcesses: number
+  submittedDeliveries: number
+  pendingOutbox: number
 }
 
 /**
@@ -64,14 +77,18 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
   private currentLeaseOwner: string | null = null
   private staleLeaseOwner: string | null = null
   private fixtures: ActiveFixture[] = []
+  private expectedCardIds = new Set<number>()
+  private expectedContractCardIds = new Set<number>()
   private expectedJobIds = new Set<string>()
   private expectedOutboxIds = new Set<string>()
+  private expectedDeliveryReportIds = new Set<string>()
   private fault: Fault | null = null
   private lockDb: BetterSqlite3.Database | null = null
   private networkServer: Server | null = null
   private networkPort = 0
   private clockMs = FIXED_NOW
   private crashed = false
+  private runtimeGeneration = 0
 
   async reset(): Promise<void> {
     await this.disposeRuntime()
@@ -80,13 +97,17 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     this.databasePath = path.join(this.root, 'orchestra.db')
     this.projectPath = path.join(this.root, 'project')
     fs.mkdirSync(this.projectPath, { recursive: true })
+    this.expectedCardIds.clear()
+    this.expectedContractCardIds.clear()
     this.expectedJobIds.clear()
     this.expectedOutboxIds.clear()
+    this.expectedDeliveryReportIds.clear()
     this.fixtures = []
     this.fault = null
     this.networkPort = 0
     this.clockMs = FIXED_NOW
     this.crashed = false
+    this.runtimeGeneration = 0
     this.staleLease = null
     this.staleLeaseOwner = null
     this.openRuntime()
@@ -97,6 +118,17 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     CREATE TABLE IF NOT EXISTS qa16_fault_pressure (
       id INTEGER PRIMARY KEY,
       payload BLOB NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS qa16_critical_mutations (
+      idempotency_key TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id),
+      outbox_id TEXT NOT NULL REFERENCES ops_outbox(id),
+      prepared_at TEXT NOT NULL,
+      applied_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS qa16_critical_effects (
+      idempotency_key TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
     );`)
   }
 
@@ -131,7 +163,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       case 'outbox.inspect':
         return this.inspectOutbox()
       case 'chaos.inject-fault':
-        return this.injectFault(String(action.fault))
+        return this.injectFault(String(action.fault), String(action.idempotencyKey ?? ''))
       case 'chaos.clear-fault':
         return this.clearFault(String(action.fault))
       case 'chaos.run-critical-mutation':
@@ -157,6 +189,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       .run(this.workspaceId, this.boardId, this.projectPath)
     this.lease = acquireDaemonLease(this.db)
     this.currentLeaseOwner = this.lease.ownerId
+    this.runtimeGeneration += 1
   }
 
   private reopenRuntime(): void {
@@ -168,6 +201,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     this.lease = acquireDaemonLease(this.db)
     this.currentLeaseOwner = this.lease.ownerId
     this.crashed = false
+    this.runtimeGeneration += 1
   }
 
   private async disposeRuntime(): Promise<void> {
@@ -177,7 +211,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       try { this.lockDb.close() } catch { /* already closed */ }
       this.lockDb = null
     }
-    for (const fixture of this.fixtures) this.stopChild(fixture.child)
+    await Promise.all(this.fixtures.map((fixture) => this.stopChild(fixture.child)))
     this.fixtures = []
     try { this.lease?.release() } catch { /* crash simulation may have closed SQLite */ }
     try { this.staleLease?.release() } catch { /* stale handle is intentionally fenced */ }
@@ -192,69 +226,131 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     }
     for (let index = 0; index < agents; index += 1) {
       const key = `qa16:${transition}:${index}`
-      const job = this.scheduler.create({
-        boardId: this.boardId,
-        workspaceId: this.workspaceId,
-        provider: 'codex',
-        driverId: 'codex',
-        idempotencyKey: key,
-        maxAttempts: 3,
-      })
-      this.expectedJobIds.add(job.id)
-      const running = !['contract-created', 'job-queued'].includes(transition)
+      const card = this.db.prepare(`INSERT INTO cards (board_id, title, description)
+        VALUES (?, ?, 'QA-016 isolated lifecycle fixture')`).run(
+        this.boardId,
+        `Lifecycle ${transition} ${index}`,
+      )
+      const cardId = Number(card.lastInsertRowid)
+      this.expectedCardIds.add(cardId)
+      this.db.prepare(`INSERT INTO task_contracts (
+        card_id, objective, acceptance_criteria, verify_commands, workspace_id
+      ) VALUES (?, ?, '["preserve durable work"]', '["qa16"]', ?)`).run(
+        cardId,
+        `Preserve ${transition}`,
+        this.workspaceId,
+      )
+      this.expectedContractCardIds.add(cardId)
+
+      let jobId: string | null = null
       let child: ChildProcess | null = null
       let sessionId: string | null = null
       let processId: string | null = null
-      if (running) {
+      if (transition !== 'contract-created') {
+        const job = this.scheduler.create({
+          boardId: this.boardId,
+          cardId,
+          workspaceId: this.workspaceId,
+          provider: 'codex',
+          driverId: 'codex',
+          contractVersion: 1,
+          idempotencyKey: key,
+          maxAttempts: 3,
+        })
+        jobId = job.id
+        this.expectedJobIds.add(job.id)
+      }
+      if (jobId && transition !== 'job-queued') {
         this.db.prepare(`UPDATE jobs SET status='running', attempts=1, started_at=? WHERE id=?`)
-          .run(this.now().toISOString(), job.id)
+          .run(this.now().toISOString(), jobId)
+      }
+      if (jobId && !['job-queued', 'job-claimed'].includes(transition)) {
+        const sessionStatus = ['session-created', 'provider-launching'].includes(transition)
+          ? 'starting'
+          : 'running'
+        sessionId = `qa16-session-${transition}-${index}`
+        this.db.prepare(`INSERT INTO agent_sessions (
+          id, workspace_id, provider, status, context_json, job_id, control_state,
+          recovery_state, history_state, created_at, updated_at
+        ) VALUES (?, ?, 'codex', ?, '{}', ?, 'active', 'attachable', 'complete', ?, ?)`)
+          .run(
+            sessionId,
+            this.workspaceId,
+            sessionStatus,
+            jobId,
+            this.now().toISOString(),
+            this.now().toISOString(),
+          )
+      }
+      if (jobId && !['job-queued', 'job-claimed', 'session-created'].includes(transition)) {
         child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
           cwd: this.projectPath,
           env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
           stdio: 'ignore',
         })
-        if (!child.pid) throw new Error('provider child did not expose a pid')
-        sessionId = `qa16-session-${transition}-${index}`
+        if (!child.pid) throw new Error('supervised helper did not expose a pid')
         processId = `qa16-process-${transition}-${index}`
-        this.db.prepare(`INSERT INTO agent_sessions (
-          id, workspace_id, provider, status, context_json, job_id, control_state,
-          recovery_state, history_state, created_at, updated_at
-        ) VALUES (?, ?, 'codex', 'running', '{}', ?, 'active', 'attachable', 'complete', ?, ?)`)
-          .run(sessionId, this.workspaceId, job.id, this.now().toISOString(), this.now().toISOString())
+        const processStatus = transition === 'provider-launching' ? 'starting' : 'running'
         this.db.prepare(`INSERT INTO processes (
           id, workspace_id, name, command, cwd, status, pid, restartable
-        ) VALUES (?, ?, ?, ?, ?, 'running', ?, 1)`)
-          .run(processId, this.workspaceId, `provider-${index}`, process.execPath, this.projectPath, child.pid)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`)
+          .run(
+            processId,
+            this.workspaceId,
+            `qa16-supervised-helper-${index}`,
+            process.execPath,
+            this.projectPath,
+            processStatus,
+            child.pid,
+          )
       }
-      if (transition === 'delivery-submitted' || transition === 'outbox-pending') {
+      if (jobId && (transition === 'delivery-submitted' || transition === 'outbox-pending')) {
+        const reportId = `qa16-delivery-${transition}-${index}`
+        this.db.prepare(`INSERT INTO delivery_reports (
+          id, lineage_id, sequence, board_id, card_id, job_id, session_id, workspace_id,
+          status, asked_snapshot, summary, created_by, submitted_by, created_at, updated_at, submitted_at
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'submitted', ?, 'QA-016 fixture',
+          'qa16', 'qa16', ?, ?, ?)`)
+          .run(
+            reportId,
+            reportId,
+            this.boardId,
+            cardId,
+            jobId,
+            sessionId,
+            this.workspaceId,
+            JSON.stringify({ transition, card_id: cardId }),
+            this.now().toISOString(),
+            this.now().toISOString(),
+            this.now().toISOString(),
+          )
+        this.expectedDeliveryReportIds.add(reportId)
+      }
+      if (jobId && transition === 'outbox-pending') {
         const row = this.recovery.enqueue({
           boardId: this.boardId,
-          eventId: `qa16-delivery:${job.id}`,
+          eventId: `qa16-delivery:${jobId}`,
           destination: 'attention',
-          dedupeKey: `qa16-delivery:${job.id}`,
-          payload: { job_id: job.id, transition },
+          dedupeKey: `qa16-delivery:${jobId}`,
+          payload: { job_id: jobId, transition },
           availableAt: this.now().toISOString(),
         })
         this.expectedOutboxIds.add(row.id)
       }
-      this.fixtures.push({ jobId: job.id, sessionId, processId, child })
+      this.fixtures.push({ jobId, cardId, sessionId, processId, child })
     }
-    return { status: 201, jobs: agents, transition }
+    return { status: 201, transition, lifecycleEvidence: this.lifecycleEvidence() }
   }
 
   private crashRuntime(transition: string): AdversarialObservation {
     if (!LIFECYCLE_TRANSITIONS.has(transition)) return { status: 422, error: 'invalid transition' }
-    this.db.prepare(`UPDATE daemon_leases SET pid=? WHERE name='orchestra-daemon' AND owner_id=?`)
-      .run(DEAD_PID, this.currentLeaseOwner)
-    this.db.pragma('wal_checkpoint(TRUNCATE)')
-    this.db.close()
-    this.lease = null
-    this.crashed = true
-    return { status: 204, transition, databaseClosed: true }
+    this.closeDatabaseForCrash()
+    return { status: 204, transition, databaseClosed: true, runtimeGeneration: this.runtimeGeneration }
   }
 
   private restartRuntime(): AdversarialObservation {
-    if (this.crashed) this.reopenRuntime()
+    const reopened = this.crashed
+    if (reopened) this.reopenRuntime()
     const activeProcesses = new Set(this.fixtures.flatMap((fixture) =>
       fixture.processId && fixture.child?.pid && fixture.child.exitCode === null ? [fixture.processId] : []))
     const report = this.recovery.reconcileOrphans({
@@ -263,7 +359,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       ownsProcess: ({ id }) => activeProcesses.has(id),
       ownsDaemonLease: (candidate) => candidate.ownerId === this.currentLeaseOwner,
     })
-    return { status: 200, recoveryRunId: report.runId }
+    return { status: 200, recoveryRunId: report.runId, reopened, runtimeGeneration: this.runtimeGeneration }
   }
 
   private blockOldShutdownWrites(): AdversarialObservation {
@@ -297,8 +393,17 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       GROUP BY idempotency_key HAVING count(*)>1
     )`).get(this.boardId) as { count: number }).count)
     const missingJobs = [...this.expectedJobIds].filter((id) => !jobRows.some((row) => row.id === id)).length
+    const missingCards = [...this.expectedCardIds].filter((id) => !this.db.prepare(
+      'SELECT 1 FROM cards WHERE id=?',
+    ).get(id)).length
+    const missingContracts = [...this.expectedContractCardIds].filter((id) => !this.db.prepare(
+      'SELECT 1 FROM task_contracts WHERE card_id=?',
+    ).get(id)).length
     const missingOutbox = [...this.expectedOutboxIds].filter((id) => !this.db.prepare(
       'SELECT 1 FROM ops_outbox WHERE id=?',
+    ).get(id)).length
+    const missingDeliveryReports = [...this.expectedDeliveryReportIds].filter((id) => !this.db.prepare(
+      'SELECT 1 FROM delivery_reports WHERE id=?',
     ).get(id)).length
     const orphanAuthority = Number((this.db.prepare(`SELECT count(*) AS count
       FROM agent_sessions session LEFT JOIN jobs job ON job.id=session.job_id
@@ -310,16 +415,26 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     const staleGenerationWritesAccepted = this.staleLeaseOwner && leases[0]?.owner_id === this.staleLeaseOwner ? 1 : 0
     const activeAgents = Number((this.db.prepare(`SELECT count(*) AS count FROM agent_sessions
       WHERE status IN ('starting','running','idle')`).get() as { count: number }).count)
-    const providerChildren = this.fixtures.filter((fixture) => fixture.child?.exitCode === null).length
+    const liveHelperProcesses = this.fixtures.filter((fixture) => fixture.child?.exitCode === null).length
+    const preparedCriticalMutations = Number((this.db.prepare(`SELECT count(*) AS count
+      FROM qa16_critical_mutations`).get() as { count: number }).count)
+    const appliedCriticalMutations = Number((this.db.prepare(`SELECT count(*) AS count
+      FROM qa16_critical_mutations WHERE applied_at IS NOT NULL`).get() as { count: number }).count)
+    const criticalEffects = Number((this.db.prepare(`SELECT count(*) AS count
+      FROM qa16_critical_effects`).get() as { count: number }).count)
     return {
       status: 200,
       duplicateJobs,
       orphanAuthority,
-      silentDataLoss: missingJobs + missingOutbox,
+      silentDataLoss: missingCards + missingContracts + missingJobs + missingOutbox + missingDeliveryReports,
       invalidLeases: leases.length === 1 && leases[0]?.owner_id === this.currentLeaseOwner ? 0 : 1,
       activeAgents,
       staleGenerationWritesAccepted,
-      providerChildren,
+      liveHelperProcesses,
+      preparedCriticalMutations,
+      appliedCriticalMutations,
+      criticalEffects,
+      lifecycleEvidence: this.lifecycleEvidence(),
     }
   }
 
@@ -361,7 +476,14 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
         index += 1
       },
     })
-    return { status: 200, delivered: result.delivered.length, ambiguous: result.retried.length }
+    this.closeDatabaseForCrash()
+    return {
+      status: 200,
+      delivered: result.delivered.length,
+      ambiguous: result.retried.length,
+      databaseClosed: true,
+      runtimeGeneration: this.runtimeGeneration,
+    }
   }
 
   private async drainOutbox(): Promise<AdversarialObservation> {
@@ -401,10 +523,14 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     }
   }
 
-  private async injectFault(candidate: string): Promise<AdversarialObservation> {
+  private async injectFault(candidate: string, idempotencyKey: string): Promise<AdversarialObservation> {
     if (!['disk-full', 'database-locked', 'provider-unavailable', 'git-conflict'].includes(candidate)) {
       return { status: 422, error: 'unknown fault' }
     }
+    if (!idempotencyKey || idempotencyKey.length > 256) {
+      return { status: 422, error: 'idempotency key is required before fault injection' }
+    }
+    const prepared = this.prepareCriticalMutation(idempotencyKey)
     this.fault = candidate as Fault
     if (this.fault === 'disk-full') {
       const pageCount = Number(this.db.pragma('page_count', { simple: true }))
@@ -416,7 +542,13 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     } else if (this.fault === 'provider-unavailable') {
       this.networkPort = await this.reserveNetworkPort()
     }
-    return { status: 200, fault: this.fault }
+    return {
+      status: 200,
+      fault: this.fault,
+      preparedCriticalMutations: 1,
+      preservedJobId: prepared.jobId,
+      preservedOutboxId: prepared.outboxId,
+    }
   }
 
   private async clearFault(candidate: string): Promise<AdversarialObservation> {
@@ -437,6 +569,9 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
 
   private async runCriticalMutation(idempotencyKey: string): Promise<AdversarialObservation> {
     if (!idempotencyKey || idempotencyKey.length > 256) return { status: 422 }
+    const prepared = this.db.prepare(`SELECT job_id, outbox_id FROM qa16_critical_mutations
+      WHERE idempotency_key=?`).get(idempotencyKey) as { job_id: string; outbox_id: string } | undefined
+    if (!prepared) return { status: 409, error: 'critical mutation was not durably prepared' }
     if (this.fault === 'git-conflict') {
       const base = path.join(this.root, 'git-base.txt')
       const current = path.join(this.root, 'git-current.txt')
@@ -460,9 +595,8 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       return { status: 500, error: 'disk-full fault did not activate' }
     }
 
-    let job
     try {
-      job = this.scheduler.create({
+      const job = this.scheduler.create({
         boardId: this.boardId,
         workspaceId: this.workspaceId,
         provider: 'codex',
@@ -471,9 +605,68 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
         maxAttempts: 3,
       })
       this.expectedJobIds.add(job.id)
+      const row = this.recovery.enqueue({
+        boardId: this.boardId,
+        eventId: `qa16-critical:${job.id}`,
+        destination: 'network',
+        dedupeKey: `qa16-critical:${idempotencyKey}`,
+        payload: { job_id: job.id },
+        maxAttempts: 4,
+        availableAt: this.now().toISOString(),
+      })
+      this.expectedOutboxIds.add(row.id)
+      if (this.fault === 'provider-unavailable' || this.networkServer) {
+        const result = await this.recovery.dispatch({
+          ownerId: this.currentLeaseOwner!,
+          now: this.now(),
+          limit: 100,
+          deliver: async () => {
+            try {
+              const response = await fetch(`http://127.0.0.1:${this.networkPort}/deliver`, {
+                method: 'POST',
+                body: idempotencyKey,
+                signal: AbortSignal.timeout(1_000),
+              })
+              if (!response.ok) throw new Error(`provider returned ${response.status}`)
+            } catch (error) {
+              throw Object.assign(new Error('provider unavailable', { cause: error }), {
+                operationsCode: 'PROVIDER_UNAVAILABLE',
+              })
+            }
+          },
+        })
+        if (result.retried.length || result.dead.length) {
+          const stored = this.db.prepare(`SELECT last_error FROM ops_outbox WHERE id=?`)
+            .get(prepared.outbox_id) as { last_error: string | null }
+          const mode = stored.last_error?.replace(/^delivery_failed:/u, '') ?? 'unknown'
+          const disposition = classifyOperationsFailure({ operationsCode: mode.toUpperCase() })
+          this.clockMs += 5_000
+          return { status: 503, failure: mode, failClosed: disposition.failClosed }
+        }
+      }
+      const applied = this.db.transaction(() => {
+        const effect = this.db.prepare(`INSERT INTO qa16_critical_effects
+          (idempotency_key, applied_at) VALUES (?, ?) ON CONFLICT(idempotency_key) DO NOTHING`)
+          .run(idempotencyKey, this.now().toISOString())
+        this.db.prepare(`UPDATE qa16_critical_mutations SET applied_at=coalesce(applied_at, ?)
+          WHERE idempotency_key=?`).run(this.now().toISOString(), idempotencyKey)
+        return effect.changes
+      }).immediate()
+      return { status: 200, jobId: job.id, outboxId: row.id, replayed: applied === 0 }
     } catch (error) {
       return this.failure(error)
     }
+  }
+
+  private prepareCriticalMutation(idempotencyKey: string): { jobId: string; outboxId: string } {
+    const job = this.scheduler.create({
+      boardId: this.boardId,
+      workspaceId: this.workspaceId,
+      provider: 'codex',
+      driverId: 'codex',
+      idempotencyKey,
+      maxAttempts: 3,
+    })
     const row = this.recovery.enqueue({
       boardId: this.boardId,
       eventId: `qa16-critical:${job.id}`,
@@ -483,27 +676,52 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       maxAttempts: 4,
       availableAt: this.now().toISOString(),
     })
+    this.db.prepare(`INSERT INTO qa16_critical_mutations
+      (idempotency_key, job_id, outbox_id, prepared_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(idempotency_key) DO NOTHING`).run(
+      idempotencyKey,
+      job.id,
+      row.id,
+      this.now().toISOString(),
+    )
+    this.expectedJobIds.add(job.id)
     this.expectedOutboxIds.add(row.id)
-    if (this.fault === 'provider-unavailable' || this.networkServer) {
-      const result = await this.recovery.dispatch({
-        ownerId: this.currentLeaseOwner!,
-        now: this.now(),
-        limit: 100,
-        deliver: async () => {
-          const response = await fetch(`http://127.0.0.1:${this.networkPort}/deliver`, {
-            method: 'POST',
-            body: idempotencyKey,
-            signal: AbortSignal.timeout(1_000),
-          })
-          if (!response.ok) throw Object.assign(new Error('provider unavailable'), { code: 'PROVIDER_UNAVAILABLE' })
-        },
-      })
-      if (result.retried.length || result.dead.length) {
-        this.clockMs += 5_000
-        return { status: 503, failure: 'provider_unavailable' }
-      }
+    return { jobId: job.id, outboxId: row.id }
+  }
+
+  private lifecycleEvidence(): LifecycleEvidence {
+    const scalar = (sql: string) => Number((this.db.prepare(sql).get(this.boardId) as { count: number }).count)
+    return {
+      contracts: scalar(`SELECT count(*) AS count FROM task_contracts contract
+        JOIN cards card ON card.id=contract.card_id WHERE card.board_id=?`),
+      queuedJobs: scalar(`SELECT count(*) AS count FROM jobs WHERE board_id=? AND status='queued'`),
+      runningJobs: scalar(`SELECT count(*) AS count FROM jobs WHERE board_id=? AND status='running'`),
+      startingSessions: scalar(`SELECT count(*) AS count FROM agent_sessions session
+        JOIN workspaces workspace ON workspace.id=session.workspace_id
+        WHERE workspace.board_id=? AND session.status='starting'`),
+      runningSessions: scalar(`SELECT count(*) AS count FROM agent_sessions session
+        JOIN workspaces workspace ON workspace.id=session.workspace_id
+        WHERE workspace.board_id=? AND session.status='running'`),
+      startingProcesses: scalar(`SELECT count(*) AS count FROM processes process
+        JOIN workspaces workspace ON workspace.id=process.workspace_id
+        WHERE workspace.board_id=? AND process.status='starting'`),
+      runningProcesses: scalar(`SELECT count(*) AS count FROM processes process
+        JOIN workspaces workspace ON workspace.id=process.workspace_id
+        WHERE workspace.board_id=? AND process.status='running'`),
+      submittedDeliveries: scalar(`SELECT count(*) AS count FROM delivery_reports
+        WHERE board_id=? AND status='submitted'`),
+      pendingOutbox: scalar(`SELECT count(*) AS count FROM ops_outbox
+        WHERE board_id=? AND status='pending'`),
     }
-    return { status: 200, jobId: job.id, outboxId: row.id }
+  }
+
+  private closeDatabaseForCrash(): void {
+    this.db.prepare(`UPDATE daemon_leases SET pid=? WHERE name='orchestra-daemon' AND owner_id=?`)
+      .run(DEAD_PID, this.currentLeaseOwner)
+    this.db.pragma('wal_checkpoint(TRUNCATE)')
+    this.db.close()
+    this.lease = null
+    this.crashed = true
   }
 
   private failure(error: unknown): AdversarialObservation {
@@ -518,9 +736,28 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     return new Date(this.clockMs)
   }
 
-  private stopChild(child: ChildProcess | null): void {
+  private async stopChild(child: ChildProcess | null): Promise<void> {
     if (!child?.pid || child.exitCode !== null) return
-    try { child.kill('SIGKILL') } catch { /* already exited */ }
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.off('exit', finish)
+        child.off('error', finish)
+        resolve()
+      }
+      const timer = setTimeout(finish, 2_000)
+      timer.unref()
+      child.once('exit', finish)
+      child.once('error', finish)
+      try {
+        if (!child.kill('SIGKILL')) finish()
+      } catch {
+        finish()
+      }
+    })
   }
 
   private async reserveNetworkPort(): Promise<number> {
