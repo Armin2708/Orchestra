@@ -69,7 +69,8 @@ export function DiscussionCenter({
       <div><p>Collaborative intelligence</p><h2>Discussions</h2></div>
       <button type="button" onClick={() => setCreateOpen((value) => !value)}>New discussion</button>
     </header>
-    <form className="dc-search" onSubmit={(event) => { event.preventDefault(); void load() }}>
+    <form className="dc-search" aria-label="Search discussions"
+      onSubmit={(event) => { event.preventDefault(); void load() }}>
       <input aria-label="Search discussions" value={query}
         onChange={(event) => setQuery(event.target.value)} placeholder="Search questions, answers, plans…" />
       <button type="submit">Search</button>
@@ -148,10 +149,11 @@ function DiscussionDetail({ value, profileId, client, onChange }: {
       acceptedId={value.discussion.accepted_post_id} onReply={setReplyTo}
       onAccept={async (id) => { await client.accept(value.discussion.id, id); await onChange() }}
       onPromote={async (id) => { await client.requestPromotion(value.discussion.id, id); await onChange() }} />)}</div>
-    <form className="dc-reply" onSubmit={submit}>
+    <form className="dc-reply" aria-label="Post discussion reply" onSubmit={submit}>
       {replyTo && <p>Replying to <code>{replyTo.slice(0, 10)}</code>
         <button type="button" onClick={() => setReplyTo(null)}>Cancel</button></p>}
-      <textarea value={reply} onChange={(event) => setReply(event.target.value)}
+      <textarea aria-label="Discussion reply" value={reply}
+        onChange={(event) => setReply(event.target.value)}
         placeholder="Write an answer or nested reply" rows={4} maxLength={200000} />
       <button type="submit" disabled={busy || !reply.trim()}>{busy ? 'Posting…' : 'Post answer'}</button>
     </form>
@@ -193,7 +195,7 @@ function CreateDiscussion({ boardId, linkType, linkTarget, client, onCreated }: 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [tags, setTags] = useState('')
-  return <form className="dc-create" onSubmit={async (event) => {
+  return <form className="dc-create" aria-label="Create discussion" onSubmit={async (event) => {
     event.preventDefault()
     const links = linkType && linkTarget ? [{ type: linkType, target_id: linkTarget }] : []
     await onCreated(await client.create(boardId, {
@@ -201,13 +203,18 @@ function CreateDiscussion({ boardId, linkType, linkTarget, client, onCreated }: 
       tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), links,
     }))
   }}>
-    <select value={type} onChange={(event) => setType(event.target.value as DiscussionType)}>
+    <select aria-label="Discussion type" value={type}
+      onChange={(event) => setType(event.target.value as DiscussionType)}>
       {(['question', 'answer', 'plan', 'decision', 'announcement', 'conflict'] as const)
         .map((value) => <option key={value}>{value}</option>)}
     </select>
-    <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Discussion title" maxLength={500} />
-    <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Exact question or context" rows={4} maxLength={200000} />
-    <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="tags, comma-separated" />
+    <input aria-label="Discussion title" value={title}
+      onChange={(event) => setTitle(event.target.value)} placeholder="Discussion title" maxLength={500} />
+    <textarea aria-label="Discussion body" value={body}
+      onChange={(event) => setBody(event.target.value)} placeholder="Exact question or context"
+      rows={4} maxLength={200000} />
+    <input aria-label="Discussion tags" value={tags}
+      onChange={(event) => setTags(event.target.value)} placeholder="tags, comma-separated" />
     <button disabled={!title.trim() || !body.trim()} type="submit">Create</button>
   </form>
 }

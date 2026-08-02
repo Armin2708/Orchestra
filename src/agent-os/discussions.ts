@@ -412,6 +412,9 @@ export class DiscussionService {
       fingerprint: { discussionId: discussion.id, postId: retained.id, body, expectedVersion, actor },
       create: () => {
         if (retained.version !== expectedVersion) throw new ConflictError('post version changed')
+        if (discussion.accepted_post_id === retained.id) {
+          throw new ConflictError('an accepted answer is immutable')
+        }
         if (this.db.prepare(`SELECT 1 FROM os_discussion_promotions
           WHERE post_id=? AND status IN ('approved','promoted')`).get(retained.id)) {
           throw new ConflictError('an approved promotion makes the exact source immutable')
@@ -743,11 +746,7 @@ export class DiscussionService {
     if (discussion.accepted_post_id !== post.id) {
       throw new ConflictError('only the currently accepted answer may be promoted')
     }
-    const accepted = this.db.prepare(`SELECT * FROM os_discussion_events
-      WHERE discussion_id=? AND post_id=? AND event_type='discussion.answer.accepted'
-      ORDER BY rowid DESC LIMIT 1`).get(discussion.id, post.id) as
-      | Record<string, unknown> | undefined
-    if (!accepted) throw new ConflictError('accepted answer lacks exact acceptance evidence')
+    const accepted = this.acceptanceEvidence(discussion.id, post)
     const artifact = canonicalKnowledgeJson({
       schema_version: 1,
       kind: 'discussion_answer',
@@ -820,6 +819,7 @@ export class DiscussionService {
           throw new ConflictError('promotion has already been reviewed')
         }
         const post = this.requirePost(current.post_id, discussion.id)
+        this.acceptanceEvidence(discussion.id, post, current.acceptance_event_id)
         if (post.content_sha256 !== current.source_content_sha256
           || discussion.accepted_post_id !== post.id
           || sha256(current.artifact_json) !== current.artifact_sha256) {
@@ -1264,6 +1264,35 @@ export class DiscussionService {
       .get(text(id, 'promotion id', 200)) as PromotionRow | undefined
     if (!row) throw new NotFoundError('discussion promotion not found')
     return row
+  }
+
+  private acceptanceEvidence(
+    discussionId: string,
+    post: DiscussionPost,
+    eventId?: string,
+  ): Record<string, unknown> {
+    const accepted = eventId
+      ? this.db.prepare(`SELECT * FROM os_discussion_events
+          WHERE id=? AND discussion_id=? AND post_id=?
+            AND event_type='discussion.answer.accepted'`)
+          .get(eventId, discussionId, post.id) as Record<string, unknown> | undefined
+      : this.db.prepare(`SELECT * FROM os_discussion_events
+          WHERE discussion_id=? AND post_id=? AND event_type='discussion.answer.accepted'
+          ORDER BY rowid DESC LIMIT 1`)
+          .get(discussionId, post.id) as Record<string, unknown> | undefined
+    if (!accepted) throw new ConflictError('accepted answer lacks exact acceptance evidence')
+    let payload: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(String(accepted.payload_json))
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
+      payload = parsed as Record<string, unknown>
+    } catch {
+      throw new ConflictError('accepted answer evidence payload is invalid')
+    }
+    if (payload.post_id !== post.id || payload.content_sha256 !== post.content_sha256) {
+      throw new ConflictError('accepted answer evidence does not match the exact source')
+    }
+    return accepted
   }
 
   private permission(id: string): Record<string, unknown> {

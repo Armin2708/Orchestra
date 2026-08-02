@@ -57,7 +57,6 @@ export class CanonicalConflictDiscussionAdapter implements ConflictDiscussionAda
       actor: { type: 'service', id: 'team-planning-conflicts' },
       idempotencyKey: input.idempotencyKey,
       correlationId: input.correlationId,
-      causationId: input.conflictId,
     })
     return { id: snapshot.discussion.id }
   }
@@ -72,7 +71,6 @@ export class CanonicalConflictDiscussionAdapter implements ConflictDiscussionAda
       actor: { type: 'service', id: 'team-planning-conflicts' },
       idempotencyKey: input.idempotencyKey,
       correlationId: input.conflictId,
-      causationId: input.resolutionId,
     })
   }
 }
