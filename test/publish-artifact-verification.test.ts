@@ -1,11 +1,12 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { verifyPublishArtifact } from '../scripts/verify-publish-artifact.mjs'
 import { verifyPriorArtifactEvidence } from '../scripts/prior-artifact-evidence.mjs'
+import { canonicalJson, manifestContractBinding } from '../scripts/exact-commit-contract.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const contract = JSON.parse(
@@ -43,17 +44,7 @@ const writeJson = (file: string, value: unknown) => {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-const manifestContract = () => ({
-  workflow: contract.workflow,
-  runner: contract.runner,
-  node_version: contract.node_version,
-  npm_version: contract.npm_version,
-  codex_cli_version: contract.codex_cli_version,
-  artifact_retention_days: contract.artifact_retention_days,
-  accepted_moderate_packages_by_gate: contract.accepted_moderate_packages_by_gate,
-  action_pins: contract.action_pins,
-  required_gates: contract.required_gates,
-})
+const manifestContract = () => manifestContractBinding(contract)
 
 const fixture = () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-publish-artifact-'))
@@ -112,18 +103,13 @@ const fixture = () => {
   const priorBytes = fs.readFileSync(priorTarballPath)
   const priorSha256 = hash('sha256', priorBytes, 'hex')
   const priorWorkflowRun = {
-    repository: 'owner/orchestra',
-    event: 'workflow_dispatch',
-    ref: 'refs/heads/internal-retained',
+    repository: 'Armin2708/Orchestra',
+    event: 'push',
+    ref: `refs/tags/v${priorVersion}`,
     run_id: '77',
     run_attempt: '1',
   }
-  const priorRequiredGates = [
-    'exact-commit',
-    'package-artifact',
-    'package-secret-scan',
-    'package-upload',
-  ]
+  const priorRequiredGates = contract.required_gates
   const priorMetadata = {
     commit_sha: priorCommitSha,
     package_name: sourcePackage.name,
@@ -141,9 +127,10 @@ const fixture = () => {
     schema_version: 1,
     backlog_item: 'QA-019',
     commit_sha: priorCommitSha,
+    generated_at: '2026-07-24T00:00:02.000Z',
     result: 'passed',
     workflow_run: priorWorkflowRun,
-    contract: { workflow: '.github/workflows/ci.yml', required_gates: priorRequiredGates },
+    contract: manifestContract(),
     summary: {
       required: priorRequiredGates.length,
       passed: priorRequiredGates.length,
@@ -160,41 +147,76 @@ const fixture = () => {
       gate_id,
       status: 'passed',
       exit_code: 0,
+      started_at: '2026-07-24T00:00:00.000Z',
+      completed_at: '2026-07-24T00:00:01.000Z',
+      invocation: { executable: 'fixture' },
+      runner: { node_version: contract.node_version },
       details: gate_id === 'package-upload'
         ? { action_outcome: 'success', artifact_id: '77', artifact_digest: '9'.repeat(64) }
         : {},
     })),
+    unexpected_gates: [],
     package_artifact: priorMetadata,
   })
   const priorReceiptPath = path.join(packageDirectory, 'prior-retained-artifact-receipt.json')
-  writeJson(priorReceiptPath, {
+  const priorArtifact = {
+    name: sourcePackage.name,
+    version: priorVersion,
+    filename: priorTarballName,
+    bytes: priorBytes.byteLength,
+    sha256: priorSha256,
+    npm_shasum: hash('sha1', priorBytes, 'hex'),
+    npm_integrity: `sha512-${hash('sha512', priorBytes, 'base64')}`,
+  }
+  const priorAttestation = {
     schema_version: 1,
-    kind: 'retained-internal',
-    decision: 'trusted',
+    repository: 'Armin2708/Orchestra',
+    workflow: '.github/workflows/ci.yml',
+    event: 'push',
+    ref: `refs/tags/v${priorVersion}`,
+    tag: `v${priorVersion}`,
     source_commit: priorCommitSha,
-    evidence_manifest_sha256: hash('sha256', fs.readFileSync(priorManifestPath), 'hex'),
-    workflow_run: priorWorkflowRun,
-    artifact: {
-      name: sourcePackage.name,
-      version: priorVersion,
-      filename: priorTarballName,
-      bytes: priorBytes.byteLength,
-      sha256: priorSha256,
-      npm_shasum: hash('sha1', priorBytes, 'hex'),
-      npm_integrity: `sha512-${hash('sha512', priorBytes, 'base64')}`,
+    workflow_run: { run_id: priorWorkflowRun.run_id, run_attempt: priorWorkflowRun.run_attempt },
+    package_upload: { artifact_id: '77', artifact_digest: '9'.repeat(64) },
+    evidence_manifest: {
+      sha256: hash('sha256', fs.readFileSync(priorManifestPath), 'hex'),
+      contract_schema_version: contract.schema_version,
+      contract_sha256: manifestContract().contract_sha256,
     },
-    trust: {
-      approved_at: '2026-08-02T00:00:00.000Z',
-      approved_by: 'release-maintainer',
-      approval_id: 'internal-baseline-77',
-      exact_commit_ci_passed: true,
-      rationale: 'Explicitly trusted retained internal baseline.',
+    artifact: priorArtifact,
+  }
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const priorKeyId = `sha256:${hash(
+    'sha256',
+    publicKey.export({ format: 'der', type: 'spki' }) as Buffer,
+    'hex',
+  )}`
+  writeJson(priorReceiptPath, {
+    schema_version: 2,
+    kind: 'maintainer-signature',
+    attestation: priorAttestation,
+    signature: {
+      algorithm: 'ed25519',
+      key_id: priorKeyId,
+      value: sign(null, Buffer.from(canonicalJson(priorAttestation)), privateKey).toString('base64'),
     },
   })
+  const priorTrustRoots = {
+    schema_version: 1,
+    repository: 'Armin2708/Orchestra',
+    workflow: '.github/workflows/ci.yml',
+    event: 'push',
+    trusted_signing_keys: [{
+      key_id: priorKeyId,
+      algorithm: 'ed25519',
+      public_key_pem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+    }],
+  }
   const priorEvidence = verifyPriorArtifactEvidence({
     artifactPath: priorTarballPath,
     manifestPath: priorManifestPath,
     receiptPath: priorReceiptPath,
+    trustRoots: priorTrustRoots,
   })
   const metadata = {
     schema_version: 1,
@@ -347,7 +369,7 @@ const fixture = () => {
     commit_sha: commitSha,
     generated_at: '2026-07-25T00:00:02.000Z',
     workflow_run: {
-      repository: 'owner/orchestra',
+      repository: 'Armin2708/Orchestra',
       event: 'push',
       ref: 'refs/tags/v0.1.0-beta.1',
       run_id: '303',
@@ -392,7 +414,7 @@ const fixture = () => {
       sourcePackagePath,
       expectedSha: commitSha,
       expectedTag: 'v0.1.0-beta.1',
-      expectedRepository: 'owner/orchestra',
+      expectedRepository: 'Armin2708/Orchestra',
       expectedEvent: 'push',
       expectedRef: 'refs/tags/v0.1.0-beta.1',
       expectedRunId: '303',
@@ -401,6 +423,7 @@ const fixture = () => {
       packageArtifactDigest,
       evidenceArtifactId,
       evidenceArtifactDigest,
+      priorTrustRoots,
     },
   }
 }
@@ -434,7 +457,7 @@ describe('exact package publish verification', () => {
       workflow_run_attempt: '1',
       prior_package_sha256: sample.metadata.lifecycle.previous_artifact.sha256,
       prior_source_commit: 'f'.repeat(40),
-      prior_trust_kind: 'retained-internal',
+      prior_trust_kind: 'maintainer-signature',
     })
     expect(JSON.parse(
       fs.readFileSync(path.join(sample.outputDirectory, 'verification-receipt.json'), 'utf8'),
@@ -574,11 +597,39 @@ describe('exact package publish verification', () => {
   it('rejects a prior receipt that is not cryptographically bound to the evidence manifest', () => {
     const sample = fixture()
     const receipt = JSON.parse(fs.readFileSync(sample.priorReceiptPath, 'utf8'))
-    receipt.evidence_manifest_sha256 = '0'.repeat(64)
+    receipt.attestation.evidence_manifest.sha256 = '0'.repeat(64)
     writeJson(sample.priorReceiptPath, receipt)
 
     expect(() => verifyPublishArtifact(sample.arguments))
-      .toThrow('prior receipt is not bound to evidence')
+      .toThrow('prior retained-artifact attestation does not exactly match')
+  })
+
+  it('fails closed without a repository-pinned trusted signing key', () => {
+    const sample = fixture()
+    const { priorTrustRoots: _testOnlyTrustRoot, ...productionArguments } = sample.arguments
+
+    expect(() => verifyPublishArtifact(productionArguments))
+      .toThrow('no trusted prior-artifact signing key is configured')
+  })
+
+  it('rejects a tampered maintainer signature', () => {
+    const sample = fixture()
+    const receipt = JSON.parse(fs.readFileSync(sample.priorReceiptPath, 'utf8'))
+    receipt.signature.value = `${receipt.signature.value[0] === 'A' ? 'B' : 'A'}${receipt.signature.value.slice(1)}`
+    writeJson(sample.priorReceiptPath, receipt)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('prior retained-artifact signature verification failed')
+  })
+
+  it('rejects a prior manifest that omits any checked-in required gate', () => {
+    const sample = fixture()
+    const priorManifest = JSON.parse(fs.readFileSync(sample.priorManifestPath, 'utf8'))
+    priorManifest.contract.required_gates = priorManifest.contract.required_gates.slice(0, -1)
+    writeJson(sample.priorManifestPath, priorManifest)
+
+    expect(() => verifyPublishArtifact(sample.arguments))
+      .toThrow('prior CI contract does not match the complete checked-in contract')
   })
 
   it('rejects missing rollback, wrong installed version, or moderate vulnerabilities', () => {

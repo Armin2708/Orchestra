@@ -427,7 +427,7 @@ export async function runPackageLifecycle({
   previousEvidenceDirectory,
   previousEvidenceManifestPath,
   previousEvidenceReceiptPath,
-  previousPublishReceiptPath,
+  priorTrustRoots,
   reportPath,
   keepTemporary = false,
   runAudit = true,
@@ -453,7 +453,7 @@ export async function runPackageLifecycle({
         evidenceDirectory: previousEvidenceDirectory,
         manifestPath: previousEvidenceManifestPath,
         receiptPath: previousEvidenceReceiptPath,
-        publishReceiptPath: previousPublishReceiptPath,
+        trustRoots: priorTrustRoots,
       })
     : {
         verified: false,

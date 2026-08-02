@@ -1,11 +1,20 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runPackageLifecycle } from '../scripts/package-lifecycle-smoke.mjs'
 import { verifyPackagedMarkdownLinks } from '../scripts/package-link-integrity.mjs'
+import {
+  canonicalJson,
+  manifestContractBinding,
+} from '../scripts/exact-commit-contract.mjs'
+
+const root = path.resolve(import.meta.dirname, '..')
+const exactContract = JSON.parse(
+  fs.readFileSync(path.join(root, 'scripts/exact-commit-ci-contract.json'), 'utf8'),
+)
 
 const temporaryDirectories: string[] = []
 
@@ -64,14 +73,14 @@ const exactPriorEvidence = (artifactPath: string, version: string) => {
     .map((entry) => entry.slice('package/'.length))
     .sort()
   const workflowRun = {
-    repository: 'owner/orchestra',
-    event: 'workflow_dispatch',
-    ref: 'refs/heads/internal-retained',
+    repository: 'Armin2708/Orchestra',
+    event: 'push',
+    ref: `refs/tags/v${version}`,
     run_id: '71',
     run_attempt: '1',
   }
   const commitSha = '7'.repeat(40)
-  const requiredGates = ['exact-commit', 'package-artifact', 'package-secret-scan', 'package-upload']
+  const requiredGates = exactContract.required_gates
   const metadata = {
     commit_sha: commitSha,
     package_name: 'orchestra-board',
@@ -90,7 +99,8 @@ const exactPriorEvidence = (artifactPath: string, version: string) => {
     commit_sha: commitSha,
     result: 'passed',
     workflow_run: workflowRun,
-    contract: { workflow: '.github/workflows/ci.yml', required_gates: requiredGates },
+    generated_at: '2026-08-02T00:00:02.000Z',
+    contract: manifestContractBinding(exactContract),
     summary: {
       required: requiredGates.length,
       passed: requiredGates.length,
@@ -107,37 +117,71 @@ const exactPriorEvidence = (artifactPath: string, version: string) => {
       gate_id,
       status: 'passed',
       exit_code: 0,
+      started_at: '2026-08-02T00:00:00.000Z',
+      completed_at: '2026-08-02T00:00:01.000Z',
+      invocation: { executable: 'fixture' },
+      runner: { node_version: exactContract.node_version },
       details: gate_id === 'package-upload'
         ? { action_outcome: 'success', artifact_id: '71', artifact_digest: '8'.repeat(64) }
         : {},
     })),
+    unexpected_gates: [],
     package_artifact: metadata,
   }
   const manifestPath = path.join(directory, 'manifest.json')
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-  const receipt = {
-    schema_version: 1,
-    kind: 'retained-internal',
-    decision: 'trusted',
-    source_commit: commitSha,
-    evidence_manifest_sha256: createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex'),
-    workflow_run: workflowRun,
-    artifact: { name: 'orchestra-board', version, filename: path.basename(artifactPath),
+  const artifact = { name: 'orchestra-board', version, filename: path.basename(artifactPath),
       bytes: bytes.byteLength, sha256: sha('sha256'), npm_shasum: sha('sha1'),
-      npm_integrity: `sha512-${sha('sha512', 'base64')}` },
-    trust: {
-      approved_at: '2026-08-02T00:00:00.000Z',
-      approved_by: 'release-maintainer',
-      approval_id: 'internal-baseline-71',
-      exact_commit_ci_passed: true,
-      rationale: 'Retained internal baseline for cross-version lifecycle verification.',
+      npm_integrity: `sha512-${sha('sha512', 'base64')}` }
+  const attestation = {
+    schema_version: 1,
+    repository: 'Armin2708/Orchestra',
+    workflow: '.github/workflows/ci.yml',
+    event: 'push',
+    ref: `refs/tags/v${version}`,
+    tag: `v${version}`,
+    source_commit: commitSha,
+    workflow_run: { run_id: workflowRun.run_id, run_attempt: workflowRun.run_attempt },
+    package_upload: { artifact_id: '71', artifact_digest: '8'.repeat(64) },
+    evidence_manifest: {
+      sha256: createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex'),
+      contract_schema_version: exactContract.schema_version,
+      contract_sha256: manifestContractBinding(exactContract).contract_sha256,
+    },
+    artifact,
+  }
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const keyId = `sha256:${createHash('sha256').update(
+    publicKey.export({ format: 'der', type: 'spki' }),
+  ).digest('hex')}`
+  const receipt = {
+    schema_version: 2,
+    kind: 'maintainer-signature',
+    attestation,
+    signature: {
+      algorithm: 'ed25519',
+      key_id: keyId,
+      value: sign(null, Buffer.from(canonicalJson(attestation)), privateKey).toString('base64'),
     },
   }
   fs.writeFileSync(
     path.join(directory, 'retained-artifact-receipt.json'),
     `${JSON.stringify(receipt, null, 2)}\n`,
   )
-  return directory
+  return {
+    directory,
+    trustRoots: {
+      schema_version: 1,
+      repository: 'Armin2708/Orchestra',
+      workflow: '.github/workflows/ci.yml',
+      event: 'push',
+      trusted_signing_keys: [{
+        key_id: keyId,
+        algorithm: 'ed25519',
+        public_key_pem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+      }],
+    },
+  }
 }
 
 describe('QA-017 package lifecycle harness', () => {
@@ -177,15 +221,23 @@ describe('QA-017 package lifecycle harness', () => {
       runAudit: false,
     })).rejects.toThrow('requires machine-verifiable prior exact-commit evidence')
 
+    const evidence = exactPriorEvidence(previous, '0.1.0-beta.0')
+    await expect(runPackageLifecycle({
+      artifactPath: candidate,
+      previousArtifactPath: previous,
+      previousEvidenceDirectory: evidence.directory,
+    })).rejects.toThrow('no trusted prior-artifact signing key is configured')
+
     const report = await runPackageLifecycle({
       artifactPath: candidate,
       previousArtifactPath: previous,
-      previousEvidenceDirectory: exactPriorEvidence(previous, '0.1.0-beta.0'),
+      previousEvidenceDirectory: evidence.directory,
+      priorTrustRoots: evidence.trustRoots,
     })
     expect(report).toMatchObject({
       local_rehearsal_passed: true,
       passed: true,
-      previous_artifact: { evidence: { verified: true, trust_kind: 'retained-internal' } },
+      previous_artifact: { evidence: { verified: true, trust_kind: 'maintainer-signature' } },
       upgrade: { observed: true, passed: true, mode: 'prior-artifact-upgrade' },
       rollback: { observed: true, passed: true },
       release_gate: {

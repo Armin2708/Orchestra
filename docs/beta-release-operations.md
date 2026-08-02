@@ -43,11 +43,17 @@ active work, retained artifacts, unrelated provider configuration and project fi
 exercise a real cross-version upgrade and rollback, set `ORCHESTRA_PREVIOUS_PACKAGE` to a retained,
 previously verified tarball with a different version and digest, and set
 `ORCHESTRA_PREVIOUS_PACKAGE_EVIDENCE` to its exact-commit evidence directory. That directory must
-contain `manifest.json` and `retained-artifact-receipt.json`; published provenance may additionally
-use `verification-receipt.json`. The receipt cryptographically binds the tarball SHA-256, npm
-shasum/integrity, exact source commit, package identity and CI workflow/run to either verified npm
-provenance or an explicitly approved retained-internal baseline. A functional or synthetic tarball
-without that binding is rejected before installation.
+contain `manifest.json` and `retained-artifact-receipt.json`. The receipt must carry a verified
+Ed25519 maintainer signature whose public key is pinned in
+`scripts/prior-artifact-trust-roots.json`. Its signed attestation binds the exact
+`Armin2708/Orchestra` repository, workflow, tag/ref/event, source commit, workflow run, upload
+artifact ID/digest, complete checked-in CI contract digest, evidence manifest digest and tarball
+identity. Free-form approval, unsigned retained-internal receipts and boolean provenance claims are
+unsupported. The checked-in trust-root list is intentionally empty during preparation, so no prior
+artifact can close the release gate until a reviewed maintainer key or independently verified
+external provenance mechanism is pinned in source. Tests use ephemeral keys only to prove the
+cryptographic verifier; a functional or synthetic tarball without production trust is rejected
+before installation.
 
 Without a distinct verified prior artifact, the harness may report `local_rehearsal_passed: true`,
 but `release_gate.status` is `incomplete` and top-level `passed` is false. CI retains the diagnostic

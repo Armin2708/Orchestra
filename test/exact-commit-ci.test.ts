@@ -4,6 +4,7 @@ import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createEvidenceManifest } from '../scripts/exact-commit-evidence.mjs'
+import { manifestContractBinding } from '../scripts/exact-commit-contract.mjs'
 
 type ActionPin = {
   uses: string
@@ -311,6 +312,11 @@ describe('QA-019 exact-commit CI contract', () => {
     })
     expect(manifest.gates.map((gate: EvidenceRecord) => gate.gate_id))
       .toEqual(contract.required_gates)
+    expect(manifest.contract).toEqual(manifestContractBinding(contract))
+    expect(manifest.contract.contract_sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(manifest.contract.contract_sha256).not.toBe(
+      manifestContractBinding({ ...contract, codex_cli_version: 'changed' }).contract_sha256,
+    )
 
     const noPriorArtifact = structuredClone(packageArtifact)
     noPriorArtifact.lifecycle.release_gate.status = 'incomplete'

@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyPriorArtifactEvidence } from './prior-artifact-evidence.mjs'
+import { manifestContractBinding } from './exact-commit-contract.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -116,18 +117,6 @@ const tarballFileInventory = (tarball) => {
   return files.map((entry) => entry.slice('package/'.length)).sort()
 }
 
-const expectedManifestContract = (contract) => ({
-  workflow: contract.workflow,
-  runner: contract.runner,
-  node_version: contract.node_version,
-  npm_version: contract.npm_version,
-  codex_cli_version: contract.codex_cli_version,
-  artifact_retention_days: contract.artifact_retention_days,
-  accepted_moderate_packages_by_gate: contract.accepted_moderate_packages_by_gate,
-  action_pins: contract.action_pins,
-  required_gates: contract.required_gates,
-})
-
 const prepareOutputDirectory = (directory) => {
   if (existsSync(directory)) {
     const entries = exactRegularFiles(directory, 'verified output directory')
@@ -153,6 +142,7 @@ export function verifyPublishArtifact({
   packageArtifactDigest,
   evidenceArtifactId,
   evidenceArtifactDigest,
+  priorTrustRoots,
 }) {
   const commitSha = requiredString(expectedSha, 'expected commit SHA', commitShaPattern)
   const tag = requiredString(expectedTag, 'expected tag')
@@ -173,6 +163,8 @@ export function verifyPublishArtifact({
     'evidence artifact digest',
     sha256Pattern,
   )
+  invariant(repository === 'Armin2708/Orchestra', 'release repository is not the trusted Orchestra repository')
+  invariant(event === 'push', 'beta publication requires a tag push workflow event')
   invariant(packageId !== evidenceId, 'package and evidence artifact ids must differ')
 
   const resolvedPackageDirectory = resolve(packageDirectory)
@@ -200,9 +192,6 @@ export function verifyPublishArtifact({
     priorTarballName,
     'prior-evidence-manifest.json',
     'prior-retained-artifact-receipt.json',
-    ...(metadata.lifecycle?.previous_artifact?.evidence?.trust_kind === 'published-provenance'
-      ? ['prior-verification-receipt.json']
-      : []),
   ]
   const expectedPackageFiles = [
     tarballName,
@@ -276,10 +265,7 @@ export function verifyPublishArtifact({
     artifactPath: join(resolvedPackageDirectory, priorTarballName),
     manifestPath: join(resolvedPackageDirectory, 'prior-evidence-manifest.json'),
     receiptPath: join(resolvedPackageDirectory, 'prior-retained-artifact-receipt.json'),
-    publishReceiptPath: metadata.lifecycle?.previous_artifact?.evidence?.trust_kind ===
-      'published-provenance'
-      ? join(resolvedPackageDirectory, 'prior-verification-receipt.json')
-      : undefined,
+    trustRoots: priorTrustRoots,
   })
   invariant(
     sameJson(verifiedPrior, metadata.lifecycle?.previous_artifact?.evidence),
@@ -390,7 +376,7 @@ export function verifyPublishArtifact({
   invariant(manifest.commit_sha === commitSha, 'evidence manifest commit does not match the tag commit')
   invariant(manifest.result === 'passed', 'evidence manifest did not pass')
   invariant(
-    sameJson(manifest.contract, expectedManifestContract(contract)),
+    sameJson(manifest.contract, manifestContractBinding(contract)),
     'evidence manifest contract does not match checked-out source',
   )
   invariant(

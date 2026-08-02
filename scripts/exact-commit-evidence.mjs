@@ -9,6 +9,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { manifestContractBinding } from './exact-commit-contract.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
@@ -396,17 +397,7 @@ export function createEvidenceManifest({
     commit_sha: expectedSha,
     generated_at: generatedAt,
     workflow_run: workflowRun,
-    contract: {
-      workflow: contract.workflow,
-      runner: contract.runner,
-      node_version: contract.node_version,
-      npm_version: contract.npm_version,
-      codex_cli_version: contract.codex_cli_version,
-      artifact_retention_days: contract.artifact_retention_days,
-      accepted_moderate_packages_by_gate: contract.accepted_moderate_packages_by_gate,
-      action_pins: contract.action_pins,
-      required_gates: contract.required_gates,
-    },
+    contract: manifestContractBinding(contract),
     result: passed ? 'passed' : 'failed',
     summary: {
       required: orderedGates.length,

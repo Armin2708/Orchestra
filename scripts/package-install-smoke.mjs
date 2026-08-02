@@ -171,12 +171,6 @@ if (lifecycle.passed) {
       'prior-retained-artifact-receipt.json',
     ],
   ]
-  if (lifecycle.previous_artifact.evidence.trust_kind === 'published-provenance') {
-    retainedPriorFiles.push([
-      join(previousEvidenceDirectory, 'verification-receipt.json'),
-      'prior-verification-receipt.json',
-    ])
-  }
   for (const [source, filename] of retainedPriorFiles) {
     copyFileSync(source, join(packageDirectory, filename))
   }

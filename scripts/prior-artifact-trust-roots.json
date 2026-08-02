@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "repository": "Armin2708/Orchestra",
+  "workflow": ".github/workflows/ci.yml",
+  "event": "push",
+  "trusted_signing_keys": []
+}

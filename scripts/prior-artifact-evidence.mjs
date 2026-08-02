@@ -1,7 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { canonicalJson, manifestContractBinding } from './exact-commit-contract.mjs'
+
+const scriptDirectory = dirname(fileURLToPath(import.meta.url))
+const contractPath = join(scriptDirectory, 'exact-commit-ci-contract.json')
+const trustRootsPath = join(scriptDirectory, 'prior-artifact-trust-roots.json')
 
 const packageName = 'orchestra-board'
 const commitPattern = /^[0-9a-f]{40}$/
@@ -9,6 +15,9 @@ const sha256Pattern = /^[0-9a-f]{64}$/
 const artifactIdPattern = /^[1-9][0-9]*$/
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/
 const maxJsonBytes = 4 * 1024 * 1024
+const trustedRepository = 'Armin2708/Orchestra'
+const trustedWorkflow = '.github/workflows/ci.yml'
+const trustedEvent = 'push'
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message)
@@ -74,9 +83,9 @@ const tarballInventory = (artifactPath) => {
 
 const exactWorkflowIdentity = (value, label) => {
   invariant(value && typeof value === 'object', `${label} is missing`)
-  invariant(String(value.repository ?? '').trim() !== '', `${label} repository is missing`)
-  invariant(String(value.event ?? '').trim() !== '', `${label} event is missing`)
-  invariant(String(value.ref ?? '').trim() !== '', `${label} ref is missing`)
+  invariant(value.repository === trustedRepository, `${label} repository is invalid`)
+  invariant(value.event === trustedEvent, `${label} event is invalid`)
+  invariant(/^refs\/tags\/v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/.test(String(value.ref ?? '')), `${label} ref is invalid`)
   invariant(artifactIdPattern.test(String(value.run_id ?? '')), `${label} run id is invalid`)
   invariant(artifactIdPattern.test(String(value.run_attempt ?? '')), `${label} run attempt is invalid`)
   return {
@@ -88,12 +97,66 @@ const exactWorkflowIdentity = (value, label) => {
   }
 }
 
+const exactKeys = (value, keys, label) => {
+  invariant(
+    value && typeof value === 'object' && sameJson(Object.keys(value).sort(), [...keys].sort()),
+    `${label} contains missing or unsigned fields`,
+  )
+}
+
+const completePassingGate = (gate, commitSha) =>
+  gate?.schema_version === 1 &&
+  gate?.commit_sha === commitSha &&
+  gate?.status === 'passed' &&
+  gate?.exit_code === 0 &&
+  Number.isFinite(Date.parse(String(gate?.started_at ?? ''))) &&
+  Number.isFinite(Date.parse(String(gate?.completed_at ?? ''))) &&
+  Date.parse(gate.started_at) <= Date.parse(gate.completed_at) &&
+  String(gate?.invocation?.executable ?? '').trim() !== '' &&
+  gate?.runner && typeof gate.runner === 'object' &&
+  String(gate.runner.node_version ?? '').trim() !== '' &&
+  gate?.details && typeof gate.details === 'object' && !Array.isArray(gate.details)
+
+const signingKeyId = (key) =>
+  `sha256:${digest('sha256', key.export({ format: 'der', type: 'spki' }))}`
+
+const verifyMaintainerSignature = ({ receipt, attestation, trustRoots }) => {
+  invariant(trustRoots?.schema_version === 1, 'prior artifact trust-root schema is unsupported')
+  invariant(trustRoots.repository === trustedRepository, 'prior artifact trust-root repository is invalid')
+  invariant(trustRoots.workflow === trustedWorkflow, 'prior artifact trust-root workflow is invalid')
+  invariant(trustRoots.event === trustedEvent, 'prior artifact trust-root event is invalid')
+  invariant(
+    Array.isArray(trustRoots.trusted_signing_keys) && trustRoots.trusted_signing_keys.length > 0,
+    'no trusted prior-artifact signing key is configured',
+  )
+  exactKeys(receipt, ['schema_version', 'kind', 'attestation', 'signature'], 'prior retained-artifact receipt')
+  exactKeys(receipt.signature, ['algorithm', 'key_id', 'value'], 'prior retained-artifact signature')
+  invariant(receipt.schema_version === 2, 'prior retained-artifact receipt schema is unsupported')
+  invariant(receipt.kind === 'maintainer-signature', 'prior retained-artifact receipt trust kind is unsupported')
+  invariant(receipt.signature.algorithm === 'ed25519', 'prior retained-artifact signature algorithm is unsupported')
+  const trusted = trustRoots.trusted_signing_keys.find((entry) =>
+    entry?.key_id === receipt.signature.key_id && entry?.algorithm === 'ed25519')
+  invariant(trusted, 'prior retained-artifact signing key is not trusted')
+  const publicKey = createPublicKey(trusted.public_key_pem)
+  invariant(publicKey.asymmetricKeyType === 'ed25519', 'prior artifact trust root is not an Ed25519 key')
+  invariant(signingKeyId(publicKey) === trusted.key_id, 'prior artifact trust-root key id is invalid')
+  const encodedSignature = String(receipt.signature.value ?? '')
+  invariant(/^[A-Za-z0-9+/]+={0,2}$/.test(encodedSignature), 'prior retained-artifact signature encoding is invalid')
+  const signature = Buffer.from(encodedSignature, 'base64')
+  invariant(signature.byteLength === 64, 'prior retained-artifact signature length is invalid')
+  invariant(
+    verifySignature(null, Buffer.from(canonicalJson(attestation)), publicKey, signature),
+    'prior retained-artifact signature verification failed',
+  )
+  return trusted.key_id
+}
+
 export function verifyPriorArtifactEvidence({
   artifactPath,
   evidenceDirectory,
   manifestPath,
   receiptPath,
-  publishReceiptPath,
+  trustRoots,
 } = {}) {
   invariant(artifactPath, 'prior artifact path is required')
   const artifactFile = regularFileBytes(artifactPath, 'prior package artifact')
@@ -126,6 +189,8 @@ export function verifyPriorArtifactEvidence({
   )
   const manifest = manifestFile.value
   const receipt = receiptFile.value
+  const checkedContract = readJson(contractPath, 'checked exact-commit contract').value
+  const checkedTrustRoots = trustRoots ?? readJson(trustRootsPath, 'prior artifact trust roots').value
   const manifestSha256 = digest('sha256', manifestFile.bytes)
   const receiptSha256 = digest('sha256', receiptFile.bytes)
 
@@ -134,23 +199,23 @@ export function verifyPriorArtifactEvidence({
   invariant(commitPattern.test(String(manifest.commit_sha ?? '')), 'prior evidence commit is invalid')
   invariant(manifest.result === 'passed', 'prior exact-commit evidence did not pass')
   const workflowRun = exactWorkflowIdentity(manifest.workflow_run, 'prior evidence workflow')
-  invariant(manifest.contract?.workflow === '.github/workflows/ci.yml', 'prior CI workflow is invalid')
+  invariant(
+    workflowRun.ref === `refs/tags/v${artifact.version}`,
+    'prior evidence workflow ref does not match the retained artifact version',
+  )
+  invariant(
+    sameJson(manifest.contract, manifestContractBinding(checkedContract)),
+    'prior CI contract does not match the complete checked-in contract',
+  )
   const requiredGates = manifest.contract?.required_gates
   invariant(
-    Array.isArray(requiredGates) &&
-      ['exact-commit', 'package-artifact', 'package-secret-scan', 'package-upload']
-        .every((gate) => requiredGates.includes(gate)) &&
-      new Set(requiredGates).size === requiredGates.length,
-    'prior exact-commit gate contract is incomplete',
+    sameJson(requiredGates, checkedContract.required_gates),
+    'prior exact-commit gate contract does not match the checked-in contract',
   )
-  invariant(Array.isArray(manifest.gates) && manifest.gates.length > 0, 'prior evidence gates are missing')
+  invariant(Array.isArray(manifest.gates), 'prior evidence gates are missing')
   invariant(
-    manifest.gates.every((gate) =>
-      gate?.schema_version === 1 &&
-      gate?.commit_sha === manifest.commit_sha &&
-      gate?.status === 'passed' &&
-      gate?.exit_code === 0),
-    'prior evidence contains a non-passing or cross-commit gate',
+    manifest.gates.every((gate) => completePassingGate(gate, manifest.commit_sha)),
+    'prior evidence contains an incomplete, non-passing, or cross-commit gate outcome',
   )
   invariant(
     sameJson(manifest.gates.map((gate) => gate.gate_id), requiredGates) &&
@@ -163,6 +228,10 @@ export function verifyPriorArtifactEvidence({
       manifest.summary?.package_consistent === true &&
       manifest.summary?.package_upload_evidence_present === true,
     'prior exact-commit evidence summary is incomplete',
+  )
+  invariant(
+    Array.isArray(manifest.unexpected_gates) && manifest.unexpected_gates.length === 0,
+    'prior exact-commit evidence contains unexpected gates',
   )
   const uploadGate = manifest.gates.find((gate) => gate.gate_id === 'package-upload')
   invariant(
@@ -192,66 +261,47 @@ export function verifyPriorArtifactEvidence({
     'prior package inventory does not match exact-commit evidence',
   )
 
-  invariant(receipt.schema_version === 1, 'prior retained-artifact receipt schema is unsupported')
-  invariant(
-    receipt.kind === 'retained-internal' || receipt.kind === 'published-provenance',
-    'prior retained-artifact receipt trust kind is invalid',
-  )
-  invariant(receipt.decision === 'trusted', 'prior retained artifact is not explicitly trusted')
-  invariant(receipt.source_commit === manifest.commit_sha, 'prior receipt commit does not match evidence')
-  invariant(receipt.evidence_manifest_sha256 === manifestSha256, 'prior receipt is not bound to evidence')
-  invariant(sameJson(receipt.workflow_run, workflowRun), 'prior receipt workflow does not match evidence')
-  for (const field of ['name', 'version', 'filename', 'bytes', 'sha256', 'npm_shasum', 'npm_integrity']) {
-    invariant(receipt.artifact?.[field] === artifact[field], `prior receipt artifact ${field} is invalid`)
+  const expectedAttestation = {
+    schema_version: 1,
+    repository: trustedRepository,
+    workflow: trustedWorkflow,
+    event: trustedEvent,
+    ref: `refs/tags/v${artifact.version}`,
+    tag: `v${artifact.version}`,
+    source_commit: manifest.commit_sha,
+    workflow_run: {
+      run_id: workflowRun.run_id,
+      run_attempt: workflowRun.run_attempt,
+    },
+    package_upload: {
+      artifact_id: String(uploadGate.details.artifact_id),
+      artifact_digest: uploadGate.details.artifact_digest,
+    },
+    evidence_manifest: {
+      sha256: manifestSha256,
+      contract_schema_version: manifest.contract.contract_schema_version,
+      contract_sha256: manifest.contract.contract_sha256,
+    },
+    artifact,
   }
   invariant(
-    Number.isFinite(Date.parse(String(receipt.trust?.approved_at ?? ''))) &&
-      String(receipt.trust?.approved_by ?? '').trim() !== '' &&
-      String(receipt.trust?.approval_id ?? '').trim() !== '' &&
-      receipt.trust?.exact_commit_ci_passed === true,
-    'prior receipt trust approval is incomplete',
+    sameJson(receipt.attestation, expectedAttestation),
+    'prior retained-artifact attestation does not exactly match artifact, contract, workflow, and upload evidence',
   )
-
-  let publishReceiptSha256 = null
-  if (receipt.kind === 'published-provenance') {
-    const published = readJson(
-      publishReceiptPath ?? join(directory, 'verification-receipt.json'),
-      'prior publish verification receipt',
-    )
-    publishReceiptSha256 = digest('sha256', published.bytes)
-    invariant(
-      receipt.trust?.verification_receipt_sha256 === publishReceiptSha256,
-      'prior publish receipt digest does not match trust approval',
-    )
-    invariant(
-      published.value?.commit_sha === manifest.commit_sha &&
-        published.value?.package_name === artifact.name &&
-        published.value?.package_version === artifact.version &&
-        published.value?.package_sha256 === artifact.sha256 &&
-        String(published.value?.workflow_run_id) === workflowRun.run_id &&
-        String(published.value?.workflow_run_attempt) === workflowRun.run_attempt,
-      'prior publish receipt does not match the retained artifact and workflow',
-    )
-    invariant(
-      receipt.trust?.registry === 'https://registry.npmjs.org' &&
-        receipt.trust?.dist_tag === 'beta' &&
-        receipt.trust?.npm_provenance_verified === true,
-      'prior npm publication provenance is not verified',
-    )
-  } else {
-    invariant(
-      String(receipt.trust?.rationale ?? '').trim() !== '',
-      'prior retained-internal receipt requires a trust rationale',
-    )
-  }
+  const signingKey = verifyMaintainerSignature({
+    receipt,
+    attestation: expectedAttestation,
+    trustRoots: checkedTrustRoots,
+  })
 
   return {
     verified: true,
     trust_kind: receipt.kind,
+    signing_key_id: signingKey,
     source_commit: manifest.commit_sha,
     evidence_manifest_sha256: manifestSha256,
     receipt_sha256: receiptSha256,
-    publish_receipt_sha256: publishReceiptSha256,
+    contract_sha256: manifest.contract.contract_sha256,
     workflow_run: workflowRun,
     artifact,
   }
