@@ -1,4 +1,5 @@
 import type { Snapshot } from './api'
+import type { AgentProfile } from './agentHomeApi'
 import type { DeliveryReport, Job, OsId } from './osApi'
 import type { OpenWorkGraph } from './openWorkApi'
 
@@ -442,11 +443,18 @@ export function projectScopedJobs(
 
 export function commandCenterProjectProjection(input: {
   snapshots: readonly Snapshot[]
+  agentProfiles: readonly AgentProfile[]
   jobs: readonly Job[]
   savedView?: SavedCommandCenterView | null
 }) {
   const jobs = projectScopedJobs(input.snapshots, input.jobs)
-  const allSearchRecords = commandCenterSearchRecords({ snapshots: input.snapshots, jobs })
+  const boardIds = new Set(input.snapshots.map((snapshot) => snapshot.board.id))
+  const agentProfiles = input.agentProfiles.filter((profile) => boardIds.has(profile.board_id))
+  const allSearchRecords = commandCenterSearchRecords({
+    snapshots: input.snapshots,
+    agentProfiles,
+    jobs,
+  })
   const kindForSection: Partial<Record<CommandCenterSection, CommandCenterSearchKind>> = {
     work: 'work',
     agents: 'agent',
@@ -471,27 +479,41 @@ const deliverySummary = (delivery: DeliveryReport) =>
 
 export function commandCenterSearchRecords(input: {
   snapshots: readonly Snapshot[]
+  agentProfiles: readonly AgentProfile[]
   jobs?: readonly Job[]
   discussions?: readonly CommandCenterDiscussionRecord[]
   knowledge?: readonly CommandCenterKnowledgeRecord[]
   deliveries?: readonly DeliveryReport[]
 }): CommandCenterSearchRecord[] {
   const boardNames = new Map(input.snapshots.map((snapshot) => [snapshot.board.id, snapshot.board.name]))
+  const legacyAgents = new Map(input.snapshots.flatMap((snapshot) => snapshot.agents.map((agent) => [
+    `${snapshot.board.id}:${agent.id}`,
+    agent,
+  ] as const)))
   const records: CommandCenterSearchRecord[] = []
+  for (const profile of input.agentProfiles.filter((item) => item.status === 'active')) {
+    const linkedAgent = profile.legacy_agent_id === null
+      ? undefined
+      : legacyAgents.get(`${profile.board_id}:${profile.legacy_agent_id}`)
+    const provider = linkedAgent?.provider ?? profile.default_provider
+    records.push({
+      id: `agent:${profile.board_id}:${profile.id}`,
+      kind: 'agent',
+      title: profile.name,
+      description: `${provider ?? 'Provider unavailable'} · ${boardNames.get(profile.board_id) ?? `Project ${profile.board_id}`}`,
+      status: commandCenterStatus('agent', linkedAgent?.status ?? profile.status).label,
+      boardId: profile.board_id,
+      href: commandCenterDeepLink('', {
+        section: 'agents', boardId: profile.board_id, agentId: profile.id,
+      }),
+      keywords: [
+        provider ?? '',
+        linkedAgent?.model ?? profile.default_model ?? '',
+        ...(linkedAgent?.capabilities ?? profile.capabilities),
+      ],
+    })
+  }
   for (const snapshot of input.snapshots) {
-    for (const agent of snapshot.agents.filter((item) => item.status !== 'gone')) {
-      const profileId = `legacy-agent:${agent.id}`
-      records.push({
-        id: `agent:${snapshot.board.id}:${profileId}`,
-        kind: 'agent',
-        title: agent.name,
-        description: `${agent.provider ?? 'Provider unavailable'} · ${boardNames.get(snapshot.board.id)}`,
-        status: commandCenterStatus('agent', agent.status).label,
-        boardId: snapshot.board.id,
-        href: commandCenterDeepLink('', { section: 'agents', boardId: snapshot.board.id, agentId: profileId }),
-        keywords: [agent.provider ?? '', agent.model ?? '', ...(agent.capabilities ?? [])],
-      })
-    }
     for (const card of snapshot.cards) {
       records.push({
         id: `work:${snapshot.board.id}:${card.id}`,

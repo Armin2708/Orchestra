@@ -277,7 +277,24 @@ export class SqliteRuntimePersistence implements RuntimePersistence {
   }
 
   listRunningProcesses(): ProcessRecord[] {
-    return (this.db.prepare("SELECT * FROM processes WHERE status IN ('starting','running','stopping') ORDER BY rowid")
+    return (this.db.prepare(`SELECT process.* FROM processes process
+      WHERE process.status IN ('starting','running','stopping')
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_sessions session
+          JOIN jobs job ON job.id=coalesce(
+            session.job_id,
+            CASE WHEN json_valid(session.context_json)
+              THEN json_extract(session.context_json, '$.job_id') END
+          )
+          WHERE session.external_id=process.id
+            AND session.workspace_id=job.workspace_id
+            AND session.provider='shell'
+            AND coalesce(session.driver_id, session.provider)='shell'
+            AND job.provider='shell'
+            AND job.driver_id='shell'
+            AND job.status='cancelling'
+        )
+      ORDER BY process.rowid`)
       .all() as Record<string, unknown>[]).map(mapProcess)
   }
 

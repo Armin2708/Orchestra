@@ -202,7 +202,7 @@ describe('durable session tool policy and provenance', () => {
 
     const approval = service.requestInvocation('session-tools', {
       toolId: 'native:workspace-editor',
-      actorId: 'agent-1',
+      actor: { type: 'agent', id: 'agent-1' },
       requestId: 'approval-1',
       idempotencyKey: 'authorize-approval-1',
     })
@@ -213,7 +213,7 @@ describe('durable session tool policy and provenance', () => {
     })
     const replayedApproval = service.requestInvocation('session-tools', {
       toolId: 'native:workspace-editor',
-      actorId: 'agent-1',
+      actor: { type: 'agent', id: 'agent-1' },
       requestId: 'approval-1',
       idempotencyKey: 'authorize-approval-1',
     })
@@ -225,7 +225,7 @@ describe('durable session tool policy and provenance', () => {
       defaultDecision: 'deny',
       rules: [{ target: 'native:workspace-editor', decision: 'allow' }],
       expectedRevision: 0,
-      actorId: 'operator',
+      actor: { type: 'human', id: 'operator' },
       idempotencyKey: 'policy-1',
     })
     expect(policy).toMatchObject({ revision: 1, default_decision: 'deny' })
@@ -233,19 +233,19 @@ describe('durable session tool policy and provenance', () => {
       defaultDecision: 'deny',
       rules: [{ target: 'native:workspace-editor', decision: 'allow' }],
       expectedRevision: 0,
-      actorId: 'operator',
+      actor: { type: 'human', id: 'operator' },
       idempotencyKey: 'policy-1',
     })).toEqual(policy)
     expect(() => service.setPolicy('session-tools', {
       defaultDecision: 'allow',
       expectedRevision: 0,
-      actorId: 'operator',
+      actor: { type: 'human', id: 'operator' },
       idempotencyKey: 'policy-stale',
     })).toThrow(/revision changed/)
 
     expect(service.requestInvocation('session-tools', {
       toolId: 'native:workspace-editor',
-      actorId: 'agent-1',
+      actor: { type: 'agent', id: 'agent-1' },
       idempotencyKey: 'authorize-allow-1',
     })).toMatchObject({ decision: 'allow', attention: null })
 
@@ -255,7 +255,7 @@ describe('durable session tool policy and provenance', () => {
       arguments: { password: 'SECRET-SENTINEL', command: 'deploy' },
       providerCallId: 'provider-call-1',
       providerEventId: 'provider-event-1',
-      actorId: 'agent-1',
+      actor: { type: 'agent', id: 'agent-1' },
       idempotencyKey: 'invocation-event-1',
     }
     const invocation = service.recordInvocation('session-tools', invocationInput)
@@ -289,7 +289,7 @@ describe('durable session tool policy and provenance', () => {
     expect(codex.managed_support).toBe('candidate')
     expect(service.requestInvocation('session-tools', {
       toolId: codex.id,
-      actorId: 'agent-1',
+      actor: { type: 'agent', id: 'agent-1' },
       idempotencyKey: 'authorize-codex-unaccepted',
     })).toMatchObject({ decision: 'deny', attention: null })
     db.close()
