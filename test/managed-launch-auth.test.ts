@@ -20,6 +20,7 @@ import { api } from '../src/client.js'
 import { Conductor } from '../src/conductor.js'
 import { openDb } from '../src/db.js'
 import { _internals as hookInternals, runHook } from '../src/hooks.js'
+import { buildServer } from '../src/server.js'
 import { runHookToCompletion } from './helpers/scoped-hook-state.js'
 
 const environmentKeys = [
@@ -184,6 +185,72 @@ describe('managed launch bootstrap authorization', () => {
       agentName: 'first-managed',
       bootstrapNonce: firstBootstrap.nonce,
     }))).toBeNull()
+  })
+
+  it('admits only the exact one-time bootstrap through anonymous registration', async () => {
+    const { db, boardId } = dbFixture()
+    const firstBootstrap = issueManagedAgentLaunchBootstrap()
+    const secondBootstrap = issueManagedAgentLaunchBootstrap()
+    const firstId = insertHired(db, boardId, 'first-route-managed', firstBootstrap.hash)
+    const secondId = insertHired(db, boardId, 'second-route-managed', secondBootstrap.hash)
+    const server = buildServer(db, undefined, {
+      token: 'operator-transport',
+      agentToken: 'legacy-shared-agent-transport',
+    })
+    servers.push(server)
+    await server.ready()
+
+    const arbitrary = await server.inject({
+      method: 'POST', url: '/api/v1/agents/register',
+      payload: { board_id: boardId, name: 'anonymous-claim', session_id: 'anonymous-session' },
+    })
+    expect(arbitrary.statusCode).toBe(401)
+
+    const crossAgent = await server.inject({
+      method: 'POST', url: '/api/v1/agents/register',
+      payload: {
+        board_id: boardId, name: 'second-route-managed', provider: 'claude',
+        session_id: 'provider-session', agent_id: secondId,
+        bootstrap_nonce: firstBootstrap.nonce,
+      },
+    })
+    expect(crossAgent.statusCode).toBe(401)
+
+    const registered = await server.inject({
+      method: 'POST', url: '/api/v1/agents/register',
+      payload: {
+        board_id: boardId, name: 'first-route-managed', provider: 'claude',
+        session_id: 'provider-session', agent_id: firstId,
+        bootstrap_nonce: firstBootstrap.nonce,
+      },
+    })
+    expect(registered.statusCode).toBe(200)
+    expect(registered.json()).toMatchObject({
+      id: firstId,
+      external_session_id: 'provider-session',
+      session_token: expect.any(String),
+    })
+    expect(registered.json()).not.toHaveProperty('hook_token_hash')
+
+    const replay = await server.inject({
+      method: 'POST', url: '/api/v1/agents/register',
+      payload: {
+        board_id: boardId, name: 'first-route-managed', provider: 'claude',
+        session_id: 'provider-session', agent_id: firstId,
+        bootstrap_nonce: firstBootstrap.nonce,
+      },
+    })
+    expect(replay.statusCode).toBe(401)
+
+    const legacyClaim = await server.inject({
+      method: 'POST', url: '/api/v1/agents/register',
+      headers: { authorization: 'Bearer legacy-shared-agent-transport' },
+      payload: {
+        board_id: boardId, name: 'second-route-managed', provider: 'claude',
+        session_id: 'claimed-session',
+      },
+    })
+    expect(legacyClaim.statusCode).toBe(409)
   })
 
   it('rolls back canonical binding when an otherwise matching bootstrap is expired', () => {

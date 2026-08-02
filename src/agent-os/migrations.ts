@@ -66,6 +66,10 @@ import {
   KNOWLEDGE_CONTEXT_USE_ACTUAL_TABLE_SQL,
   installKnowledgeContextUseActualEvidenceSchema,
 } from './knowledge-context-use-actual-migration.js'
+import {
+  AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID,
+  installDeliveryAutoshipIntentSchema,
+} from './delivery-autoship-intent-migration.js'
 
 interface Migration {
   id: string
@@ -1189,6 +1193,25 @@ const migrations: Migration[] = [
   {
     id: '005-delivery-report-revision-cascade',
     apply(db) {
+      const currentParentForeignKey = (db.prepare(
+        "PRAGMA foreign_key_list('delivery_reports')",
+      ).all() as Array<{ from: string; table: string; on_delete: string }>).find(
+        (row) => row.from === 'parent_report_id',
+      )
+      // A removed marker must not rebuild the already-current report table underneath
+      // later append-only shipment/autoship triggers. Re-recording the marker is enough.
+      if (currentParentForeignKey?.table === 'delivery_reports'
+        && currentParentForeignKey.on_delete === 'CASCADE') return
+      const reinstallAutoshipIntentSchema = !!db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='delivery_autoship_intents'`).get()
+      if (reinstallAutoshipIntentSchema) {
+        const intentCount = (db.prepare(`SELECT COUNT(*) AS count
+          FROM delivery_autoship_intents`).get() as { count: number }).count
+        if (intentCount > 0) {
+          throw new Error('cannot replay delivery revision migration with durable autoship intents')
+        }
+        db.exec('DROP TRIGGER IF EXISTS delivery_autoship_intents_scope')
+      }
       db.exec(`
         CREATE TABLE delivery_reports_v5 (
           id TEXT PRIMARY KEY,
@@ -1336,6 +1359,7 @@ const migrations: Migration[] = [
           SELECT RAISE(ABORT, 'invalid delivery status transition');
         END;
       `)
+      if (reinstallAutoshipIntentSchema) installDeliveryAutoshipIntentSchema(db)
     },
   },
   {
@@ -7655,6 +7679,24 @@ const migrations: Migration[] = [
         )
       }
       installKnowledgeContextUseActualEvidenceSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID,
+    apply(db) {
+      const dependencies = db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+        WHERE id IN (?, ?)`).get(
+        AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+        AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+      ) as { count: number }
+      if (dependencies.count !== 2) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`
+          + ` and ${AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryAutoshipIntentSchema(db)
     },
   },
 ]
