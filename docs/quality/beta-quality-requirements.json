@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "allowed_items": ["QA-001", "QA-009", "QA-010", "QA-011", "QA-012", "QA-016", "QA-018"],
+  "allowed_statuses": ["prerequisite", "lane-dependent"],
+  "required_cases": [
+    "QA-001/codex-client-lifecycle", "QA-001/codex-supervisor-lifecycle", "QA-001/runtime-process-lifecycle", "QA-001/agent-home-action-lifecycle", "QA-001/job-market-contract-lifecycle", "QA-001/job-assignment-lifecycle", "QA-001/delivery-report-negative-transition-matrix", "QA-001/organization-membership-negative-transition-matrix", "QA-001/knowledge-context-build-lifecycle", "QA-001/discussion-lifecycle", "QA-001/team-planning-conflict-lifecycle", "QA-001/device-session-lifecycle",
+    "QA-009/criterion-evidence", "QA-009/rejection-revision", "QA-009/resubmission-api", "QA-009/audited-override",
+    "QA-010/bounded-ingestion", "QA-010/ingestion-security", "QA-010/freshness-policy", "QA-010/retrieval-citations", "QA-010/prompt-injection-as-data",
+    "QA-011/intentional-fanout", "QA-011/no-automated-ack-loop", "QA-011/team-planning-budget", "QA-011/team-conflict-resolution",
+    "QA-012/pairing-single-use-origin-expiry", "QA-012/device-scope-default-deny", "QA-012/selective-revoke-and-expiry", "QA-012/step-up-binding-and-replay",
+    "QA-016/daemon-mid-session-prerequisite", "QA-016/provider-disconnect-prerequisite", "QA-016/long-running-dogfood-daemon-provider-network",
+    "QA-018/lane-a-tool-reports", "QA-018/lane-b-tool-reports", "QA-018/lane-c-tool-reports", "QA-018/lane-d-tool-reports", "QA-018/integrator-tool-reports"
+  ],
+  "required_statuses": {
+    "QA-001/discussion-lifecycle": "lane-dependent", "QA-001/team-planning-conflict-lifecycle": "lane-dependent", "QA-001/device-session-lifecycle": "lane-dependent",
+    "QA-011/team-planning-budget": "lane-dependent", "QA-011/team-conflict-resolution": "lane-dependent",
+    "QA-012/pairing-single-use-origin-expiry": "lane-dependent", "QA-012/device-scope-default-deny": "lane-dependent", "QA-012/selective-revoke-and-expiry": "lane-dependent", "QA-012/step-up-binding-and-replay": "lane-dependent",
+    "QA-016/long-running-dogfood-daemon-provider-network": "lane-dependent",
+    "QA-018/lane-a-tool-reports": "lane-dependent", "QA-018/lane-b-tool-reports": "lane-dependent", "QA-018/lane-c-tool-reports": "lane-dependent", "QA-018/lane-d-tool-reports": "lane-dependent", "QA-018/integrator-tool-reports": "lane-dependent"
+  },
+  "commands": {
+    "qa001-runtime": ["npx", "vitest", "run", "--reporter=json", "test/codex-runtime-state-machines.test.ts"],
+    "qa001-agent-home": ["npx", "vitest", "run", "--reporter=json", "test/agent-home-controls.test.ts"],
+    "qa001-transition-matrix": ["npx", "vitest", "run", "--reporter=json", "test/beta-state-transition-matrix.test.ts"],
+    "qa001-job-assignment": ["npx", "vitest", "run", "--reporter=json", "test/job-assignment-domain.test.ts"],
+    "qa001-knowledge-migration": ["npx", "vitest", "run", "--reporter=json", "test/knowledge-migrations.test.ts"],
+    "qa009-delivery": ["npx", "vitest", "run", "--reporter=json", "test/delivery-reports.test.ts", "test/delivery-api.test.ts"],
+    "qa010-knowledge": ["npx", "vitest", "run", "--reporter=json", "test/knowledge-ingestion.test.ts", "test/knowledge-ingestion-security.test.ts", "test/knowledge-retrieval.test.ts"],
+    "qa011-coordination": ["npx", "vitest", "run", "--reporter=json", "test/message-ui.test.ts", "test/organization-coordination.test.ts"],
+    "qa016-interruption-prerequisites": ["npx", "vitest", "run", "--reporter=json", "test/agent-home-daemon-restart-acceptance.test.ts", "test/codex-runtime-state-machines.test.ts", "test/provider-agent-manager.test.ts"]
+  },
+  "future_command_ids": ["qa001-lane-a-future", "qa001-lane-c-future", "qa011-lane-a-future", "qa012-lane-c-future", "qa016-long-running-dogfood", "qa018-tool-reports"],
+  "artifact_paths": [
+    "src/codex/client.ts", "src/codex/supervisor.ts", "src/runtime/supervisor.ts", "src/agent-os/agent-home-lifecycle.ts", "src/agent-os/job-market.ts", "src/agent-os/job-assignments.ts", "src/agent-os/delivery-reports.ts", "src/agent-os/migrations.ts", "src/agent-os/organization.ts",
+    "test/codex-runtime-state-machines.test.ts", "test/agent-home-controls.test.ts", "test/beta-state-transition-matrix.test.ts", "test/job-assignment-domain.test.ts", "test/knowledge-migrations.test.ts", "test/delivery-reports.test.ts", "test/delivery-api.test.ts", "test/knowledge-ingestion.test.ts", "test/knowledge-ingestion-security.test.ts", "test/knowledge-retrieval.test.ts", "test/message-ui.test.ts", "test/organization-coordination.test.ts", "test/agent-home-daemon-restart-acceptance.test.ts", "test/provider-agent-manager.test.ts"
+  ],
+  "state_machine_discovery_sha256": "f83bede4431a2815337ef6ec6cf0b1adbd0c8cc46acff0058a1afb0faa61625c",
+  "classified_state_machine_files": [
+    "src/agent-os/agent-home-lifecycle.ts", "src/agent-os/agent-home-support.ts", "src/agent-os/compatibility-forward-migration.ts", "src/agent-os/compatibility-migration-failure-journal.ts", "src/agent-os/compatibility-migration-telemetry.ts", "src/agent-os/contract-templates.ts", "src/agent-os/conversations.ts", "src/agent-os/delivery-reports.ts", "src/agent-os/job-assignment-routes.ts", "src/agent-os/job-assignments.ts", "src/agent-os/job-market.ts", "src/agent-os/knowledge-retrieval.ts", "src/agent-os/knowledge-types.ts", "src/agent-os/managed-session-binding.ts", "src/agent-os/migrations.ts", "src/agent-os/open-work.ts", "src/agent-os/organization-coordination.ts", "src/agent-os/organization-migration.ts", "src/agent-os/organization-routes.ts", "src/agent-os/organization.ts", "src/agent-os/projected-text-redaction.ts", "src/agent-os/routes.ts", "src/agent-os/runtime-integration.ts", "src/agent-os/scheduler.ts", "src/agent-os/service-boundaries.ts", "src/agent-providers.ts", "src/codex/client.ts", "src/codex/protocol.ts", "src/codex/provider-service.ts", "src/codex/supervisor.ts", "src/environment-compatibility.ts", "src/provider-agent-manager.ts", "src/provider-contract.ts", "src/readiness-doctor.ts", "src/remote.ts", "src/runtime/drivers/claude.ts", "src/runtime/drivers/codex.ts", "src/runtime/supervisor.ts", "src/runtime/types.ts"
+  ]
+}
