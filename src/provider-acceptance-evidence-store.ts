@@ -103,6 +103,27 @@ const assertArtifact = (
   }
 }
 
+const verifyRetainedArtifact = (
+  loadArtifact: (artifactRef: string) => string | Uint8Array,
+  matrix: Readonly<DeclaredProviderAcceptanceMatrixV1>,
+  artifact: ProviderAcceptanceArtifactV1,
+  evidenceId: string,
+): void => {
+  let retained: unknown
+  try {
+    retained = parseArtifact(loadArtifact(artifact.artifact_ref))
+  } catch (error) {
+    throw new Error(
+      `provider acceptance artifact could not be verified: ${evidenceId}`,
+      { cause: error },
+    )
+  }
+  if (canonicalHash(retained) !== artifact.artifact_sha256
+    || stableJson(retained) !== stableJson(matrix)) {
+    throw new Error(`provider acceptance artifact digest mismatch: ${evidenceId}`)
+  }
+}
+
 const matrixMatchesRow = (
   matrix: Readonly<DeclaredProviderAcceptanceMatrixV1>,
   row: ProviderAcceptanceEvidenceRowV1,
@@ -187,6 +208,7 @@ export class ProviderAcceptanceEvidenceStoreV1 {
       artifact.artifact_ref,
       artifact.artifact_sha256,
     )
+    verifyRetainedArtifact(this.#loadArtifact, matrix, artifact, id)
     const recordedAt = this.#now().toISOString()
     const insert = this.db.prepare(`INSERT INTO provider_acceptance_evidence (
       id, contract_version, provider_id, adapter_id, adapter_version, mode_id,
@@ -230,25 +252,12 @@ export class ProviderAcceptanceEvidenceStoreV1 {
 
   hydrate(registry: ProviderAdapterRegistryV1): number {
     if (this.#hydrated.has(registry)) return 0
-    const evidence = this.list()
+    const evidence = this.verified()
       .sort((left, right) =>
         Date.parse(left.matrix.observed_at) - Date.parse(right.matrix.observed_at)
         || Date.parse(left.recorded_at) - Date.parse(right.recorded_at)
         || left.id.localeCompare(right.id))
     for (const record of evidence) {
-      let artifact: unknown
-      try {
-        artifact = parseArtifact(this.#loadArtifact(record.artifact_ref))
-      } catch (error) {
-        throw new Error(
-          `provider acceptance artifact could not be verified: ${record.id}`,
-          { cause: error },
-        )
-      }
-      if (canonicalHash(artifact) !== record.artifact_sha256
-        || stableJson(artifact) !== stableJson(record.matrix)) {
-        throw new Error(`provider acceptance artifact digest mismatch: ${record.id}`)
-      }
       registry.recordAcceptance(
         record.matrix as DeclaredProviderAcceptanceMatrixV1,
       )
@@ -264,6 +273,14 @@ export class ProviderAcceptanceEvidenceStoreV1 {
         ORDER BY observed_at, recorded_at, rowid`).all()
     ) as ProviderAcceptanceEvidenceRowV1[]
     return rows.map(evidenceRecord)
+  }
+
+  verified(): ProviderAcceptanceEvidenceRecordV1[] {
+    const evidence = this.list()
+    for (const record of evidence) {
+      verifyRetainedArtifact(this.#loadArtifact, record.matrix, record, record.id)
+    }
+    return evidence
   }
 
   private required(id: string): ProviderAcceptanceEvidenceRecordV1 {
