@@ -12,6 +12,8 @@ import {
   checkedBudget,
   percentile,
   redactEvidence,
+  resolveApprovedEvidencePath,
+  validateBaselineAgainstCaptures,
   verifiableDocumentDigest,
 } from './lib/browser-quality.mjs'
 
@@ -22,7 +24,7 @@ const parseArgs = (argv) => {
   const observations = []
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--output' && argv[index + 1]) output = resolve(argv[++index])
-    else observations.push(resolve(argv[index]))
+    else observations.push(argv[index])
   }
   if (!output || observations.length < 3) {
     throw new Error('usage: create-browser-baseline.mjs --output <path> <observation...> (at least three)')
@@ -33,28 +35,29 @@ const parseArgs = (argv) => {
 const fileDigest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex')
 
 const loadObservation = (path) => {
-  const document = JSON.parse(readFileSync(path, 'utf8'))
-  if (document.sha256 !== verifiableDocumentDigest(document)) throw new Error(`${path}: evidence digest is invalid`)
-  if (canonicalJson(document) !== canonicalJson(redactEvidence(document))) throw new Error(`${path}: evidence is not redacted`)
-  if (document.evidence_boundary?.qa_013_closure_permitted !== false) throw new Error(`${path}: QA-013 boundary changed`)
+  const approvedPath = resolveApprovedEvidencePath(repositoryRoot, path)
+  const document = JSON.parse(readFileSync(approvedPath, 'utf8'))
+  if (document.sha256 !== verifiableDocumentDigest(document)) throw new Error(`${approvedPath}: evidence digest is invalid`)
+  if (canonicalJson(document) !== canonicalJson(redactEvidence(document))) throw new Error(`${approvedPath}: evidence is not redacted`)
+  if (document.evidence_boundary?.qa_013_closure_permitted !== false) throw new Error(`${approvedPath}: QA-013 boundary changed`)
   for (const viewport of document.viewports ?? []) {
     if (viewport.console_errors?.length || viewport.page_errors?.length || viewport.failed_requests?.length) {
-      throw new Error(`${path}: runtime/network errors cannot enter the performance baseline`)
+      throw new Error(`${approvedPath}: runtime/network errors cannot enter the performance baseline`)
     }
     if (viewport.readiness?.graph_agents_rendered !== 18
       || viewport.readiness?.transcript_events_rendered < 250
       || viewport.readiness?.search_matches_rendered !== 5) {
-      throw new Error(`${path}: scale/readiness assertions did not pass`)
+      throw new Error(`${approvedPath}: scale/readiness assertions did not pass`)
     }
     for (const surface of PERFORMANCE_SURFACES) {
       const metric = viewport.performance?.[surface]
       if (!Number.isFinite(metric?.observed_ms) || metric.observed_ms < 0
         || metric.budget_ms !== null || metric.budget_source !== 'observation_only') {
-        throw new Error(`${path}: ${viewport.id} ${surface} is not an unbiased observation`)
+        throw new Error(`${approvedPath}: ${viewport.id} ${surface} is not an unbiased observation`)
       }
     }
   }
-  return { path, document, file_sha256: fileDigest(path) }
+  return { path: approvedPath, document, file_sha256: fileDigest(approvedPath) }
 }
 
 const main = () => {
@@ -111,6 +114,8 @@ const main = () => {
     viewports,
   }
   baseline.sha256 = verifiableDocumentDigest(baseline)
+  const recomputationErrors = validateBaselineAgainstCaptures(baseline, captures.map((capture) => capture.document))
+  if (recomputationErrors.length) throw new Error(`generated baseline failed recomputation: ${recomputationErrors.join('; ')}`)
   mkdirSync(dirname(options.output), { recursive: true })
   writeFileSync(options.output, `${JSON.stringify(baseline, null, 2)}\n`, { mode: 0o600 })
   console.log(`QA browser performance baseline: ${options.output}`)

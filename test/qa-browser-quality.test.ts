@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import baseline from '../docs/qa-browser-performance-baseline.json'
+import observation1 from '../docs/qa-evidence/browser-quality/observation-1.json'
+import observation2 from '../docs/qa-evidence/browser-quality/observation-2.json'
+import observation3 from '../docs/qa-evidence/browser-quality/observation-3.json'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ACCESSIBILITY_GATES,
   BETA_EXPERIENCE_BUDGETS_MS,
@@ -12,6 +18,9 @@ import {
   deriveRegressionBudgetMs,
   evidenceDigest,
   redactEvidence,
+  resolveApprovedEvidencePath,
+  validateBaselineAgainstCaptures,
+  validateBuildSourceIdentity,
   validatePerformanceBaseline,
   validateBrowserQualityEvidence,
   verifiableDocumentDigest,
@@ -34,6 +43,11 @@ const passingEvidence = () => {
     readiness: { graph_agents_rendered: 18, transcript_events_rendered: 250, search_matches_rendered: 5 },
     journeys: Array.from({ length: 12 }, (_, index) => ({
       name: `journey-${index}`,
+      interaction_modes: {
+        pointer: { passed: true, counts_toward_pass: true },
+        keyboard: { passed: true, counts_toward_pass: true },
+        dom_fallback: { passed: true, counts_toward_pass: false },
+      },
       accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
@@ -118,6 +132,51 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     delete evidence.viewports[0].performance.search.budget_ms
     evidence.sha256 = verifiableDocumentDigest(evidence)
     expect(validateBrowserQualityEvidence(evidence)).toContain('desktop has invalid search budget provenance')
+  })
+
+  it('recomputes samples, p95, and budgets from captures so a self-digested edit cannot pass', () => {
+    const captures = [observation1, observation2, observation3] as any[]
+    expect(validateBaselineAgainstCaptures(baseline, captures)).toEqual([])
+    const exploit = structuredClone(baseline) as any
+    const metric = exploit.viewports[0].performance.search
+    metric.samples_ms = metric.samples_ms.map((sample: number) => sample + 10)
+    metric.observed_p95_ms = Math.max(...metric.samples_ms)
+    Object.assign(metric, checkedBudget('search', metric.observed_p95_ms))
+    exploit.sha256 = verifiableDocumentDigest(exploit)
+    expect(validatePerformanceBaseline(exploit)).toEqual([])
+    expect(validateBaselineAgainstCaptures(exploit, captures)).toEqual(expect.arrayContaining([
+      'baseline desktop search samples do not match captures',
+      'baseline desktop search p95 does not match captures',
+    ]))
+  })
+
+  it('rejects dirty or stale source identity before trusting build artifacts', () => {
+    const manifest = {
+      source_status: 'clean', source_commit: 'a'.repeat(40), source_tree_sha256: 'b'.repeat(64),
+      source_checked_at: '2026-08-02T10:00:00.000Z', artifacts_built_at: '2026-08-02T10:00:01.000Z',
+    }
+    expect(validateBuildSourceIdentity(manifest, {
+      source_status: 'clean', source_commit: manifest.source_commit, source_tree_sha256: manifest.source_tree_sha256,
+    })).toEqual([])
+    expect(validateBuildSourceIdentity(manifest, {
+      source_status: 'dirty', source_commit: manifest.source_commit, source_tree_sha256: manifest.source_tree_sha256,
+    })).toContain('tracked source tree is dirty')
+  })
+
+  it('confines retained observations to real non-symlink files in the approved directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'browser-evidence-path-'))
+    try {
+      const approved = join(root, 'docs', 'qa-evidence', 'browser-quality')
+      mkdirSync(approved, { recursive: true })
+      writeFileSync(join(approved, 'capture.json'), '{}')
+      writeFileSync(join(root, 'docs', 'qa-evidence', 'not-approved.json'), '{}')
+      symlinkSync(join(approved, 'capture.json'), join(approved, 'linked.json'))
+      expect(resolveApprovedEvidencePath(root, 'docs/qa-evidence/browser-quality/capture.json'))
+        .toBe(realpathSync(join(approved, 'capture.json')))
+      expect(() => resolveApprovedEvidencePath(root, 'docs/qa-evidence/browser-quality/linked.json')).toThrow(/symlink/)
+      expect(() => resolveApprovedEvidencePath(root, 'docs/qa-evidence/not-approved.json')).toThrow(/outside/)
+      expect(() => resolveApprovedEvidencePath(root, join(approved, 'capture.json'))).toThrow(/relative/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
   it('redacts nested credentials, bearer values, assignments, and URL credentials before artifacts', () => {

@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
+import { lstatSync, realpathSync } from 'node:fs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export const BROWSER_QUALITY_SCHEMA_VERSION = 2
 export const BROWSER_BASELINE_SCHEMA_VERSION = 2
-export const BROWSER_BUILD_SCHEMA_VERSION = 1
+export const BROWSER_BUILD_SCHEMA_VERSION = 2
 
 export const RESPONSIVE_VIEWPORTS = Object.freeze([
   Object.freeze({ id: 'desktop', width: 1440, height: 1000, mobile: false }),
@@ -114,6 +116,33 @@ export const checkedBudget = (surface, observedP95Ms) => {
   }
 }
 
+export const validateBuildSourceIdentity = (manifest, current) => {
+  const errors = []
+  if (manifest?.source_status !== 'clean') errors.push('build manifest source status is not clean')
+  if (current?.source_status !== 'clean') errors.push('tracked source tree is dirty')
+  if (manifest?.source_commit !== current?.source_commit) errors.push('build manifest source commit is stale')
+  if (!/^[a-f0-9]{64}$/.test(String(manifest?.source_tree_sha256 ?? ''))
+    || manifest.source_tree_sha256 !== current?.source_tree_sha256) errors.push('build manifest source-tree digest is stale')
+  if (!(Date.parse(manifest?.artifacts_built_at) >= Date.parse(manifest?.source_checked_at))) {
+    errors.push('build artifacts were not produced after the clean-source check')
+  }
+  return errors
+}
+
+export const resolveApprovedEvidencePath = (repositoryRoot, value) => {
+  if (typeof value !== 'string' || !value || isAbsolute(value)) throw new Error('capture path must be repository-relative')
+  const realRepository = realpathSync(repositoryRoot)
+  const approved = realpathSync(resolve(realRepository, 'docs', 'qa-evidence', 'browser-quality'))
+  const lexical = resolve(realRepository, value)
+  const actual = realpathSync(lexical)
+  if (lstatSync(lexical).isSymbolicLink() || actual !== lexical) throw new Error('capture path may not use symlinks')
+  const child = relative(approved, actual)
+  if (!child || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('capture path is outside the approved evidence directory')
+  }
+  return actual
+}
+
 const parseRgb = (value) => {
   const match = String(value).match(/^rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i)
   if (!match) return null
@@ -195,6 +224,39 @@ export const validatePerformanceBaseline = (baseline) => {
   return errors
 }
 
+export const validateBaselineAgainstCaptures = (baseline, captures) => {
+  const errors = []
+  if (!Array.isArray(captures) || captures.length < 3) return ['at least three capture documents are required']
+  const sourceCommit = baseline?.source?.commit
+  const artifactIdentity = baseline?.source?.artifact_identity
+  for (const [index, capture] of captures.entries()) {
+    if (capture?.source?.commit !== sourceCommit) errors.push(`capture ${index + 1} source commit differs from baseline`)
+    if (canonicalJson(capture?.source?.artifact_identity) !== canonicalJson(artifactIdentity)) {
+      errors.push(`capture ${index + 1} artifact identity differs from baseline`)
+    }
+  }
+  for (const viewport of RESPONSIVE_VIEWPORTS) {
+    const claimed = baseline?.viewports?.find((candidate) => candidate.id === viewport.id)
+    for (const surface of PERFORMANCE_SURFACES) {
+      const samples = captures.map((capture) => capture?.viewports
+        ?.find((candidate) => candidate.id === viewport.id)?.performance?.[surface]?.observed_ms)
+      if (samples.some((sample) => !Number.isFinite(sample) || sample < 0)) {
+        errors.push(`captures are missing ${viewport.id} ${surface} samples`)
+        continue
+      }
+      const recomputedP95 = percentile(samples, 0.95)
+      const recomputedBudget = checkedBudget(surface, recomputedP95)
+      const metric = claimed?.performance?.[surface]
+      if (canonicalJson(metric?.samples_ms) !== canonicalJson(samples)) errors.push(`baseline ${viewport.id} ${surface} samples do not match captures`)
+      if (metric?.observed_p95_ms !== recomputedP95) errors.push(`baseline ${viewport.id} ${surface} p95 does not match captures`)
+      for (const key of ['budget_ms', 'experience_budget_ms', 'regression_budget_ms', 'budget_source']) {
+        if (metric?.[key] !== recomputedBudget[key]) errors.push(`baseline ${viewport.id} ${surface} ${key} does not match captures`)
+      }
+    }
+  }
+  return errors
+}
+
 export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true } = {}) => {
   const errors = []
   if (evidence?.schema_version !== BROWSER_QUALITY_SCHEMA_VERSION) errors.push('schema version is invalid')
@@ -220,6 +282,14 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     if (actual.readiness?.search_matches_rendered !== 5) errors.push(`${expected.id} did not render the five expected search matches`)
     if (actual.journeys?.length !== 12 || actual.journeys.some((journey) => !journey.accessibility)) {
       errors.push(`${expected.id} is missing per-journey accessibility evidence`)
+    }
+    for (const journey of actual.journeys ?? []) {
+      for (const mode of ['pointer', 'keyboard']) {
+        if (journey.interaction_modes?.[mode]?.passed !== true) errors.push(`${expected.id} ${journey.name} failed independent ${mode} interaction`)
+      }
+      if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
+        errors.push(`${expected.id} ${journey.name} is missing separately labeled DOM fallback evidence`)
+      }
     }
     for (const surface of PERFORMANCE_SURFACES) {
       const result = actual.performance?.[surface]
