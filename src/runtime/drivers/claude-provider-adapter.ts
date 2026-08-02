@@ -111,6 +111,16 @@ export type ClaudeProviderAdapterOptionsV1 = {
   ): MaybePromise<ProviderUsageV1>
 }
 
+export type ClaudeProviderExecutableOptionsV1 = Pick<
+  ClaudeProviderAdapterOptionsV1,
+  | 'environment'
+  | 'platform'
+  | 'resolveBundledExecutable'
+  | 'readExecutable'
+  | 'fingerprintExecutable'
+  | 'readVersion'
+>
+
 type PrivateExecutableObservationV1 = {
   resolvedPath: string | null
   executableFingerprint: string
@@ -444,12 +454,14 @@ const sealForkLaunchRequest = (
   }
 }
 
-export function createClaudeProviderAdapterV1(
-  options: ClaudeProviderAdapterOptionsV1,
-): ProviderExecutionAdapterV1 {
+const inspectClaudeProviderExecutableV1 = (
+  options: ClaudeProviderExecutableOptionsV1 = {},
+): {
+  discovery: ProviderExecutableDiscoveryV1
+  privateObservation: PrivateExecutableObservationV1
+} => {
   const environment = options.environment ?? process.env
   const platform = options.platform ?? `${process.platform}-${process.arch}`
-  const now = options.now ?? (() => new Date())
   const executableResolver = options.resolveBundledExecutable
     ?? resolveClaudeBundledCliCommand
   const executableFingerprinter = options.fingerprintExecutable
@@ -457,6 +469,76 @@ export function createClaudeProviderAdapterV1(
       ? (resolvedPath: string) => sha256(options.readExecutable!(resolvedPath))
       : fingerprintExecutableFileV1)
   const versionReader = options.readVersion ?? readVersion
+  const resolvedPath = executableResolver()
+  let rawVersion: string | null = null
+  if (resolvedPath) {
+    try {
+      rawVersion = versionReader(
+        resolvedPath,
+        minimalVersionEnvironment(environment),
+      )
+    } catch {
+      // A version-probe failure is unknown, not evidence of incompatibility.
+    }
+  }
+  const exactVersion = exactClaudeVersion(rawVersion)
+  const versionValidated = exactVersion !== null
+    && CLAUDE_PROVIDER_MANIFEST_V1.executable.validated_versions
+      .includes(exactVersion)
+  let executableFingerprint = sha256([
+    'claude-sdk-bundled-executable-v1',
+    exactVersion ?? 'unknown',
+    platform,
+    resolvedPath ? 'resolved' : 'missing',
+  ].join('\u0000'))
+  const platformSupported =
+    CLAUDE_PROVIDER_MANIFEST_V1.executable.supported_platforms
+      .includes(platform)
+  let status: ProviderExecutableDiscoveryV1['status'] = !resolvedPath
+    ? 'missing'
+    : !platformSupported
+      ? 'incompatible'
+      : exactVersion === null
+        ? 'unknown'
+        : versionValidated
+          ? 'validated'
+          : 'incompatible'
+  if (resolvedPath) {
+    try {
+      executableFingerprint = executableFingerprinter(resolvedPath)
+    } catch {
+      status = 'untrusted'
+    }
+  }
+  return {
+    discovery: {
+      contract_version: 1,
+      provider_id: CLAUDE_PROVIDER_MANIFEST_V1.provider_id,
+      adapter_id: CLAUDE_PROVIDER_MANIFEST_V1.adapter_id,
+      status,
+      source: 'sdk_bundled',
+      version: exactVersion,
+      platform,
+      resolved_path: null,
+      executable_fingerprint: executableFingerprint,
+    },
+    privateObservation: {
+      resolvedPath,
+      executableFingerprint,
+    },
+  }
+}
+
+export const discoverClaudeProviderExecutableV1 = (
+  options: ClaudeProviderExecutableOptionsV1 = {},
+): ProviderExecutableDiscoveryV1 =>
+  inspectClaudeProviderExecutableV1(options).discovery
+
+export function createClaudeProviderAdapterV1(
+  options: ClaudeProviderAdapterOptionsV1,
+): ProviderExecutionAdapterV1 {
+  const environment = options.environment ?? process.env
+  const now = options.now ?? (() => new Date())
   const authenticationProbe = options.probeAuthentication
     ?? probeAuthentication
   const driverBindings = new Map<string, DriverSessionBindingV1>()
@@ -502,62 +584,9 @@ export function createClaudeProviderAdapterV1(
     manifest: CLAUDE_PROVIDER_MANIFEST_V1,
     driver: bridgeDriver,
     async discoverExecutable(): Promise<ProviderExecutableDiscoveryV1> {
-      const resolvedPath = executableResolver()
-      let rawVersion: string | null = null
-      if (resolvedPath) {
-        try {
-          rawVersion = versionReader(
-            resolvedPath,
-            minimalVersionEnvironment(environment),
-          )
-        } catch {
-          // A version-probe failure is unknown, not evidence of incompatibility.
-        }
-      }
-      const exactVersion = exactClaudeVersion(rawVersion)
-      const versionValidated = exactVersion !== null
-        && CLAUDE_PROVIDER_MANIFEST_V1.executable.validated_versions
-          .includes(exactVersion)
-      let executableFingerprint = sha256([
-        'claude-sdk-bundled-executable-v1',
-        exactVersion ?? 'unknown',
-        platform,
-        resolvedPath ? 'resolved' : 'missing',
-      ].join('\u0000'))
-      const platformSupported =
-        CLAUDE_PROVIDER_MANIFEST_V1.executable.supported_platforms
-          .includes(platform)
-      let status: ProviderExecutableDiscoveryV1['status'] = !resolvedPath
-        ? 'missing'
-        : !platformSupported
-          ? 'incompatible'
-          : exactVersion === null
-            ? 'unknown'
-            : versionValidated
-              ? 'validated'
-              : 'incompatible'
-      if (resolvedPath) {
-        try {
-          executableFingerprint = executableFingerprinter(resolvedPath)
-        } catch {
-          status = 'untrusted'
-        }
-      }
-      privateExecutable = {
-        resolvedPath,
-        executableFingerprint,
-      }
-      return {
-        contract_version: 1,
-        provider_id: CLAUDE_PROVIDER_MANIFEST_V1.provider_id,
-        adapter_id: CLAUDE_PROVIDER_MANIFEST_V1.adapter_id,
-        status,
-        source: 'sdk_bundled',
-        version: exactVersion,
-        platform,
-        resolved_path: null,
-        executable_fingerprint: executableFingerprint,
-      }
+      const observation = inspectClaudeProviderExecutableV1(options)
+      privateExecutable = observation.privateObservation
+      return observation.discovery
     },
     async probeReadiness(intent, boundary) {
       const mode = CLAUDE_PROVIDER_MANIFEST_V1.modes.find(

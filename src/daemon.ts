@@ -49,6 +49,9 @@ import {
   CODEX_PROTOCOL_CONFIGURATION_FINGERPRINT_V1,
   createCodexProviderAdapterV1,
 } from './runtime/drivers/codex-provider-adapter.js'
+import { discoverClaudeProviderExecutableV1 } from './runtime/drivers/claude-provider-adapter.js'
+import { discoverQwenProviderExecutableV1 } from './runtime/drivers/qwen-provider-adapter.js'
+import { discoverKimiProviderExecutableV1 } from './runtime/drivers/kimi-provider-adapter.js'
 import {
   ProviderContractAgentDriverV1,
 } from './runtime/drivers/provider-contract-driver.js'
@@ -69,22 +72,91 @@ import {
   runOperatorReadinessDoctor,
   type OperatorDoctorReport,
 } from './readiness-doctor.js'
-import type { ProviderExecutableDiscoveryV1 } from './provider-contract.js'
+import type {
+  ProviderExecutableDiscoveryV1,
+  ProviderManifestV1,
+} from './provider-contract.js'
+import {
+  DECLARED_PROVIDER_ACCEPTANCE_GATE_IDS_V1,
+} from './provider-adapter-registry.js'
+import type {
+  ProviderAcceptanceEvidenceRecordV1,
+} from './provider-acceptance-evidence-store.js'
 
 export type DaemonProviderToolSurface = ReturnType<
   typeof createDeclaredProviderToolRegistry
 >
 
+export type DaemonProviderDiscoveries = Readonly<Record<
+  'claude' | 'codex' | 'qwen' | 'kimi',
+  ProviderExecutableDiscoveryV1
+>>
+
+const acceptedProviderEvidence = (
+  records: readonly ProviderAcceptanceEvidenceRecordV1[],
+  discoveries: DaemonProviderDiscoveries,
+  sourceCommit: string | null,
+  manifest: ProviderManifestV1,
+  modeId: string,
+): boolean => {
+  if (!sourceCommit || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceCommit)) {
+    return false
+  }
+  const mode = manifest.modes.find((candidate) => candidate.id === modeId)
+  const discovery = discoveries[manifest.provider_id as keyof DaemonProviderDiscoveries]
+  if (!mode
+    || !discovery
+    || discovery.status !== 'validated'
+    || discovery.version === null) {
+    return false
+  }
+  return records.some((record) => {
+    const matrix = record.matrix
+    return /^pe_[a-f0-9]{64}$/.test(record.id)
+      && /^[a-f0-9]{64}$/.test(record.matrix_sha256)
+      && /^[a-f0-9]{64}$/.test(record.artifact_sha256)
+      && matrix.provider_id === manifest.provider_id
+      && matrix.adapter_id === manifest.adapter_id
+      && matrix.adapter_version === manifest.adapter_version
+      && matrix.mode_id === mode.id
+      && matrix.runtime_mode === mode.runtime_mode
+      && matrix.billing_mode === mode.billing_mode
+      && matrix.credential_kind === mode.default_credential_kind
+      && matrix.executable_version === discovery.version
+      && matrix.platform === discovery.platform
+      && matrix.source_commit === sourceCommit
+      && DECLARED_PROVIDER_ACCEPTANCE_GATE_IDS_V1.every((gateId) =>
+        matrix.gates[gateId].state === 'passed'
+        && matrix.gates[gateId].evidence_refs.length > 0)
+  })
+}
+
 export const createDaemonProviderToolSurface = async (input: {
   doctor: () => OperatorDoctorReport
-  discoverCodex: () => Promise<ProviderExecutableDiscoveryV1>
+  discoveries: () => Promise<DaemonProviderDiscoveries>
+  acceptanceEvidence?: () => readonly ProviderAcceptanceEvidenceRecordV1[]
+  sourceCommit?: () => string | null
   integrations: () => readonly ToolIntegrationCheck[]
 }): Promise<DaemonProviderToolSurface> => {
   const doctor = input.doctor()
-  const discovery = await input.discoverCodex()
+  const discoveries = await input.discoveries()
+  let records: readonly ProviderAcceptanceEvidenceRecordV1[] = []
+  try {
+    records = input.acceptanceEvidence?.() ?? []
+  } catch {
+    // Missing or mutated retained artifacts cannot preserve an acceptance claim.
+  }
+  const sourceCommit = input.sourceCommit?.() ?? null
   return createDeclaredProviderToolRegistry({
     doctor,
-    discoveries: { codex: discovery },
+    discoveries,
+    accepted: (manifest, modeId) => acceptedProviderEvidence(
+      records,
+      discoveries,
+      sourceCommit,
+      manifest,
+      modeId,
+    ),
     observedAt: doctor.checked_at,
   }, input.integrations())
 }
@@ -95,6 +167,32 @@ export const synchronizeDaemonProviderToolSurface = (
 ): void => {
   current.registry.synchronize(next.registry.list())
   current.matrix.splice(0, current.matrix.length, ...next.matrix)
+}
+
+export const createDaemonProviderToolSurfaceRefresher = (
+  current: DaemonProviderToolSurface,
+  inspect: () => Promise<DaemonProviderToolSurface>,
+  failClosed: () => DaemonProviderToolSurface,
+): (() => Promise<void>) => {
+  let generation = 0
+  return async () => {
+    const requestedGeneration = ++generation
+    try {
+      const refreshed = await inspect()
+      if (requestedGeneration !== generation) return
+      synchronizeDaemonProviderToolSurface(current, refreshed)
+    } catch {
+      if (requestedGeneration !== generation) return
+      try {
+        synchronizeDaemonProviderToolSurface(current, failClosed())
+      } catch {
+        synchronizeDaemonProviderToolSurface(
+          current,
+          createDeclaredProviderToolRegistry(),
+        )
+      }
+    }
+  }
 }
 
 export function dataDir(): string {
@@ -141,6 +239,13 @@ export interface ServeOptions { expose?: boolean }
 export type CodexProviderContractRouting = {
   enabled: boolean
   source_commit: string | null
+}
+
+export const providerToolEvidenceSourceCommit = (
+  source: NodeJS.ProcessEnv = process.env,
+): string | null => {
+  const value = source.ORCHESTRA_PROVIDER_CONTRACT_SOURCE_COMMIT?.trim() ?? ''
+  return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value) ? value : null
 }
 
 export const codexProviderContractRouting = (
@@ -442,7 +547,20 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     })
     const inspectToolSurface = () => createDaemonProviderToolSurface({
       doctor: () => runOperatorReadinessDoctor('both'),
-      discoverCodex: () => codexAdapter.discoverExecutable(),
+      discoveries: async () => {
+        const [claude, codex] = await Promise.all([
+          Promise.resolve(discoverClaudeProviderExecutableV1()),
+          codexAdapter.discoverExecutable(),
+        ])
+        return {
+          claude,
+          codex,
+          qwen: discoverQwenProviderExecutableV1(),
+          kimi: discoverKimiProviderExecutableV1(),
+        }
+      },
+      acceptanceEvidence: () => agentOs.providerAcceptanceEvidence.verified(),
+      sourceCommit: () => providerToolEvidenceSourceCommit(),
       integrations: () => inspectDeclaredProviderToolIntegrations({
         scope: 'project',
         roots: { cwd: process.cwd() },
@@ -457,18 +575,20 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       providerMatrix: toolSurface.matrix,
       isOperator: (request: FastifyRequest) => request.orchestraPrincipal === 'operator',
     })
-    toolEvidenceRefreshTimer = setInterval(() => {
-      void inspectToolSurface().then((refreshed) => {
-        synchronizeDaemonProviderToolSurface(toolSurface, refreshed)
-      }).catch(() => {
+    const refreshToolSurface = createDaemonProviderToolSurfaceRefresher(
+      toolSurface,
+      inspectToolSurface,
+      () => {
         const integrations = inspectDeclaredProviderToolIntegrations({
           scope: 'project',
           roots: { cwd: process.cwd() },
           pluginRoot: process.cwd(),
         })
-        const closed = createDeclaredProviderToolRegistry({}, integrations)
-        synchronizeDaemonProviderToolSurface(toolSurface, closed)
-      })
+        return createDeclaredProviderToolRegistry({}, integrations)
+      },
+    )
+    toolEvidenceRefreshTimer = setInterval(() => {
+      void refreshToolSurface()
     }, 60_000)
     toolEvidenceRefreshTimer.unref()
     registerPush(server)

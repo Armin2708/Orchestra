@@ -132,6 +132,63 @@ describe('durable provider acceptance evidence', () => {
     db.close()
   })
 
+  it('verifies retained evidence before changing durable or in-memory state', () => {
+    const cases = [
+      {
+        name: 'missing artifact',
+        arrange: () => {
+          const value = matrix()
+          const retained = retainedArtifact(value)
+          unlinkSync(retained.path)
+          return { value, artifact: retained.artifact }
+        },
+        error: /artifact could not be verified/,
+      },
+      {
+        name: 'wrong digest',
+        arrange: () => {
+          const value = matrix()
+          const retained = retainedArtifact(value)
+          return {
+            value,
+            artifact: { ...retained.artifact, artifact_sha256: 'b'.repeat(64) },
+          }
+        },
+        error: /artifact digest mismatch/,
+      },
+      {
+        name: 'wrong matrix',
+        arrange: () => {
+          const retainedValue = matrix()
+          const retained = retainedArtifact(retainedValue)
+          return {
+            value: matrix('2026-07-28T12:10:00.000Z'),
+            artifact: retained.artifact,
+          }
+        },
+        error: /artifact digest mismatch/,
+      },
+    ]
+
+    for (const testCase of cases) {
+      const db = openDb(':memory:')
+      const store = new ProviderAcceptanceEvidenceStoreV1(db)
+      const registry = new ProviderAdapterRegistryV1()
+      const { value, artifact } = testCase.arrange()
+
+      expect(
+        () => store.record(registry, value, artifact),
+        testCase.name,
+      ).toThrow(testCase.error)
+      expect(store.list(), testCase.name).toEqual([])
+      expect(
+        registry.declarations().find((entry) => entry.provider_id === 'codex'),
+        testCase.name,
+      ).toMatchObject({ acceptance_matrix_count: 0 })
+      db.close()
+    }
+  })
+
   it('fails closed when persisted evidence no longer matches its digest', () => {
     const db = openDb(':memory:')
     const store = new ProviderAcceptanceEvidenceStoreV1(db)
