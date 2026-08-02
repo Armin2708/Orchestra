@@ -178,7 +178,7 @@ export interface VerifiedDeliveryKnowledgeIngestionInput {
   gotchas?: VerifiedGotchaInput[]
 }
 
-export interface AcceptedKnowledgeEntryInput {
+export interface AcceptedDecisionKnowledgeEntryInput {
   path: string
   start_line: number
   end_line: number
@@ -186,9 +186,9 @@ export interface AcceptedKnowledgeEntryInput {
   expected_source_sha256: string
 }
 
-export interface AcceptedKnowledgeArtifact {
+export interface AcceptedDecisionKnowledgeArtifact {
   schema_version: 1
-  kind: 'discussion_answer' | 'decision'
+  kind: 'decision'
   key: string
   title: string
   content: string
@@ -196,13 +196,13 @@ export interface AcceptedKnowledgeArtifact {
   accepted_by: string
 }
 
-export interface AcceptedKnowledgeIngestionInput {
+export interface AcceptedDecisionKnowledgeIngestionInput {
   board_id: number
   repository_key: string
   repository_root: string
   base_commit_sha: string
   observed_at: string
-  entries: AcceptedKnowledgeEntryInput[]
+  entries: AcceptedDecisionKnowledgeEntryInput[]
 }
 
 export interface KnowledgeSourceIngestionReport {
@@ -5632,9 +5632,9 @@ function deliveryPlans(
   return plans
 }
 
-function validateAcceptedKnowledgeInput(
-  value: AcceptedKnowledgeIngestionInput,
-): { common: CommonInput; entries: AcceptedKnowledgeEntryInput[] } {
+function validateAcceptedDecisionKnowledgeInput(
+  value: AcceptedDecisionKnowledgeIngestionInput,
+): { common: CommonInput; entries: AcceptedDecisionKnowledgeEntryInput[] } {
   const record = safeRecord(value, [
     'board_id',
     'repository_key',
@@ -5646,7 +5646,7 @@ function validateAcceptedKnowledgeInput(
   const entries = safeArray(
     record.entries,
     MAX_KNOWLEDGE_SOURCE_ACCEPTED_ENTRIES,
-  ).map((item): AcceptedKnowledgeEntryInput => {
+  ).map((item): AcceptedDecisionKnowledgeEntryInput => {
     const entry = safeRecord(item, [
       'path',
       'start_line',
@@ -5674,7 +5674,7 @@ function validateAcceptedKnowledgeInput(
   return { common: commonInput(record), entries }
 }
 
-function acceptedKnowledgeArtifact(raw: string): AcceptedKnowledgeArtifact {
+function acceptedDecisionKnowledgeArtifact(raw: string): AcceptedDecisionKnowledgeArtifact {
   try {
     const parsed: unknown = JSON.parse(raw)
     const record = safeRecord(parsed, [
@@ -5688,7 +5688,7 @@ function acceptedKnowledgeArtifact(raw: string): AcceptedKnowledgeArtifact {
     ])
     if (record.schema_version !== 1) fail('evidence_mismatch')
     const kind = safeText(record.kind, 32)
-    if (kind !== 'discussion_answer' && kind !== 'decision') {
+    if (kind !== 'decision') {
       fail('evidence_mismatch')
     }
     const key = safeText(record.key, 256)
@@ -5703,7 +5703,7 @@ function acceptedKnowledgeArtifact(raw: string): AcceptedKnowledgeArtifact {
     ) {
       fail('evidence_mismatch')
     }
-    const artifact: AcceptedKnowledgeArtifact = {
+    const artifact: AcceptedDecisionKnowledgeArtifact = {
       schema_version: 1,
       kind,
       key,
@@ -5719,10 +5719,10 @@ function acceptedKnowledgeArtifact(raw: string): AcceptedKnowledgeArtifact {
   }
 }
 
-function acceptedKnowledgePlans(
+function acceptedDecisionKnowledgePlans(
   common: CommonInput,
   root: string,
-  entries: readonly AcceptedKnowledgeEntryInput[],
+  entries: readonly AcceptedDecisionKnowledgeEntryInput[],
 ): PlannedKnowledge[] {
   const evidenceByPath = new Map<string, LoadedEvidence>()
   let evidenceBytes = 0
@@ -5745,7 +5745,7 @@ function acceptedKnowledgePlans(
     if (sha256(cited.raw) !== entry.expected_source_sha256) {
       fail('evidence_mismatch')
     }
-    const artifact = acceptedKnowledgeArtifact(cited.raw)
+    const artifact = acceptedDecisionKnowledgeArtifact(cited.raw)
     const acceptedIdentity = `${artifact.kind}\u0000${artifact.key}`
     if (acceptedIdentities.has(acceptedIdentity)) {
       fail('contradictory_evidence')
@@ -5803,21 +5803,21 @@ function acceptedKnowledgePlans(
 
 /**
  * Ingests adapter-neutral structural evidence, selectively scoped Git
- * history/blame, committed accepted answers/decisions, and accepted delivery
+ * history/blame, committed accepted decisions, and accepted delivery
  * evidence. Every method re-verifies repository and database scope inside the
  * atomic persistence transaction.
  */
 export class KnowledgeSourceIngestor {
   constructor(private readonly db: Database.Database) {}
 
-  ingestAcceptedKnowledge(
-    value: AcceptedKnowledgeIngestionInput,
+  ingestAcceptedDecision(
+    value: AcceptedDecisionKnowledgeIngestionInput,
   ): KnowledgeSourceIngestionReport {
     try {
-      const input = validateAcceptedKnowledgeInput(value)
+      const input = validateAcceptedDecisionKnowledgeInput(value)
       const verified = verifyRepository(this.db, input.common)
       assertRepositoryStable(this.db, input.common, verified)
-      const plans = acceptedKnowledgePlans(
+      const plans = acceptedDecisionKnowledgePlans(
         input.common,
         verified.root,
         input.entries,

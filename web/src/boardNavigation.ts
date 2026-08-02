@@ -8,7 +8,7 @@ export const BOARD_TABS = [
 ] as const
 
 export type BoardTab = typeof BOARD_TABS[number]['id']
-export type PrimaryView = 'board' | 'open-work' | 'organization' | 'roadmap' | 'settings'
+export type PrimaryView = 'board' | 'open-work' | 'collaboration' | 'organization' | 'roadmap' | 'settings'
 
 export type StoredNavigation = {
   view: PrimaryView
@@ -16,7 +16,7 @@ export type StoredNavigation = {
 }
 
 const primaryViews = new Set<PrimaryView>([
-  'board', 'open-work', 'organization', 'roadmap', 'settings',
+  'board', 'open-work', 'collaboration', 'organization', 'roadmap', 'settings',
 ])
 const boardTabs = new Set<BoardTab>(BOARD_TABS.map((tab) => tab.id))
 

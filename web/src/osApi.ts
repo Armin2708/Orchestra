@@ -249,6 +249,38 @@ export type DeliveryCollection = {
   current: DeliveryReport | null
 }
 
+export type JobDeliveryDetailModel = {
+  job: { id: OsId; status: string; provider: string }
+  requested: DeliveryAskedSnapshot & { contract_version?: number; contract_updated_at?: string }
+  delivered: DeliveryReport
+  lineage: DeliveryReport[]
+  verification_runs: Array<{
+    id: string; command: string; cwd: string; environment: Record<string, string>
+    environment_sha256: string; exit_code: number; output_artifact_id: string
+    output_sha256: string; started_at: string; finished_at: string; recorded_by: string
+  }>
+  artifact_attestations: Array<{
+    id: string; artifact_id: string; content_sha256: string; byte_size: number
+    source_kind: string; source_locator: string; source_revision: string | null
+    builder: string; attestation_sha256: string
+  }>
+  review_comments: Array<{
+    id: string; criterion_id: string | null; deliverable_id: string | null
+    artifact_id: string
+    location: { path?: string; startLine?: number; endLine?: number; startByte?: number; endByte?: number }
+    body: string; author: string; created_at: string
+  }>
+  shipments: Array<{
+    id: string; source_repository: string; source_commit: string; destination: string
+    deployment_ref: string | null; manifest_sha256: string; shipped_by: string; shipped_at: string
+  }>
+  regressions: Array<{
+    id: string; summary: string; evidence_artifact_id: string; reopened_report_id: string
+    recorded_by: string; observed_at: string
+  }>
+  evidence_gaps: string[]
+}
+
 export type Policy = {
   id: OsId
   board_id: number
@@ -860,6 +892,30 @@ export const normalizeDeliveriesResponse = (value: unknown): DeliveryCollection 
   return { deliveries: ordered, current }
 }
 
+export const normalizeJobDeliveryDetail = (value: unknown): JobDeliveryDetailModel => {
+  const detail = objectValue(parseJson<unknown>(value, value))
+  const job = objectValue(detail.job)
+  const id = optionalId(firstValue(job, 'id', 'job_id', 'jobId'))
+  if (id === null) throw new Error('Job delivery detail is missing job.id')
+  return {
+    ...(detail as unknown as JobDeliveryDetailModel),
+    job: {
+      id,
+      status: optionalString(job.status) ?? 'unknown',
+      provider: optionalString(job.provider) ?? 'unknown',
+    },
+    requested: normalizeAskedSnapshot(detail.requested),
+    delivered: normalizeDeliveryReport(detail.delivered),
+    lineage: listValue(detail.lineage).map(normalizeDeliveryReport),
+    verification_runs: listValue(detail.verification_runs) as JobDeliveryDetailModel['verification_runs'],
+    artifact_attestations: listValue(detail.artifact_attestations) as JobDeliveryDetailModel['artifact_attestations'],
+    review_comments: listValue(detail.review_comments) as JobDeliveryDetailModel['review_comments'],
+    shipments: listValue(detail.shipments) as JobDeliveryDetailModel['shipments'],
+    regressions: listValue(detail.regressions) as JobDeliveryDetailModel['regressions'],
+    evidence_gaps: asStringList(detail.evidence_gaps),
+  }
+}
+
 const accessProfiles = new Set<AgentAccessProfile>(['read_only', 'workspace_write', 'full_access'])
 
 const normalizeAccessProfile = (value: unknown): AgentAccessProfile | null => {
@@ -1467,6 +1523,11 @@ export const osApi = {
     unwrapEntity<Artifact>(await api('POST', `/os/cards/${cardId}/evidence`, input), ['artifact']),
   getDeliveries: async (cardId: number) =>
     normalizeDeliveriesResponse(await api('GET', `/os/cards/${cardId}/deliveries`)),
+  getJobDeliveryDetail: async (jobId: OsId) =>
+    normalizeJobDeliveryDetail(unwrapEntity<unknown>(
+      await api('GET', `/os/jobs/${jobId}/detail`),
+      ['job_detail'],
+    )),
 
   getContext: async (workspaceId: OsId) =>
     unwrapList<ContextItem>(await api('GET', `/os/workspaces/${workspaceId}/context`), ['context', 'context_items']),

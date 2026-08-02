@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -15,6 +15,10 @@ import { OrchestrationService } from '../src/agent-os/orchestration-service.js'
 import { openDb } from '../src/db.js'
 import type { AgentDriver, DriverLaunchRequest } from '../src/runtime/index.js'
 import { buildServer } from '../src/server.js'
+import {
+  managedAgentSessionCredentialPath,
+  persistManagedAgentSessionCredential,
+} from '../src/agent-session-credential.js'
 
 const roots: string[] = []
 const servers: FastifyInstance[] = []
@@ -1382,6 +1386,105 @@ describe('Agent OS daemon runtime integration', () => {
       .get(cardId) as { count: number }).count).toBe(1)
     expect((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE card_id=? AND type='review_request'")
       .get(cardId) as { count: number }).count).toBe(0)
+  })
+
+  it('repairs a mismatched exact Codex credential during trusted canonical recovery', async () => {
+    const { base, boardId, repo, db, runtime, server } = await fixture()
+    const previousHome = process.env.ORCHESTRA_HOME
+    process.env.ORCHESTRA_HOME = path.join(base, 'orchestra-home')
+    let recoveredWorkspaceId = 'codex-recovery-workspace'
+    const driver: AgentDriver & { updateSession: () => Promise<void> } = {
+      id: 'codex',
+      capabilities: () => ({
+        attach: true, streaming: true, interrupt: true, stop: true, rawTerminal: false, resume: true,
+      }),
+      launch: async () => { throw new Error('not used') },
+      attach: async () => ({
+        id: 'codex:recovered', externalId: 'codex-recovery-thread', driverId: 'codex',
+        workspaceId: recoveredWorkspaceId, status: 'idle',
+        startedAt: new Date().toISOString(), metadata: {},
+      }),
+      updateSession: async () => undefined,
+      send: async () => undefined,
+      interrupt: async () => undefined,
+      stop: async () => undefined,
+      events: async function* () { await new Promise(() => {}) },
+    }
+    runtime.registerDriver(driver)
+    const workspace = (await server.inject({
+      method: 'POST', url: `/api/v1/os/boards/${boardId}/workspaces`,
+      payload: {
+        id: 'codex-recovery-workspace', name: 'Codex recovery', kind: 'shared', root_path: repo,
+      },
+    })).json().workspace
+    recoveredWorkspaceId = String(workspace.id)
+    const job = runtime.scheduler.create({
+      boardId, workspaceId: workspace.id, provider: 'codex', maxAttempts: 1,
+    })
+    const profile = new AgentProfileService(db).create({
+      boardId,
+      name: 'Recovered Codex profile',
+      defaultProvider: 'codex',
+      defaultAccessProfile: 'workspace_write',
+      actor: { type: 'system', id: 'test' },
+      idempotencyKey: 'test:codex-recovery-profile',
+    })
+    const conversation = db.prepare(`SELECT id FROM agent_conversations
+      WHERE profile_id=? AND is_default=1`).get(profile.id) as { id: string }
+    const agentId = Number(db.prepare(`INSERT INTO agents
+      (board_id, name, session_id, kind, status, provider, external_session_id,
+       hook_token_hash, access_profile)
+      VALUES (?, 'recovered-codex', ?, 'hired', 'active', 'codex',
+        'codex-recovery-thread', ?, 'workspace_write')`).run(
+      boardId,
+      `agent-os:${job.id}`,
+      createHash('sha256').update('database-mismatch').digest('hex'),
+    ).lastInsertRowid)
+    db.prepare(`INSERT INTO agent_sessions
+      (id, workspace_id, agent_id, provider, external_id, status, profile_id,
+       conversation_id, job_id, mode, driver_id, access_profile, context_json)
+      VALUES ('codex-recovery-session', ?, ?, 'codex', 'codex-recovery-thread',
+        'running', ?, ?, ?, 'managed', 'codex', 'workspace_write', '{}')`).run(
+      workspace.id,
+      agentId,
+      profile.id,
+      conversation.id,
+      job.id,
+    )
+    db.prepare(`UPDATE jobs SET status='running', attempts=1, started_at=datetime('now')
+      WHERE id=?`).run(job.id)
+    persistManagedAgentSessionCredential({
+      agent_id: agentId,
+      agent_name: 'recovered-codex',
+      board_id: boardId,
+      provider: 'codex',
+      session_id: 'codex-recovery-thread',
+      session_token: 'file-mismatch',
+      cwd: repo,
+    })
+
+    try {
+      const recovery = await runtime.reconcileJobs()
+      expect(recovery, JSON.stringify({
+        job: runtime.scheduler.get(job.id),
+        session: db.prepare('SELECT * FROM agent_sessions WHERE id=?')
+          .get('codex-recovery-session'),
+      })).toEqual({ resumed: [job.id], recovered: [] })
+      const credentialPath = managedAgentSessionCredentialPath('codex', 'codex-recovery-thread')
+      const credential = JSON.parse(await readFile(credentialPath, 'utf8')) as {
+        session_token: string
+      }
+      const row = db.prepare('SELECT hook_token_hash FROM agents WHERE id=?').get(agentId) as {
+        hook_token_hash: string
+      }
+      expect(credential.session_token).not.toBe('file-mismatch')
+      expect(createHash('sha256').update(credential.session_token).digest('hex'))
+        .toBe(row.hook_token_hash)
+      expect((await stat(credentialPath)).mode & 0o777).toBe(0o600)
+    } finally {
+      if (previousHome === undefined) delete process.env.ORCHESTRA_HOME
+      else process.env.ORCHESTRA_HOME = previousHome
+    }
   })
 
   it('continues a resumable Claude job after daemon restart instead of attaching it idle', async () => {

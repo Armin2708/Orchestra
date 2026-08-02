@@ -29,7 +29,7 @@ type ForwardMigrationInventory = {
 }
 
 const CODE_HEAD = '74d632f46bfeaaead1c7a52ced8a317915baacbf'
-const INVENTORY_HEAD = 'c25ec778febd393950829a8dae5cb7e44b102e8d'
+const INVENTORY_HEAD = 'f6718aac2e86e02dbac2e8d9b4eaee4e51d01560'
 const VALIDATION_CATEGORIES = ['count', 'key', 'scope', 'lifecycle', 'hash']
 const EVIDENCE_TABLES = [
   'os_compatibility_projection_links',

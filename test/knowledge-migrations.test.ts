@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
+import {
+  AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+  installKnowledgeContextUseActualEvidenceSchema,
+} from '../src/agent-os/knowledge-context-use-actual-migration.js'
 import { applyAgentOsMigrations } from '../src/agent-os/migrations.js'
 import { openDb } from '../src/db.js'
 
@@ -416,6 +420,26 @@ function insertContextUse(
 
 function removeMigration018(db: Database.Database): void {
   db.exec(`
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_immutable;
+    DROP TRIGGER IF EXISTS knowledge_freshness_observations_delete;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_immutable;
+    DROP TRIGGER IF EXISTS knowledge_control_actions_delete;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_review_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_update;
+    DROP TRIGGER IF EXISTS knowledge_promotion_requests_delete;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_insert;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_immutable;
+    DROP TRIGGER IF EXISTS knowledge_promotion_sources_delete;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_immutable;
+    DROP TRIGGER IF EXISTS knowledge_benchmark_runs_delete;
+    DROP TABLE IF EXISTS knowledge_promotion_sources;
+    DROP TABLE IF EXISTS knowledge_promotion_requests;
+    DROP TABLE IF EXISTS knowledge_review_requests;
+    DROP TABLE IF EXISTS knowledge_freshness_observations;
+    DROP TABLE IF EXISTS knowledge_control_actions;
+    DROP TABLE IF EXISTS knowledge_benchmark_runs;
+    DELETE FROM os_schema_migrations WHERE id='031-knowledge-management';
     DROP TABLE IF EXISTS knowledge_retrieval_fts;
     DROP TABLE IF EXISTS knowledge_retrieval_index_state;
     DROP TABLE IF EXISTS knowledge_retrieval_documents;
@@ -525,7 +549,7 @@ describe('knowledge persistence migration 018', () => {
     `).get(MIGRATION_ID)).toEqual({ id: MIGRATION_ID })
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '030-terminal-session-state' })
+    `).get()).toEqual({ id: '039-terminal-session-state' })
     const tables = (db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name IN (
@@ -543,7 +567,33 @@ describe('knowledge persistence migration 018', () => {
     ])
     expect((db.prepare(
       'SELECT COUNT(*) AS count FROM os_schema_migrations',
-    ).get() as { count: number }).count).toBe(30)
+    ).get() as { count: number }).count).toBe(39)
+    db.close()
+  })
+
+  it('upgrades populated ContextUse evidence and reapplies migration 036 idempotently', () => {
+    expect(AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID)
+      .toBe('036-knowledge-context-use-actual-evidence')
+    const db = openDb(':memory:')
+    const boardId = insertBoard(db, 'actual-evidence-replay')
+    completeBuild(db, boardId)
+    const runtime = insertRuntime(db, boardId, 'actual-evidence-replay')
+    insertContextUse(db, boardId, runtime)
+    const running = db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)
+
+    installKnowledgeContextUseActualEvidenceSchema(db)
+    expect(db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)).toEqual(running)
+    db.prepare(`UPDATE context_uses
+      SET outcome='completed', actual_tokens=NULL, completed_at=?
+      WHERE board_id=? AND id=?`).run(at, boardId, useId)
+    const retained = db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)
+
+    installKnowledgeContextUseActualEvidenceSchema(db)
+    expect(db.prepare(`SELECT * FROM context_uses
+      WHERE board_id=? AND id=?`).get(boardId, useId)).toEqual(retained)
     db.close()
   })
 
@@ -1775,11 +1825,6 @@ describe('knowledge persistence migration 018', () => {
     `).get(boardId, buildId)).toEqual({ status: 'used' })
     expect(() => db.prepare(`
       UPDATE context_uses
-      SET outcome='completed', actual_tokens=NULL, completed_at=?
-      WHERE board_id=? AND id=?
-    `).run(at, boardId, useId)).toThrow()
-    expect(() => db.prepare(`
-      UPDATE context_uses
       SET outcome='completed', actual_tokens=1, completed_at='2026-07-25T23:59:59.000Z'
       WHERE board_id=? AND id=?
     `).run(boardId, useId)).toThrow()
@@ -1790,7 +1835,7 @@ describe('knowledge persistence migration 018', () => {
     `).run(at, boardId, useId)).toThrow(/CHECK/)
     db.prepare(`
       UPDATE context_uses
-      SET outcome='completed', actual_tokens=1, completed_at=?
+      SET outcome='completed', actual_tokens=NULL, completed_at=?
       WHERE board_id=? AND id=?
     `).run(at, boardId, useId)
     expect(db.prepare(`
@@ -1798,7 +1843,7 @@ describe('knowledge persistence migration 018', () => {
       FROM context_uses WHERE board_id=? AND id=?
     `).get(boardId, useId)).toEqual({
       outcome: 'completed',
-      actual_tokens: 1,
+      actual_tokens: null,
       completed_at: at,
     })
     expect(() => db.prepare(`

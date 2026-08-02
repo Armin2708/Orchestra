@@ -1,0 +1,29 @@
+.discussion-center { display:grid; gap:12px; min-height:420px; color:var(--ink,#27251f); }
+.dc-header,.dc-search,.dc-queues,.dc-thread>header,.dc-post>header,.dc-post>footer { display:flex; gap:10px; align-items:center; }
+.dc-header { justify-content:space-between; }
+.dc-header p,.dc-header h2,.dc-thread h3,.dc-post p { margin:0; }
+.dc-header p,.dc-list span,.dc-list small,.dc-thread>header span,.dc-post header span { text-transform:uppercase; letter-spacing:.08em; font-size:11px; }
+.dc-search input { flex:1; }
+.dc-search input,.dc-create input,.dc-create textarea,.dc-create select,.dc-reply textarea { border:1px solid #d7d2c7; border-radius:6px; background:#fffdf8; padding:9px 10px; }
+.dc-queues button,.dc-header button,.dc-search button,.dc-create button,.dc-reply button,.dc-post button,.dc-subscribe { border:1px solid #cbc4b7; border-radius:999px; background:#fffdf8; padding:6px 10px; cursor:pointer; }
+.dc-queues button.active { background:#27251f; color:#fff; }
+.dc-layout { display:grid; grid-template-columns:minmax(190px,280px) 1fr; gap:14px; min-width:0; }
+.dc-list { display:grid; align-content:start; gap:5px; max-height:620px; overflow:auto; }
+.dc-list>button { display:grid; gap:4px; text-align:left; border:1px solid #ded8cd; border-radius:8px; background:#faf7f0; padding:10px; }
+.dc-list>button.active { border-color:#766b59; background:#f0eadf; }
+.dc-detail { min-width:0; }
+.dc-thread { display:grid; gap:10px; }
+.dc-thread>header b { margin-left:auto; }
+.dc-tags { display:flex; flex-wrap:wrap; gap:5px; }
+.dc-tags code { background:#eee8dc; padding:2px 5px; border-radius:4px; }
+.dc-tree { display:grid; gap:8px; }
+.dc-post { border:1px solid #ddd6c9; border-radius:8px; padding:10px; background:#fffdf8; }
+.dc-post.accepted { border-color:#568765; background:#f3f8f2; }
+.dc-post header strong { color:#376844; margin-left:auto; }
+.dc-post footer code { margin-right:auto; color:#756d61; }
+.dc-children { border-left:2px solid #ded8cd; margin:10px 0 0 12px; padding-left:10px; display:grid; gap:8px; }
+.dc-reply,.dc-create { display:grid; gap:8px; }
+.dc-reply button,.dc-create button { justify-self:start; }
+.dc-error { color:#a43b34; background:#fff0ed; padding:8px; border-radius:6px; }
+.dc-empty { color:#756d61; text-align:center; margin:60px 0; }
+@media (max-width:720px) { .dc-layout { grid-template-columns:1fr; } .dc-list { max-height:230px; } }

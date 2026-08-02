@@ -1314,7 +1314,7 @@ describe('strict context budgets', () => {
 })
 
 describe('context-use lifecycle contracts', () => {
-  it('requires completed token evidence and monotonic completion time', () => {
+  it('allows unavailable completed token evidence and requires monotonic completion time', () => {
     const identity = {
       context_build_id: BUILD_A,
       job_id: 'job-lifecycle',
@@ -1340,14 +1340,11 @@ describe('context-use lifecycle contracts', () => {
       outcome: 'failed',
       completed_at: '2026-07-26T09:02:00.000Z',
     })).toMatchObject({ outcome: 'failed', actual_tokens: null })
-    expectContractError(
-      () => validateContextUse({
-        ...running,
-        outcome: 'completed',
-        completed_at: '2026-07-26T09:02:00.000Z',
-      }),
-      'invalid_contract',
-    )
+    expect(validateContextUse({
+      ...running,
+      outcome: 'completed',
+      completed_at: '2026-07-26T09:02:00.000Z',
+    })).toMatchObject({ outcome: 'completed', actual_tokens: null })
     expectContractError(
       () => validateContextUse({
         ...running,

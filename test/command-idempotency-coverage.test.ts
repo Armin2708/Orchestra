@@ -41,7 +41,7 @@ describe('DOM-013 command idempotency coverage', () => {
 
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations ORDER BY rowid DESC LIMIT 1
-    `).get()).toEqual({ id: '030-terminal-session-state' })
+    `).get()).toEqual({ id: '039-terminal-session-state' })
     expect(db.prepare(`
       SELECT type FROM sqlite_master
       WHERE name='os_command_receipts'

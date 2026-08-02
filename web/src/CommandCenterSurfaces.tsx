@@ -234,7 +234,8 @@ export function CanonicalJobDetail({
         <div><dt>Budget</dt><dd>{job.budget_tokens === null ? 'No token cap' : `${job.budget_tokens.toLocaleString()} tokens`}</dd></div>
       </dl>
       {job.error && <div className="cc-job-error" role="alert"><OsIcon name="attention" /><span>{job.error}</span></div>}
-      <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card} />
+      <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card}
+        boardId={job.board_id} />
     </article>
   )
 }

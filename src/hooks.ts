@@ -2,8 +2,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { api } from './client.js'
-import { dataDir, ensureDaemon } from './daemon.js'
+import { ensureDaemon } from './daemon.js'
 import { hookRules, verbose } from './rules.js'
+import {
+  MANAGED_AGENT_BOOTSTRAP_ENV,
+  MANAGED_AGENT_HOME_SESSION_ENV,
+  managedAgentSessionCredentialPath,
+  persistManagedAgentSessionCredential,
+} from './agent-session-credential.js'
 
 // throwaway sessions in temp dirs shouldn't create phantom boards
 export function isThrowawayCwd(cwd: string): boolean {
@@ -40,15 +46,14 @@ type Session = {
   provider: HookProvider
   session_id: string
   session_token: string
+  cwd?: string
   transcript_path?: string
 }
-const safeSessionId = (id: string) => encodeURIComponent(id)
 // Keep the historical Claude path intact while isolating every other provider
 // under its own directory. This avoids state collisions without invalidating
 // active Claude sessions during upgrade.
-const sessFile = (provider: HookProvider, id: string) => provider === 'claude'
-  ? path.join(dataDir(), 'sessions', `${safeSessionId(id)}.json`)
-  : path.join(dataDir(), 'sessions', provider, `${safeSessionId(id)}.json`)
+const sessFile = (provider: HookProvider, id: string) =>
+  managedAgentSessionCredentialPath(provider, id)
 const loadSession = (provider: HookProvider, id: string): Session | undefined => {
   try {
     const session = JSON.parse(fs.readFileSync(sessFile(provider, id), 'utf8'))
@@ -59,12 +64,7 @@ const loadSession = (provider: HookProvider, id: string): Session | undefined =>
 }
 
 const saveSession = (provider: HookProvider, session: Session): void => {
-  const file = sessFile(provider, session.session_id)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(session), { mode: 0o600 })
-  // `mode` only applies when Node creates the file. Upgrade legacy session files
-  // explicitly so a newly-added bearer token never remains in a prior 0644 file.
-  fs.chmodSync(file, 0o600)
+  persistManagedAgentSessionCredential(session)
 }
 
 const sessionIdentity = (session: Session) => ({
@@ -77,18 +77,48 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
   if (!input.session_id) return undefined
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return undefined
   if (!(await ensureDaemon())) return undefined
-  const board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
+  const managed = process.env.ORCHESTRA_MANAGED_AGENT === '1'
+  const managedBoardId = managed
+    ? positiveEnvironmentInteger(process.env.ORCHESTRA_BOARD_ID) : null
+  const board = managedBoardId
+    ? { id: managedBoardId }
+    : await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
+  const managedAgentId = managed
+    ? positiveEnvironmentInteger(process.env.ORCHESTRA_AGENT_ID) : null
+  const bootstrapNonce = managed
+    ? process.env[MANAGED_AGENT_BOOTSTRAP_ENV]?.trim() || null : null
+  const agentHomeSessionId = managed
+    ? process.env[MANAGED_AGENT_HOME_SESSION_ENV]?.trim() || null : null
   const agent = await api('POST', '/agents/register', {
     board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
+    ...(managedAgentId ? { agent_id: managedAgentId } : {}),
+    ...(bootstrapNonce ? { bootstrap_nonce: bootstrapNonce } : {}),
+    ...(agentHomeSessionId ? { agent_home_session_id: agentHomeSessionId } : {}),
   })
   if (typeof agent.session_token !== 'string') return undefined
   const sess: Session = {
     agent_id: agent.id, agent_name: agent.name, board_id: board.id, provider,
     session_id: input.session_id, session_token: agent.session_token,
+    cwd: sessionCwd(input.cwd),
     transcript_path: input.transcript_path,
   }
   saveSession(provider, sess)
   return sess
+}
+
+function positiveEnvironmentInteger(value: string | undefined): number | null {
+  if (!value || !/^\d+$/u.test(value)) return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number > 0 ? number : null
+}
+
+function sessionCwd(value: unknown): string {
+  const cwd = typeof value === 'string' && value ? value : process.cwd()
+  try {
+    return fs.realpathSync(cwd)
+  } catch {
+    return path.resolve(cwd)
+  }
 }
 
 // session file may be missing (session-start cut short, cleanup, crash) — self-heal

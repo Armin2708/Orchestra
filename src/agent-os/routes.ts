@@ -50,6 +50,17 @@ import { jobAssignmentPlugin } from './job-assignment-routes.js'
 import { openWorkPlugin } from './open-work-routes.js'
 import { organizationPlugin } from './organization-routes.js'
 import { outcomeAnalyticsPlugin } from './outcome-analytics-routes.js'
+import { deliveryTrackbookPlugin } from './delivery-trackbook-routes.js'
+import { knowledgeManagementPlugin } from './knowledge-management-routes.js'
+import { discussionPlugin } from './discussion-routes.js'
+import { teamPlanningPlugin } from './team-planning-routes.js'
+import type { AgentMutationPrincipal } from './agent-mutation-principal.js'
+import { DiscussionService } from './discussions.js'
+import { CanonicalDiscussionKnowledgePromotionAdapter } from './discussion-knowledge-promotion.js'
+import {
+  CanonicalConflictDiscussionAdapter,
+  DiscussionAttentionWakeAdapter,
+} from './collaboration-adapters.js'
 import {
   AGENT_OS_COMPATIBILITY_TELEMETRY_FAILURE_DIAGNOSTICS,
   AGENT_OS_COMPATIBILITY_TELEMETRY_MISMATCH_DIAGNOSTICS,
@@ -147,6 +158,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
   isOperator?: (request: FastifyRequest) => boolean
+  resolveAgentPrincipal?: (request: FastifyRequest) => AgentMutationPrincipal | null
   compatibilityFailureJournal?: CompatibilityMigrationFailureJournal
   supportedProviders?: readonly string[]
   globalCapacity?: number
@@ -162,6 +174,11 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   const canonicalOptions = options.orchestration && !options.scheduler
     ? options
     : { ...options, scheduler, orchestration }
+  const discussionService = new DiscussionService(
+    options.db,
+    new DiscussionAttentionWakeAdapter(options.db),
+    new CanonicalDiscussionKnowledgePromotionAdapter(options.db),
+  )
   server.register(agentOsPlugin, { ...canonicalOptions, prefix: '/api/v1/os' })
   server.register(agentHomePlugin, {
     db: options.db,
@@ -201,6 +218,43 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   server.register(outcomeAnalyticsPlugin, {
     db: options.db,
     isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(deliveryTrackbookPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    resolveAgentPrincipal: options.resolveAgentPrincipal,
+    prefix: '/api/v1/os',
+  })
+  server.register(knowledgeManagementPlugin, {
+    db: options.db,
+    isOperator: options.isOperator,
+    prefix: '/api/v1/os',
+  })
+  server.register(discussionPlugin, {
+    db: options.db,
+    service: discussionService,
+    isOperator: options.isOperator,
+    resolveActor: (request) => {
+      if (options.isOperator?.(request)) {
+        return { type: 'operator', id: request.orchestraPrincipal ?? 'operator' }
+      }
+      const principal = options.resolveAgentPrincipal?.(request)
+      return principal ? {
+        type: 'agent',
+        id: `agent:${principal.agentId}`,
+        profileId: principal.profileId,
+        provider: principal.provider,
+        sessionId: principal.sessionId,
+      } : null
+    },
+    prefix: '/api/v1/os',
+  })
+  server.register(teamPlanningPlugin, {
+    db: options.db,
+    discussionAdapter: new CanonicalConflictDiscussionAdapter(discussionService),
+    isOperator: options.isOperator,
+    resolveAgentPrincipal: options.resolveAgentPrincipal,
     prefix: '/api/v1/os',
   })
 }

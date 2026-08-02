@@ -76,6 +76,160 @@ it('ships a green branch: --no-ff merge on main, shipped recorded, branch delete
   expect(branches).toBe('') // merged branch cleaned up
 }, 30000)
 
+it('does not expose shipment success until the candidate worktree and branch are both gone', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-71', { 'cleanup-order.txt': 'safe\n' })
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-agent-worktree-'))
+  const worktree = path.join(holder, 'card-71')
+  await git(dir, 'worktree', 'add', worktree, 'card-71')
+  let recordObservedCleanup = false
+  const h = harness(dir, {
+    recordShipped: async () => {
+      const worktrees = (await git(dir, 'worktree', 'list', '--porcelain')).stdout
+      const branch = (await git(dir, 'branch', '--list', 'card-71')).stdout.trim()
+      expect(worktrees).not.toContain(worktree)
+      expect(branch).toBe('')
+      recordObservedCleanup = true
+    },
+  })
+
+  h.q.enqueue({ ...cand(71, 'card-71'), worktree })
+  await until(() => h.events.some((event) => ['shipped', 'failed'].includes(event.type)))
+
+  expect(h.failures).toEqual([])
+  expect(recordObservedCleanup).toBe(true)
+}, 30000)
+
+it('recovers an already-merged exact candidate by cleaning its registered worktree and branch first', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-72', { 'restart-cleanup.txt': 'safe\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-72')).stdout.trim()
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-restart-worktree-'))
+  const worktree = path.join(holder, 'card-72')
+  await git(dir, 'worktree', 'add', worktree, 'card-72')
+  await git(dir, 'merge', '--no-ff', 'card-72', '-m', 'merge before restart')
+  let recordedAfterCleanup = false
+  const h = harness(dir, {
+    recordShipped: async () => {
+      expect((await git(dir, 'worktree', 'list', '--porcelain')).stdout).not.toContain(worktree)
+      expect((await git(dir, 'branch', '--list', 'card-72')).stdout.trim()).toBe('')
+      recordedAfterCleanup = true
+    },
+  })
+
+  h.q.enqueue({ ...cand(72, 'card-72'), sourceCommit, worktree })
+  await until(() => h.events.some((event) => ['shipped', 'failed'].includes(event.type)))
+
+  expect(h.failures).toEqual([])
+  expect(recordedAfterCleanup).toBe(true)
+}, 30000)
+
+it('preserves candidate and unrelated worktrees when restart cleanup is given the wrong path', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-73', { 'candidate.txt': 'candidate\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-73')).stdout.trim()
+  await mkBranch(dir, 'card-730', { 'unrelated.txt': 'unrelated\n' })
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-identity-worktrees-'))
+  const candidateWorktree = path.join(holder, 'candidate')
+  const unrelatedWorktree = path.join(holder, 'unrelated')
+  await git(dir, 'worktree', 'add', candidateWorktree, 'card-73')
+  await git(dir, 'worktree', 'add', unrelatedWorktree, 'card-730')
+  await git(dir, 'merge', '--no-ff', 'card-73', '-m', 'merge candidate before restart')
+  const h = harness(dir)
+
+  h.q.enqueue({ ...cand(73, 'card-73'), sourceCommit, worktree: unrelatedWorktree })
+  await until(() => h.failures.length > 0)
+
+  expect(h.failures[0][1]).toBe('ship error')
+  expect(h.failures[0][2]).toMatch(/registered worktree does not match candidate/)
+  const registrations = (await git(dir, 'worktree', 'list', '--porcelain')).stdout
+  expect(registrations).toContain(candidateWorktree)
+  expect(registrations).toContain(unrelatedWorktree)
+  expect((await git(dir, 'branch', '--list', 'card-73')).stdout.trim()).not.toBe('')
+  expect((await git(dir, 'branch', '--list', 'card-730')).stdout.trim()).not.toBe('')
+  expect(h.shipped).toEqual([])
+}, 30000)
+
+it('preserves a branch that moved after the accepted source commit', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-74', { 'accepted.txt': 'accepted\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-74')).stdout.trim()
+  await git(dir, 'merge', '--no-ff', 'card-74', '-m', 'merge accepted source')
+  await git(dir, 'branch', '-f', 'card-74', 'main')
+  const movedCommit = (await git(dir, 'rev-parse', 'card-74')).stdout.trim()
+  expect(movedCommit).not.toBe(sourceCommit)
+  const h = harness(dir)
+
+  h.q.enqueue({ ...cand(74, 'card-74'), sourceCommit })
+  await until(() => h.failures.length > 0)
+
+  expect(h.failures[0][1]).toBe('candidate identity changed')
+  expect((await git(dir, 'rev-parse', 'card-74')).stdout.trim()).toBe(movedCommit)
+  expect(h.shipped).toEqual([])
+}, 30000)
+
+it('preserves a dirty accepted worktree instead of forcing restart cleanup', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-75', { 'accepted-clean.txt': 'accepted\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-75')).stdout.trim()
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-dirty-worktree-'))
+  const worktree = path.join(holder, 'card-75')
+  await git(dir, 'worktree', 'add', worktree, 'card-75')
+  await git(dir, 'merge', '--no-ff', 'card-75', '-m', 'merge dirty candidate before restart')
+  await writeFile(path.join(worktree, 'accepted-clean.txt'), 'tracked but uncommitted\n')
+  await writeFile(path.join(worktree, 'uncommitted.txt'), 'preserve me\n')
+  const h = harness(dir)
+
+  h.q.enqueue({ ...cand(75, 'card-75'), sourceCommit, worktree })
+  await until(() => h.failures.length > 0)
+
+  expect(h.failures[0][1]).toBe('ship error')
+  expect(h.failures[0][2]).toMatch(/dirty and was preserved/)
+  expect((await git(dir, 'worktree', 'list', '--porcelain')).stdout).toContain(worktree)
+  expect((await git(dir, 'branch', '--list', 'card-75')).stdout.trim()).not.toBe('')
+  expect(h.shipped).toEqual([])
+}, 30000)
+
+it('blocks when the accepted branch vanished but its canonical worktree still exists', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-76', { 'accepted-detached.txt': 'accepted\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-76')).stdout.trim()
+  const holder = await mkdtemp(path.join(os.tmpdir(), 'orch-ship-detached-worktree-'))
+  const worktree = path.join(holder, 'card-76')
+  await git(dir, 'worktree', 'add', worktree, 'card-76')
+  await git(dir, 'merge', '--no-ff', 'card-76', '-m', 'merge before detached cleanup failure')
+  await git(worktree, 'checkout', '--detach', sourceCommit)
+  await git(dir, 'branch', '-d', 'card-76')
+  const h = harness(dir)
+
+  h.q.enqueue({ ...cand(76, 'card-76'), sourceCommit, worktree })
+  await until(() => h.failures.length > 0)
+
+  expect(h.failures[0][1]).toBe('candidate cleanup unresolved')
+  expect((await git(dir, 'worktree', 'list', '--porcelain')).stdout).toContain(worktree)
+  expect(h.shipped).toEqual([])
+}, 30000)
+
+it('ignores ambient Git directory and worktree overrides during exact cleanup', async () => {
+  const dir = await mkRepo()
+  await mkBranch(dir, 'card-77', { 'sanitized-git-env.txt': 'safe\n' })
+  const sourceCommit = (await git(dir, 'rev-parse', 'card-77')).stdout.trim()
+  const h = harness(dir)
+  process.env.GIT_DIR = path.join(dir, 'attacker-controlled-git-dir')
+  process.env.GIT_WORK_TREE = path.join(dir, 'attacker-controlled-work-tree')
+  try {
+    h.q.enqueue({ ...cand(77, 'card-77'), sourceCommit })
+    await until(() => h.events.some((event) => ['shipped', 'failed'].includes(event.type)))
+  } finally {
+    delete process.env.GIT_DIR
+    delete process.env.GIT_WORK_TREE
+  }
+
+  expect(h.failures).toEqual([])
+  expect(h.shipped).toHaveLength(1)
+  expect((await git(dir, 'branch', '--list', 'card-77')).stdout.trim()).toBe('')
+}, 30000)
+
 it('a red suite leaves main untouched, keeps the branch, and reports the output', async () => {
   const dir = await mkRepo()
   const before = (await git(dir, 'rev-parse', 'HEAD')).stdout.trim()

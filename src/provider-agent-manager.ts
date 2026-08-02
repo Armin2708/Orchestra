@@ -18,6 +18,10 @@ import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import type { AgentDriver, DriverEvent, DriverSession } from './runtime/index.js'
 import { appendDriverTranscript, type DriverTranscriptLine } from './runtime/transcript.js'
 import { fromCodexUsage, recordProviderUsage, type ProviderUsageSplit } from './usage.js'
+import { KnowledgeRuntimeIntegration } from './agent-os/knowledge-runtime-integration.js'
+import { WorkspaceStore } from './agent-os/workspace-store.js'
+import { AgentProfileService } from './agent-os/agent-profiles.js'
+import { provisionManagedAgentSessionCredential } from './agent-session-credential.js'
 
 export const ACCESS_PROFILES = ['read_only', 'workspace_write', 'full_access'] as const
 export type AccessProfile = (typeof ACCESS_PROFILES)[number]
@@ -157,6 +161,8 @@ type CodexState = {
   sending: Promise<void>
   lastEventSeq: number
   rateLimitPause: { at: string; snapshot?: unknown } | null
+  ambientContext: string | null
+  ambientSessionId: string | null
 }
 
 const emptyCodexUsage = (): ProviderUsageSplit => ({
@@ -215,6 +221,7 @@ const codexRoleInstructions = (role: SpecialistRole | undefined, name: string): 
 /** Board-facing lifecycle for Codex threads, backed by the provider-neutral AgentDriver. */
 export class CodexManagedAgentRuntime {
   private readonly states = new Map<number, CodexState>()
+  private readonly knowledge: KnowledgeRuntimeIntegration
 
   constructor(
     private readonly db: Database.Database,
@@ -223,6 +230,7 @@ export class CodexManagedAgentRuntime {
     private readonly providerService?: AgentProviderService,
   ) {
     if (driver.id !== CODEX_PROVIDER_ID) throw new Error(`expected codex driver, got ${driver.id}`)
+    this.knowledge = new KnowledgeRuntimeIntegration(db)
   }
 
   isHired(agentId: number): boolean {
@@ -314,6 +322,8 @@ export class CodexManagedAgentRuntime {
       rateLimitPause: prior.rate_limit_pause && typeof prior.rate_limit_pause === 'object'
         ? prior.rate_limit_pause as { at: string; snapshot?: unknown }
         : null,
+      ambientContext: null,
+      ambientSessionId: null,
     }
     this.states.set(state.agentId, state)
     this.log(state, 'status', resumeSession ? `resumed in ${options.cwd} (previous session continues)` : `hired in ${options.cwd}`)
@@ -558,8 +568,35 @@ export class CodexManagedAgentRuntime {
       return
     }
     state.session = session
-    this.db.prepare(`UPDATE agents SET status='active', external_session_id=?, last_seen=datetime('now') WHERE id=?`)
-      .run(session.externalId, state.agentId)
+    this.db.prepare(`UPDATE agents SET status='active', external_session_id=?,
+      last_seen=datetime('now') WHERE id=?`).run(session.externalId, state.agentId)
+    const collaboration = this.ensureLegacyCollaborationSession(state, session)
+    provisionManagedAgentSessionCredential(this.db, {
+      agentId: state.agentId,
+      boardId: state.boardId,
+      agentName: state.name,
+      provider: CODEX_PROVIDER_ID,
+      externalSessionId: session.externalId,
+      cwd: state.cwd,
+    })
+    if (state.cardId === null && this.knowledge.hasSources(state.boardId)) {
+      const repositoryHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: state.cwd,
+        encoding: 'utf8',
+        timeout: 5_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim().toLowerCase()
+      const ambient = this.knowledge.prepareAmbientSessionStart({
+        board_id: state.boardId,
+        session_id: collaboration.sessionId,
+        workspace_id: collaboration.workspaceId,
+        repository_head_sha: repositoryHead,
+        objective: state.queue[0] ?? 'Provide exact repository context for this ambient Orchestra session.',
+        created_at: new Date().toISOString(),
+      })
+      state.ambientContext = ambient?.session_start_context ?? null
+      state.ambientSessionId = collaboration.sessionId
+    }
     this.log(state, 'status', `session started${state.model ? ` · ${state.model}` : ''} · ${state.cwd}`)
     this.persist(state)
     this.emitAgent(state)
@@ -572,7 +609,11 @@ export class CodexManagedAgentRuntime {
     state.sending = state.sending.then(async () => {
       while (state.session && state.queue.length && !state.ended) {
         const text = state.queue[0]
-        await this.driver.send(state.session.id, text)
+        const prompt = state.ambientContext === null
+          ? text
+          : `${state.ambientContext}\n\n${text}`
+        await this.driver.send(state.session.id, prompt)
+        state.ambientContext = null
         state.queue.shift()
       }
       this.persist(state)
@@ -710,6 +751,11 @@ export class CodexManagedAgentRuntime {
     if (state.cardId !== null && !state.cardFinalized) this.finalizeCard(state, outcome, reason)
     removeAgentCards(this.db, state.agentId)
     this.db.prepare("UPDATE agents SET status='gone', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    if (state.ambientSessionId) {
+      this.db.prepare(`UPDATE agent_sessions SET status='stopped',
+        updated_at=datetime('now') WHERE id=? AND job_id IS NULL`)
+        .run(state.ambientSessionId)
+    }
     bounceDeadLetters(this.db, state.agentId)
     this.log(state, 'status', reason)
     this.persist(state)
@@ -800,6 +846,67 @@ export class CodexManagedAgentRuntime {
     const card = this.db.prepare(`SELECT c.*, a.name AS owner FROM cards c
       LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(cardId) as any
     return card && { ...card, column: card.column_name, paths: JSON.parse(card.paths) }
+  }
+
+  private ambientWorkspace(state: CodexState) {
+    const existing = new WorkspaceStore(this.db).listBoard(state.boardId)
+      .find((workspace) => workspace.card_id === null
+        && workspace.status === 'active'
+        && (workspace.worktree_path ?? workspace.root_path) === state.cwd)
+    if (existing) return existing
+    return new WorkspaceStore(this.db).create({
+      boardId: state.boardId,
+      name: `Ambient ${state.name}`,
+      kind: 'shared',
+      rootPath: state.cwd,
+      status: 'active',
+    })
+  }
+
+  private ensureLegacyCollaborationSession(
+    state: CodexState,
+    session: DriverSession,
+  ): { workspaceId: string; sessionId: string } {
+    const workspace = this.ambientWorkspace(state)
+    const profile = new AgentProfileService(this.db).create({
+      boardId: state.boardId,
+      name: `Managed Codex ${state.agentId}`,
+      defaultProvider: CODEX_PROVIDER_ID,
+      defaultModel: state.model,
+      defaultEffort: state.effort,
+      defaultAccessProfile: state.accessProfile,
+      actor: { type: 'system', id: 'codex-managed-runtime' },
+      idempotencyKey: `codex-managed-agent:${state.agentId}:profile`,
+      correlationId: `codex-managed-agent:${state.agentId}`,
+    })
+    const conversation = this.db.prepare(`SELECT id FROM agent_conversations
+      WHERE board_id=? AND profile_id=? AND status='active' AND is_default=1`)
+      .get(state.boardId, profile.id) as { id: string }
+    const sessionId = `legacy-codex:${state.agentId}`
+    this.db.prepare(`INSERT INTO agent_sessions (
+        id, workspace_id, agent_id, provider, external_id, model, status,
+        profile_id, conversation_id, context_json, mode, driver_id, access_profile,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, 'codex', ?, ?, 'running', ?, ?, ?, 'managed', 'codex', ?,
+        datetime('now'), datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        workspace_id=excluded.workspace_id, agent_id=excluded.agent_id,
+        external_id=excluded.external_id, model=excluded.model, status='running',
+        profile_id=excluded.profile_id, conversation_id=excluded.conversation_id,
+        context_json=excluded.context_json, access_profile=excluded.access_profile,
+        updated_at=datetime('now')
+      WHERE agent_sessions.job_id IS NULL`).run(
+      sessionId,
+      workspace.id,
+      state.agentId,
+      session.externalId,
+      state.model,
+      profile.id,
+      conversation.id,
+      JSON.stringify({ classification: 'legacy_managed', provider_session_id: session.externalId }),
+      state.accessProfile,
+    )
+    return { workspaceId: workspace.id, sessionId }
   }
 
   private required(agentId: number): CodexState {

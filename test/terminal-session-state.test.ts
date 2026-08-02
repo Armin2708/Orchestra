@@ -3,7 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
-import { AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID } from '../src/agent-os/migrations.js'
+import {
+  AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID,
+  applyAgentOsMigrations,
+} from '../src/agent-os/migrations.js'
 import {
   TerminalSessionStateService,
 } from '../src/agent-os/terminal-session-state.js'
@@ -88,6 +91,81 @@ describe('durable terminal session state', () => {
     db = openDb(database)
     expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
       WHERE id=?`).get(AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID)).toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('upgrades a Lane-D database with the legacy 030 terminal marker without losing state', () => {
+    const db = openDb(':memory:')
+    seed(db)
+    service(db).selectProcess('workspace-1', 'process-1')
+    const retained = db.prepare(`SELECT * FROM terminal_workspace_state
+      WHERE workspace_id='workspace-1'`).get()
+
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id IN (
+        '030-delivery-collaboration-trackbook',
+        '031-knowledge-management',
+        '032-discussions-domain',
+        '033-teams-planning-conflicts',
+        '034-team-collaboration-review',
+        '035-delivery-shipment-integrity',
+        '036-knowledge-context-use-actual-evidence',
+        '037-delivery-autoship-intents',
+        '038-delivery-autoship-worktree-identity',
+        '039-terminal-session-state'
+      )`).run()
+    db.prepare(`INSERT INTO os_schema_migrations (id)
+      VALUES ('030-terminal-session-state')`).run()
+
+    applyAgentOsMigrations(db)
+    applyAgentOsMigrations(db)
+
+    const integratedIds = db.prepare(`SELECT id, COUNT(*) AS count
+      FROM os_schema_migrations
+      WHERE id IN (
+        '030-delivery-collaboration-trackbook',
+        '031-knowledge-management',
+        '032-discussions-domain',
+        '033-teams-planning-conflicts',
+        '034-team-collaboration-review',
+        '035-delivery-shipment-integrity',
+        '036-knowledge-context-use-actual-evidence',
+        '037-delivery-autoship-intents',
+        '038-delivery-autoship-worktree-identity',
+        '039-terminal-session-state'
+      )
+      GROUP BY id ORDER BY id`).all()
+    expect(integratedIds).toEqual([
+      { id: '030-delivery-collaboration-trackbook', count: 1 },
+      { id: '031-knowledge-management', count: 1 },
+      { id: '032-discussions-domain', count: 1 },
+      { id: '033-teams-planning-conflicts', count: 1 },
+      { id: '034-team-collaboration-review', count: 1 },
+      { id: '035-delivery-shipment-integrity', count: 1 },
+      { id: '036-knowledge-context-use-actual-evidence', count: 1 },
+      { id: '037-delivery-autoship-intents', count: 1 },
+      { id: '038-delivery-autoship-worktree-identity', count: 1 },
+      { id: '039-terminal-session-state', count: 1 },
+    ])
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='030-terminal-session-state'`).get()).toEqual({ count: 1 })
+    expect(db.prepare(`SELECT * FROM terminal_workspace_state
+      WHERE workspace_id='workspace-1'`).get()).toEqual(retained)
+    db.close()
+  })
+
+  it('fails closed when a legacy 030 terminal marker has an incomplete schema', () => {
+    const db = openDb(':memory:')
+    db.prepare(`DELETE FROM os_schema_migrations
+      WHERE id >= '030-'`).run()
+    db.prepare(`INSERT INTO os_schema_migrations (id)
+      VALUES ('030-terminal-session-state')`).run()
+    db.exec('DROP TRIGGER terminal_command_history_immutable_guard')
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/039-terminal-session-state found incomplete 030-terminal-session-state schema/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id='039-terminal-session-state'`).get()).toEqual({ count: 0 })
     db.close()
   })
 

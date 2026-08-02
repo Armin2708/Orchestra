@@ -39,8 +39,47 @@ import {
   installOrganizationAssuranceSchema,
 } from './organization-assurance-migration.js'
 import { TERMINAL_SESSION_STATE_SCHEMA_SQL } from './terminal-session-state.js'
+import {
+  AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID,
+  installDeliveryTrackbookSchema,
+} from './delivery-trackbook-migration.js'
+import {
+  AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID,
+  installKnowledgeManagementSchema,
+} from './knowledge-management-migration.js'
+import {
+  AGENT_OS_DISCUSSION_MIGRATION_ID,
+  installDiscussionSchema,
+} from './discussion-migration.js'
+import {
+  AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
+  installTeamPlanningSchema,
+} from './team-planning-migration.js'
+import {
+  AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID,
+  installTeamCollaborationReviewSchema,
+} from './team-collaboration-review-migration.js'
+import {
+  AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+  installDeliveryShipmentIntegritySchema,
+} from './delivery-shipment-integrity-migration.js'
+import {
+  AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+  KNOWLEDGE_CONTEXT_USE_ACTUAL_TABLE_SQL,
+  installKnowledgeContextUseActualEvidenceSchema,
+} from './knowledge-context-use-actual-migration.js'
+import {
+  AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID,
+  installDeliveryAutoshipIntentSchema,
+} from './delivery-autoship-intent-migration.js'
+import {
+  AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID,
+  installDeliveryAutoshipWorktreeIdentitySchema,
+} from './delivery-autoship-worktree-identity-migration.js'
 
 export const AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID =
+  '039-terminal-session-state' as const
+const AGENT_OS_LEGACY_TERMINAL_SESSION_STATE_MIGRATION_ID =
   '030-terminal-session-state' as const
 
 interface Migration {
@@ -370,7 +409,13 @@ const assertKnowledgeSchemaCompatible = (db: Database.Database): void => {
   }
   for (const table of tableRows) {
     const actualHash = sha256(normalizedSchemaSql(table.sql ?? ''))
-    if (actualHash !== KNOWLEDGE_TABLE_SCHEMA_HASHES[table.name]) {
+    const acceptedHashes = table.name === 'context_uses'
+      ? [
+          KNOWLEDGE_TABLE_SCHEMA_HASHES.context_uses,
+          sha256(normalizedSchemaSql(KNOWLEDGE_CONTEXT_USE_ACTUAL_TABLE_SQL)),
+        ]
+      : [KNOWLEDGE_TABLE_SCHEMA_HASHES[table.name]]
+    if (!acceptedHashes.includes(actualHash)) {
       throw new Error(
         'migration 018-knowledge-persistence found an incompatible knowledge schema',
       )
@@ -1159,6 +1204,25 @@ const migrations: Migration[] = [
   {
     id: '005-delivery-report-revision-cascade',
     apply(db) {
+      const currentParentForeignKey = (db.prepare(
+        "PRAGMA foreign_key_list('delivery_reports')",
+      ).all() as Array<{ from: string; table: string; on_delete: string }>).find(
+        (row) => row.from === 'parent_report_id',
+      )
+      // A removed marker must not rebuild the already-current report table underneath
+      // later append-only shipment/autoship triggers. Re-recording the marker is enough.
+      if (currentParentForeignKey?.table === 'delivery_reports'
+        && currentParentForeignKey.on_delete === 'CASCADE') return
+      const reinstallAutoshipIntentSchema = !!db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='delivery_autoship_intents'`).get()
+      if (reinstallAutoshipIntentSchema) {
+        const intentCount = (db.prepare(`SELECT COUNT(*) AS count
+          FROM delivery_autoship_intents`).get() as { count: number }).count
+        if (intentCount > 0) {
+          throw new Error('cannot replay delivery revision migration with durable autoship intents')
+        }
+        db.exec('DROP TRIGGER IF EXISTS delivery_autoship_intents_scope')
+      }
       db.exec(`
         CREATE TABLE delivery_reports_v5 (
           id TEXT PRIMARY KEY,
@@ -1306,6 +1370,7 @@ const migrations: Migration[] = [
           SELECT RAISE(ABORT, 'invalid delivery status transition');
         END;
       `)
+      if (reinstallAutoshipIntentSchema) installDeliveryAutoshipIntentSchema(db)
     },
   },
   {
@@ -7526,17 +7591,174 @@ const migrations: Migration[] = [
     },
   },
   {
-    id: AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID,
+    id: AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID,
     apply(db) {
-      const hasOrganizationAssurance = db.prepare(`SELECT 1 FROM os_schema_migrations
+      const hasAssurance = db.prepare(`SELECT 1 FROM os_schema_migrations
         WHERE id=?`).get(AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID)
-      if (!hasOrganizationAssurance) {
+      if (!hasAssurance) {
         throw new Error(
-          `migration ${AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID}`
+          `migration ${AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID}`
           + ` requires ${AGENT_OS_ORGANIZATION_ASSURANCE_MIGRATION_ID}`,
         )
       }
-      db.exec(TERMINAL_SESSION_STATE_SCHEMA_SQL)
+      installDeliveryTrackbookSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID,
+    apply(db) {
+      const hasDeliveryTrackbook = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID)
+      if (!hasDeliveryTrackbook) {
+        throw new Error(
+          `migration ${AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_TRACKBOOK_MIGRATION_ID}`,
+        )
+      }
+      installKnowledgeManagementSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DISCUSSION_MIGRATION_ID,
+    apply(db) {
+      const hasKnowledgeManagement = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID)
+      if (!hasKnowledgeManagement) {
+        throw new Error(
+          `migration ${AGENT_OS_DISCUSSION_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_KNOWLEDGE_MANAGEMENT_MIGRATION_ID}`,
+        )
+      }
+      installDiscussionSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_TEAM_PLANNING_MIGRATION_ID,
+    apply(db) {
+      const hasDiscussions = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DISCUSSION_MIGRATION_ID)
+      if (!hasDiscussions) {
+        throw new Error(
+          `migration ${AGENT_OS_TEAM_PLANNING_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DISCUSSION_MIGRATION_ID}`,
+        )
+      }
+      installTeamPlanningSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID,
+    apply(db) {
+      const hasTeamPlanning = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_TEAM_PLANNING_MIGRATION_ID)
+      if (!hasTeamPlanning) {
+        throw new Error(
+          `migration ${AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_TEAM_PLANNING_MIGRATION_ID}`,
+        )
+      }
+      installTeamCollaborationReviewSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+    apply(db) {
+      const hasTeamCollaborationReview = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID)
+      if (!hasTeamCollaborationReview) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_TEAM_COLLABORATION_REVIEW_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryShipmentIntegritySchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+    apply(db) {
+      const dependencies = db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+        WHERE id IN (?, ?)`).get(
+        '018-knowledge-persistence',
+        AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+      ) as { count: number }
+      if (dependencies.count !== 2) {
+        throw new Error(
+          `migration ${AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID}`
+          + ' requires 018-knowledge-persistence'
+          + ` and ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`,
+        )
+      }
+      installKnowledgeContextUseActualEvidenceSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID,
+    apply(db) {
+      const dependencies = db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+        WHERE id IN (?, ?)`).get(
+        AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID,
+        AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID,
+      ) as { count: number }
+      if (dependencies.count !== 2) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_SHIPMENT_INTEGRITY_MIGRATION_ID}`
+          + ` and ${AGENT_OS_KNOWLEDGE_CONTEXT_USE_ACTUAL_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryAutoshipIntentSchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID,
+    apply(db) {
+      const dependency = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID)
+      if (!dependency) {
+        throw new Error(
+          `migration ${AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_AUTOSHIP_INTENT_MIGRATION_ID}`,
+        )
+      }
+      installDeliveryAutoshipWorktreeIdentitySchema(db)
+    },
+  },
+  {
+    id: AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID,
+    apply(db) {
+      const hasDurableWorktreeIdentity = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID)
+      if (!hasDurableWorktreeIdentity) {
+        throw new Error(
+          `migration ${AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_DELIVERY_AUTOSHIP_WORKTREE_IDENTITY_MIGRATION_ID}`,
+        )
+      }
+      const hasLegacyTerminalState = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_LEGACY_TERMINAL_SESSION_STATE_MIGRATION_ID)
+      if (hasLegacyTerminalState) {
+        const legacySchemaObjects = db.prepare(`SELECT COUNT(*) AS count
+          FROM sqlite_master
+          WHERE name IN (
+            'terminal_workspace_state',
+            'terminal_command_history',
+            'idx_terminal_command_history_process',
+            'idx_terminal_command_history_session',
+            'terminal_workspace_state_process_insert_guard',
+            'terminal_workspace_state_process_update_guard',
+            'terminal_command_history_scope_insert_guard',
+            'terminal_command_history_immutable_guard'
+          )`).get() as { count: number }
+        if (legacySchemaObjects.count !== 8) {
+          throw new Error(
+            `migration ${AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID}`
+            + ` found incomplete ${AGENT_OS_LEGACY_TERMINAL_SESSION_STATE_MIGRATION_ID} schema`,
+          )
+        }
+      } else {
+        db.exec(TERMINAL_SESSION_STATE_SCHEMA_SQL)
+      }
     },
   },
 ]

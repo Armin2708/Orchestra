@@ -21,6 +21,10 @@ import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
 import { DeliveryLifecycleIntegration } from './agent-os/delivery-integration.js'
+import {
+  DeliveryTrackbookService,
+  type DeliveryAutoshipIntent,
+} from './agent-os/delivery-trackbook.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
 import { CODEX_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
@@ -35,6 +39,11 @@ import {
   type AgentOsServerRouteOptions,
 } from './server-composition.js'
 import { registerCompatibilityReadObserver } from './agent-os/compatibility-read-observer.js'
+import {
+  consumeManagedAgentLaunchBootstrap,
+  managedAgentCredentialHash,
+} from './agent-session-credential.js'
+import { resolveAgentMutationPrincipal } from './agent-os/agent-mutation-principal.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -66,7 +75,7 @@ export interface ConductorLike extends AgentSessionControlHost {
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
-  interface FastifyRequest { orchestraPrincipal: 'operator' | 'agent' }
+  interface FastifyRequest { orchestraPrincipal: 'operator' | 'agent' | 'anonymous' }
 }
 
 export interface ServerOptions {
@@ -107,6 +116,18 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         req.orchestraPrincipal = 'agent'
         return
       }
+      // Managed providers intentionally receive no ambient daemon bearer. Their exact,
+      // persisted provider-session credential is sufficient after bootstrap registration.
+      if (req.headers['x-orchestra-agent-id'] !== undefined) {
+        req.orchestraPrincipal = 'agent'
+        if (resolveAgentMutationPrincipal(db, req)) return
+      }
+      // Body validation below consumes a one-time launch nonce. No other anonymous API
+      // request is admitted, and ordinary registration still requires transport auth.
+      if (req.method === 'POST' && req.url.split('?')[0] === '/api/v1/agents/register') {
+        req.orchestraPrincipal = 'anonymous'
+        return
+      }
       return reply.code(401).send({ error: 'unauthorized' })
     })
   }
@@ -115,6 +136,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
   const deliveryLifecycle = new DeliveryLifecycleIntegration(db)
+  const deliveryTrackbook = new DeliveryTrackbookService(db)
   const deliveryFailure = (error: unknown, reply: any) => {
     if (error instanceof AgentOsError) {
       return reply.code(error.statusCode).send({ error: error.message, code: error.code })
@@ -254,7 +276,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/api/v1/boards', () => db.prepare(`SELECT * FROM boards ORDER BY id`).all())
 
-  server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string } }>(
+  server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string; agent_id?: number; bootstrap_nonce?: string; agent_home_session_id?: string } }>(
     '/api/v1/agents/register', (req, reply) => {
       const { board_id, session_id } = req.body
       const requestedProvider = req.body.provider?.trim().toLowerCase()
@@ -264,11 +286,31 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const externalSessionId = req.body.external_session_id ?? session_id ?? null
       if (externalSessionId !== null && (typeof externalSessionId !== 'string' || !externalSessionId.trim() || externalSessionId.length > 512))
         return reply.code(400).send({ error: 'session_id must be a non-empty string of 512 characters or fewer' })
+      if (req.body.bootstrap_nonce !== undefined) {
+        const managed = consumeManagedAgentLaunchBootstrap(db, {
+          agentId: Number(req.body.agent_id),
+          boardId: Number(board_id),
+          agentName: String(req.body.name ?? ''),
+          provider,
+          externalSessionId: String(externalSessionId ?? ''),
+          bootstrapNonce: String(req.body.bootstrap_nonce),
+          agentHomeSessionId: req.body.agent_home_session_id ?? null,
+        })
+        if (!managed) return reply.code(401).send({ error: 'invalid or expired managed launch bootstrap' })
+        const stored = db.prepare('SELECT * FROM agents WHERE id=?').get(managed.agentId) as any
+        const { hook_token_hash: _secretHash, ...agent } = stored
+        emit(managed.boardId, 'agent', agent)
+        return { ...agent, session_token: managed.sessionToken }
+      }
+      if (req.orchestraPrincipal === 'anonymous') {
+        return reply.code(401).send({ error: 'registration requires transport authentication' })
+      }
       let name = req.body.name
       const identity = externalSessionId ? db.prepare(`SELECT * FROM agents WHERE provider=? AND external_session_id=?`)
         .get(provider, externalSessionId) as any : undefined
       if (identity) {
-        if (identity.kind !== 'session' || identity.board_id !== board_id || (name && name !== identity.name))
+        if (!['session', 'hired'].includes(identity.kind)
+          || identity.board_id !== board_id || (name && name !== identity.name))
           return reply.code(409).send({ error: 'provider session identity is already bound to another agent' })
         name = identity.name
       }
@@ -281,9 +323,30 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const legacyNameOnly = !!named && !externalSessionId && !named.external_session_id && named.kind === 'session'
       if (named && !sameIdentity && !legacyNameOnly)
         return reply.code(409).send({ error: `agent ${name} is already registered with another session` })
+      const hired = identity?.kind === 'hired' ? identity : named?.kind === 'hired' ? named : null
+      const exactPrincipal = req.orchestraPrincipal === 'agent'
+        ? resolveAgentMutationPrincipal(db, req) : null
+      if (req.orchestraPrincipal === 'agent' && !exactPrincipal) {
+        return reply.code(403).send({ error: 'exact provider-session credential is required' })
+      }
+      if (hired && exactPrincipal?.agentId !== hired.id) {
+        return reply.code(409).send({ error: 'managed agent identity requires its launch or current session credential' })
+      }
       const sessionToken = externalSessionId ? randomBytes(32).toString('base64url') : null
       const tokenHash = sessionToken ? hookTokenHash(sessionToken) : null
       try {
+        if (hired && sessionToken && tokenHash) {
+          const oldToken = String(req.headers['x-orchestra-session-token'] ?? '')
+          const rotated = db.prepare(`UPDATE agents SET hook_token_hash=?, status='active',
+              last_seen=datetime('now')
+            WHERE id=? AND board_id=? AND provider=? AND external_session_id=?
+              AND hook_token_hash=?`)
+            .run(tokenHash, hired.id, board_id, provider, externalSessionId,
+              managedAgentCredentialHash(oldToken))
+          if (rotated.changes !== 1) {
+            return reply.code(409).send({ error: 'managed agent session credential rotation lost its compare-and-set' })
+          }
+        } else {
         db.prepare(`
           INSERT INTO agents (board_id, name, session_id, provider, external_session_id, hook_token_hash)
           VALUES (?, ?, ?, ?, ?, ?)
@@ -291,6 +354,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
             session_id=excluded.session_id, external_session_id=excluded.external_session_id,
             hook_token_hash=excluded.hook_token_hash, status='active', last_seen=datetime('now')
         `).run(board_id, name, session_id ?? null, provider, externalSessionId, tokenHash)
+        }
       } catch (error) {
         if (String(error).includes('UNIQUE constraint failed'))
           return reply.code(409).send({ error: 'provider session identity is already registered' })
@@ -372,11 +436,22 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     let q = ships.get(board.id)
     if (q) return q
     const hooks: ShipHooks = {
-      onEvent: (type, data) => emit(board.id, 'ship', { status: type, ...data }),
+      onEvent: (type, data) => {
+        emit(board.id, 'ship', { status: type, ...data })
+      },
       recordShipped: async (cardId, hash) => {
         await recordShipped(db, server.bus, { id: cardId, board_id: board.id }, board.project_path, { hash, by: 'autoship' })
+        const intent = deliveryTrackbook.pendingAutoshipIntentForCard(board.id, cardId)
+        if (!intent) throw new Error('accepted delivery autoship intent is missing')
+        deliveryTrackbook.completeAutoshipIntent(intent.id, {
+          actor: { type: 'operator', id: 'ship_queue' },
+          observedHeadCommit: hash,
+          idempotencyKey: `autoship-complete:${intent.id}:${hash}`,
+        })
       },
-      onSuccess: (c) => emit(board.id, 'card', getCard(c.cardId)),
+      onSuccess: (c) => {
+        emit(board.id, 'card', getCard(c.cardId))
+      },
       onFailure: (c, reason, detail) => {
         db.prepare(`UPDATE cards SET column_name='blocked', updated_at=datetime('now') WHERE id=?`).run(c.cardId)
         logEvent(c.cardId, null, 'autoship_failed', { reason, detail: detail.slice(0, 4000) })
@@ -391,6 +466,38 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const logEvent = (card_id: number, agent_id: number | null, type: string, payload: unknown = {}) =>
     db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)`)
       .run(card_id, agent_id, type, JSON.stringify(payload))
+
+  // Reconcile already-merged intents first, then restore the bounded unmerged outbox.
+  // This runs only when autoship is enabled and never fabricates evidence from card status.
+  if (autoshipEnabled()) {
+    const reconciliation = deliveryTrackbook.reconcilePendingAutoshipIntents({
+      actor: { type: 'operator', id: 'ship_queue_recovery' },
+      limit: 200,
+    })
+    // Consume this exact bounded snapshot. Pending-attempt events rotate attempted intents to the
+    // back of later queries; re-querying here could starve all 200 candidates until another restart.
+    for (const pending of reconciliation) {
+      if (pending.status !== 'pending') continue
+      const intent = pending.intent
+      const candidate = db.prepare(`SELECT card.id, card.title, card.branch,
+          card.column_name, board.id AS board_id, board.project_path,
+          (SELECT event.type FROM card_events event WHERE event.card_id=card.id
+            ORDER BY event.id DESC LIMIT 1) AS latest_event_type
+        FROM cards card JOIN boards board ON board.id=card.board_id
+        WHERE card.id=? AND card.board_id=?`).get(intent.card_id, intent.board_id) as any
+      const recoverableState = candidate?.column_name === 'done'
+        || (candidate?.column_name === 'blocked' && candidate.latest_event_type === 'autoship_failed')
+      if (!candidate || !recoverableState || candidate.branch !== intent.source_branch) continue
+      shipFor({ id: candidate.board_id, project_path: candidate.project_path }).enqueue({
+        boardId: candidate.board_id,
+        cardId: candidate.id,
+        branch: candidate.branch,
+        title: candidate.title,
+        sourceCommit: intent.source_commit,
+        worktree: cardWorktree(intent.source_repository, candidate.id),
+      })
+    }
+  }
 
   server.post<{ Body: { board_id: number; title: string; description?: string; paths?: string[]; agent?: string; column?: string } }>(
     '/api/v1/cards', (req, reply) => {
@@ -666,6 +773,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         return { card: getCard(card.id), decision, held: true, reason: gate.held }
       }
       let delivery
+      let autoshipIntent: DeliveryAutoshipIntent | null = null
       try {
         delivery = deliveryLifecycle.accept({
           cardId: card.id,
@@ -673,7 +781,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           summary: note,
           confirmed,
         })
+        if (!delivery) {
+          return reply.code(409).send({ error: 'accepted delivery evidence is unavailable' })
+        }
         deliveryLifecycle.assertDoneReady(card.id)
+        if (wantShip) {
+          autoshipIntent = deliveryTrackbook.prepareAutoshipIntent(delivery.id, {
+            actor: { type: 'operator', id: 'autoship_approval' },
+            branch: card.branch,
+            idempotencyKey: `autoship-intent:${card.board_id}:${card.id}:${delivery.id}`,
+          })
+        }
       } catch (error) {
         return deliveryFailure(error, reply)
       }
@@ -695,7 +813,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (wantShip) {
         if (gate.warn) logEvent(card.id, null, 'autoship_note', { warn: gate.warn })
         const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
-        shipFor(board).enqueue({ boardId: card.board_id, cardId: card.id, branch: card.branch, title: card.title, worktree: null })
+        if (!autoshipIntent) throw new Error('accepted delivery autoship intent is missing')
+        shipFor(board).enqueue({
+          boardId: card.board_id,
+          cardId: card.id,
+          branch: card.branch,
+          title: card.title,
+          sourceCommit: autoshipIntent.source_commit,
+          worktree: cardWorktree(autoshipIntent.source_repository, card.id),
+        })
       }
       const unlocked = card.milestone_id != null && card.step_order != null
         ? db.prepare(`SELECT id, title, column_name FROM cards WHERE milestone_id=? AND step_order > ? ORDER BY step_order LIMIT 1`)

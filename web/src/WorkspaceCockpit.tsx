@@ -475,7 +475,8 @@ export function WorkspaceCockpit({ snaps, onChange, readOnly = false }: {
         readOnly={readOnly} onOpenAgent={setLiveAgent} />
     )
     if (pane === 'changes') return <ChangesPane evidence={evidence} />
-    if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card} />
+    if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence}
+      contract={contract} card={card} boardId={currentBoard!} />
     if (pane === 'processes') return (
       <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} readOnly={readOnly} onAttach={attachProcess}
         onSignal={signalProcess} onRestart={restartProcess} />

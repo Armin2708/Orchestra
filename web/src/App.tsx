@@ -34,6 +34,7 @@ import './agentOs.css'
 
 const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
 const OpenWorkView = React.lazy(() => import('./OpenWorkView').then((module) => ({ default: module.OpenWorkView })))
+const CollaborationCenter = React.lazy(() => import('./CollaborationCenter').then((module) => ({ default: module.CollaborationCenter })))
 const OrganizationCenter = React.lazy(() => import('./OrganizationCenter').then((module) => ({ default: module.OrganizationCenter })))
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -291,7 +292,9 @@ export function App() {
         <div className="topbar-actions">
           <SystemMeter boards={snaps.map((s) => s.board.id)} />
           <nav className="view-tabs">
-            <button className={commandCenterActive ? 'tab active' : 'tab'} onClick={() => pickCommandSection(commandSection)}>Command center</button>
+             <button className={commandCenterActive ? 'tab active' : 'tab'} onClick={() => pickCommandSection(commandSection)}>Command center</button>
+             <button className={view === 'open-work' ? 'tab active' : 'tab'} onClick={() => pickView('open-work')}>Open Work</button>
+            <button className={view === 'collaboration' ? 'tab active' : 'tab'} onClick={() => pickView('collaboration')}>Collaborate</button>
             <button className={view === 'organization' ? 'tab active' : 'tab'} onClick={() => pickView('organization')}>Organization</button>
             <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
@@ -375,6 +378,12 @@ export function App() {
           ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading organization"><span /><span /><span /></div>}>
               <OrganizationCenter boards={shown.map((snapshot) => snapshot.board)} />
             </React.Suspense>
+        : view === 'collaboration'
+          ? shown[0]
+            ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading collaboration"><span /><span /><span /></div>}>
+                <CollaborationCenter boardId={shown[0].board.id} />
+              </React.Suspense>
+            : <GettingStarted onSettings={() => pickView('settings')} />
         : view === 'roadmap'
           ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
           : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>

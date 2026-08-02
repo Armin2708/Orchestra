@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "c25ec778febd393950829a8dae5cb7e44b102e8d",
+  "observed_at_commit": "f6718aac2e86e02dbac2e8d9b4eaee4e51d01560",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
@@ -25,8 +25,8 @@
     },
     {
       "name": "discussions",
-      "implementation_state": "reserved",
-      "source": "src/agent-os/service-boundaries.ts"
+      "implementation_state": "canonical",
+      "source": "src/agent-os/discussions.ts"
     },
     {
       "name": "knowledge",
@@ -50,8 +50,8 @@
     },
     {
       "name": "conflicts",
-      "implementation_state": "compatibility_only",
-      "source": "src/agent-os/conflict-service.ts"
+      "implementation_state": "canonical",
+      "source": "src/agent-os/team-planning.ts"
     },
     {
       "name": "device_pairing",
@@ -129,10 +129,17 @@
     "src/agent-os/compatibility-migration-telemetry.ts",
     "src/agent-os/compatibility-migration-failure-journal.ts",
     "src/agent-os/knowledge-retrieval.ts",
+    "src/agent-os/delivery-trackbook-migration.ts",
+    "src/agent-os/knowledge-management-migration.ts",
+    "src/agent-os/discussion-migration.ts",
+    "src/agent-os/team-planning-migration.ts",
     "src/agent-os/organization-migration.ts",
     "src/agent-os/organization-coordination-migration.ts",
     "src/agent-os/organization-assurance-migration.ts",
-    "src/agent-os/outcome-analytics-migration.ts"
+    "src/agent-os/outcome-analytics-migration.ts",
+    "src/agent-os/delivery-shipment-integrity-migration.ts",
+    "src/agent-os/knowledge-context-use-actual-migration.ts",
+    "src/agent-os/delivery-autoship-intent-migration.ts"
   ],
   "database_tables": {
     "canonical": [
@@ -159,13 +166,26 @@
       "daemon_leases",
       "delivery_criterion_results",
       "delivery_deliverable_results",
+      "delivery_artifact_attestations",
+      "delivery_autoship_completions",
+      "delivery_autoship_intents",
+      "delivery_regressions",
       "delivery_reports",
+      "delivery_review_comments",
+      "delivery_shipment_receipts",
+      "delivery_shipments",
+      "delivery_verification_runs",
       "job_market_assignments",
       "job_market_contracts",
       "job_market_criteria",
       "job_market_dependencies",
       "jobs",
       "knowledge_chunks",
+      "knowledge_benchmark_runs",
+      "knowledge_control_actions",
+      "knowledge_freshness_observations",
+      "knowledge_promotion_requests",
+      "knowledge_promotion_sources",
       "knowledge_retrieval_documents",
       "knowledge_retrieval_fts",
       "knowledge_retrieval_fts_config",
@@ -175,6 +195,7 @@
       "knowledge_retrieval_fts_idx",
       "knowledge_retrieval_index_state",
       "knowledge_retrieval_schema",
+      "knowledge_review_requests",
       "knowledge_sources",
       "os_access_certifications",
       "os_authority_policies",
@@ -182,9 +203,31 @@
       "os_capability_attestations",
       "os_capacity_snapshots",
       "os_command_receipts",
+      "os_conflict_knowledge_candidates",
+      "os_conflict_participants",
+      "os_conflict_proposals",
+      "os_conflict_resolutions",
+      "os_conflicts",
       "os_corrective_actions",
       "os_control_approvals",
       "os_decision_records",
+      "os_discussion_commands",
+      "os_discussion_events",
+      "os_discussion_links",
+      "os_discussion_mentions",
+      "os_discussion_notifications",
+      "os_discussion_permissions",
+      "os_discussion_posts",
+      "os_discussion_promotions",
+      "os_discussion_search",
+      "os_discussion_search_config",
+      "os_discussion_search_content",
+      "os_discussion_search_data",
+      "os_discussion_search_docsize",
+      "os_discussion_search_idx",
+      "os_discussion_subscriptions",
+      "os_discussion_tags",
+      "os_discussions",
       "os_escalations",
       "os_events",
       "os_incident_timeline",
@@ -197,6 +240,9 @@
       "os_objectives",
       "os_organizations",
       "os_participation_history",
+      "os_planning_artifacts",
+      "os_planning_overrides",
+      "os_planning_sessions",
       "os_positions",
       "os_postmortems",
       "os_product_areas",
@@ -216,6 +262,13 @@
       "os_team_interactions",
       "os_team_memberships",
       "os_team_ownerships",
+      "os_team_command_receipts",
+      "os_team_delegations",
+      "os_team_integrations",
+      "os_team_plan_participants",
+      "os_team_plan_roles",
+      "os_team_plans",
+      "os_team_work_bindings",
       "os_teams",
       "os_trace_edges",
       "os_trace_nodes",
@@ -233,6 +286,7 @@
       "outcome_team_digests",
       "outcome_usage_observations",
       "outcome_usage_provider_bindings",
+      "os_work_leases",
       "policies",
       "process_output",
       "processes",
@@ -318,10 +372,70 @@
     {
       "file": "src/agent-os/outcome-analytics-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/delivery-trackbook-routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/knowledge-management-routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/discussion-routes.ts",
+      "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/agent-os/team-planning-routes.ts",
+      "prefix": "/api/v1/os"
     }
   ],
   "http_routes": {
     "canonical": [
+      "DELETE /api/v1/os/discussions/:discussionId/subscriptions/:profileId",
+      "GET /api/v1/os/boards/:boardId/discussion-promotions",
+      "GET /api/v1/os/boards/:boardId/discussion-queues/:queue",
+      "GET /api/v1/os/boards/:boardId/discussions",
+      "GET /api/v1/os/boards/:boardId/knowledge",
+      "GET /api/v1/os/boards/:boardId/knowledge/benchmarks",
+      "GET /api/v1/os/boards/:boardId/knowledge/promotions",
+      "GET /api/v1/os/boards/:boardId/knowledge/reviews",
+      "GET /api/v1/os/boards/:boardId/team-conflicts",
+      "GET /api/v1/os/boards/:boardId/team-plans",
+      "GET /api/v1/os/boards/:boardId/team-visualization",
+      "GET /api/v1/os/boards/:id/delivery-trackbook",
+      "GET /api/v1/os/context-builds/:buildId/knowledge-manifest",
+      "GET /api/v1/os/discussions/:discussionId",
+      "GET /api/v1/os/jobs/:id/detail",
+      "GET /api/v1/os/team-plans/:planId",
+      "PATCH /api/v1/os/discussions/:discussionId/posts/:postId",
+      "POST /api/v1/os/boards/:boardId/discussion-permissions",
+      "POST /api/v1/os/boards/:boardId/discussions",
+      "POST /api/v1/os/boards/:boardId/knowledge/benchmarks",
+      "POST /api/v1/os/boards/:boardId/knowledge/promotions",
+      "POST /api/v1/os/boards/:boardId/knowledge/promotions/:promotionId/review",
+      "POST /api/v1/os/boards/:boardId/knowledge/refresh",
+      "POST /api/v1/os/boards/:boardId/knowledge/sources/:sourceId/actions",
+      "POST /api/v1/os/boards/:boardId/team-plans",
+      "POST /api/v1/os/deliveries/:id/artifacts/:artifactId/attest",
+      "POST /api/v1/os/deliveries/:id/reject-with-feedback",
+      "POST /api/v1/os/deliveries/:id/reopen-regression",
+      "POST /api/v1/os/deliveries/:id/review-comments",
+      "POST /api/v1/os/deliveries/:id/revise-rejected",
+      "POST /api/v1/os/deliveries/:id/ship",
+      "POST /api/v1/os/deliveries/:id/verification-runs",
+      "POST /api/v1/os/discussion-permissions/:permissionId/revoke",
+      "POST /api/v1/os/discussion-promotions/:promotionId/review",
+      "POST /api/v1/os/discussions/:discussionId/accept",
+      "POST /api/v1/os/discussions/:discussionId/posts",
+      "POST /api/v1/os/discussions/:discussionId/posts/:postId/promotion",
+      "POST /api/v1/os/discussions/:discussionId/transition",
+      "POST /api/v1/os/team-conflict-knowledge-candidates/:candidateId/review",
+      "POST /api/v1/os/team-conflicts/:conflictId/knowledge-candidates",
+      "POST /api/v1/os/team-conflicts/:conflictId/proposals",
+      "POST /api/v1/os/team-conflicts/:conflictId/resolve",
+      "POST /api/v1/os/team-plans/:planId/:command",
+      "PUT /api/v1/os/discussions/:discussionId/subscriptions/:profileId",
       "DELETE /api/v1/os/workspaces/:id",
       "GET /api/v1/os/agent-profiles/:id",
       "GET /api/v1/os/agent-profiles/:id/conversations",
@@ -745,15 +859,18 @@
       "checkpoint.*",
       "conversation.*",
       "delivery.*",
+      "discussion.*",
       "driver.<DriverEvent.type>",
       "evidence.*",
       "job.*",
       "job_market.*",
+      "knowledge.*",
       "legacy.<LegacyBusEvent.type>",
       "orchestration.*",
       "policy.*",
       "process.*",
       "task_contract.*",
+      "team.*",
       "workspace.*"
     ]
   },
@@ -796,6 +913,12 @@
       "classification": "canonical",
       "file": "web/src/App.tsx",
       "evidence": ">Organization</button>"
+    },
+    {
+      "id": "primary.collaboration",
+      "classification": "canonical",
+      "file": "web/src/App.tsx",
+      "evidence": ">Collaborate</button>"
     },
     {
       "id": "primary.settings",
@@ -894,6 +1017,18 @@
       "evidence": "{ id: 'history', label: 'History' }"
     },
     {
+      "id": "agent-home.knowledge-manifest",
+      "classification": "canonical",
+      "file": "web/src/AgentHome.tsx",
+      "evidence": "<AgentKnowledgeManifest"
+    },
+    {
+      "id": "agent-home.discussions",
+      "classification": "canonical",
+      "file": "web/src/AgentHome.tsx",
+      "evidence": "<AgentHomeDiscussions"
+    },
+    {
       "id": "workspace.terminal",
       "classification": "canonical",
       "file": "web/src/WorkspaceCockpit.tsx",
@@ -942,6 +1077,24 @@
       "evidence": "Open full Trackbook"
     },
     {
+      "id": "collaboration.discussions",
+      "classification": "canonical",
+      "file": "web/src/CollaborationCenter.tsx",
+      "evidence": "<ProjectDiscussionCenter"
+    },
+    {
+      "id": "collaboration.knowledge",
+      "classification": "canonical",
+      "file": "web/src/CollaborationCenter.tsx",
+      "evidence": "<KnowledgeView"
+    },
+    {
+      "id": "collaboration.teams",
+      "classification": "canonical",
+      "file": "web/src/CollaborationCenter.tsx",
+      "evidence": "<TeamPlanningVisualization"
+    },
+    {
       "id": "phone.pwa",
       "classification": "infrastructure",
       "file": "web/public/manifest.webmanifest",
@@ -949,22 +1102,6 @@
     }
   ],
   "planned_not_implemented": [
-    {
-      "noun": "Discussion and DiscussionPost",
-      "reason": "A reserved service boundary exists, but current ask/reply/message transport is not a durable searchable Q&A domain."
-    },
-    {
-      "noun": "Team and PlanningSession",
-      "reason": "There is no bounded team, planning-round, proposal, critique, or synthesis service."
-    },
-    {
-      "noun": "Conflict",
-      "reason": "A compatibility-only detection service exists, but current conflict output is computed overlap detection plus attention, not a durable resolution lifecycle."
-    },
-    {
-      "noun": "Knowledge compilation and operator surfaces",
-      "reason": "Durable persistence, verified structural/history/delivery ingestion, and deterministic bounded FTS retrieval exist, but managed prompt injection, freshness automation, review controls, API, UI, and benchmarks do not."
-    },
     {
       "noun": "DeviceSession",
       "reason": "A reserved device-pairing boundary exists, but remote pairing still uses the operator master token; named scoped revocable device credentials do not exist."

@@ -1,16 +1,14 @@
 import type Database from 'better-sqlite3'
-import {
-  ComputedWorkspaceConflictService,
-  type ConflictDetectionServiceBoundary,
-} from './conflict-service.js'
 import { ConversationService } from './conversations.js'
 import { DeliveryReportService } from './delivery-reports.js'
+import { DiscussionService } from './discussions.js'
 import { KnowledgeService } from './knowledge-service.js'
 import { KnowledgeStore } from './knowledge-store.js'
 import { OrchestrationService } from './orchestration-service.js'
 import { OrganizationService } from './organization.js'
 import { OrganizationCoordinationService } from './organization-coordination.js'
 import { OrganizationAssuranceService } from './organization-assurance.js'
+import { PlanningTeamService } from './team-planning.js'
 import type { JobScheduler } from './scheduler.js'
 
 export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
@@ -79,6 +77,36 @@ export type DeliveryServiceBoundary = Pick<
   | 'assertJobReviewReady'
   | 'assertJobCompletionReady'
   | 'renderHuman'
+>
+
+export type DiscussionServiceBoundary = Pick<
+  DiscussionService,
+  | 'createDiscussion'
+  | 'addPost'
+  | 'editPost'
+  | 'acceptAnswer'
+  | 'transition'
+  | 'subscribe'
+  | 'unsubscribe'
+  | 'grantPermission'
+  | 'revokePermission'
+  | 'requestPromotion'
+  | 'get'
+  | 'require'
+  | 'list'
+  | 'search'
+  | 'queue'
+  | 'notifications'
+  | 'promotions'
+>
+
+export type ConflictResolutionServiceBoundary = Pick<
+  PlanningTeamService,
+  | 'openConflict'
+  | 'addConflictProposal'
+  | 'resolveConflict'
+  | 'requestConflictKnowledgePromotion'
+  | 'listBoardConflicts'
 >
 
 export type KnowledgePersistenceServiceBoundary = Pick<
@@ -216,7 +244,11 @@ export interface AgentOsDomainServiceBoundaries {
     'canonical',
     DeliveryServiceBoundary
   >
-  readonly discussions: AgentOsReservedServiceBoundary<'discussions'>
+  readonly discussions: AgentOsActiveServiceBoundary<
+    'discussions',
+    'canonical',
+    DiscussionServiceBoundary
+  >
   readonly knowledge: AgentOsActiveServiceBoundary<
     'knowledge',
     'canonical',
@@ -239,8 +271,8 @@ export interface AgentOsDomainServiceBoundaries {
   >
   readonly conflicts: AgentOsActiveServiceBoundary<
     'conflicts',
-    'compatibility_only',
-    ConflictDetectionServiceBoundary
+    'canonical',
+    ConflictResolutionServiceBoundary
   >
   readonly device_pairing: AgentOsReservedServiceBoundary<'device_pairing'>
 }
@@ -250,17 +282,18 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   orchestration?: OrchestrationServiceBoundary
   conversations?: ConversationServiceBoundary
   deliveries?: DeliveryServiceBoundary
+  discussions?: DiscussionServiceBoundary
   knowledge?: KnowledgeServiceBoundary
   organization?: OrganizationServiceBoundary
   coordination?: OrganizationCoordinationServiceBoundary
   assurance?: OrganizationAssuranceServiceBoundary
-  conflicts?: ConflictDetectionServiceBoundary
+  conflicts?: ConflictResolutionServiceBoundary
 }
 
 /**
  * Creates one explicit composition catalog without moving domain behavior into a router or
- * server bootstrap. Reserved domains stay null so legacy messages and the master-token QR cannot
- * be mistaken for canonical Discussions or secure device pairing.
+ * server bootstrap. Reserved domains stay null so the master-token QR cannot be mistaken for
+ * secure device pairing.
  */
 export function createAgentOsDomainServiceBoundaries(
   db: Database.Database,
@@ -315,8 +348,10 @@ export function createAgentOsDomainServiceBoundaries(
       ],
       'Canonical delivery and evidence boundary.',
     ),
-    discussions: reservedBoundary(
+    discussions: activeBoundary(
       'discussions',
+      'canonical',
+      options.discussions ?? new DiscussionService(db),
       [
         'durable discussion and post lifecycle',
         'accepted answers and resolutions',
@@ -327,7 +362,7 @@ export function createAgentOsDomainServiceBoundaries(
         'implicit broadcast',
         'tool-capable prompt injection',
       ],
-      'Reserved until the canonical Discussion domain is implemented; messages remain transport.',
+      'Canonical durable Discussion and reviewable exact-source promotion boundary.',
     ),
     knowledge: activeBoundary(
       'knowledge',
@@ -337,15 +372,15 @@ export function createAgentOsDomainServiceBoundaries(
         'knowledge source and chunk persistence',
         'context build manifests',
         'context use accounting',
-        'accepted discussion and decision evidence ingestion',
+        'committed decision evidence ingestion',
         'verified repository evidence ingestion',
         'deterministic retrieval synchronization and query',
       ],
       [
-        'managed prompt injection',
-        'automatic freshness or promotion',
+        'unreviewed arbitrary-text promotion',
+        'provider-reported token estimates as actual usage',
       ],
-      'Canonical bounded Knowledge ingestion and retrieval boundary.',
+      'Canonical bounded Knowledge compilation, injection, freshness, review, and retrieval boundary.',
     ),
     organization: activeBoundary(
       'organization',
@@ -397,18 +432,19 @@ export function createAgentOsDomainServiceBoundaries(
     ),
     conflicts: activeBoundary(
       'conflicts',
-      'compatibility_only',
-      options.conflicts ?? new ComputedWorkspaceConflictService(db),
+      'canonical',
+      options.conflicts ?? new PlanningTeamService(db),
       [
-        'computed execution-root overlap',
-        'computed owned-path overlap',
+        'durable conflict lifecycle and participants',
+        'bounded proposals and explicit arbitration',
+        'rationale, resolution, follow-up, and reviewed knowledge candidates',
       ],
       [
-        'durable Conflict lifecycle',
-        'negotiation and arbitration',
-        'enforcement or automatic resolution',
+        'implicit last-write-wins resolution',
+        'self-approval or status-only knowledge promotion',
+        'unbounded negotiation fanout',
       ],
-      'Compatibility detection boundary; durable Conflict resolution remains open.',
+      'Canonical durable Conflict negotiation and resolution boundary.',
     ),
     device_pairing: reservedBoundary(
       'device_pairing',
