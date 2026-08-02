@@ -324,12 +324,19 @@ class CdpClient {
 }
 
 const evaluate = async (client, expression) => {
-  const result = await client.send('Runtime.evaluate', {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-    userGesture: true,
-  })
+  let result
+  try {
+    result = await client.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    })
+  } catch (error) {
+    const expressionLabel = String(expression).replace(/\s+/g, ' ').trim().slice(0, 160)
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${message}; evaluate=${expressionLabel}`)
+  }
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'browser evaluation failed')
   }
