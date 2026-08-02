@@ -360,11 +360,21 @@ const hitTestPoint = async (client, selector, label) => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!(element instanceof HTMLElement)) return null;
     const rect = element.getBoundingClientRect();
+    let left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+    let top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+      const parentRect = parent.getBoundingClientRect();
+      left = Math.max(left, parentRect.left); right = Math.min(right, parentRect.right);
+      top = Math.max(top, parentRect.top); bottom = Math.min(bottom, parentRect.bottom);
+    }
+    if (right <= left || bottom <= top) return null;
     const candidates = [
       [0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75],
     ];
     for (const [xRatio, yRatio] of candidates) {
-      const x = rect.left + rect.width * xRatio, y = rect.top + rect.height * yRatio;
+      const x = left + (right - left) * xRatio, y = top + (bottom - top) * yRatio;
       const hit = document.elementFromPoint(x, y);
       if (hit && (hit === element || element.contains(hit))) return { x, y };
     }
@@ -753,6 +763,8 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     enabled: viewport.mobile,
     maxTouchPoints: viewport.mobile ? 5 : 1,
   })
+  await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
   await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.board-section-tabs'))`, 'initial board')
@@ -862,7 +874,12 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     'conversation search',
     async (mode) => {
       if (mode === 'pointer') {
-        await pointerClick(client, '.ah-search input', 'conversation search input', viewport.mobile)
+        await pointerClick(
+          client,
+          viewport.mobile ? '.ah-search label' : '.ah-search input',
+          'conversation search input',
+          viewport.mobile,
+        )
       } else if (mode === 'keyboard') {
         let tabEvents = await keyboardNavigateTo(client, '.ah-search input', 'conversation search input')
         await dispatchKey(client, 'a', { meta: true })
