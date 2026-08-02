@@ -1,42 +1,26 @@
 # Agent OS North Star Delivery Program
 
-Status: the canonical Milestone A acceptance harness is delivered, while its legacy-launch-removal
-summary remains open. Milestone B now has provider-native durable Agent Home capture, controls,
-search/export, retention, native fork reconciliation, CLI parity, the responsive visual workspace,
-and the integrated privacy/audit blocker closure; its daemon-to-browser restart and current mobile
-acceptance gates remain open. Milestone C has typed Job Market contracts, built-in templates, and
-an explicit assignment lifecycle bound through jobs, sessions, execution, retry, recovery, and
-control projections, integrated Open Work, deterministic matching, and the complete exclusive-job
-gate, plus the durable Knowledge Compiler persistence foundation and bounded repository-document
-ingestion; collaborative Team assignment and Knowledge compilation/injection remain open. The
-product is not yet public plug-and-play.
-The researched [Agent Team Operating Model](./agent-team-operating-model.md) now defines the
+Status: the four beta lanes are unified in one source candidate. Milestone A's canonical lifecycle
+is delivered while legacy-write retirement remains gated. Milestone B has durable Agent Home and
+requested-versus-delivered Job Detail, but real provider/tool parity and daemon-to-browser
+continuation remain open. Milestone C now includes the bounded Knowledge Compiler, structured
+Discussion/Q&A, Teams, planning, conflict resolution, audited integration, and exact delivery
+evidence. Milestone D has secure scoped DeviceSessions, safe phone control, operations/recovery,
+and a quality-aware outcome dashboard; exact-candidate native mobile and production-duration gates
+remain open. Milestone E is not delivered and the product is not public plug-and-play.
+
+The [Agent Team Operating Model](./agent-team-operating-model.md) is implemented and verified as a
 cross-cutting organization, authority, communication, quality, traceability, performance, and
-incident-learning contract as 25 open `ORG-*` backlog items. It is a delivery plan, not a claim
-that the organization control plane is implemented.
-The versioned subscription-first terminal-agent contract is delivered and its first
-capability-aware driver-bridge/support-gate slice is implemented. The canonical Codex adapter,
-append-only acceptance store, opt-in no-fallback production wrapper, and authorized restart
-recovery are now implemented. The conservative clean-profile Codex acceptance harness is also
-implemented, but its real exact-tuple run, the other three managed adapters, and the exact
-declared-provider compatibility matrix remain open. BASE-007 now defines a closed-by-default
-migration control and rollback point for every phase without claiming that reserved controls or
-unfinished phases are implemented. BASE-008 now anchors tests, builds, packaging, cold startup,
-memory, loopback latency, and deterministic injected-context token usage to one exact clean source
-commit without converting observations into release thresholds. BASE-009 now proves the canonical
-request-to-accepted-delivery-to-cited-knowledge lifecycle as an executable specification without
-claiming an automatic production compiler or a real provider turn. DOM-010 now standardizes
-durable actor, causal, workspace, session, job, and contract metadata at the canonical event
-boundary. DOM-013 now requires replay identity across every canonical create, launch, retry,
-submit, accept, and cancel command family. DOM-014 now exposes typed, independently injectable
-service boundaries for all seven named domains while keeping partial and reserved implementations
-explicit. DOM-015 now keeps the critical `buildServer` hub at the composition/compatibility
-boundary and delegates Agent OS option assembly plus focused route registration to a dedicated
-module. DOM-016 now assigns every compatibility/legacy table one non-competing authority and
-cutover contract. DOM-017 now implements its idempotent physical migration, deterministic
-backfill/quarantine evidence, five validation categories, compatibility range, and forward-only
-rollback plan. DOM-019 now adds privacy-safe compatibility usage, mismatch, and durable failure
-evidence without enabling a cutover or disabling a legacy writer.
+incident-learning control plane. The versioned provider boundary includes deterministic Claude,
+Codex, Qwen, and Kimi implementation seams, but **zero providers are managed-beta accepted** until
+their exact native subscription, policy, billing, platform, and eight-gate matrices pass.
+
+The beta source candidate preserves default-deny migration controls, canonical domain/event
+metadata, idempotent commands, focused service boundaries, compatibility projections, forward-only
+migrations, real terminals, worktree isolation, secure remote authority, local recovery, redacted
+diagnostics, onboarding, packaging, and fail-closed publication controls. Exact candidate and
+retained-artifact evidence is defined in
+[the beta release-candidate checkpoint](./checkpoints/beta-release-candidate.md).
 
 This document is the source-controlled engineering contract for delivering Orchestra's Agent OS
 north star. The terminal, installed CLIs, provider-native behavior, worktree safety, explicit human
@@ -44,9 +28,9 @@ attention, and observed evidence remain product invariants throughout the progra
 
 Personal subscription entitlement through a provider's native terminal CLI is the primary managed
 execution path. Direct provider-API execution and usage-priced API credentials are optional,
-explicit secondary modes and never silent fallback. Claude Code and Codex CLI are the current
-managed runtimes; Qwen Code and Kimi Code are first-release targets whose support remains open
-until the same versioned provider matrix and real acceptance gates pass.
+explicit secondary modes and never silent fallback. Claude Code, Codex CLI, Qwen Code, and Kimi
+Code are first-release targets with deterministic implementation seams; none is a supported
+managed runtime until the same versioned provider matrix and real acceptance gates pass.
 Provider terms and provider-managed overage are part of that gate: an interactive-only
 subscription cannot power background orchestration without permission, and metered overage must
 be explicitly visible and consented.
@@ -132,7 +116,11 @@ native subscription readiness for every declared provider, exact-commit CI,
 migration/backup/recovery, security review, package provenance, public plugin installation where
 supported, dogfood, rollback, diagnostics, release notes, and staged beta promotion all pass.
 
-## Current delivery slice
+## Historical pre-beta delivery slice (superseded)
+
+The following Asked/Delivered/Remaining record is retained for traceability. The beta candidate
+status at the top of this document and the candidate checkpoint supersede its former continuation
+list and counts.
 
 ### Asked
 
@@ -439,20 +427,29 @@ See [Durable Agent Home](./agent-home.md) and [Typed Job Market](./job-market.md
   provider-turn evidence. BASE-009's test executor and promotion seam do not implement the
   production Knowledge adapters/compiler/injection owned by later KNO items.
 
-The strict master reconciliation is **176 / 400 checklist boxes delivered; 224 remain open**.
-The 25 `ORG-*` boxes are implemented and acceptance-verified through organization core,
-coordination, assurance/learning, API/CLI/web control surfaces, the restart-safe two-team gate,
-and focused governance coverage.
-The prior exact-head reconciliation closed `JOB-010`, `PKG-002`, and `PKG-005`; this current
-program state closes `KNO-002` through `KNO-010`, `TOOL-013`, `BASE-007`, `BASE-008`, `BASE-009`, `DOM-010`, and
-`DOM-013` through `DOM-019`, `ORG-001` through `ORG-024`, and `ORG-GATE`, plus `JOB-008`,
-`JOB-009`, `JOB-014`, `JOB-015`, and `JOB-GATE`;
-it keeps `JOB-012` and `TOOL-014` open, and keeps `BASE-010` reopened because the
-expanded provider target does not yet have an exact compatibility matrix.
-The milestone summaries remain 2 / 15; this branch is a verified engineering train, not a public
-plug-and-play release.
+The historical pre-beta record states: strict master reconciliation is **176 / 400 checklist boxes delivered; 224 remain open**.
+That record closed `DOM-013` through `DOM-019`; the current candidate preserves those contracts.
+The table below is retained as history and is not the current
+authoritative count. The integrated Lane A checkpoint delivers its complete owned
+collaboration scope, including `JOB-012`, its seven `DEL-*` items, `KNO-011` through `KNO-027` and
+`KNO-GATE`, its `DSC-*` scope and `DSC-GATE`, `TEAM-001` through `TEAM-020` and `TEAM-GATE`, the
+requested-versus-delivered MILE-B summary, and all three MILE-C summaries. Lane C delivers
+`REM-002` through `REM-016` plus `REM-018` through `REM-020`, and `OPS-003` through `OPS-022`;
+`REM-017`, `REM-GATE`, production-transition `OPS-002`, and `OPS-GATE` remain open. Lane D delivers
+the evidence-backed analytics, quality, onboarding, documentation, diagnostics, and packaging
+items enumerated in the candidate checkpoint while keeping all partial and external gates open.
 
-| Area | Delivered | Open |
+The current milestone ceiling is **8 / 15**: the two prior Milestone A summaries; requested-versus-
+delivered Job Detail; the three Milestone C summaries; scoped DeviceSession pairing/revoke/step-up
+security; and the quality-aware outcome dashboard. Durable daemon-to-browser Agent Home recovery,
+complete provider and terminal parity, exact-candidate phone/PWA acceptance, clean-platform/public
+release, and exact-artifact rollback prevent the other seven milestone summaries from closing.
+
+The exact checkbox count is reconciled only in the authoritative Vault after post-commit candidate
+evidence. This source commit intentionally avoids a count that would become false when the final
+retained artifact and external gates are recorded.
+
+| Historical pre-beta baseline area | Delivered | Open |
 |---|---:|---:|
 | Phase 0 — Product contract/baseline | 12 / 13 | 1 |
 | Phase 1 — Canonical domain/event ledger | 20 / 20 | 0 |
