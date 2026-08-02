@@ -417,6 +417,9 @@ const operationsCases: readonly AdversarialCase[] = [
         await target.reset()
         const seed = ok(await target.perform({ op: 'chaos.seed-active-work', agents: 3, transition }), `seed ${transition}`)
         assert.deepEqual(seed.lifecycleEvidence, lifecycleEvidenceByTransition[transition], `${transition}: exact fixture shape`)
+        const seededIdentities = value<Record<string, readonly (number | string)[]>>(seed, 'durableIdentities')
+        assert.equal(seededIdentities.cards.length, 3, `${transition}: exact card identities`)
+        assert.equal(seededIdentities.contracts.length, 3, `${transition}: exact contract identities`)
         const crash = ok(await target.perform({ op: 'chaos.crash', transition }), `crash ${transition}`)
         assert.equal(crash.databaseClosed, true, `${transition}: crash must close SQLite`)
         const restart = ok(await target.perform({ op: 'chaos.restart' }), `restart ${transition}`)
@@ -427,6 +430,7 @@ const operationsCases: readonly AdversarialCase[] = [
         assert.equal(state.orphanAuthority, 0, `${transition}: orphan authority`)
         assert.equal(state.silentDataLoss, 0, `${transition}: silent data loss`)
         assert.equal(state.invalidLeases, 0, `${transition}: invalid leases`)
+        assert.deepEqual(state.durableIdentities, seededIdentities, `${transition}: every durable identity preserved`)
       }
     },
   },
@@ -476,8 +480,10 @@ const operationsCases: readonly AdversarialCase[] = [
           idempotencyKey,
         }), `prepare and inject ${fault}`)
         assert.equal(injected.preparedCriticalMutations, 1, `${fault}: durable intent must predate fault`)
-        assert.equal(typeof injected.preservedJobId, 'string', `${fault}: durable job identity`)
-        assert.equal(typeof injected.preservedOutboxId, 'string', `${fault}: durable outbox identity`)
+        const preservedJobId = value<string>(injected, 'preservedJobId')
+        const preservedOutboxId = value<string>(injected, 'preservedOutboxId')
+        assert.ok(preservedJobId.length > 0, `${fault}: nonempty durable job identity`)
+        assert.ok(preservedOutboxId.length > 0, `${fault}: nonempty durable outbox identity`)
         const attempt = await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey })
         assert.ok(attempt.status >= 400, `${fault}: operation must not report success`)
         assert.equal(attempt.failure, expectedFailure, `${fault}: exact stable failure classification`)
@@ -487,6 +493,11 @@ const operationsCases: readonly AdversarialCase[] = [
         assert.equal(failedState.appliedCriticalMutations, 0, `${fault}: failed mutation not applied`)
         assert.equal(failedState.criticalEffects, 0, `${fault}: no failed-attempt side effect`)
         assert.equal(failedState.silentDataLoss, 0, `${fault}: failed-attempt identities preserved`)
+        assert.deepEqual(failedState.criticalMutationIdentities, [{
+          idempotencyKey,
+          jobId: preservedJobId,
+          outboxId: preservedOutboxId,
+        }], `${fault}: reported identities equal durable database state`)
         ok(await target.perform({ op: 'chaos.clear-fault', fault }), `clear ${fault}`)
         const retry = ok(await target.perform({ op: 'chaos.run-critical-mutation', idempotencyKey }), `retry ${fault}`)
         assert.equal(retry.replayed, false, `${fault}: first successful application`)

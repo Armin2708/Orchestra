@@ -29,11 +29,12 @@ user state, the shared checkout, provider credentials, or an external service.
   provider/network loss uses an unavailable then restored loopback HTTP destination, and Git
   conflict runs `git merge-file`; every mutation is durably prepared before fault injection, every
   first attempt asserts its exact stable failure class and fail-closed disposition with a preserved
-  nonempty job/outbox identity, and the same idempotency key applies exactly one effect after
-  recovery; and
+  nonempty job/outbox identity equal to the durable database record, and the same idempotency key
+  applies exactly one effect after recovery; and
 - generic supervised helper processes model the process-lifecycle seam without claiming a provider
-  implementation. They are isolated under the test root, SIGKILLed, and awaited through exit during
-  cleanup. Only generated temporary directories are removed.
+  implementation. They are isolated under the test root, SIGKILLed, awaited through the child
+  `close` event, and given two event-loop turns for handle release during cleanup. A timeout fails
+  the test instead of claiming successful reaping. Only generated temporary directories are removed.
 
 The pre-existing `test/agent-home-daemon-restart-acceptance.test.ts` remains the full-process
 SIGKILL proof: it starts the production daemon and a fake Codex app-server fixture, kills the daemon
@@ -59,8 +60,10 @@ The remediated lane was verified with Node `22.20.0` and npm `10.9.3`:
 - the three changed files pass Gitleaks and diff-hygiene checks.
 
 The first independent exact review correctly blocked three vacuous P1 claims and two P2 cleanup /
-wording issues. This revision addresses all five; a fresh independent exact-commit review is still
-required before the ready marker.
+wording issues. A second exact review then found two remaining identity-assertion holes and one
+child-handle cleanup overclaim. This revision adds exact post-restart session/process identity
+comparison, nonempty fault-identity equality against durable records, and fail-closed `close`-event
+reaping. A fresh independent exact-commit review is still required before the ready marker.
 
 This bounded harness is strong implementation evidence for `OPS-002` and the engineering portion
 of `OPS-GATE`, but it is not elapsed-time dogfood and does not claim a real subscription provider,

@@ -80,6 +80,8 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
   private expectedCardIds = new Set<number>()
   private expectedContractCardIds = new Set<number>()
   private expectedJobIds = new Set<string>()
+  private expectedSessionIds = new Set<string>()
+  private expectedProcessIds = new Set<string>()
   private expectedOutboxIds = new Set<string>()
   private expectedDeliveryReportIds = new Set<string>()
   private fault: Fault | null = null
@@ -100,6 +102,8 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     this.expectedCardIds.clear()
     this.expectedContractCardIds.clear()
     this.expectedJobIds.clear()
+    this.expectedSessionIds.clear()
+    this.expectedProcessIds.clear()
     this.expectedOutboxIds.clear()
     this.expectedDeliveryReportIds.clear()
     this.fixtures = []
@@ -212,6 +216,8 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       this.lockDb = null
     }
     await Promise.all(this.fixtures.map((fixture) => this.stopChild(fixture.child)))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setImmediate(resolve))
     this.fixtures = []
     try { this.lease?.release() } catch { /* crash simulation may have closed SQLite */ }
     try { this.staleLease?.release() } catch { /* stale handle is intentionally fenced */ }
@@ -281,6 +287,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
             this.now().toISOString(),
             this.now().toISOString(),
           )
+        this.expectedSessionIds.add(sessionId)
       }
       if (jobId && !['job-queued', 'job-claimed', 'session-created'].includes(transition)) {
         child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -303,6 +310,7 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
             processStatus,
             child.pid,
           )
+        this.expectedProcessIds.add(processId)
       }
       if (jobId && (transition === 'delivery-submitted' || transition === 'outbox-pending')) {
         const reportId = `qa16-delivery-${transition}-${index}`
@@ -339,7 +347,12 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       }
       this.fixtures.push({ jobId, cardId, sessionId, processId, child })
     }
-    return { status: 201, transition, lifecycleEvidence: this.lifecycleEvidence() }
+    return {
+      status: 201,
+      transition,
+      lifecycleEvidence: this.lifecycleEvidence(),
+      durableIdentities: this.preservedDurableIdentities(),
+    }
   }
 
   private crashRuntime(transition: string): AdversarialObservation {
@@ -393,6 +406,12 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       GROUP BY idempotency_key HAVING count(*)>1
     )`).get(this.boardId) as { count: number }).count)
     const missingJobs = [...this.expectedJobIds].filter((id) => !jobRows.some((row) => row.id === id)).length
+    const missingSessions = [...this.expectedSessionIds].filter((id) => !this.db.prepare(
+      'SELECT 1 FROM agent_sessions WHERE id=?',
+    ).get(id)).length
+    const missingProcesses = [...this.expectedProcessIds].filter((id) => !this.db.prepare(
+      'SELECT 1 FROM processes WHERE id=?',
+    ).get(id)).length
     const missingCards = [...this.expectedCardIds].filter((id) => !this.db.prepare(
       'SELECT 1 FROM cards WHERE id=?',
     ).get(id)).length
@@ -422,11 +441,22 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       FROM qa16_critical_mutations WHERE applied_at IS NOT NULL`).get() as { count: number }).count)
     const criticalEffects = Number((this.db.prepare(`SELECT count(*) AS count
       FROM qa16_critical_effects`).get() as { count: number }).count)
+    const criticalMutationIdentities = (this.db.prepare(`SELECT idempotency_key, job_id, outbox_id
+      FROM qa16_critical_mutations ORDER BY idempotency_key`).all() as Array<{
+        idempotency_key: string
+        job_id: string
+        outbox_id: string
+      }>).map((row) => ({
+        idempotencyKey: row.idempotency_key,
+        jobId: row.job_id,
+        outboxId: row.outbox_id,
+      }))
     return {
       status: 200,
       duplicateJobs,
       orphanAuthority,
-      silentDataLoss: missingCards + missingContracts + missingJobs + missingOutbox + missingDeliveryReports,
+      silentDataLoss: missingCards + missingContracts + missingJobs + missingSessions
+        + missingProcesses + missingOutbox + missingDeliveryReports,
       invalidLeases: leases.length === 1 && leases[0]?.owner_id === this.currentLeaseOwner ? 0 : 1,
       activeAgents,
       staleGenerationWritesAccepted,
@@ -434,7 +464,9 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
       preparedCriticalMutations,
       appliedCriticalMutations,
       criticalEffects,
+      criticalMutationIdentities,
       lifecycleEvidence: this.lifecycleEvidence(),
+      durableIdentities: this.preservedDurableIdentities(),
     }
   }
 
@@ -715,6 +747,25 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
     }
   }
 
+  private preservedDurableIdentities(): Record<string, readonly (number | string)[]> {
+    const existing = <T extends number | string>(
+      values: ReadonlySet<T>,
+      table: string,
+      column: string,
+    ): T[] => [...values].filter((value) => this.db.prepare(
+      `SELECT 1 FROM ${table} WHERE ${column}=?`,
+    ).get(value)).sort((left, right) => String(left).localeCompare(String(right)))
+    return {
+      cards: existing(this.expectedCardIds, 'cards', 'id'),
+      contracts: existing(this.expectedContractCardIds, 'task_contracts', 'card_id'),
+      jobs: existing(this.expectedJobIds, 'jobs', 'id'),
+      sessions: existing(this.expectedSessionIds, 'agent_sessions', 'id'),
+      processes: existing(this.expectedProcessIds, 'processes', 'id'),
+      deliveries: existing(this.expectedDeliveryReportIds, 'delivery_reports', 'id'),
+      outbox: existing(this.expectedOutboxIds, 'ops_outbox', 'id'),
+    }
+  }
+
   private closeDatabaseForCrash(): void {
     this.db.prepare(`UPDATE daemon_leases SET pid=? WHERE name='orchestra-daemon' AND owner_id=?`)
       .run(DEAD_PID, this.currentLeaseOwner)
@@ -738,24 +789,29 @@ export class ProductionOperationsChaosTarget implements RemoteOpsAdversarialTarg
 
   private async stopChild(child: ChildProcess | null): Promise<void> {
     if (!child?.pid || child.exitCode !== null) return
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false
-      const finish = () => {
+      const finish = (error?: Error) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        child.off('exit', finish)
-        child.off('error', finish)
-        resolve()
+        child.off('close', finish)
+        child.off('error', fail)
+        if (error) reject(error)
+        else resolve()
       }
-      const timer = setTimeout(finish, 2_000)
+      const fail = (error: Error) => finish(error)
+      const timer = setTimeout(
+        () => finish(new Error(`supervised helper ${child.pid} did not close after SIGKILL`)),
+        2_000,
+      )
       timer.unref()
-      child.once('exit', finish)
-      child.once('error', finish)
+      child.once('close', finish)
+      child.once('error', fail)
       try {
-        if (!child.kill('SIGKILL')) finish()
-      } catch {
-        finish()
+        if (!child.kill('SIGKILL')) finish(new Error(`supervised helper ${child.pid} rejected SIGKILL`))
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
       }
     })
   }
