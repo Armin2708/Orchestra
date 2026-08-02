@@ -20,6 +20,11 @@ import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 const packageName = 'orchestra-board'
 const sha256Pattern = /^[0-9a-f]{64}$/
 const waitArray = new Int32Array(new SharedArrayBuffer(4))
+const rotatingPrimaryKeyTables = new Set([
+  // Reconciliation replaces bounded, generation-scoped success receipts after replay.
+  // The durable journal state/day seals and every canonical/user table remain strict.
+  'os_compatibility_failure_success_receipts',
+])
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message)
@@ -409,7 +414,7 @@ export const verifyDatabasePreservation = (databasePath, baseline, label) => {
     const observedKeys = new Set(observedTable.primary_keys)
     for (const key of expectedTable.primary_keys) {
       invariant(
-        observedKeys.has(key),
+        rotatingPrimaryKeyTables.has(expectedTable.name) || observedKeys.has(key),
         `${label} removed or replaced a primary-key identity in Orchestra table ${expectedTable.name}`,
       )
     }
@@ -418,7 +423,8 @@ export const verifyDatabasePreservation = (databasePath, baseline, label) => {
     ...preservationSummary(observed),
     baseline_snapshot_sha256: preservationSummary(baseline).snapshot_sha256,
     all_prior_tables_present: true,
-    all_prior_primary_keys_present: true,
+    all_protected_prior_primary_keys_present: true,
+    rotating_primary_key_tables: [...rotatingPrimaryKeyTables],
     row_counts_non_decreasing: true,
     passed: true,
   }

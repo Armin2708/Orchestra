@@ -216,8 +216,8 @@ describe('QA-017 package lifecycle harness', () => {
         actual_orchestra_database: true,
         active_work_preserved: true,
         database_continuity: {
-          after_upgrade: { passed: true, all_prior_primary_keys_present: true },
-          after_uninstall: { passed: true, all_prior_primary_keys_present: true },
+          after_upgrade: { passed: true, all_protected_prior_primary_keys_present: true },
+          after_uninstall: { passed: true, all_protected_prior_primary_keys_present: true },
         },
         packaged_backup: {
           script_path: 'node_modules/orchestra-board/scripts/backup-orchestra-state.sh',
