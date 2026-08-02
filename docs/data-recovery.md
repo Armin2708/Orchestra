@@ -4,7 +4,7 @@ Status: operator contract for beta evaluation. It does not claim an automated ba
 
 ## Ownership and locations
 
-`ORCHESTRA_HOME` defaults to `~/.orchestra`. It owns the SQLite database and WAL/SHM companions,
+`ORCHESTRA_HOME` defaults to `~/.orchestra`. It owns `onboarding.json`, the SQLite database and WAL/SHM companions,
 operator and agent bearer files, push keys, provider hook-session bindings, local telemetry spools,
 and optional legacy tunnel state. The complete inventory and sensitivity labels are in
 [operator-preview.md](operator-preview.md).
@@ -26,11 +26,34 @@ Backups are offline-consistent operations:
 6. Inspect and separately preserve every worktree with `git worktree list` and `git status`.
 
 ```sh
-sqlite3 "$ORCHESTRA_HOME/orchestra.db" \
-  ".backup '/absolute/secure/path/orchestra.backup.db'"
-shasum -a 256 /absolute/secure/path/orchestra.backup.db
-sqlite3 /absolute/secure/path/orchestra.backup.db 'PRAGMA integrity_check;'
+orchestra_state_root="${ORCHESTRA_HOME:-$HOME/.orchestra}"
+orchestra_backup_path="/absolute/secure/path/orchestra.backup.db"
+
+case "$orchestra_state_root" in /*) ;; *) echo 'ORCHESTRA_HOME must be absolute' >&2; exit 1;; esac
+case "$orchestra_backup_path" in /*) ;; *) echo 'backup path must be absolute' >&2; exit 1;; esac
+case "$orchestra_backup_path" in *"'"*) echo "backup path cannot contain a single quote" >&2; exit 1;; esac
+if printf '%s%s' "$orchestra_state_root" "$orchestra_backup_path" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  echo 'state and backup paths cannot contain control characters' >&2
+  exit 1
+fi
+test -f "$orchestra_state_root/orchestra.db"
+test ! -e "$orchestra_backup_path"
+
+sqlite3 "$orchestra_state_root/orchestra.db" ".backup '$orchestra_backup_path'"
+sqlite3 "$orchestra_backup_path" 'PRAGMA integrity_check;'
+if command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$orchestra_backup_path"       # macOS and many Linux hosts
+elif command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$orchestra_backup_path"           # GNU/Linux
+else
+  echo 'no SHA-256 utility found' >&2
+  exit 1
+fi
 ```
+
+Do not run the snippet with an unset `HOME`, a relative/custom state root, a pre-existing backup
+target, or a backup path containing control characters. Record the resolved state root before
+stopping the daemon; do not assume a later shell has the same environment.
 
 Never paste a database, WAL/SHM file, bearer, provider session, transcript, or worktree content into
 a support report.

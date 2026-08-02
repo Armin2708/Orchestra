@@ -27,10 +27,12 @@ defaults are:
 - isolated worktrees for writable managed jobs; and
 - manual, recoverable cleanup only.
 
-Run `onboard --json` to inspect the plan without applying it. Run `onboard --apply` only after
-reviewing the plan. Applying saves an owner-only `onboarding.json` under `ORCHESTRA_HOME` and installs
-only the explicitly selected Claude or Codex hooks. Hook writes are provider-specific, reversible,
-and immediately verified.
+Run `onboard --json` to inspect the plan without applying it. `onboard --apply` fails before writing
+configuration or hooks when any blocker exists. Because no provider is release-validated on this
+lane, current plans are inspection-only. Once Lane B supplies a validated provider/mode and supported
+hook capability, applying saves an owner-only `onboarding.json` under `ORCHESTRA_HOME` before the
+explicit provider-specific hook step; configuration failure cannot activate hooks, and hook failure
+rolls the verified configuration back.
 
 ## Provider truth
 

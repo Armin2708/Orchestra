@@ -12,7 +12,11 @@ import {
   type FirstRunProviderId,
   type FirstRunTelemetryChoice,
 } from './first-run-onboarding.js'
-import { runLifecycleDemo } from './lifecycle-demo.js'
+import {
+  createLifecycleDemoLaunchAuthorizer,
+  runLifecycleDemo,
+  type LifecycleDemoLaunchGateDeps,
+} from './lifecycle-demo.js'
 import type { AgentOsApi } from './agent-os-cli.js'
 
 export type FirstRunAsk = (
@@ -26,6 +30,7 @@ export type FirstRunCliDeps = {
   output?: (line: string) => void
   applyPlan?: typeof applyFirstRunPlan
   api?: AgentOsApi
+  demoLaunchGate?: LifecycleDemoLaunchGateDeps
 }
 
 const oneOf = <T extends string>(
@@ -180,6 +185,10 @@ export const registerFirstRunCommands = (
         project_root: projectRoot,
         provider,
         launch: options.launch,
+      }, {
+        authorizeLaunch: deps.demoLaunchGate
+          ? createLifecycleDemoLaunchAuthorizer(deps.demoLaunchGate)
+          : undefined,
       })
       output(options.json ? JSON.stringify(result, null, 2) : [
         `Demo state: ${result.state}`,

@@ -9,6 +9,27 @@ import {
 } from '../src/first-run-onboarding.js'
 
 describe('first-run onboarding domain', () => {
+  const releaseReadyPlan = (root: string, hooks: 'off' | 'project' = 'off') => {
+    const candidate = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'codex',
+      hook_scope: hooks,
+      telemetry: 'redacted',
+    })
+    return {
+      ...candidate,
+      provider: {
+        ...candidate.provider,
+        release_state: 'validated' as const,
+        support_state: 'supported' as const,
+        support_reason: null,
+      },
+      hooks: { ...candidate.hooks, capability_state: 'supported' as const },
+      blockers: [],
+      ready_for_managed_launch: true,
+    }
+  }
+
   it('uses safe defaults and preserves provider support truth', () => {
     const plan = buildFirstRunPlan({
       project_root: '/workspace/project',
@@ -63,16 +84,11 @@ describe('first-run onboarding domain', () => {
     )
   })
 
-  it('persists an owner-only compatible config and delegates only explicit hooks', () => {
+  it('persists an owner-only compatible config and delegates hooks only for a release-ready plan', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-'))
     const configPath = path.join(root, 'state', 'onboarding.json')
     const installProviderHooks = vi.fn()
-    const plan = buildFirstRunPlan({
-      project_root: root,
-      provider_id: 'codex',
-      hook_scope: 'project',
-      telemetry: 'redacted',
-    })
+    const plan = releaseReadyPlan(root, 'project')
 
     const config = applyFirstRunPlan(plan, {
       configPath,
@@ -91,9 +107,81 @@ describe('first-run onboarding domain', () => {
     expect(fs.readFileSync(configPath, 'utf8')).not.toMatch(/api[_-]?key|token|secret/i)
   })
 
+  it('rejects every candidate blocker before config or hook side effects', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-blocked-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const installProviderHooks = vi.fn()
+    const candidate = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'codex',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunPlan(candidate, { configPath, installProviderHooks }))
+      .toThrow('no configuration or hooks were changed')
+    expect(installProviderHooks).not.toHaveBeenCalled()
+    expect(fs.existsSync(configPath)).toBe(false)
+
+    const forged = {
+      ...candidate,
+      blockers: [],
+      ready_for_managed_launch: true,
+    }
+    expect(() => applyFirstRunPlan(forged, { configPath, installProviderHooks }))
+      .toThrow('not release-validated')
+    expect(installProviderHooks).not.toHaveBeenCalled()
+
+    const unknownHooks = {
+      ...releaseReadyPlan(root, 'project'),
+      hooks: { scope: 'project' as const, capability_state: 'unknown' as const },
+    }
+    expect(() => applyFirstRunPlan(unknownHooks, { configPath, installProviderHooks }))
+      .toThrow('hook capability is not supported')
+    expect(fs.existsSync(configPath)).toBe(false)
+  })
+
+  it('never activates hooks when config persistence fails first', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-write-fail-'))
+    const notDirectory = path.join(root, 'not-a-directory')
+    fs.writeFileSync(notDirectory, 'occupied')
+    const installProviderHooks = vi.fn()
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root, 'project'), {
+      configPath: path.join(notDirectory, 'onboarding.json'),
+      installProviderHooks,
+    })).toThrow()
+    expect(installProviderHooks).not.toHaveBeenCalled()
+
+    const invalidConfig = path.join(root, 'invalid-onboarding.json')
+    fs.writeFileSync(invalidConfig, '{"api_token":"do-not-overwrite"}\n')
+    const original = fs.readFileSync(invalidConfig, 'utf8')
+    expect(() => applyFirstRunPlan(releaseReadyPlan(root, 'project'), {
+      configPath: invalidConfig,
+      installProviderHooks,
+    })).toThrow('forbidden sensitive field')
+    expect(fs.readFileSync(invalidConfig, 'utf8')).toBe(original)
+    expect(installProviderHooks).not.toHaveBeenCalled()
+  })
+
+  it('rolls the verified config back when release-ready hook setup fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-rollback-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const previous = releaseReadyPlan(root)
+    applyFirstRunPlan(previous, {
+      configPath,
+      now: () => '2026-08-02T08:00:00.000Z',
+    })
+    const previousBytes = fs.readFileSync(configPath, 'utf8')
+    const next = releaseReadyPlan(root, 'project')
+    expect(() => applyFirstRunPlan(next, {
+      configPath,
+      now: () => '2026-08-02T09:00:00.000Z',
+      installProviderHooks: () => { throw new Error('hook write failed') },
+    })).toThrow('hook write failed')
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(previousBytes)
+  })
+
   it('fails closed on unknown config schema and invalid project selection', () => {
     expect(() => assertFirstRunConfigCompatible({ schema_version: 2 }))
-      .toThrow('unsupported first-run configuration schema')
+      .toThrow('unknown or missing fields')
     const plan = buildFirstRunPlan({
       project_root: 'relative/project',
       provider_id: 'kimi',
@@ -107,5 +195,23 @@ describe('first-run onboarding domain', () => {
     }, { directoryExists: () => true })
     expect(unsupportedHooks.blockers.map((blocker) => blocker.code))
       .toContain('hooks_not_supported')
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-strict-'))
+    const config = applyFirstRunPlan(releaseReadyPlan(root), {
+      configPath: path.join(root, 'onboarding.json'),
+      now: () => '2026-08-02T09:00:00.000Z',
+    })
+    expect(() => assertFirstRunConfigCompatible({ ...config, schema_version: 2 }))
+      .toThrow('unsupported first-run configuration schema')
+    expect(() => assertFirstRunConfigCompatible({ ...config, unknown: true }))
+      .toThrow('unknown or missing fields')
+    expect(() => assertFirstRunConfigCompatible({
+      ...config,
+      safe_defaults: { ...config.safe_defaults, bind_host: '0.0.0.0' },
+    })).toThrow('safe default drift: bind_host')
+    expect(() => assertFirstRunConfigCompatible({
+      ...config,
+      api_token: 'not-allowed',
+    })).toThrow('forbidden sensitive field')
   })
 })

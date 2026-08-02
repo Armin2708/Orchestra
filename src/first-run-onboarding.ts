@@ -86,6 +86,72 @@ export type FirstRunPlanDeps = {
   directoryExists?: (directory: string) => boolean
 }
 
+const CONFIG_KEYS = [
+  'schema_version',
+  'project_root',
+  'provider_id',
+  'execution_mode',
+  'hook_scope',
+  'telemetry',
+  'safe_defaults',
+  'configured_at',
+] as const
+
+const SAFE_DEFAULT_KEYS = [
+  'bind_host',
+  'remote_access',
+  'terminal_remote_write',
+  'telemetry',
+  'usage_priced_api_fallback',
+  'destructive_cleanup',
+  'workspace_mode',
+] as const
+
+const SENSITIVE_FIELD = /(?:^|[_-])(?:api[_-]?key|authorization|bearer|credential|password|private[_-]?key|secret|token)(?:$|[_-])/i
+
+const plainRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype)
+
+const exactKeys = (
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  label: string,
+): void => {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (actual.length !== wanted.length
+    || actual.some((key, index) => key !== wanted[index])) {
+    throw new Error(`${label} has unknown or missing fields`)
+  }
+}
+
+const rejectSensitiveFields = (value: unknown, location = 'configuration'): void => {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectSensitiveFields(item, `${location}[${index}]`))
+    return
+  }
+  if (!plainRecord(value)) return
+  for (const [key, child] of Object.entries(value)) {
+    if (SENSITIVE_FIELD.test(key)) {
+      throw new Error(`${location}.${key} is a forbidden sensitive field`)
+    }
+    rejectSensitiveFields(child, `${location}.${key}`)
+  }
+}
+
+const safeDefaults = (
+  telemetry: FirstRunTelemetryChoice,
+): FirstRunPlan['defaults'] => ({
+  bind_host: '127.0.0.1',
+  remote_access: 'off',
+  terminal_remote_write: 'off',
+  telemetry,
+  usage_priced_api_fallback: 'off',
+  destructive_cleanup: 'manual_only',
+  workspace_mode: 'isolated_worktree',
+})
+
 const providerManifest = (providerId: FirstRunProviderId) => {
   const manifest = FIRST_RELEASE_PROVIDER_MANIFESTS_V1.find(
     (candidate) => candidate.provider_id === providerId,
@@ -154,7 +220,7 @@ export const buildFirstRunPlan = (
 
   const hookCapability = selectedMode.capabilities.hooks.state
   if (hooks !== 'off'
-    && (hookCapability === 'unsupported'
+    && (hookCapability !== 'supported'
       || (answers.provider_id !== 'claude' && answers.provider_id !== 'codex'))) {
     blockers.push({
       code: 'hooks_not_supported',
@@ -162,15 +228,7 @@ export const buildFirstRunPlan = (
     })
   }
 
-  const defaults: FirstRunPlan['defaults'] = {
-    bind_host: '127.0.0.1',
-    remote_access: 'off',
-    terminal_remote_write: 'off',
-    telemetry,
-    usage_priced_api_fallback: 'off',
-    destructive_cleanup: 'manual_only',
-    workspace_mode: 'isolated_worktree',
-  }
+  const defaults = safeDefaults(telemetry)
 
   return {
     schema_version: FIRST_RUN_CONFIG_SCHEMA_VERSION,
@@ -219,10 +277,12 @@ export const buildFirstRunPlan = (
 export const assertFirstRunConfigCompatible = (
   value: unknown,
 ): FirstRunConfigV1 => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!plainRecord(value)) {
     throw new Error('first-run configuration must be an object')
   }
-  const config = value as Partial<FirstRunConfigV1>
+  rejectSensitiveFields(value)
+  exactKeys(value, CONFIG_KEYS, 'first-run configuration')
+  const config = value as unknown as FirstRunConfigV1
   if (config.schema_version !== FIRST_RUN_CONFIG_SCHEMA_VERSION) {
     throw new Error(`unsupported first-run configuration schema: ${String(config.schema_version)}`)
   }
@@ -241,11 +301,26 @@ export const assertFirstRunConfigCompatible = (
   if (!['off', 'redacted'].includes(String(config.telemetry))) {
     throw new Error('first-run telemetry choice is unsupported')
   }
+  if (!plainRecord(config.safe_defaults)) {
+    throw new Error('first-run safe_defaults must be an object')
+  }
+  exactKeys(
+    config.safe_defaults as unknown as Record<string, unknown>,
+    SAFE_DEFAULT_KEYS,
+    'first-run safe_defaults',
+  )
+  const expectedDefaults = safeDefaults(config.telemetry)
+  for (const key of SAFE_DEFAULT_KEYS) {
+    if (config.safe_defaults[key] !== expectedDefaults[key]) {
+      throw new Error(`first-run safe default drift: ${key}`)
+    }
+  }
   if (typeof config.configured_at !== 'string'
-    || !Number.isFinite(Date.parse(config.configured_at))) {
+    || !Number.isFinite(Date.parse(config.configured_at))
+    || new Date(Date.parse(config.configured_at)).toISOString() !== config.configured_at) {
     throw new Error('first-run configured_at must be an ISO timestamp')
   }
-  return config as FirstRunConfigV1
+  return config
 }
 
 export const firstRunConfigPath = (
@@ -255,21 +330,33 @@ export const firstRunConfigPath = (
   'onboarding.json',
 )
 
+const writeVerifiedText = (
+  file: string,
+  serialized: string,
+  mode: number,
+): void => {
+  const directory = path.dirname(file)
+  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.tmp`)
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+  try {
+    fs.writeFileSync(temporary, serialized, { mode, flag: 'wx' })
+    fs.renameSync(temporary, file)
+    fs.chmodSync(file, mode)
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
+  }
+  if (fs.readFileSync(file, 'utf8') !== serialized) {
+    throw new Error(`configuration changed while writing ${file}`)
+  }
+}
+
 export const writeFirstRunConfig = (
   file: string,
   config: FirstRunConfigV1,
 ): void => {
   assertFirstRunConfigCompatible(config)
-  const directory = path.dirname(file)
-  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.tmp`)
   const serialized = `${JSON.stringify(config, null, 2)}\n`
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(temporary, serialized, { mode: 0o600, flag: 'wx' })
-  fs.renameSync(temporary, file)
-  fs.chmodSync(file, 0o600)
-  if (fs.readFileSync(file, 'utf8') !== serialized) {
-    throw new Error(`first-run configuration changed while writing ${file}`)
-  }
+  writeVerifiedText(file, serialized, 0o600)
 }
 
 export type ApplyFirstRunPlanDeps = {
@@ -282,20 +369,33 @@ export const applyFirstRunPlan = (
   plan: FirstRunPlan,
   deps: ApplyFirstRunPlanDeps = {},
 ): FirstRunConfigV1 => {
-  if (plan.blockers.some((blocker) =>
-    blocker.code === 'project_not_absolute'
-    || blocker.code === 'project_not_found'
-    || blocker.code === 'hooks_not_supported'
-    || blocker.code === 'provider_api_consent_required')) {
-    throw new Error('first-run plan has configuration blockers')
+  if (plan.blockers.length > 0 || !plan.ready_for_managed_launch) {
+    throw new Error('first-run plan is blocked; no configuration or hooks were changed')
   }
-  if (plan.hooks.scope !== 'off') {
-    ;(deps.installProviderHooks ?? installHooks)(plan.hooks.scope, {
-      provider: plan.provider.id === 'claude' || plan.provider.id === 'codex'
-        ? plan.provider.id
-        : (() => { throw new Error('provider hooks are unavailable') })(),
-      roots: { cwd: plan.project_root },
-    })
+  if (plan.schema_version !== FIRST_RUN_CONFIG_SCHEMA_VERSION
+    || !path.isAbsolute(plan.project_root)
+    || (() => {
+      try { return !fs.statSync(plan.project_root).isDirectory() } catch { return true }
+    })()) {
+    throw new Error('first-run project and schema must be valid before apply')
+  }
+  if (plan.provider.release_state !== 'validated'
+    || plan.provider.support_state !== 'supported') {
+    throw new Error('first-run provider is not release-validated and supported')
+  }
+  if (plan.hooks.scope !== 'off'
+    && plan.hooks.capability_state !== 'supported') {
+    throw new Error('first-run hook capability is not supported')
+  }
+  if (plan.provider.mode === 'native_subscription'
+    && (plan.provider.runtime_mode !== 'native_cli'
+      || plan.provider.billing_mode !== 'personal_subscription')) {
+    throw new Error('first-run native subscription selection is inconsistent')
+  }
+  if (plan.provider.mode === 'provider_api'
+    && (plan.provider.runtime_mode !== 'provider_api'
+      || plan.provider.billing_mode !== 'usage_priced_api')) {
+    throw new Error('first-run provider API selection is inconsistent')
   }
   const config: FirstRunConfigV1 = {
     schema_version: FIRST_RUN_CONFIG_SCHEMA_VERSION,
@@ -307,6 +407,56 @@ export const applyFirstRunPlan = (
     safe_defaults: plan.defaults,
     configured_at: (deps.now ?? (() => new Date().toISOString()))(),
   }
-  writeFirstRunConfig(deps.configPath ?? firstRunConfigPath(), config)
+  assertFirstRunConfigCompatible(config)
+  const configFile = deps.configPath ?? firstRunConfigPath()
+  const previous = fs.existsSync(configFile)
+    ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
+    : null
+  if (previous) {
+    let parsed: unknown
+    try { parsed = JSON.parse(previous.content) } catch {
+      throw new Error('existing first-run configuration is invalid; refusing to overwrite it')
+    }
+    assertFirstRunConfigCompatible(parsed)
+  }
+  const serialized = `${JSON.stringify(config, null, 2)}\n`
+  const currentConfig = (): string | null => {
+    try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
+  }
+  try {
+    writeFirstRunConfig(configFile, config)
+    if (plan.hooks.scope !== 'off') {
+      ;(deps.installProviderHooks ?? installHooks)(plan.hooks.scope, {
+        provider: plan.provider.id === 'claude' || plan.provider.id === 'codex'
+          ? plan.provider.id
+          : (() => { throw new Error('provider hooks are unavailable') })(),
+        roots: { cwd: plan.project_root },
+      })
+    }
+    if (currentConfig() !== serialized) {
+      throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
+    }
+  } catch (error) {
+    const current = currentConfig()
+    const unchanged = previous ? current === previous.content : current === null
+    if (current !== serialized && !unchanged) {
+      throw new AggregateError(
+        [error],
+        `hook setup failed and ${configFile} changed concurrently; refusing to overwrite it`,
+      )
+    }
+    if (current === serialized) {
+      if (previous) {
+        assertFirstRunConfigCompatible(JSON.parse(previous.content))
+        writeVerifiedText(configFile, previous.content, previous.mode)
+      } else {
+        fs.unlinkSync(configFile)
+        if (fs.existsSync(configFile)) {
+          throw new AggregateError([error], 'hook setup failed and new config rollback did not verify')
+        }
+      }
+    }
+    throw error
+  }
   return config
 }

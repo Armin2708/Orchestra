@@ -35,6 +35,7 @@ The current source writes the following under `ORCHESTRA_HOME`:
 | `sessions/**/*.throttle`, `sessions/**/*.nudged`, `sessions/**/*.stale` | Ephemeral hook throttle and reminder markers. |
 | `remote.json` | Optional legacy tunnel provider, public URL, process identifier when applicable, and start time. |
 | `cloudflared.log` | Optional Cloudflare quick-tunnel startup output. Treat it as sensitive operational data. |
+| `onboarding.json` | Optional owner-only schema-v1 onboarding selection and fixed safe defaults. It contains no provider credential and is not written while provider readiness is blocked. |
 
 SQLite stores local injected-context telemetry as event category, character/token estimate, count,
 agent, board, and day. This is local product telemetry; the current product has no Orchestra-hosted

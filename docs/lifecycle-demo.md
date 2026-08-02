@@ -1,6 +1,6 @@
 # Real lifecycle demo
 
-The `lifecycle-demo` command uses production HTTP contracts to create a real Board, card and
+The `lifecycle-demo` command uses production HTTP contracts to create or reuse one marker-bound Board, card and
 versioned WorkContract, then publishes the contract. Its safe default stops there: it does not
 launch a provider, spend tokens, modify a worktree, submit evidence, or accept its own delivery.
 
@@ -10,9 +10,18 @@ After the Lane D integrator registers the command:
 orchestra lifecycle-demo --project /absolute/path/to/a/test-repository --json
 ```
 
-Inspect the returned card and its immutable Requested/Asked state. Only after `orchestra doctor`
-passes for a genuinely claimed native-subscription provider may an operator explicitly add
-`--launch`. Provider-API mode is not used by this demo.
+The selected project must already contain a safe sample file (`README.md`, `package.json`,
+`.gitignore`, or an explicitly validated relative file). The demo does not point the WorkContract at
+a nonexistent repository path.
+
+Inspect the returned card and its immutable Requested/Asked state. `--launch` is disabled unless
+central integration injects a gate that returns both a current ready doctor attestation and the
+exact accepted native-subscription provider matrix (source commit, digest, executable and platform).
+The supplied gate factory runs the doctor first and invokes the exact acceptance reader only after
+doctor success; central wiring must use the production evidence store, never a constant success stub.
+Missing, candidate or mismatched evidence fails before any API mutation. Provider-API mode is not
+used by this demo. Repeating the same marker reuses its card and existing Job rather than creating a
+second provider charge.
 
 The real lifecycle is:
 

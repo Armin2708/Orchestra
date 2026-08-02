@@ -1,6 +1,8 @@
 # Versioned API, event, and schema contract
 
-Contract version: **1**. Executable source: `src/operator-contract.ts`.
+Candidate contract version: **1**. Executable draft: `src/operator-contract.ts`. This file documents
+the intended compatibility rule; it is not a generated exhaustive route/event/schema inventory and
+does not close PKG-014 until central publication and drift gates exist.
 
 | Surface | Version | Compatibility rule |
 | --- | --- | --- |
@@ -16,8 +18,8 @@ or identity/idempotency reinterpretation requires a new major contract. An addit
 does not. Event consumers must key on version and kind, preserve unknown events, and never infer a
 terminal state from ordering alone.
 
-The automated compatibility check rejects operator-contract, first-run-schema and provider-contract
-major mismatches. Database compatibility additionally requires the exact migration/integrity gates;
+The local candidate compatibility helper rejects operator-contract, first-run-schema and provider-contract
+major mismatches. It is not a retained-artifact upgrade test. Database compatibility additionally requires the exact migration/integrity gates;
 a matching API major alone does not authorize an old binary to write a newer database.
 
 Authentication and DeviceSession scope are not encoded by URL version. Every route inherits the

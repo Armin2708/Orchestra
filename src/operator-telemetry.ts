@@ -40,6 +40,10 @@ const PROPERTY_VALUES = Object.freeze({
 const validateProperties = (
   properties: NonNullable<OperatorTelemetryInput['properties']>,
 ): void => {
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)
+    || Object.getPrototypeOf(properties) !== Object.prototype) {
+    throw new Error('telemetry properties must be a plain object')
+  }
   for (const [key, value] of Object.entries(properties)) {
     const allowed = PROPERTY_VALUES[key as keyof typeof PROPERTY_VALUES]
     if (!allowed || !(allowed as readonly string[]).includes(String(value))) {
@@ -49,7 +53,11 @@ const validateProperties = (
 }
 
 export const redactedInstallationId = (localSeed: string): string => {
-  if (localSeed.length < 16) throw new Error('telemetry installation seed is too short')
+  if (typeof localSeed !== 'string'
+    || localSeed.length < 16
+    || localSeed.length > 4_096) {
+    throw new Error('telemetry installation seed must be a bounded local string')
+  }
   return `sha256:${createHash('sha256').update(localSeed).digest('hex')}`
 }
 
@@ -59,16 +67,34 @@ export const buildOperatorTelemetryEnvelope = (
   input: OperatorTelemetryInput,
   now: () => string = () => new Date().toISOString(),
 ): OperatorTelemetryEnvelopeV1 | null => {
+  if (consent !== 'off' && consent !== 'redacted') {
+    throw new Error('telemetry consent must be off or redacted')
+  }
   if (consent === 'off') return null
-  if (!OPERATOR_TELEMETRY_EVENTS.includes(input.event)) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.getPrototypeOf(input) !== Object.prototype
+    || Object.keys(input).some((key) => key !== 'event' && key !== 'properties')
+    || !OPERATOR_TELEMETRY_EVENTS.includes(input.event)) {
     throw new Error('telemetry event is not allowlisted')
   }
   validateProperties(input.properties ?? {})
+  const occurredAt = now()
+  const parsedAt = typeof occurredAt === 'string' ? Date.parse(occurredAt) : Number.NaN
+  if (!Number.isFinite(parsedAt)
+    || new Date(parsedAt).toISOString() !== occurredAt
+    || new Date(parsedAt).getUTCFullYear() < 2020
+    || new Date(parsedAt).getUTCFullYear() > 2100) {
+    throw new Error('telemetry occurred_at must be a canonical bounded ISO timestamp')
+  }
+  const installationId = redactedInstallationId(localSeed)
+  if (!/^sha256:[a-f0-9]{64}$/.test(installationId)) {
+    throw new Error('telemetry installation id is invalid')
+  }
   return {
     schema_version: 1,
     event: input.event,
-    installation_id: redactedInstallationId(localSeed),
-    occurred_at: now(),
+    installation_id: installationId,
+    occurred_at: occurredAt,
     properties: { ...input.properties },
   }
 }

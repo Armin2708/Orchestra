@@ -1,5 +1,8 @@
 # Upgrade and compatibility notes
 
+Status: candidate operator notes and local schema checks. PKG-015 remains open until retained-package
+clean install/upgrade/uninstall/data-preservation automation passes against supported versions.
+
 Before upgrading, retain the exact current version/commit, create and restore-test an offline
 SQLite backup, preserve worktrees separately, and keep provider hooks quiesced for the entire
 database transition. Verify the target package digest and its declared Node/npm/platform/provider

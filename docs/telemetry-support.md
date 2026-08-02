@@ -19,13 +19,16 @@ the documented Claude usage-window check are separate product behavior.
 
 ## Support workflow
 
-Lane C/OPS owns automatic redacted diagnostics generation. Once available, it must produce a
+Lane C/OPS owns automatic redacted diagnostics generation and bundle verification. The support
+adapter is disabled when no verifier is injected. Once available, the generator must produce a
 manifest with schema version, basename (never local path), digest, generation time, included
 categories, redaction attestation and zero secret findings.
 
-`prepareSupportCase` accepts only that verified manifest, a full exact commit, safe issue text,
-expected/actual behavior and reproduction steps. It refuses unverified or secret-bearing input and
-emits a reviewable support-case manifest. Before sharing, the operator still reviews the bundle.
+`prepareSupportCase` accepts only that strict manifest plus an injected verifier attesting the actual
+bundle byte length, SHA-256 digest, redaction result and zero secret findings. The attestation must
+match the manifest exactly. Filenames, categories, timestamps, versions and every emitted text field
+are runtime-validated, including PEM/PAT patterns. Self-declared manifest flags alone are not proof.
+Before sharing, the operator still reviews the bundle.
 
 Never attach databases/WAL/SHM, state roots, bearer files, provider login output, environment dumps,
 transcripts, prompts, PTY output, approval parameters, source files, local paths, raw browser storage,
