@@ -5,7 +5,10 @@ import {
   DiscussionAttentionWakeAdapter,
 } from '../src/agent-os/collaboration-adapters.js'
 import { DiscussionService } from '../src/agent-os/discussions.js'
+import { JobAssignmentService } from '../src/agent-os/job-assignments.js'
+import { JobMarketService } from '../src/agent-os/job-market.js'
 import { OrganizationService } from '../src/agent-os/organization.js'
+import { JobScheduler } from '../src/agent-os/scheduler.js'
 import { PlanningTeamService } from '../src/agent-os/team-planning.js'
 import { openDb } from '../src/db.js'
 
@@ -23,6 +26,11 @@ function collaborationFixture() {
   const cardId = Number(db.prepare(`INSERT INTO cards (board_id, title, description)
     VALUES (?, 'Resolve overlap', 'Exercise the composed conflict discussion adapter')`)
     .run(boardId).lastInsertRowid)
+  const workspaceId = `discussion-adapter-workspace-${boardId}`
+  db.prepare(`INSERT INTO workspaces
+    (id, board_id, card_id, name, kind, root_path, status)
+    VALUES (?, ?, ?, 'Discussion adapter', 'shared', ?, 'active')`)
+    .run(workspaceId, boardId, cardId, `/tmp/${workspaceId}`)
   const profiles = new AgentProfileService(db)
   const facilitator = profiles.create({
     boardId,
@@ -66,6 +74,26 @@ function collaborationFixture() {
       idempotencyKey: `membership:${boardId}:${index}`,
     })
   }
+  const market = new JobMarketService(db)
+  const assignment = new JobAssignmentService(db).assign({
+    cardId,
+    profileId: facilitator.id,
+    workspaceId,
+    expectedMarketVersion: market.get(cardId).market_version,
+    actor: operator,
+    idempotencyKey: `assignment:${boardId}`,
+  }).assignment
+  const job = new JobScheduler(db).create({
+    boardId,
+    cardId,
+    workspaceId,
+    provider: 'codex',
+    jobAssignment: {
+      jobAssignmentId: assignment.id,
+      assignedProfileId: assignment.profile_id,
+      assignmentMarketVersion: assignment.assigned_market_version,
+    },
+  })
   const discussions = new DiscussionService(
     db,
     new DiscussionAttentionWakeAdapter(db),
@@ -101,6 +129,7 @@ function collaborationFixture() {
     planId: String(plan.id),
     facilitator,
     reviewer,
+    job,
     facilitatorMemberId: members.find((member) =>
       member.agent_profile_id === facilitator.id)!.id,
     reviewerMemberId: members.find((member) => member.agent_profile_id === reviewer.id)!.id,
@@ -116,7 +145,7 @@ describe('Discussion independent-review regressions', () => {
       severity: 'high',
       summary: 'Implementation and review overlap on the same Discussion boundary.',
       participantMemberIds: [value.facilitatorMemberId, value.reviewerMemberId],
-      causalJobIds: ['job:implementation', 'job:review'],
+      causalJobIds: [value.job.id],
       affectedResources: [{ kind: 'path', key: 'src/agent-os/discussions.ts' }],
       detectionEvidence: { detector: 'review-regression', exact: true },
       actor: operator,

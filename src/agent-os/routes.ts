@@ -53,6 +53,7 @@ import { deliveryTrackbookPlugin } from './delivery-trackbook-routes.js'
 import { knowledgeManagementPlugin } from './knowledge-management-routes.js'
 import { discussionPlugin } from './discussion-routes.js'
 import { teamPlanningPlugin } from './team-planning-routes.js'
+import type { AgentMutationPrincipal } from './agent-mutation-principal.js'
 import { DiscussionService } from './discussions.js'
 import { CanonicalDiscussionKnowledgePromotionAdapter } from './discussion-knowledge-promotion.js'
 import {
@@ -149,6 +150,7 @@ export interface AgentOsRouteOptions extends FastifyPluginOptions {
   providers?: AgentProviderCatalog[] | (() => AgentProviderCatalog[] | Promise<AgentProviderCatalog[]>)
   plugins?: PluginDescriptor[] | (() => PluginDescriptor[])
   isOperator?: (request: FastifyRequest) => boolean
+  resolveAgentPrincipal?: (request: FastifyRequest) => AgentMutationPrincipal | null
   compatibilityFailureJournal?: CompatibilityMigrationFailureJournal
   supportedProviders?: readonly string[]
   globalCapacity?: number
@@ -206,6 +208,7 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
   server.register(deliveryTrackbookPlugin, {
     db: options.db,
     isOperator: options.isOperator,
+    resolveAgentPrincipal: options.resolveAgentPrincipal,
     prefix: '/api/v1/os',
   })
   server.register(knowledgeManagementPlugin, {
@@ -217,12 +220,26 @@ export function registerAgentOsRoutes(server: FastifyInstance, options: AgentOsR
     db: options.db,
     service: discussionService,
     isOperator: options.isOperator,
+    resolveActor: (request) => {
+      if (options.isOperator?.(request)) {
+        return { type: 'operator', id: request.orchestraPrincipal ?? 'operator' }
+      }
+      const principal = options.resolveAgentPrincipal?.(request)
+      return principal ? {
+        type: 'agent',
+        id: `agent:${principal.agentId}`,
+        profileId: principal.profileId,
+        provider: principal.provider,
+        sessionId: principal.sessionId,
+      } : null
+    },
     prefix: '/api/v1/os',
   })
   server.register(teamPlanningPlugin, {
     db: options.db,
     discussionAdapter: new CanonicalConflictDiscussionAdapter(discussionService),
     isOperator: options.isOperator,
+    resolveAgentPrincipal: options.resolveAgentPrincipal,
     prefix: '/api/v1/os',
   })
 }

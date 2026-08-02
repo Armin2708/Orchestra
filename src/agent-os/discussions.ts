@@ -1179,8 +1179,10 @@ export class DiscussionService {
       throw new ValidationError('agent actor requires a profile id')
     }
     if (actor.sessionId) {
-      const session = this.db.prepare(`SELECT board_id, profile_id, provider
-        FROM agent_sessions WHERE id=?`).get(actor.sessionId) as
+      const session = this.db.prepare(`SELECT workspace.board_id, session.profile_id,
+          session.provider FROM agent_sessions session
+          JOIN workspaces workspace ON workspace.id=session.workspace_id
+          WHERE session.id=?`).get(actor.sessionId) as
         | { board_id: number; profile_id: string | null; provider: string } | undefined
       if (!session || session.board_id !== boardId
         || (actor.profileId && session.profile_id !== actor.profileId)

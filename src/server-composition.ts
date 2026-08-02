@@ -10,6 +10,7 @@ import {
   type AgentOsRouteOptions,
 } from './agent-os/routes.js'
 import { CODEX_CAPABILITIES } from './provider-agent-manager.js'
+import { resolveAgentMutationPrincipal } from './agent-os/agent-mutation-principal.js'
 
 export type AgentOsServerRouteOptions = Omit<AgentOsRouteOptions, 'db'>
 
@@ -96,6 +97,8 @@ export function composeAgentOsRouteOptions(
     globalCapacity: input.agentOs?.globalCapacity ?? configuredGlobalCapacity(),
     perProfileCapacity: input.agentOs?.perProfileCapacity ?? 1,
     isOperator: input.isOperator,
+    resolveAgentPrincipal: input.agentOs?.resolveAgentPrincipal
+      ?? ((request) => resolveAgentMutationPrincipal(input.db, request)),
   }
 }
 

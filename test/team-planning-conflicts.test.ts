@@ -859,4 +859,91 @@ describe('TEAM-001–020 and JOB-012 bounded collaboration', () => {
     await app.close()
     value.db.close()
   })
+
+  it('scopes agent team commands to the exact explicit participant and preserves human override', async () => {
+    const value = fixture()
+    const app = Fastify()
+    app.addHook('preHandler', async (request) => {
+      request.orchestraPrincipal = 'agent'
+    })
+    await app.register(teamPlanningPlugin, {
+      prefix: '/api/v1/os',
+      db: value.db,
+      discussionAdapter: value.discussionAdapter,
+      isOperator: () => false,
+      resolveAgentPrincipal: (request) => request.headers['x-test-profile'] === value.implementer.id
+        ? {
+            agentId: 42,
+            boardId: value.boardId,
+            profileId: value.implementer.id,
+            provider: 'codex',
+            providerSessionId: 'provider-session-42',
+            sessionId: 'canonical-session-42',
+            jobId: value.job.id,
+            jobAssignmentId: value.assignment.id,
+            assignmentMarketVersion: value.assignment.assigned_market_version,
+          }
+        : null,
+    })
+    const url = `/api/v1/os/team-plans/${value.plan.id}/artifact.record`
+    const sharedOnly = await app.inject({
+      method: 'POST',
+      url,
+      headers: { 'idempotency-key': `team-agent-shared-${value.boardId}` },
+      payload: {
+        authorMemberId: value.implementerMember.id,
+        kind: 'proposal',
+        summary: 'A shared bearer is not mutation identity.',
+      },
+    })
+    expect(sharedOnly.statusCode).toBe(403)
+
+    const exact = await app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        'x-test-profile': value.implementer.id,
+        'idempotency-key': `team-agent-exact-${value.boardId}`,
+      },
+      payload: {
+        authorMemberId: value.implementerMember.id,
+        kind: 'proposal',
+        summary: 'The exact explicit participant records its own artifact.',
+      },
+    })
+    expect(exact.statusCode, exact.body).toBe(201)
+    expect(value.db.prepare(`SELECT actor_type, actor_id FROM os_events
+      WHERE idempotency_key=?`).get(`team:team-agent-exact-${value.boardId}`)).toEqual({
+      actor_type: 'agent',
+      actor_id: value.implementer.id,
+    })
+
+    const impersonation = await app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        'x-test-profile': value.implementer.id,
+        'idempotency-key': `team-agent-impersonation-${value.boardId}`,
+      },
+      payload: {
+        authorMemberId: value.reviewerMember.id,
+        kind: 'critique',
+        summary: 'An implementer must not impersonate the reviewer.',
+      },
+    })
+    expect(impersonation.statusCode).toBe(403)
+
+    const humanOverride = await app.inject({
+      method: 'POST',
+      url: `/api/v1/os/team-plans/${value.plan.id}/override.record`,
+      headers: {
+        'x-test-profile': value.implementer.id,
+        'idempotency-key': `team-agent-override-${value.boardId}`,
+      },
+      payload: { reason: 'Agents cannot grant themselves a human override.', scope: {} },
+    })
+    expect(humanOverride.statusCode).toBe(403)
+    await app.close()
+    value.db.close()
+  })
 })

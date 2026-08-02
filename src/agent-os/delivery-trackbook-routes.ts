@@ -10,10 +10,15 @@ import {
 import { AgentOsError, ForbiddenError, ValidationError } from './errors.js'
 import { requireIdempotencyKey } from './idempotency.js'
 import { objectBody, positiveId, requiredString } from './json.js'
+import {
+  requireAgentOwnsDelivery,
+  type AgentMutationPrincipal,
+} from './agent-mutation-principal.js'
 
 export interface DeliveryTrackbookRouteOptions extends FastifyPluginOptions {
   db: Database.Database
   isOperator?: (request: FastifyRequest) => boolean
+  resolveAgentPrincipal?: (request: FastifyRequest) => AgentMutationPrincipal | null
 }
 
 /** Focused route module; the lane root registers it under `/api/v1/os`. */
@@ -48,7 +53,7 @@ export const deliveryTrackbookPlugin: FastifyPluginAsync<DeliveryTrackbookRouteO
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/verification-runs', (request, reply) => {
     const body = safeBody(request.body)
     const verification = service.recordVerificationRun(request.params.id, {
-      actor: authenticatedActor(request, options),
+      actor: authenticatedActor(request, options, request.params.id),
       command: requiredString(body.command, 'command'),
       cwd: requiredString(body.cwd, 'cwd'),
       environment: stringRecord(body.environment, 'environment'),
@@ -66,7 +71,7 @@ export const deliveryTrackbookPlugin: FastifyPluginAsync<DeliveryTrackbookRouteO
     (request, reply) => {
       const body = safeBody(request.body)
       const attestation = service.attestArtifact(request.params.id, {
-        actor: authenticatedActor(request, options),
+        actor: authenticatedActor(request, options, request.params.id),
         artifactId: request.params.artifactId,
         contentSha256: optionalString(body.content_sha256 ?? body.contentSha256),
         byteSize: optionalInteger(body.byte_size ?? body.byteSize, 'byte_size'),
@@ -120,7 +125,10 @@ export const deliveryTrackbookPlugin: FastifyPluginAsync<DeliveryTrackbookRouteO
 
   app.post<{ Params: { id: string }; Body: unknown }>('/deliveries/:id/revise-rejected', (request, reply) => {
     safeBody(request.body ?? {})
-    const delivery = service.reviseRejected(request.params.id, authenticatedActor(request, options))
+    const delivery = service.reviseRejected(
+      request.params.id,
+      authenticatedActor(request, options, request.params.id),
+    )
     return reply.code(201).send({ delivery })
   })
 
@@ -153,10 +161,22 @@ export const deliveryTrackbookPlugin: FastifyPluginAsync<DeliveryTrackbookRouteO
   })
 }
 
-function authenticatedActor(request: FastifyRequest, options: DeliveryTrackbookRouteOptions): ActorIdentity {
-  const id = request.orchestraPrincipal
-  if (!id) throw new ForbiddenError('authenticated principal is required for Delivery Trackbook commands')
-  return { type: options.isOperator?.(request) ? 'operator' : 'agent', id }
+function authenticatedActor(
+  request: FastifyRequest,
+  options: DeliveryTrackbookRouteOptions,
+  deliveryId?: string,
+): ActorIdentity {
+  if (options.isOperator?.(request)) {
+    return { type: 'operator', id: request.orchestraPrincipal ?? 'operator' }
+  }
+  const principal = options.resolveAgentPrincipal?.(request)
+  if (!principal) {
+    throw new ForbiddenError(
+      'session-bound agent identity is required for Delivery Trackbook commands',
+    )
+  }
+  if (deliveryId) requireAgentOwnsDelivery(options.db, principal, deliveryId)
+  return { type: 'agent', id: principal.profileId }
 }
 
 function operatorActor(request: FastifyRequest, options: DeliveryTrackbookRouteOptions): ActorIdentity {
