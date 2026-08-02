@@ -159,3 +159,53 @@ shipments, and zero completions. The committed regression preserves this exact e
   existing exact allowlist; it must not replace them with broad exceptions.
 - This checkpoint does not publish, tag, push, promote providers, alter backlog counts, or claim a
   stable release.
+
+## Ignored-worktree preservation remediation addendum
+
+Date: 2026-08-02
+
+This addendum supersedes the ready marker `f777aafa16d704ff0213d76fb7578d084ab6d672`.
+Central re-review found one further P1: the tracked/untracked cleanliness check omitted Git-ignored
+content, so `git worktree remove` could delete ignored user files such as `.env`, dependency caches,
+or retained artifacts.
+
+Verified remediation implementation head:
+`5221ace572231aee4cf55b0ed13bb60f0f61b573`.
+
+- Exact candidate cleanup now requests tracked, untracked, and ignored porcelain entries with
+  `--untracked-files=all --ignored=matching`. Any returned entry fails closed before worktree or
+  branch removal.
+- A real daemon-restart regression creates ignored `.env`, `node_modules/local-cache.bin`, and
+  `artifacts/accepted-output.log` content. It proves every file survives, the exact worktree remains
+  registered, the branch remains at its immutable source commit, the autoship intent remains
+  pending, and the card moves to `blocked` with zero receipt, shipment, or completion records.
+- Independent adversarial review additionally verified ignored files, directories, file symlinks,
+  and directory symlinks are all surfaced; a symlink not covered by a directory-only ignore rule is
+  still untracked and therefore also blocks cleanup.
+
+### Evidence
+
+Environment: Node `22.20.0`, npm `10.9.3`.
+
+| Gate | Exact result |
+|---|---|
+| Independent focused restart suite | 3 files / 29 tests passed |
+| Complete default repository suite | 208 files / 1,784 tests passed in 104.90s |
+| Complete one-worker repository suite | 208 files / 1,784 tests passed in 291.71s |
+| Root TypeScript and production build | passed |
+| Web TypeScript and production build | passed |
+| Root and web dependency audits | zero vulnerabilities |
+| Gitleaks changed-file scan | no findings |
+| Gitleaks implementation full-history scan | 460 commits / 15.91 MB scanned; no findings |
+| GitNexus | known pre-edit `ShipQueue` HIGH (104 affected) and `buildServer` CRITICAL (75 affected); staged detection mapped two files but no symbols because the index is stale, so no low-risk inference was accepted |
+| Graphify | refreshed to 8,164 nodes / 19,869 edges / 308 communities |
+| Independent remediation review | APPROVE; P0=0, P1=0, P2=0 |
+
+### Rollback and integration
+
+- Revert the new ready marker and `5221ace572231aee4cf55b0ed13bb60f0f61b573` before reverting
+  the earlier remediation commits.
+- Central integration must preserve any ignored candidate content by failing closed; no cleanup path
+  may use force or treat an ignored-only worktree as empty.
+- This checkpoint does not publish, tag, push, promote providers, alter backlog counts, or claim a
+  stable release.
