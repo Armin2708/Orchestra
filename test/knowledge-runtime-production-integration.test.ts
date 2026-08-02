@@ -266,7 +266,7 @@ async function until(condition: () => boolean, timeoutMs = 10_000): Promise<void
 }
 
 describe('knowledge runtime production wiring', () => {
-  it('recompiles at live HEAD and attributes initial and follow-up contexts from provider input deltas', async () => {
+  it('recompiles at live HEAD without attributing whole-turn provider input to context uses', async () => {
     const repositoryState = await repository()
     const db = openDb(':memory:')
     installKnowledgeContextUseActualEvidenceSchema(db)
@@ -357,8 +357,12 @@ describe('knowledge runtime production wiring', () => {
         },
       },
     })
-    await until(() => sessionContext().knowledge_context_input_tokens === 120)
-    expect(sessionContext().knowledge_context_input_source).toBe('provider_input_delta')
+    await until(() => {
+      const usage = sessionContext().usage_total as Record<string, unknown> | undefined
+      return usage?.input_tokens === 120
+    })
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_tokens')
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_source')
 
     putKnowledge(db, boardId, secondHead, 'follow-up',
       'Inspect the new followup delta FOLLOW_UP_ONLY with exact source evidence.')
@@ -399,9 +403,9 @@ describe('knowledge runtime production wiring', () => {
       }>
     expect(uses).toHaveLength(3)
     expect(uses.map((use) => use.outcome)).toEqual(['failed', 'completed', 'completed'])
-    expect(uses.map((use) => use.actual_tokens)).toEqual([null, 120, 3_380])
-    expect(uses[1].actual_tokens).not.toBe(uses[1].estimated_tokens)
-    expect(uses[2].actual_tokens).not.toBe(uses[2].estimated_tokens)
+    expect(uses.map((use) => use.actual_tokens)).toEqual([null, null, null])
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_tokens')
+    expect(sessionContext()).not.toHaveProperty('knowledge_context_input_source')
     expect(runtime.scheduler.get(job.id)?.spent_tokens).toBe(4_000)
     expect(db.prepare(`SELECT total_tokens, input_tokens, output_tokens
       FROM agent_usage`).get()).toEqual({
