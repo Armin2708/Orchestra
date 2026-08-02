@@ -17,9 +17,9 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 152 | 3 | 10 | 12 | 177 |
+| SQLite application tables | 167 | 3 | 10 | 17 | 197 |
 | Registered HTTP routes | 168 | 29 | 25 | 9 | 231 |
-| CLI command families/subcommands | 94 | 5 | 18 | 8 | 125 |
+| CLI command families/subcommands | 94 | 5 | 18 | 20 | 137 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -467,7 +467,7 @@ POST /api/v1/push/unsubscribe
 
 ## CLI API
 
-The exact 125 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
+The exact 137 command paths are machine-checked from `src/cli.ts`, `src/agent-os-cli.ts`, and
 `src/job-assignment-cli.ts`. The compact human map is:
 
 | Class | Command surface |
@@ -555,7 +555,7 @@ The test:
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every registered literal HTTP route, applies Agent OS prefixes, expands session
    actions, and exact-compares all 231 signatures;
-3. extracts every Commander root/subcommand and exact-compares all 125 command paths;
+3. extracts every Commander root/subcommand and exact-compares all 137 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;
