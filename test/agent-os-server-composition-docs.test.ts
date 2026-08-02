@@ -15,7 +15,7 @@ type CompositionInventory = {
   }
 }
 
-const INVENTORY_HEAD = 'f6718aac2e86e02dbac2e8d9b4eaee4e51d01560'
+const INVENTORY_HEAD = 'fefec4c70810f1b5fd196835f0696fc2deaba8fe'
 const DOM015_CODE_HEAD = '98c722f10357311d5c1dfdb4ca8e83228adc2b8c'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')

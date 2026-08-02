@@ -2,7 +2,7 @@
 
 Status: REM-001 candidate
 
-Observed code: `b5ba7b848083028c2174bd109b0ccd6d33e316c2`
+Observed code: `fefec4c70810f1b5fd196835f0696fc2deaba8fe`
 
 Machine-readable companion: `docs/remote-mobile-threat-control-matrix.json`
 

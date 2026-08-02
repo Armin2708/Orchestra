@@ -6,7 +6,7 @@ DOM-014's focused service-boundary topology, DOM-015's server composition bounda
 legacy projection contract, DOM-017's physical forward migration, and DOM-019's compatibility
 telemetry and failure evidence, plus the integrated Open Work, collaboration, knowledge, team,
 delivery, and outcome-analytics surfaces, observed at exact code head
-`f6718aac2e86e02dbac2e8d9b4eaee4e51d01560`.
+`fefec4c70810f1b5fd196835f0696fc2deaba8fe`.
 
 This inventory separates the original Board product from the canonical Agent OS and the bridges
 that keep both usable during migration. The machine-readable source of truth is

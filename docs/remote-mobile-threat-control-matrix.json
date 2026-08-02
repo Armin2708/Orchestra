@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "b5ba7b848083028c2174bd109b0ccd6d33e316c2",
+  "observed_at_commit": "fefec4c70810f1b5fd196835f0696fc2deaba8fe",
   "backlog_item": "REM-001",
   "classification": "threat_model_only",
   "posture": "functional_beta_not_safe_remote_beta",

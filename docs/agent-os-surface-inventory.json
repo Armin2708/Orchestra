@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "f6718aac2e86e02dbac2e8d9b4eaee4e51d01560",
+  "observed_at_commit": "fefec4c70810f1b5fd196835f0696fc2deaba8fe",
   "classification": {
     "canonical": "Agent OS state or interface under the durable /api/v1/os contract.",
     "compatibility": "A supported legacy-shaped bridge that may project into canonical state but is not itself the canonical source of truth.",
