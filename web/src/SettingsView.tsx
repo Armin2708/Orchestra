@@ -9,6 +9,7 @@ import {
   osApi,
 } from './osApi'
 import { RemoteAccessCenter } from './RemoteAccessCenter'
+import { SupportCasePanel } from './SupportCasePanel'
 import './settings.css'
 
 type AgentType = keyof AgentDefaults
@@ -330,6 +331,7 @@ export function SettingsView() {
           </footer>
         )}
       </form>
+      <SupportCasePanel />
       <RemoteAccessCenter />
     </main>
   )

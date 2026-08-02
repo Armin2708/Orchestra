@@ -7,6 +7,10 @@ import { OperationsHealthService, type OperationsHealthProbe } from './health.js
 import { OperationsAlertEngine, OperationsMetrics } from './metrics.js'
 import { StructuredOperationsLogger } from './structured-logger.js'
 import type { OperationsRuntime } from './runtime.js'
+import {
+  createSupportCaseExport,
+  type SupportCaseExportRequestV1,
+} from '../support-case-export.js'
 
 const scalar = (db: Database.Database, sql: string): number => {
   try { return Number((db.prepare(sql).get() as { value: number }).value) || 0 } catch { return 0 }
@@ -242,8 +246,7 @@ export function registerOperationsIntegration(
     } }
   })
 
-  server.get('/api/v1/ops/diagnostics', async (request, reply) => {
-    if (!requireLocalOwner(request, reply)) return
+  const createDiagnosticsArtifact = async () => {
     const snapshot = await checkHealth()
     metrics.set('queue_depth', scalar(db, "SELECT count(*) AS value FROM jobs WHERE status='queued'"))
     metrics.set('retry_attempts', scalar(db, `SELECT
@@ -255,7 +258,7 @@ export function registerOperationsIntegration(
     metrics.set('device_revoke_propagation_pending', scalar(db, `SELECT count(*) AS value
       FROM ops_outbox WHERE destination='remote-device-revocation'
         AND status IN ('pending','delivering')`))
-    const artifact = new OperationsDiagnosticsBundle().create({
+    return new OperationsDiagnosticsBundle().create({
       generatedByVersion: VERSION,
       health: snapshot,
       metrics: metrics.snapshot(),
@@ -272,10 +275,37 @@ export function registerOperationsIntegration(
         stale_remote_authorized_intents: staleRemoteAuthorizedIntentCount(db),
       },
     })
+  }
+
+  server.get('/api/v1/ops/diagnostics', async (request, reply) => {
+    if (!requireLocalOwner(request, reply)) return
+    const artifact = await createDiagnosticsArtifact()
     reply.header('content-type', 'application/gzip')
     reply.header('content-disposition', `attachment; filename="${artifact.filename}"`)
     reply.header('x-content-sha256', artifact.sha256)
+    reply.header('cache-control', 'no-store')
+    reply.header('x-content-type-options', 'nosniff')
     return reply.send(artifact.bytes)
+  })
+
+  server.post('/api/v1/ops/support-case', async (request, reply) => {
+    if (!requireLocalOwner(request, reply)) return
+    try {
+      const artifact = createSupportCaseExport({
+        request: request.body as SupportCaseExportRequestV1,
+        diagnostics: await createDiagnosticsArtifact(),
+      })
+      reply.header('content-type', 'application/json; charset=utf-8')
+      reply.header('content-disposition', `attachment; filename="${artifact.filename}"`)
+      reply.header('x-content-sha256', artifact.sha256)
+      reply.header('cache-control', 'no-store')
+      reply.header('x-content-type-options', 'nosniff')
+      return reply.send(artifact.bytes)
+    } catch {
+      return reply.code(400).send({
+        error: 'support-case export was rejected by consent, input, or diagnostics verification',
+      })
+    }
   })
 
   return {

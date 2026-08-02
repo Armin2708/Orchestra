@@ -39,6 +39,7 @@ import {
   createPlatformCredentialStore,
   type ProtectedCredentialReference,
 } from './operations/credentials.js'
+import { registerSupportCaseCommand } from './support-case-cli.js'
 
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
@@ -140,6 +141,11 @@ ops.command('diagnostics <destination>')
       review_before_sharing: true,
     }, null, 2))
   })
+registerSupportCaseCommand(ops, {
+  ensureReady: up,
+  baseUrl,
+  ownerToken: ensureToken,
+})
 ops.command('backup [name]').option('--root <directory>', 'backup root under the Orchestra state directory')
   .action(async (name, o) => {
     const stateRoot = dataDir()

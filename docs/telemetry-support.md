@@ -19,16 +19,21 @@ the documented Claude usage-window check are separate product behavior.
 
 ## Support workflow
 
-Lane C/OPS owns automatic redacted diagnostics generation and bundle verification. The support
-adapter is disabled when no verifier is injected. Once available, the generator must produce a
-manifest with schema version, basename (never local path), digest, generation time, included
-categories, redaction attestation and zero secret findings.
+The local-owner daemon now connects Lane C's allowlisted gzip generator to the support adapter
+through an independent strict byte verifier. The verifier recomputes the compressed-byte SHA-256,
+enforces compressed and decoded size limits, decompresses the exact bytes, validates the closed
+schema and exclusion list, and rejects unsafe keys or text. Only then does it construct the manifest
+and attestation consumed by `prepareSupportCase`; client-supplied manifest flags are never accepted.
 
-`prepareSupportCase` accepts only that strict manifest plus an injected verifier attesting the actual
-bundle byte length, SHA-256 digest, redaction result and zero secret findings. The attestation must
-match the manifest exactly. Filenames, categories, timestamps, versions and every emitted text field
-are runtime-validated, including PEM/PAT patterns. Self-declared manifest flags alone are not proof.
-Before sharing, the operator still reviews the bundle.
+The Settings support form and `orchestra ops support-case` both call the local-owner-only
+`POST /api/v1/ops/support-case` route. The route generates fresh diagnostics, verifies those exact
+bytes and returns one digest-bound local JSON export containing the report and base64-encoded gzip
+bytes. Both surfaces require explicit local-export/review consent. The browser never persists the
+owner token, the CLI writes by exclusive create with mode `0600`, and no route accepts a local input
+or output path. Before sharing, the operator must decode and review the export.
+
+No issue-tracker, email, upload or publication transport is registered. Creating the export does not
+submit a report, authorize publication or close external support/release gates.
 
 Never attach databases/WAL/SHM, state roots, bearer files, provider login output, environment dumps,
 transcripts, prompts, PTY output, approval parameters, source files, local paths, raw browser storage,

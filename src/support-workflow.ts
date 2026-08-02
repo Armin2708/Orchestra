@@ -31,10 +31,21 @@ export type SupportCaseV1 = {
   share_warning: string
 }
 
+export type SupportCaseInputV1 = {
+  title: string
+  summary: string
+  reproduction_steps: readonly string[]
+  expected: string
+  actual: string
+  exact_commit: string
+  orchestra_version: string
+  diagnostics: RedactedDiagnosticsManifestV1
+}
+
 const SHA256 = /^[a-f0-9]{64}$/
 const COMMIT = /^[a-f0-9]{40}$/
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/
-const BUNDLE_FILE = /^orchestra-diagnostics-[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:json|zip|tar\.gz)$/
+const BUNDLE_FILE = /^orchestra-diagnostics-[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:json(?:\.gz)?|zip|tar\.gz)$/
 const IDENTIFIER = /^[a-z0-9][a-z0-9._-]{0,127}$/
 const SECRET_PATTERN = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:github_pat_|gh[pousr]_|glpat-|xox[baprs]-|sk-)[A-Za-z0-9_-]{8,}|\bAKIA[A-Z0-9]{16}\b|bearer\s+[a-z0-9._~+/-]+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+)/i
 const DIAGNOSTIC_CATEGORIES = new Set([
@@ -115,16 +126,10 @@ const safeText = (value: string, label: string, maxLength = 4_000): string => {
   return normalized
 }
 
-export const prepareSupportCase = (input: {
-  title: string
-  summary: string
-  reproduction_steps: readonly string[]
-  expected: string
-  actual: string
-  exact_commit: string
-  orchestra_version: string
-  diagnostics: RedactedDiagnosticsManifestV1
-}, deps: SupportWorkflowDeps = {}): SupportCaseV1 => {
+export const prepareSupportCase = (
+  input: SupportCaseInputV1,
+  deps: SupportWorkflowDeps = {},
+): SupportCaseV1 => {
   if (!exactPlainRecord(input, SUPPORT_INPUT_KEYS)) {
     throw new Error('support case input has unknown or missing fields')
   }

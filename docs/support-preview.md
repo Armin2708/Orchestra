@@ -48,6 +48,39 @@ Do not attach or paste any of the following:
   screenshots containing any of those; or
 - `cloudflared.log` or browser/network logs without reviewing and redacting them first.
 
+## Prepare one local support-case export
+
+The Settings page provides the same local workflow as the CLI. For the CLI, create a request file
+containing only the report fields:
+
+```json
+{
+  "title": "Provider launch is blocked",
+  "summary": "The readiness check reports an accepted version mismatch.",
+  "reproduction_steps": ["Run the readiness check"],
+  "expected": "The accepted executable is ready.",
+  "actual": "The executable remains blocked.",
+  "exact_commit": "0000000000000000000000000000000000000000",
+  "orchestra_version": "0.1.0"
+}
+```
+
+Then explicitly consent to a local export and manual review:
+
+```sh
+orchestra ops support-case ./support-request.json . --consent-review-before-sharing
+```
+
+The daemon generates fresh diagnostics, recomputes and binds the exact byte length and SHA-256,
+checks the decoded closed schema and exclusions, and returns one JSON file. The file embeds the gzip
+bytes as base64 so report metadata cannot be separated from a different diagnostics bundle. The CLI
+validates the response digest, writes only the server-generated safe filename into the existing
+output directory, uses exclusive create with mode `0600`, and refuses overwrite or symlink targets.
+
+Decode and review both the report and embedded gzip before sharing. Nothing is uploaded or submitted
+by this command. If the strict verifier rejects the bundle, do not bypass it or create an ad-hoc
+archive.
+
 Replace project, user, host, agent, branch, worktree, and session identifiers with neutral labels
 when they are not needed to reproduce the fault. Never post a secret and then rely on editing the
 issue later; treat any published credential as exposed.
