@@ -647,6 +647,7 @@ export class DeliveryTrackbookService {
         source_commit: intent.source_commit,
         observed_head_commit: observedHeadCommit,
       }, completedAt)
+      this.restoreAutoshipCard(intent)
       return this.autoshipResult(intent, this.autoshipCompletionForIntent(intent.id)!)
     })
     return complete.immediate()
@@ -675,7 +676,6 @@ export class DeliveryTrackbookService {
             idempotencyKey: `autoship-intent-reconcile:${intent.id}:${head}`,
           }),
         }
-        this.restoreAutoshipCard(intent)
         return completed
       } catch (error) {
         return this.pendingAutoshipReconciliation(

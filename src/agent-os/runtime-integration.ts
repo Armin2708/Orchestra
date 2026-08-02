@@ -1839,6 +1839,30 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
           currentlyPaused ? 'paused' : 'active',
           currentSession.id,
         )
+        if (sessionRow.provider === 'codex' && currentSession.agent_id) {
+          const recoveredAgent = this.db.prepare(`SELECT id, board_id, name, provider,
+              external_session_id FROM agents WHERE id=? AND kind='hired'`)
+            .get(currentSession.agent_id) as {
+              id: number
+              board_id: number
+              name: string
+              provider: string
+              external_session_id: string | null
+            } | undefined
+          if (!recoveredAgent || recoveredAgent.board_id !== job.board_id
+            || recoveredAgent.provider !== sessionRow.provider
+            || recoveredAgent.external_session_id !== sessionRow.external_id) {
+            throw new Error('recovered Codex agent identity does not match its durable session')
+          }
+          provisionManagedAgentSessionCredential(this.db, {
+            agentId: recoveredAgent.id,
+            boardId: recoveredAgent.board_id,
+            agentName: recoveredAgent.name,
+            provider: recoveredAgent.provider,
+            externalSessionId: sessionRow.external_id,
+            cwd: this.workspaces.root(durableWorkspace),
+          })
+        }
         this.live.set(job.id, { driver, session })
         void this.watch(job, currentSession.id, driver, session, job.spent_tokens, job.spent_cents)
         resumed.push(job.id)
@@ -2973,6 +2997,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
 
   private sessionForJob(jobId: string): {
     id: string
+    agent_id: number | null
     workspace_id: string
     job_id: string | null
     job_assignment_id: string | null
@@ -2989,7 +3014,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
     status: AgentSessionRecord['status']
     control_state: AgentSessionRecord['control_state']
   } | undefined {
-    return this.db.prepare(`SELECT s.id, s.workspace_id, s.job_id,
+    return this.db.prepare(`SELECT s.id, s.agent_id, s.workspace_id, s.job_id,
       s.job_assignment_id, s.assigned_profile_id, s.assignment_market_version,
       s.profile_id, s.conversation_id, s.provider, s.driver_id, s.external_id,
       COALESCE(a.model, s.model) AS model,
@@ -3005,6 +3030,7 @@ export class AgentOsJobExecutor implements JobExecutor, AgentHomeRuntimeControl 
       ORDER BY CASE WHEN s.job_id=? THEN 0 ELSE 1 END,
         s.updated_at DESC, s.rowid DESC LIMIT 1`).get(jobId, jobId, jobId) as {
         id: string
+        agent_id: number | null
         workspace_id: string
         job_id: string | null
         job_assignment_id: string | null
