@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "attestation", "signature"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "qa-018-evidence-signature" },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose", "repository", "manifest_sha256", "integrator_commit", "signed_at",
+        "authorization_scope"
+      ],
+      "properties": {
+        "purpose": { "const": "orchestra-beta-quality-integration-v1" },
+        "repository": { "const": "Armin2708/Orchestra" },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "integrator_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "signed_at": { "type": "string", "format": "date-time" },
+        "authorization_scope": { "const": "qa-018-evidence-only" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "key_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "value": { "type": "string", "minLength": 84, "maxLength": 88 }
+      }
+    }
+  }
+}

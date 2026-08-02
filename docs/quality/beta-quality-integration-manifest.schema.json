@@ -2,37 +2,124 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "base_ref", "integrator_commit", "lanes", "external_receipt"],
+  "required": [
+    "schema_version", "purpose", "repository", "base_ref", "integrator_commit",
+    "authorization_scope", "public_release_authorized", "slices", "unresolved_findings"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
+    "purpose": { "const": "orchestra-beta-quality-integration-v1" },
+    "repository": { "const": "Armin2708/Orchestra" },
     "base_ref": { "$ref": "#/$defs/commit" },
     "integrator_commit": { "$ref": "#/$defs/commit" },
-    "lanes": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"],
-      "properties": {
-        "lane_a": { "$ref": "#/$defs/lane" },
-        "lane_b": { "$ref": "#/$defs/lane" },
-        "lane_c": { "$ref": "#/$defs/lane" },
-        "lane_d": { "$ref": "#/$defs/lane" },
-        "integrator": { "$ref": "#/$defs/lane" }
-      }
+    "authorization_scope": { "const": "qa-018-evidence-only" },
+    "public_release_authorized": { "const": false },
+    "slices": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/slice" }
     },
-    "external_receipt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["signer", "signed_at", "signature", "verification"],
-      "properties": {
-        "signer": { "type": "string", "minLength": 1 },
-        "signed_at": { "type": "string", "format": "date-time" },
-        "signature": { "type": "string", "minLength": 32 },
-        "verification": { "const": "external-human-required" }
-      }
-    }
+    "unresolved_findings": { "$ref": "#/$defs/findings" }
   },
   "$defs": {
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-    "lane": { "type": "object", "additionalProperties": false, "required": ["ready_commit", "base_ref", "range", "ready_marker", "gitnexus_version", "graphify_version"], "properties": { "ready_commit": { "$ref": "#/$defs/commit" }, "base_ref": { "$ref": "#/$defs/commit" }, "range": { "type": "string", "minLength": 82 }, "ready_marker": { "type": "string", "minLength": 1 }, "gitnexus_version": { "type": "string", "minLength": 1 }, "graphify_version": { "type": "string", "minLength": 1 } } }
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "gitnexus-impact", "gitnexus-detect-changes", "graphify-update",
+            "graphify-status", "graphify-graph", "graphify-manifest"
+          ]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "base_ref", "range", "marker"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/commit" },
+        "base_ref": { "$ref": "#/$defs/commit" },
+        "range": { "type": "string", "pattern": "^[0-9a-f]{40}\\.\\.[0-9a-f]{40}$" },
+        "marker": { "type": "string", "minLength": 1 }
+      }
+    },
+    "toolReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tested_commit", "tool_version", "path", "sha256", "requests_sha256", "raw_artifacts"
+      ],
+      "properties": {
+        "tested_commit": { "$ref": "#/$defs/commit" },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "requests_sha256": { "$ref": "#/$defs/sha256" },
+        "raw_artifacts": {
+          "type": "array", "minItems": 2, "maxItems": 4,
+          "uniqueItems": true, "items": { "$ref": "#/$defs/artifact" }
+        }
+      }
+    },
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_sha256", "target", "risk", "disposition", "reviewer", "rationale",
+        "checkpoint_commit"
+      ],
+      "properties": {
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "target": { "type": "string", "minLength": 1 },
+        "risk": { "enum": ["HIGH", "CRITICAL"] },
+        "disposition": { "const": "accepted-after-independent-review" },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "rationale": { "type": "string", "minLength": 20 },
+        "checkpoint_commit": { "$ref": "#/$defs/commit" }
+      }
+    },
+    "findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p0", "p1", "p2"],
+      "properties": { "p0": { "const": 0 }, "p1": { "const": 0 }, "p2": { "const": 0 } }
+    },
+    "slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice_id", "source_checkpoint", "accepted_remediation_checkpoints", "accepted_commit",
+        "tool_reports", "risk_dispositions", "unresolved_findings"
+      ],
+      "properties": {
+        "slice_id": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
+        "source_checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "accepted_remediation_checkpoints": {
+          "type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/checkpoint" }
+        },
+        "accepted_commit": { "$ref": "#/$defs/commit" },
+        "tool_reports": {
+          "type": "object", "additionalProperties": false,
+          "required": ["gitnexus", "graphify"],
+          "properties": {
+            "gitnexus": { "$ref": "#/$defs/toolReport" },
+            "graphify": { "$ref": "#/$defs/toolReport" }
+          }
+        },
+        "risk_dispositions": {
+          "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/disposition" }
+        },
+        "unresolved_findings": { "$ref": "#/$defs/findings" }
+      }
+    }
   }
 }

@@ -4,49 +4,143 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "tool", "lane", "tested_commit", "base_ref", "range", "ready_marker", "tool_version", "invocation_argv", "raw_impact", "raw_detect_changes", "unresolved_findings"],
+      "required": [
+        "schema_version", "tool", "slice_id", "tested_commit", "base_ref", "range",
+        "tool_version", "requests", "unresolved_findings"
+      ],
       "properties": {
-        "schema_version": { "const": 2 },
+        "schema_version": { "const": 3 },
         "tool": { "const": "gitnexus" },
-        "lane": { "$ref": "#/$defs/lane" },
+        "slice_id": { "$ref": "#/$defs/slice" },
         "tested_commit": { "$ref": "#/$defs/commit" },
         "base_ref": { "$ref": "#/$defs/commit" },
-        "range": { "type": "string", "minLength": 82 },
-        "ready_marker": { "type": "string", "minLength": 1 },
+        "range": { "$ref": "#/$defs/range" },
         "tool_version": { "type": "string", "minLength": 1 },
-        "invocation_argv": { "type": "object", "additionalProperties": false, "required": ["impact", "detect_changes"], "properties": { "impact": { "$ref": "#/$defs/argv" }, "detect_changes": { "$ref": "#/$defs/argv" } } },
-        "raw_impact": { "$ref": "#/$defs/artifact" },
-        "raw_detect_changes": { "$ref": "#/$defs/artifact" },
+        "requests": {
+          "type": "object", "additionalProperties": false,
+          "required": ["impact", "detect_changes"],
+          "properties": {
+            "impact": {
+              "type": "array", "minItems": 1, "uniqueItems": true,
+              "items": { "$ref": "#/$defs/impactRequest" }
+            },
+            "detect_changes": { "$ref": "#/$defs/detectRequest" }
+          }
+        },
         "unresolved_findings": { "$ref": "#/$defs/findings" }
       }
     },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "tool", "lane", "tested_commit", "base_ref", "range", "ready_marker", "tool_version", "invocation_argv", "raw_update", "raw_status", "graph_artifact", "manifest_artifact", "unresolved_findings"],
+      "required": [
+        "schema_version", "tool", "slice_id", "tested_commit", "base_ref", "range",
+        "tool_version", "requests", "artifacts", "unresolved_findings"
+      ],
       "properties": {
-        "schema_version": { "const": 2 },
+        "schema_version": { "const": 3 },
         "tool": { "const": "graphify" },
-        "lane": { "$ref": "#/$defs/lane" },
+        "slice_id": { "$ref": "#/$defs/slice" },
         "tested_commit": { "$ref": "#/$defs/commit" },
         "base_ref": { "$ref": "#/$defs/commit" },
-        "range": { "type": "string", "minLength": 82 },
-        "ready_marker": { "type": "string", "minLength": 1 },
+        "range": { "$ref": "#/$defs/range" },
         "tool_version": { "type": "string", "minLength": 1 },
-        "invocation_argv": { "type": "object", "additionalProperties": false, "required": ["update", "status"], "properties": { "update": { "$ref": "#/$defs/argv" }, "status": { "$ref": "#/$defs/argv" } } },
-        "raw_update": { "$ref": "#/$defs/artifact" },
-        "raw_status": { "$ref": "#/$defs/artifact" },
-        "graph_artifact": { "$ref": "#/$defs/artifact" },
-        "manifest_artifact": { "$ref": "#/$defs/artifact" },
+        "requests": {
+          "type": "object", "additionalProperties": false,
+          "required": ["update", "status"],
+          "properties": {
+            "update": { "$ref": "#/$defs/graphifyRequest" },
+            "status": { "$ref": "#/$defs/graphifyRequest" }
+          }
+        },
+        "artifacts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["graph", "manifest"],
+          "properties": {
+            "graph": { "$ref": "#/$defs/artifact" },
+            "manifest": { "$ref": "#/$defs/artifact" }
+          }
+        },
         "unresolved_findings": { "$ref": "#/$defs/findings" }
       }
     }
   ],
   "$defs": {
-    "lane": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
+    "slice": { "enum": ["lane_a", "lane_b", "lane_c", "lane_d", "integrator"] },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-    "argv": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } },
-    "artifact": { "type": "object", "additionalProperties": false, "required": ["path", "output_sha256"], "properties": { "path": { "type": "string", "minLength": 1 }, "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
-    "findings": { "type": "object", "additionalProperties": false, "required": ["p0", "p1", "p2"], "properties": { "p0": { "const": 0 }, "p1": { "const": 0 }, "p2": { "const": 0 } } }
+    "range": { "type": "string", "pattern": "^[0-9a-f]{40}\\.\\.[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "impactRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_id", "api", "arguments", "observed_risk", "result"],
+      "properties": {
+        "request_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,127}$" },
+        "api": { "const": "mcp__gitnexus__impact" },
+        "arguments": {
+          "type": "object", "additionalProperties": false,
+          "required": ["repo", "target", "direction", "maxDepth", "minConfidence", "includeTests"],
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "target": { "type": "string", "minLength": 1 },
+            "direction": { "const": "upstream" },
+            "maxDepth": { "type": "integer", "minimum": 1, "maximum": 32 },
+            "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "includeTests": { "type": "boolean" },
+            "file_path": { "type": "string", "minLength": 1 },
+            "kind": { "type": "string", "minLength": 1 },
+            "limit": { "type": "integer", "minimum": 1 },
+            "offset": { "type": "integer", "minimum": 0 },
+            "summaryOnly": { "type": "boolean" },
+            "timeoutMs": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "observed_risk": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL", "UNKNOWN"] },
+        "result": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "detectRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["api", "arguments", "result"],
+      "properties": {
+        "api": { "const": "mcp__gitnexus__detect_changes" },
+        "arguments": {
+          "type": "object", "additionalProperties": false,
+          "required": ["repo", "worktree", "scope", "base_ref"],
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "worktree": { "type": "string", "minLength": 1 },
+            "scope": { "const": "compare" },
+            "base_ref": { "$ref": "#/$defs/commit" },
+            "branch": { "type": "string", "minLength": 1 }
+          }
+        },
+        "result": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "graphifyRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["argv", "exit_code", "result"],
+      "properties": {
+        "argv": {
+          "type": "array", "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "exit_code": { "const": 0 },
+        "result": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "findings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["p0", "p1", "p2"],
+      "properties": { "p0": { "const": 0 }, "p1": { "const": 0 }, "p2": { "const": 0 } }
+    }
   }
 }

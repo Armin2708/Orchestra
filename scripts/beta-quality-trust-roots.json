@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "purpose": "orchestra-beta-quality-integration-v1",
+  "repository": "Armin2708/Orchestra",
+  "authorization_scope": "qa-018-evidence-only",
+  "trusted_signing_keys": []
+}
