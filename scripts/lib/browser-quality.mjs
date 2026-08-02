@@ -324,7 +324,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     for (const gate of ACCESSIBILITY_GATES) {
       if (actual.accessibility?.[gate]?.passed !== true) errors.push(`${expected.id} failed ${gate}`)
     }
-    if (actual.readiness?.graph_agents_rendered !== 18) errors.push(`${expected.id} did not render all 18 graph agents`)
+    if (!Number.isInteger(actual.readiness?.dependency_graph_nodes_rendered)
+      || actual.readiness.dependency_graph_nodes_rendered < 1) {
+      errors.push(`${expected.id} did not render the dependency graph`)
+    }
     if (actual.readiness?.transcript_events_rendered < 250) errors.push(`${expected.id} did not render 250 transcript events`)
     if (actual.readiness?.search_matches_rendered !== 5) errors.push(`${expected.id} did not render the five expected search matches`)
     if (actual.journeys?.length !== 12 || actual.journeys.some((journey) => !journey.accessibility)) {

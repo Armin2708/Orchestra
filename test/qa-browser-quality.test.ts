@@ -46,7 +46,7 @@ const passingEvidence = () => {
     page_errors: [],
     failed_requests: [],
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
-    readiness: { graph_agents_rendered: 18, transcript_events_rendered: 250, search_matches_rendered: 5 },
+    readiness: { dependency_graph_nodes_rendered: 1, transcript_events_rendered: 250, search_matches_rendered: 5 },
     journeys: Array.from({ length: 12 }, (_, index) => ({
       name: index === 0 ? 'conversation search' : `journey-${index}`,
       interaction_modes: {

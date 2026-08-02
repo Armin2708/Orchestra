@@ -377,7 +377,9 @@ const dispatchKey = async (client, key, { shift = false, meta = false } = {}) =>
   const code = key === 'Tab' ? 'Tab' : key === 'Enter' ? 'Enter' : key === 'Escape' ? 'Escape'
     : key === 'Backspace' ? 'Backspace' : key === ' ' ? 'Space' : key.length === 1 ? `Key${key.toUpperCase()}` : key
   const windowsVirtualKeyCode = key === 'Tab' ? 9 : key === 'Enter' ? 13 : key === 'Escape' ? 27
-    : key === 'Backspace' ? 8 : key === ' ' ? 32 : key.toUpperCase().charCodeAt(0)
+    : key === 'Backspace' ? 8 : key === ' ' ? 32 : key === 'ArrowLeft' ? 37
+      : key === 'ArrowUp' ? 38 : key === 'ArrowRight' ? 39 : key === 'ArrowDown' ? 40
+        : key.toUpperCase().charCodeAt(0)
   const modifiers = (shift ? 8 : 0) | (meta ? 4 : 0)
   const event = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers }
   await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event })
@@ -406,18 +408,45 @@ const activeFocusProbe = (client, targetSelector = null) => evaluate(client, `((
 
 const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) => {
   let tabEvents = 0
+  let arrowEvents = 0
   const traversal = []
-  let previous = await activeFocusProbe(client, selector)
+  const rovingTab = await evaluate(client, `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'tab' || target.tabIndex >= 0) return null;
+    const tablist = target.closest('[role="tablist"]');
+    const active = tablist?.querySelector('[role="tab"][tabindex="0"]');
+    if (!(active instanceof HTMLElement)) return null;
+    if (!active.dataset.qaKeyboardOrigin) active.dataset.qaKeyboardOrigin = 'qa-' + Math.random().toString(16).slice(2);
+    return {
+      origin_selector: '[data-qa-keyboard-origin="' + active.dataset.qaKeyboardOrigin + '"]',
+      tab_count: tablist.querySelectorAll('[role="tab"]').length,
+    };
+  })()`)
+  const navigationSelector = rovingTab?.origin_selector ?? selector
+  let previous = await activeFocusProbe(client, navigationSelector)
   for (let index = 0; index < maximumTabs; index += 1) {
     await dispatchKey(client, 'Tab')
     tabEvents += 1
-    const focused = await activeFocusProbe(client, selector)
+    const focused = await activeFocusProbe(client, navigationSelector)
     traversal.push({ key: focused.key, xterm_proxy: focused.xterm_proxy, visible: focused.visible })
     if (focused.target) {
+      if (rovingTab) {
+        for (let tabIndex = 0; tabIndex < rovingTab.tab_count; tabIndex += 1) {
+          if ((await activeFocusProbe(client, selector)).target) break
+          await dispatchKey(client, 'ArrowRight')
+          arrowEvents += 1
+          const arrowFocused = await activeFocusProbe(client, selector)
+          traversal.push({ key: arrowFocused.key, xterm_proxy: arrowFocused.xterm_proxy, visible: arrowFocused.visible })
+        }
+        if (!(await activeFocusProbe(client, selector)).target) {
+          throw new Error(`roving tab navigation could not reach ${label}`)
+        }
+      }
       return {
         focus_acquisition: 'tab_navigation',
         programmatic_focus: false,
         tab_events: tabEvents,
+        arrow_events: arrowEvents,
         traversal: traversal.slice(-24),
         xterm_focus_encounters: traversal.filter((step) => step.xterm_proxy).length,
       }
@@ -795,7 +824,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
-  await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.board-section-tabs'))`, 'initial board')
+  await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`, 'initial command center')
   const startup = await evaluate(client, `performance.now()`)
   const snapshot = await evaluate(client, `(async () => {
     const started = performance.now();
@@ -863,7 +892,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     }
     const retainsPerformance = ['graph overview', 'durable transcript', 'conversation search'].includes(name)
     const elapsed = retainsPerformance
-      ? performanceSampleForJourney(interactionModes)
+      ? interactionModes.pointer.passed
+        ? performanceSampleForJourney(interactionModes)
+        : interactionModes.pointer.elapsed_ms
       : interactionModes.pointer.elapsed_ms
     const overflow = await overflowAudit(client)
     overflowSamples.push(overflow)
@@ -883,16 +914,20 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
 
   const graph = await recordJourney(
     'graph overview',
-    (mode) => activateMode(client, mode, '#board-tab-overview', 'Overview', viewport.mobile),
-    `document.querySelectorAll('.network .net-name').length === 18`,
-    async () => { await domActivate(client, '#board-tab-messages'); await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'`, 'graph reset state') },
+    (mode) => activateMode(client, mode, '#cc-section-tab-work', 'Work', viewport.mobile),
+    `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-work'
+      && document.querySelectorAll('.ow-graph-nodes > li').length >= 1`,
+    async () => {
+      await domActivate(client, '#cc-section-tab-activity')
+      await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-activity'`, 'graph reset state')
+    },
   )
-  const graphAgentsRendered = await evaluate(client, `document.querySelectorAll('.network .net-name').length`)
+  const dependencyGraphNodesRendered = await evaluate(client, `document.querySelectorAll('.ow-graph-nodes > li').length`)
   const transcript = await recordJourney(
     'durable transcript',
     async (mode) => {
       const keyboardSteps = []
-      const initialActivation = await activateMode(client, mode, '#board-tab-agents', 'Agents', viewport.mobile)
+      const initialActivation = await activateMode(client, mode, '#cc-section-tab-agents', 'Agents', viewport.mobile)
       if (mode === 'keyboard') keyboardSteps.push(initialActivation)
       await assertModeReady(`Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home')
       for (let page = 0; page < 20; page += 1) {
@@ -912,7 +947,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       }
     },
     `document.querySelectorAll('.ah-event').length >= 250`,
-    async () => { await domActivate(client, '#board-tab-messages'); await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'`, 'transcript reset state') },
+    async () => {
+      await domActivate(client, '#cc-section-tab-work')
+      await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-work'`, 'transcript reset state')
+    },
   )
   const transcriptEventsRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
   const modalFocus = await modalFocusAudit(client, viewport.mobile)
@@ -985,9 +1023,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         && document.querySelector('.ah-search button[type="submit"]')?.textContent?.trim() === 'Search';
     })()`,
     async () => {
-      await domActivate(client, '#board-tab-messages')
-      await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-messages'`, 'search reset away from Agent Home')
-      await domActivate(client, '#board-tab-agents')
+      await domActivate(client, '#cc-section-tab-work')
+      await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-work'`, 'search reset away from Agent Home')
+      await domActivate(client, '#cc-section-tab-agents')
       await assertModeReady(`Boolean(document.querySelector('.agent-home .ah-search input'))`, 'search reset Agent Home')
       for (let page = 0; page < 20; page += 1) {
         const state = await evaluate(client, `({ count: document.querySelectorAll('.ah-event').length, more: Boolean(document.querySelector('.ah-load-more:not(:disabled)')) })`)
@@ -999,15 +1037,18 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   )
   const searchMatchesRendered = await evaluate(client, `document.querySelectorAll('.ah-event').length`)
 
-  for (const tab of ['messages', 'workspace', 'timeline', 'shipped']) {
+  for (const section of ['work', 'discussions', 'knowledge', 'outcomes', 'activity']) {
     await recordJourney(
-      `${tab} board view`,
-      (mode) => activateMode(client, mode, `#board-tab-${tab}`, tab, viewport.mobile),
-      `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-${tab}'`,
-      async () => { await domActivate(client, '#board-tab-overview'); await waitFor(client, `document.querySelector('#board-section-panel')?.getAttribute('aria-labelledby') === 'board-tab-overview'`, `${tab} reset state`) },
+      `${section} command center view`,
+      (mode) => activateMode(client, mode, `#cc-section-tab-${section}`, section, viewport.mobile),
+      `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-${section}'`,
+      async () => {
+        await domActivate(client, '#cc-section-tab-agents')
+        await waitFor(client, `document.querySelector('#command-center-content')?.getAttribute('aria-labelledby') === 'cc-section-tab-agents'`, `${section} reset state`)
+      },
     )
   }
-  for (const view of ['Open Work', 'Organization', 'Roadmap', 'Settings', 'Board']) {
+  for (const view of ['Organization', 'Roadmap', 'Settings', 'Command center']) {
     await recordJourney(
       `${view} primary view`,
       async (mode) => {
@@ -1015,17 +1056,17 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
         if (!selector) throw new Error(`could not find ${view}`)
         return activateMode(client, mode, selector, view, viewport.mobile)
       },
-      view === 'Board'
-        ? `Boolean(document.querySelector('.board-section-tabs'))`
+      view === 'Command center'
+        ? `Boolean(document.querySelector('.cc-project-nav'))`
         : `Boolean([...document.querySelectorAll('.view-tabs button')].find((button) => button.textContent?.trim() === ${JSON.stringify(view)})?.classList.contains('active'))`,
       async () => {
-        const resetView = view === 'Board' ? 'Open Work' : 'Board'
+        const resetView = view === 'Command center' ? 'Organization' : 'Command center'
         const selector = await selectorForButtonText(client, resetView)
         if (selector) await domActivate(client, selector)
       },
     )
   }
-  await domActivate(client, '#board-tab-agents')
+  await domActivate(client, '#cc-section-tab-agents')
   await waitFor(client, `Boolean(document.querySelector('.agent-home .ah-search input'))`, 'Agent Home for accessibility audit')
 
   const accessibility = Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => {
@@ -1086,7 +1127,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
     failed_requests: failedRequests,
     accessibility,
     readiness: {
-      graph_agents_rendered: graphAgentsRendered,
+      dependency_graph_nodes_rendered: dependencyGraphNodesRendered,
       transcript_events_rendered: transcriptEventsRendered,
       search_matches_rendered: searchMatchesRendered,
       expected_search_matches: 5,
@@ -1188,7 +1229,11 @@ const main = async () => {
       client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
     ])
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: `localStorage.setItem('orchestra-token', ${JSON.stringify(operatorToken)})`,
+      source: `
+        localStorage.setItem('orchestra-token', ${JSON.stringify(operatorToken)});
+        localStorage.setItem('orchestra-command-center-onboarding', 'complete');
+        localStorage.setItem('orchestra-view', 'board');
+      `,
     })
 
     const requestedViewport = process.env.ORCHESTRA_QA_VIEWPORT
