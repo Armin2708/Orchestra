@@ -40,6 +40,7 @@ import {
   type SessionToolSnapshot,
   type ToolPolicyDecision,
 } from './agentToolApi'
+import { runRuntimeMutation } from './runtimeReadOnly'
 
 export type AgentHomeDetailTab = 'work' | 'context' | 'tools' | 'usage' | 'history'
 export type AgentHomeMobilePane = 'conversation' | 'terminal' | 'details'
@@ -65,6 +66,7 @@ export function AgentHomeHeader({
   busyAction,
   error,
   copied,
+  readOnly = false,
   onAction,
   onRefresh,
   onCopyLink,
@@ -81,6 +83,7 @@ export function AgentHomeHeader({
   busyAction: AgentHomeAction | null
   error: string | null
   copied: boolean
+  readOnly?: boolean
   onAction: (action: AgentHomeAction) => void
   onRefresh: () => void
   onCopyLink: () => void
@@ -97,7 +100,9 @@ export function AgentHomeHeader({
     })
     return (
       <button key={action} type="button" className={compact ? 'ah-menu-action' : 'ah-action'}
-        disabled={actionPresentation.disabled} title={actionPresentation.reason} onClick={() => onAction(action)}>
+        disabled={readOnly || actionPresentation.disabled}
+        title={readOnly ? 'Reconnect Orchestra to change this session' : actionPresentation.reason}
+        onClick={() => onAction(action)}>
         {busyAction === action ? 'Working…' : action}
       </button>
     )
@@ -201,6 +206,7 @@ export function AgentConversationPanel({
   searching,
   hasMore,
   exportBusy,
+  readOnly = false,
   onQueryChange,
   onKindChange,
   onSearch,
@@ -218,6 +224,7 @@ export function AgentConversationPanel({
   searching: boolean
   hasMore: boolean
   exportBusy: 'human' | 'json' | null
+  readOnly?: boolean
   onQueryChange: (value: string) => void
   onKindChange: (value: AgentHomeEventKind | 'all') => void
   onSearch: (event: React.FormEvent) => void
@@ -234,7 +241,10 @@ export function AgentConversationPanel({
         </div>
         <div className="ah-panel-actions">
           {liveAgent && (
-            <button type="button" onClick={onOpenLiveAgent}><OsIcon name="message" size={13} /> Live chat</button>
+            <button type="button" onClick={onOpenLiveAgent} disabled={readOnly}
+              title={readOnly ? 'Reconnect Orchestra to send provider input' : undefined}>
+              <OsIcon name="message" size={13} /> Live chat
+            </button>
           )}
           <details className="ah-export-menu">
             <summary>Export</summary>
@@ -337,6 +347,7 @@ export function AgentTerminalPanel({
   openingShell,
   startingCommand,
   restartingProcessId,
+  readOnly = false,
   onSelectProcess,
   onOpenShell,
   onRunCommand,
@@ -352,6 +363,7 @@ export function AgentTerminalPanel({
   openingShell: boolean
   startingCommand: boolean
   restartingProcessId: string | null
+  readOnly?: boolean
   onSelectProcess: (process: WorkspaceProcess) => void
   onOpenShell: () => void
   onRunCommand: (command: string) => Promise<void>
@@ -364,6 +376,7 @@ export function AgentTerminalPanel({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (readOnly) return
     const next = command.trim()
     if (!next) return
     await onRunCommand(next)
@@ -387,16 +400,16 @@ export function AgentTerminalPanel({
           ))}
         </div>
         <div className="ah-panel-actions">
-          <button type="button" onClick={onOpenShell} disabled={!workspace || openingShell}>
+          <button type="button" onClick={onOpenShell} disabled={readOnly || !workspace || openingShell}>
             <OsIcon name="terminal" size={13} /> {openingShell ? 'Opening…' : 'New shell'}
           </button>
           {process && (running
             ? <>
-                <button type="button" onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button>
-                <button type="button" onClick={() => onSignal(process, 'SIGTERM')}>Stop</button>
+                <button type="button" disabled={readOnly} onClick={() => onSignal(process, 'SIGINT')}>Interrupt</button>
+                <button type="button" disabled={readOnly} onClick={() => onSignal(process, 'SIGTERM')}>Stop</button>
               </>
             : Boolean(process.restartable) && <button type="button"
-                disabled={restartingProcessId === String(process.id)} onClick={() => onRestart(process)}>
+                disabled={readOnly || restartingProcessId === String(process.id)} onClick={() => onRestart(process)}>
                 {restartingProcessId === String(process.id) ? 'Restarting…' : 'Restart'}
               </button>)}
         </div>
@@ -407,14 +420,14 @@ export function AgentTerminalPanel({
         <AgentHomeInlineState icon="workspace" title="No session workspace"
           detail="Start or attach a managed provider session to bind a recoverable workspace and real terminal." dark />
       )}
-      {workspace && <ProcessTerminal process={process} onProcessChanged={onProcessChanged} />}
+      {workspace && <ProcessTerminal process={process} readOnly={readOnly} onProcessChanged={onProcessChanged} />}
       <form className="ah-command" onSubmit={submit}>
         <label htmlFor="ah-command-input">Run in a new PTY</label>
         <div>
           <span aria-hidden="true">$</span>
           <input id="ah-command-input" value={command} onChange={(event) => setCommand(event.target.value)}
-            placeholder="git status" autoComplete="off" spellCheck={false} disabled={!workspace} />
-          <button type="submit" disabled={!workspace || !command.trim() || startingCommand}>
+            placeholder="git status" autoComplete="off" spellCheck={false} disabled={readOnly || !workspace} />
+          <button type="submit" disabled={readOnly || !workspace || !command.trim() || startingCommand}>
             {startingCommand ? 'Starting…' : 'Run'}
           </button>
         </div>
@@ -440,6 +453,7 @@ export function AgentInspector({
   onTabChange,
   onSelectSession,
   onSelectConversation,
+  readOnly = false,
 }: {
   tab: AgentHomeDetailTab
   profile: AgentProfile
@@ -453,6 +467,7 @@ export function AgentInspector({
   attention: AttentionItem[]
   context: Loadable<ContextItem[]>
   events: ConversationEvent[]
+  readOnly?: boolean
   onTabChange: (tab: AgentHomeDetailTab) => void
   onSelectSession: (session: AgentSessionRecord) => void
   onSelectConversation: (conversation: AgentConversation) => void
@@ -478,7 +493,7 @@ export function AgentInspector({
         {tab === 'work' && <WorkDetail workspace={workspace} job={job} contract={contract} session={session}
           processes={processes} attention={attention} />}
         {tab === 'context' && <ContextDetail context={context} />}
-        {tab === 'tools' && <ToolsDetail profile={profile} session={session} events={events} />}
+        {tab === 'tools' && <ToolsDetail profile={profile} session={session} events={events} readOnly={readOnly} />}
         {tab === 'usage' && <UsageDetail events={events} job={job} />}
         {tab === 'history' && <HistoryDetail home={home} session={session} conversation={conversation}
           onSelectSession={onSelectSession} onSelectConversation={onSelectConversation} />}
@@ -560,10 +575,12 @@ function ToolsDetail({
   profile,
   session,
   events,
+  readOnly = false,
 }: {
   profile: AgentProfile
   session: AgentSessionRecord | null
   events: ConversationEvent[]
+  readOnly?: boolean
 }) {
   const [snapshot, setSnapshot] = useState<SessionToolSnapshot | null>(null)
   const [busyToolId, setBusyToolId] = useState<string | null>(null)
@@ -595,17 +612,18 @@ function ToolsDetail({
   }, [session?.id])
 
   const changePolicy = async (toolId: string, decision: ToolPolicyDecision) => {
-    if (!session || !snapshot) return
+    if (readOnly || !session || !snapshot) return
     setBusyToolId(toolId)
     setToolError(null)
     try {
       const rules = snapshot.policy.rules.filter((rule) => rule.target !== toolId)
       rules.push({ target: toolId, decision })
-      await agentToolApi.updatePolicy(session.id, {
+      const mutation = await runRuntimeMutation(readOnly, () => agentToolApi.updatePolicy(session.id, {
         default_decision: snapshot.policy.default_decision,
         rules,
         revision: snapshot.policy.revision,
-      })
+      }))
+      if (!mutation.performed) return
       setSnapshot(await agentToolApi.getSessionTools(session.id))
     } catch (error) {
       setToolError(error instanceof Error ? error.message : 'The tool policy could not be updated.')
@@ -618,7 +636,7 @@ function ToolsDetail({
     <div className="ah-detail-stack">
       {!session && <p className="ah-detail-empty">Select a durable provider session to inspect effective tool permissions.</p>}
       {session && !snapshot && !toolError && <AgentHomePanelSkeleton rows={3} />}
-      {snapshot && <AgentToolControls snapshot={snapshot} busyToolId={busyToolId}
+      {snapshot && <AgentToolControls snapshot={snapshot} busyToolId={busyToolId} readOnly={readOnly}
         error={toolError} onPolicyChange={(toolId, decision) => void changePolicy(toolId, decision)} />}
       {session && toolError && !snapshot && <p className="ah-detail-error" role="alert">{toolError}</p>}
       <DetailSection title="Declared capabilities" eyebrow={`${profile.capabilities.length} available`}>

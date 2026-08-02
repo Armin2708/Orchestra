@@ -102,24 +102,12 @@ export type SavedCommandCenterView = {
 
 export const DEFAULT_COMMAND_CENTER_VIEWS: readonly SavedCommandCenterView[] = [
   {
-    id: 'preset-active-work', name: 'Active work', section: 'work', query: '',
-    filters: { status: 'running,assigned' }, createdAt: 'built-in',
+    id: 'preset-ready-work', name: 'Ready work', section: 'work', query: '',
+    filters: { status: 'ready' }, createdAt: 'built-in',
   },
   {
     id: 'preset-blocked-work', name: 'Blocked work', section: 'work', query: '',
     filters: { status: 'blocked' }, createdAt: 'built-in',
-  },
-  {
-    id: 'preset-needs-review', name: 'Needs review', section: 'work', query: '',
-    filters: { status: 'submitted' }, createdAt: 'built-in',
-  },
-  {
-    id: 'preset-unanswered', name: 'Unanswered', section: 'discussions', query: '',
-    filters: { status: 'open', type: 'question' }, createdAt: 'built-in',
-  },
-  {
-    id: 'preset-conflicts', name: 'Conflicts', section: 'discussions', query: '',
-    filters: { status: 'open', type: 'conflict' }, createdAt: 'built-in',
   },
 ]
 
@@ -441,36 +429,40 @@ export function projectScopedJobs(
   return jobs.filter((job) => boardIds.has(job.board_id))
 }
 
+export type CommandCenterProjectFocus = {
+  kind: 'all' | 'project' | 'missing'
+  snapshots: readonly Snapshot[]
+  projectId: number | null
+}
+
+export function normalizeCommandCenterFocus(raw: string | null): number | 'all' {
+  if (!raw || raw === 'all') return 'all'
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 'all'
+}
+
+export function resolveCommandCenterProjectFocus(
+  snapshots: readonly Snapshot[],
+  focus: number | 'all',
+): CommandCenterProjectFocus {
+  if (focus === 'all') return { kind: 'all', snapshots, projectId: null }
+  const snapshot = snapshots.find((candidate) => candidate.board.id === focus)
+  return snapshot
+    ? { kind: 'project', snapshots: [snapshot], projectId: focus }
+    : { kind: 'missing', snapshots: [], projectId: focus }
+}
+
 export function commandCenterProjectProjection(input: {
   snapshots: readonly Snapshot[]
   agentProfiles: readonly AgentProfile[]
   jobs: readonly Job[]
-  savedView?: SavedCommandCenterView | null
 }) {
   const jobs = projectScopedJobs(input.snapshots, input.jobs)
   const boardIds = new Set(input.snapshots.map((snapshot) => snapshot.board.id))
   const agentProfiles = input.agentProfiles.filter((profile) => boardIds.has(profile.board_id))
-  const allSearchRecords = commandCenterSearchRecords({
-    snapshots: input.snapshots,
-    agentProfiles,
-    jobs,
-  })
-  const kindForSection: Partial<Record<CommandCenterSection, CommandCenterSearchKind>> = {
-    work: 'work',
-    agents: 'agent',
-    discussions: 'discussion',
-    knowledge: 'knowledge',
-  }
-  const savedKind = input.savedView ? kindForSection[input.savedView.section] : undefined
-  const sectionRecords = savedKind
-    ? allSearchRecords.filter((record) => record.kind === savedKind)
-    : allSearchRecords
   return {
     jobs,
-    searchRecords: filterCommandCenterSearchRecords(
-      sectionRecords,
-      input.savedView?.filters ?? {},
-    ),
+    searchRecords: commandCenterSearchRecords({ snapshots: input.snapshots, agentProfiles, jobs }),
   }
 }
 

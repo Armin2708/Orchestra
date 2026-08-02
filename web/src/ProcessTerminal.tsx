@@ -5,17 +5,20 @@ import '@xterm/xterm/css/xterm.css'
 import { OsId, osApi, WorkspaceProcess } from './osApi'
 import { OsIcon } from './OsIcon'
 import { isResizableProcess } from './processTerminalState'
+import { runRuntimeMutation } from './runtimeReadOnly'
 
 export type ProcessTerminalHandle = { focus: () => void; fit: () => void }
 
 export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   process: WorkspaceProcess | null
+  readOnly?: boolean
   onProcessChanged?: () => void
-}>(({ process, onProcessChanged }, forwardedRef) => {
+}>(({ process, readOnly = false, onProcessChanged }, forwardedRef) => {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const processRef = useRef<WorkspaceProcess | null>(process)
+  const readOnlyRef = useRef(readOnly)
   const sequenceRef = useRef(0)
   const inputQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const inputBufferRef = useRef<{ processId: OsId; data: string } | null>(null)
@@ -25,6 +28,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   const [streamError, setStreamError] = useState<string | null>(null)
 
   processRef.current = process
+  readOnlyRef.current = readOnly
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => terminalRef.current?.focus(),
@@ -50,6 +54,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       letterSpacing: 0,
       lineHeight: 1.35,
       scrollback: 10_000,
+      screenReaderMode: true,
       theme: {
         background: '#201f1c',
         foreground: '#e6e1d8',
@@ -82,6 +87,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     fitRef.current = fit
 
     const sendResize = () => {
+      if (readOnlyRef.current) return
       try { fit.fit() } catch { return }
       const active = processRef.current
       if (!isResizableProcess(active)) return
@@ -102,15 +108,17 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       inputTimerRef.current = undefined
       const batch = inputBufferRef.current
       inputBufferRef.current = null
-      if (!batch?.data) return
+      if (!batch?.data || readOnlyRef.current) return
       inputQueueRef.current = inputQueueRef.current
         .catch(() => undefined)
-        .then(() => osApi.writeProcessInput(batch.processId, batch.data))
+        .then(() => runRuntimeMutation(readOnlyRef.current,
+          () => osApi.writeProcessInput(batch.processId, batch.data)))
         .catch(() => setStreamError('Terminal input could not reach the process.'))
     }
     flushInputRef.current = flushInput
 
     const input = terminal.onData((data) => {
+      if (readOnlyRef.current) return
       const active = processRef.current
       if (!active || !['running', 'starting', 'stopping'].includes(active.status)) return
       const current = inputBufferRef.current
@@ -136,6 +144,13 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   }, [])
 
   useEffect(() => {
+    if (!readOnly) return
+    if (inputTimerRef.current) window.clearTimeout(inputTimerRef.current)
+    inputTimerRef.current = undefined
+    inputBufferRef.current = null
+  }, [readOnly])
+
+  useEffect(() => {
     flushInputRef.current?.()
     sequenceRef.current = 0
     setStreamError(null)
@@ -144,7 +159,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     terminal.reset()
     terminal.clear()
     let frame: number | undefined
-    if (isResizableProcess(process)) {
+    if (!readOnly && isResizableProcess(process)) {
       frame = window.requestAnimationFrame(() => {
         try { fitRef.current?.fit() } catch { return }
         const current = processRef.current
@@ -153,7 +168,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       })
     }
     return () => { if (frame) window.cancelAnimationFrame(frame) }
-  }, [process?.id])
+  }, [process?.id, readOnly])
 
   useEffect(() => {
     if (!process) return
@@ -201,7 +216,9 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   return (
     <div className="os-terminal-wrap">
       <div ref={hostRef} className="os-xterm" role="application"
+        aria-readonly={readOnly || undefined}
         aria-label={process ? `Terminal for ${process.name}` : 'Terminal without a process'} />
+      {readOnly && <p className="sr-only" role="status">Terminal output is available read only while Orchestra reconnects.</p>}
       {!process && (
         <div className="os-terminal-empty" aria-hidden="true">
           <OsIcon name="terminal" size={22} />

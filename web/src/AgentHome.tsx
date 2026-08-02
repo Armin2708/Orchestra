@@ -45,6 +45,7 @@ import {
 } from './osApi'
 import { ProviderBadge } from './ProviderBadge'
 import { useModalFocusTrap } from './useModalFocusTrap'
+import { runRuntimeMutation } from './runtimeReadOnly'
 import './agentHome.css'
 
 const emptyProfiles = (): Loadable<AgentProfile[]> => ({
@@ -104,7 +105,11 @@ const messageFor = (error: unknown, fallback: string) => {
   return error instanceof Error ? error.message : fallback
 }
 
-export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
+export function AgentHome({ snaps, onChange, readOnly = false }: {
+  snaps: Snapshot[]
+  onChange: () => void
+  readOnly?: boolean
+}) {
   const initialSelection = useRef(parseAgentHomeSelection(location.search))
   const mobile = useMedia('(max-width: 820px)')
   const boardKey = snaps.map((snapshot) => snapshot.board.id).join(',')
@@ -141,6 +146,13 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   const [renameOpen, setRenameOpen] = useState(false)
   const [liveAgent, setLiveAgent] = useState<Agent | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!readOnly) return
+    setCreateOpen(false)
+    setRenameOpen(false)
+    setLiveAgent(null)
+  }, [readOnly])
 
   const selectedProfile = useMemo(() =>
     profiles.data.find((profile) => profile.id === selectedProfileId) ?? null,
@@ -507,13 +519,16 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const performAction = async (action: AgentHomeAction, body: Record<string, unknown> = {}) => {
-    if (!selectedSession) return
+    if (readOnly || !selectedSession) return
     if ((action === 'stop' || action === 'archive')
       && !window.confirm(`${action === 'stop' ? 'Stop' : 'Archive'} this provider session?`)) return
     setBusyAction(action)
     setHeaderError(null)
     try {
-      const result = await agentHomeApi.sessionAction(selectedSession.id, action, body)
+      const mutation = await runRuntimeMutation(readOnly,
+        () => agentHomeApi.sessionAction(selectedSession.id, action, body))
+      if (!mutation.performed) return
+      const result = mutation.value
       if (result.created_session) {
         setSelectedSessionId(result.created_session.id)
         setSelectedConversationId(result.created_session.conversation_id)
@@ -530,6 +545,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const requestAction = (action: AgentHomeAction) => {
+    if (readOnly) return
     if (action === 'rename') {
       setRenameOpen(true)
       return
@@ -538,18 +554,21 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const openShell = async () => {
-    if (!runtime.workspace || openingShell) return
+    const workspace = runtime.workspace
+    if (readOnly || !workspace || openingShell) return
     setOpeningShell(true)
     setHeaderError(null)
     try {
-      const process = await osApi.createProcess(runtime.workspace.id, {
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.createProcess(workspace.id, {
         name: 'shell',
         interactive: true,
-        cwd: runtime.workspace.worktree_path ?? runtime.workspace.root_path,
+        cwd: workspace.worktree_path ?? workspace.root_path,
         cols: 100,
         rows: 30,
         restartable: true,
-      })
+      }))
+      if (!mutation.performed) return
+      const process = mutation.value
       setSelectedProcessId(String(process.id))
       await loadRuntime(true)
     } catch (error) {
@@ -558,18 +577,21 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const runCommand = async (command: string) => {
-    if (!runtime.workspace) return
+    const workspace = runtime.workspace
+    if (readOnly || !workspace) return
     setStartingCommand(true)
     setHeaderError(null)
     try {
-      const process = await osApi.createProcess(runtime.workspace.id, {
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.createProcess(workspace.id, {
         name: command.split(/\s+/)[0] || 'command',
         command,
-        cwd: runtime.workspace.worktree_path ?? runtime.workspace.root_path,
+        cwd: workspace.worktree_path ?? workspace.root_path,
         cols: 100,
         rows: 30,
         restartable: true,
-      })
+      }))
+      if (!mutation.performed) return
+      const process = mutation.value
       setSelectedProcessId(String(process.id))
       await loadRuntime(true)
     } catch (error) {
@@ -578,18 +600,23 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   }
 
   const signalProcess = async (process: WorkspaceProcess, signal: string) => {
+    if (readOnly) return
     try {
-      if (signal === 'SIGTERM') await osApi.stopProcess(process.id)
-      else await osApi.signalProcess(process.id, signal)
+      const mutation = await runRuntimeMutation(readOnly, () => signal === 'SIGTERM'
+        ? osApi.stopProcess(process.id)
+        : osApi.signalProcess(process.id, signal))
+      if (!mutation.performed) return
       await loadRuntime(true)
     } catch (error) { setHeaderError(messageFor(error, 'The signal could not be delivered.')) }
   }
 
   const restartProcess = async (process: WorkspaceProcess) => {
-    if (restartingProcessId) return
+    if (readOnly || restartingProcessId) return
     setRestartingProcessId(String(process.id))
     try {
-      const restarted = await osApi.restartProcess(process.id)
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.restartProcess(process.id))
+      if (!mutation.performed) return
+      const restarted = mutation.value
       setSelectedProcessId(String(restarted.id))
       await loadRuntime(true)
     } catch (error) { setHeaderError(messageFor(error, 'The process could not be restarted.')) }
@@ -628,13 +655,15 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     provider: string
     model: string
   }) => {
-    const created = await agentHomeApi.createProfile(input.boardId, {
+    const mutation = await runRuntimeMutation(readOnly, () => agentHomeApi.createProfile(input.boardId, {
       name: input.name,
       role: input.role || null,
       default_provider: input.provider || null,
       default_model: input.model || null,
       default_access_profile: 'workspace_write',
-    })
+    }))
+    if (!mutation.performed) return
+    const created = mutation.value
     await loadProfiles(true)
     selectProfile(created)
     setCreateOpen(false)
@@ -651,11 +680,12 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   const showProfileError = profiles.status === 'error' && profiles.data.length === 0
 
   return (
-    <div className="agent-home">
+    <div className="agent-home" aria-readonly={readOnly || undefined}>
       <aside className="ah-rail">
         <header>
           <div><p>Agent OS</p><h2>Agent Home</h2></div>
-          <button type="button" onClick={() => setCreateOpen(true)} aria-label="Create durable agent" title="Create durable agent">
+          <button type="button" onClick={() => setCreateOpen(true)} disabled={readOnly}
+            aria-label="Create durable agent" title={readOnly ? 'Reconnect Orchestra to create an agent' : 'Create durable agent'}>
             <OsIcon name="plus" size={15} />
           </button>
         </header>
@@ -672,7 +702,8 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
             <div className="ah-rail-empty">
               <strong>{profiles.data.length ? 'No agents match' : 'No durable agents yet'}</strong>
               <p>{profiles.data.length ? 'Try another name or provider.' : 'Create an identity that can keep its history across provider sessions.'}</p>
-              {!profiles.data.length && <button type="button" onClick={() => setCreateOpen(true)}>Create first agent</button>}
+              {!profiles.data.length && <button type="button" disabled={readOnly}
+                onClick={() => setCreateOpen(true)}>Create first agent</button>}
             </div>
           )}
           {visibleProfiles.map((profile) => {
@@ -720,7 +751,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
           <div className="ah-stage-state">
             <AgentHomeInlineState icon="message" title="Create a durable agent identity"
               detail="One identity can coordinate many independent Claude or Codex sessions while keeping its work, provenance, context, and history together." />
-            <button type="button" onClick={() => setCreateOpen(true)}>Create durable agent</button>
+            <button type="button" disabled={readOnly} onClick={() => setCreateOpen(true)}>Create durable agent</button>
           </div>
         )}
         {selectedProfile && (home.status === 'loading' && !home.data ? <AgentHomeStageSkeleton /> : home.data ? (
@@ -730,6 +761,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
               contract={runtime.contract}
               process={selectedProcess} attention={runtime.attention} capabilities={sessionCapabilities}
               busyAction={busyAction} error={headerError ?? home.error ?? runtime.error} copied={copied}
+              readOnly={readOnly}
               onAction={requestAction} onRefresh={() => {
                 void refreshHome(false); void loadRuntime(false)
               }} onCopyLink={() => void copyLink()} />
@@ -754,6 +786,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                       events={events} highlightedEventId={selectedEventId}
                       query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
                       searching={searching} hasMore={hasMoreEvents} exportBusy={exportBusy}
+                      readOnly={readOnly}
                       onQueryChange={setSearchDraft} onKindChange={(value) => {
                         setSelectedEventId(null)
                         focusedEventRef.current = null
@@ -771,6 +804,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                     <AgentTerminalPanel workspace={runtime.workspace} processes={runtime.processes}
                       process={selectedProcess} loading={runtime.status === 'loading'} error={runtime.error}
                       openingShell={openingShell} startingCommand={startingCommand}
+                      readOnly={readOnly}
                       restartingProcessId={restartingProcessId}
                       onSelectProcess={(process) => setSelectedProcessId(String(process.id))}
                       onOpenShell={() => void openShell()} onRunCommand={runCommand}
@@ -783,6 +817,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                       job={runtime.job} contract={runtime.contract}
                       processes={runtime.processes} attention={runtime.attention}
                       context={runtime.context} events={events.data} onTabChange={setDetailTab}
+                      readOnly={readOnly}
                       onSelectSession={selectSession} onSelectConversation={selectConversation} />
                   )}
                 </div>
@@ -794,6 +829,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                     events={events} highlightedEventId={selectedEventId}
                     query={searchDraft} kind={eventKind} liveAgent={legacyAgent}
                     searching={searching} hasMore={hasMoreEvents} exportBusy={exportBusy}
+                    readOnly={readOnly}
                     onQueryChange={setSearchDraft} onKindChange={(value) => {
                       setSelectedEventId(null)
                       focusedEventRef.current = null
@@ -810,6 +846,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                   <AgentTerminalPanel workspace={runtime.workspace} processes={runtime.processes}
                     process={selectedProcess} loading={runtime.status === 'loading'} error={runtime.error}
                     openingShell={openingShell} startingCommand={startingCommand}
+                    readOnly={readOnly}
                     restartingProcessId={restartingProcessId}
                     onSelectProcess={(process) => setSelectedProcessId(String(process.id))}
                     onOpenShell={() => void openShell()} onRunCommand={runCommand}
@@ -822,6 +859,7 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                   job={runtime.job} contract={runtime.contract}
                   processes={runtime.processes} attention={runtime.attention}
                   context={runtime.context} events={events.data} onTabChange={setDetailTab}
+                  readOnly={readOnly}
                   onSelectSession={selectSession} onSelectConversation={selectConversation} />
               </div>
             )}
@@ -835,18 +873,18 @@ export function AgentHome({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
         ))}
       </main>
 
-      {createOpen && (
+      {createOpen && !readOnly && (
         <CreateAgentDialog snaps={snaps} onClose={() => setCreateOpen(false)}
           onCreate={createProfile} />
       )}
-      {renameOpen && selectedSession && (
+      {renameOpen && !readOnly && selectedSession && (
         <RenameSessionDialog session={selectedSession} onClose={() => setRenameOpen(false)}
           onRename={async (name) => {
             await performAction('rename', { name })
             setRenameOpen(false)
           }} />
       )}
-      {liveAgent && legacySnapshot && (
+      {liveAgent && !readOnly && legacySnapshot && (
         <AgentTerminal agent={liveAgent} boardId={legacySnapshot.board.id}
           threads={legacySnapshot.threads} cards={legacySnapshot.cards}
           onClose={() => setLiveAgent(null)} onChange={() => {

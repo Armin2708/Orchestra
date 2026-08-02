@@ -24,11 +24,13 @@ export function AgentToolControls({
   snapshot,
   busyToolId = null,
   error = null,
+  readOnly = false,
   onPolicyChange,
 }: {
   snapshot: SessionToolSnapshot
   busyToolId?: string | null
   error?: string | null
+  readOnly?: boolean
   onPolicyChange: (toolId: string, decision: ToolPolicyDecision) => void
 }) {
   const provider = snapshot.provider
@@ -107,7 +109,7 @@ export function AgentToolControls({
                   <select
                     aria-label={`${tool.name} session policy`}
                     value={tool.permission.requested}
-                    disabled={busyToolId === tool.id}
+                    disabled={readOnly || busyToolId === tool.id}
                     onChange={(event) => onPolicyChange(
                       tool.id,
                       event.target.value as ToolPolicyDecision,

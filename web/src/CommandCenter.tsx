@@ -40,6 +40,7 @@ export type CommandCenterProps = {
   section: CommandCenterSection
   counts?: Partial<Record<CommandCenterSection, number>>
   searchRecords: readonly CommandCenterSearchRecord[]
+  currentQuery?: string
   currentFilters?: Record<string, string>
   children: React.ReactNode
   attentionControl?: React.ReactNode
@@ -55,6 +56,7 @@ export function CommandCenter({
   section,
   counts = {},
   searchRecords,
+  currentQuery = '',
   currentFilters = {},
   children,
   attentionControl,
@@ -116,18 +118,19 @@ export function CommandCenter({
   }
 
   const saveCurrentView = () => {
-    const key = JSON.stringify({ section, query, currentFilters })
+    if (section !== 'work') return
+    const key = JSON.stringify({ section, query: currentQuery, currentFilters })
     if (savedViews.some((item) => JSON.stringify({
       section: item.section,
       query: item.query,
       currentFilters: item.filters,
     }) === key)) return
-    const suffix = query.trim() || Object.values(currentFilters).filter(Boolean).join(', ') || 'All'
+    const suffix = currentQuery.trim() || Object.values(currentFilters).filter(Boolean).join(', ') || 'All'
     const next: SavedCommandCenterView = {
       id: `view-${Date.now().toString(36)}`,
       name: `${sectionLabel(section)} · ${suffix}`,
       section,
-      query: query.trim(),
+      query: currentQuery.trim(),
       filters: currentFilters,
       createdAt: new Date().toISOString(),
     }
@@ -135,7 +138,6 @@ export function CommandCenter({
   }
 
   const applySavedView = (view: SavedCommandCenterView) => {
-    setQuery(view.query)
     onNavigate(view.section)
     onApplySavedView?.(view)
     const href = commandCenterDeepLink(location.search, {
@@ -277,7 +279,8 @@ export function CommandCenter({
           {[...DEFAULT_COMMAND_CENTER_VIEWS, ...savedViews].slice(0, 10).map((view) => (
             <button key={view.id} type="button" onClick={() => applySavedView(view)}>{view.name}</button>
           ))}
-          <button className="cc-save-view" type="button" onClick={saveCurrentView}>
+          <button className="cc-save-view" type="button" onClick={saveCurrentView}
+            disabled={section !== 'work'} title={section === 'work' ? 'Save the visible Open Work collection' : 'Saved views are available for Open Work'}>
             <OsIcon name="plus" size={13} /> Save current
           </button>
         </div>

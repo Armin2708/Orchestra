@@ -80,6 +80,8 @@ describe('unified command center component contract', () => {
     expect(appSource).toContain("readOnly={connectionState !== 'live'}")
     expect(appSource).toContain('commandCenterProjectProjection({')
     expect(appSource).toContain('boardId={focus === \'all\' ? null')
+    expect(appSource).toContain('resolveCommandCenterProjectFocus(snaps, focus)')
+    expect(appSource).not.toContain('visible.length > 0 ? visible : snaps')
   })
 
   it('keeps canonical Discussions explicitly unavailable instead of relabeling Messages', () => {

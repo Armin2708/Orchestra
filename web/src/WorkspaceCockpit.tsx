@@ -22,6 +22,7 @@ import { OsIcon, OsIconName } from './OsIcon'
 import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
 import { TrackbookPane } from './TrackbookPane'
 import { useModalFocusTrap } from './useModalFocusTrap'
+import { runRuntimeMutation } from './runtimeReadOnly'
 import {
   ChangesPane,
   ContextPane,
@@ -84,7 +85,11 @@ const timeLabel = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
+export function WorkspaceCockpit({ snaps, onChange, readOnly = false }: {
+  snaps: Snapshot[]
+  onChange: () => void
+  readOnly?: boolean
+}) {
   const mobile = useMedia('(max-width: 820px)')
   const requestedPaneRef = useRef<PaneId | null>(localStorage.getItem('orchestra-os-pane') === 'trackbook' ? 'trackbook' : null)
   const snapsRef = useRef(snaps)
@@ -103,6 +108,12 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   const [liveAgent, setLiveAgent] = useState<Agent | null>(null)
   const [headerError, setHeaderError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!readOnly) return
+    setCreateOpen(false)
+    setLiveAgent(null)
+  }, [readOnly])
 
   const [processes, setProcesses] = useState<Resource<WorkspaceProcess[]>>(resource([]))
   const [events, setEvents] = useState<Resource<OsEvent[]>>(resource([]))
@@ -379,18 +390,23 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   }
 
   const signalProcess = async (process: WorkspaceProcess, signal: string) => {
+    if (readOnly) return
     try {
-      if (signal === 'SIGTERM') await osApi.stopProcess(process.id)
-      else await osApi.signalProcess(process.id, signal)
+      const mutation = await runRuntimeMutation(readOnly, () => signal === 'SIGTERM'
+        ? osApi.stopProcess(process.id)
+        : osApi.signalProcess(process.id, signal))
+      if (!mutation.performed) return
       setHeaderError(null)
       window.setTimeout(() => refreshProcesses(true), 250)
     } catch (error) { setHeaderError(errorMessage(error, `Could not send ${signal}.`)) }
   }
 
   const restartProcess = async (process: WorkspaceProcess) => {
-    if (!selected || String(process.workspace_id) !== String(selected.id)) return
+    if (readOnly || !selected || String(process.workspace_id) !== String(selected.id)) return
     try {
-      const created = await osApi.restartProcess(process.id)
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.restartProcess(process.id))
+      if (!mutation.performed) return
+      const created = mutation.value
       await refreshProcesses(true)
       attachProcess(created)
       setHeaderError(null)
@@ -398,13 +414,16 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   }
 
   const toggleContextPin = async (item: ContextItem) => {
-    if (!selected) return
+    if (readOnly || !selected) return
     const before = context
     const updated = context.data.map((candidate) => String(candidate.id) === String(item.id)
       ? { ...candidate, pinned: !Boolean(candidate.pinned) } : candidate)
     setContext({ status: 'ready', data: updated, error: null })
     try {
-      const data = await osApi.updateContext(selected.id, { items: updated })
+      const mutation = await runRuntimeMutation(readOnly,
+        () => osApi.updateContext(selected.id, { items: updated }))
+      if (!mutation.performed) return
+      const data = mutation.value
       setContext({ status: 'ready', data, error: null })
     } catch (error) {
       setContext({ ...before, status: 'error', error: errorMessage(error, 'Context could not be updated.') })
@@ -423,9 +442,10 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
   }
 
   const archive = async () => {
-    if (!selected || !window.confirm(`Archive ${selected.name}? Dirty files and artifacts will be preserved.`)) return
+    if (readOnly || !selected || !window.confirm(`Archive ${selected.name}? Dirty files and artifacts will be preserved.`)) return
     try {
-      await osApi.archiveWorkspace(selected.id)
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.archiveWorkspace(selected.id))
+      if (!mutation.performed) return
       localStorage.removeItem('orchestra-os-workspace')
       selectedIdRef.current = null
       setSelectedId(null)
@@ -434,7 +454,10 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     } catch (error) { setHeaderError(errorMessage(error, 'The workspace could not be archived.')) }
   }
 
-  const openCreate = (task: Card | null = null) => { setCreateCard(task); setCreateOpen(true) }
+  const openCreate = (task: Card | null = null) => {
+    if (readOnly) return
+    setCreateCard(task); setCreateOpen(true)
+  }
   const closeCreate = useCallback(() => { setCreateOpen(false); setCreateCard(null) }, [])
   const currentBoard = selected?.board_id ?? snaps[0]?.board.id
 
@@ -442,28 +465,29 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
     if (!selected) return null
     if (pane === 'terminal') return (
       <TerminalPane workspace={selected} processes={scopedProcesses} activeProcess={activeProcess}
+        readOnly={readOnly}
         terminalRef={terminalRef} commandRef={commandRef} onAttach={attachProcess}
         onProcessesChanged={refreshProcesses} onError={setHeaderError}
         onSignal={signalProcess} onRestart={restartProcess} />
     )
     if (pane === 'agent') return (
       <ConversationPane events={events} workspace={selected} snapshot={boardSnapshot} agent={owner}
-        onOpenAgent={setLiveAgent} />
+        readOnly={readOnly} onOpenAgent={setLiveAgent} />
     )
     if (pane === 'changes') return <ChangesPane evidence={evidence} />
     if (pane === 'trackbook') return <TrackbookPane deliveries={deliveries} evidence={evidence} contract={contract} card={card} />
     if (pane === 'processes') return (
-      <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} onAttach={attachProcess}
+      <ProcessesPane processes={scopedProcesses} activeId={activeProcessId} readOnly={readOnly} onAttach={attachProcess}
         onSignal={signalProcess} onRestart={restartProcess} />
     )
-    if (pane === 'context') return <ContextPane context={context} onTogglePin={toggleContextPin} />
+    if (pane === 'context') return <ContextPane context={context} readOnly={readOnly} onTogglePin={toggleContextPin} />
     return <PolicyPane policies={policies} contract={contract} />
   }
 
   return (
-    <div className="os-cockpit">
+    <div className="os-cockpit" aria-readonly={readOnly || undefined}>
       <WorkspaceRail snaps={snaps} workspaces={workspaces} selectedId={selectedId}
-        onSelect={selectWorkspace} onCreate={openCreate} />
+        readOnly={readOnly} onSelect={selectWorkspace} onCreate={openCreate} />
 
       <main className="os-workspace-stage">
         {workspaces.status === 'loading' && workspaces.data.length === 0 && <WorkspaceStageSkeleton />}
@@ -481,7 +505,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
             <p className="os-eyebrow">Workspace Runtime</p>
             <h2>Give the task somewhere durable to run</h2>
             <p>A workspace binds its checkout, task, processes, agent session, context, evidence, and policy into one recoverable unit.</p>
-            <button className="os-primary-button" onClick={() => openCreate()}><OsIcon name="plus" /> Create workspace</button>
+            <button className="os-primary-button" disabled={readOnly} onClick={() => openCreate()}><OsIcon name="plus" /> Create workspace</button>
             <small>Every workspace remains attachable from a normal terminal.</small>
           </div>
         )}
@@ -516,7 +540,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
                 </div>
                 <button className="os-secondary-button" onClick={copyPath}><OsIcon name="command" /> {copied ? 'Copied' : 'Terminal attach'}</button>
                 <button className="os-icon-button" onClick={() => setReloadTick((tick) => tick + 1)} aria-label="Refresh workspace data" title="Refresh workspace data"><OsIcon name="refresh" /></button>
-                <button className="os-text-button os-archive-button" onClick={archive}><OsIcon name="archive" /> Archive</button>
+                <button className="os-text-button os-archive-button" disabled={readOnly} onClick={archive}><OsIcon name="archive" /> Archive</button>
               </div>
               {workspaceConflicts.length > 0 && (
                 <div className="os-conflict-banner"><OsIcon name="attention" /><b>{workspaceConflicts.length} scope conflict{workspaceConflicts.length === 1 ? '' : 's'}</b><span>Review overlapping paths before merging.</span></div>
@@ -577,7 +601,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
         )}
       </main>
 
-      {createOpen && currentBoard && (
+      {createOpen && !readOnly && currentBoard && (
         <CreateWorkspaceDialog snaps={snaps} initialBoardId={currentBoard} initialCard={createCard}
           onClose={closeCreate} onCreated={async (workspace) => {
             setCreateOpen(false); setCreateCard(null)
@@ -587,7 +611,7 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
           }} />
       )}
 
-      {liveAgent && boardSnapshot && (
+      {liveAgent && !readOnly && boardSnapshot && (
         <AgentTerminal agent={liveAgent} boardId={boardSnapshot.board.id} threads={boardSnapshot.threads}
           cards={boardSnapshot.cards} onClose={() => setLiveAgent(null)} onChange={() => { onChange(); setReloadTick((tick) => tick + 1) }} />
       )}
@@ -596,12 +620,13 @@ export function WorkspaceCockpit({ snaps, onChange }: { snaps: Snapshot[]; onCha
 }
 
 function TerminalPane({ workspace, processes, activeProcess, terminalRef, commandRef, onAttach,
-  onProcessesChanged, onError, onSignal, onRestart }: {
+  onProcessesChanged, onError, onSignal, onRestart, readOnly = false }: {
   workspace: Workspace
   processes: Resource<WorkspaceProcess[]>
   activeProcess: WorkspaceProcess | null
   terminalRef: React.RefObject<ProcessTerminalHandle>
   commandRef: React.RefObject<HTMLInputElement>
+  readOnly?: boolean
   onAttach: (process: WorkspaceProcess) => void
   onProcessesChanged: () => void
   onError: (message: string | null) => void
@@ -615,15 +640,17 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
   const autoShellWorkspaceRef = useRef<string | null>(null)
 
   const openShell = useCallback(async () => {
-    if (openingShellRef.current) return
+    if (readOnly || openingShellRef.current) return
     openingShellRef.current = true
     setOpeningShell(true)
     try {
-      const created = await osApi.createProcess(workspace.id, {
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.createProcess(workspace.id, {
         name: 'shell', interactive: true,
         cwd: workspace.worktree_path ?? workspace.root_path,
         cols: 100, rows: 30, restartable: true,
-      })
+      }))
+      if (!mutation.performed) return
+      const created = mutation.value
       await onProcessesChanged()
       onAttach(created)
       onError(null)
@@ -633,10 +660,10 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
       openingShellRef.current = false
       setOpeningShell(false)
     }
-  }, [onAttach, onError, onProcessesChanged, terminalRef, workspace.id, workspace.root_path, workspace.worktree_path])
+  }, [onAttach, onError, onProcessesChanged, readOnly, terminalRef, workspace.id, workspace.root_path, workspace.worktree_path])
 
   useEffect(() => {
-    if (processes.status !== 'ready') return
+    if (readOnly || processes.status !== 'ready') return
     if (processes.data.some((process) => ['running', 'starting', 'stopping'].includes(process.status))) return
     const workspaceId = String(workspace.id)
     if (autoShellWorkspaceRef.current === workspaceId) return
@@ -646,15 +673,18 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
 
   const run = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (readOnly) return
     const value = command.trim()
     if (!value) return
     setStarting(true)
     try {
-      const created = await osApi.createProcess(workspace.id, {
+      const mutation = await runRuntimeMutation(readOnly, () => osApi.createProcess(workspace.id, {
         name: value.split(/\s+/)[0] || 'shell', command: value,
         cwd: workspace.worktree_path ?? workspace.root_path,
         cols: 100, rows: 30, restartable: true,
-      })
+      }))
+      if (!mutation.performed) return
+      const created = mutation.value
       setCommand('')
       await onProcessesChanged()
       onAttach(created)
@@ -678,27 +708,27 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
           ))}
         </div>
         <div className="os-process-actions">
-          <button onClick={() => void openShell()} disabled={openingShell} title="Open the host's interactive shell">
+          <button onClick={() => void openShell()} disabled={readOnly || openingShell} title="Open the host's interactive shell">
             <OsIcon name="terminal" size={12} /> {openingShell ? 'Opening' : 'New shell'}
           </button>
           {activeProcess && <>
             <span className="os-process-facts">PID {activeProcess.pid ?? '—'} · exit {activeProcess.exit_code ?? '—'}</span>
             {['running', 'starting', 'stopping'].includes(activeProcess.status) ? (
-              <><button onClick={() => onSignal(activeProcess, 'SIGINT')}>Interrupt</button><button onClick={() => onSignal(activeProcess, 'SIGTERM')}>Stop</button></>
-            ) : activeProcess.restartable ? <button onClick={() => onRestart(activeProcess)}>Restart</button> : null}
+              <><button disabled={readOnly} onClick={() => onSignal(activeProcess, 'SIGINT')}>Interrupt</button><button disabled={readOnly} onClick={() => onSignal(activeProcess, 'SIGTERM')}>Stop</button></>
+            ) : activeProcess.restartable ? <button disabled={readOnly} onClick={() => onRestart(activeProcess)}>Restart</button> : null}
           </>}
         </div>
       </header>
       {processes.status === 'error' && <div className="os-inline-error" role="alert">{processes.error}</div>}
-      <ProcessTerminal ref={terminalRef} process={activeProcess} onProcessChanged={onProcessesChanged} />
+      <ProcessTerminal ref={terminalRef} process={activeProcess} readOnly={readOnly} onProcessChanged={onProcessesChanged} />
       <form className="os-command-bar" onSubmit={run}>
         <label htmlFor="os-run-command">Run in a new PTY</label>
         <div>
           <span aria-hidden="true">$</span>
           <input ref={commandRef} id="os-run-command" value={command} onChange={(event) => setCommand(event.target.value)}
-            placeholder="npm run dev" autoComplete="off" spellCheck={false} />
+            placeholder="npm run dev" autoComplete="off" spellCheck={false} disabled={readOnly} />
           <kbd>⌘K</kbd>
-          <button type="submit" disabled={!command.trim() || starting}><OsIcon name="send" /> {starting ? 'Starting' : 'Run'}</button>
+          <button type="submit" disabled={readOnly || !command.trim() || starting}><OsIcon name="send" /> {starting ? 'Starting' : 'Run'}</button>
         </div>
         <small>Direct PTY · raw input/output · no agent mediation</small>
       </form>
@@ -706,10 +736,11 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
   )
 }
 
-function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
+function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate, readOnly = false }: {
   snaps: Snapshot[]
   workspaces: Resource<Workspace[]>
   selectedId: string | null
+  readOnly?: boolean
   onSelect: (workspace: Workspace) => void
   onCreate: (card?: Card | null) => void
 }) {
@@ -737,7 +768,8 @@ function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
           <button type="button" className="os-icon-button os-info-button" onClick={openInfo}
             aria-label="Learn how workspaces work" title="How workspaces work" aria-haspopup="dialog"
             aria-expanded={infoOpen} aria-controls="workspace-info-dialog"><span aria-hidden="true">i</span></button>
-          <button type="button" className="os-icon-button" onClick={() => onCreate()} aria-label="Create workspace" title="Create workspace"><OsIcon name="plus" /></button>
+          <button type="button" className="os-icon-button" disabled={readOnly} onClick={() => onCreate()}
+            aria-label="Create workspace" title={readOnly ? 'Reconnect Orchestra to create a workspace' : 'Create workspace'}><OsIcon name="plus" /></button>
         </div>
       </header>
       <label className="os-rail-search">
@@ -771,7 +803,7 @@ function WorkspaceRail({ snaps, workspaces, selectedId, onSelect, onCreate }: {
           <section className="os-rail-section os-task-rail">
             <div className="os-rail-label"><span>Tasks without runtime</span><code>{unassigned.length}</code></div>
             {unassigned.map(({ card, board }) => (
-              <button key={`${board.id}-${card.id}`} onClick={() => onCreate(card)}>
+              <button key={`${board.id}-${card.id}`} disabled={readOnly} onClick={() => onCreate(card)}>
                 <span>Task {card.id}</span><strong>{card.title}</strong><small>{board.name}</small>
                 <OsIcon name="plus" size={13} />
               </button>

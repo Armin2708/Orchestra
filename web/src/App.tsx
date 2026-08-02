@@ -14,7 +14,9 @@ import {
   commandCenterDeepLink,
   commandCenterProjectProjection,
   legacyCommandCenterRedirect,
+  normalizeCommandCenterFocus,
   parseCommandCenterSelection,
+  resolveCommandCenterProjectFocus,
   type CommandCenterSection,
   type SavedCommandCenterView,
 } from './commandCenterModel'
@@ -49,11 +51,16 @@ export function App() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([])
   const [activeSavedView, setActiveSavedView] = useState<SavedCommandCenterView | null>(null)
+  const [collectionView, setCollectionView] = useState<{ query: string; filters: Record<string, string> }>({
+    query: '', filters: {},
+  })
+  const handleCollectionStateChange = useCallback((state: { query: string; filters: Record<string, string> }) => {
+    setCollectionView(state)
+  }, [])
   const [locationSearch, setLocationSearch] = useState(location.search)
   const [needsAuth, setNeedsAuth] = useState(false)
   const [focus, setFocus] = useState<number | 'all'>(() => {
-    const saved = localStorage.getItem('orchestra-focus')
-    return saved && saved !== 'all' ? Number(saved) : 'all'
+    return normalizeCommandCenterFocus(localStorage.getItem('orchestra-focus'))
   })
   const [menuOpen, setMenuOpen] = useState(false)
   const [navigation, setNavigation] = useState(() => {
@@ -125,14 +132,21 @@ export function App() {
     localStorage.setItem('orchestra-board-tab', boardTab)
   }, [view, boardTab])
 
-  useEffect(() => setActiveSavedView(null), [focus])
+  useEffect(() => {
+    setActiveSavedView(null)
+    setCollectionView({ query: '', filters: {} })
+  }, [focus])
 
   // a notification tap lands on /?board=<id>[&card=<id>] — focus that board;
   // the card param is picked up by ProjectGrid once snapshots arrive
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    const b = Number(params.get('board'))
-    if (b) { setFocus(b); localStorage.setItem('orchestra-focus', String(b)) }
+    const b = parseCommandCenterSelection(location.search).boardId
+    if (params.has('board')) {
+      const normalized = b ?? 'all'
+      setFocus(normalized)
+      localStorage.setItem('orchestra-focus', String(normalized))
+    }
     if (['agent', 'session', 'conversation'].some((key) => params.has(key))) {
       setNavigation({ view: 'board', boardTab: 'agents' })
       setCommandSection('agents')
@@ -214,14 +228,14 @@ export function App() {
   if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
   const cards = snaps.flatMap((s) => s.cards)
-  const visible = focus === 'all' ? snaps : snaps.filter((s) => s.board.id === focus)
-  const shown = visible.length > 0 ? visible : snaps // focused board was removed — fall back
+  const focusScope = resolveCommandCenterProjectFocus(snaps, focus)
+  const visible = focusScope.snapshots
+  const shown = [...focusScope.snapshots]
   const commandCenterActive = view === 'board' || view === 'open-work'
   const { jobs: projectJobs, searchRecords } = commandCenterProjectProjection({
     snapshots: shown,
     agentProfiles,
     jobs,
-    savedView: activeSavedView,
   })
   const commandCounts = {
     work: shown.reduce((sum, snapshot) => sum + snapshot.cards.length, 0),
@@ -253,7 +267,7 @@ export function App() {
           <Mark />
           <div className="brand-picker">
             <button className="brand-btn" onClick={() => setMenuOpen((o) => !o)}>
-              <span className="brand-title">{focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Orchestra'}</span>
+              <span className="brand-title">{focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Project unavailable'}</span>
               <span className="brand-caret">▾</span>
             </button>
             <p className="sub">
@@ -285,17 +299,21 @@ export function App() {
         </div>
       </header>
       {commandCenterActive
-        ? loaded && snaps.length === 0
+        ? loaded && focusScope.kind === 'missing'
+           ? <CommandCenterState kind="error" title="Project not found"
+              detail={`Project ${focusScope.projectId} is unavailable or was deleted. Choose another project from the project switcher.`} />
+        : loaded && snaps.length === 0
            ? connectionState === 'offline'
              ? <CommandCenterState kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
              : <GettingStarted onSettings={() => pickView('settings')} />
            : <CommandCenter key={focus === 'all' ? 'all-projects' : `project-${focus}`}
-              projectName={focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Orchestra'}
-              projectId={focus === 'all' ? null : shown[0]?.board.id ?? null}
+              projectName={focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Project unavailable'}
+              projectId={focusScope.projectId}
               section={commandSection}
               counts={commandCounts}
               searchRecords={searchRecords}
-               currentFilters={activeSavedView?.filters ?? {}}
+               currentQuery={commandSection === 'work' ? collectionView.query : ''}
+               currentFilters={commandSection === 'work' ? collectionView.filters : {}}
                onNavigate={(section) => {
                  setActiveSavedView(null)
                  pickCommandSection(section)
@@ -303,7 +321,7 @@ export function App() {
                onOpenHref={openCommandHref}
                onApplySavedView={setActiveSavedView}
                connectionState={connectionState}
-              attentionControl={<NeedsYou boards={snaps.map((snapshot) => snapshot.board)}
+              attentionControl={<NeedsYou boards={shown.map((snapshot) => snapshot.board)}
                 readOnly={connectionState !== 'live'} onOpen={(item) => {
                 if (item.workspace_id !== null) localStorage.setItem('orchestra-os-workspace', String(item.workspace_id))
                  const href = commandCenterDeepLink(location.search, {
@@ -335,10 +353,12 @@ export function App() {
                          boardId={focus === 'all' ? null : shown[0]?.board.id ?? null}
                          collectionQuery={activeSavedView?.section === 'work' ? activeSavedView.query : ''}
                          collectionFilters={activeSavedView?.section === 'work' ? activeSavedView.filters : undefined}
+                         onCollectionStateChange={handleCollectionStateChange}
                          readOnly={connectionState !== 'live'} />
                      </React.Suspense>
                  : commandSection === 'agents'
-                   ? <CanonicalAgentHome key={locationSearch} snaps={shown} onChange={refresh} locationSearch={locationSearch} />
+                   ? <CanonicalAgentHome key={locationSearch} snaps={shown} onChange={refresh}
+                      locationSearch={locationSearch} readOnly={connectionState !== 'live'} />
                   : commandSection === 'discussions'
                     ? <CanonicalDiscussionDetail discussion={null} posts={[]} backendAvailable={false} />
                     : commandSection === 'knowledge'
