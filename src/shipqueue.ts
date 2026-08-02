@@ -210,7 +210,7 @@ export class ShipQueue {
         throw new Error(`registered worktree HEAD does not match accepted source commit for ${branch}`)
       }
       const dirty = (await this.git(
-        ['status', '--porcelain=v1', '--untracked-files=all'],
+        ['status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching'],
         registered.path,
       )).stdout.trim()
       if (dirty) throw new Error(`candidate worktree is dirty and was preserved for ${branch}`)

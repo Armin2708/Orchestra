@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -355,6 +355,47 @@ describe('durable autoship recovery', () => {
     expect(() => restartedDb.prepare('DELETE FROM delivery_autoship_completions WHERE intent_id=?')
       .run(intent.id)).toThrow(/immutable/)
   })
+
+  it('preserves ignored candidate content and all canonical state during restart cleanup', async () => {
+    const setup = fixture()
+    const intent = setup.trackbook.prepareAutoshipIntent(setup.accepted.id, {
+      actor,
+      branch: 'card-77',
+      idempotencyKey: 'prepare:ignored-content',
+    })
+    git(setup.repository, 'merge', '--no-ff', setup.sourceCommit, '-m', 'merge before ignored-content recovery')
+    const worktree = cardWorktree(setup.repository, setup.cardId)
+    git(setup.repository, 'worktree', 'add', worktree, 'card-77')
+    writeFileSync(path.join(setup.repository, '.git', 'info', 'exclude'), '.env\nnode_modules/\nartifacts/\n')
+    mkdirSync(path.join(worktree, 'node_modules'), { recursive: true })
+    mkdirSync(path.join(worktree, 'artifacts'), { recursive: true })
+    const ignoredPaths = [
+      path.join(worktree, '.env'),
+      path.join(worktree, 'node_modules', 'local-cache.bin'),
+      path.join(worktree, 'artifacts', 'accepted-output.log'),
+    ]
+    for (const ignoredPath of ignoredPaths) writeFileSync(ignoredPath, 'preserve me\n')
+    expect(git(worktree, 'check-ignore', ...ignoredPaths)).not.toBe('')
+    setup.db.prepare("UPDATE cards SET column_name='done' WHERE id=?").run(setup.cardId)
+
+    const server = buildServer(setup.db)
+    await expect.poll(
+      () => setup.db.prepare('SELECT column_name FROM cards WHERE id=?').get(setup.cardId),
+      { timeout: 30_000 },
+    ).toEqual({ column_name: 'blocked' })
+
+    expect(ignoredPaths.every((ignoredPath) => existsSync(ignoredPath))).toBe(true)
+    expect(git(setup.repository, 'worktree', 'list', '--porcelain')).toContain(realpathSync(worktree))
+    expect(git(setup.repository, 'rev-parse', 'card-77')).toBe(setup.sourceCommit)
+    expect(setup.trackbook.pendingAutoshipIntents()).toEqual([intent])
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipment_receipts').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_shipments').get())
+      .toEqual({ count: 0 })
+    expect(setup.db.prepare('SELECT COUNT(*) AS count FROM delivery_autoship_completions').get())
+      .toEqual({ count: 0 })
+    await server.close()
+  }, 60_000)
 
   it('requires the exact card worktree path to be absent and preserves unrelated worktrees', () => {
     const setup = fixture()
