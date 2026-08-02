@@ -12,7 +12,7 @@ import { reap, bounceDeadLetters } from './reaper.js'
 import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureAgentToken, ensureToken } from './token.js'
-import { registerPush } from './push.js'
+import { loadSecureVapidKeys, registerPush, type VapidKeys } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
 import { sessionToolPlugin } from './agent-os/session-tool-routes.js'
@@ -194,6 +194,26 @@ export const createDaemonProviderToolSurfaceRefresher = (
     }
   }
 }
+import { createOperationsRuntime } from './operations/runtime.js'
+import { inspectRemoteTunnelHealth } from './remote.js'
+import { deliverRemotePushOutbox } from './remote-security-integration.js'
+import {
+  OperationsRecoveryService,
+  OperationsRetentionService,
+  SafeShutdownCoordinator,
+} from './agent-os/operations-recovery.js'
+import {
+  assertOperationsShutdownClean,
+  OperationsOutboxWorker,
+  OperationsRetentionScheduler,
+  OperationsRuntimeCoordinator,
+  type OperationsRuntimeObservation,
+} from './agent-os/operations-runtime.js'
+import {
+  acquireStateTransitionGuard,
+  invalidateDaemonQuiescenceReceipt,
+  writeDaemonQuiescenceReceipt,
+} from './agent-os/database-quiescence.js'
 
 export function dataDir(): string {
   const d = process.env.ORCHESTRA_HOME ?? path.join(os.homedir(), '.orchestra')
@@ -378,10 +398,19 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   if (opts.expose && authDisabled())
     throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')
   const orchestraDataDir = dataDir()
-  const db = openDb(path.join(orchestraDataDir, 'orchestra.db'))
+  const databasePath = path.join(orchestraDataDir, 'orchestra.db')
+  const startupTransition = acquireStateTransitionGuard(orchestraDataDir, 'daemon-start')
+  let db: Database.Database
+  let lease: ReturnType<typeof acquireDaemonLease>
+  try {
+    invalidateDaemonQuiescenceReceipt(orchestraDataDir)
+    db = openDb(databasePath)
+    lease = acquireDaemonLease(db)
+  } finally {
+    startupTransition.release()
+  }
   const token = authDisabled() ? undefined : ensureToken()
   const agentToken = authDisabled() ? undefined : ensureAgentToken()
-  const lease = acquireDaemonLease(db)
   let compatibilityFailureJournal:
     ReturnType<typeof openCompatibilityMigrationFailureJournal> | undefined
   let unbindCompatibilityFailureJournal: (() => void) | undefined
@@ -389,6 +418,38 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   let manager: ProviderAgentManager | undefined
   let autowake: Autowake | undefined
   let toolEvidenceRefreshTimer: ReturnType<typeof setInterval> | undefined
+  let vapidKeys: VapidKeys | undefined
+  let vapidCredentialReason = 'vapid_credentials_not_checked'
+  let runtimeReconciled = false
+  const safeShutdown = new SafeShutdownCoordinator()
+  const trackedActiveWork = new Map<string, () => void>()
+  const reconcileActiveWork = () => {
+    const active = db.prepare(`SELECT id FROM agent_sessions
+      WHERE status IN ('starting','running','idle') ORDER BY id`).all() as Array<{ id: string }>
+    const activeIds = new Set(active.map((row) => `session:${row.id}`))
+    for (const [id, release] of trackedActiveWork) {
+      if (!activeIds.has(id)) { release(); trackedActiveWork.delete(id) }
+    }
+    for (const id of activeIds) {
+      if (trackedActiveWork.has(id)) continue
+      const sessionId = id.slice('session:'.length)
+      let detached = false
+      const release = safeShutdown.register({
+        id,
+        settle: async () => {
+          while (!detached) {
+            const row = db.prepare('SELECT status FROM agent_sessions WHERE id=?').get(sessionId) as
+              { status: string } | undefined
+            if (!row || !['starting', 'running', 'idle'].includes(row.status)) return
+            await new Promise<void>((resolve) => setTimeout(resolve, 250))
+          }
+        },
+        onDeadline: 'detach',
+        detach: async () => { detached = true },
+      })
+      trackedActiveWork.set(id, () => { detached = true; release() })
+    }
+  }
   const agentOs = createAgentOsRuntime(db)
   const terminalSessionState = new TerminalSessionStateService(db, {
     digestKey: ensureTerminalHistoryDigestKey(orchestraDataDir),
@@ -466,20 +527,26 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       })
     : null
   let runtimesClosed = false
-  const shutdownRuntimes = async () => {
-    if (runtimesClosed) return
+  let runtimeShutdownProven = false
+  const shutdownRuntimes = async (): Promise<boolean> => {
+    if (runtimesClosed) return runtimeShutdownProven
     runtimesClosed = true
-    await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
-    await codexDriver.detachAll().catch(() => undefined)
-    codexDriver.dispose()
-    codexProvider.dispose()
-    await codexSupervisor.stop().catch(() => undefined)
-    unbindCompatibilityFailureJournal?.()
+    const failures: unknown[] = []
+    const settled = await Promise.allSettled([agentOs.shutdown(), manager?.shutdown() ?? Promise.resolve()])
+    failures.push(...settled.filter((result) => result.status === 'rejected').map((result) => result.reason))
+    try { await codexDriver.detachAll() } catch (error) { failures.push(error) }
+    try { codexDriver.dispose() } catch (error) { failures.push(error) }
+    try { codexProvider.dispose() } catch (error) { failures.push(error) }
+    try { await codexSupervisor.stop() } catch (error) { failures.push(error) }
+    try { unbindCompatibilityFailureJournal?.() } catch (error) { failures.push(error) }
     unbindCompatibilityFailureJournal = undefined
-    compatibilityFailureJournal?.close()
+    try { compatibilityFailureJournal?.close() } catch (error) { failures.push(error) }
+    runtimeShutdownProven = failures.length === 0
+    return runtimeShutdownProven
   }
   let codexReady = false
   let server: ReturnType<typeof buildServer>
+  let operationsRuntime: ReturnType<typeof createOperationsRuntime>
   try {
     compatibilityFailureJournal = openCompatibilityMigrationFailureJournal(
       db,
@@ -507,6 +574,52 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     } else if (codexReady) {
       agentOs.registerDriver(codexDriver)
     }
+    try {
+      vapidKeys = await loadSecureVapidKeys()
+      vapidCredentialReason = 'vapid_credentials_ready'
+    } catch {
+      // Push remains fail-closed while the daemon and local recovery controls stay available.
+      vapidKeys = undefined
+      vapidCredentialReason = 'vapid_secure_store_unavailable'
+    }
+    operationsRuntime = createOperationsRuntime({
+      db,
+      lease: { ownerId: lease.ownerId, pid: process.pid },
+      drivers: () => {
+        const descriptors = agentOs.descriptors()
+        return { registered: descriptors.length, ready: descriptors.length }
+      },
+      providers: async () => {
+        const catalogs = await manager?.providerCatalog() ?? []
+        return {
+          configured: catalogs.length,
+          ready: catalogs.filter((provider) => provider.health?.status === 'ready'
+            || (!provider.health && provider.available)).length,
+          degraded: catalogs.filter((provider) => provider.health?.status === 'degraded').length,
+          unavailable: catalogs.filter((provider) => provider.health?.status === 'unavailable'
+            || (!provider.health && !provider.available)).length,
+        }
+      },
+      ptySupervisor: () => ({
+        responsive: true,
+        reconciled: runtimeReconciled,
+        lostProcesses: Number((db.prepare("SELECT count(*) AS count FROM processes WHERE status='lost'")
+          .get() as { count: number }).count),
+      }),
+      hooks: () => ({ enabled: Boolean(compatibilityFailureJournal), coherent: Boolean(compatibilityFailureJournal) }),
+      tunnel: inspectRemoteTunnelHealth,
+      credentials: () => ({ available: Boolean(vapidKeys), reasonCode: vapidCredentialReason }),
+    })
+    if (!vapidKeys) {
+      operationsRuntime.logger.log({
+        level: 'warn',
+        event: 'operations.credentials.unavailable',
+        outcome: 'degraded',
+        component: 'push',
+        reasonCode: vapidCredentialReason,
+        attributes: { push_enabled: false },
+      })
+    }
     server = buildServer(db, (bus) => {
       agentOs.setBus(bus)
       maestro = new Conductor(db, bus, agentToken, { nativeEventSink: claudeNativeEventSink })
@@ -518,6 +631,11 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       token,
       agentToken,
       autowakeAt: () => autowake?.scheduledAt() ?? null,
+      operations: operationsRuntime,
+      vapidKeys,
+      admitMutation: () => safeShutdown.admitMutation(),
+      reconcileActiveWork,
+      registerActiveWork: (registration) => safeShutdown.register(registration),
       agentOs: {
         runtime: agentOs.adapter,
         jobExecutor: agentOs.jobExecutor,
@@ -591,41 +709,13 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       void refreshToolSurface()
     }, 60_000)
     toolEvidenceRefreshTimer.unref()
-    registerPush(server)
+    registerPush(server, { vapidKeys })
   } catch (error) {
     await shutdownRuntimes()
     lease.release()
     throw error
   }
-  let reapTimer: ReturnType<typeof setInterval> | undefined
-  let schedulerTimer: ReturnType<typeof setInterval> | undefined
-  let closing = false
-  const close = () => {
-    if (closing) return
-    closing = true
-    void server.close().finally(() => {
-      try { fs.unlinkSync(path.join(dataDir(), 'daemon.pid')) } catch { /* already absent */ }
-    })
-  }
-  server.addHook('onClose', async () => {
-    if (toolEvidenceRefreshTimer) clearInterval(toolEvidenceRefreshTimer)
-    if (reapTimer) clearInterval(reapTimer)
-    if (schedulerTimer) clearInterval(schedulerTimer)
-    autowake?.stop()
-    process.off('SIGTERM', close)
-    process.off('SIGINT', close)
-    await shutdownRuntimes()
-    lease.release()
-  })
-  try {
-    await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
-  } catch (error) {
-    await shutdownRuntimes()
-    lease.release()
-    throw error
-  }
-  try {
-    await agentOs.reconcileLost()
+  const reconcileJobsAfterRestart = async () => {
     for (const s of survivors(db)) {
       if (s.name.startsWith('auditor-')) { // one-shot auditors don't outlive a restart
         db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(s.id)
@@ -665,9 +755,171 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         bounceDeadLetters(db, s.id)
       }
     }
-    await agentOs.reconcileJobs()
+    return agentOs.reconcileJobs()
+  }
+  const recovery = new OperationsRecoveryService(db)
+  const observeRecovery = (observation: OperationsRuntimeObservation): void => {
+    operationsRuntime.metrics.increment('recovery_results_total', 1, {
+      component: observation.source,
+      result: observation.outcome,
+    })
+    operationsRuntime.logger.log({
+      level: observation.outcome === 'failed' ? 'error' : 'info',
+      event: `recovery.${observation.source}.${observation.outcome}`,
+      outcome: observation.outcome === 'failed' ? 'failed' : 'succeeded',
+      component: observation.source,
+      attributes: {
+        delivered: observation.delivered,
+        retried: observation.retried,
+        dead: observation.dead,
+        failed_boards: observation.failedBoards,
+      },
+    })
+  }
+  const outbox = new OperationsOutboxWorker(recovery, {
+    ownerId: lease.ownerId,
+    observe: observeRecovery,
+    destinations: {
+      attention: {
+        conformance: {
+          mode: 'durable_idempotency_key',
+          evidenceId: 'ops-outbox.attention.v1',
+        },
+        deliver: async (delivery, signal) => {
+          if (signal.aborted) throw new Error('attention delivery aborted')
+          recovery.consumeIdempotently({
+            consumer: 'daemon-bus-attention',
+            eventId: delivery.idempotencyKey,
+            payload: delivery.payload,
+          }, () => server.bus.emit('event', {
+            type: 'attention',
+            data: { payload: delivery.payload, idempotency_key: delivery.idempotencyKey },
+          }))
+        },
+      },
+      'remote-device-revocation': {
+        conformance: {
+          mode: 'durable_idempotency_key',
+          evidenceId: 'ops-outbox.remote-device-revocation.v1',
+        },
+        deliver: async (delivery, signal) => {
+          if (signal.aborted) throw new Error('remote-device-revocation delivery aborted')
+          recovery.consumeIdempotently({
+            consumer: 'daemon-bus-device-revocation',
+            eventId: delivery.idempotencyKey,
+            payload: delivery.payload,
+          }, () => server.bus.emit('event', {
+            type: 'remote-device-revocation',
+            data: { payload: delivery.payload, idempotency_key: delivery.idempotencyKey },
+          }))
+        },
+      },
+      'remote-push-attention': {
+        conformance: {
+          mode: 'durable_idempotency_key',
+          evidenceId: 'web-push.topic-sha256-outbox-key.v1',
+        },
+        deliver: async (delivery, signal) => {
+          await deliverRemotePushOutbox(db, delivery, signal, vapidKeys)
+        },
+      },
+    },
+  })
+  const retentionService = new OperationsRetentionService(db)
+  const retention = new OperationsRetentionScheduler(retentionService, {
+    observe: observeRecovery,
+    authorizeCompaction: async (policy) => {
+      const evidence = db.prepare(`SELECT id, actor_id FROM os_events
+        WHERE board_id=? AND kind='operations.retention.authorized'
+          AND actor_type='local_operator' AND actor_id IS NOT NULL
+          AND json_extract(payload, '$.policy_updated_at')=?
+        ORDER BY created_at DESC, id DESC LIMIT 1`).get(
+        policy.board_id,
+        policy.updated_at,
+      ) as { id: string; actor_id: string } | undefined
+      return evidence ? {
+        actorType: 'local_admin' as const,
+        actorId: evidence.actor_id,
+        auditEventId: evidence.id,
+      } : null
+    },
+  })
+  const operationsCoordinator = new OperationsRuntimeCoordinator({
+    reconcileProcesses: () => agentOs.reconcileLost(),
+    reconcileOrphans: () => recovery.reconcileOrphans({
+      ownerId: lease.ownerId,
+      ownsDaemonLease: (candidate) => candidate.ownerId === lease.ownerId && candidate.pid === process.pid,
+    }),
+    reconcileJobs: reconcileJobsAfterRestart,
+    outbox,
+    retention,
+    shutdown: safeShutdown,
+    retentionService,
+    flush: async () => { await outbox.tick() },
+  })
+  let reapTimer: ReturnType<typeof setInterval> | undefined
+  let schedulerTimer: ReturnType<typeof setInterval> | undefined
+  let closing = false
+  const stopProducers = () => {
+    if (toolEvidenceRefreshTimer) clearInterval(toolEvidenceRefreshTimer)
+    if (reapTimer) clearInterval(reapTimer)
+    if (schedulerTimer) clearInterval(schedulerTimer)
+    toolEvidenceRefreshTimer = undefined
+    reapTimer = undefined
+    schedulerTimer = undefined
+    autowake?.stop()
+  }
+  const close = () => {
+    if (closing) return
+    closing = true
+    stopProducers()
+    void operationsCoordinator.close().then(async (report) => {
+      assertOperationsShutdownClean(report)
+      await server.close()
+      try { fs.unlinkSync(path.join(dataDir(), 'daemon.pid')) } catch { /* already absent */ }
+    }).catch((error: unknown) => {
+      operationsRuntime.logger.log({
+        level: 'error', event: 'shutdown.authority-retained', outcome: 'failed',
+        component: 'shutdown', reasonCode: 'operator_intervention_required',
+      })
+      process.exitCode = 1
+      closing = false
+      process.stderr.write(`Fatal shutdown: ${error instanceof Error ? error.message : 'operator intervention required'}\n`)
+    })
+  }
+  server.addHook('onClose', async () => {
+    stopProducers()
+    process.off('SIGTERM', close)
+    process.off('SIGINT', close)
+    const report = await operationsCoordinator.close()
+    assertOperationsShutdownClean(report)
+    operationsRuntime.close()
+    const providerHooksInactive = await shutdownRuntimes()
+    if (!providerHooksInactive) throw new Error('provider runtime and hook shutdown could not be proven')
+    lease.release()
+    db.close()
+    writeDaemonQuiescenceReceipt({
+      stateRoot: orchestraDataDir,
+      databasePath,
+      daemonPid: process.pid,
+      daemonLeaseOwnerId: lease.ownerId,
+      providerHooksInactive,
+    })
+  })
+  let coordinatorStarted = false
+  try {
+    await operationsCoordinator.start()
+    coordinatorStarted = true
+    runtimeReconciled = true
+    reconcileActiveWork()
+    await server.listen({ host: opts.expose ? '0.0.0.0' : '127.0.0.1', port: port() })
   } catch (error) {
-    await server.close()
+    if (coordinatorStarted) {
+      const report = await operationsCoordinator.close()
+      assertOperationsShutdownClean(report)
+    }
+    await shutdownRuntimes()
+    lease.release()
     throw error
   }
   // limit-paused agents deliberately sit out the resurrect above — the autowake timer
@@ -675,7 +927,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   autowake = new Autowake(db, server.bus, (boardId) => manager!.wake(boardId))
   if (autowakeEnabled()) void autowake.reschedule()
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
-  reapTimer = setInterval(() => reap(db), 60_000)
+  reapTimer = setInterval(() => { reap(db); reconcileActiveWork() }, 60_000)
   schedulerTimer = setInterval(() => { void scheduler.tick().catch(() => undefined) }, 2_000)
   void scheduler.tick().catch(() => undefined)
 
@@ -686,7 +938,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
 async function healthy(timeoutMs = 300): Promise<boolean> {
   try {
     const res = await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) })
-    return (await res.json()).ok === true
+    const status = await res.json() as { live?: unknown; ok?: unknown }
+    return status.live === true || status.ok === true
   } catch { return false }
 }
 
@@ -703,6 +956,6 @@ export async function ensureDaemon(): Promise<boolean> {
 
 export function stopDaemon(): boolean {
   const pidFile = path.join(dataDir(), 'daemon.pid')
-  try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM'); fs.unlinkSync(pidFile); return true }
+  try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM'); return true }
   catch { return false }
 }

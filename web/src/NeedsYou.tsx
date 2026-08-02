@@ -79,8 +79,13 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
         setOpen((current) => !current)
       }
     }
+    const onRemoteOpen = () => setOpen(true)
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('orchestra:open-attention', onRemoteOpen)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('orchestra:open-attention', onRemoteOpen)
+    }
   }, [])
 
   const boardNames = useMemo(() => new Map(boards.map((board) => [board.id, board.name])), [boardKey])

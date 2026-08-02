@@ -1,7 +1,7 @@
 # Support preview
 
-Status: engineering-preview support guidance; no SLA, public-release support promise, or automated
-diagnostics bundle.
+Status: engineering-preview support guidance; no SLA or public-release support promise. An
+allowlisted local diagnostics bundle exists, but no bundle is automatically safe to publish.
 
 ## Before reporting a problem
 
@@ -26,11 +26,22 @@ an existing issue first.
 
 ## Do not share
 
-There is no implemented diagnostics-bundle command that can make an arbitrary state archive safe
-to publish. Do not attach or paste:
+Generate a bounded, redacted bundle only to a new owner-only file:
+
+```sh
+orchestra ops diagnostics ./orchestra-diagnostics.json.gz
+```
+
+The command calls the loopback owner-only endpoint, writes with exclusive create and mode `0600`,
+and includes only allowlisted health, metrics, bounded redacted logs, runtime facts, and safe
+configuration categories. Decode and review it before sharing. It is not an arbitrary state
+archive and does not make the following safe to attach or paste:
+
+Do not attach or paste any of the following:
 
 - `ORCHESTRA_HOME`, `orchestra.db`, SQLite WAL/SHM files, or raw database exports;
-- `token`, `agent-token`, `vapid.json`, hook session files, browser storage, or QR/remote URLs;
+- `token`, `agent-token`, `vapid-reference.json`, hook session files, browser storage, pairing
+  artifacts, device/stream credentials, or remote URLs;
 - provider credentials, login output, environment dumps, keychain output, cookies, or request
   authorization headers;
 - raw transcripts, prompts, PTY output, approval parameters, project source, local paths, or
@@ -41,11 +52,21 @@ Replace project, user, host, agent, branch, worktree, and session identifiers wi
 when they are not needed to reproduce the fault. Never post a secret and then rely on editing the
 issue later; treat any published credential as exposed.
 
-If a remote-preview token may have been captured, stop the tunnel and daemon. The current preview
-has no per-device revocation, so do not resume exposure until the master credential has been
-deliberately rotated and affected browser storage has been cleared.
+If a device may be lost or any remote credential may have been captured, run:
+
+```sh
+orchestra remote --rollback REVOKE_ALL_REMOTE_AUTHORITY --reason 'lost device or suspected theft'
+```
+
+This durably disables remote access, revokes pairing/device/stream/step-up/push/grant authority,
+purges caches on contact, and stops only verified Orchestra-owned tunnel state. Local recovery
+remains available. To permit only fresh pairing after review, run:
+
+```sh
+orchestra remote --enable-new-pairing ENABLE_NEW_REMOTE_PAIRING
+```
 
 ## What this guidance does not prove
 
-These steps help produce a safer bug report. They do not satisfy diagnostics-bundle, support-policy,
+These steps help produce a safer bug report. They do not by themselves satisfy support-policy,
 upgrade/uninstall, remote-security, or public-release gates.

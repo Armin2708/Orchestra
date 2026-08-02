@@ -310,15 +310,14 @@ describe('REM-001 remote/mobile threat model', () => {
 
   it('fails closed when credential, stream, read, message, framing, offline, PTY, or approval baseline changes', () => {
     expect(read('src/remote.ts')).toContain(
-      'export const pairUrl = (s: RemoteState) => `${s.url}/#token=${ensureToken()}`',
+      'return `${state.url}/#pair=${encodeURIComponent(value.pairing_ticket)}`',
     )
-    expect(read('web/src/api.ts')).toContain(
-      "export const getToken = () => localStorage.getItem('orchestra-token') ?? ''",
-    )
-    expect(read('web/src/api.ts')).toContain(
-      'return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : \'/api/v1/events\'',
-    )
-    expect(read('src/server.ts')).toContain('const given = bearer ?? query.token')
+    expect(read('src/remote.ts')).not.toContain('/#token=')
+    expect(read('web/src/api.ts')).toContain("export const getToken = () => isLoopbackBrowser() ? localOwnerToken : ''")
+    expect(read('web/src/api.ts')).toContain("export const streamUrl = () => '/api/v1/events'")
+    expect(read('web/src/deviceAuth.ts')).toContain("throw new Error('legacy owner-token pairing is disabled')")
+    expect(read('src/server.ts')).not.toContain('query.token')
+    expect(read('src/remote-security-integration.ts')).toContain('REMOTE_STREAM_CREDENTIAL')
     expect(read('web/public/sw.js')).toContain(
       "if (url.origin !== location.origin || e.request.method !== 'GET') return",
     )
@@ -330,8 +329,8 @@ describe('REM-001 remote/mobile threat model', () => {
     )
     expect(read('src/conductor.ts')).toContain('h.push(text, msg.id)')
     expect(read('src/agent-os/routes.ts')).toContain("'/processes/:id/output', (request) => {")
-    expect(`${read('src/server.ts')}\n${read('web/index.html')}`.toLowerCase())
-      .not.toMatch(/frame-ancestors|x-frame-options/)
+    expect(read('src/remote-request-security.ts').toLowerCase())
+      .toMatch(/frame-ancestors.*none[\s\S]*x-frame-options/)
     expect(read('src/runtime/drivers/codex.ts')).toContain(
       "actorId: source === 'operator'\n          ? null",
     )

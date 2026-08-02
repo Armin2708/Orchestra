@@ -81,6 +81,25 @@ export const AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID =
   '039-terminal-session-state' as const
 const AGENT_OS_LEGACY_TERMINAL_SESSION_STATE_MIGRATION_ID =
   '030-terminal-session-state' as const
+import {
+  AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+  AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID,
+  deviceSessionSchemaFingerprint,
+  installDeviceSessionSchema,
+} from './device-session-migration.js'
+import {
+  LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID,
+  OPERATIONS_RECOVERY_SCHEMA_ID,
+  installOperationsRecoverySchema,
+} from './operations-recovery.js'
+import {
+  attestRemoteDeviceProofSchema,
+  installRemoteDeviceProofSchema,
+} from '../remote-device-proof.js'
+import {
+  attestRemoteSecuritySchema,
+  installRemoteSecuritySchema,
+} from '../remote-security-schema.js'
 
 interface Migration {
   id: string
@@ -7758,6 +7777,67 @@ const migrations: Migration[] = [
         }
       } else {
         db.exec(TERMINAL_SESSION_STATE_SCHEMA_SQL)
+      }
+    },
+  },
+  {
+    id: AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+    apply(db) {
+      const hasTerminalState = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID)
+      if (!hasTerminalState) {
+        throw new Error(
+          `migration ${AGENT_OS_DEVICE_SESSION_MIGRATION_ID}`
+          + ` requires ${AGENT_OS_TERMINAL_SESSION_STATE_MIGRATION_ID}`,
+        )
+      }
+      const hasLegacyDeviceSessions = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID)
+      try {
+        if (hasLegacyDeviceSessions) {
+          deviceSessionSchemaFingerprint(db)
+          attestRemoteDeviceProofSchema(db)
+          attestRemoteSecuritySchema(db)
+        }
+        installDeviceSessionSchema(db)
+        installRemoteDeviceProofSchema(db)
+        installRemoteSecuritySchema(db)
+      } catch (error) {
+        if (hasLegacyDeviceSessions) {
+          throw new Error(
+            `migration ${AGENT_OS_DEVICE_SESSION_MIGRATION_ID}`
+            + ` found incomplete ${AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID} schema`,
+            { cause: error },
+          )
+        }
+        throw error
+      }
+    },
+  },
+  {
+    id: OPERATIONS_RECOVERY_SCHEMA_ID,
+    apply(db) {
+      const hasDeviceSessions = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(AGENT_OS_DEVICE_SESSION_MIGRATION_ID)
+      if (!hasDeviceSessions) {
+        throw new Error(
+          `migration ${OPERATIONS_RECOVERY_SCHEMA_ID}`
+          + ` requires ${AGENT_OS_DEVICE_SESSION_MIGRATION_ID}`,
+        )
+      }
+      const hasLegacyOperations = db.prepare(`SELECT 1 FROM os_schema_migrations
+        WHERE id=?`).get(LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID)
+      try {
+        installOperationsRecoverySchema(db)
+      } catch (error) {
+        if (hasLegacyOperations) {
+          throw new Error(
+            `migration ${OPERATIONS_RECOVERY_SCHEMA_ID}`
+            + ` found incomplete ${LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID} schema`,
+            { cause: error },
+          )
+        }
+        throw error
       }
     },
   },

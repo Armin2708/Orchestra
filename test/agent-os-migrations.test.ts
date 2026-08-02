@@ -13,6 +13,14 @@ import { ConversationService } from '../src/agent-os/conversations.js'
 import { EventStore } from '../src/agent-os/event-store.js'
 import { JobAssignmentService } from '../src/agent-os/job-assignments.js'
 import { TaskContractService } from '../src/agent-os/task-contracts.js'
+import {
+  AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+  AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID,
+} from '../src/agent-os/device-session-migration.js'
+import {
+  LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID,
+  OPERATIONS_RECOVERY_SCHEMA_ID,
+} from '../src/agent-os/operations-recovery.js'
 
 const tempDirs: string[] = []
 afterEach(() => {
@@ -128,7 +136,7 @@ describe('Agent OS migrations', () => {
     const file = path.join(directory, 'orchestra.db')
     const first = openDb(file)
     applyAgentOsMigrations(first)
-    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(39)
+    expect((first.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(41)
     first.close()
 
     const second = openDb(file)
@@ -149,14 +157,18 @@ describe('Agent OS migrations', () => {
       'delivery_autoship_completions', 'os_compatibility_projection_links',
       'os_compatibility_projection_quarantine',
       'os_compatibility_migration_checks', 'terminal_workspace_state',
-      'terminal_command_history']) {
+      'terminal_command_history', 'os_pairing_tickets', 'os_device_sessions',
+      'os_device_credentials', 'os_device_proof_replays',
+      'os_remote_resource_grants', 'os_remote_step_up_grants',
+      'os_remote_mutation_audit', 'ops_outbox', 'ops_event_consumptions',
+      'ops_recovery_runs', 'ops_retention_policies', 'ops_compaction_archives']) {
       expect(tables.has(table), table).toBe(true)
     }
-    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(39)
+    expect((second.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(41)
     const migrationIds = (second.prepare(
       'SELECT id FROM os_schema_migrations ORDER BY rowid',
     ).all() as Array<{ id: string }>).map((row) => row.id)
-    expect(migrationIds.slice(-21)).toEqual([
+    expect(migrationIds.slice(-23)).toEqual([
       '019-provider-acceptance-evidence',
       '020-causal-event-metadata',
       '021-command-idempotency-coverage',
@@ -178,9 +190,11 @@ describe('Agent OS migrations', () => {
       '037-delivery-autoship-intents',
       '038-delivery-autoship-worktree-identity',
       '039-terminal-session-state',
+      '040-device-sessions',
+      '041-operations-recovery-foundation',
     ])
     expect(migrationIds.at(-1))
-      .toBe('039-terminal-session-state')
+      .toBe('041-operations-recovery-foundation')
     expect(migrationIds).not.toContain('013-agent-home-native-fork')
     expect((second.prepare("SELECT dflt_value FROM pragma_table_info('workspaces') WHERE name='status'").get() as any).dflt_value)
       .toBe("'active'")
@@ -222,6 +236,115 @@ describe('Agent OS migrations', () => {
     second.close()
   })
 
+  it('adopts complete legacy Lane C schemas without rewriting device or operations data', () => {
+    const db = openDb(':memory:')
+    const at = '2026-08-02T12:00:00.000Z'
+    const later = '2026-08-02T12:15:00.000Z'
+    db.prepare(`DELETE FROM os_schema_migrations WHERE id IN (?, ?)`).run(
+      AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+      OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.prepare(`INSERT INTO os_schema_migrations (id) VALUES (?), (?)`).run(
+      AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID,
+      LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.prepare(`INSERT INTO os_pairing_tickets (
+      id, secret_hash, expected_origin, requested_scopes_json,
+      session_ttl_seconds, credential_ttl_seconds, state,
+      created_by_actor_type, created_at, expires_at
+    ) VALUES ('legacy-ticket', ?, 'https://phone.example.test', '["observe"]',
+      3600, 900, 'pending', 'human', ?, ?)`).run('a'.repeat(64), at, later)
+    db.prepare(`INSERT INTO os_device_sessions (
+      id, name, state, scopes_json, public_key_thumbprint, public_key_jwk_json,
+      created_from_ticket_id, created_by_actor_type, created_at, activated_at, expires_at
+    ) VALUES ('legacy-device', 'Legacy phone', 'active', '["observe"]', ?, ?,
+      'legacy-ticket', 'human', ?, ?, ?)`).run(
+      `sha256:${'b'.repeat(64)}`,
+      '{"kty":"EC"}',
+      at,
+      at,
+      later,
+    )
+    db.prepare(`INSERT INTO os_device_credentials (
+      id, device_session_id, secret_hash, public_key_thumbprint, public_key_jwk_json,
+      state, rotation_generation, issued_at, expires_at
+    ) VALUES ('legacy-credential', 'legacy-device', ?, ?, ?, 'active', 0, ?, ?)`).run(
+      'c'.repeat(64),
+      `sha256:${'b'.repeat(64)}`,
+      '{"kty":"EC"}',
+      at,
+      later,
+    )
+    db.prepare(`INSERT INTO ops_event_consumptions
+      (consumer, event_id, payload_sha256, consumed_at)
+      VALUES ('legacy-consumer', 'legacy-event', ?, ?)`).run('d'.repeat(64), at)
+    const before = {
+      device: db.prepare(`SELECT * FROM os_device_sessions WHERE id='legacy-device'`).get(),
+      credential: db.prepare(`SELECT * FROM os_device_credentials WHERE id='legacy-credential'`).get(),
+      operation: db.prepare(`SELECT * FROM ops_event_consumptions
+        WHERE consumer='legacy-consumer' AND event_id='legacy-event'`).get(),
+    }
+
+    applyAgentOsMigrations(db)
+    applyAgentOsMigrations(db)
+
+    expect({
+      device: db.prepare(`SELECT * FROM os_device_sessions WHERE id='legacy-device'`).get(),
+      credential: db.prepare(`SELECT * FROM os_device_credentials WHERE id='legacy-credential'`).get(),
+      operation: db.prepare(`SELECT * FROM ops_event_consumptions
+        WHERE consumer='legacy-consumer' AND event_id='legacy-event'`).get(),
+    }).toEqual(before)
+    for (const id of [AGENT_OS_DEVICE_SESSION_MIGRATION_ID, OPERATIONS_RECOVERY_SCHEMA_ID]) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations WHERE id=?`).get(id))
+        .toEqual({ count: 1 })
+    }
+    db.close()
+  })
+
+  it('fails closed and records no new markers for an incomplete legacy device schema', () => {
+    const db = openDb(':memory:')
+    db.prepare(`DELETE FROM os_schema_migrations WHERE id IN (?, ?)`).run(
+      AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+      OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.prepare(`INSERT INTO os_schema_migrations (id) VALUES (?), (?)`).run(
+      AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID,
+      LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.exec('DROP INDEX idx_os_device_credentials_one_active')
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/040-device-sessions found incomplete 030-device-sessions schema/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id IN (?, ?)`).get(
+      AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+      OPERATIONS_RECOVERY_SCHEMA_ID,
+    )).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rolls back the device marker when the legacy operations schema is incomplete', () => {
+    const db = openDb(':memory:')
+    db.prepare(`DELETE FROM os_schema_migrations WHERE id IN (?, ?)`).run(
+      AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+      OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.prepare(`INSERT INTO os_schema_migrations (id) VALUES (?), (?)`).run(
+      AGENT_OS_LEGACY_DEVICE_SESSION_MIGRATION_ID,
+      LEGACY_OPERATIONS_RECOVERY_SCHEMA_ID,
+    )
+    db.exec('DROP INDEX idx_ops_outbox_ready')
+
+    expect(() => applyAgentOsMigrations(db))
+      .toThrow(/041-operations-recovery-foundation found incomplete 031-operations-recovery-foundation schema/)
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
+      WHERE id IN (?, ?)`).get(
+      AGENT_OS_DEVICE_SESSION_MIGRATION_ID,
+      OPERATIONS_RECOVERY_SCHEMA_ID,
+    )).toEqual({ count: 0 })
+    db.close()
+  })
+
   it('can safely rerun migration 012 after its marker is removed', () => {
     const db = openDb(':memory:')
     db.prepare("DELETE FROM os_schema_migrations WHERE id='012-agent-home-retention'").run()
@@ -231,7 +354,7 @@ describe('Agent OS migrations', () => {
       WHERE id='012-agent-home-retention'`).get() as { count: number }).count).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as {
       count: number
-    }).count).toBe(39)
+    }).count).toBe(41)
     for (const table of [
       'agent_home_retention_policies',
       'agent_home_retention_runs',
@@ -949,8 +1072,6 @@ describe('Agent OS migrations', () => {
     const ids = (db.prepare('SELECT id FROM os_schema_migrations ORDER BY rowid')
       .all() as Array<{ id: string }>).map((row) => row.id)
     expect(ids.slice(-15)).toEqual([
-      '027-agent-organization-core',
-      '028-agent-organization-coordination',
       '029-agent-organization-assurance',
       '030-delivery-collaboration-trackbook',
       '031-knowledge-management',
@@ -962,6 +1083,8 @@ describe('Agent OS migrations', () => {
       '037-delivery-autoship-intents',
       '038-delivery-autoship-worktree-identity',
       '039-terminal-session-state',
+      '040-device-sessions',
+      '041-operations-recovery-foundation',
       '014-agent-home-native-fork-lifecycle',
       '015-agent-home-action-command-scope',
     ])
@@ -1097,7 +1220,7 @@ describe('Agent OS migrations', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM os_schema_migrations
       WHERE id='015-agent-home-action-command-scope'`).get()).toEqual({ count: 1 })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations')
-      .get() as { count: number }).count).toBe(39)
+      .get() as { count: number }).count).toBe(41)
     const requestLookupPlan = db.prepare(`EXPLAIN QUERY PLAN
       SELECT id, board_id, kind, source, workspace_id, card_id, session_id,
         process_id, job_id, contract_id, correlation_id, causation_id,
@@ -1325,7 +1448,7 @@ describe('Agent OS migrations', () => {
       },
     })
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(39)
+      .toBe(41)
     db.close()
   })
 
@@ -1477,7 +1600,7 @@ describe('Agent OS migrations', () => {
     expect((db.prepare('SELECT payload FROM os_events WHERE id=?').get(nonDriver.id) as { payload: string }).payload)
       .toContain('NON_DRIVER_EVENT_MUST_REMAIN')
     expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count)
-      .toBe(39)
+      .toBe(41)
     db.close()
   })
 
@@ -1550,7 +1673,7 @@ describe('Agent OS migrations', () => {
     applyAgentOsMigrations(db)
     applyAgentOsMigrations(db)
 
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(39)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(41)
     expect(db.prepare('SELECT provider, driver_id, effort, access_profile, idempotency_key FROM jobs WHERE id=?')
       .get('legacy-job')).toEqual({
         provider: 'claude', driver_id: 'claude', effort: null,
@@ -1670,7 +1793,7 @@ describe('Agent OS migrations', () => {
     expect(() => db.prepare('DELETE FROM cards WHERE id=1').run()).not.toThrow()
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_reports').get() as any).count).toBe(0)
     expect((db.prepare('SELECT COUNT(*) AS count FROM delivery_criterion_results').get() as any).count).toBe(0)
-    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(39)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM os_schema_migrations').get() as any).count).toBe(41)
     db.close()
   })
 

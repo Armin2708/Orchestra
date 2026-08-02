@@ -6,6 +6,7 @@ import { OsId, osApi, WorkspaceProcess } from './osApi'
 import { OsIcon } from './OsIcon'
 import { isResizableProcess } from './processTerminalState'
 import { runRuntimeMutation } from './runtimeReadOnly'
+import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 
 export type ProcessTerminalHandle = { focus: () => void; fit: () => void }
 
@@ -14,6 +15,9 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   readOnly?: boolean
   onProcessChanged?: () => void
 }>(({ process, readOnly = false, onProcessChanged }, forwardedRef) => {
+  const remoteAccess = useRemoteAccess()
+  const remoteWritable = Boolean(process && remoteAccess.canUse('terminal-write', 'process', String(process.id)))
+  const writable = !readOnly && remoteWritable
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -25,10 +29,12 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   const inputTimerRef = useRef<number | undefined>()
   const flushInputRef = useRef<(() => void) | null>(null)
   const resizeTimerRef = useRef<number | undefined>()
+  const writableRef = useRef(writable)
   const [streamError, setStreamError] = useState<string | null>(null)
 
   processRef.current = process
   readOnlyRef.current = readOnly
+  writableRef.current = writable
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => terminalRef.current?.focus(),
@@ -43,6 +49,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
 
     const terminal = new Terminal({
       allowProposedApi: false,
+      disableStdin: !writableRef.current,
       convertEol: false,
       cursorBlink: true,
       cursorStyle: 'block',
@@ -90,7 +97,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       if (readOnlyRef.current) return
       try { fit.fit() } catch { return }
       const active = processRef.current
-      if (!isResizableProcess(active)) return
+      if (!writableRef.current || !isResizableProcess(active)) return
       const processId = active.id
       if (resizeTimerRef.current) window.clearTimeout(resizeTimerRef.current)
       resizeTimerRef.current = window.setTimeout(() => {
@@ -120,7 +127,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     const input = terminal.onData((data) => {
       if (readOnlyRef.current) return
       const active = processRef.current
-      if (!active || !['running', 'starting', 'stopping'].includes(active.status)) return
+      if (!writableRef.current || !active || !['running', 'starting', 'stopping'].includes(active.status)) return
       const current = inputBufferRef.current
       if (current && String(current.processId) !== String(active.id)) flushInput()
       const next = inputBufferRef.current
@@ -144,11 +151,13 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   }, [])
 
   useEffect(() => {
-    if (!readOnly) return
-    if (inputTimerRef.current) window.clearTimeout(inputTimerRef.current)
-    inputTimerRef.current = undefined
-    inputBufferRef.current = null
-  }, [readOnly])
+    if (terminalRef.current) terminalRef.current.options.disableStdin = !writable
+    if (!writable) {
+      inputBufferRef.current = null
+      if (inputTimerRef.current) window.clearTimeout(inputTimerRef.current)
+      inputTimerRef.current = undefined
+    }
+  }, [readOnly, writable])
 
   useEffect(() => {
     flushInputRef.current?.()
@@ -159,7 +168,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     terminal.reset()
     terminal.clear()
     let frame: number | undefined
-    if (!readOnly && isResizableProcess(process)) {
+    if (writableRef.current && isResizableProcess(process)) {
       frame = window.requestAnimationFrame(() => {
         try { fitRef.current?.fit() } catch { return }
         const current = processRef.current
@@ -168,7 +177,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       })
     }
     return () => { if (frame) window.cancelAnimationFrame(frame) }
-  }, [process?.id, readOnly])
+  }, [process?.id, readOnly, writable])
 
   useEffect(() => {
     if (!process) return
@@ -216,7 +225,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   return (
     <div className="os-terminal-wrap">
       <div ref={hostRef} className="os-xterm" role="application"
-        aria-readonly={readOnly || undefined}
+        aria-readonly={!writable || undefined}
         aria-label={process ? `Terminal for ${process.name}` : 'Terminal without a process'} />
       {readOnly && <p className="sr-only" role="status">Terminal output is available read only while Orchestra reconnects.</p>}
       {!process && (
@@ -227,6 +236,8 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
         </div>
       )}
       {streamError && <div className="os-terminal-error" role="alert">{streamError}</div>}
+      {process && !readOnly && !remoteWritable && <RemoteControlGate scope="terminal-write" resourceType="process" resourceId={String(process.id)}
+        label="Terminal output is live, but input, resize, restart, and signals require terminal-write plus a process-bound step-up." />}
     </div>
   )
 })

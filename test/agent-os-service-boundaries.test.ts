@@ -49,7 +49,7 @@ describe('Agent OS domain service boundaries', () => {
         'canonical',
         'canonical',
         'canonical',
-        'reserved',
+        'canonical',
       ])
     expect(boundaries.orchestration.service).toBeInstanceOf(OrchestrationService)
     expect(boundaries.conversations.service).toBeInstanceOf(ConversationService)
@@ -60,12 +60,13 @@ describe('Agent OS domain service boundaries', () => {
     expect(boundaries.coordination.service).toBeInstanceOf(OrganizationCoordinationService)
     expect(boundaries.assurance.service).toBeInstanceOf(OrganizationAssuranceService)
     expect(boundaries.conflicts.service).toBeInstanceOf(PlanningTeamService)
-    expect(boundaries.device_pairing.service).toBeNull()
+    expect(boundaries.device_pairing.implementation_state).toBe('canonical')
+    expect(boundaries.device_pairing.service.listDeviceSessions()).toEqual([])
     expect(Object.isFrozen(boundaries)).toBe(true)
     expect(Object.values(boundaries).every(Object.isFrozen)).toBe(true)
   })
 
-  it('keeps canonical collaboration domains bounded and device pairing reserved', () => {
+  it('keeps canonical collaboration and device-pairing domains bounded', () => {
     const { db, scheduler } = fixture()
     const boundaries = createAgentOsDomainServiceBoundaries(db, { scheduler })
 
@@ -80,7 +81,7 @@ describe('Agent OS domain service boundaries', () => {
       'unbounded negotiation fanout',
     ]))
     expect(boundaries.device_pairing.excludes).toContain('operator master-token QR bootstrap')
-    expect(boundaries.device_pairing.detail).toMatch(/threat-model gates/i)
+    expect(boundaries.device_pairing.detail).toMatch(/default-deny/i)
   })
 
   it('publishes the durable conflict lifecycle through the canonical boundary', () => {

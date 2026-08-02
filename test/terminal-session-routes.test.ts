@@ -111,7 +111,7 @@ describe('durable terminal route policy', () => {
     expect(writes).toEqual([])
   })
 
-  it('keeps resolver-free terminal mutation authority loopback-only', async () => {
+  it('keeps resolver-free terminal mutation authority authenticated loopback-only', async () => {
     const { server, writes } = await fixture(false, true)
     expect((await server.inject({
       method: 'POST',
@@ -123,7 +123,7 @@ describe('durable terminal route policy', () => {
       url: '/api/v1/os/processes/process-1/commands',
       remoteAddress: '203.0.113.7',
       payload: { command: 'printf remote' },
-    })).statusCode).toBe(403)
+    })).statusCode).toBe(401)
     expect(writes).toEqual(['printf local\n'])
   })
 })

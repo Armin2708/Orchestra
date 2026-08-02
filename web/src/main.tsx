@@ -1,17 +1,20 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
-import { setToken } from './api'
+import { prepareBrowserAuthority } from './deviceAuth'
+import { PairingRequired } from './RemoteDeviceShell'
 
-// one-scan pairing: `orchestra remote` QRs the board URL with #token=…
-// stored before render so the first fetch is already authenticated
-const paired = location.hash.match(/[#&]token=([0-9a-f]{16,})/)
-if (paired) {
-  setToken(paired[1])
-  history.replaceState(null, '', location.pathname + location.search)
+async function boot() {
+  try {
+    const authorityMode = await prepareBrowserAuthority()
+    createRoot(document.getElementById('root')!).render(<App authorityMode={authorityMode} />)
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : 'Device pairing failed.'
+    createRoot(document.getElementById('root')!).render(<PairingRequired error={error} />)
+  }
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+void boot()
 
 // dev builds skip the worker so vite's module graph is never cached
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

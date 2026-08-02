@@ -4,7 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
-import { ensureVapidKeys, publicBase, registerPush, PushPayload } from '../src/push.js'
+import { loadSecureVapidKeys, publicBase, registerPush, PushPayload } from '../src/push.js'
+import type { PlatformCredentialStore } from '../src/operations/credentials.js'
 
 type Sent = { endpoint: string; payload: PushPayload }
 
@@ -14,6 +15,7 @@ function harness(opts: { failWith?: Record<string, number>; now?: () => number }
   const sent: Sent[] = []
   const ntfy: { topic: string; payload: PushPayload }[] = []
   registerPush(server, {
+    vapidKeys: { publicKey: 'A'.repeat(64), privateKey: 'B'.repeat(64) },
     now: opts.now,
     sendWebPush: async (sub, payload) => {
       const status = opts.failWith?.[sub.endpoint]
@@ -40,11 +42,80 @@ const subscribeDevice = (server: any, endpoint = 'https://push.example/dev1') =>
 beforeEach(() => { process.env.ORCHESTRA_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-push-')) })
 afterEach(() => { delete process.env.ORCHESTRA_HOME; vi.restoreAllMocks() })
 
-it('mints 0600 VAPID keys once and reuses them', () => {
-  const k = ensureVapidKeys()
+class MemoryCredentialStore implements PlatformCredentialStore {
+  readonly facility = 'memory-test'
+  readonly values = new Map<string, Uint8Array>()
+  async isAvailable() { return true }
+  async put(reference: string, secret: Uint8Array) { this.values.set(reference, Uint8Array.from(secret)) }
+  async get(reference: string) { return this.values.get(reference) ?? null }
+  async replace(current: string, replacement: string, secret: Uint8Array) {
+    if (!this.values.has(current)) throw new Error('missing')
+    this.values.delete(current)
+    this.values.set(replacement, Uint8Array.from(secret))
+  }
+  async delete(reference: string) { this.values.delete(reference) }
+}
+
+it('stores only an opaque VAPID reference on disk and reuses secure key material', async () => {
+  const store = new MemoryCredentialStore()
+  const k = await loadSecureVapidKeys({ store })
   expect(k.publicKey).toBeTruthy()
-  expect(fs.statSync(path.join(process.env.ORCHESTRA_HOME!, 'vapid.json')).mode & 0o777).toBe(0o600)
-  expect(ensureVapidKeys()).toEqual(k) // stable — resubscribing phones stay valid
+  const referencePath = path.join(process.env.ORCHESTRA_HOME!, 'vapid-reference.json')
+  expect(fs.statSync(referencePath).mode & 0o777).toBe(0o600)
+  const document = fs.readFileSync(referencePath, 'utf8')
+  expect(document).not.toContain(k.privateKey)
+  expect(document).toContain('credential_ref')
+  expect(await loadSecureVapidKeys({ store })).toEqual(k)
+  expect(fs.existsSync(path.join(process.env.ORCHESTRA_HOME!, 'vapid.json'))).toBe(false)
+})
+
+it('recovers a partial legacy migration by refusing push until plaintext cleanup succeeds', async () => {
+  const store = new MemoryCredentialStore()
+  const keys = await loadSecureVapidKeys({ store })
+  const legacyPath = path.join(process.env.ORCHESTRA_HOME!, 'vapid.json')
+  fs.writeFileSync(legacyPath, `${JSON.stringify(keys)}\n`, { mode: 0o600 })
+  const unlink = fs.unlinkSync.bind(fs)
+  const blocked = vi.spyOn(fs, 'unlinkSync').mockImplementation((target) => {
+    if (String(target) === legacyPath) throw Object.assign(new Error('forced unlink failure'), { code: 'EACCES' })
+    return unlink(target)
+  })
+  await expect(loadSecureVapidKeys({ store })).rejects.toThrow('forced unlink failure')
+  expect(fs.existsSync(legacyPath)).toBe(true)
+  blocked.mockRestore()
+  expect(await loadSecureVapidKeys({ store })).toEqual(keys)
+  expect(fs.existsSync(legacyPath)).toBe(false)
+})
+
+it('leaves the only legacy VAPID key intact when secure persistence fails', async () => {
+  const legacyPath = path.join(process.env.ORCHESTRA_HOME!, 'vapid.json')
+  const legacy = { publicKey: 'A'.repeat(64), privateKey: 'B'.repeat(64) }
+  const serialized = `${JSON.stringify(legacy)}\n`
+  fs.writeFileSync(legacyPath, serialized, { mode: 0o600 })
+  const store = new MemoryCredentialStore()
+  store.put = async () => { throw new Error('forced secure store failure') }
+  await expect(loadSecureVapidKeys({ store })).rejects.toThrow('forced secure store failure')
+  expect(fs.readFileSync(legacyPath, 'utf8')).toBe(serialized)
+  expect(fs.existsSync(path.join(process.env.ORCHESTRA_HOME!, 'vapid-reference.json'))).toBe(false)
+})
+
+it('rotates an expiring secure VAPID reference and retires the old credential', async () => {
+  const store = new MemoryCredentialStore()
+  let now = new Date('2026-01-01T00:00:00.000Z')
+  const first = await loadSecureVapidKeys({ store, clock: () => now })
+  const initialReference = JSON.parse(fs.readFileSync(
+    path.join(process.env.ORCHESTRA_HOME!, 'vapid-reference.json'), 'utf8',
+  )).private_key.credential_ref as string
+  now = new Date('2026-12-05T00:00:00.000Z')
+  const rotated = await loadSecureVapidKeys({ store, clock: () => now })
+  expect(rotated).toEqual(first)
+  expect(store.values.has(initialReference)).toBe(false)
+  const nextReference = JSON.parse(fs.readFileSync(
+    path.join(process.env.ORCHESTRA_HOME!, 'vapid-reference.json'), 'utf8',
+  )).private_key.credential_ref as string
+  expect(nextReference).not.toBe(initialReference)
+  const persisted = fs.readFileSync(path.join(process.env.ORCHESTRA_HOME!, 'vapid-reference.json'), 'utf8')
+  expect(persisted).not.toContain(first.privateKey)
+  expect(persisted).not.toContain('retired_private_keys')
 })
 
 it('serves the public key and stores/removes subscriptions', async () => {

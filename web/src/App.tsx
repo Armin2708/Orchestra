@@ -29,6 +29,10 @@ import { wakeMeter } from './wake'
 import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
 import { osApi, type Job } from './osApi'
 import { agentHomeApi, type AgentProfile } from './agentHomeApi'
+import { OfflineStateBanner, RemoteAccessProvider } from './RemoteAccess'
+import { PhoneRemoteDock } from './PhoneRemoteDock'
+import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
+import type { BrowserAuthorityMode } from './deviceAuth'
 import './messages.css'
 import './agentOs.css'
 
@@ -45,7 +49,13 @@ export const Mark = () => (
   </svg>
 )
 
-export function App() {
+export function App({ authorityMode = 'local-owner' }: { authorityMode?: BrowserAuthorityMode }) {
+  if (authorityMode === 'paired-device') return <RemoteDeviceShell />
+  if (authorityMode === 'pairing-required') return <PairingRequired />
+  return <LocalOwnerApp />
+}
+
+function LocalOwnerApp() {
   const [snaps, setSnaps] = useState<Snapshot[]>([])
   const [loaded, setLoaded] = useState(false)
   const [connectionState, setConnectionState] = useState<'live' | 'stale' | 'offline'>('offline')
@@ -106,6 +116,17 @@ export function App() {
     history.pushState(history.state, '', href)
     setLocationSearch(new URL(href, location.origin).search)
   }
+  const pickBoardTab = (next: BoardTab) => {
+    const section: CommandCenterSection = next === 'messages'
+      ? 'discussions'
+      : next === 'agents' || next === 'workspace'
+        ? 'agents'
+        : next === 'timeline' || next === 'shipped'
+          ? 'activity'
+          : 'work'
+    setNavigation({ view: 'board', boardTab: next })
+    pickCommandSection(section)
+  }
   const pick = (f: number | 'all') => {
     setFocus(f)
     setMenuOpen(false)
@@ -149,10 +170,14 @@ export function App() {
       setFocus(normalized)
       localStorage.setItem('orchestra-focus', String(normalized))
     }
-    if (['agent', 'session', 'conversation'].some((key) => params.has(key))) {
+    if (['attention', 'approval', 'question', 'conflict'].some((key) => params.has(key))) {
+      setNavigation({ view: 'board', boardTab: 'workspace' })
+      setCommandSection('agents')
+      window.setTimeout(() => window.dispatchEvent(new Event('orchestra:open-attention')), 0)
+    } else if (['agent', 'session', 'conversation', 'workspace'].some((key) => params.has(key))) {
       setNavigation({ view: 'board', boardTab: 'agents' })
       setCommandSection('agents')
-    } else if (params.has('card') || params.has('job') || params.has('delivery')) {
+    } else if (params.has('card') || params.has('job') || params.has('delivery') || params.has('review')) {
       setNavigation({ view: 'board', boardTab: 'overview' })
       setCommandSection('work')
     }
@@ -263,7 +288,9 @@ export function App() {
   const commandSelection = parseCommandCenterSelection(locationSearch)
 
   return (
+    <RemoteAccessProvider>
     <div className="app">
+      <OfflineStateBanner />
       <header className="topbar">
         <div className="brand">
           <Mark />
@@ -389,7 +416,12 @@ export function App() {
           : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
               <SettingsView />
             </React.Suspense>}
+      <PhoneRemoteDock active={view === 'board' ? boardTab : 'overview'} onTab={(tab) => {
+        pickView('board')
+        pickBoardTab(tab)
+      }} onAttention={() => window.dispatchEvent(new Event('orchestra:open-attention'))} />
     </div>
+    </RemoteAccessProvider>
   )
 }
 
@@ -436,7 +468,7 @@ function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
             value={token} onChange={(e) => setTokenInput(e.target.value)} />
           <button className="login-btn" type="submit" disabled={!token.trim()}>Connect</button>
         </form>
-        <p className="hint">Stored only in this browser. You won't be asked again.</p>
+        <p className="hint">Accepted only on loopback, held only in this tab's memory, and cleared when the page closes.</p>
       </div>
     </div>
   )

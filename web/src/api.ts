@@ -1,12 +1,34 @@
-export const getToken = () => localStorage.getItem('orchestra-token') ?? ''
-export const setToken = (t: string) => localStorage.setItem('orchestra-token', t)
+import { clearRejectedCurrentDeviceAuthority, deviceRequestHeaders, isLoopbackBrowser } from './deviceAuth'
+
+let localOwnerToken = ''
+
+/** Master owner authority is loopback-only, memory-only, and never serialized by the browser. */
+export const getToken = () => isLoopbackBrowser() ? localOwnerToken : ''
+export const setToken = (token: string) => {
+  if (!isLoopbackBrowser()) throw new Error('owner tokens are accepted only from loopback')
+  localOwnerToken = token.trim()
+}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
-export const api = async (method: string, p: string, body?: unknown) => {
-  const headers: Record<string, string> = {}
+export const boundedIdempotencyKey = (value: string): string => {
+  const key = value.trim()
+  if (!key || key.length > 128 || /[\u0000-\u001f\u007f,]/u.test(key)) {
+    throw new Error('idempotency-key must be 1-128 characters without controls or commas')
+  }
+  return key
+}
+
+export const api = async (method: string, p: string, body?: unknown, extraHeaders: Record<string, string> = {}) => {
+  const headers: Record<string, string> = await deviceRequestHeaders(method, p)
+  for (const name of ['x-orchestra-step-up-grant', 'x-orchestra-step-up-nonce']) {
+    if (extraHeaders[name]) headers[name] = extraHeaders[name]
+  }
+  if (extraHeaders['idempotency-key'] !== undefined) {
+    headers['idempotency-key'] = boundedIdempotencyKey(extraHeaders['idempotency-key'])
+  }
   const token = getToken()
   if (token) headers.authorization = `Bearer ${token}`
   // fastify rejects bodyless requests that carry a json content-type
@@ -15,16 +37,20 @@ export const api = async (method: string, p: string, body?: unknown) => {
     method,
     headers: Object.keys(headers).length ? headers : undefined,
     body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
   })
+  if (res.status === 401 && headers.authorization?.startsWith('Device ')) {
+    await clearRejectedCurrentDeviceAuthority()
+  }
   if (!res.ok) throw new ApiError(res.status, await res.text())
   return res.json()
 }
 
-// EventSource can't set headers — the daemon accepts ?token= on SSE routes
-export const streamUrl = () => {
-  const token = getToken()
-  return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : '/api/v1/events'
-}
+/** EventSource cannot carry proof headers; clients use authenticated polling instead. */
+export const streamUrl = () => '/api/v1/events'
 
 export type VerificationCriterion = { text: string; met: boolean | 'unverifiable'; evidence: string }
 // latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict

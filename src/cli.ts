@@ -5,7 +5,13 @@ import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
 import { ensureToken } from './token.js'
-import { pairUrl, startRemote, stopRemote } from './remote.js'
+import {
+  enableNewRemotePairing,
+  pairUrl,
+  rollbackRemoteAccess,
+  startRemote,
+  stopRemote,
+} from './remote.js'
 import { messageBody } from './msgsafe.js'
 import { registerAgentOsCommands } from './agent-os-cli.js'
 import { registerDoctorCommand } from './doctor-cli.js'
@@ -14,10 +20,44 @@ import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
 import qrcode from 'qrcode-terminal'
+import fs from 'node:fs'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { dataDir } from './daemon.js'
+import { openDb } from './db.js'
+import {
+  assertSafeChildPath,
+  createDatabaseBackup,
+  restoreDatabaseBackup,
+  retireDatabaseBackups,
+  verifyDatabaseBackup,
+} from './agent-os/database-recovery.js'
+import { acquireDatabaseRestoreQuiescenceGuard } from './agent-os/database-quiescence.js'
+import { OperationsRetentionService } from './agent-os/operations-recovery.js'
+import {
+  ProtectedCredentialVault,
+  createPlatformCredentialStore,
+  type ProtectedCredentialReference,
+} from './operations/credentials.js'
 
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
 const envAgent = () => process.env.ORCHESTRA_AGENT
+const resolveOperationsStateDirectory = async (
+  stateRoot: string,
+  requestedRoot: string,
+  create: boolean,
+): Promise<string> => {
+  const candidate = await assertSafeChildPath(stateRoot, requestedRoot)
+  if (create) fs.mkdirSync(candidate, { recursive: true, mode: 0o700 })
+  const canonicalStateRoot = fs.realpathSync(stateRoot)
+  const canonicalCandidate = fs.realpathSync(candidate)
+  const relative = path.relative(canonicalStateRoot, canonicalCandidate)
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('backup root must remain inside Orchestra state')
+  }
+  return canonicalCandidate
+}
 const providerOption = (allowBoth: boolean) => (value: string) => {
   const accepted = allowBoth ? ['claude', 'codex', 'both'] : ['claude', 'codex']
   if (!accepted.includes(value))
@@ -68,9 +108,197 @@ program.command('token').description('print the API token (paste it into the web
     console.log(ensureToken())
   })
 
-program.command('remote').description('start the legacy tunnel preview (QR contains the reusable operator token; not secure device pairing)')
-  .option('--stop', 'request a best-effort tunnel stop; verify the external URL is unreachable')
+const ops = program.command('ops').description('local operations, recovery, and retention controls')
+ops.command('diagnostics <destination>')
+  .description('write one allowlisted redacted diagnostics bundle to a new owner-only file')
+  .action(async (destination) => {
+    await up()
+    const response = await fetch(`${baseUrl()}/api/v1/ops/diagnostics`, {
+      redirect: 'error', cache: 'no-store',
+      headers: { authorization: `Bearer ${ensureToken()}`, accept: 'application/gzip' },
+    })
+    if (!response.ok || response.headers.get('content-type') !== 'application/gzip') {
+      throw new Error('the daemon could not create a redacted diagnostics bundle')
+    }
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length === 0 || bytes.length > 8 * 1024 * 1024) {
+      throw new Error('diagnostics bundle size is invalid')
+    }
+    const resolved = path.resolve(destination)
+    const descriptor = fs.openSync(resolved, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600)
+    try {
+      fs.writeFileSync(descriptor, bytes)
+      fs.fsyncSync(descriptor)
+    } catch (error) {
+      try { fs.unlinkSync(resolved) } catch { /* retain original write failure */ }
+      throw error
+    } finally { fs.closeSync(descriptor) }
+    console.log(JSON.stringify({
+      path: resolved,
+      bytes: bytes.length,
+      sha256: response.headers.get('x-content-sha256'),
+      review_before_sharing: true,
+    }, null, 2))
+  })
+ops.command('backup [name]').option('--root <directory>', 'backup root under the Orchestra state directory')
+  .action(async (name, o) => {
+    const stateRoot = dataDir()
+    const backupRoot = await resolveOperationsStateDirectory(
+      stateRoot,
+      path.resolve(o.root ?? path.join(stateRoot, 'backups')),
+      true,
+    )
+    const db = openDb(path.join(stateRoot, 'orchestra.db'))
+    try {
+      const backup = await createDatabaseBackup(db, { backupRoot, name })
+      console.log(JSON.stringify(backup, null, 2))
+    } finally { db.close() }
+  })
+ops.command('verify-backup <manifest>').action(async (manifest) => {
+  console.log(JSON.stringify(await verifyDatabaseBackup(manifest), null, 2))
+})
+ops.command('restore <manifest>')
+  .requiredOption('--confirm-quiesced', 'require a recorded clean daemon/provider shutdown proof')
+  .action(async (manifest, o) => {
+    if (!o.confirmQuiesced) throw new Error('restore requires --confirm-quiesced')
+    const stateRoot = dataDir()
+    const destinationPath = path.join(stateRoot, 'orchestra.db')
+    const quiescence = acquireDatabaseRestoreQuiescenceGuard({ stateRoot, destinationPath })
+    try {
+      const restored = await restoreDatabaseBackup({
+        manifestPath: manifest,
+        stateRoot,
+        destinationPath,
+        isQuiesced: quiescence.verify,
+      })
+      quiescence.consume()
+      console.log(JSON.stringify(restored, null, 2))
+    } finally {
+      quiescence.release()
+    }
+  })
+ops.command('retire-backups')
+  .option('--root <directory>', 'backup root under the Orchestra state directory')
+  .requiredOption('--keep <count>', 'number of newest backups to keep')
   .action(async (o) => {
+    const stateRoot = dataDir()
+    const backupRoot = await resolveOperationsStateDirectory(
+      stateRoot,
+      path.resolve(o.root ?? path.join(stateRoot, 'backups')),
+      false,
+    )
+    const retired = await retireDatabaseBackups({ backupRoot, keep: Number(o.keep) })
+    console.log(JSON.stringify({ retired }, null, 2))
+  })
+ops.command('configure-retention')
+  .requiredOption('--board <id>').requiredOption('--events <days>')
+  .requiredOption('--transcripts <days>').requiredOption('--pty <days>')
+  .requiredOption('--artifacts <days>')
+  .action((o) => {
+    const db = openDb(path.join(dataDir(), 'orchestra.db'))
+    try {
+      const service = new OperationsRetentionService(db)
+      const policy = db.transaction(() => {
+        const configured = service.configure({
+          boardId: Number(o.board), eventDays: Number(o.events),
+          transcriptDays: Number(o.transcripts), ptyDays: Number(o.pty),
+          artifactDays: Number(o.artifacts),
+        })
+        const eventId = `retention-auth:${randomUUID()}`
+        db.prepare(`INSERT INTO os_events (
+          id, board_id, kind, source, payload, actor_type, actor_id, idempotency_key
+        ) VALUES (?, ?, 'operations.retention.authorized', 'local-cli', ?,
+          'local_operator', 'local-owner', ?)`).run(
+          eventId,
+          configured.board_id,
+          JSON.stringify({ policy_updated_at: configured.updated_at }),
+          eventId,
+        )
+        return configured
+      }).immediate()
+      console.log(JSON.stringify(policy, null, 2))
+    } finally { db.close() }
+  })
+ops.command('credential-store').description('verify the platform credential facility').action(async () => {
+  const store = createPlatformCredentialStore()
+  const available = await store.isAvailable()
+  console.log(JSON.stringify({ facility: store.facility, available }))
+  if (!available) process.exitCode = 1
+})
+const readCredentialReference = (referencePath: string): ProtectedCredentialReference => {
+  const resolved = path.resolve(referencePath)
+  const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8')) as ProtectedCredentialReference
+  if (!parsed || typeof parsed !== 'object') throw new Error('credential reference file is invalid')
+  return parsed
+}
+const readCredentialStdin = (): Uint8Array => {
+  const material = fs.readFileSync(0)
+  if (material.byteLength < 16) {
+    material.fill(0)
+    throw new Error('credential stdin must contain at least 16 bytes')
+  }
+  return material
+}
+ops.command('protect-credential')
+  .description('store credential bytes from stdin and print only an opaque reference')
+  .requiredOption('--ttl-ms <milliseconds>')
+  .action(async (o) => {
+    const material = readCredentialStdin()
+    try {
+      const reference = await new ProtectedCredentialVault(createPlatformCredentialStore())
+        .protect(material, Number(o.ttlMs))
+      console.log(JSON.stringify(reference, null, 2))
+    } finally { material.fill(0) }
+  })
+ops.command('check-credential <reference>')
+  .description('verify an opaque credential reference without printing secret material')
+  .action(async (referencePath) => {
+    const vault = new ProtectedCredentialVault(createPlatformCredentialStore())
+    const material = await vault.resolve(readCredentialReference(referencePath))
+    material.fill(0)
+    console.log(JSON.stringify({ available: true }))
+  })
+ops.command('rotate-credential <reference>')
+  .description('atomically replace a credential using bytes from stdin and print the new reference')
+  .requiredOption('--ttl-ms <milliseconds>')
+  .action(async (referencePath, o) => {
+    const material = readCredentialStdin()
+    try {
+      const reference = await new ProtectedCredentialVault(createPlatformCredentialStore())
+        .rotate(readCredentialReference(referencePath), material, Number(o.ttlMs))
+      console.log(JSON.stringify(reference, null, 2))
+    } finally { material.fill(0) }
+  })
+ops.command('revoke-credential <reference>')
+  .description('individually revoke an opaque credential reference')
+  .action(async (referencePath) => {
+    await new ProtectedCredentialVault(createPlatformCredentialStore())
+      .revoke(readCredentialReference(referencePath))
+    console.log(JSON.stringify({ revoked: true }))
+  })
+
+program.command('remote').description('start private remote access with secure device pairing')
+  .option('--stop', 'stop the verified Orchestra-owned tunnel')
+  .option('--rollback <confirmation>', 'durably revoke all remote authority; requires REVOKE_ALL_REMOTE_AUTHORITY')
+  .option('--reason <reason>', 'operator reason recorded with an emergency rollback')
+  .option('--enable-new-pairing <confirmation>', 're-enable only new pairing; requires ENABLE_NEW_REMOTE_PAIRING')
+  .option('--public', 'confirm public Cloudflare exposure (also requires ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1)')
+  .option('--board <id...>', 'grant this device access only to the selected board ids')
+  .option('--scope <scope...>', 'explicit device scopes: observe stream message approve agent-control terminal-write admin')
+  .action(async (o) => {
+    const controlActions = [o.stop === true, Boolean(o.rollback), Boolean(o.enableNewPairing)]
+      .filter(Boolean).length
+    if (controlActions > 1) throw new Error('--stop, --rollback, and --enable-new-pairing are mutually exclusive')
+    if (o.rollback) {
+      const result = await rollbackRemoteAccess(String(o.rollback), o.reason)
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+    if (o.enableNewPairing) {
+      const result = await enableNewRemotePairing(String(o.enableNewPairing))
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
     if (o.stop) {
       const s = stopRemote()
       console.log(s
@@ -78,13 +306,32 @@ program.command('remote').description('start the legacy tunnel preview (QR conta
         : 'no recorded remote access state was found')
       return
     }
-    const { state, reused } = await startRemote()
-    const url = pairUrl(state)
-    console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
-    console.log('scan to open the board on your phone, signed in — the QR embeds your token, treat it like a password:\n')
-    qrcode.generate(url, { small: true })
-    console.log(`\n${url}`)
-    console.log('request a best-effort stop with: orchestra remote --stop; then verify the URL is unreachable')
+    const boardIds = (o.board ?? []).map((value: string) => Number(value))
+    if (boardIds.some((value: number) => !Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error('--board values must be positive integer board ids')
+    }
+    const scopes = o.scope as string[] | undefined
+    const allowedScopes = new Set(['observe', 'stream', 'message', 'approve', 'agent-control', 'terminal-write', 'admin'])
+    if (scopes?.some((scope) => !allowedScopes.has(scope))) {
+      throw new Error('--scope contains an unsupported device scope')
+    }
+    if (scopes?.some((scope) => ['agent-control', 'terminal-write', 'admin'].includes(scope))) {
+      console.error('WARNING: high-risk device authority requested; keep the device locked and revoke it immediately if lost.')
+    }
+    const { state, reused } = await startRemote({ confirmPublic: o.public === true })
+    try {
+      const url = await pairUrl(state, boardIds, scopes as never)
+      console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
+      console.log(state.provider === 'tailscale'
+        ? 'Private tailnet exposure selected. Pair only a device you control:\n'
+        : 'PUBLIC exposure selected. Pair promptly, keep scopes narrow, and stop the tunnel when finished:\n')
+      qrcode.generate(url, { small: true })
+      console.log(`\n${url}`)
+      console.log('stop the verified tunnel with: orchestra remote --stop')
+    } catch (error) {
+      if (!reused) stopRemote()
+      throw error
+    }
   })
 
 program.command('join').description('register this agent session on the project board (agents only)')

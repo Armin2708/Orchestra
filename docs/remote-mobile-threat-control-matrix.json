@@ -342,8 +342,8 @@
     },
     {
       "id": "CUR-002",
-      "status": "partial",
-      "description": "Remote prefers Tailscale and otherwise uses a TLS Cloudflare quick tunnel to the loopback daemon; the public fallback is automatic rather than explicitly confirmed.",
+      "status": "implemented",
+      "description": "Remote prefers private Tailscale; public Cloudflare requires independent configuration plus per-command confirmation, and reuse/stop require verified ownership.",
       "evidence": [
         {
           "file": "src/remote.ts",
@@ -351,7 +351,7 @@
         },
         {
           "file": "src/remote.ts",
-          "contains": "if (hasBin('cloudflared')) return { state: await startCloudflared(), reused: false }"
+          "contains": "if (!publicTunnelAllowed(options)) {"
         }
       ]
     },
@@ -377,34 +377,34 @@
     {
       "id": "CUR-004",
       "status": "partial",
-      "description": "Pairing initially places the bearer in a URL fragment, which is not sent in the initial HTTP request, and the app removes the fragment after importing it; the reusable secret is then persisted in localStorage.",
+      "description": "The remote browser rejects and scrubs legacy owner-token fragments or queries, removes legacy browser storage, and accepts only single-use PairingTickets; the legacy CLI URL remains a server-side integration gap.",
       "evidence": [
         {
-          "file": "src/remote.ts",
-          "contains": "export const pairUrl = (s: RemoteState) => `${s.url}/#token=${ensureToken()}`"
+          "file": "web/src/deviceAuth.ts",
+          "contains": "throw new Error('legacy owner-token pairing is disabled')"
         },
         {
           "file": "web/src/main.tsx",
-          "contains": "history.replaceState(null, '', location.pathname + location.search)"
+          "contains": "const authorityMode = await prepareBrowserAuthority()"
         },
         {
           "file": "web/src/api.ts",
-          "contains": "export const setToken = (t: string) => localStorage.setItem('orchestra-token', t)"
+          "contains": "if (!isLoopbackBrowser()) throw new Error('owner tokens are accepted only from loopback')"
         }
       ]
     },
     {
       "id": "CUR-005",
-      "status": "partial",
-      "description": "API requests require a matching bearer or query token, but query-token acceptance applies to every API route and the master bearer maps directly to the broad operator principal.",
+      "status": "implemented",
+      "description": "Master and agent bearers require loopback socket and ingress Host evidence; remote Device credentials are proof-bound and accepted only on explicitly classified routes, while query credentials are rejected.",
       "evidence": [
         {
-          "file": "src/server.ts",
-          "contains": "const given = bearer ?? query.token"
+          "file": "src/remote-security-integration.ts",
+          "contains": "&& loopback(address) && loopbackIngressHost(request)"
         },
         {
-          "file": "src/server.ts",
-          "contains": "req.orchestraPrincipal = 'operator'"
+          "file": "src/remote-security-integration.ts",
+          "contains": "return reply.code(403).send({ error: 'remote route is not classified' })"
         }
       ]
     },
@@ -520,7 +520,7 @@
       "evidence": [
         {
           "file": "src/remote.ts",
-          "contains": "fs.writeFileSync(remoteStatePath(), JSON.stringify(s, null, 2) + '\\n', { mode: 0o600 })"
+          "contains": "fs.writeFileSync(temporary, JSON.stringify(s, null, 2) + '\\n', { mode: 0o600, flag: 'wx' })"
         },
         {
           "file": "src/remote.ts",
@@ -528,7 +528,7 @@
         },
         {
           "file": "src/remote.ts",
-          "contains": "else if (alive(s.pid)) { try { process.kill(s.pid!, 'SIGTERM') } catch { /* raced its exit */ } }"
+          "contains": "if (!ownsCloudflared(state)) throw new Error('refusing to signal an unverified Cloudflare process')"
         }
       ]
     },
@@ -564,16 +564,16 @@
     },
     {
       "id": "CUR-016",
-      "status": "partial",
-      "description": "The PWA uses network-first API caching for availability, but authenticated GET responses can survive offline and are not partitioned or purged by device session.",
+      "status": "implemented",
+      "description": "The PWA keeps authenticated API responses network-only, fails authenticated reads explicitly while offline, and can purge legacy device data after revocation or authentication failure.",
       "evidence": [
         {
           "file": "web/public/sw.js",
-          "contains": "caches.open(API_CACHE).then((c) => c.put(e.request, copy))"
+          "contains": "e.respondWith(fetch(e.request, { cache: 'no-store' }))"
         },
         {
           "file": "web/public/sw.js",
-          "contains": "fetch(e.request).then((res) => {"
+          "contains": "if (e.data?.type !== 'PURGE_DEVICE_DATA') return"
         }
       ]
     },

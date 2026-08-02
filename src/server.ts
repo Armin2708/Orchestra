@@ -11,7 +11,6 @@ import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
-import { VERSION } from './version.js'
 import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
@@ -44,6 +43,16 @@ import {
   managedAgentCredentialHash,
 } from './agent-session-credential.js'
 import { resolveAgentMutationPrincipal } from './agent-os/agent-mutation-principal.js'
+import {
+  registerRemoteSecurityIntegration,
+  type RemoteAuthenticatedDevice,
+} from './remote-security-integration.js'
+import { registerOperationsIntegration } from './operations/integration.js'
+import type { OperationsRuntime } from './operations/runtime.js'
+import type { ActiveWorkRegistration } from './agent-os/operations-recovery.js'
+import { OperationsRateLimiter } from './operations/capacity.js'
+import { classifyOperationalFailure, OPERATIONS_FAILURE_POLICIES } from './operations/failure-policy.js'
+import type { VapidKeys } from './push.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -75,7 +84,10 @@ export interface ConductorLike extends AgentSessionControlHost {
 }
 declare module 'fastify' {
   interface FastifyInstance { db: Database.Database; bus: Bus }
-  interface FastifyRequest { orchestraPrincipal: 'operator' | 'agent' | 'anonymous' }
+  interface FastifyRequest {
+    orchestraPrincipal: 'operator' | 'agent' | 'device' | 'anonymous'
+    orchestraRemoteDevice: RemoteAuthenticatedDevice | null
+  }
 }
 
 export interface ServerOptions {
@@ -88,6 +100,12 @@ export interface ServerOptions {
   // daemon-only Agent OS runtime/driver seams; in-process tests keep the durable read APIs
   // while unsupported process mutations continue to fail explicitly.
   agentOs?: AgentOsServerRouteOptions
+  operations?: OperationsRuntime
+  vapidKeys?: VapidKeys
+  stopRemoteTunnel?: () => unknown
+  admitMutation?: () => void
+  reconcileActiveWork?: () => void
+  registerActiveWork?: (registration: ActiveWorkRegistration) => () => void
 }
 
 const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
@@ -97,41 +115,138 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const server = Fastify()
   server.decorate('db', db)
   server.decorate('bus', new EventEmitter())
-  server.decorateRequest('orchestraPrincipal', 'operator')
-  if (opts.token) {
-    const expected = opts.token
-    // /health and the static UI stay open — the UI is where you enter the token
-    server.addHook('onRequest', async (req, reply) => {
-      if (!req.url.startsWith('/api/')) return
-      const auth = req.headers.authorization
-      const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined
-      // EventSource can't set headers, so SSE clients pass ?token= instead
-      const query = (req.query ?? {}) as Record<string, string>
-      const given = bearer ?? query.token
-      if (tokenEquals(given, expected)) {
-        req.orchestraPrincipal = 'operator'
-        return
-      }
-      if (opts.agentToken && tokenEquals(given, opts.agentToken)) {
-        req.orchestraPrincipal = 'agent'
-        return
-      }
-      // Managed providers intentionally receive no ambient daemon bearer. Their exact,
-      // persisted provider-session credential is sufficient after bootstrap registration.
-      if (req.headers['x-orchestra-agent-id'] !== undefined) {
-        req.orchestraPrincipal = 'agent'
-        if (resolveAgentMutationPrincipal(db, req)) return
-      }
-      // Body validation below consumes a one-time launch nonce. No other anonymous API
-      // request is admitted, and ordinary registration still requires transport auth.
-      if (req.method === 'POST' && req.url.split('?')[0] === '/api/v1/agents/register') {
-        req.orchestraPrincipal = 'anonymous'
-        return
-      }
-      return reply.code(401).send({ error: 'unauthorized' })
-    })
-  }
+  server.decorateRequest('orchestraPrincipal', 'anonymous')
+  server.decorateRequest('orchestraRemoteDevice', null)
   const maestro = conductor?.(server.bus)
+  registerRemoteSecurityIntegration(server, {
+    db,
+    masterToken: opts.token,
+    agentToken: opts.agentToken,
+    operations: opts.operations,
+    vapidKeys: opts.vapidKeys,
+    stopRemoteTunnel: opts.stopRemoteTunnel,
+    runtime: opts.agentOs?.runtime,
+    controls: maestro,
+    authenticateAgent: (request) => Boolean(resolveAgentMutationPrincipal(db, request)),
+  })
+  const operations = registerOperationsIntegration(server, db, opts.operations)
+  const operationalRateLimiter = new OperationsRateLimiter({
+    rules: [
+      { family: 'request', limit: 1_000, windowMs: 60_000 },
+      { family: 'command', limit: 240, windowMs: 60_000 },
+      { family: 'provider', limit: 60, windowMs: 60_000 },
+    ],
+    partitionSalt: randomBytes(32).toString('hex'),
+  })
+  const capacityAdmissions = new Map<object, { requestId: string; provider: string }>()
+  const activeRequestReleases = new WeakMap<object, () => void>()
+  server.addHook('onRequest', async (request, reply) => {
+    if (request.url.startsWith('/api/')) {
+      const rawPartition = request.orchestraRemoteDevice?.deviceSessionId
+        ?? request.ip ?? request.raw.socket.remoteAddress ?? 'unknown'
+      const requestLimit = operationalRateLimiter.consume('request', rawPartition)
+      const commandFamily = ['GET', 'HEAD', 'OPTIONS'].includes(request.method) ? null
+        : /(?:\/agents\/hire|\/launch|\/dispatch|\/jobs(?:\/|$))/u.test(request.url)
+          ? 'provider' as const : 'command' as const
+      const commandLimit = commandFamily ? operationalRateLimiter.consume(commandFamily, rawPartition) : null
+      const denied = !requestLimit.allowed ? requestLimit : commandLimit && !commandLimit.allowed ? commandLimit : null
+      if (denied) {
+        try {
+          opts.operations?.recordRateLimitRejection(request.orchestraRemoteDevice?.deviceSessionId)
+        } catch { /* rate-limit denial remains authoritative */ }
+        return reply.code(429)
+          .header('retry-after', String(Math.ceil(denied.retry_after_ms / 1_000)))
+          .send({ error: 'operational rate limit exceeded', reason_code: denied.reason_code })
+      }
+    }
+    if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return
+    try { opts.admitMutation?.() } catch {
+      return reply.code(503).send({ error: 'daemon is draining; new mutations are disabled' })
+    }
+    const launchesWork = /(?:\/agents\/hire|\/launch|\/dispatch|\/jobs(?:\/|$))/u.test(request.url)
+    if (launchesWork && opts.registerActiveWork) {
+      let resolveSettled!: () => void
+      const settled = new Promise<void>((resolve) => { resolveSettled = resolve })
+      const unregister = opts.registerActiveWork({
+        id: `http:${request.id}`,
+        settle: () => settled,
+        onDeadline: 'stop',
+        stop: async () => { request.raw.destroy(); resolveSettled() },
+      })
+      activeRequestReleases.set(request, () => { resolveSettled(); unregister() })
+    }
+    if (!opts.operations || !launchesWork) return
+  })
+  server.addHook('preHandler', async (request, reply) => {
+    const launchesWork = !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+      && /(?:\/agents\/hire|\/launch|\/dispatch|\/jobs(?:\/|$))/u.test(request.url)
+    if (!opts.operations || !launchesWork) return
+    const durableActive = db.prepare(`SELECT 'session:' || session.id AS requestId,
+      coalesce(job.provider, 'claude') AS provider
+      FROM agent_sessions session LEFT JOIN jobs job ON job.id=session.job_id
+      WHERE session.status IN ('starting','running','idle')
+      UNION ALL
+      SELECT 'agent:' || agent.id AS requestId, coalesce(agent.provider, 'claude') AS provider
+      FROM agents agent WHERE agent.kind='hired' AND agent.status NOT IN ('gone','paused_limit')
+        AND NOT EXISTS (SELECT 1 FROM agent_sessions session
+          WHERE session.agent_id=agent.id AND session.status IN ('starting','running','idle'))`)
+      .all() as Array<{ requestId: string; provider: string }>
+    const inFlight = [...capacityAdmissions.values()].map((active) => ({
+      ...active, priority: 'interactive' as const,
+    }))
+    opts.operations.capacity.reconcileActive([
+      ...durableActive.map((active) => ({ ...active, priority: 'normal' as const })),
+      ...inFlight,
+    ])
+    const body = request.body as { provider?: unknown } | undefined
+    const provider = typeof body?.provider === 'string' && /^[a-z0-9_-]{1,64}$/u.test(body.provider)
+      ? body.provider : 'claude'
+    const capacityId = `http:${request.id}`
+    const admission = opts.operations.capacity.admit({
+      requestId: capacityId, provider, priority: 'interactive',
+    })
+    if (admission.decision !== 'start') {
+      if (admission.decision === 'queue') opts.operations.capacity.cancelQueued(capacityId)
+      return reply.code(429).header('retry-after', String(Math.ceil((admission.retry_after_ms ?? 1_000) / 1_000)))
+        .send({ error: 'runtime capacity is unavailable', reason_code: admission.reason_code })
+    }
+    capacityAdmissions.set(request, { requestId: capacityId, provider })
+  })
+  server.addHook('onResponse', async (request, reply) => {
+    const admission = capacityAdmissions.get(request)
+    if (admission) {
+      opts.operations?.capacity.release(admission.requestId)
+      capacityAdmissions.delete(request)
+    }
+    if (reply.statusCode < 400
+      && /(?:\/agents\/hire|\/launch|\/dispatch|\/jobs(?:\/|$))/u.test(request.url)) {
+      try { opts.reconcileActiveWork?.() } catch { /* shutdown admission is already closed */ }
+    }
+    activeRequestReleases.get(request)?.()
+  })
+  server.setErrorHandler((error, request, reply) => {
+    const source = String((error as NodeJS.ErrnoException).code ?? '').startsWith('SQLITE_')
+      ? 'database' as const
+      : /provider/u.test(request.url) ? 'provider' as const : undefined
+    const failure = classifyOperationalFailure(error, source)
+    const policy = OPERATIONS_FAILURE_POLICIES[failure]
+    opts.operations?.logger.log({
+      level: policy.alert_severity === 'critical' ? 'error' : 'warn',
+      event: 'operations.request.failed',
+      outcome: 'failed',
+      component: source ?? 'request',
+      reasonCode: policy.reason_code,
+      correlationId: request.id,
+      attributes: { disposition: policy.mutation },
+    })
+    const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error
+      && typeof (error as { statusCode?: unknown }).statusCode === 'number'
+      ? (error as { statusCode: number }).statusCode : 500
+    const status = failure === 'database_locked' ? 503
+      : failure === 'provider_unavailable' ? 503
+        : failure === 'unknown' ? statusCode : 507
+    return reply.code(status).send({ error: 'operation failed safely', reason_code: policy.reason_code })
+  })
   registerAgentSessionControlRoutes(server, maestro)
   const emit = (board_id: number, type: string, data: unknown) =>
     server.bus.emit('event', { board_id, type, data })
@@ -149,7 +264,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return false
   }
 
-  server.get('/health', () => ({ ok: true, version: VERSION }))
+  server.get('/health', async () => {
+    const status = await operations.publicReadiness()
+    return { ok: status.ready, ...status }
+  })
 
   server.get('/api/v1/system', async () => {
     const u = await claudeUsage(db)

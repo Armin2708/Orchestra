@@ -23,6 +23,7 @@ import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
 import { TrackbookPane } from './TrackbookPane'
 import { useModalFocusTrap } from './useModalFocusTrap'
 import { runRuntimeMutation } from './runtimeReadOnly'
+import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 import {
   ChangesPane,
   ContextPane,
@@ -634,14 +635,20 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
   onSignal: (process: WorkspaceProcess, signal: string) => Promise<void>
   onRestart: (process: WorkspaceProcess) => Promise<void>
 }) {
+  const remoteAccess = useRemoteAccess()
   const [command, setCommand] = useState('')
   const [starting, setStarting] = useState(false)
   const [openingShell, setOpeningShell] = useState(false)
   const openingShellRef = useRef(false)
   const autoShellWorkspaceRef = useRef<string | null>(null)
+  const remoteWorkspaceWritable = remoteAccess.canUse('terminal-write', 'workspace', String(workspace.id))
+  const workspaceWritable = !readOnly && remoteWorkspaceWritable
+  const processWritable = Boolean(!readOnly && activeProcess
+    && remoteAccess.canUse('terminal-write', 'process', String(activeProcess.id)))
 
   const openShell = useCallback(async () => {
     if (readOnly || openingShellRef.current) return
+    if (!workspaceWritable) return
     openingShellRef.current = true
     setOpeningShell(true)
     try {
@@ -661,22 +668,23 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
       openingShellRef.current = false
       setOpeningShell(false)
     }
-  }, [onAttach, onError, onProcessesChanged, readOnly, terminalRef, workspace.id, workspace.root_path, workspace.worktree_path])
+  }, [onAttach, onError, onProcessesChanged, terminalRef, workspace.id, workspace.root_path, workspace.worktree_path, workspaceWritable])
 
   useEffect(() => {
     if (readOnly || processes.status !== 'ready') return
+    if (!workspaceWritable) return
     if (processes.data.some((process) => ['running', 'starting', 'stopping'].includes(process.status))) return
     const workspaceId = String(workspace.id)
     if (autoShellWorkspaceRef.current === workspaceId) return
     autoShellWorkspaceRef.current = workspaceId
     void openShell()
-  }, [openShell, processes.data, processes.status, workspace.id])
+  }, [openShell, processes.data, processes.status, readOnly, workspace.id, workspaceWritable])
 
   const run = async (event: React.FormEvent) => {
     event.preventDefault()
     if (readOnly) return
     const value = command.trim()
-    if (!value) return
+    if (!value || !workspaceWritable) return
     setStarting(true)
     try {
       const mutation = await runRuntimeMutation(readOnly, () => osApi.createProcess(workspace.id, {
@@ -709,20 +717,20 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
           ))}
         </div>
         <div className="os-process-actions">
-          <button onClick={() => void openShell()} disabled={readOnly || openingShell} title="Open the host's interactive shell">
+          <button onClick={() => void openShell()} disabled={readOnly || openingShell || !workspaceWritable} title="Open the host's interactive shell">
             <OsIcon name="terminal" size={12} /> {openingShell ? 'Opening' : 'New shell'}
           </button>
           {activeProcess && <>
             <span className="os-process-facts">PID {activeProcess.pid ?? '—'} · exit {activeProcess.exit_code ?? '—'}</span>
             {['running', 'starting', 'stopping'].includes(activeProcess.status) ? (
-              <><button disabled={readOnly} onClick={() => onSignal(activeProcess, 'SIGINT')}>Interrupt</button><button disabled={readOnly} onClick={() => onSignal(activeProcess, 'SIGTERM')}>Stop</button></>
-            ) : activeProcess.restartable ? <button disabled={readOnly} onClick={() => onRestart(activeProcess)}>Restart</button> : null}
+              <><button disabled={!processWritable} onClick={() => onSignal(activeProcess, 'SIGINT')}>Interrupt</button><button disabled={!processWritable} onClick={() => onSignal(activeProcess, 'SIGTERM')}>Stop</button></>
+            ) : activeProcess.restartable ? <button disabled={!processWritable} onClick={() => onRestart(activeProcess)}>Restart</button> : null}
           </>}
         </div>
       </header>
       {processes.status === 'error' && <div className="os-inline-error" role="alert">{processes.error}</div>}
       <ProcessTerminal ref={terminalRef} process={activeProcess} readOnly={readOnly} onProcessChanged={onProcessesChanged} />
-      <form className="os-command-bar" onSubmit={run}>
+      {(readOnly || remoteWorkspaceWritable) ? <form className="os-command-bar" onSubmit={run}>
         <label htmlFor="os-run-command">Run in a new PTY</label>
         <div>
           <span aria-hidden="true">$</span>
@@ -732,7 +740,8 @@ function TerminalPane({ workspace, processes, activeProcess, terminalRef, comman
           <button type="submit" disabled={readOnly || !command.trim() || starting}><OsIcon name="send" /> {starting ? 'Starting' : 'Run'}</button>
         </div>
         <small>Direct PTY · raw input/output · no agent mediation</small>
-      </form>
+      </form> : <RemoteControlGate scope="terminal-write" resourceType="workspace" resourceId={String(workspace.id)}
+        label="Starting a shell or command requires terminal-write plus a workspace-bound step-up." />}
     </section>
   )
 }

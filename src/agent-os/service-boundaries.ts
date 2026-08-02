@@ -10,6 +10,10 @@ import { OrganizationCoordinationService } from './organization-coordination.js'
 import { OrganizationAssuranceService } from './organization-assurance.js'
 import { PlanningTeamService } from './team-planning.js'
 import type { JobScheduler } from './scheduler.js'
+import {
+  SqliteDeviceSessionRepository,
+  type DeviceSessionRepository,
+} from './device-sessions.js'
 
 export const AGENT_OS_DOMAIN_SERVICE_NAMES = Object.freeze([
   'orchestration',
@@ -203,6 +207,19 @@ export type OrganizationAssuranceServiceBoundary = Pick<
   | 'dashboard'
 >
 
+export type DevicePairingServiceBoundary = Pick<
+  DeviceSessionRepository,
+  | 'createPairingTicket'
+  | 'redeemPairingTicket'
+  | 'listDeviceSessions'
+  | 'listDeviceCredentials'
+  | 'verifyDeviceCredential'
+  | 'rotateDeviceCredential'
+  | 'revokeDeviceCredential'
+  | 'revokeDeviceSession'
+  | 'expireDueArtifacts'
+>
+
 interface AgentOsServiceBoundaryBase<
   Name extends AgentOsDomainServiceName,
   State extends AgentOsDomainServiceImplementationState,
@@ -274,7 +291,11 @@ export interface AgentOsDomainServiceBoundaries {
     'canonical',
     ConflictResolutionServiceBoundary
   >
-  readonly device_pairing: AgentOsReservedServiceBoundary<'device_pairing'>
+  readonly device_pairing: AgentOsActiveServiceBoundary<
+    'device_pairing',
+    'canonical',
+    DevicePairingServiceBoundary
+  >
 }
 
 export interface CreateAgentOsDomainServiceBoundariesOptions {
@@ -288,12 +309,14 @@ export interface CreateAgentOsDomainServiceBoundariesOptions {
   coordination?: OrganizationCoordinationServiceBoundary
   assurance?: OrganizationAssuranceServiceBoundary
   conflicts?: ConflictResolutionServiceBoundary
+  devicePairing?: DevicePairingServiceBoundary
 }
 
 /**
  * Creates one explicit composition catalog without moving domain behavior into a router or
- * server bootstrap. Reserved domains stay null so the master-token QR cannot be mistaken for
- * secure device pairing.
+ * server bootstrap. Discussions stay reserved; device pairing is a canonical focused boundary
+ * and transport authorization remains the root server composition's responsibility. The conflict
+ * boundary retains the collaboration lane's canonical resolution workflow.
  */
 export function createAgentOsDomainServiceBoundaries(
   db: Database.Database,
@@ -446,8 +469,10 @@ export function createAgentOsDomainServiceBoundaries(
       ],
       'Canonical durable Conflict negotiation and resolution boundary.',
     ),
-    device_pairing: reservedBoundary(
+    device_pairing: activeBoundary(
       'device_pairing',
+      'canonical',
+      options.devicePairing ?? new SqliteDeviceSessionRepository(db),
       [
         'single-use pairing tickets',
         'named scoped DeviceSessions',
@@ -458,7 +483,7 @@ export function createAgentOsDomainServiceBoundaries(
         'broad bearer persistence',
         'unclassified remote reads or mutations',
       ],
-      'Reserved until secure DeviceSession pairing is implemented and threat-model gates pass.',
+      'Canonical credential lifecycle boundary; route and service authorization remain default-deny.',
     ),
   })
 }
