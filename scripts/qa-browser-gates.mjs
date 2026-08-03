@@ -557,6 +557,31 @@ const domActivate = (client, selector) => evaluate(client, `(() => {
   return true;
 })()`)
 
+const authenticateLocalOwner = async (client, operatorToken, label) => {
+  await waitFor(client, `Boolean(document.querySelector('.login-form .login-input'))`, `${label} owner login`)
+  const focused = await evaluate(client, `(() => {
+    const input = document.querySelector('.login-form .login-input');
+    if (!(input instanceof HTMLInputElement)) return false;
+    input.focus();
+    return document.activeElement === input;
+  })()`)
+  if (!focused) throw new Error(`${label} owner login could not receive focus`)
+  await client.send('Input.insertText', { text: operatorToken })
+  await waitFor(
+    client,
+    `document.querySelector('.login-form .login-btn')?.disabled === false`,
+    `${label} owner token input`,
+  )
+  if (!await domActivate(client, '.login-form .login-btn')) {
+    throw new Error(`${label} owner login could not be submitted`)
+  }
+  await waitFor(
+    client,
+    `Boolean(document.querySelector('.cc-project-nav')) && !document.querySelector('.login-form')`,
+    `${label} authenticated command center`,
+  )
+}
+
 const activateMode = async (client, mode, selector, label, mobile) => {
   if (mode === 'pointer') return pointerClick(client, selector, label, mobile)
   if (mode === 'keyboard') return keyboardActivate(client, selector, label)
@@ -834,7 +859,7 @@ const budgetFor = (baseline, viewportId, surface) => {
   }
 }
 
-const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }) => {
+const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, operatorToken }) => {
   const consoleErrors = []
   const pageErrors = []
   const failedRequests = []
@@ -882,7 +907,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
-  await waitFor(client, `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`, 'initial command center')
+  await authenticateLocalOwner(client, operatorToken, `${viewport.id} initial command center`)
   const startup = await evaluate(client, `performance.now()`)
   const snapshot = await evaluate(client, `(async () => {
     const started = performance.now();
@@ -903,11 +928,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario }
       url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
       name,
       mode,
-      waitForReady: () => waitFor(
-        client,
-        `document.readyState === 'complete' && Boolean(document.querySelector('.cc-project-nav'))`,
-        `${name} ${mode} fresh navigation`,
-      ),
+      waitForReady: () => authenticateLocalOwner(client, operatorToken, `${name} ${mode} fresh navigation`),
     })
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
@@ -1320,7 +1341,6 @@ const main = async () => {
     ])
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
-        localStorage.setItem('orchestra-token', ${JSON.stringify(operatorToken)});
         localStorage.setItem('orchestra-command-center-onboarding', 'complete');
         localStorage.setItem('orchestra-view', 'board');
       `,
@@ -1334,7 +1354,7 @@ const main = async () => {
     const viewports = completedViewports
     for (const viewport of viewportMatrix) {
       activeViewport = viewport.id
-      viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario }))
+      viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario, operatorToken }))
     }
     activeViewport = null
     const finalManifest = await loadBuildManifest(options.artifactManifest)
@@ -1353,7 +1373,7 @@ const main = async () => {
       source: sourceEvidence(buildManifest, null, 'passed_preflight_and_final'),
       scenario,
       methodology: {
-        isolation: 'disposable Orchestra home and Chrome profile; every pointer, keyboard, and DOM fallback mode starts with a unique same-artifact Page.navigate loader',
+        isolation: 'disposable Orchestra home and Chrome profile; every pointer, keyboard, and DOM fallback mode starts with a unique same-artifact Page.navigate loader and authenticates through the real loopback login without browser token persistence',
         fixture_transport: 'board, agents, card, workspace, canonical job/session, profile, conversation, and events created through authenticated public APIs',
         failure_artifacts: 'bounded redacted JSON only; no page HTML, response body, transcript, storage, or screenshot capture',
         interaction_readiness: `two consecutive 40ms observations; ${interactionReadinessTimeoutMs}ms interaction bound and ${asynchronousReadinessTimeoutMs}ms asynchronous render bound`,
