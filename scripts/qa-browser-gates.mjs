@@ -13,6 +13,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ACCESSIBILITY_GATES,
+  AUTHENTICATED_DATA_READY_EXPRESSION,
+  AUTHENTICATED_DATA_READY_SELECTOR,
   BROWSER_OVERFLOW_AUDIT_EXPRESSION,
   BROWSER_BUILD_SCHEMA_VERSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
@@ -406,6 +408,12 @@ class CdpClient {
     const listeners = this.listeners.get(method) ?? []
     listeners.push(listener)
     this.listeners.set(method, listeners)
+    return () => {
+      const current = this.listeners.get(method) ?? []
+      const index = current.indexOf(listener)
+      if (index >= 0) current.splice(index, 1)
+      if (current.length === 0) this.listeners.delete(method)
+    }
   }
 
   send(method, params = {}) {
@@ -524,10 +532,35 @@ const activeFocusProbe = (client, targetSelector = null) => evaluate(client, `((
   };
 })()`)
 
+const escapeXtermFocus = async (client, { shift = false, targetSelector = null } = {}) => {
+  const before = await activeFocusProbe(client, targetSelector)
+  const documented = await evaluate(client, `(() => {
+    const active = document.activeElement;
+    const host = active instanceof HTMLElement ? active.closest('.os-xterm') : null;
+    const descriptionId = host?.getAttribute('aria-describedby');
+    const description = descriptionId ? document.getElementById(descriptionId)?.textContent : '';
+    return Boolean(description?.includes('Press Escape, then Tab'));
+  })()`)
+  await dispatchKey(client, 'Escape')
+  const armed = await evaluate(client, `Boolean(document.querySelector('.os-terminal-keyboard-help.is-armed'))`)
+  await dispatchKey(client, 'Tab', { shift })
+  const after = await activeFocusProbe(client, targetSelector)
+  return {
+    escape_path: shift ? 'Escape+Shift+Tab' : 'Escape+Tab',
+    documented,
+    armed,
+    advanced: before.key !== after.key || before.xterm_proxy !== after.xterm_proxy,
+    from: before.key,
+    to: after.key,
+    focused: after,
+  }
+}
+
 const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) => {
   let tabEvents = 0
   let arrowEvents = 0
   const traversal = []
+  const xtermEscapePaths = []
   const rovingTab = await evaluate(client, `(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
     if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'tab' || target.tabIndex >= 0) return null;
@@ -545,8 +578,30 @@ const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) =>
   for (let index = 0; index < maximumTabs; index += 1) {
     await dispatchKey(client, 'Tab')
     tabEvents += 1
-    const focused = await activeFocusProbe(client, navigationSelector)
+    let focused = await activeFocusProbe(client, navigationSelector)
     traversal.push({ key: focused.key, xterm_proxy: focused.xterm_proxy, visible: focused.visible })
+    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
+      const escape = await escapeXtermFocus(client, { targetSelector: navigationSelector })
+      tabEvents += 1
+      xtermEscapePaths.push({
+        escape_path: escape.escape_path,
+        documented: escape.documented,
+        armed: escape.armed,
+        advanced: escape.advanced,
+        from: escape.from,
+        to: escape.to,
+      })
+      focused = escape.focused
+      traversal.push({
+        key: focused.key,
+        xterm_proxy: focused.xterm_proxy,
+        visible: focused.visible,
+        escape_path: escape.escape_path,
+      })
+      if (!escape.documented || !escape.armed || !escape.advanced) {
+        throw new Error(`documented xterm keyboard escape did not advance focus toward ${label}`)
+      }
+    }
     if (focused.target) {
       if (rovingTab) {
         for (let tabIndex = 0; tabIndex < rovingTab.tab_count; tabIndex += 1) {
@@ -567,10 +622,8 @@ const keyboardNavigateTo = async (client, selector, label, maximumTabs = 120) =>
         arrow_events: arrowEvents,
         traversal: traversal.slice(-24),
         xterm_focus_encounters: traversal.filter((step) => step.xterm_proxy).length,
+        xterm_escape_paths: xtermEscapePaths,
       }
-    }
-    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
-      throw new Error(`xterm intercepted Tab before keyboard navigation could reach ${label}`)
     }
     previous = focused
   }
@@ -592,6 +645,7 @@ const domActivate = (client, selector) => evaluate(client, `(() => {
 
 const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit = () => {}) => {
   await waitFor(client, `Boolean(document.querySelector('.login-form .login-input'))`, `${label} owner login`)
+  const loginFormReadyMs = await evaluate(client, `performance.now()`)
   const focused = await evaluate(client, `(() => {
     const input = document.querySelector('.login-form .login-input');
     if (!(input instanceof HTMLInputElement)) return false;
@@ -605,6 +659,7 @@ const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit
     `document.querySelector('.login-form .login-btn')?.disabled === false`,
     `${label} owner token input`,
   )
+  const submitStartedMs = await evaluate(client, `performance.now()`)
   beforeSubmit()
   if (!await domActivate(client, '.login-form .login-btn')) {
     throw new Error(`${label} owner login could not be submitted`)
@@ -614,6 +669,14 @@ const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit
     `Boolean(document.querySelector('.cc-project-nav')) && !document.querySelector('.login-form')`,
     `${label} authenticated command center`,
   )
+  const commandCenterReadyMs = await evaluate(client, `performance.now()`)
+  return {
+    login_form_ready_ms: loginFormReadyMs,
+    login_entry_ms: Math.max(0, submitStartedMs - loginFormReadyMs),
+    submit_started_ms: submitStartedMs,
+    submit_to_command_center_ms: Math.max(0, commandCenterReadyMs - submitStartedMs),
+    command_center_ready_ms: commandCenterReadyMs,
+  }
 }
 
 const activateMode = async (client, mode, selector, label, mobile) => {
@@ -749,10 +812,27 @@ const keyboardAudit = async (client) => {
   await evaluate(client, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`)
   const focusOrder = []
   const violations = []
+  const xtermEscapePaths = []
   let previous = await activeFocusProbe(client)
   for (let index = 0; index < 8; index += 1) {
     await dispatchKey(client, 'Tab')
-    const focused = await activeFocusProbe(client)
+    let focused = await activeFocusProbe(client)
+    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
+      const escape = await escapeXtermFocus(client)
+      xtermEscapePaths.push({
+        escape_path: escape.escape_path,
+        documented: escape.documented,
+        armed: escape.armed,
+        advanced: escape.advanced,
+        from: escape.from,
+        to: escape.to,
+      })
+      focused = escape.focused
+      if (!escape.documented || !escape.armed || !escape.advanced) {
+        violations.push({ step: index + 1, reason: 'documented xterm keyboard escape did not advance focus', key: escape.from })
+        break
+      }
+    }
     if (!focused.interactive) {
       violations.push({ step: index + 1, reason: 'focus did not reach an interactive element' })
       previous = focused
@@ -763,17 +843,32 @@ const keyboardAudit = async (client) => {
     if (!focused.focus_visible && (focused.outline === 'none' || focused.outline === '')) {
       violations.push({ step: index + 1, reason: 'focus indicator is not visible', key: focused.key })
     }
-    if (focused.xterm_proxy && previous.xterm_proxy && focused.key === previous.key) {
-      violations.push({ step: index + 1, reason: 'xterm intercepted Tab and prevented focus from advancing', key: focused.key })
-      break
-    }
     previous = focused
   }
   if (new Set(focusOrder).size < 5) violations.push({ reason: 'keyboard traversal reached fewer than five unique controls' })
   const reverseOrder = []
+  let reversePrevious = await activeFocusProbe(client)
   for (let index = 0; index < 3; index += 1) {
     await dispatchKey(client, 'Tab', { shift: true })
-    reverseOrder.push(await evaluate(client, `document.activeElement?.id || document.activeElement?.getAttribute('role') || document.activeElement?.tagName || null`))
+    let focused = await activeFocusProbe(client)
+    if (focused.xterm_proxy && reversePrevious.xterm_proxy && focused.key === reversePrevious.key) {
+      const escape = await escapeXtermFocus(client, { shift: true })
+      xtermEscapePaths.push({
+        escape_path: escape.escape_path,
+        documented: escape.documented,
+        armed: escape.armed,
+        advanced: escape.advanced,
+        from: escape.from,
+        to: escape.to,
+      })
+      focused = escape.focused
+      if (!escape.documented || !escape.armed || !escape.advanced) {
+        violations.push({ reason: 'documented reverse xterm keyboard escape did not advance focus', key: escape.from })
+        break
+      }
+    }
+    reverseOrder.push(focused.key)
+    reversePrevious = focused
   }
   const selectedTab = await evaluate(client, `(() => {
     const tab = document.querySelector('.board-section-tabs [aria-selected="true"], .board-section-tabs .active');
@@ -796,6 +891,7 @@ const keyboardAudit = async (client) => {
     checked: focusOrder.length + reverseOrder.length,
     focus_order: focusOrder,
     reverse_focus_order: reverseOrder,
+    xterm_escape_paths: xtermEscapePaths,
     activation,
     violations,
   }
@@ -902,22 +998,23 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const failedRequests = []
   const authenticationChallenges = []
   const authenticationChallengeTracker = createLocalOwnerChallengeTracker(baseUrl)
-  client.on('Runtime.consoleAPICalled', (event) => {
+  const subscriptions = []
+  subscriptions.push(client.on('Runtime.consoleAPICalled', (event) => {
     if (event.type === 'error') {
       retainEvidenceEntry(consoleErrors, diagnosticFingerprint(
         'console_error',
         event.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '),
       ))
     }
-  })
-  client.on('Runtime.exceptionThrown', (event) => retainEvidenceEntry(pageErrors, diagnosticFingerprint(
+  }))
+  subscriptions.push(client.on('Runtime.exceptionThrown', (event) => retainEvidenceEntry(pageErrors, diagnosticFingerprint(
     'page_exception',
     event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception',
-  )))
-  client.on('Network.requestWillBeSent', (event) => {
+  ))))
+  subscriptions.push(client.on('Network.requestWillBeSent', (event) => {
     authenticationChallengeTracker.observeRequest(event.requestId, event.request?.url)
-  })
-  client.on('Network.responseReceived', (event) => {
+  }))
+  subscriptions.push(client.on('Network.responseReceived', (event) => {
     const { response } = event
     if (response?.url?.startsWith(baseUrl) && response.status >= 400) {
       const entry = {
@@ -935,14 +1032,15 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
         retain: retainEvidenceEntry,
       })
     }
-  })
-  client.on('Network.loadingFailed', (event) => {
+  }))
+  subscriptions.push(client.on('Network.loadingFailed', (event) => {
     authenticationChallengeTracker.observeFailure(event.requestId)
     if (!event.canceled && !String(event.errorText).includes('ERR_ABORTED')) {
       retainEvidenceEntry(failedRequests, diagnosticFingerprint('network_loading_failed', event.errorText))
     }
-  })
+  }))
 
+  try {
   await client.send('Emulation.setDeviceMetricsOverride', {
     width: viewport.width,
     height: viewport.height,
@@ -959,16 +1057,31 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
   authenticationChallengeTracker.beginLoginCycle()
-  await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
+  const initialNavigation = await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
+  if (initialNavigation?.errorText || !initialNavigation?.loaderId) {
+    throw new Error(`${viewport.id} initial navigation did not create a loader`)
+  }
+  let initialAuthentication
   try {
-    await authenticateLocalOwner(
+    initialAuthentication = await authenticateLocalOwner(
       client,
       operatorToken,
       `${viewport.id} initial command center`,
       () => authenticationChallengeTracker.closePreSubmitPhase(),
     )
   } finally { authenticationChallengeTracker.closePreSubmitPhase() }
-  const startup = await evaluate(client, `performance.now()`)
+  const startupNavigation = await evaluate(client, `(() => {
+    const entry = performance.getEntriesByType('navigation').at(-1);
+    const url = new URL(location.href);
+    return {
+      total_ms: performance.now(),
+      time_origin_ms: performance.timeOrigin,
+      navigation_start_ms: entry?.startTime ?? null,
+      navigation_type: entry?.type ?? null,
+      navigation_path: url.pathname,
+      navigation_viewport: url.searchParams.get('qa'),
+    };
+  })()`)
   const snapshotResourceExpression = `(() => {
     const expectedPath = '/api/v1/boards/${scenario.board_id}/snapshot';
     const entries = performance.getEntriesByType('resource').filter((entry) => {
@@ -978,7 +1091,31 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     return entry && Number.isFinite(entry.duration) ? entry.duration : null;
   })()`
   await waitFor(client, `${snapshotResourceExpression} !== null`, 'authenticated snapshot resource timing')
+  await waitFor(
+    client,
+    AUTHENTICATED_DATA_READY_EXPRESSION,
+    'authenticated command center data readiness',
+  )
   const snapshot = await evaluate(client, snapshotResourceExpression)
+  const dataReadyMs = await evaluate(client, `performance.now()`)
+  const startup = Math.max(0, dataReadyMs - initialAuthentication.submit_started_ms)
+  const startupProvenance = {
+    loader_sha256: createHash('sha256').update(initialNavigation.loaderId).digest('hex'),
+    time_origin_ms: startupNavigation.time_origin_ms,
+    navigation_start_ms: startupNavigation.navigation_start_ms,
+    navigation_type: startupNavigation.navigation_type,
+    navigation_path: startupNavigation.navigation_path,
+    navigation_viewport: startupNavigation.navigation_viewport,
+    login_form_ready_ms: initialAuthentication.login_form_ready_ms,
+    login_entry_ms: initialAuthentication.login_entry_ms,
+    submit_to_command_center_ms: initialAuthentication.submit_to_command_center_ms,
+    command_center_ready_ms: initialAuthentication.command_center_ready_ms,
+    command_center_to_data_ready_ms: Math.max(0, dataReadyMs - initialAuthentication.command_center_ready_ms),
+    submit_to_data_ready_ms: startup,
+    navigation_to_data_ready_ms: dataReadyMs,
+    snapshot_resource_ms: snapshot,
+    data_ready_selector: AUTHENTICATED_DATA_READY_SELECTOR,
+  }
 
   const journeys = []
   const overflowSamples = []
@@ -1261,12 +1398,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   }
   const performanceEvidence = Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => {
     const observed = surface === 'startup' ? metrics.startup : metrics[surface]
-    const measurementMode = surface === 'startup' ? 'navigation_timing'
+    const measurementMode = surface === 'startup' ? 'authenticated_submit_to_ready'
       : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
     return [surface, {
       observed_ms: observed,
       measurement_mode: measurementMode,
       quality_gate_passed: qualityLinkedPass[surface],
+      ...(surface === 'startup' ? { provenance: startupProvenance } : {}),
       ...budgetFor(baseline, viewport.id, surface),
     }]
   }))
@@ -1306,6 +1444,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     },
     performance: performanceEvidence,
   })
+  } finally {
+    for (const unsubscribe of subscriptions) unsubscribe()
+  }
 }
 
 const stopChild = async (child) => {

@@ -52,7 +52,7 @@ const loadObservation = (path) => {
     }
     for (const surface of PERFORMANCE_SURFACES) {
       const metric = viewport.performance?.[surface]
-      const expectedMode = surface === 'startup' ? 'navigation_timing'
+      const expectedMode = surface === 'startup' ? 'authenticated_submit_to_ready'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
       if (!Number.isFinite(metric?.observed_ms) || metric.observed_ms < 0
         || metric.budget_ms !== null || metric.budget_source !== 'observation_only'
@@ -89,7 +89,7 @@ const main = () => {
       return [surface, {
         samples_ms: samples,
         observed_p95_ms: observedP95,
-        measurement_mode: surface === 'startup' ? 'navigation_timing'
+        measurement_mode: surface === 'startup' ? 'authenticated_submit_to_ready'
           : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
         ...checkedBudget(surface, observedP95),
       }]

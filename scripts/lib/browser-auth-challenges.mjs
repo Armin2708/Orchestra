@@ -3,9 +3,21 @@ import { createHash } from 'node:crypto'
 export const LOCAL_OWNER_CHALLENGE_PATHS = Object.freeze([
   '/api/v1/boards',
   '/api/v1/events',
+  '/api/v1/system',
+  '/api/v1/os/open-work',
+  '/api/v1/os/devices/self',
 ])
 
-const endpointDigest = (path) => createHash('sha256').update(path).digest('hex')
+export const REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS = Object.freeze([
+  '/api/v1/boards',
+  '/api/v1/events',
+])
+
+export const localOwnerChallengeEndpointDigest = (path) => createHash('sha256').update(path).digest('hex')
+
+export const LOCAL_OWNER_CHALLENGE_DIGESTS = Object.freeze(Object.fromEntries(
+  LOCAL_OWNER_CHALLENGE_PATHS.map((path) => [path, localOwnerChallengeEndpointDigest(path)]),
+))
 
 export const createLocalOwnerChallengeTracker = (baseUrl) => {
   const origin = new URL(baseUrl).origin
@@ -42,14 +54,17 @@ export const createLocalOwnerChallengeTracker = (baseUrl) => {
     },
     inventory() {
       const endpoints = LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
-        endpoint_sha256: endpointDigest(path),
+        endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
         count: counts.get(path) ?? 0,
       }))
       const totalCount = endpoints.reduce((sum, entry) => sum + entry.count, 0)
+      const requiredDigests = new Set(REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS
+        .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
       return {
         passed: loginCycles > 0
-          && endpoints.every((entry) => entry.count === loginCycles)
-          && totalCount === loginCycles * LOCAL_OWNER_CHALLENGE_PATHS.length
+          && endpoints.every((entry) => Number.isInteger(entry.count)
+            && entry.count >= 0 && entry.count <= loginCycles
+            && (!requiredDigests.has(entry.endpoint_sha256) || entry.count === loginCycles))
           && admittedRequests.size === 0,
         login_cycles: loginCycles,
         total_count: totalCount,

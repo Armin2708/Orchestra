@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ACCESSIBILITY_GATES,
+  AUTHENTICATED_DATA_READY_EXPRESSION,
   BETA_EXPERIENCE_BUDGETS_MS,
   BROWSER_BASELINE_SCHEMA_VERSION,
   BROWSER_JOURNEYS,
@@ -43,7 +44,9 @@ import {
   writeBrowserArtifact,
 } from '../scripts/lib/browser-quality.mjs'
 import {
+  LOCAL_OWNER_CHALLENGE_DIGESTS,
   LOCAL_OWNER_CHALLENGE_PATHS,
+  REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
   createLocalOwnerChallengeTracker,
   recordLocalOwnerHttpFailure,
 } from '../scripts/lib/browser-auth-challenges.mjs'
@@ -79,6 +82,21 @@ const passingEvidence = () => {
     console_errors: [],
     page_errors: [],
     failed_requests: [],
+    authentication_challenges: REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
+      label: 'expected_local_owner_challenge',
+      status: 401,
+      endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
+    })),
+    authentication_challenge_inventory: {
+      passed: true,
+      login_cycles: 1,
+      total_count: 2,
+      pending_request_count: 0,
+      endpoints: LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
+        endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
+        count: REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS.includes(path) ? 1 : 0,
+      })),
+    },
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     readiness: { dependency_graph_nodes_rendered: 1, transcript_events_rendered: 250, search_matches_rendered: 5 },
     journeys: BROWSER_JOURNEYS.map((name) => ({
@@ -104,38 +122,94 @@ const passingEvidence = () => {
       accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
-      observed_ms: 10,
-      measurement_mode: surface === 'startup' ? 'navigation_timing'
+      observed_ms: surface === 'startup' ? 4 : 10,
+      measurement_mode: surface === 'startup' ? 'authenticated_submit_to_ready'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
       quality_gate_passed: true,
       budget_ms: 100,
       budget_source: 'checked_observation',
+      ...(surface === 'startup' ? { provenance: {
+        loader_sha256: evidenceDigest(`startup:${viewport.id}`),
+        time_origin_ms: 1_000 + RESPONSIVE_VIEWPORTS.findIndex((candidate) => candidate.id === viewport.id),
+        navigation_start_ms: 0,
+        navigation_type: 'navigate',
+        navigation_path: '/',
+        navigation_viewport: viewport.id,
+        login_form_ready_ms: 4,
+        login_entry_ms: 2,
+        submit_to_command_center_ms: 1,
+        command_center_ready_ms: 7,
+        command_center_to_data_ready_ms: 3,
+        submit_to_data_ready_ms: 4,
+        navigation_to_data_ready_ms: 10,
+        snapshot_resource_ms: 3,
+        data_ready_selector: '.cc-shell[data-connection="live"]',
+      } } : {}),
     }])),
   })),
   }
   return finalizeBrowserEvidence(evidence, [])
 }
 
+const currentBaseline = () => {
+  const upgraded = structuredClone(baseline) as any
+  upgraded.schema_version = BROWSER_BASELINE_SCHEMA_VERSION
+  for (const viewport of upgraded.viewports) {
+    viewport.performance.startup.measurement_mode = 'authenticated_submit_to_ready'
+  }
+  upgraded.sha256 = verifiableDocumentDigest(upgraded)
+  return upgraded
+}
+
 describe('QA-013–QA-015 browser quality evidence contract', () => {
+  it('uses the breaking schema-v5 contract for authenticated browser evidence', () => {
+    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(5)
+    expect(BROWSER_BASELINE_SCHEMA_VERSION).toBe(4)
+  })
+
+  it('does not close startup on navigation or an offline command center', () => {
+    const evaluateReady = (connection: 'absent' | 'offline' | 'live') => Function(
+      'document',
+      `return ${AUTHENTICATED_DATA_READY_EXPRESSION}`,
+    )({
+      querySelector: (selector: string) => selector === '.cc-shell[data-connection="live"]'
+        && connection === 'live' ? { dataset: { connection: 'live' } } : null,
+    })
+    expect(evaluateReady('absent')).toBe(false)
+    expect(evaluateReady('offline')).toBe(false)
+    expect(evaluateReady('live')).toBe(true)
+  })
+
   it('admits only request-id-bound pre-submit owner challenges and fails post-submit 401 closed', () => {
     const tracker = createLocalOwnerChallengeTracker('http://127.0.0.1:4312')
     tracker.beginLoginCycle()
     expect(tracker.observeRequest('boards-pre', 'http://127.0.0.1:4312/api/v1/boards')).toBe(true)
     expect(tracker.observeRequest('events-pre', 'http://127.0.0.1:4312/api/v1/events')).toBe(true)
+    for (const [index, path] of LOCAL_OWNER_CHALLENGE_PATHS.slice(2).entries()) {
+      expect(tracker.observeRequest(`optional-${index}`, `http://127.0.0.1:4312${path}`)).toBe(true)
+    }
     expect(tracker.observeRequest('snapshot-pre', 'http://127.0.0.1:4312/api/v1/boards/7/snapshot')).toBe(false)
     expect(tracker.observeRequest('foreign-pre', 'https://example.invalid/api/v1/boards')).toBe(false)
     tracker.closePreSubmitPhase()
     expect(tracker.observeRequest('boards-post', 'http://127.0.0.1:4312/api/v1/boards')).toBe(false)
     expect(tracker.observeResponse('boards-pre', 401).expected).toBe(true)
     expect(tracker.observeResponse('events-pre', 401).expected).toBe(true)
+    for (const [index] of LOCAL_OWNER_CHALLENGE_PATHS.slice(2).entries()) {
+      expect(tracker.observeResponse(`optional-${index}`, 401).expected).toBe(true)
+    }
     expect(tracker.observeResponse('snapshot-pre', 401).expected).toBe(false)
     expect(tracker.observeResponse('boards-post', 401).expected).toBe(false)
-    expect(tracker.inventory()).toMatchObject({
+    const inventory = tracker.inventory()
+    expect(inventory).toMatchObject({
       passed: true,
       login_cycles: 1,
-      total_count: 2,
-      endpoints: expect.arrayContaining(LOCAL_OWNER_CHALLENGE_PATHS.map(() => expect.objectContaining({ count: 1 }))),
+      total_count: LOCAL_OWNER_CHALLENGE_PATHS.length,
     })
+    expect(inventory.endpoints).toHaveLength(LOCAL_OWNER_CHALLENGE_PATHS.length)
+    expect(inventory.endpoints).toEqual(expect.arrayContaining(LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
+      endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
+      count: 1,
+    }))))
   })
 
   it('retains an adversarial post-submit 401 as a failed request', () => {
@@ -217,11 +291,22 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     const journey = passingEvidence().viewports[0].journeys[0]
     journey.interaction_modes.pointer.readiness_asserted = 'x'.repeat(10_000)
     journey.interaction_modes.pointer.action_evidence = { traversal: Array.from({ length: 100 }, (_, index) => index) }
-    journey.accessibility.keyboard_focus = { passed: true, checked: 20, focus_order: Array.from({ length: 100 }, (_, index) => index) }
+    const escapePath = {
+      escape_path: 'Escape+Tab', documented: true, armed: true, advanced: true,
+      from: 'Terminal input', to: 'BUTTON:6',
+    }
+    journey.interaction_modes.keyboard.action_evidence.xterm_escape_paths = [escapePath]
+    journey.accessibility.keyboard_focus = {
+      passed: true, checked: 20, focus_order: Array.from({ length: 100 }, (_, index) => index),
+      xterm_escape_paths: [escapePath],
+    }
     const compact = compactJourneyEvidence(journey)
     expect(compact.interaction_modes.pointer).not.toHaveProperty('readiness_asserted')
     expect(compact.interaction_modes.pointer).not.toHaveProperty('action_evidence')
-    expect(compact.accessibility.keyboard_focus).toEqual({ passed: true, checked: 20 })
+    expect(compact.interaction_modes.keyboard.action_evidence.xterm_escape_paths).toEqual([escapePath])
+    expect(compact.accessibility.keyboard_focus).toEqual({
+      passed: true, checked: 20, xterm_escape_paths: [escapePath],
+    })
 
     journey.interaction_modes.pointer.passed = false
     journey.interaction_modes.pointer.error = 'pointer did not activate'
@@ -271,11 +356,12 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
   })
 
   it('binds every performance budget to the maximum of three retained observations', () => {
-    expect(baseline.schema_version).toBe(BROWSER_BASELINE_SCHEMA_VERSION)
-    expect(baseline.methodology.runs).toBe(3)
-    expect(baseline.capture_artifacts).toHaveLength(3)
-    expect(validatePerformanceBaseline(baseline)).toEqual([])
-    for (const viewport of baseline.viewports) {
+    const checked = currentBaseline()
+    expect(checked.schema_version).toBe(BROWSER_BASELINE_SCHEMA_VERSION)
+    expect(checked.methodology.runs).toBe(3)
+    expect(checked.capture_artifacts).toHaveLength(3)
+    expect(validatePerformanceBaseline(checked)).toEqual([])
+    for (const viewport of checked.viewports) {
       expect(RESPONSIVE_VIEWPORTS.some((candidate) => candidate.id === viewport.id)).toBe(true)
       for (const surface of PERFORMANCE_SURFACES) {
         const metric = viewport.performance[surface as keyof typeof viewport.performance]
@@ -287,22 +373,23 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
   })
 
   it('rejects missing, non-finite, self-derived, or digest-tampered checked budgets', () => {
-    const missing = structuredClone(baseline) as any
+    const checked = currentBaseline()
+    const missing = structuredClone(checked) as any
     delete missing.viewports[0].performance.search.budget_ms
     missing.sha256 = verifiableDocumentDigest(missing)
     expect(validatePerformanceBaseline(missing)).toContain('baseline desktop search budget_ms is invalid')
 
-    const nonFinite = structuredClone(baseline) as any
+    const nonFinite = structuredClone(checked) as any
     nonFinite.viewports[0].performance.search.budget_ms = Number.POSITIVE_INFINITY
     nonFinite.sha256 = verifiableDocumentDigest(nonFinite)
     expect(validatePerformanceBaseline(nonFinite)).toContain('baseline desktop search budget_ms is invalid')
 
-    const selfDerived = structuredClone(baseline) as any
+    const selfDerived = structuredClone(checked) as any
     selfDerived.viewports[0].performance.search.budget_source = 'capture_only'
     selfDerived.sha256 = verifiableDocumentDigest(selfDerived)
     expect(validatePerformanceBaseline(selfDerived)).toContain('baseline desktop search budget source is invalid')
 
-    const tampered = structuredClone(baseline) as any
+    const tampered = structuredClone(checked) as any
     tampered.methodology.runs = 99
     expect(validatePerformanceBaseline(tampered)).toContain('baseline digest is invalid')
 
@@ -314,8 +401,9 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
 
   it('recomputes samples, p95, and budgets from captures so a self-digested edit cannot pass', () => {
     const captures = [observation1, observation2, observation3] as any[]
-    expect(validateBaselineAgainstCaptures(baseline, captures)).toEqual([])
-    const exploit = structuredClone(baseline) as any
+    const checked = currentBaseline()
+    expect(validateBaselineAgainstCaptures(checked, captures)).toEqual([])
+    const exploit = structuredClone(checked) as any
     const metric = exploit.viewports[0].performance.search
     metric.samples_ms = metric.samples_ms.map((sample: number) => sample + 10)
     metric.observed_p95_ms = Math.max(...metric.samples_ms)
@@ -566,6 +654,55 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     ]))
   })
 
+  it('rejects missing, mismatched, duplicate, or unknown authentication challenge evidence', () => {
+    const mutations = [
+      (viewport: any) => { delete viewport.authentication_challenge_inventory },
+      (viewport: any) => {
+        viewport.authentication_challenge_inventory.endpoints[0].count = 0
+        viewport.authentication_challenge_inventory.total_count = 1
+      },
+      (viewport: any) => {
+        viewport.authentication_challenge_inventory.endpoints[4]
+          = { ...viewport.authentication_challenge_inventory.endpoints[0] }
+      },
+      (viewport: any) => { viewport.authentication_challenges[0].endpoint_sha256 = 'f'.repeat(64) },
+      (viewport: any) => { viewport.authentication_challenges.pop() },
+    ]
+    for (const mutate of mutations) {
+      const evidence = passingEvidence()
+      mutate(evidence.viewports[0])
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('desktop has invalid authentication challenge inventory')
+    }
+  })
+
+  it('rejects stale, reused, or internally inconsistent startup navigation provenance', () => {
+    const inconsistent = passingEvidence()
+    inconsistent.viewports[0].performance.startup.provenance.command_center_ready_ms = 9
+    inconsistent.sha256 = verifiableDocumentDigest(inconsistent)
+    expect(validateBrowserQualityEvidence(inconsistent)).toContain('desktop has invalid startup navigation provenance')
+
+    const reused = passingEvidence()
+    reused.viewports[1].performance.startup.provenance.loader_sha256
+      = reused.viewports[0].performance.startup.provenance.loader_sha256
+    reused.viewports[1].performance.startup.provenance.time_origin_ms
+      = reused.viewports[0].performance.startup.provenance.time_origin_ms
+    reused.sha256 = verifiableDocumentDigest(reused)
+    expect(validateBrowserQualityEvidence(reused)).toContain('startup navigation provenance is not unique across viewports')
+  })
+
+  it('rejects an xterm escape claim that did not prove documented focus advancement', () => {
+    const evidence = passingEvidence()
+    evidence.viewports[0].journeys[0].accessibility.keyboard_focus.xterm_escape_paths = [{
+      escape_path: 'Escape+Tab', documented: true, armed: true, advanced: false,
+      from: 'Terminal input', to: 'Terminal input',
+    }]
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence))
+      .toContain('desktop graph overview has invalid xterm keyboard escape evidence')
+  })
+
   it('rejects duplicate, missing, or unknown canonical journeys', () => {
     for (const mutate of [
       (evidence: any) => { evidence.viewports[0].journeys.pop() },
@@ -775,5 +912,8 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(authSource).toContain("label: 'expected_local_owner_challenge'")
     expect(source).toContain("type: 'keyDown'")
     expect(source).toContain("...(result.violations ?? []), ...(result.unsupported ?? [])")
+    expect(source).toContain('for (const unsubscribe of subscriptions) unsubscribe()')
+    expect(source).toContain("escape_path: shift ? 'Escape+Shift+Tab' : 'Escape+Tab'")
+    expect(source).toContain('AUTHENTICATED_DATA_READY_EXPRESSION')
   })
 })

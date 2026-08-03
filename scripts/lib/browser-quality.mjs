@@ -4,9 +4,14 @@ import {
   renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import {
+  LOCAL_OWNER_CHALLENGE_DIGESTS,
+  LOCAL_OWNER_CHALLENGE_PATHS,
+  REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
+} from './browser-auth-challenges.mjs'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 4
-export const BROWSER_BASELINE_SCHEMA_VERSION = 3
+export const BROWSER_QUALITY_SCHEMA_VERSION = 5
+export const BROWSER_BASELINE_SCHEMA_VERSION = 4
 export const BROWSER_BUILD_SCHEMA_VERSION = 3
 
 export const RESPONSIVE_VIEWPORTS = Object.freeze([
@@ -49,6 +54,9 @@ export const EVIDENCE_MAX_STRING_LENGTH = 1_024
 export const EVIDENCE_MAX_ARRAY_LENGTH = 25
 export const EVIDENCE_MAX_DEPTH = 12
 export const EVIDENCE_MAX_BYTES = 512 * 1_024
+
+export const AUTHENTICATED_DATA_READY_SELECTOR = '.cc-shell[data-connection="live"]'
+export const AUTHENTICATED_DATA_READY_EXPRESSION = `Boolean(document.querySelector('${AUTHENTICATED_DATA_READY_SELECTOR}'))`
 
 export const BETA_EXPERIENCE_BUDGETS_MS = Object.freeze({
   startup: 1_500,
@@ -236,7 +244,7 @@ export const compactJourneyEvidence = (journey) => ({
     if (mode === 'keyboard' && result.action_evidence) {
       compact.action_evidence = Object.fromEntries([
         'focus_acquisition', 'programmatic_focus', 'tab_events', 'arrow_events',
-        'xterm_focus_encounters', 'activation_key',
+        'xterm_focus_encounters', 'xterm_escape_paths', 'activation_key',
       ].filter((key) => result.action_evidence[key] !== undefined)
         .map((key) => [key, result.action_evidence[key]]))
     }
@@ -252,6 +260,8 @@ export const compactJourneyEvidence = (journey) => ({
   accessibility: Object.fromEntries(Object.entries(journey.accessibility ?? {}).map(([gate, result]) => [gate, {
     passed: result.passed,
     ...(result.checked !== undefined ? { checked: result.checked } : {}),
+    ...(gate === 'keyboard_focus' && Array.isArray(result.xterm_escape_paths)
+      ? { xterm_escape_paths: result.xterm_escape_paths.slice(0, EVIDENCE_MAX_ARRAY_LENGTH) } : {}),
     ...(result.passed === true ? {} : {
       violations: result.violations ?? [],
       unsupported: result.unsupported ?? [],
@@ -542,7 +552,7 @@ export const validatePerformanceBaseline = (baseline) => {
       if (metric.budget_source !== 'checked_observation') {
         errors.push(`baseline ${expected.id} ${surface} budget source is invalid`)
       }
-      const expectedMode = surface === 'startup' ? 'navigation_timing'
+      const expectedMode = surface === 'startup' ? 'authenticated_submit_to_ready'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
       if (metric.measurement_mode !== expectedMode) {
         errors.push(`baseline ${expected.id} ${surface} measurement mode is invalid`)
@@ -579,7 +589,7 @@ export const validateBaselineAgainstCaptures = (baseline, captures) => {
       const recomputedP95 = percentile(samples, 0.95)
       const recomputedBudget = checkedBudget(surface, recomputedP95)
       const metric = claimed?.performance?.[surface]
-      const expectedMode = surface === 'startup' ? 'navigation_timing'
+      const expectedMode = surface === 'startup' ? 'authenticated_submit_to_ready'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer'
       if (canonicalJson(metric?.samples_ms) !== canonicalJson(samples)) errors.push(`baseline ${viewport.id} ${surface} samples do not match captures`)
       if (metric?.observed_p95_ms !== recomputedP95) errors.push(`baseline ${viewport.id} ${surface} p95 does not match captures`)
@@ -623,6 +633,31 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     if (actual.console_errors?.length) errors.push(`${expected.id} emitted console errors`)
     if (actual.page_errors?.length) errors.push(`${expected.id} emitted page errors`)
     if (actual.failed_requests?.length) errors.push(`${expected.id} has failed requests`)
+    const challengeInventory = actual.authentication_challenge_inventory
+    const challengeEndpoints = Array.isArray(challengeInventory?.endpoints) ? challengeInventory.endpoints : []
+    const allowedChallengeDigests = new Set(Object.values(LOCAL_OWNER_CHALLENGE_DIGESTS))
+    const requiredChallengeDigests = new Set(REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS
+      .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
+    const challengeDigests = challengeEndpoints.map((entry) => entry?.endpoint_sha256)
+    const challengeCycles = challengeInventory?.login_cycles
+    const challengeTotal = challengeEndpoints.reduce((sum, entry) => sum
+      + (Number.isInteger(entry?.count) ? entry.count : 0), 0)
+    const retainedChallenges = Array.isArray(actual.authentication_challenges)
+      ? actual.authentication_challenges : []
+    const validChallengeInventory = challengeInventory?.passed === true
+      && Number.isInteger(challengeCycles) && challengeCycles > 0
+      && challengeEndpoints.length === LOCAL_OWNER_CHALLENGE_PATHS.length
+      && new Set(challengeDigests).size === LOCAL_OWNER_CHALLENGE_PATHS.length
+      && challengeDigests.every((digest) => allowedChallengeDigests.has(digest))
+      && challengeEndpoints.every((entry) => Number.isInteger(entry?.count)
+        && entry.count >= 0 && entry.count <= challengeCycles
+        && (!requiredChallengeDigests.has(entry.endpoint_sha256) || entry.count === challengeCycles))
+      && challengeInventory.total_count === challengeTotal
+      && challengeInventory.pending_request_count === 0
+      && retainedChallenges.length === Math.min(challengeTotal, EVIDENCE_MAX_ARRAY_LENGTH)
+      && retainedChallenges.every((entry) => entry?.label === 'expected_local_owner_challenge'
+        && entry.status === 401 && allowedChallengeDigests.has(entry.endpoint_sha256))
+    if (!validChallengeInventory) errors.push(`${expected.id} has invalid authentication challenge inventory`)
     for (const gate of ACCESSIBILITY_GATES) {
       if (actual.accessibility?.[gate]?.passed !== true) errors.push(`${expected.id} failed ${gate}`)
     }
@@ -666,6 +701,16 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         || keyboardEvidence.tab_events < 1) {
         errors.push(`${expected.id} ${journey.name} lacks keyboard-only activation evidence`)
       }
+      const xtermEscapePaths = [
+        ...(Array.isArray(keyboardEvidence?.xterm_escape_paths) ? keyboardEvidence.xterm_escape_paths : []),
+        ...(Array.isArray(journey.accessibility?.keyboard_focus?.xterm_escape_paths)
+          ? journey.accessibility.keyboard_focus.xterm_escape_paths : []),
+      ]
+      if (xtermEscapePaths.some((path) => !['Escape+Tab', 'Escape+Shift+Tab'].includes(path?.escape_path)
+        || path.documented !== true || path.armed !== true || path.advanced !== true
+        || typeof path.from !== 'string' || typeof path.to !== 'string' || path.from === path.to)) {
+        errors.push(`${expected.id} ${journey.name} has invalid xterm keyboard escape evidence`)
+      }
       if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
         errors.push(`${expected.id} ${journey.name} is missing separately labeled DOM fallback evidence`)
       }
@@ -682,7 +727,7 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       }
     }
     const expectedMeasurementModes = {
-      startup: 'navigation_timing',
+      startup: 'authenticated_submit_to_ready',
       snapshot_loading: 'authenticated_fetch',
       transcript_loading: 'pointer',
       graph_view: 'pointer',
@@ -704,7 +749,40 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       if (typeof result?.quality_gate_passed !== 'boolean') {
         errors.push(`${expected.id} ${surface} is missing quality-linked performance status`)
       }
+      if (surface === 'startup') {
+        const provenance = result?.provenance
+        const submitStarted = provenance?.login_form_ready_ms + provenance?.login_entry_ms
+        const navigationToReady = submitStarted + provenance?.submit_to_data_ready_ms
+        const commandCenterReady = submitStarted + provenance?.submit_to_command_center_ms
+        if (!/^[a-f0-9]{64}$/.test(String(provenance?.loader_sha256 ?? ''))
+          || !Number.isFinite(provenance?.time_origin_ms) || provenance.time_origin_ms <= 0
+          || provenance?.navigation_start_ms !== 0
+          || provenance?.navigation_type !== 'navigate'
+          || provenance?.navigation_path !== '/'
+          || provenance?.navigation_viewport !== expected.id
+          || !Number.isFinite(provenance?.login_form_ready_ms) || provenance.login_form_ready_ms < 0
+          || !Number.isFinite(provenance?.login_entry_ms) || provenance.login_entry_ms < 0
+          || !Number.isFinite(provenance?.submit_to_command_center_ms) || provenance.submit_to_command_center_ms < 0
+          || !Number.isFinite(provenance?.command_center_ready_ms) || provenance.command_center_ready_ms < 0
+          || !Number.isFinite(provenance?.command_center_to_data_ready_ms) || provenance.command_center_to_data_ready_ms < 0
+          || !Number.isFinite(provenance?.submit_to_data_ready_ms) || provenance.submit_to_data_ready_ms < 0
+          || !Number.isFinite(provenance?.navigation_to_data_ready_ms) || provenance.navigation_to_data_ready_ms < 0
+          || !Number.isFinite(provenance?.snapshot_resource_ms) || provenance.snapshot_resource_ms < 0
+          || provenance?.data_ready_selector !== AUTHENTICATED_DATA_READY_SELECTOR
+          || Math.abs(commandCenterReady - provenance.command_center_ready_ms) > 1
+          || Math.abs(navigationToReady - provenance.navigation_to_data_ready_ms) > 1
+          || Math.abs(provenance.command_center_ready_ms + provenance.command_center_to_data_ready_ms
+            - provenance.navigation_to_data_ready_ms) > 1
+          || Math.abs(result.observed_ms - provenance.submit_to_data_ready_ms) > 1) {
+          errors.push(`${expected.id} has invalid startup navigation provenance`)
+        }
+      }
     }
+  }
+  const startupProvenance = viewports.map((viewport) => viewport?.performance?.startup?.provenance)
+  if (new Set(startupProvenance.map((provenance) => provenance?.loader_sha256)).size !== RESPONSIVE_VIEWPORTS.length
+    || new Set(startupProvenance.map((provenance) => provenance?.time_origin_ms)).size !== RESPONSIVE_VIEWPORTS.length) {
+    errors.push('startup navigation provenance is not unique across viewports')
   }
   if (!/^[a-f0-9]{64}$/.test(String(evidence?.source?.artifact_identity?.root_dist_sha256 ?? ''))
     || !/^[a-f0-9]{64}$/.test(String(evidence?.source?.artifact_identity?.web_dist_sha256 ?? ''))) {

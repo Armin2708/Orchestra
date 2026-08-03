@@ -50,6 +50,10 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   `checked_observation`. Capture mode emits observations only and cannot self-budget.
 - Baseline samples, p95 and budgets are recomputed directly from every retained observation during
   validation; changing claimed values and recomputing the self-digest still fails.
+- Browser evidence schema v5 defines startup as valid owner-token submission through authenticated
+  snapshot and `.cc-shell[data-connection="live"]` readiness. Navigation/login phases, fresh loader
+  identity and unique `performance.timeOrigin` remain diagnostic provenance. Baseline schema v4 is
+  required because older navigation-timing startup samples are not comparable.
 - Retained paths must resolve to real non-symlink files inside
   `docs/qa-evidence/browser-quality/`; absolute, escaping and symlink paths fail closed.
 - Manifest creation refuses dirty tracked source, hashes every tracked file with SHA-256, builds
