@@ -316,6 +316,7 @@ export const createSeedBudgetPacer = ({
     latestCompletedAtMs: null,
     waitCount: 0,
     waitMs: 0,
+    responseToBoundaryElapsedMs: [],
   }]))
   const completionWaiters = new Set()
   const rateLimitFailures = []
@@ -343,8 +344,10 @@ export const createSeedBudgetPacer = ({
   const waitForNextSegment = async (state) => {
     while (state.inFlight > 0) await waitForCompletion()
     if (state.latestCompletedAtMs === null) throw new Error('seed budget boundary has no completed response')
-    const deadline = state.latestCompletedAtMs + state.windowMs
+    const boundaryResponseAtMs = state.latestCompletedAtMs
+    const deadline = boundaryResponseAtMs + state.windowMs
     while (now() < deadline) await performWait(state, deadline - now())
+    state.responseToBoundaryElapsedMs.push(Math.max(0, now() - boundaryResponseAtMs))
     state.segmentStarts = 0
     state.latestCompletedAtMs = null
   }
@@ -411,9 +414,8 @@ export const createSeedBudgetPacer = ({
       while (totalInFlight > 0) await waitForCompletion()
       if (finalResponseAtMs === null) throw new Error('browser fixture seed completed without a response')
       const deadline = finalResponseAtMs + REQUEST_BUDGET_WINDOW_MS
-      const startedAt = now()
       while (now() < deadline) await sleep(Math.min(deadline - now(), REQUEST_BUDGET_WINDOW_MS))
-      finalDrainMs = Math.max(0, now() - startedAt)
+      finalDrainMs = Math.max(0, now() - finalResponseAtMs)
       completed = true
       if (rateLimitResponseCount > 0) {
         throw new Error(`fixture seed observed ${rateLimitResponseCount} operational 429 response(s)`)
@@ -437,6 +439,7 @@ export const createSeedBudgetPacer = ({
         limit: state.ceiling + state.reserve,
         wait_count: state.waitCount,
         wait_ms: state.waitMs,
+        response_to_boundary_elapsed_ms: structuredClone(state.responseToBoundaryElapsedMs),
       })
       return {
         request: familyEvidence(states.request),
@@ -987,7 +990,7 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
   const seedTopLevelKeys = ['request', 'command', 'provider', 'final_drain_ms', 'max_in_flight', 'rate_limit_response_count']
   const seedFamilyKeys = [
     'observed_starts', 'completed_responses', 'window_ms', 'ceiling', 'reserve', 'limit',
-    'wait_count', 'wait_ms',
+    'wait_count', 'wait_ms', 'response_to_boundary_elapsed_ms',
   ]
   const validSeedFamily = (family, { observed, windowMs, ceiling, reserve, mustWait }) => family
     && typeof family === 'object'
@@ -1001,6 +1004,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     && family.limit === family.ceiling + family.reserve
     && Number.isInteger(family.wait_count) && family.wait_count >= 0
     && Number.isFinite(family.wait_ms) && family.wait_ms >= 0
+    && Array.isArray(family.response_to_boundary_elapsed_ms)
+    && family.response_to_boundary_elapsed_ms.length === Math.floor((observed - 1) / ceiling)
+    && family.response_to_boundary_elapsed_ms.every((elapsed) => Number.isFinite(elapsed)
+      && elapsed >= windowMs)
     && (mustWait
       ? family.wait_count > 0 && family.wait_ms > 0
       : family.wait_count === 0 && family.wait_ms === 0)
@@ -1031,7 +1038,8 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       === seedBudgetPacing.request.observed_starts
     && evidence?.scenario?.transcript_events === 250
     && evidence?.scenario?.graph_agents === 18
-    && Number.isFinite(seedBudgetPacing.final_drain_ms) && seedBudgetPacing.final_drain_ms > 0
+    && Number.isFinite(seedBudgetPacing.final_drain_ms)
+    && seedBudgetPacing.final_drain_ms >= REQUEST_BUDGET_WINDOW_MS
     && Number.isInteger(seedBudgetPacing.max_in_flight)
     && seedBudgetPacing.max_in_flight > 0 && seedBudgetPacing.max_in_flight <= SEED_MAX_IN_FLIGHT
     && seedBudgetPacing.rate_limit_response_count === 0

@@ -117,6 +117,7 @@ const passingEvidence = () => {
       limit: REQUEST_BUDGET_CEILING + REQUEST_BUDGET_RESERVE,
       wait_count: 0,
       wait_ms: 0,
+      response_to_boundary_elapsed_ms: [],
     },
     command: {
       observed_starts: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
@@ -127,6 +128,7 @@ const passingEvidence = () => {
       limit: SEED_COMMAND_BUDGET_CEILING + SEED_COMMAND_BUDGET_RESERVE,
       wait_count: 1,
       wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+      response_to_boundary_elapsed_ms: [SEED_COMMAND_BUDGET_WINDOW_MS],
     },
     provider: {
       observed_starts: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
@@ -137,6 +139,7 @@ const passingEvidence = () => {
       limit: SEED_PROVIDER_BUDGET_CEILING + SEED_PROVIDER_BUDGET_RESERVE,
       wait_count: 0,
       wait_ms: 0,
+      response_to_boundary_elapsed_ms: [],
     },
     final_drain_ms: REQUEST_BUDGET_WINDOW_MS,
     max_in_flight: SEED_MAX_IN_FLIGHT,
@@ -446,6 +449,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         limit: REQUEST_BUDGET_CEILING + REQUEST_BUDGET_RESERVE,
         wait_count: 0,
         wait_ms: 0,
+        response_to_boundary_elapsed_ms: [],
       },
       command: {
         observed_starts: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
@@ -456,6 +460,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         limit: SEED_COMMAND_BUDGET_CEILING + SEED_COMMAND_BUDGET_RESERVE,
         wait_count: 1,
         wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+        response_to_boundary_elapsed_ms: [SEED_COMMAND_BUDGET_WINDOW_MS],
       },
       provider: {
         observed_starts: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
@@ -466,6 +471,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         limit: SEED_PROVIDER_BUDGET_CEILING + SEED_PROVIDER_BUDGET_RESERVE,
         wait_count: 0,
         wait_ms: 0,
+        response_to_boundary_elapsed_ms: [],
       },
       final_drain_ms: REQUEST_BUDGET_WINDOW_MS,
       max_in_flight: SEED_MAX_IN_FLIGHT,
@@ -501,7 +507,39 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       observed_starts: SEED_COMMAND_BUDGET_CEILING + 1,
       wait_count: 2,
       wait_ms: 60_410,
+      response_to_boundary_elapsed_ms: [60_500],
     })
+  })
+
+  it('records exact response-boundary elapsed time when scheduler delay precedes a one-ms sleep', async () => {
+    let now = 0
+    const waits: number[] = []
+    const pacer = createSeedBudgetPacer({
+      now: () => now,
+      sleep: async (milliseconds: number) => { waits.push(milliseconds); now += milliseconds },
+    })
+    for (let offset = 0; offset < SEED_COMMAND_BUDGET_CEILING; offset += SEED_MAX_IN_FLIGHT) {
+      const reservations = await Promise.all(Array.from(
+        { length: SEED_MAX_IN_FLIGHT },
+        () => pacer.beforeRequest('command'),
+      ))
+      for (const reservation of reservations) {
+        pacer.completeRequest(reservation, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+      }
+    }
+    now = SEED_COMMAND_BUDGET_WINDOW_MS - 1
+    const next = await pacer.beforeRequest('command')
+    expect(waits).toEqual([1])
+    expect(pacer.evidence().command).toMatchObject({
+      wait_count: 1,
+      wait_ms: 1,
+      response_to_boundary_elapsed_ms: [SEED_COMMAND_BUDGET_WINDOW_MS],
+    })
+    pacer.completeRequest(next, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+    now += REQUEST_BUDGET_WINDOW_MS - 1
+    await pacer.finishAndDrain()
+    expect(waits).toEqual([1, 1])
+    expect(pacer.evidence().final_drain_ms).toBe(REQUEST_BUDGET_WINDOW_MS)
   })
 
   it('repeats response-anchored pacing across multiple slow command windows', async () => {
@@ -530,6 +568,10 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       observed_starts: SEED_COMMAND_BUDGET_CEILING * 2 + 1,
       wait_count: 2,
       wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS * 2,
+      response_to_boundary_elapsed_ms: [
+        SEED_COMMAND_BUDGET_WINDOW_MS,
+        SEED_COMMAND_BUDGET_WINDOW_MS,
+      ],
     })
     expect(pacer.evidence().max_in_flight).toBe(SEED_MAX_IN_FLIGHT)
   })
@@ -1092,6 +1134,12 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         evidence.seed_budget_pacing.request.wait_count = 1
         evidence.seed_budget_pacing.request.wait_ms = 60_000
       },
+      (evidence: any) => {
+        evidence.seed_budget_pacing.command.wait_count = 1
+        evidence.seed_budget_pacing.command.wait_ms = 1
+        evidence.seed_budget_pacing.command.response_to_boundary_elapsed_ms = [1]
+      },
+      (evidence: any) => { evidence.seed_budget_pacing.final_drain_ms = 1 },
       (evidence: any) => { evidence.seed_budget_pacing.final_drain_ms = 0 },
       (evidence: any) => { evidence.seed_budget_pacing.max_in_flight = 21 },
       (evidence: any) => { evidence.seed_budget_pacing.rate_limit_response_count = 1 },
@@ -1106,6 +1154,16 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       expect(validateBrowserQualityEvidence(evidence))
         .toContain('seed budget pacing provenance is invalid')
     }
+  })
+
+  it('accepts exact response-boundary elapsed provenance despite a one-ms recorded sleep', () => {
+    const evidence = passingEvidence()
+    evidence.seed_budget_pacing.command.wait_count = 1
+    evidence.seed_budget_pacing.command.wait_ms = 1
+    evidence.seed_budget_pacing.command.response_to_boundary_elapsed_ms = [SEED_COMMAND_BUDGET_WINDOW_MS]
+    evidence.seed_budget_pacing.final_drain_ms = REQUEST_BUDGET_WINDOW_MS
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence)).toEqual([])
   })
 
   it('rejects missing, mismatched, duplicate, or unknown authentication challenge evidence', () => {
