@@ -41,7 +41,7 @@ archive and does not make the following safe to attach or paste:
 Do not attach or paste any of the following:
 
 - `ORCHESTRA_HOME`, `orchestra.db`, SQLite WAL/SHM files, or raw database exports;
-- `token`, `agent-token`, `vapid-reference.json`, hook session files, browser storage, pairing
+- `token`, `owner-password.json`, `agent-token`, `vapid-reference.json`, hook session files, browser storage, pairing
   artifacts, device/stream credentials, or remote URLs;
 - provider credentials, login output, environment dumps, keychain output, cookies, or request
   authorization headers;

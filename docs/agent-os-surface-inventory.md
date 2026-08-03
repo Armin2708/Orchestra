@@ -19,8 +19,8 @@ is `test/agent-os-baseline-docs.test.ts`.
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
 | SQLite application tables | 170 | 3 | 10 | 17 | 200 |
-| Contract-scoped registered HTTP routes | 168 | 29 | 25 | 9 | 231 |
-| Contract-scoped CLI command families/subcommands | 94 | 5 | 18 | 20 | 137 |
+| Contract-scoped registered HTTP routes | 168 | 29 | 25 | 12 | 234 |
+| Contract-scoped CLI command families/subcommands | 94 | 5 | 18 | 23 | 140 |
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -462,24 +462,28 @@ a canonical contract/job lifecycle (`src/server.ts:1055`).
 ### Infrastructure routes
 
 ```text
+GET /api/v1/auth/status
 GET /api/v1/events
 GET /api/v1/push/status
 GET /api/v1/push/vapid-key
 GET /api/v1/system
 GET /health
+POST /api/v1/auth/login
+POST /api/v1/auth/setup
 POST /api/v1/push/ntfy
 POST /api/v1/push/subscribe
 POST /api/v1/push/test
 POST /api/v1/push/unsubscribe
 ```
 
-`GET /api/v1/events` is the operator-authenticated global SSE stream
+The three `/api/v1/auth/*` routes are loopback/loopback-Host-only password setup and session
+exchange; they never accept remote ingress. `GET /api/v1/events` is the operator-authenticated global SSE stream
 (`src/server.ts:1358`). Agent OS event history is the paged durable
 `GET /api/v1/os/boards/:id/events`, not SSE.
 
 ## CLI API
 
-The exact 137 compatibility-contract command paths are machine-checked from `src/cli.ts`,
+The exact 140 compatibility-contract command paths are machine-checked from `src/cli.ts`,
 `src/agent-os-cli.ts`, and `src/job-assignment-cli.ts`. Separately registered current commands
 include `doctor`, `onboard`, `lifecycle-demo`, and `ops support-case`; their focused tests and
 operator docs are additional release evidence rather than being silently folded into the 137-count
@@ -490,7 +494,7 @@ historical extractor. The compact human map is:
 | Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `organization {list,create,show,command}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
-| Infrastructure | `serve`; `stop`; `restart`; `token`; `remote`; `hook`; `install`; `uninstall` |
+| Infrastructure | `serve`; `stop`; `restart`; `token`; `password {status,reset}`; `remote`; `hook`; `install`; `uninstall` |
 
 Root command names and every child command are listed individually in
 `agent-os-surface-inventory.json`; the test expands the dynamic Agent Home session-action loop so
@@ -569,9 +573,9 @@ The test:
 
 1. opens a fresh in-memory database and exact-compares every application table;
 2. extracts every contract-scoped literal HTTP route, applies Agent OS prefixes, expands session
-   actions, and exact-compares all 231 signatures;
+   actions, and exact-compares all 234 signatures;
 3. extracts every command in the manifest's three scoped Commander sources and exact-compares all
-   137 command paths;
+   140 command paths;
 4. exact-compares closed message, conversation, driver, runtime, workspace, and session-action
    vocabularies;
 5. exact-compares legacy/canonical live-bus names;

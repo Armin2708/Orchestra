@@ -67,6 +67,12 @@ orchestra onboard \
   --telemetry off
 ```
 
+When the local UI first opens at `http://localhost:4750`, create its local owner password. A
+successful sign-in creates a temporary session that survives refreshes in that tab for up to 12
+hours; the password itself is never stored in browser storage. The daemon's reusable transport
+credential is not a browser login. To recover a forgotten password, stop Orchestra and run
+`orchestra password reset --confirm RESET_LOCAL_PASSWORD`, restart it, and create a new password.
+
 The human output gives the exact safe next steps and lists every provider blocker. JSON automation
 can use the same command with `--json`. `--apply` is rejected before invoking configuration or hook
 writes while any provider, project, mode, acceptance, or hook blocker remains. Passing doctor alone

@@ -67,9 +67,27 @@ describe('board-local navigation', () => {
     expect(app).toContain("import { BoardSection } from './BoardSection'")
     expect(app).toContain('<BoardSection')
     expect(app).toContain("const commandCenterActive = view === 'open-work'")
+    expect(app).toContain("focusScope.kind === 'project'")
+    expect(app).not.toContain("focusScope.kind === 'focused'")
     expect(app).toContain('>Board</button>')
     expect(app).toContain('>Advanced</button>')
     expect(board).toContain('<NetworkView')
+  })
+
+  it('gives focused and multi-project graphs a real canvas height', () => {
+    const css = readFileSync(new URL('../web/src/styles.css', import.meta.url), 'utf8')
+    expect(css).toMatch(/\.projects\.focused \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\)/)
+    expect(css).toContain('.projects:not(.focused) .project.network-mode { min-height: 500px; }')
+    expect(css).toContain('.projects:not(.focused) .net-wrap .network { min-height: 440px; }')
+  })
+
+  it('uses a local password and temporary browser session instead of asking users for a token', () => {
+    const app = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
+    expect(app).toContain('Create your password')
+    expect(app).toContain('Unlock board')
+    expect(app).toContain('authenticateLocalOwnerPassword')
+    expect(app).not.toContain('Paste token')
+    expect(app).not.toContain('<pre>orchestra token</pre>')
   })
 
   it('reveals circular kill controls only from agent hover or focus', () => {

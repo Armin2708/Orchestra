@@ -4,14 +4,14 @@ export type CanvasViewport = CanvasPoint & { zoom: number }
 export const MIN_CANVAS_ZOOM = 0.35
 export const MAX_CANVAS_ZOOM = 2.5
 export const DEFAULT_CANVAS_VIEWPORT: CanvasViewport = { x: 0, y: 0, zoom: 1 }
-export const COMPACT_CANVAS_VIEWPORT: CanvasViewport = { x: 0, y: 0, zoom: MIN_CANVAS_ZOOM }
+export const COMPACT_CANVAS_VIEWPORT: CanvasViewport = { x: 0, y: 0, zoom: 1 }
 
 export function defaultCanvasViewport(compact: boolean): CanvasViewport {
   return { ...(compact ? COMPACT_CANVAS_VIEWPORT : DEFAULT_CANVAS_VIEWPORT) }
 }
 
 export function canvasViewportStorageKey(storageKey: string, compact: boolean) {
-  return `${storageKey}:${compact ? 'compact' : 'wide'}`
+  return `${storageKey}:${compact ? 'compact-v2' : 'wide'}`
 }
 
 export function clampCanvasZoom(zoom: number) {

@@ -11,6 +11,7 @@ import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
+import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-auth.js'
 import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
@@ -93,6 +94,7 @@ declare module 'fastify' {
 export interface ServerOptions {
   token?: string
   agentToken?: string
+  localOwnerAuth?: LocalOwnerPasswordAuth
   // test seam: replace the real ShipQueue (which runs git + the full suite)
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
   // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
@@ -122,6 +124,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     db,
     masterToken: opts.token,
     agentToken: opts.agentToken,
+    authenticateLocalOwnerSession: (session) => opts.localOwnerAuth?.authenticate(session) ?? false,
     operations: opts.operations,
     vapidKeys: opts.vapidKeys,
     stopRemoteTunnel: opts.stopRemoteTunnel,
@@ -267,6 +270,41 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.get('/health', async () => {
     const status = await operations.publicReadiness()
     return { ok: status.ready, ...status }
+  })
+
+  const ownerAuthFailure = (error: unknown, reply: any) => {
+    if (error instanceof LocalOwnerAuthError) {
+      return reply.code(error.statusCode).send({ error: error.message, code: error.code })
+    }
+    throw error
+  }
+
+  server.get('/api/v1/auth/status', async (_request, reply) => {
+    reply.header('cache-control', 'no-store')
+    return { password_set: opts.localOwnerAuth?.isConfigured() ?? false }
+  })
+
+  server.post<{ Body: { password?: string } }>('/api/v1/auth/setup', async (request, reply) => {
+    reply.header('cache-control', 'no-store')
+    if (!opts.localOwnerAuth) return reply.code(503).send({ error: 'local password authentication is unavailable' })
+    try {
+      const result = opts.localOwnerAuth.setup(String(request.body?.password ?? ''))
+      return { session: result.session, expires_at: result.expiresAt }
+    } catch (error) {
+      return ownerAuthFailure(error, reply)
+    }
+  })
+
+  server.post<{ Body: { password?: string } }>('/api/v1/auth/login', async (request, reply) => {
+    reply.header('cache-control', 'no-store')
+    if (!opts.localOwnerAuth) return reply.code(503).send({ error: 'local password authentication is unavailable' })
+    try {
+      const partition = request.ip || request.raw.socket.remoteAddress || 'loopback'
+      const result = opts.localOwnerAuth.login(String(request.body?.password ?? ''), partition)
+      return { session: result.session, expires_at: result.expiresAt }
+    } catch (error) {
+      return ownerAuthFailure(error, reply)
+    }
   })
 
   server.get('/api/v1/system', async () => {

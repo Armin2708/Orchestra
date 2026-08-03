@@ -142,7 +142,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   min-width: 56px; color: var(--ink-soft); font-size: 11px;
   font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
 }
-.projects.focused { grid-template-columns: 1fr; }
+.projects.focused {
+  height: 100%; min-height: 0;
+  grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr);
+}
 .projects {
   position: relative; z-index: 1; width: 100%; min-height: 100%; overflow: visible;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 20px;
@@ -155,7 +158,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   max-height: calc(100dvh - 200px); overflow: hidden;
 }
 .project.network-mode { overflow: visible; }
-.projects.focused .project { height: calc(100dvh - 200px); }
+.projects.focused .project { height: 100%; min-height: 0; max-height: none; }
+.projects:not(.focused) .project.network-mode { min-height: 500px; }
+.projects:not(.focused) .net-wrap,
+.projects:not(.focused) .net-wrap .network { min-height: 440px; }
 .project-head {
   position: absolute; top: 18px; left: 20px; right: 20px; z-index: 6;
   display: flex; align-items: flex-start; justify-content: flex-end; gap: 12px;
@@ -167,8 +173,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
 }
 .project-head-right { justify-content: flex-end; gap: 12px; min-width: 0; padding: 8px 10px; }
-.project-crew { display: flex; }
-.project-crew .avatar { margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
+.project-crew { display: flex; gap: 6px; }
+.project-crew .avatar { box-shadow: 0 0 0 2px var(--surface); }
 .threads { display: grid; gap: 8px; overflow-y: auto; max-height: 230px; flex-shrink: 0; }
 .thread {
   background: #FBF3DB; border-radius: var(--radius-sm);
@@ -780,7 +786,14 @@ textarea {
 
 .empty-card .hint { font-size: 12px; }
 
-.login-form { display: flex; gap: 8px; width: 100%; }
+.login-form { display: grid; gap: 14px; width: 100%; text-align: left; }
+
+.login-kicker {
+  margin-bottom: -8px; color: var(--ink-soft); font-size: 10px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+
+.login-field { display: grid; gap: 6px; color: var(--ink-soft); font-size: 11px; font-weight: 600; }
 
 .login-input {
   flex: 1; padding: 10px 12px; font-size: 13px; color: var(--ink);
@@ -797,11 +810,24 @@ textarea {
 
 .login-btn:disabled { opacity: 0.4; cursor: default; }
 
+.login-error {
+  padding: 9px 11px; border: 1px solid #e1b8b4; border-radius: var(--radius-sm);
+  background: #fff5f3; color: #8f2d2a; font-size: 12px; line-height: 1.4;
+}
 
-@media (max-width: 1100px) {
+
+@media (min-width: 769px) and (max-width: 1100px) {
   .board { grid-template-columns: repeat(2, 1fr); }
-  .topbar { flex-wrap: wrap; }
-  .topbar-actions { margin-left: auto; flex-wrap: wrap; }
+  .topbar {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; gap: 10px 20px; padding: 12px 24px;
+  }
+  .topbar-actions { display: contents; }
+  .view-tabs { grid-column: 2; grid-row: 1; margin-left: 0; }
+  .sysmeter {
+    grid-column: 1 / -1; grid-row: 2; min-width: 0;
+    overflow-x: auto; padding: 2px 0; scrollbar-width: thin;
+  }
 }
 
 @media (max-width: 940px) {
@@ -1161,7 +1187,13 @@ textarea {
     height: auto; max-height: none; padding: 14px 14px 12px;
   }
   .projects.focused .project { height: auto; }
-  .project-head { top: 14px; left: 14px; right: 14px; flex-wrap: wrap; }
+  .projects:not(.focused) .project.network-mode { min-height: 390px; }
+  .projects:not(.focused) .net-wrap,
+  .projects:not(.focused) .net-wrap .network { min-height: 340px; }
+  .project-head {
+    position: relative; top: auto; left: auto; right: auto;
+    min-height: 52px; flex: none; flex-wrap: wrap;
+  }
   .project-head-right { max-width: 100%; margin-left: auto; flex-wrap: wrap; }
   .project-cards { grid-template-columns: 1fr; }
 
@@ -1172,6 +1204,10 @@ textarea {
   .ticket-rail .t-card, .rail-mile { min-width: 0; }
   .rail-mile-steps { flex-direction: column; overflow: visible; }
   .network { min-height: 340px; }
+  .net-legend { right: 120px; gap: 10px; font-size: 10px; }
+  .net-legend > span:nth-child(2) { font-size: 0; }
+  .net-legend > span:nth-child(2)::after { content: 'answered'; font-size: 10px; }
+  .net-legend > span:last-child { display: none; }
 
   /* roadmap: single column; brainstorm workspace stacks under the plan */
   .roadmap, .roadmap.focused { grid-template-columns: 1fr; padding: 4px 16px calc(90px + env(safe-area-inset-bottom)); }

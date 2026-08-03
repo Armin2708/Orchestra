@@ -344,7 +344,7 @@ describe('REM-001 remote/mobile threat model', () => {
       'return `${state.url}/#pair=${encodeURIComponent(value.pairing_ticket)}`',
     )
     expect(read('src/remote.ts')).not.toContain('/#token=')
-    expect(read('web/src/api.ts')).toContain("export const getToken = () => isLoopbackBrowser() ? localOwnerToken : ''")
+    expect(read('web/src/api.ts')).toContain("export const getToken = () => isLoopbackBrowser() ? localOwnerSession.get() : ''")
     expect(read('web/src/api.ts')).toContain("export const streamUrl = () => '/api/v1/events'")
     expect(read('web/src/deviceAuth.ts')).toContain("throw new Error('legacy owner-token pairing is disabled')")
     expect(read('src/server.ts')).not.toContain('query.token')

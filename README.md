@@ -64,6 +64,10 @@ node dist/cli.js serve
 
 Then open http://localhost:4750. This starts the local daemon and UI; it does not turn the
 unpublished package/plugin flow or any unaccepted managed provider into a supported release.
+On first open, create a local Orchestra password. The browser keeps only a temporary 12-hour
+session in the current tab, so refreshes remain signed in without exposing the daemon's internal
+transport credential. If the password is forgotten, stop the daemon and run
+`node dist/cli.js password reset --confirm RESET_LOCAL_PASSWORD`, then create a new one.
 
 For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
 Orchestra:
@@ -199,6 +203,11 @@ Rules of thumb:
 ```
 orchestra remote
 ```
+
+Open the camera on a phone that is connected to the same private Tailscale network and scan the
+printed QR. The one-use link pairs that browser as a named, expiring device; the local dashboard
+password is never entered on the phone. Use `--board <id>` and the narrowest necessary `--scope`
+arguments before pairing when the phone should see less than the default grant.
 
 It keeps the daemon on loopback and asks either verified private `tailscale serve` or explicitly
 confirmed public `cloudflared` to forward to it. The QR never contains the master token. Redemption

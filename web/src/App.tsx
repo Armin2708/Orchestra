@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError, getToken, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
+import {
+  api,
+  ApiError,
+  authenticateLocalOwnerPassword,
+  getToken,
+  localOwnerPasswordStatus,
+  setToken,
+  streamUrl,
+  Snapshot,
+  SystemInfo,
+  Telemetry,
+} from './api'
 import { BoardSection } from './BoardSection'
 import { BoardTab, PrimaryView, resolveLocationNavigation } from './boardNavigation'
 import { CommandCenter } from './CommandCenter'
@@ -297,8 +308,8 @@ function LocalOwnerApp() {
         if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
       }
     }
-    // A fresh navigation cannot inherit the memory-only token. Probe REST immediately so a
-    // token-required daemon can return 401 and present Login without a dead one-second wait.
+    // Probe REST immediately so a restored tab session can reconnect without a dead one-second wait,
+    // or an expired session can return 401 and present Login.
     const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 0)
     if (authenticatedPolling) requestRefresh()
     return () => {
@@ -432,7 +443,7 @@ function LocalOwnerApp() {
             ? connectionState === 'offline'
               ? <CommandCenterState kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
               : <GettingStarted onSettings={() => pickView('settings')} />
-            : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'focused'}
+            : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
                 openMessages={shown.reduce((sum, snapshot) => sum + snapshot.open_questions.length, 0)}
                 onTabChange={pickBoardTab} onChange={refresh} />
         : commandCenterActive
@@ -559,21 +570,70 @@ function PushBell() {
   )
 }
 
-function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
-  const [token, setTokenInput] = useState('')
+function Login({ onSubmit }: { onSubmit: (session: string) => void }) {
+  const [mode, setMode] = useState<'loading' | 'setup' | 'login'>('loading')
+  const [password, setPassword] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let current = true
+    localOwnerPasswordStatus()
+      .then((status) => { if (current) setMode(status.password_set ? 'login' : 'setup') })
+      .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : 'Sign-in is unavailable.') })
+    return () => { current = false }
+  }, [])
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (mode === 'loading' || busy) return
+    if (mode === 'setup' && password !== confirmation) {
+      setError('Passwords do not match.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const result = await authenticateLocalOwnerPassword(mode, password)
+      onSubmit(result.session)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Sign-in failed.')
+      setBusy(false)
+    }
+  }
+
+  const setup = mode === 'setup'
   return (
     <div className="empty-hero">
       <div className="empty-card">
         <Mark />
-        <h1>Connect to Orchestra</h1>
-        <p>This daemon requires a token. Print it from the machine running Orchestra:</p>
-        <pre>orchestra token</pre>
-        <form className="login-form" onSubmit={(e) => { e.preventDefault(); if (token.trim()) onSubmit(token.trim()) }}>
-          <input className="login-input" type="password" placeholder="Paste token" autoFocus
-            value={token} onChange={(e) => setTokenInput(e.target.value)} />
-          <button className="login-btn" type="submit" disabled={!token.trim()}>Connect</button>
+        <p className="login-kicker">Local dashboard</p>
+        <h1>{mode === 'loading' ? 'Preparing sign-in' : setup ? 'Create your password' : 'Welcome back'}</h1>
+        <p>{setup
+          ? 'Choose the password you will use to open Orchestra on this computer.'
+          : 'Enter your Orchestra password to open the board.'}</p>
+        <form className="login-form" onSubmit={submit}>
+          <label className="login-field">
+            <span>Password</span>
+            <input className="login-input" type="password" autoFocus disabled={mode === 'loading' || busy}
+              autoComplete={setup ? 'new-password' : 'current-password'} value={password}
+              onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          {setup && (
+            <label className="login-field">
+              <span>Confirm password</span>
+              <input className="login-input" type="password" disabled={busy} autoComplete="new-password"
+                value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+            </label>
+          )}
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <button className="login-btn" type="submit"
+            disabled={mode === 'loading' || busy || password.length < 8 || (setup && confirmation.length < 8)}>
+            {busy ? 'Checking…' : setup ? 'Create password' : 'Unlock board'}
+          </button>
         </form>
-        <p className="hint">Accepted only on loopback, held only in this tab's memory, and cleared when the page closes.</p>
+        <p className="hint">The password stays on this computer. This tab stays signed in through refreshes for up to 12 hours and signs out when it closes.</p>
       </div>
     </div>
   )

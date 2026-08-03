@@ -12,6 +12,7 @@ import { reap, bounceDeadLetters } from './reaper.js'
 import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureAgentToken, ensureToken } from './token.js'
+import { LocalOwnerPasswordAuth } from './local-owner-auth.js'
 import { loadSecureVapidKeys, registerPush, type VapidKeys } from './push.js'
 import { Autowake, autowakeEnabled } from './autowake.js'
 import { createAgentOsRuntime } from './agent-os/runtime-integration.js'
@@ -411,6 +412,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   }
   const token = authDisabled() ? undefined : ensureToken()
   const agentToken = authDisabled() ? undefined : ensureAgentToken()
+  const localOwnerAuth = authDisabled()
+    ? undefined
+    : new LocalOwnerPasswordAuth(path.join(orchestraDataDir, 'owner-password.json'))
   let compatibilityFailureJournal:
     ReturnType<typeof openCompatibilityMigrationFailureJournal> | undefined
   let unbindCompatibilityFailureJournal: (() => void) | undefined
@@ -630,6 +634,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     }, {
       token,
       agentToken,
+      localOwnerAuth,
       autowakeAt: () => autowake?.scheduledAt() ?? null,
       operations: operationsRuntime,
       vapidKeys,

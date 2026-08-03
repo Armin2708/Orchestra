@@ -5,6 +5,7 @@ import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, uninstallHooks } from './install.js'
 import { ensureToken } from './token.js'
+import { localOwnerPasswordPath, resetLocalOwnerPassword } from './local-owner-auth.js'
 import {
   enableNewRemotePairing,
   pairUrl,
@@ -98,7 +99,7 @@ program.command('restart').description('gracefully restart the daemon — defers
     }
     console.log((await ensureDaemon()) ? `daemon restarted on ${baseUrl()}` : 'daemon failed to restart')
   })
-program.command('token').description('print the API token (paste it into the web UI login)')
+program.command('token').description('print the internal operator transport credential (not used for browser login)')
   .action(() => {
     const scoped = process.env.ORCHESTRA_AGENT_TOKEN?.trim()
     if (process.env.ORCHESTRA_MANAGED_AGENT === '1') {
@@ -107,6 +108,19 @@ program.command('token').description('print the API token (paste it into the web
       return
     }
     console.log(ensureToken())
+  })
+
+const password = program.command('password').description('inspect or reset the local browser password')
+password.command('status').description('show whether a local browser password is configured')
+  .action(() => console.log(fs.existsSync(localOwnerPasswordPath()) ? 'password configured' : 'password not configured'))
+password.command('reset').description('remove the local browser password so the UI can create a new one')
+  .requiredOption('--confirm <phrase>', 'must be RESET_LOCAL_PASSWORD')
+  .action((options) => {
+    if (options.confirm !== 'RESET_LOCAL_PASSWORD') throw new Error('confirmation must be RESET_LOCAL_PASSWORD')
+    const removed = resetLocalOwnerPassword()
+    console.log(removed
+      ? 'local browser password reset; open the loopback UI to create a new password'
+      : 'no local browser password was configured')
   })
 
 const ops = program.command('ops').description('local operations, recovery, and retention controls')

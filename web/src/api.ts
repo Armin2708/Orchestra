@@ -1,16 +1,53 @@
 import { clearRejectedCurrentDeviceAuthority, deviceRequestHeaders, isLoopbackBrowser } from './deviceAuth'
+import { createLocalOwnerSessionStore } from './localOwnerSession'
 
-let localOwnerToken = ''
+const localOwnerSession = createLocalOwnerSessionStore(
+  typeof sessionStorage === 'undefined' ? null : sessionStorage,
+)
 
-/** Master owner authority is loopback-only, memory-only, and never serialized by the browser. */
-export const getToken = () => isLoopbackBrowser() ? localOwnerToken : ''
-export const setToken = (token: string) => {
+/** Short-lived owner sessions are loopback-only and persist only in the current browser tab. */
+export const getToken = () => isLoopbackBrowser() ? localOwnerSession.get() : ''
+export const setToken = (session: string, expiresAt?: string) => {
   if (!isLoopbackBrowser()) throw new Error('owner tokens are accepted only from loopback')
-  localOwnerToken = token.trim()
+  localOwnerSession.set(session, expiresAt)
 }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
+}
+
+export type LocalOwnerPasswordStatus = { password_set: boolean }
+export type LocalOwnerPasswordSession = { session: string; expires_at: string }
+
+const parseAuthResponse = async <T>(response: Response): Promise<T> => {
+  const payload = await response.json().catch(() => ({})) as T & { error?: string }
+  if (!response.ok) throw new ApiError(response.status, payload.error || 'Authentication failed.')
+  return payload
+}
+
+export const localOwnerPasswordStatus = async (): Promise<LocalOwnerPasswordStatus> => {
+  if (!isLoopbackBrowser()) throw new Error('local owner password is available only on loopback')
+  return parseAuthResponse(await fetch('/api/v1/auth/status', {
+    cache: 'no-store', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+  }))
+}
+
+export const authenticateLocalOwnerPassword = async (
+  mode: 'setup' | 'login',
+  password: string,
+): Promise<LocalOwnerPasswordSession> => {
+  if (!isLoopbackBrowser()) throw new Error('local owner password is available only on loopback')
+  const result = await parseAuthResponse<LocalOwnerPasswordSession>(await fetch(`/api/v1/auth/${mode}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+  }))
+  setToken(result.session, result.expires_at)
+  return result
 }
 
 export const boundedIdempotencyKey = (value: string): string => {
@@ -42,6 +79,7 @@ export const api = async (method: string, p: string, body?: unknown, extraHeader
     redirect: 'error',
     referrerPolicy: 'no-referrer',
   })
+  if (res.status === 401 && headers.authorization?.startsWith('Bearer ')) localOwnerSession.clear()
   if (res.status === 401 && headers.authorization?.startsWith('Device ')) {
     await clearRejectedCurrentDeviceAuthority()
   }

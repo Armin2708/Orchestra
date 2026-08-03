@@ -27,6 +27,7 @@ The current source writes the following under `ORCHESTRA_HOME`:
 | `orchestra.db-wal`, `orchestra.db-shm` | SQLite WAL companion files while the database is active. They are part of a consistent live database state, not disposable logs. |
 | `daemon.pid` | Ephemeral daemon process identifier; removed during a graceful shutdown. |
 | `token` | Reusable master operator bearer. Owner-only when created; never attach or paste it into a report. |
+| `owner-password.json` | Owner-only salted scrypt hash for local browser sign-in. It contains no plaintext password; deleting it signs out local browser sessions and requires password setup again. |
 | `agent-token` | Reusable credential scoped for managed-agent API access. Owner-only when created; never attach or paste it into a report. |
 | `vapid-reference.json` | Owner-only opaque reference to the Web Push private key held by the platform credential store; it contains no private key bytes. |
 | `sessions/*.json` | Claude hook session bindings, including a per-session bearer and local transcript path metadata. |

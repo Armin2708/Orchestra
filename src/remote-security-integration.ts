@@ -65,6 +65,7 @@ export interface RemoteSecurityOptions {
   db: Database.Database
   masterToken?: string
   agentToken?: string
+  authenticateLocalOwnerSession?: (session: string) => boolean
   operations?: OperationsRuntime
   vapidKeys?: VapidKeys
   runtime?: AgentOsRuntimeAdapter
@@ -88,6 +89,11 @@ const REMOTE_ROUTE_PREFIXES = [
 
 const REMOTE_STREAM_ISSUE_PATH = '/api/v1/os/remote/streams'
 const REMOTE_STREAM_OPEN_PATH = '/api/v1/os/remote/stream'
+const LOCAL_OWNER_AUTH_PATHS = new Set([
+  '/api/v1/auth/status',
+  '/api/v1/auth/setup',
+  '/api/v1/auth/login',
+])
 const REMOTE_STREAM_TTL_MS = 30_000
 const REMOTE_STREAM_CREDENTIAL = /^orchestra_stream_v1\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/u
 
@@ -991,6 +997,11 @@ export function registerRemoteSecurityIntegration(
     request.orchestraPrincipal = 'anonymous'
     request.orchestraRemoteDevice = null
     const path = request.url.split('?')[0]
+    const address = request.ip || request.raw.socket.remoteAddress
+    if (LOCAL_OWNER_AUTH_PATHS.has(path)) {
+      if (loopback(address) && loopbackIngressHost(request)) return
+      return reply.code(404).send({ error: 'not found' })
+    }
     if (path === '/api/v1/os/devices/redeem') {
       if (process.env.ORCHESTRA_REMOTE_KILL_SWITCH === '1' || remoteAccessDisabled(options.db)) {
         reply.header('clear-site-data', '"cache", "storage"')
@@ -1004,11 +1015,15 @@ export function registerRemoteSecurityIntegration(
       return
     }
     const authorization = request.headers.authorization
-    const address = request.ip || request.raw.socket.remoteAddress
     if (authorization?.startsWith('Bearer ')) {
       const supplied = authorization.slice(7)
       if (options.masterToken && tokenEquals(supplied, options.masterToken)
         && loopback(address) && loopbackIngressHost(request)) {
+        request.orchestraPrincipal = 'operator'
+        return
+      }
+      if (loopback(address) && loopbackIngressHost(request)
+        && options.authenticateLocalOwnerSession?.(supplied)) {
         request.orchestraPrincipal = 'operator'
         return
       }
