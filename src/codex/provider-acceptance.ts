@@ -712,7 +712,7 @@ const assertChatGptSubscription = (
   }
 }
 
-const rateLimitSummary = (
+export const rateLimitSummary = (
   response: CodexRateLimitsResponse,
 ): Record<string, unknown> => {
   const values = response.rateLimitsByLimitId
