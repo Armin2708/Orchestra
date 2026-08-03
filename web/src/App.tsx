@@ -34,6 +34,7 @@ import { PhoneRemoteDock } from './PhoneRemoteDock'
 import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
 import type { BrowserAuthorityMode } from './deviceAuth'
 import { createSingleFlightRefresh } from './singleFlightRefresh'
+import { LocalOwnerConnecting, resolveLocalOwnerSurface } from './LocalOwnerStartup'
 import './messages.css'
 import './agentOs.css'
 
@@ -301,7 +302,15 @@ function LocalOwnerApp() {
     }
   }, [loadSnapshots, needsAuth])
 
-  if (needsAuth) return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
+  const localOwnerSurface = resolveLocalOwnerSurface({
+    needsAuth,
+    hasConnected: hasConnectedRef.current,
+    connectionState,
+  })
+  if (localOwnerSurface === 'login') {
+    return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
+  }
+  if (localOwnerSurface === 'connecting') return <LocalOwnerConnecting />
   const agents = snaps.flatMap((s) => s.agents.filter((a) => a.status !== 'gone'))
   const cards = snaps.flatMap((s) => s.cards)
   const focusScope = resolveCommandCenterProjectFocus(snaps, focus)
