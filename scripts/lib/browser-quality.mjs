@@ -10,7 +10,7 @@ import {
   REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
 } from './browser-auth-challenges.mjs'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 7
+export const BROWSER_QUALITY_SCHEMA_VERSION = 8
 export const BROWSER_BASELINE_SCHEMA_VERSION = 4
 export const BROWSER_BUILD_SCHEMA_VERSION = 3
 
@@ -125,6 +125,16 @@ export const REQUEST_BUDGET_WINDOW_MS = 60_000
 export const REQUEST_BUDGET_CEILING = 800
 export const REQUEST_BUDGET_RESERVE = 200
 export const REQUEST_BUDGET_MAX_LIFECYCLE_STARTS = 200
+export const SEED_COMMAND_BUDGET_WINDOW_MS = 60_000
+export const SEED_COMMAND_BUDGET_CEILING = 200
+export const SEED_COMMAND_BUDGET_RESERVE = 40
+export const SEED_PROVIDER_BUDGET_WINDOW_MS = 60_000
+export const SEED_PROVIDER_BUDGET_CEILING = 50
+export const SEED_PROVIDER_BUDGET_RESERVE = 10
+export const SEED_MAX_IN_FLIGHT = 20
+export const FIXTURE_SEED_EXPECTED_REQUEST_STARTS = 275
+export const FIXTURE_SEED_EXPECTED_COMMAND_STARTS = 273
+export const FIXTURE_SEED_EXPECTED_PROVIDER_STARTS = 1
 const startupRouteDigest = (path) => createHash('sha256').update(path).digest('hex')
 export const STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS = Object.freeze({
   boards: startupRouteDigest('/api/v1/boards'),
@@ -233,13 +243,6 @@ export const createRequestBudgetPacer = (baseUrl, {
   }
 
   return {
-    async waitForSeedWindow(seedStartedAtMs) {
-      const remaining = Math.max(0, Math.min(
-        REQUEST_BUDGET_WINDOW_MS,
-        seedStartedAtMs + REQUEST_BUDGET_WINDOW_MS - now(),
-      ))
-      await performWait(remaining)
-    },
     async beforeLifecycle() {
       finishLifecycle()
       const error = healthError()
@@ -288,6 +291,159 @@ export const createRequestBudgetPacer = (baseUrl, {
         ceiling: REQUEST_BUDGET_CEILING,
         reserve: REQUEST_BUDGET_RESERVE,
         max_lifecycle_request_starts: Math.max(maxLifecycleStarts, currentLifecycleStarts ?? 0),
+        rate_limit_response_count: rateLimitResponseCount,
+      }
+    },
+  }
+}
+
+export const createSeedBudgetPacer = ({
+  now = () => performance.now(),
+  sleep = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)),
+} = {}) => {
+  const policies = Object.freeze({
+    request: Object.freeze({ windowMs: REQUEST_BUDGET_WINDOW_MS, ceiling: REQUEST_BUDGET_CEILING, reserve: REQUEST_BUDGET_RESERVE }),
+    command: Object.freeze({ windowMs: SEED_COMMAND_BUDGET_WINDOW_MS, ceiling: SEED_COMMAND_BUDGET_CEILING, reserve: SEED_COMMAND_BUDGET_RESERVE }),
+    provider: Object.freeze({ windowMs: SEED_PROVIDER_BUDGET_WINDOW_MS, ceiling: SEED_PROVIDER_BUDGET_CEILING, reserve: SEED_PROVIDER_BUDGET_RESERVE }),
+  })
+  const states = Object.fromEntries(Object.entries(policies).map(([family, policy]) => [family, {
+    ...policy,
+    observedStarts: 0,
+    completedResponses: 0,
+    segmentStarts: 0,
+    inFlight: 0,
+    maxInFlight: 0,
+    latestCompletedAtMs: null,
+    waitCount: 0,
+    waitMs: 0,
+  }]))
+  const completionWaiters = new Set()
+  const rateLimitFailures = []
+  let rateLimitResponseCount = 0
+  let reservationQueue = Promise.resolve()
+  let totalInFlight = 0
+  let maxInFlight = 0
+  let finalResponseAtMs = null
+  let finalDrainMs = 0
+  let completed = false
+
+  const notifyCompletion = () => {
+    for (const resolveCompletion of completionWaiters) resolveCompletion()
+    completionWaiters.clear()
+  }
+  const waitForCompletion = () => new Promise((resolveCompletion) => completionWaiters.add(resolveCompletion))
+  const performWait = async (state, milliseconds) => {
+    if (!(milliseconds > 0)) return
+    const requested = Math.min(milliseconds, state.windowMs)
+    const startedAt = now()
+    state.waitCount += 1
+    await sleep(requested)
+    state.waitMs += Math.max(0, now() - startedAt)
+  }
+  const waitForNextSegment = async (state) => {
+    while (state.inFlight > 0) await waitForCompletion()
+    if (state.latestCompletedAtMs === null) throw new Error('seed budget boundary has no completed response')
+    const deadline = state.latestCompletedAtMs + state.windowMs
+    while (now() < deadline) await performWait(state, deadline - now())
+    state.segmentStarts = 0
+    state.latestCompletedAtMs = null
+  }
+  const familiesFor = (family) => family === 'provider' ? ['request', 'provider']
+    : family === 'command' ? ['request', 'command'] : ['request']
+
+  return {
+    async beforeRequest(family) {
+      if (!['request', 'command', 'provider'].includes(family)) throw new Error('seed request budget family is invalid')
+      if (completed) throw new Error('seed request started after final drain')
+      const reserve = async () => {
+        const families = familiesFor(family)
+        for (const familyName of families) {
+          const state = states[familyName]
+          if (state.segmentStarts >= state.ceiling) await waitForNextSegment(state)
+        }
+        if (totalInFlight >= SEED_MAX_IN_FLIGHT) {
+          throw new Error(`fixture seed concurrency exceeds ${SEED_MAX_IN_FLIGHT} requests`)
+        }
+        for (const familyName of families) {
+          const state = states[familyName]
+          state.observedStarts += 1
+          state.segmentStarts += 1
+          state.inFlight += 1
+          state.maxInFlight = Math.max(state.maxInFlight, state.inFlight)
+        }
+        totalInFlight += 1
+        maxInFlight = Math.max(maxInFlight, totalInFlight)
+        return { family, completed: false }
+      }
+      const reservation = reservationQueue.then(reserve, reserve)
+      reservationQueue = reservation.catch(() => {})
+      return reservation
+    },
+    completeRequest(reservation, status, rawUrl) {
+      if (!reservation || reservation.completed || !['request', 'command', 'provider'].includes(reservation.family)) {
+        throw new Error('seed request completion does not match an active reservation')
+      }
+      reservation.completed = true
+      const completedAt = now()
+      for (const familyName of familiesFor(reservation.family)) {
+        const state = states[familyName]
+        state.inFlight -= 1
+        state.completedResponses += 1
+        state.latestCompletedAtMs = completedAt
+      }
+      totalInFlight -= 1
+      finalResponseAtMs = completedAt
+      if (status === 429) {
+        let url
+        try { url = new URL(rawUrl) } catch { url = null }
+        rateLimitResponseCount += 1
+        rateLimitFailures.push({
+          label: 'http_failure',
+          status: 429,
+          endpoint_sha256: startupRouteDigest(url?.pathname ?? 'invalid'),
+        })
+        if (rateLimitFailures.length > EVIDENCE_MAX_ARRAY_LENGTH) rateLimitFailures.shift()
+      }
+      notifyCompletion()
+    },
+    async finishAndDrain() {
+      await reservationQueue
+      while (totalInFlight > 0) await waitForCompletion()
+      if (finalResponseAtMs === null) throw new Error('browser fixture seed completed without a response')
+      const deadline = finalResponseAtMs + REQUEST_BUDGET_WINDOW_MS
+      const startedAt = now()
+      while (now() < deadline) await sleep(Math.min(deadline - now(), REQUEST_BUDGET_WINDOW_MS))
+      finalDrainMs = Math.max(0, now() - startedAt)
+      completed = true
+      if (rateLimitResponseCount > 0) {
+        throw new Error(`fixture seed observed ${rateLimitResponseCount} operational 429 response(s)`)
+      }
+    },
+    assertHealthy() {
+      if (rateLimitResponseCount > 0) {
+        throw new Error(`fixture seed observed ${rateLimitResponseCount} operational 429 response(s)`)
+      }
+    },
+    failedRequests() {
+      return structuredClone(rateLimitFailures)
+    },
+    evidence() {
+      const familyEvidence = (state) => ({
+        observed_starts: state.observedStarts,
+        completed_responses: state.completedResponses,
+        window_ms: state.windowMs,
+        ceiling: state.ceiling,
+        reserve: state.reserve,
+        limit: state.ceiling + state.reserve,
+        wait_count: state.waitCount,
+        wait_ms: state.waitMs,
+      })
+      return {
+        request: familyEvidence(states.request),
+        command: familyEvidence(states.command),
+        provider: familyEvidence(states.provider),
+        final_drain_ms: finalDrainMs,
+        max_in_flight: maxInFlight,
         rate_limit_response_count: rateLimitResponseCount,
       }
     },
@@ -800,6 +956,11 @@ export const validateBaselineAgainstCaptures = (baseline, captures) => {
 export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true } = {}) => {
   const errors = []
   if (evidence?.schema_version !== BROWSER_QUALITY_SCHEMA_VERSION) errors.push('schema version is invalid')
+  const viewports = Array.isArray(evidence?.viewports) ? evidence.viewports : []
+  const authenticationChallengeInventoryTotal = viewports.reduce((sum, viewport) => {
+    const total = viewport?.authentication_challenge_inventory?.total_count
+    return sum + (Number.isInteger(total) && total >= 0 ? total : 0)
+  }, 0)
   const requestBudgetPacing = evidence?.request_budget_pacing
   const pacingKeys = [
     'observed_request_starts', 'wait_count', 'total_wait_ms', 'window_ms', 'ceiling', 'reserve',
@@ -808,7 +969,7 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
   const validRequestBudgetPacing = requestBudgetPacing && typeof requestBudgetPacing === 'object'
     && canonicalJson(Object.keys(requestBudgetPacing).sort()) === canonicalJson([...pacingKeys].sort())
     && Number.isInteger(requestBudgetPacing.observed_request_starts)
-    && requestBudgetPacing.observed_request_starts > 0
+    && requestBudgetPacing.observed_request_starts >= authenticationChallengeInventoryTotal
     && Number.isInteger(requestBudgetPacing.wait_count) && requestBudgetPacing.wait_count >= 0
     && Number.isFinite(requestBudgetPacing.total_wait_ms) && requestBudgetPacing.total_wait_ms >= 0
     && ((requestBudgetPacing.wait_count === 0 && requestBudgetPacing.total_wait_ms === 0)
@@ -818,11 +979,63 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     && requestBudgetPacing.reserve === REQUEST_BUDGET_RESERVE
     && requestBudgetPacing.ceiling + requestBudgetPacing.reserve === 1_000
     && Number.isInteger(requestBudgetPacing.max_lifecycle_request_starts)
-    && requestBudgetPacing.max_lifecycle_request_starts >= 0
+    && requestBudgetPacing.max_lifecycle_request_starts >= 2
     && requestBudgetPacing.max_lifecycle_request_starts <= REQUEST_BUDGET_MAX_LIFECYCLE_STARTS
     && requestBudgetPacing.rate_limit_response_count === 0
   if (!validRequestBudgetPacing) errors.push('request budget pacing provenance is invalid')
-  const viewports = Array.isArray(evidence?.viewports) ? evidence.viewports : []
+  const seedBudgetPacing = evidence?.seed_budget_pacing
+  const seedTopLevelKeys = ['request', 'command', 'provider', 'final_drain_ms', 'max_in_flight', 'rate_limit_response_count']
+  const seedFamilyKeys = [
+    'observed_starts', 'completed_responses', 'window_ms', 'ceiling', 'reserve', 'limit',
+    'wait_count', 'wait_ms',
+  ]
+  const validSeedFamily = (family, { observed, windowMs, ceiling, reserve, mustWait }) => family
+    && typeof family === 'object'
+    && canonicalJson(Object.keys(family).sort()) === canonicalJson([...seedFamilyKeys].sort())
+    && family.observed_starts === observed
+    && family.completed_responses === observed
+    && family.window_ms === windowMs
+    && family.ceiling === ceiling
+    && family.reserve === reserve
+    && family.limit === ceiling + reserve
+    && family.limit === family.ceiling + family.reserve
+    && Number.isInteger(family.wait_count) && family.wait_count >= 0
+    && Number.isFinite(family.wait_ms) && family.wait_ms >= 0
+    && (mustWait
+      ? family.wait_count > 0 && family.wait_ms > 0
+      : family.wait_count === 0 && family.wait_ms === 0)
+  const validSeedBudgetPacing = seedBudgetPacing && typeof seedBudgetPacing === 'object'
+    && canonicalJson(Object.keys(seedBudgetPacing).sort()) === canonicalJson([...seedTopLevelKeys].sort())
+    && validSeedFamily(seedBudgetPacing.request, {
+      observed: FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
+      windowMs: REQUEST_BUDGET_WINDOW_MS,
+      ceiling: REQUEST_BUDGET_CEILING,
+      reserve: REQUEST_BUDGET_RESERVE,
+      mustWait: false,
+    })
+    && validSeedFamily(seedBudgetPacing.command, {
+      observed: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+      windowMs: SEED_COMMAND_BUDGET_WINDOW_MS,
+      ceiling: SEED_COMMAND_BUDGET_CEILING,
+      reserve: SEED_COMMAND_BUDGET_RESERVE,
+      mustWait: true,
+    })
+    && validSeedFamily(seedBudgetPacing.provider, {
+      observed: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+      windowMs: SEED_PROVIDER_BUDGET_WINDOW_MS,
+      ceiling: SEED_PROVIDER_BUDGET_CEILING,
+      reserve: SEED_PROVIDER_BUDGET_RESERVE,
+      mustWait: false,
+    })
+    && seedBudgetPacing.command.observed_starts + seedBudgetPacing.provider.observed_starts + 1
+      === seedBudgetPacing.request.observed_starts
+    && evidence?.scenario?.transcript_events === 250
+    && evidence?.scenario?.graph_agents === 18
+    && Number.isFinite(seedBudgetPacing.final_drain_ms) && seedBudgetPacing.final_drain_ms > 0
+    && Number.isInteger(seedBudgetPacing.max_in_flight)
+    && seedBudgetPacing.max_in_flight > 0 && seedBudgetPacing.max_in_flight <= SEED_MAX_IN_FLIGHT
+    && seedBudgetPacing.rate_limit_response_count === 0
+  if (!validSeedBudgetPacing) errors.push('seed budget pacing provenance is invalid')
   const viewportIds = viewports.map((viewport) => viewport?.id)
   if (viewportIds.length !== RESPONSIVE_VIEWPORTS.length
     || new Set(viewportIds).size !== viewportIds.length

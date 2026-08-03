@@ -29,6 +29,7 @@ import {
   canonicalRepositoryName,
   compactJourneyEvidence,
   createRequestBudgetPacer,
+  createSeedBudgetPacer,
   createStartupCompetitorStartTracker,
   finalizeBrowserEvidence,
   finalizeValidatedBrowserEvidence,
@@ -265,53 +266,65 @@ const waitForJson = async (url, predicate = () => true) => {
   throw new Error(`timed out waiting for ${url}: ${lastError instanceof Error ? lastError.message : 'not ready'}`)
 }
 
-const jsonRequest = async (baseUrl, method, path, body, headers = {}) => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(5_000),
-  })
-  const text = await response.text()
+const jsonRequest = async (baseUrl, method, path, body, headers, seedBudgetPacer, budgetFamily) => {
+  const url = `${baseUrl}${path}`
+  const family = budgetFamily ?? (['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'request' : 'command')
+  const reservation = await seedBudgetPacer.beforeRequest(family)
+  let response
+  let text = ''
+  try {
+    response = await fetch(url, {
+      method,
+      headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
+    })
+    text = await response.text()
+  } finally {
+    seedBudgetPacer.completeRequest(reservation, response?.status ?? 0, url)
+  }
+  seedBudgetPacer.assertHealthy()
   let parsed
   try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
   if (response.ok) return parsed
   const responseSha256 = createHash('sha256').update(text).digest('hex')
-  throw new Error(`${method} ${path} returned ${response.status}; response_sha256=${responseSha256}`)
+  const endpointSha256 = createHash('sha256').update(path).digest('hex')
+  throw new Error(`fixture request returned ${response.status}; endpoint_sha256=${endpointSha256}; response_sha256=${responseSha256}`)
 }
 
-const seedScenario = async (baseUrl, authHeaders) => {
-  const board = await jsonRequest(baseUrl, 'POST', '/api/v1/boards/resolve', {
+const seedScenario = async (baseUrl, authHeaders, seedBudgetPacer) => {
+  const seedRequest = (method, path, body, headers = authHeaders, family) => jsonRequest(
+    baseUrl, method, path, body, headers, seedBudgetPacer, family,
+  )
+  const board = await seedRequest('POST', '/api/v1/boards/resolve', {
     project_path: repositoryRoot,
-  }, authHeaders)
-  await Promise.all(Array.from({ length: 17 }, (_, index) => jsonRequest(
-    baseUrl,
+  })
+  await Promise.all(Array.from({ length: 17 }, (_, index) => seedRequest(
     'POST',
     '/api/v1/agents/register',
     { board_id: board.id, name: `qa-agent-${String(index + 1).padStart(2, '0')}` },
-    authHeaders,
   )))
-  const card = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+  const card = (await seedRequest('POST', '/api/v1/cards', {
     board_id: board.id,
     title: 'QA browser evidence fixture',
     description: 'Public-API-only fixture for browser quality evidence.',
     paths: [],
-  }, authHeaders)).card
-  const graphCard = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+  })).card
+  const graphCard = (await seedRequest('POST', '/api/v1/cards', {
     board_id: board.id,
     title: 'QA dependency graph fixture',
     description: 'Keeps a real Open Work dependency graph visible while the browser session runs.',
     paths: [],
-  }, authHeaders)).card
-  const prerequisite = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+  })).card
+  const prerequisite = (await seedRequest('POST', '/api/v1/cards', {
     board_id: board.id,
     title: 'QA dependency fixture',
     description: 'Renders a real dependency node and edge for the browser quality journey.',
     paths: [],
     column: 'done',
-  }, authHeaders)).card
-  const contract = await jsonRequest(baseUrl, 'GET', `/api/v1/os/cards/${graphCard.id}/contract`, undefined, authHeaders)
-  await jsonRequest(baseUrl, 'PUT', `/api/v1/os/cards/${graphCard.id}/contract`, {
+  })).card
+  const contract = await seedRequest('GET', `/api/v1/os/cards/${graphCard.id}/contract`)
+  await seedRequest('PUT', `/api/v1/os/cards/${graphCard.id}/contract`, {
     dependency_rules: [{
       card_id: prerequisite.id,
       blocking_reason: 'QA dependency remains open for graph rendering.',
@@ -319,16 +332,16 @@ const seedScenario = async (baseUrl, authHeaders) => {
     }],
     expected_market_version: contract.job_market.market_version,
   }, { ...authHeaders, 'idempotency-key': 'qa-browser-contract-dependency' })
-  const workspace = (await jsonRequest(baseUrl, 'POST', `/api/v1/os/boards/${board.id}/workspaces`, {
+  const workspace = (await seedRequest('POST', `/api/v1/os/boards/${board.id}/workspaces`, {
     name: 'QA browser workspace', kind: 'shared', root_path: repositoryRoot,
   }, { ...authHeaders, 'idempotency-key': 'qa-browser-workspace' })).workspace
-  const launch = await jsonRequest(baseUrl, 'POST', `/api/v1/os/boards/${board.id}/jobs`, {
+  const launch = await seedRequest('POST', `/api/v1/os/boards/${board.id}/jobs`, {
     card_id: card.id,
     workspace_id: workspace.id,
     provider: 'codex',
     model: 'qa-browser-model',
     idempotency_key: 'qa-browser-job',
-  }, { ...authHeaders, 'idempotency-key': 'qa-browser-job' })
+  }, { ...authHeaders, 'idempotency-key': 'qa-browser-job' }, 'provider')
   const sessionId = launch.session.id
   const events = Array.from({ length: 250 }, (_, index) => ({
     index,
@@ -342,8 +355,7 @@ const seedScenario = async (baseUrl, authHeaders) => {
     },
   }))
   for (let offset = 0; offset < events.length; offset += 20) {
-    await Promise.all(events.slice(offset, offset + 20).map(({ index, body }) => jsonRequest(
-      baseUrl,
+    await Promise.all(events.slice(offset, offset + 20).map(({ index, body }) => seedRequest(
       'POST',
       `/api/v1/os/sessions/${sessionId}/events`,
       body,
@@ -1573,7 +1585,7 @@ const main = async () => {
   const options = parseArgs(process.argv.slice(2))
   const daemonStdout = [], daemonStderr = [], chromeStderr = []
   let daemon, chrome, client, operatorToken = ''
-  let requestBudgetPacer, detachRequestBudgetPacer
+  let seedBudgetPacer, requestBudgetPacer, detachRequestBudgetPacer
   let buildManifest = null
   let runRoot = null
   let activeViewport = null
@@ -1605,7 +1617,7 @@ const main = async () => {
     const daemonPort = await unusedPort()
     const chromePort = await unusedPort()
     const baseUrl = `http://127.0.0.1:${daemonPort}`
-    requestBudgetPacer = createRequestBudgetPacer(baseUrl)
+    seedBudgetPacer = createSeedBudgetPacer()
     const environment = {
       ...process.env,
       ORCHESTRA_AUTOSHIP: '0',
@@ -1634,9 +1646,9 @@ const main = async () => {
     operatorToken = readFileSync(tokenPath, 'utf8').trim()
     if (!operatorToken) throw new Error('operator token is empty')
     const authHeaders = { authorization: `Bearer ${operatorToken}` }
-    const seedWindowStartedAtMs = performance.now()
-    const scenario = await seedScenario(baseUrl, authHeaders)
-    await requestBudgetPacer.waitForSeedWindow(seedWindowStartedAtMs)
+    const scenario = await seedScenario(baseUrl, authHeaders, seedBudgetPacer)
+    await seedBudgetPacer.finishAndDrain()
+    requestBudgetPacer = createRequestBudgetPacer(baseUrl)
 
     chrome = spawn(options.chrome, [
       '--headless=new',
@@ -1702,6 +1714,7 @@ const main = async () => {
         qa_013_closure_permitted: false,
       },
       source: sourceEvidence(buildManifest, null, 'passed_preflight_and_final'),
+      seed_budget_pacing: seedBudgetPacer.evidence(),
       request_budget_pacing: requestBudgetPacer.evidence(),
       scenario,
       methodology: {
@@ -1768,8 +1781,12 @@ const main = async () => {
       ),
       active_viewport: activeViewport,
       completed_viewports: completedViewports,
+      seed_budget_pacing: seedBudgetPacer?.evidence() ?? null,
       request_budget_pacing: requestBudgetPacer?.evidence() ?? null,
-      failed_requests: requestBudgetPacer?.failedRequests() ?? [],
+      failed_requests: [
+        ...(seedBudgetPacer?.failedRequests() ?? []),
+        ...(requestBudgetPacer?.failedRequests() ?? []),
+      ],
       diagnostics,
     })
     const fatalEvidence = finalizeBrowserEvidence(failureEvidence, [safeMessage(error)], 'fatal')

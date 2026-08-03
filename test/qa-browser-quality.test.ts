@@ -19,12 +19,22 @@ import {
   EVIDENCE_MAX_ARRAY_LENGTH,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MAX_STRING_LENGTH,
+  FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+  FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+  FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
   PERFORMANCE_SURFACES,
   REQUEST_BUDGET_CEILING,
   REQUEST_BUDGET_MAX_LIFECYCLE_STARTS,
   REQUEST_BUDGET_RESERVE,
   REQUEST_BUDGET_WINDOW_MS,
   RESPONSIVE_VIEWPORTS,
+  SEED_COMMAND_BUDGET_CEILING,
+  SEED_COMMAND_BUDGET_RESERVE,
+  SEED_COMMAND_BUDGET_WINDOW_MS,
+  SEED_MAX_IN_FLIGHT,
+  SEED_PROVIDER_BUDGET_CEILING,
+  SEED_PROVIDER_BUDGET_RESERVE,
+  SEED_PROVIDER_BUDGET_WINDOW_MS,
   STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS,
   STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
   STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
@@ -35,6 +45,7 @@ import {
   checkedBudget,
   compactJourneyEvidence,
   createRequestBudgetPacer,
+  createSeedBudgetPacer,
   createStartupCompetitorStartTracker,
   deriveRegressionBudgetMs,
   evidenceDigest,
@@ -95,6 +106,45 @@ const passingEvidence = () => {
     reserve: REQUEST_BUDGET_RESERVE,
     max_lifecycle_request_starts: 120,
     rate_limit_response_count: 0,
+  },
+  seed_budget_pacing: {
+    request: {
+      observed_starts: FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
+      completed_responses: FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
+      window_ms: REQUEST_BUDGET_WINDOW_MS,
+      ceiling: REQUEST_BUDGET_CEILING,
+      reserve: REQUEST_BUDGET_RESERVE,
+      limit: REQUEST_BUDGET_CEILING + REQUEST_BUDGET_RESERVE,
+      wait_count: 0,
+      wait_ms: 0,
+    },
+    command: {
+      observed_starts: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+      completed_responses: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+      window_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+      ceiling: SEED_COMMAND_BUDGET_CEILING,
+      reserve: SEED_COMMAND_BUDGET_RESERVE,
+      limit: SEED_COMMAND_BUDGET_CEILING + SEED_COMMAND_BUDGET_RESERVE,
+      wait_count: 1,
+      wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+    },
+    provider: {
+      observed_starts: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+      completed_responses: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+      window_ms: SEED_PROVIDER_BUDGET_WINDOW_MS,
+      ceiling: SEED_PROVIDER_BUDGET_CEILING,
+      reserve: SEED_PROVIDER_BUDGET_RESERVE,
+      limit: SEED_PROVIDER_BUDGET_CEILING + SEED_PROVIDER_BUDGET_RESERVE,
+      wait_count: 0,
+      wait_ms: 0,
+    },
+    final_drain_ms: REQUEST_BUDGET_WINDOW_MS,
+    max_in_flight: SEED_MAX_IN_FLIGHT,
+    rate_limit_response_count: 0,
+  },
+  scenario: {
+    transcript_events: 250,
+    graph_agents: 18,
   },
   viewports: RESPONSIVE_VIEWPORTS.map((viewport) => ({
     ...viewport,
@@ -213,8 +263,8 @@ const currentBaseline = () => {
 }
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
-  it('uses the breaking schema-v7 contract for authenticated browser evidence', () => {
-    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(7)
+  it('uses the breaking schema-v8 contract for authenticated browser evidence', () => {
+    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(8)
     expect(BROWSER_BASELINE_SCHEMA_VERSION).toBe(4)
     expect(EXPECTED_BROWSER_LOGIN_CYCLES).toBe(37)
     expect(passingEvidence().viewports[0].authentication_challenge_inventory).toMatchObject({
@@ -223,7 +273,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       pending_request_count: 0,
     })
     const staleDiagnostic = passingEvidence()
-    staleDiagnostic.schema_version = 6
+    staleDiagnostic.schema_version = 7
     staleDiagnostic.sha256 = verifiableDocumentDigest(staleDiagnostic)
     expect(validateBrowserQualityEvidence(staleDiagnostic)).toContain('schema version is invalid')
   })
@@ -314,17 +364,13 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(pacer.evidence().observed_request_starts).toBe(2)
   })
 
-  it('paces seed and rolling request windows before starting another lifecycle', async () => {
+  it('paces the rolling browser request window before starting another lifecycle', async () => {
     let now = 0
     const waits: number[] = []
     const pacer = createRequestBudgetPacer('http://127.0.0.1:4312', {
       now: () => now,
       sleep: async (milliseconds: number) => { waits.push(milliseconds); now += milliseconds },
     })
-    const seedStartedAt = now
-    now = 1_000
-    await pacer.waitForSeedWindow(seedStartedAt)
-    expect(waits).toEqual([59_000])
     for (let lifecycle = 0; lifecycle < 4; lifecycle += 1) {
       await pacer.beforeLifecycle()
       for (let request = 0; request < REQUEST_BUDGET_MAX_LIFECYCLE_STARTS; request += 1) {
@@ -332,11 +378,11 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       }
     }
     await pacer.beforeLifecycle()
-    expect(waits).toEqual([59_000, 60_000])
+    expect(waits).toEqual([60_000])
     expect(pacer.evidence()).toEqual({
       observed_request_starts: REQUEST_BUDGET_CEILING,
-      wait_count: 2,
-      total_wait_ms: 119_000,
+      wait_count: 1,
+      total_wait_ms: 60_000,
       window_ms: REQUEST_BUDGET_WINDOW_MS,
       ceiling: REQUEST_BUDGET_CEILING,
       reserve: REQUEST_BUDGET_RESERVE,
@@ -365,6 +411,160 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       endpoint_sha256: localOwnerChallengeEndpointDigest('/api/v1/system'),
     }])
     expect(JSON.stringify(limited.failedRequests())).not.toContain('/api/v1/system')
+  })
+
+  it('paces concurrent fixture requests across exact request, command, and provider policies', async () => {
+    let now = 0
+    const waits: number[] = []
+    const pacer = createSeedBudgetPacer({
+      now: () => now,
+      sleep: async (milliseconds: number) => { waits.push(milliseconds); now += milliseconds },
+    })
+    const issue = async (family: 'request' | 'command' | 'provider', count: number) => {
+      for (let offset = 0; offset < count; offset += 20) {
+        const size = Math.min(20, count - offset)
+        const reservations = await Promise.all(Array.from({ length: size }, () => pacer.beforeRequest(family)))
+        now += 1
+        for (const reservation of reservations) {
+          pacer.completeRequest(reservation, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+        }
+      }
+    }
+
+    await issue('command', FIXTURE_SEED_EXPECTED_COMMAND_STARTS)
+    await issue('request', 1)
+    await issue('provider', FIXTURE_SEED_EXPECTED_PROVIDER_STARTS)
+    await pacer.finishAndDrain()
+
+    expect(pacer.evidence()).toEqual({
+      request: {
+        observed_starts: FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
+        completed_responses: FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
+        window_ms: REQUEST_BUDGET_WINDOW_MS,
+        ceiling: REQUEST_BUDGET_CEILING,
+        reserve: REQUEST_BUDGET_RESERVE,
+        limit: REQUEST_BUDGET_CEILING + REQUEST_BUDGET_RESERVE,
+        wait_count: 0,
+        wait_ms: 0,
+      },
+      command: {
+        observed_starts: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+        completed_responses: FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
+        window_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+        ceiling: SEED_COMMAND_BUDGET_CEILING,
+        reserve: SEED_COMMAND_BUDGET_RESERVE,
+        limit: SEED_COMMAND_BUDGET_CEILING + SEED_COMMAND_BUDGET_RESERVE,
+        wait_count: 1,
+        wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS,
+      },
+      provider: {
+        observed_starts: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+        completed_responses: FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
+        window_ms: SEED_PROVIDER_BUDGET_WINDOW_MS,
+        ceiling: SEED_PROVIDER_BUDGET_CEILING,
+        reserve: SEED_PROVIDER_BUDGET_RESERVE,
+        limit: SEED_PROVIDER_BUDGET_CEILING + SEED_PROVIDER_BUDGET_RESERVE,
+        wait_count: 0,
+        wait_ms: 0,
+      },
+      final_drain_ms: REQUEST_BUDGET_WINDOW_MS,
+      max_in_flight: SEED_MAX_IN_FLIGHT,
+      rate_limit_response_count: 0,
+    })
+    expect(waits).toEqual([SEED_COMMAND_BUDGET_WINDOW_MS, REQUEST_BUDGET_WINDOW_MS])
+    expect(JSON.stringify(pacer.evidence())).not.toMatch(/api\/|request_id|url|session/i)
+  })
+
+  it('anchors a new seed segment to the latest response and tolerates early and oversleeping clocks', async () => {
+    let now = 0
+    const requestedWaits: number[] = []
+    const pacer = createSeedBudgetPacer({
+      now: () => now,
+      sleep: async (milliseconds: number) => {
+        requestedWaits.push(milliseconds)
+        now += requestedWaits.length === 1 ? Math.floor(milliseconds / 2) : milliseconds + 500
+      },
+    })
+    for (let offset = 0; offset < SEED_COMMAND_BUDGET_CEILING; offset += 20) {
+      const reservations = await Promise.all(Array.from({ length: 20 }, () => pacer.beforeRequest('command')))
+      now += 1
+      for (const reservation of reservations) {
+        pacer.completeRequest(reservation, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+      }
+    }
+    now = 100
+    const next = await pacer.beforeRequest('command')
+    expect(requestedWaits).toEqual([59_910, 29_955])
+    expect(now).toBe(60_510)
+    pacer.completeRequest(next, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+    expect(pacer.evidence().command).toMatchObject({
+      observed_starts: SEED_COMMAND_BUDGET_CEILING + 1,
+      wait_count: 2,
+      wait_ms: 60_410,
+    })
+  })
+
+  it('repeats response-anchored pacing across multiple slow command windows', async () => {
+    let now = 0
+    const waits: number[] = []
+    const pacer = createSeedBudgetPacer({
+      now: () => now,
+      sleep: async (milliseconds: number) => { waits.push(milliseconds); now += milliseconds },
+    })
+    const issueWindow = async (count: number) => {
+      for (let offset = 0; offset < count; offset += 20) {
+        const size = Math.min(20, count - offset)
+        const reservations = await Promise.all(Array.from({ length: size }, () => pacer.beforeRequest('command')))
+        now += 100
+        for (const reservation of reservations) {
+          pacer.completeRequest(reservation, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+        }
+      }
+    }
+
+    await issueWindow(SEED_COMMAND_BUDGET_CEILING)
+    await issueWindow(SEED_COMMAND_BUDGET_CEILING)
+    await issueWindow(1)
+    expect(waits).toEqual([SEED_COMMAND_BUDGET_WINDOW_MS, SEED_COMMAND_BUDGET_WINDOW_MS])
+    expect(pacer.evidence().command).toMatchObject({
+      observed_starts: SEED_COMMAND_BUDGET_CEILING * 2 + 1,
+      wait_count: 2,
+      wait_ms: SEED_COMMAND_BUDGET_WINDOW_MS * 2,
+    })
+    expect(pacer.evidence().max_in_flight).toBe(SEED_MAX_IN_FLIGHT)
+  })
+
+  it('fails closed before fixture concurrency can exceed twenty requests', async () => {
+    const pacer = createSeedBudgetPacer()
+    const reservations = await Promise.all(Array.from(
+      { length: SEED_MAX_IN_FLIGHT },
+      () => pacer.beforeRequest('command'),
+    ))
+    await expect(pacer.beforeRequest('command')).rejects.toThrow(/concurrency exceeds 20/)
+    for (const reservation of reservations) {
+      pacer.completeRequest(reservation, 200, 'http://127.0.0.1:4312/api/v1/fixture')
+    }
+    expect(pacer.evidence().max_in_flight).toBe(SEED_MAX_IN_FLIGHT)
+  })
+
+  it('fails fixture seeding closed on a hashed 429 without raw request data', async () => {
+    let now = 0
+    const pacer = createSeedBudgetPacer({ now: () => now })
+    const reservation = await pacer.beforeRequest('provider')
+    now = 5
+    pacer.completeRequest(reservation, 429, 'http://127.0.0.1:4312/api/v1/os/boards/secret/jobs')
+    expect(() => pacer.assertHealthy()).toThrow(/operational 429/)
+    expect(pacer.evidence()).toMatchObject({
+      provider: { observed_starts: 1 },
+      rate_limit_response_count: 1,
+    })
+    expect(pacer.failedRequests()).toEqual([{
+      label: 'http_failure',
+      status: 429,
+      endpoint_sha256: localOwnerChallengeEndpointDigest('/api/v1/os/boards/secret/jobs'),
+    }])
+    expect(JSON.stringify({ evidence: pacer.evidence(), failures: pacer.failedRequests() }))
+      .not.toMatch(/secret|api\/|url|request_id/i)
   })
 
   it('admits only request-id-bound pre-submit owner challenges and fails post-submit 401 closed', () => {
@@ -846,10 +1046,15 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     const mutations = [
       (evidence: any) => { delete evidence.request_budget_pacing },
       (evidence: any) => { evidence.request_budget_pacing.observed_request_starts = 0 },
+      (evidence: any) => {
+        evidence.request_budget_pacing.observed_request_starts = RESPONSIVE_VIEWPORTS.length
+          * LOCAL_OWNER_CHALLENGE_PATHS.length * EXPECTED_BROWSER_LOGIN_CYCLES - 1
+      },
       (evidence: any) => { evidence.request_budget_pacing.window_ms = 59_999 },
       (evidence: any) => { evidence.request_budget_pacing.ceiling = 801 },
       (evidence: any) => { evidence.request_budget_pacing.reserve = 199 },
       (evidence: any) => { evidence.request_budget_pacing.max_lifecycle_request_starts = 201 },
+      (evidence: any) => { evidence.request_budget_pacing.max_lifecycle_request_starts = 1 },
       (evidence: any) => { evidence.request_budget_pacing.rate_limit_response_count = 1 },
       (evidence: any) => {
         evidence.request_budget_pacing.wait_count = 0
@@ -863,6 +1068,43 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       evidence.sha256 = verifiableDocumentDigest(evidence)
       expect(validateBrowserQualityEvidence(evidence))
         .toContain('request budget pacing provenance is invalid')
+    }
+  })
+
+  it('rejects re-digested impossible seed-budget provenance', () => {
+    const mutations = [
+      (evidence: any) => { delete evidence.seed_budget_pacing },
+      (evidence: any) => { evidence.seed_budget_pacing.request.observed_starts = 274 },
+      (evidence: any) => { evidence.seed_budget_pacing.request.completed_responses = 274 },
+      (evidence: any) => { evidence.seed_budget_pacing.command.observed_starts = 274 },
+      (evidence: any) => { evidence.seed_budget_pacing.provider.observed_starts = 0 },
+      (evidence: any) => { evidence.seed_budget_pacing.request.window_ms = 59_999 },
+      (evidence: any) => { evidence.seed_budget_pacing.command.ceiling = 201 },
+      (evidence: any) => { evidence.seed_budget_pacing.command.reserve = 39 },
+      (evidence: any) => { evidence.seed_budget_pacing.command.limit = 239 },
+      (evidence: any) => { evidence.seed_budget_pacing.provider.ceiling = 51 },
+      (evidence: any) => { evidence.seed_budget_pacing.provider.reserve = 9 },
+      (evidence: any) => {
+        evidence.seed_budget_pacing.command.wait_count = 0
+        evidence.seed_budget_pacing.command.wait_ms = 0
+      },
+      (evidence: any) => {
+        evidence.seed_budget_pacing.request.wait_count = 1
+        evidence.seed_budget_pacing.request.wait_ms = 60_000
+      },
+      (evidence: any) => { evidence.seed_budget_pacing.final_drain_ms = 0 },
+      (evidence: any) => { evidence.seed_budget_pacing.max_in_flight = 21 },
+      (evidence: any) => { evidence.seed_budget_pacing.rate_limit_response_count = 1 },
+      (evidence: any) => { evidence.seed_budget_pacing.command.url = '/api/v1/private' },
+      (evidence: any) => { evidence.scenario.transcript_events = 249 },
+      (evidence: any) => { evidence.scenario.graph_agents = 17 },
+    ]
+    for (const mutate of mutations) {
+      const evidence = passingEvidence()
+      mutate(evidence)
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('seed budget pacing provenance is invalid')
     }
   })
 
@@ -1266,7 +1508,12 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(qualitySource).toContain('request_sha256')
     expect(source).toContain('observer?.takeRecords?.()')
     expect(source).toContain('candidate.start_ms === entry.start_ms && candidate.duration_ms === entry.duration_ms')
-    expect(source).toContain('const seedWindowStartedAtMs = performance.now()')
+    expect(source).toContain('seedBudgetPacer = createSeedBudgetPacer()')
+    expect(source).toContain('await seedBudgetPacer.finishAndDrain()')
+    expect(source.indexOf('await seedBudgetPacer.finishAndDrain()'))
+      .toBeLessThan(source.indexOf('requestBudgetPacer = createRequestBudgetPacer(baseUrl)'))
+    expect(source).toContain("}, { ...authHeaders, 'idempotency-key': 'qa-browser-job' }, 'provider')")
+    expect(source).toContain('seedBudgetPacer.completeRequest(reservation, response?.status ?? 0, url)')
     expect(source).toContain('attachRequestBudgetPacer(client, requestBudgetPacer)')
     expect(source.match(/attachRequestBudgetPacer\(client, requestBudgetPacer\)/g)).toHaveLength(1)
     expect(source).toContain('await requestBudgetPacer.beforeLifecycle()')
