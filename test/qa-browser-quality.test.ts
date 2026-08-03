@@ -23,6 +23,7 @@ import {
   compositeRgba,
   contrastRatio,
   checkedBudget,
+  compactJourneyEvidence,
   deriveRegressionBudgetMs,
   evidenceDigest,
   finalizeBrowserEvidence,
@@ -145,6 +146,53 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       budget_source: 'checked_observation',
     })
     expect(() => deriveRegressionBudgetMs(0)).toThrow(/positive finite/)
+  })
+
+  it('compacts successful journey evidence while retaining failure diagnostics', () => {
+    const journey = passingEvidence().viewports[0].journeys[0]
+    journey.interaction_modes.pointer.readiness_asserted = 'x'.repeat(10_000)
+    journey.interaction_modes.pointer.action_evidence = { traversal: Array.from({ length: 100 }, (_, index) => index) }
+    journey.accessibility.keyboard_focus = { passed: true, checked: 20, focus_order: Array.from({ length: 100 }, (_, index) => index) }
+    const compact = compactJourneyEvidence(journey)
+    expect(compact.interaction_modes.pointer).not.toHaveProperty('readiness_asserted')
+    expect(compact.interaction_modes.pointer).not.toHaveProperty('action_evidence')
+    expect(compact.accessibility.keyboard_focus).toEqual({ passed: true, checked: 20 })
+
+    journey.interaction_modes.pointer.passed = false
+    journey.interaction_modes.pointer.error = 'pointer did not activate'
+    journey.accessibility.text_contrast = { passed: false, checked: true, violations: [{ ratio: 4.2 }] }
+    const failed = compactJourneyEvidence(journey)
+    expect(failed.interaction_modes.pointer).toMatchObject({
+      passed: false,
+      error: 'pointer did not activate',
+      readiness_asserted: 'x'.repeat(10_000),
+      action_evidence: { traversal: Array.from({ length: 100 }, (_, index) => index) },
+    })
+    expect(failed.accessibility.text_contrast.violations).toEqual([{ ratio: 4.2 }])
+
+    const matrix = passingEvidence()
+    for (const viewport of matrix.viewports) {
+      viewport.journeys = viewport.journeys.map((rawJourney: any) => compactJourneyEvidence({
+        ...rawJourney,
+        overflow_measurement: { offenders: Array.from({ length: 100 }, (_, index) => ({ index })) },
+        interaction_modes: Object.fromEntries(Object.entries(rawJourney.interaction_modes)
+          .map(([mode, result]: [string, any]) => [mode, {
+            ...result,
+            readiness_asserted: 'selector'.repeat(2_000),
+            action_evidence: mode === 'keyboard'
+              ? { ...result.action_evidence, traversal: Array.from({ length: 500 }, (_, index) => ({ index })) }
+              : { payload: 'diagnostic'.repeat(2_000) },
+          }])),
+        accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, {
+          passed: true,
+          checked: 250,
+          traversal: Array.from({ length: 500 }, (_, index) => ({ index })),
+        }])),
+      }))
+    }
+    expect(Buffer.byteLength(JSON.stringify(matrix))).toBeLessThanOrEqual(EVIDENCE_MAX_BYTES)
+    expect(matrix.viewports).toHaveLength(3)
+    expect(matrix.viewports.every((viewport: any) => viewport.journeys.length === BROWSER_JOURNEYS.length)).toBe(true)
   })
 
   it('binds every performance budget to the maximum of three retained observations', () => {

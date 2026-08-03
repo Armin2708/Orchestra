@@ -217,6 +217,48 @@ export const performanceSampleForJourney = (interactionModes) => {
   return pointer.elapsed_ms
 }
 
+export const compactJourneyEvidence = (journey) => ({
+  name: journey.name,
+  passed: journey.passed,
+  elapsed_ms: journey.elapsed_ms,
+  performance_sample_mode: journey.performance_sample_mode,
+  horizontal_overflow_px: journey.horizontal_overflow_px,
+  interaction_modes: Object.fromEntries(Object.entries(journey.interaction_modes ?? {}).map(([mode, result]) => {
+    const compact = {
+      passed: result.passed,
+      elapsed_ms: result.elapsed_ms,
+      counts_toward_pass: result.counts_toward_pass,
+      performance_eligible: result.performance_eligible,
+      diagnostic_only: result.diagnostic_only,
+      reset: result.reset,
+    }
+    if (mode === 'keyboard' && result.action_evidence) {
+      compact.action_evidence = Object.fromEntries([
+        'focus_acquisition', 'programmatic_focus', 'tab_events', 'arrow_events',
+        'xterm_focus_encounters', 'activation_key',
+      ].filter((key) => result.action_evidence[key] !== undefined)
+        .map((key) => [key, result.action_evidence[key]]))
+    }
+    if (result.passed !== true) {
+      compact.error = result.error
+      compact.setup_error = result.setup_error
+      compact.action_evidence = result.action_evidence
+      compact.readiness_asserted = result.readiness_asserted
+      compact.input_surface = result.input_surface
+    }
+    return [mode, compact]
+  })),
+  accessibility: Object.fromEntries(Object.entries(journey.accessibility ?? {}).map(([gate, result]) => [gate, {
+    passed: result.passed,
+    ...(result.checked !== undefined ? { checked: result.checked } : {}),
+    ...(result.passed === true ? {} : {
+      violations: result.violations ?? [],
+      unsupported: result.unsupported ?? [],
+      unsupported_count: result.unsupported_count,
+    }),
+  }])),
+})
+
 export const validateBuildSourceIdentity = (manifest, current) => {
   const errors = []
   if (typeof manifest?.repository !== 'string' || !manifest.repository

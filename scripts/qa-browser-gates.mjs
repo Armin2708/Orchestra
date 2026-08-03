@@ -21,6 +21,7 @@ import {
   assertFinalBuildManifest,
   assertDistinctArtifactPaths,
   canonicalRepositoryName,
+  compactJourneyEvidence,
   finalizeBrowserEvidence,
   finalizeValidatedBrowserEvidence,
   navigateFreshInteractionMode,
@@ -1036,7 +1037,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     const overflow = await overflowAudit(client)
     overflowSamples.push(overflow)
     const accessibility = await auditSurface(client)
-    journeys.push({
+    journeys.push(compactJourneyEvidence({
       name,
       passed: interactionModes.pointer.passed && interactionModes.keyboard.passed,
       elapsed_ms: elapsed,
@@ -1045,7 +1046,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
       overflow_measurement: overflow,
       interaction_modes: interactionModes,
       accessibility,
-    })
+    }))
     return elapsed
   }
 
