@@ -16,7 +16,7 @@
     "github_environment": "npm-beta",
     "required_reviewers_minimum": 1,
     "required_reviewers_verified": false,
-    "external_check": "GitHub environment lookup returned 404 on 2026-08-02; protection is absent or not observable",
+    "external_check": "GitHub environment lookup returned HTTP 404 on 2026-08-03; protection is absent or not observable",
     "workflow_publish_enabled": false,
     "tag_triggered_publish": false,
     "enablement_requires": [

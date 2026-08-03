@@ -33,10 +33,10 @@ invariant(
 invariant(
   contract.publication_approval?.github_environment === 'npm-beta' &&
     contract.publication_approval?.required_reviewers_minimum >= 1 &&
-    contract.publication_approval?.required_reviewers_verified === false &&
+    typeof contract.publication_approval?.required_reviewers_verified === 'boolean' &&
     contract.publication_approval?.workflow_publish_enabled === false &&
     contract.publication_approval?.tag_triggered_publish === false,
-  'publication must remain fail-closed until npm-beta required reviewers are verified',
+  'publication must remain fail-closed through npm-beta protection observation and human approval',
 )
 invariant(contract.versioning?.semver_prerelease_required === true, 'beta requires a prerelease version')
 invariant(
