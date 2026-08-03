@@ -47,6 +47,20 @@ committed renames and removals are followed by a containing-directory `fsync`; W
 same exact-byte/mode checks but this document makes no crash-durability guarantee for directory
 metadata there.
 
+Technical private-beta testers can still connect an already-installed, user-authenticated Claude
+Code or Codex CLI terminal to the local board without opening the managed-provider boundary:
+
+```sh
+orchestra onboard --project "$PWD" --provider claude --mode native_subscription \
+  --hooks project --telemetry off --apply-ambient-hooks
+```
+
+This explicit ambient-only action rederives and validates the complete plan, installs only the
+selected provider's hooks, and does not write a managed-launch configuration or clear any provider
+policy/acceptance blocker. Start a new Claude Code terminal in the project after installing the
+hooks. Use `--provider codex` for Codex CLI, or the existing `orchestra install --provider both`
+command when intentionally configuring both providers outside the first-run plan.
+
 ## Provider truth
 
 The wizard reads the canonical v1 manifests; it does not infer support from an installed binary.

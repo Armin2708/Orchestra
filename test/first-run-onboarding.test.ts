@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  applyFirstRunAmbientHooks,
   applyFirstRunPlan,
   assertFirstRunConfigCompatible,
   buildFirstRunPlan,
@@ -100,6 +101,70 @@ describe('first-run onboarding domain', () => {
       .toThrow('no configuration or hooks were changed')
     expect(installProviderHooks).not.toHaveBeenCalled()
     expect(fs.existsSync(configPath)).toBe(false)
+  })
+
+  it('installs ambient Claude hooks while keeping managed launch policy-blocked', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-ambient-'))
+    const installProviderHooks = vi.fn()
+    const plan = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      execution_mode: 'native_subscription',
+      hook_scope: 'project',
+      telemetry: 'off',
+    })
+
+    const result = applyFirstRunAmbientHooks(plan, { installProviderHooks })
+
+    expect(result).toMatchObject({
+      schema_version: 1,
+      provider_id: 'claude',
+      scope: 'project',
+      managed_launch_ready: false,
+    })
+    expect(result.managed_launch_blockers.map((blocker) => blocker.code))
+      .toEqual(expect.arrayContaining([
+        'provider_not_release_supported',
+        'provider_acceptance_not_ready',
+        'provider_mode_not_supported',
+      ]))
+    expect(installProviderHooks).toHaveBeenCalledWith('project', {
+      provider: 'claude',
+      roots: { cwd: root },
+    })
+  })
+
+  it('keeps ambient hook installation explicit, exact, and provider-scoped', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-ambient-guard-'))
+    const installProviderHooks = vi.fn()
+    const off = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      hook_scope: 'off',
+    })
+    expect(() => applyFirstRunAmbientHooks(off, { installProviderHooks }))
+      .toThrow('requires project or global scope')
+
+    const qwen = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'qwen',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunAmbientHooks(qwen, { installProviderHooks }))
+      .toThrow('available only for Claude Code and Codex CLI')
+
+    const claude = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      hook_scope: 'project',
+    })
+    const forged = {
+      ...claude,
+      provider: { ...claude.provider, release_state: 'validated' },
+    } as FirstRunPlan
+    expect(() => applyFirstRunAmbientHooks(forged, { installProviderHooks }))
+      .toThrow('stale or forged')
+    expect(installProviderHooks).not.toHaveBeenCalled()
   })
 
   it('rejects forged cleared blockers for Codex and Qwen before any write', () => {

@@ -133,6 +133,50 @@ describe('first-run CLI registrar', () => {
     expect(output[0]).toContain('Configuration saved')
   })
 
+  it('installs ambient Claude hooks without claiming managed launch support', async () => {
+    const applyPlan = vi.fn()
+    const applyAmbientHooks = vi.fn(() => ({
+      schema_version: 1 as const,
+      provider_id: 'claude' as const,
+      scope: 'project' as const,
+      managed_launch_ready: false,
+      managed_launch_blockers: [],
+    }))
+    const { output, run } = setup({ applyPlan, applyAmbientHooks })
+
+    await run(
+      'onboard',
+      '--project', '/workspace/project',
+      '--provider', 'claude',
+      '--mode', 'native_subscription',
+      '--hooks', 'project',
+      '--telemetry', 'off',
+      '--apply-ambient-hooks',
+    )
+
+    expect(applyAmbientHooks).toHaveBeenCalledOnce()
+    expect(applyPlan).not.toHaveBeenCalled()
+    expect(output[0]).toContain('Ambient claude hooks installed (project)')
+    expect(output[0]).toContain('Managed provider launch was not enabled')
+  })
+
+  it('rejects conflicting onboarding mutations before applying either one', async () => {
+    const applyPlan = vi.fn()
+    const applyAmbientHooks = vi.fn()
+    const { run } = setup({ applyPlan, applyAmbientHooks })
+
+    await expect(run(
+      'onboard',
+      '--project', '/workspace/project',
+      '--provider', 'claude',
+      '--hooks', 'project',
+      '--apply',
+      '--apply-ambient-hooks',
+    )).rejects.toThrow('mutually exclusive')
+    expect(applyPlan).not.toHaveBeenCalled()
+    expect(applyAmbientHooks).not.toHaveBeenCalled()
+  })
+
   it('rejects an invalid provider before any action', async () => {
     const { run } = setup()
     await expect(run('onboard', '--provider', 'imaginary')).rejects.toThrow(
