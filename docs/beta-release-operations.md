@@ -124,6 +124,12 @@ Before changing cohorts, retain the exact artifact and evidence, name the cohort
 control delta, verify backup/restore, and observe install, provider, recovery, token and migration
 signals. Never silently substitute a provider, authentication method or billing mode.
 
+Use the packaged [beta release monitor](beta-release-monitoring.md) to turn that bounded,
+privacy-safe event stream into a digest-bound report. Use the packaged
+[controlled outcome benchmark runner](outcome-benchmarking.md) for before/after token and quality
+evidence. Both tools keep their release-gate claim false: harness output is not a substitute for a
+real observation window or representative exact-artifact tasks.
+
 ## Upgrade and uninstall
 
 An upgrade uses the previous and candidate retained tarballs. Stop the daemon, preserve the
