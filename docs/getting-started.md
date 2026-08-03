@@ -1,12 +1,52 @@
 # Getting started with Orchestra beta
 
-Status: source-checkout beta onboarding contract. Public npm installation and stable promotion are
-not claimed here.
+Status: private retained-tarball and source-checkout technical-beta contract. Public npm/plugin
+installation, managed-provider support, and stable promotion are not claimed here.
+
+## What a tester must receive
+
+The release owner must send all of the following through a trusted channel:
+
+- one retained `.tgz` artifact, not instructions to rebuild it;
+- its exact SHA-256 digest and source commit;
+- the provider/platform limitations for that exact candidate;
+- a support contact and the local-only support workflow; and
+- the rollback instruction: stop Orchestra, remove only Orchestra hooks and package code, and
+  preserve `ORCHESTRA_HOME` unless the tester separately chooses to delete their data.
+
+Do not install when the archive digest differs, the source/digest is missing, or the archive came
+from an untrusted location. A local tarball is a private distribution mechanism, not provenance or
+a public release by itself.
+
+## Private tarball: verify, install, inspect
+
+Use Node `22.20.0` and npm `10.9.3`. Replace the placeholders with the exact values from the owner:
+
+```sh
+node --version
+npm --version
+ORCHESTRA_BETA_TARBALL=/absolute/path/orchestra-board-CANDIDATE.tgz
+shasum -a 256 "$ORCHESTRA_BETA_TARBALL"
+# Linux: sha256sum "$ORCHESTRA_BETA_TARBALL"
+# Compare the full output with <OWNER_SUPPLIED_SHA256> before continuing.
+
+npm install --global "$ORCHESTRA_BETA_TARBALL"
+orchestra --version
+orchestra doctor --provider codex
+```
+
+The package itself defines no install lifecycle script, but native dependencies require their own
+normal npm installation scripts. Use only the verified retained artifact; `--ignore-scripts` is not
+the functional install path for SQLite and PTY dependencies.
+
+Substitute `claude` for `codex` when evaluating Claude Code. A doctor failure blocks managed
+provider use. It does not silently switch provider, billing mode, or credentials. The command never
+logs in or performs a model request; follow its explicit provider login/version remediation and
+rerun it.
 
 ## The safe first run
 
-Build with the validated toolchain, then run the first-run wizard. The integrated root CLI registers
-both `onboard` and `lifecycle-demo`:
+From a source checkout, build with the same toolchain before using the equivalent installed CLI:
 
 ```sh
 node --version   # v22.20.0
@@ -15,6 +55,22 @@ npm ci
 npm run build
 node dist/cli.js onboard
 ```
+
+For either installation form, inspect a complete non-interactive plan first:
+
+```sh
+orchestra onboard \
+  --project /absolute/path/to/test-project \
+  --provider codex \
+  --mode native_subscription \
+  --hooks off \
+  --telemetry off
+```
+
+The human output gives the exact safe next steps and lists every provider blocker. JSON automation
+can use the same command with `--json`. `--apply` is rejected before invoking configuration or hook
+writes while any provider, project, mode, acceptance, or hook blocker remains. Passing doctor alone
+does not clear the independent exact provider-acceptance gate.
 
 The wizard selects one absolute project root, one provider, one execution/billing mode, an optional
 provider-specific hook scope, and external telemetry consent. It writes no provider credential. Its
@@ -29,8 +85,7 @@ defaults are:
 
 Run `onboard --json` to inspect the plan without applying it. `onboard --apply` fails before writing
 configuration or hooks when any blocker exists. Because no provider is release-validated at
-integrated code head `58fc112a94c2253dd04f2ba617a6477b11d3d966`, current plans are
-inspection-only. Apply never trusts the returned plan as an authority: it
+the current candidate, plans are inspection-only. Apply never trusts the returned plan as an authority: it
 rebuilds the complete plan from its safe provider/mode/project/hook/telemetry identifiers and the
 current immutable provider manifest, then requires an exact match. Clearing blockers or forging
 provider, billing, runtime, capability, defaults or advanced-control fields cannot enable writes.
@@ -87,14 +142,42 @@ readiness fails.
 ## After onboarding
 
 1. Run `orchestra doctor --provider <provider>` and treat every required failure as blocking.
-2. Start locally and inspect the Board before enabling hooks globally.
-3. Run the safe [lifecycle demo](lifecycle-demo.md); it stops before provider execution by default.
-4. Read [data and recovery](data-recovery.md), [telemetry and support](telemetry-support.md), and
+2. Start the local product with `orchestra serve`, open `http://127.0.0.1:4750`, and inspect the
+   Board before enabling hooks.
+3. Only after the exact provider doctor passes, optionally install project-local observation hooks
+   with `orchestra install --project --provider codex` (or `claude`). These reversible hooks expose
+   ordinary terminal sessions to the Board; they do not authorize managed launch or turn the
+   provider into a supported claim. Remove them with the matching project/provider uninstall
+   command shown below.
+4. Do not use the bundled plugin manifests as an unpublished-tarball shortcut: they intentionally
+   reference the pinned npm package and require the separately verified public/plugin gate.
+5. Run `orchestra lifecycle-demo --project /absolute/path/to/test-project --provider codex`; omit
+   `--launch`. The demo creates a real Board/card/contract but spends no provider tokens.
+6. Read [data and recovery](data-recovery.md), [telemetry and support](telemetry-support.md), and
    the [remote security boundary](remote-access-security.md).
 
-For a local support export, first generate and review diagnostics or use the consent-gated
-`orchestra ops support-case` workflow described in [support preview](support-preview.md). It creates
-local files only and never uploads or publishes them.
+## Stop, support, and remove
+
+With the daemon running, create an owner-only diagnostics file:
+
+```sh
+orchestra ops diagnostics ./orchestra-diagnostics.json.gz
+```
+
+Review it locally before sharing. For the digest-bound support-case flow, use the request template
+and explicit consent command in [support preview](support-preview.md). Nothing is uploaded by either
+command.
+
+To remove the private build without deleting user data:
+
+```sh
+orchestra uninstall --project --provider codex  # repeat for each hook scope/provider used
+orchestra stop
+npm uninstall --global orchestra-board
+```
+
+The package uninstall does not authorize deletion of `ORCHESTRA_HOME`, projects, worktrees, or the
+retained artifact. Back up and verify state before any separately chosen data removal.
 
 Advanced controls are discoverable in the JSON plan. Unavailable controls stay visible with their
 dependency instead of silently disappearing or being enabled with unsafe defaults.

@@ -429,6 +429,73 @@ export const writeFirstRunConfig = (
   writeVerifiedText(file, serialized, 0o600)
 }
 
+export const runFirstRunConfigTransaction = <T>(
+  configFile: string,
+  config: FirstRunConfigV1,
+  action: () => T,
+): T => {
+  if (!path.isAbsolute(configFile)) {
+    throw new Error('first-run configuration path must be absolute')
+  }
+  assertFirstRunConfigCompatible(config)
+  const previous = fs.existsSync(configFile)
+    ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
+    : null
+  if (previous) {
+    let parsed: unknown
+    try { parsed = JSON.parse(previous.content) } catch {
+      throw new Error('existing first-run configuration is invalid; refusing to overwrite it')
+    }
+    assertFirstRunConfigCompatible(parsed)
+  }
+  const serialized = `${JSON.stringify(config, null, 2)}\n`
+  const currentConfig = (): string | null => {
+    try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
+  }
+  try {
+    writeFirstRunConfig(configFile, config)
+    const result = action()
+    if (currentConfig() !== serialized) {
+      throw new Error(`first-run configuration changed during apply: ${configFile}`)
+    }
+    return result
+  } catch (error) {
+    const rollbackErrors: unknown[] = []
+    const current = currentConfig()
+    const unchanged = previous ? current === previous.content : current === null
+    if (current !== serialized && !unchanged) {
+      rollbackErrors.push(new Error(
+        `configuration changed concurrently; refusing rollback for ${configFile}`,
+      ))
+    } else if (current === serialized) {
+      try {
+        if (previous) {
+          assertFirstRunConfigCompatible(JSON.parse(previous.content))
+          writeVerifiedText(configFile, previous.content, previous.mode)
+        } else {
+          fs.unlinkSync(configFile)
+          if (process.platform !== 'win32') {
+            const directoryDescriptor = fs.openSync(path.dirname(configFile), fs.constants.O_RDONLY)
+            try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+          }
+          if (fs.existsSync(configFile)) {
+            throw new Error('new config rollback did not verify')
+          }
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'first-run setup failed and rollback was incomplete; concurrent files were not overwritten',
+      )
+    }
+    throw error
+  }
+}
+
 export type ApplyFirstRunPlanDeps = {
   now?: () => string
   configPath?: string
@@ -590,80 +657,22 @@ export const applyFirstRunPlan = (
       ? plan.provider.id
       : (() => { throw new Error('provider hooks are unavailable') })()
   const configFile = deps.configPath ?? firstRunConfigPath()
-  if (!path.isAbsolute(configFile)) {
-    throw new Error('first-run configuration path must be absolute')
-  }
-  const previous = fs.existsSync(configFile)
-    ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
-    : null
-  if (previous) {
-    let parsed: unknown
-    try { parsed = JSON.parse(previous.content) } catch {
-      throw new Error('existing first-run configuration is invalid; refusing to overwrite it')
-    }
-    assertFirstRunConfigCompatible(parsed)
-  }
-  const serialized = `${JSON.stringify(config, null, 2)}\n`
-  const currentConfig = (): string | null => {
-    try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
-  }
-  try {
-    if (plan.hooks.scope !== 'off' && hookProvider) {
-      const hookOptions = {
-        provider: hookProvider,
-        roots: { cwd: plan.project_root },
-      } as const
-      runHookInstallTransaction(plan.hooks.scope, hookOptions, (transaction) => {
-        writeFirstRunConfig(configFile, config)
+  if (plan.hooks.scope !== 'off' && hookProvider) {
+    const hookOptions = {
+      provider: hookProvider,
+      roots: { cwd: plan.project_root },
+    } as const
+    runHookInstallTransaction(plan.hooks.scope, hookOptions, (transaction) => {
+      runFirstRunConfigTransaction(configFile, config, () => {
         ;(deps.installProviderHooks ?? installHooks)(
           plan.hooks.scope as HookScope,
           hookOptions,
           transaction,
         )
-        if (currentConfig() !== serialized) {
-          throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
-        }
       })
-    } else {
-      writeFirstRunConfig(configFile, config)
-      if (currentConfig() !== serialized) {
-        throw new Error(`first-run configuration changed during apply: ${configFile}`)
-      }
-    }
-  } catch (error) {
-    const rollbackErrors: unknown[] = []
-    const current = currentConfig()
-    const unchanged = previous ? current === previous.content : current === null
-    if (current !== serialized && !unchanged) {
-      rollbackErrors.push(new Error(
-        `configuration changed concurrently; refusing rollback for ${configFile}`,
-      ))
-    } else if (current === serialized) {
-      try {
-        if (previous) {
-          assertFirstRunConfigCompatible(JSON.parse(previous.content))
-          writeVerifiedText(configFile, previous.content, previous.mode)
-        } else {
-          fs.unlinkSync(configFile)
-          if (process.platform !== 'win32') {
-            const directoryDescriptor = fs.openSync(path.dirname(configFile), fs.constants.O_RDONLY)
-            try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
-          }
-          if (fs.existsSync(configFile)) {
-            throw new Error('new config rollback did not verify')
-          }
-        }
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError)
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...rollbackErrors],
-        'hook setup failed and rollback was incomplete; concurrent files were not overwritten',
-      )
-    }
-    throw error
+    })
+  } else {
+    runFirstRunConfigTransaction(configFile, config, () => undefined)
   }
   return config
 }

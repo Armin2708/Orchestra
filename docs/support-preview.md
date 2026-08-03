@@ -1,9 +1,8 @@
 # Support preview
 
-Status: integrated local diagnostics/support-export guidance at code head
-`58fc112a94c2253dd04f2ba617a6477b11d3d966`; no SLA, upload transport or public-release support
-promise. An allowlisted local diagnostics bundle exists, but no bundle is automatically safe to
-share.
+Status: integrated local diagnostics/support-export guidance for the exact candidate under
+evaluation; no SLA, upload transport or public-release support promise. An allowlisted local
+diagnostics bundle exists, but no bundle is automatically safe to share.
 
 ## Before reporting a problem
 

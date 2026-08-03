@@ -8,6 +8,7 @@ import {
   assertFirstRunConfigCompatible,
   buildFirstRunPlan,
   firstRunConfigPath,
+  runFirstRunConfigTransaction,
   writeFirstRunConfig,
   type FirstRunConfigV1,
   type FirstRunPlan,
@@ -244,6 +245,46 @@ describe('first-run onboarding domain', () => {
     expect(() => applyFirstRunPlan(invalid, { configPath, installProviderHooks }))
       .toThrow('identifiers are invalid; no files were changed')
     expect(installProviderHooks).not.toHaveBeenCalled()
+    expect(fs.existsSync(configPath)).toBe(false)
+  })
+
+  it('restores the previous config exactly when hook installation fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-rollback-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const previous = configFor(root)
+    writeFirstRunConfig(configPath, previous)
+    const previousBytes = fs.readFileSync(configPath, 'utf8')
+    const previousMode = fs.statSync(configPath).mode & 0o777
+
+    const replacement = {
+      ...previous,
+      telemetry: 'off' as const,
+      safe_defaults: {
+        ...previous.safe_defaults,
+        telemetry: 'off' as const,
+      },
+      configured_at: '2026-08-03T08:00:00.000Z',
+    }
+
+    expect(() => runFirstRunConfigTransaction(
+      configPath,
+      replacement,
+      () => { throw new Error('simulated hook failure') },
+    )).toThrow('simulated hook failure')
+
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(previousBytes)
+    expect(fs.statSync(configPath).mode & 0o777).toBe(previousMode)
+  })
+
+  it('removes a newly created config when the surrounding setup fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-new-rollback-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+
+    expect(() => runFirstRunConfigTransaction(
+      configPath,
+      configFor(root),
+      () => { throw new Error('simulated downstream failure') },
+    )).toThrow('simulated downstream failure')
     expect(fs.existsSync(configPath)).toBe(false)
   })
 

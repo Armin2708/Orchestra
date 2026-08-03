@@ -36,18 +36,23 @@ current/target matrix, billing semantics, known provider-policy limits, and rele
 
 ## Installation status
 
-**Public installation is not available yet.** On 2026-07-25 the public npm registry returned
-`E404` for `orchestra-board`. Both plugin hook manifests currently invoke
-`npx -y orchestra-board@0.1.0`, so the Claude/Codex plugin commands and the npm/npx commands
-previously shown here are not working plug-and-play paths. This repository is an engineering
-preview, not a public release.
+**Public installation is not available yet.** The npm package, public plugin installation, and
+stable channel are not release claims. The bundled plugin hook manifests still invoke the pinned
+package version through npm, so they are not the installation path for an unpublished build.
+
+A named trusted tester can instead install one retained tarball after independently matching the
+SHA-256 supplied by the release owner. That path uses the tarball's installed `orchestra` binary,
+keeps managed provider launch fail-closed, and provides reversible project hooks, the local UI,
+the safe lifecycle demo, and a verified local support bundle. Follow the exact
+[private technical-beta runbook](docs/getting-started.md); do not substitute a newly rebuilt or
+unverified archive.
 
 Read the [operator preview](docs/operator-preview.md) before running the source checkout. The
 [remote preview](docs/remote-preview.md) and [support preview](docs/support-preview.md) describe
 the current security boundary and the evidence that is safe to share.
 
-For contributor evaluation from an already verified source checkout, use a supported Node 22/npm
-10 environment and build both packages locally:
+For contributor evaluation from an already verified source checkout, use the exact supported Node
+22/npm 10 environment and build both packages locally:
 
 ```bash
 npm ci
@@ -58,7 +63,7 @@ node dist/cli.js serve
 ```
 
 Then open http://localhost:4750. This starts the local daemon and UI; it does not turn the
-unpublished package/plugin flow into a supported installation.
+unpublished package/plugin flow or any unaccepted managed provider into a supported release.
 
 For daemon-managed Codex agents, install the tested CLI and authenticate it before restarting
 Orchestra:

@@ -53,6 +53,28 @@ const defaultAsk = async (question: string, defaultValue: string): Promise<strin
   }
 }
 
+const shellArgument = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
+
+const displayNextSteps = (plan: FirstRunPlan): string => {
+  const commands = [
+    'Next safe steps:',
+    `  $ orchestra doctor --provider ${plan.provider.id}`,
+    '  $ orchestra serve',
+  ]
+  if (plan.provider.id === 'claude' || plan.provider.id === 'codex') {
+    commands.push(
+      `  $ orchestra lifecycle-demo --project ${shellArgument(plan.project_root)} --provider ${plan.provider.id}`,
+    )
+  } else {
+    commands.push('  Lifecycle demo unavailable for this provider until its managed adapter is accepted.')
+  }
+  commands.push('  $ orchestra ops diagnostics ./orchestra-diagnostics.json.gz')
+  commands.push(plan.ready_for_managed_launch
+    ? 'Managed actions: apply only after doctor passes; --launch still requires the retained exact acceptance tuple.'
+    : 'Blocked actions: onboarding apply, managed provider launch, and managed hook setup. Resolve every blocker first.')
+  return commands.join('\n')
+}
+
 const displayPlan = (plan: FirstRunPlan): string => [
   `Project: ${plan.project_root}`,
   `Provider: ${plan.provider.display_name} (${plan.provider.release_state})`,
@@ -62,6 +84,8 @@ const displayPlan = (plan: FirstRunPlan): string => [
   'Safe defaults: loopback-only, remote write off, no API fallback, isolated worktrees, manual cleanup',
   `Managed launch: ${plan.ready_for_managed_launch ? 'READY' : 'BLOCKED'}`,
   ...plan.blockers.map((blocker) => `- ${blocker.code}: ${blocker.detail}`),
+  '',
+  displayNextSteps(plan),
 ].join('\n')
 
 export const collectFirstRunAnswers = async (
@@ -170,6 +194,12 @@ export const registerFirstRunCommands = (
         return
       }
       if (options.apply) {
+        if (!plan.ready_for_managed_launch || plan.blockers.length > 0) {
+          const headline = 'Managed onboarding remains BLOCKED; no configuration or hooks were changed.'
+          throw new Error(options.json
+            ? JSON.stringify({ error: headline, plan }, null, 2)
+            : `${headline}\n${displayPlan(plan)}`)
+        }
         const config = (deps.applyPlan ?? applyFirstRunPlan)(plan)
         output(options.json
           ? JSON.stringify({ plan, config }, null, 2)
