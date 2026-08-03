@@ -183,7 +183,7 @@ describe('unified command center component contract', () => {
     expect(surfacesSource).not.toContain('dangerouslySetInnerHTML')
   })
 
-  it('mounts the command center as the project navigation shell with canonical fail-closed surfaces', () => {
+  it('mounts the command center behind Advanced with canonical fail-closed surfaces', () => {
     expect(appSource).toContain('<CommandCenter')
     expect(appSource).toContain("commandSection === 'agents'")
     expect(appSource).toContain('<CanonicalAgentHome')
@@ -193,6 +193,8 @@ describe('unified command center component contract', () => {
     expect(appSource).toContain('<OutcomeDashboard boardId={focus} />')
     expect(appSource).toContain('Outcome evidence is scoped to one canonical project.')
     expect(appSource).toContain("window.addEventListener('popstate', restoreDeepLink)")
-    expect(appSource).not.toContain('>Board</button>')
+    expect(appSource).toContain('>Board</button>')
+    expect(appSource).toContain('>Advanced</button>')
+    expect(appSource).toContain("const commandCenterActive = view === 'open-work'")
   })
 })

@@ -10,9 +10,10 @@ import { boardIdFromSearch, cardDrawerDeepLink, cardIdFromSearch } from './board
 import {
   CanvasPoint,
   CanvasViewport,
-  DEFAULT_CANVAS_VIEWPORT,
+  canvasViewportStorageKey,
   canvasGrid,
   clampCanvasZoom,
+  defaultCanvasViewport,
   panCanvasBy,
   zoomCanvasAt,
 } from './canvasViewport'
@@ -168,14 +169,15 @@ const boardCanvasMidpoint = (a: CanvasPoint, b: CanvasPoint): CanvasPoint => ({
 })
 const boardCanvasDistance = (a: CanvasPoint, b: CanvasPoint) => Math.hypot(a.x - b.x, a.y - b.y)
 
-function loadBoardViewport(storageKey: string): CanvasViewport {
+function loadBoardViewport(storageKey: string, compact: boolean): CanvasViewport {
+  const persistentKey = canvasViewportStorageKey(storageKey, compact)
   try {
-    const value = JSON.parse(localStorage.getItem(`orchestra-board-view-${storageKey}`) ?? 'null')
+    const value = JSON.parse(localStorage.getItem(`orchestra-board-view-${persistentKey}`) ?? 'null')
     if (Number.isFinite(value?.x) && Number.isFinite(value?.y) && Number.isFinite(value?.zoom)) {
       return { x: value.x, y: value.y, zoom: clampCanvasZoom(value.zoom) }
     }
   } catch { /* reset malformed local state */ }
-  return { ...DEFAULT_CANVAS_VIEWPORT }
+  return defaultCanvasViewport(compact)
 }
 
 const BOARD_PAN_EXCLUDE = [
@@ -192,9 +194,11 @@ function BoardCanvas({ children, focused, storageKey }: {
 }) {
   const wrap = useRef<HTMLElement>(null)
   const cursorLens = useRef<HTMLDivElement>(null)
-  const [viewport, setViewportState] = useState<CanvasViewport>(() => loadBoardViewport(storageKey))
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 768px)').matches)
+  const persistentStorageKey = canvasViewportStorageKey(storageKey, compact)
+  const [viewport, setViewportState] = useState<CanvasViewport>(() => loadBoardViewport(storageKey, compact))
   const viewportRef = useRef(viewport)
-  const storageKeyRef = useRef(storageKey)
+  const storageKeyRef = useRef(persistentStorageKey)
   const [panning, setPanning] = useState(false)
   const pointers = useRef(new Map<number, CanvasPoint>())
   const pan = useRef<{ pointerId: number; start: CanvasPoint; viewport: CanvasViewport } | null>(null)
@@ -211,24 +215,31 @@ function BoardCanvas({ children, focused, storageKey }: {
   }
 
   useEffect(() => {
-    storageKeyRef.current = storageKey
+    const media = window.matchMedia('(max-width: 768px)')
+    const updateCompact = () => setCompact(media.matches)
+    media.addEventListener('change', updateCompact)
+    return () => media.removeEventListener('change', updateCompact)
+  }, [])
+
+  useEffect(() => {
+    storageKeyRef.current = persistentStorageKey
     pointers.current.clear()
     pan.current = null
     pinch.current = null
     setPanning(false)
-    const next = loadBoardViewport(storageKey)
+    const next = loadBoardViewport(storageKey, compact)
     viewportRef.current = next
     setViewportState(next)
-  }, [storageKey])
+  }, [compact, persistentStorageKey, storageKey])
 
   useEffect(() => {
-    const key = storageKey
+    const key = persistentStorageKey
     const timer = window.setTimeout(() => {
       if (storageKeyRef.current !== key) return
       try { localStorage.setItem(`orchestra-board-view-${key}`, JSON.stringify(viewport)) } catch { /* optional persistence */ }
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [storageKey, viewport])
+  }, [persistentStorageKey, viewport])
 
   useEffect(() => {
     const canvas = wrap.current
@@ -392,7 +403,7 @@ function BoardCanvas({ children, focused, storageKey }: {
       { x: rect.width / 2, y: rect.height / 2 },
     ))
   }
-  const resetViewport = () => applyViewport({ ...DEFAULT_CANVAS_VIEWPORT })
+  const resetViewport = () => applyViewport(defaultCanvasViewport(compact))
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     if (e.target !== e.currentTarget) return

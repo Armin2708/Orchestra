@@ -925,10 +925,16 @@
   ],
   "ui_surfaces": [
     {
+      "id": "primary.graph-board",
+      "classification": "legacy",
+      "file": "web/src/App.tsx",
+      "evidence": "<BoardSection tab={boardTab}"
+    },
+    {
       "id": "primary.command-center",
       "classification": "canonical",
       "file": "web/src/App.tsx",
-      "evidence": ">Command center</button>"
+      "evidence": ">Advanced</button>"
     },
     {
       "id": "command-center.outcomes",

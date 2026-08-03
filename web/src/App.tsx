@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError, getToken, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
-import { BoardTab, PrimaryView, resolveStoredNavigation } from './boardNavigation'
+import { BoardSection } from './BoardSection'
+import { BoardTab, PrimaryView, resolveLocationNavigation } from './boardNavigation'
 import { CommandCenter } from './CommandCenter'
 import {
   CanonicalAgentHome,
@@ -85,19 +86,8 @@ function LocalOwnerApp() {
     return normalizeCommandCenterFocus(localStorage.getItem('orchestra-focus'))
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  const [navigation, setNavigation] = useState(() => {
-    const stored = resolveStoredNavigation(
-      localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab'))
-    const params = new URLSearchParams(location.search)
-    const requestedView = params.get('view')
-    if (requestedView === 'organization' || requestedView === 'roadmap' || requestedView === 'settings') {
-      return { ...stored, view: requestedView }
-    }
-    return params.has('section') || ['card', 'agent', 'conversation', 'session', 'job', 'discussion',
-      'knowledge', 'delivery', 'workspace', 'process', 'event'].some((key) => params.has(key))
-      ? { ...stored, view: 'board' as const }
-      : stored
-  })
+  const [navigation, setNavigation] = useState(() => resolveLocationNavigation(
+    localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab'), location.search))
   const [commandSection, setCommandSection] = useState<CommandCenterSection>(() => {
     const parsed = parseCommandCenterSelection(location.search)
     return new URLSearchParams(location.search).has('section')
@@ -118,7 +108,7 @@ function LocalOwnerApp() {
   }
   const pickCommandSection = (next: CommandCenterSection) => {
     setCommandSection(next)
-    setNavigation((current) => ({ ...current, view: 'board' }))
+    setNavigation((current) => ({ ...current, view: 'open-work' }))
     const href = commandCenterDeepLink(location.search, {
       section: next,
       boardId: focus === 'all' ? null : focus,
@@ -127,35 +117,48 @@ function LocalOwnerApp() {
     setLocationSearch(new URL(href, location.origin).search)
   }
   const pickBoardTab = (next: BoardTab) => {
-    const section: CommandCenterSection = next === 'messages'
-      ? 'discussions'
-      : next === 'agents' || next === 'workspace'
-        ? 'agents'
-        : next === 'timeline' || next === 'shipped'
-          ? 'activity'
-          : 'work'
     setNavigation({ view: 'board', boardTab: next })
-    pickCommandSection(section)
+    const params = new URLSearchParams(location.search)
+    for (const key of ['section', 'card', 'agent', 'conversation', 'session', 'job', 'discussion',
+      'knowledge', 'delivery', 'workspace', 'process', 'event', 'review', 'attention', 'approval',
+      'question', 'conflict']) params.delete(key)
+    params.set('view', 'board')
+    const query = params.toString()
+    const href = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`
+    history.pushState(history.state, '', href)
+    setLocationSearch(query ? `?${query}` : '')
   }
   const pick = (f: number | 'all') => {
     setFocus(f)
     setMenuOpen(false)
     localStorage.setItem('orchestra-focus', String(f))
-    const href = commandCenterDeepLink(location.search, {
-      section: commandSection,
-      boardId: f === 'all' ? null : f,
-      cardId: null,
-      agentId: null,
-      conversationId: null,
-      sessionId: null,
-      jobId: null,
-      discussionId: null,
-      knowledgeId: null,
-      deliveryId: null,
-      workspaceId: null,
-      processId: null,
-      eventId: null,
-    }, { pathname: location.pathname, hash: location.hash })
+    const href = view === 'open-work'
+      ? commandCenterDeepLink(location.search, {
+          section: commandSection,
+          boardId: f === 'all' ? null : f,
+          cardId: null,
+          agentId: null,
+          conversationId: null,
+          sessionId: null,
+          jobId: null,
+          discussionId: null,
+          knowledgeId: null,
+          deliveryId: null,
+          workspaceId: null,
+          processId: null,
+          eventId: null,
+        }, { pathname: location.pathname, hash: location.hash })
+      : (() => {
+          const params = new URLSearchParams(location.search)
+          for (const key of ['section', 'card', 'agent', 'conversation', 'session', 'job', 'discussion',
+            'knowledge', 'delivery', 'workspace', 'process', 'event', 'review', 'attention', 'approval',
+            'question', 'conflict']) params.delete(key)
+          params.set('view', view)
+          if (f === 'all') params.delete('board')
+          else params.set('board', String(f))
+          const query = params.toString()
+          return `${location.pathname}${query ? `?${query}` : ''}${location.hash}`
+        })()
     history.pushState(history.state, '', href)
     setLocationSearch(new URL(href, location.origin).search)
   }
@@ -181,30 +184,31 @@ function LocalOwnerApp() {
       localStorage.setItem('orchestra-focus', String(normalized))
     }
     if (['attention', 'approval', 'question', 'conflict'].some((key) => params.has(key))) {
-      setNavigation({ view: 'board', boardTab: 'workspace' })
+      setNavigation({ view: 'open-work', boardTab: 'workspace' })
       setCommandSection('agents')
       window.setTimeout(() => window.dispatchEvent(new Event('orchestra:open-attention')), 0)
     } else if (['agent', 'session', 'conversation', 'workspace'].some((key) => params.has(key))) {
-      setNavigation({ view: 'board', boardTab: 'agents' })
+      setNavigation({ view: 'open-work', boardTab: 'agents' })
       setCommandSection('agents')
     } else if (params.has('card') || params.has('job') || params.has('delivery') || params.has('review')) {
-      setNavigation({ view: 'board', boardTab: 'overview' })
+      setNavigation({ view: 'open-work', boardTab: 'overview' })
       setCommandSection('work')
     }
   }, [])
 
   useEffect(() => {
     const restoreDeepLink = () => {
-      const requestedView = new URLSearchParams(location.search).get('view')
-      if (requestedView === 'organization' || requestedView === 'roadmap' || requestedView === 'settings') {
+      const requested = resolveLocationNavigation(
+        localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab'), location.search)
+      if (requested.view !== 'open-work') {
         setLocationSearch(location.search)
-        setNavigation((current) => ({ ...current, view: requestedView }))
+        setNavigation(requested)
         return
       }
       const next = parseCommandCenterSelection(location.search)
       setLocationSearch(location.search)
       setCommandSection(next.section)
-      setNavigation((current) => ({ ...current, view: 'board' }))
+      setNavigation((current) => ({ ...current, view: 'open-work' }))
       if (next.boardId !== null) {
         setFocus(next.boardId)
         localStorage.setItem('orchestra-focus', String(next.boardId))
@@ -333,7 +337,7 @@ function LocalOwnerApp() {
   const focusScope = resolveCommandCenterProjectFocus(snaps, focus)
   const visible = focusScope.snapshots
   const shown = [...focusScope.snapshots]
-  const commandCenterActive = view === 'board' || view === 'open-work'
+  const commandCenterActive = view === 'open-work'
   const { jobs: projectJobs, searchRecords } = commandCenterProjectProjection({
     snapshots: shown,
     agentProfiles,
@@ -350,6 +354,7 @@ function LocalOwnerApp() {
   const openCommandHref = (href: string) => {
     history.pushState(history.state, '', href)
     setLocationSearch(new URL(href, location.origin).search)
+    setNavigation((current) => ({ ...current, view: 'open-work' }))
     const next = parseCommandCenterSelection(location.search)
     setCommandSection(next.section)
     if (next.boardId !== null) {
@@ -394,17 +399,43 @@ function LocalOwnerApp() {
         <div className="topbar-actions">
           <SystemMeter boards={snaps.map((s) => s.board.id)} />
           <nav className="view-tabs">
-             <button className={commandCenterActive ? 'tab active' : 'tab'} onClick={() => pickCommandSection(commandSection)}>Command center</button>
-             <button className={view === 'open-work' ? 'tab active' : 'tab'} onClick={() => pickView('open-work')}>Open Work</button>
-            <button className={view === 'collaboration' ? 'tab active' : 'tab'} onClick={() => pickView('collaboration')}>Collaborate</button>
-            <button className={view === 'organization' ? 'tab active' : 'tab'} onClick={() => pickView('organization')}>Organization</button>
-            <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={() => pickView('roadmap')}>Roadmap</button>
+            <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
+            <button className={commandCenterActive ? 'tab active' : 'tab'} onClick={() => pickCommandSection(commandSection)}>Advanced</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
+            <details className="view-more">
+              <summary className={view === 'collaboration' || view === 'organization' || view === 'roadmap'
+                ? 'tab active' : 'tab'}>More</summary>
+              <div className="view-more-menu">
+                <button className={view === 'collaboration' ? 'tab active' : 'tab'} onClick={(event) => {
+                  event.currentTarget.closest('details')?.removeAttribute('open')
+                  pickView('collaboration')
+                }}>Collaborate</button>
+                <button className={view === 'organization' ? 'tab active' : 'tab'} onClick={(event) => {
+                  event.currentTarget.closest('details')?.removeAttribute('open')
+                  pickView('organization')
+                }}>Organization</button>
+                <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={(event) => {
+                  event.currentTarget.closest('details')?.removeAttribute('open')
+                  pickView('roadmap')
+                }}>Roadmap</button>
+              </div>
+            </details>
             <PushBell />
           </nav>
         </div>
       </header>
-      {commandCenterActive
+      {view === 'board'
+        ? loaded && focusScope.kind === 'missing'
+          ? <CommandCenterState kind="error" title="Project not found"
+              detail={`Project ${focusScope.projectId} is unavailable or was deleted. Choose another project from the project switcher.`} />
+          : loaded && snaps.length === 0
+            ? connectionState === 'offline'
+              ? <CommandCenterState kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
+              : <GettingStarted onSettings={() => pickView('settings')} />
+            : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'focused'}
+                openMessages={shown.reduce((sum, snapshot) => sum + snapshot.open_questions.length, 0)}
+                onTabChange={pickBoardTab} onChange={refresh} />
+        : commandCenterActive
         ? loaded && focusScope.kind === 'missing'
            ? <CommandCenterState kind="error" title="Project not found"
               detail={`Project ${focusScope.projectId} is unavailable or was deleted. Choose another project from the project switcher.`} />
@@ -492,7 +523,6 @@ function LocalOwnerApp() {
               <SettingsView />
             </React.Suspense>}
       <PhoneRemoteDock active={view === 'board' ? boardTab : 'overview'} onTab={(tab) => {
-        pickView('board')
         pickBoardTab(tab)
       }} onAttention={() => window.dispatchEvent(new Event('orchestra:open-attention'))} />
     </div>

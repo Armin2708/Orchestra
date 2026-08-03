@@ -837,6 +837,16 @@ textarea {
 
 /* ── View tabs + Roadmap page ────────────────────── */
 .view-tabs { display: flex; gap: 6px; margin-left: 8px; }
+.view-more { position: relative; }
+.view-more > summary { list-style: none; cursor: pointer; }
+.view-more > summary::-webkit-details-marker { display: none; }
+.view-more-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 70;
+  min-width: 168px; padding: 6px; display: grid; gap: 2px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+}
+.view-more-menu .tab { width: 100%; justify-content: flex-start; border-radius: 6px; }
 .roadmap {
   flex: 1; min-height: 0; overflow-y: auto;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 20px;

@@ -19,6 +19,10 @@ const primaryViews = new Set<PrimaryView>([
   'board', 'open-work', 'collaboration', 'organization', 'roadmap', 'settings',
 ])
 const boardTabs = new Set<BoardTab>(BOARD_TABS.map((tab) => tab.id))
+const canonicalRouteKeys = [
+  'card', 'agent', 'conversation', 'session', 'job', 'discussion', 'knowledge', 'delivery',
+  'workspace', 'process', 'event', 'review', 'attention', 'approval', 'question', 'conflict',
+] as const
 
 export function resolveStoredNavigation(savedView: string | null, savedBoardTab: string | null): StoredNavigation {
   if (savedView === 'agents') return { view: 'board', boardTab: 'agents' }
@@ -31,4 +35,26 @@ export function resolveStoredNavigation(savedView: string | null, savedBoardTab:
     view: primaryViews.has(savedView as PrimaryView) ? savedView as PrimaryView : 'board',
     boardTab: boardTabs.has(savedBoardTab as BoardTab) ? savedBoardTab as BoardTab : 'overview',
   }
+}
+
+export function resolveLocationNavigation(
+  savedView: string | null,
+  savedBoardTab: string | null,
+  search: string,
+): StoredNavigation {
+  const stored = resolveStoredNavigation(savedView, savedBoardTab)
+  const params = new URLSearchParams(search)
+  const requestedView = params.get('view')
+
+  if (requestedView === 'collaboration' || requestedView === 'organization'
+    || requestedView === 'roadmap' || requestedView === 'settings') {
+    return { ...stored, view: requestedView }
+  }
+  if (params.has('section') || canonicalRouteKeys.some((key) => params.has(key))) {
+    return { ...stored, view: 'open-work' }
+  }
+  if (requestedView && primaryViews.has(requestedView as PrimaryView)) {
+    return { ...stored, view: requestedView as PrimaryView }
+  }
+  return stored
 }

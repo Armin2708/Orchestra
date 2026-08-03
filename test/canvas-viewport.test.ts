@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_CANVAS_ZOOM,
   MIN_CANVAS_ZOOM,
+  canvasViewportStorageKey,
   canvasGrid,
   canvasSceneOffset,
   clampCanvasZoom,
+  defaultCanvasViewport,
   panCanvasBy,
   screenToCanvas,
   screenToCanvasLocal,
@@ -12,6 +14,16 @@ import {
 } from '../web/src/canvasViewport.js'
 
 describe('board canvas viewport math', () => {
+  it('starts wide screens at full scale and compact screens fitted out', () => {
+    expect(defaultCanvasViewport(false)).toEqual({ x: 0, y: 0, zoom: 1 })
+    expect(defaultCanvasViewport(true)).toEqual({ x: 0, y: 0, zoom: MIN_CANVAS_ZOOM })
+  })
+
+  it('keeps compact and wide viewport preferences separate', () => {
+    expect(canvasViewportStorageKey('project-1', false)).toBe('project-1:wide')
+    expect(canvasViewportStorageKey('project-1', true)).toBe('project-1:compact')
+  })
+
   it('clamps zoom to a useful range', () => {
     expect(clampCanvasZoom(0.01)).toBe(MIN_CANVAS_ZOOM)
     expect(clampCanvasZoom(1.4)).toBe(1.4)
