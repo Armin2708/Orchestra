@@ -145,7 +145,17 @@ export function validateBenchmarkManifest(value) {
 const exactHead = (cwd) => {
   const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' })
   if (result.status !== 0) throw new Error('unable to resolve benchmark source commit')
-  return String(result.stdout).trim().toLowerCase()
+  const head = String(result.stdout).trim().toLowerCase()
+  const status = spawnSync(
+    'git',
+    ['status', '--porcelain=v1', '--untracked-files=no'],
+    { cwd, encoding: 'utf8' },
+  )
+  if (status.status !== 0) throw new Error('unable to verify benchmark source cleanliness')
+  if (String(status.stdout).length > 0) {
+    throw new Error('benchmark source has tracked changes')
+  }
+  return head
 }
 
 const runVariant = (scenario, variant, repositoryRoot) => {
@@ -202,6 +212,12 @@ export function runOutcomeBenchmark(manifestValue, options = {}) {
       comparison: evaluateBenchmarkPair(before.outcome, after.outcome),
     })
   })
+  const finalCommit = exactHead(repositoryRoot)
+  if (finalCommit !== manifest.source_commit) {
+    throw new Error(
+      `benchmark source changed during execution: expected ${manifest.source_commit}, observed ${finalCommit}`,
+    )
+  }
   const report = {
     schema_version: 1,
     suite_key: manifest.suite_key,
