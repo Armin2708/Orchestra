@@ -253,20 +253,39 @@ const waitForJson = async (url, predicate = () => true) => {
 }
 
 const jsonRequest = async (baseUrl, method, path, body, headers = {}) => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(5_000),
-  })
-  const text = await response.text()
-  let parsed
-  try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
-  if (!response.ok) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
+    })
+    const text = await response.text()
+    let parsed
+    try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
+    if (response.ok) return parsed
+    const retryAfterSeconds = Number(response.headers.get('retry-after'))
+    const idempotencyKey = Object.entries(headers)
+      .find(([key]) => key.toLowerCase() === 'idempotency-key')?.[1]
+    const mayRetryFixtureMutation = attempt === 0
+      && response.status === 429
+      && typeof parsed === 'object'
+      && parsed !== null
+      && parsed.error === 'operational rate limit exceeded'
+      && parsed.reason_code === 'limit_exceeded'
+      && typeof idempotencyKey === 'string'
+      && idempotencyKey.length > 0
+      && Number.isFinite(retryAfterSeconds)
+      && retryAfterSeconds > 0
+      && retryAfterSeconds <= 60
+    if (mayRetryFixtureMutation) {
+      await delay((retryAfterSeconds * 1_000) + 100)
+      continue
+    }
     const responseSha256 = createHash('sha256').update(text).digest('hex')
     throw new Error(`${method} ${path} returned ${response.status}; response_sha256=${responseSha256}`)
   }
-  return parsed
+  throw new Error(`${method} ${path} exhausted bounded operational rate-limit retry`)
 }
 
 const seedScenario = async (baseUrl, authHeaders) => {
