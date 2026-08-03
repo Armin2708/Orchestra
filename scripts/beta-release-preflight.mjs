@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parse as parseYaml } from 'yaml'
 import { evaluateBetaQualityMatrix } from './check-beta-quality-matrix.mjs'
 import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
 
@@ -56,6 +57,16 @@ const gate = (id, ok, evidence, blocker = null) => ({
   evidence,
   blocker: ok ? null : blocker,
 })
+
+export const isPublishWorkflowFailClosed = (workflowSource) => {
+  try {
+    const workflow = parseYaml(workflowSource, { uniqueKeys: true })
+    return isRecord(workflow) && isRecord(workflow.jobs) &&
+      isRecord(workflow.jobs.publish) && workflow.jobs.publish.if === '${{ false }}'
+  } catch {
+    return false
+  }
+}
 
 export const inspectArtifact = ({ artifactDirectory, commit, sourceVersion }) => {
   if (!artifactDirectory) return { ok: false, blocker: 'supply --artifact-dir for the one retained candidate' }
@@ -218,11 +229,12 @@ export function evaluateBetaReleasePreflight({
     quality = evaluateBetaQualityMatrix({ root: repository, mode: 'release', evidenceReport: qualityEvidencePath })
   }
 
+  const publishWorkflowFailClosed = isPublishWorkflowFailClosed(workflow)
   const publishFailClosed = contract.publication_approval?.workflow_publish_enabled === false &&
-    workflow.includes('if: ${{ false }}')
+    publishWorkflowFailClosed
   const protectionObserved = contract.publication_approval?.required_reviewers_verified === true &&
     contract.publication_approval?.workflow_publish_enabled === false &&
-    workflow.includes('if: ${{ false }}')
+    publishWorkflowFailClosed
   const gates = [
     gate('exact-clean-source', COMMIT_PATTERN.test(commit) && trackedStatus === '', { commit, tracked: trackedStatus === '' }, 'use one clean exact candidate commit'),
     gate('prerelease-proposal', PRERELEASE_PATTERN.test(proposal), { proposed_version: proposal || null }, 'supply an explicit SemVer prerelease proposal such as 0.1.0-beta.1'),

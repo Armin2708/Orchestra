@@ -9,6 +9,7 @@ import {
   inspectArtifact,
   inspectPlatformReports,
   inspectRolloutReports,
+  isPublishWorkflowFailClosed,
 } from '../scripts/beta-release-preflight.mjs'
 import { validateHostedPlatform } from '../scripts/validate-beta-platform-lifecycle.mjs'
 
@@ -66,6 +67,25 @@ const artifactFixture = () => {
 }
 
 describe('beta release preflight', () => {
+  it('requires the publish job itself to be structurally disabled', () => {
+    const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8')
+    expect(isPublishWorkflowFailClosed(workflow)).toBe(true)
+
+    expect(isPublishWorkflowFailClosed(`
+name: adversarial publication workflow
+on: workflow_dispatch
+jobs:
+  test:
+    if: \${{ false }}
+    runs-on: ubuntu-24.04
+    steps: []
+  publish:
+    if: \${{ true }}
+    runs-on: ubuntu-24.04
+    steps: []
+`)).toBe(false)
+  })
+
   it('keeps the prepared source blocked without approval and external evidence', () => {
     const report = evaluateBetaReleasePreflight({ root, proposedVersion: '0.1.0-beta.1' })
     const gates = new Map(report.gates.map((entry) => [entry.id, entry.status]))
