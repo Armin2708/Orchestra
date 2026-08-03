@@ -254,6 +254,12 @@ describe('Open Work component contract', () => {
     expect(viewSource).toContain('onClick={onQueueRefresh}')
   })
 
+  it('does not reload Open Work when saved-view filters are semantically unchanged', () => {
+    expect(viewSource).toMatch(
+      /setAppliedFilters\(\(current\) =>\s+serializeOpenWorkFilters\(current\) === serializeOpenWorkFilters\(next\) \? current : next\)/,
+    )
+  })
+
   it('holds save and publish confirmations above the keyed editor remount', () => {
     const detailStart = viewSource.indexOf('function OpenWorkDetail(')
     const editorStart = viewSource.indexOf('function ContractEditor(')

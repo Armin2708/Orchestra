@@ -14,6 +14,7 @@ import {
   defaultOpenWorkFilters,
   openWorkApi,
   OpenWorkApiError,
+  serializeOpenWorkFilters,
   type BriefPreview,
   type ContractAccessNeed,
   type ContractDraft,
@@ -182,7 +183,8 @@ export function OpenWorkView({
   useEffect(() => {
     const next = defaultFiltersForView(boardId, collectionFilters)
     setFilterForm(filterFormFromFilters(next))
-    setAppliedFilters(next)
+    setAppliedFilters((current) =>
+      serializeOpenWorkFilters(current) === serializeOpenWorkFilters(next) ? current : next)
     setAppliedQuery(collectionQuery)
   }, [boardId, collectionFilters, collectionQuery])
 
