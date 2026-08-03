@@ -4,10 +4,10 @@
   "status": "checked_observation",
   "budget_source": "checked_observation",
   "source": {
-    "commit": "c13098b484e744e38c990b6f06eba4ae2c133afa",
+    "commit": "49e1e5c6b8edf8be49d682680815e22fec5166f4",
     "artifact_identity": {
       "root_dist_sha256": "c92de228f05b4adf575f7e20fb60a1a720fadfd1048e225fab7fec4fb7a4d1dc",
-      "web_dist_sha256": "7e831e1c9cd9dd05db0e96dbaaefff022c3fb6d643490fc12046b496882807e9"
+      "web_dist_sha256": "c4d2149ba3efec5d3500f8e837bbad661fb5528a9bd17814ad5638179a69eae0"
     },
     "node": "22.20.0",
     "browser_surface": "standalone_chromium_cdp_fallback"
@@ -22,18 +22,18 @@
   "capture_artifacts": [
     {
       "path": "docs/qa-evidence/browser-quality/observation-1.json",
-      "sha256": "1051799a81e71ba49a0bdf8c809d6b9e458d14dd19fd9d2feac0b9d61ba9addc",
-      "file_sha256": "bb53902ce05f5b60143ab13c24fd032bb96ca20b5beb7612b793b44758256d05"
+      "sha256": "e4e2ae8db22c654994d1f60a680b21efe02a2c855683a36ec38d7d24cc3e5196",
+      "file_sha256": "9ed909fcbed79532855786a0ef0d72845198c0643d70b78a127722f452bdafc0"
     },
     {
       "path": "docs/qa-evidence/browser-quality/observation-2.json",
-      "sha256": "2902f8c179196292806862ec24b984590e1b9c56c2b4e11a3bddadbedf1673f1",
-      "file_sha256": "97f0a6d5586adae948287a65ef2deb5eddd78c578a70c33e15fa0d6ac7d94cfa"
+      "sha256": "666bc674c4ba2f93343b9d57241be8f9501aa5195a909ac1e7865b77391dcf77",
+      "file_sha256": "a3a70106fde2ade4636255fe914baf87c42c895c16a51d9a76b66848ba73f5ce"
     },
     {
       "path": "docs/qa-evidence/browser-quality/observation-3.json",
-      "sha256": "376b7ff69220b79d57e2d0124c7fd88cfb0dcf61c93c73b741d94d378939fb74",
-      "file_sha256": "dcccdae21024f8c5dee24d159d48df963b1e8ea6f218ec4a1f69bff5fa233b9d"
+      "sha256": "ac1e40d5d618976adb5c0d3633af8048681d25a3861e24c307f8a587f31c575f",
+      "file_sha256": "8710f85cf4f3ff0862db1e0d3b9ccb9ae3ec0049194476751fbd1f1dd876d26d"
     }
   ],
   "viewports": [
@@ -44,67 +44,67 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            417.30000001192093,
-            424.90000000596046,
-            427.7999999821186
+            424.59999999403954,
+            477.69999998807907,
+            468.90000000596046
           ],
-          "observed_p95_ms": 427.7999999821186,
+          "observed_p95_ms": 477.69999998807907,
           "measurement_mode": "authenticated_submit_to_ready",
-          "budget_ms": 856,
+          "budget_ms": 956,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 856,
+          "regression_budget_ms": 956,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            311.39999997615814,
-            299.09999999403954,
-            308.40000000596046
+            308.40000000596046,
+            358.40000000596046,
+            352.2999999821186
           ],
-          "observed_p95_ms": 311.39999997615814,
+          "observed_p95_ms": 358.40000000596046,
           "measurement_mode": "authenticated_fetch",
-          "budget_ms": 623,
+          "budget_ms": 717,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 623,
+          "regression_budget_ms": 717,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            1128.7578330000106,
-            1127.2980420000094,
-            1056.0340420000139
+            781.0283329999947,
+            894.8070000000007,
+            889.2445830000215
           ],
-          "observed_p95_ms": 1128.7578330000106,
+          "observed_p95_ms": 894.8070000000007,
           "measurement_mode": "pointer",
-          "budget_ms": 2258,
+          "budget_ms": 1790,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 2258,
+          "regression_budget_ms": 1790,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            928.2087919999904,
-            1053.4533329999977,
-            1054.0156660000066
+            540.9758330000041,
+            714.7281670000084,
+            628.6192500000034
           ],
-          "observed_p95_ms": 1054.0156660000066,
+          "observed_p95_ms": 714.7281670000084,
           "measurement_mode": "pointer",
           "budget_ms": 1000,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 2109,
+          "regression_budget_ms": 1430,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            632.6064999999944,
-            599.3301250000077,
-            640.3244589999958
+            656.9146250000049,
+            633.9538340000145,
+            670.2171670000243
           ],
-          "observed_p95_ms": 640.3244589999958,
+          "observed_p95_ms": 670.2171670000243,
           "measurement_mode": "pointer",
           "budget_ms": 750,
           "experience_budget_ms": 750,
-          "regression_budget_ms": 1281,
+          "regression_budget_ms": 1341,
           "budget_source": "checked_observation"
         }
       }
@@ -116,67 +116,67 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            437.7000000178814,
-            408.59999999403954,
-            424.19999998807907
+            431.59999999403954,
+            797.2000000178814,
+            464.40000000596046
           ],
-          "observed_p95_ms": 437.7000000178814,
+          "observed_p95_ms": 797.2000000178814,
           "measurement_mode": "authenticated_submit_to_ready",
-          "budget_ms": 876,
+          "budget_ms": 1500,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 876,
+          "regression_budget_ms": 1595,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            315.59999999403954,
-            305.5,
-            309.60000002384186
+            311.2999999821186,
+            602.5,
+            335.30000001192093
           ],
-          "observed_p95_ms": 315.59999999403954,
+          "observed_p95_ms": 602.5,
           "measurement_mode": "authenticated_fetch",
-          "budget_ms": 632,
+          "budget_ms": 1205,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 632,
+          "regression_budget_ms": 1205,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            1177.7580829999933,
-            1162.077500000014,
-            1193.4759580000245
+            822.7580829999933,
+            911.9860409999965,
+            1139.1914170000236
           ],
-          "observed_p95_ms": 1193.4759580000245,
+          "observed_p95_ms": 1139.1914170000236,
           "measurement_mode": "pointer",
-          "budget_ms": 2387,
+          "budget_ms": 2279,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 2387,
+          "regression_budget_ms": 2279,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            921.54566600002,
-            961.0469169999997,
-            965.7912910000014
+            634.5707079999847,
+            932.3597080000036,
+            669.8957079999964
           ],
-          "observed_p95_ms": 965.7912910000014,
+          "observed_p95_ms": 932.3597080000036,
           "measurement_mode": "pointer",
           "budget_ms": 1000,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 1932,
+          "regression_budget_ms": 1865,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            594.2750839999935,
-            612.9640420000069,
-            602.1345410000067
+            608.4251669999794,
+            597.2302909999853,
+            603.3157910000009
           ],
-          "observed_p95_ms": 612.9640420000069,
+          "observed_p95_ms": 608.4251669999794,
           "measurement_mode": "pointer",
           "budget_ms": 750,
           "experience_budget_ms": 750,
-          "regression_budget_ms": 1226,
+          "regression_budget_ms": 1217,
           "budget_source": "checked_observation"
         }
       }
@@ -188,71 +188,71 @@
       "performance": {
         "startup": {
           "samples_ms": [
-            394.7000000178814,
-            426.5,
-            425.30000001192093
+            473.40000000596046,
+            511.09999999403954,
+            469.2000000178814
           ],
-          "observed_p95_ms": 426.5,
+          "observed_p95_ms": 511.09999999403954,
           "measurement_mode": "authenticated_submit_to_ready",
-          "budget_ms": 853,
+          "budget_ms": 1023,
           "experience_budget_ms": 1500,
-          "regression_budget_ms": 853,
+          "regression_budget_ms": 1023,
           "budget_source": "checked_observation"
         },
         "snapshot_loading": {
           "samples_ms": [
-            303.40000000596046,
-            308.40000000596046,
-            306.2999999821186
+            350.5,
+            370.7999999821186,
+            347.39999997615814
           ],
-          "observed_p95_ms": 308.40000000596046,
+          "observed_p95_ms": 370.7999999821186,
           "measurement_mode": "authenticated_fetch",
-          "budget_ms": 617,
+          "budget_ms": 742,
           "experience_budget_ms": 3000,
-          "regression_budget_ms": 617,
+          "regression_budget_ms": 742,
           "budget_source": "checked_observation"
         },
         "transcript_loading": {
           "samples_ms": [
-            1139.2794169999834,
-            1118.818667000014,
-            1098.152833
+            805.8683749999909,
+            827.0490419999987,
+            839.3892500000075
           ],
-          "observed_p95_ms": 1139.2794169999834,
+          "observed_p95_ms": 839.3892500000075,
           "measurement_mode": "pointer",
-          "budget_ms": 2279,
+          "budget_ms": 1679,
           "experience_budget_ms": 3500,
-          "regression_budget_ms": 2279,
+          "regression_budget_ms": 1679,
           "budget_source": "checked_observation"
         },
         "graph_view": {
           "samples_ms": [
-            965.8838749999995,
-            1006.922499999986,
-            878.3147500000196
+            922.9116250000079,
+            627.740375000023,
+            670.45762500001
           ],
-          "observed_p95_ms": 1006.922499999986,
+          "observed_p95_ms": 922.9116250000079,
           "measurement_mode": "pointer",
           "budget_ms": 1000,
           "experience_budget_ms": 1000,
-          "regression_budget_ms": 2014,
+          "regression_budget_ms": 1846,
           "budget_source": "checked_observation"
         },
         "search": {
           "samples_ms": [
-            598.8802920000162,
-            585.5121249999793,
-            596.2621249999793
+            625.2204159999965,
+            620.0546659999818,
+            619.981832999998
           ],
-          "observed_p95_ms": 598.8802920000162,
+          "observed_p95_ms": 625.2204159999965,
           "measurement_mode": "pointer",
           "budget_ms": 750,
           "experience_budget_ms": 750,
-          "regression_budget_ms": 1198,
+          "regression_budget_ms": 1251,
           "budget_source": "checked_observation"
         }
       }
     }
   ],
-  "sha256": "9d48604e08ae8eb0c1a687eaf6342c9dd0e04de8479d441e59b7c2ed84c0c588"
+  "sha256": "de92bb96f2fe7467a1fc1f43b68127c002b229e0e19e1553ca673d29db06d43a"
 }
