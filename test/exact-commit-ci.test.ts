@@ -183,8 +183,9 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(workflow).toContain('audit dependency-audit-root')
     expect(workflow).toContain('audit dependency-audit-web --prefix web')
     expect(workflow).toContain('doctor --provider both --json')
-    expect(workflow).toContain('npm run check:codex-protocol')
-    expect(workflow).toContain('npm run check:codex-app-server')
+    expect(workflow).toContain(
+      "run codex-protocol --\n          sh -c 'npm run check:codex-protocol && npm run check:codex-app-server'",
+    )
     expect(workflow).toContain('./scripts/e2e.sh')
     expect(workflow).toContain('name: orchestra-package-${{ github.sha }}')
     expect(workflow).toContain('name: orchestra-ci-evidence-${{ github.sha }}')

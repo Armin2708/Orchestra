@@ -116,7 +116,7 @@ jobs:
         continue-on-error: true
         run: >-
           node scripts/exact-commit-evidence.mjs run codex-protocol --
-          npm run check:codex-protocol && npm run check:codex-app-server
+          sh -c 'npm run check:codex-protocol && npm run check:codex-app-server'
 
       - name: Run credential-free end-to-end smoke
         continue-on-error: true
