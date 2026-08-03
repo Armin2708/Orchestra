@@ -708,5 +708,6 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(source).not.toContain("localStorage.setItem('orchestra-token'")
     expect(source).toContain("label: 'expected_local_owner_challenge'")
     expect(source).toContain("type: 'keyDown'")
+    expect(source).toContain("...(result.violations ?? []), ...(result.unsupported ?? [])")
   })
 })

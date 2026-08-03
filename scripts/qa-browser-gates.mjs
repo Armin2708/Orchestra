@@ -1212,7 +1212,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
       surfaces_checked: results.length,
       failures: results.map((result, index) => result.passed === true ? null : {
         journey: journeys[index].name,
-        violations: result.violations ?? result.unsupported ?? [],
+        violations: [...(result.violations ?? []), ...(result.unsupported ?? [])],
       }).filter(Boolean),
     }]
   }))

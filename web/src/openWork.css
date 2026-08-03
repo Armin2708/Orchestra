@@ -248,7 +248,7 @@
   background: #fff;
   color: #575149;
   cursor: pointer;
-  transition: transform 130ms ease, opacity 130ms ease;
+  transition: transform 130ms ease, border-color 130ms ease, background-color 130ms ease, color 130ms ease;
 }
 
 .ow-button {
@@ -282,7 +282,9 @@
 .ow-add-button:disabled,
 .ow-text-button:disabled {
   cursor: not-allowed;
-  opacity: .45;
+  border-color: #d6d1c8;
+  background: #ece9e2;
+  color: #625d55;
 }
 
 .open-work button:focus-visible,

@@ -877,7 +877,14 @@ textarea {
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 7px 12px; font-size: 13px; background: var(--surface);
 }
-.rm-ticket.is-done { opacity: 0.5; }
+.rm-ticket.is-done {
+  border-color: #cfcac1;
+  background: #fff;
+}
+.rm-ticket.is-done .rm-ticket-title {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 .rm-ticket-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rm-ticket time { font-size: 10.5px; color: #706F6B; }
 .roadmap.focused { grid-template-columns: 1fr; max-width: 1000px; margin: 0 auto; width: 100%; }
