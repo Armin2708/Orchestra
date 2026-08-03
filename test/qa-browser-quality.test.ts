@@ -20,15 +20,21 @@ import {
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MAX_STRING_LENGTH,
   PERFORMANCE_SURFACES,
+  REQUEST_BUDGET_CEILING,
+  REQUEST_BUDGET_MAX_LIFECYCLE_STARTS,
+  REQUEST_BUDGET_RESERVE,
+  REQUEST_BUDGET_WINDOW_MS,
   RESPONSIVE_VIEWPORTS,
   STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS,
   STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
   STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
   assertFinalBuildManifest,
+  attachRequestBudgetPacer,
   compositeRgba,
   contrastRatio,
   checkedBudget,
   compactJourneyEvidence,
+  createRequestBudgetPacer,
   createStartupCompetitorStartTracker,
   deriveRegressionBudgetMs,
   evidenceDigest,
@@ -52,6 +58,7 @@ import {
   LOCAL_OWNER_CHALLENGE_DIGESTS,
   LOCAL_OWNER_CHALLENGE_PATHS,
   createLocalOwnerChallengeTracker,
+  localOwnerChallengeEndpointDigest,
   recordLocalOwnerHttpFailure,
 } from '../scripts/lib/browser-auth-challenges.mjs'
 
@@ -78,6 +85,16 @@ const passingEvidence = () => {
     source_tree_sha256: 'd'.repeat(64),
     build_manifest_sha256: 'e'.repeat(64),
     artifact_identity: { root_dist_sha256: 'b'.repeat(64), web_dist_sha256: 'c'.repeat(64) },
+  },
+  request_budget_pacing: {
+    observed_request_starts: 900,
+    wait_count: 1,
+    total_wait_ms: 60_000,
+    window_ms: REQUEST_BUDGET_WINDOW_MS,
+    ceiling: REQUEST_BUDGET_CEILING,
+    reserve: REQUEST_BUDGET_RESERVE,
+    max_lifecycle_request_starts: 120,
+    rate_limit_response_count: 0,
   },
   viewports: RESPONSIVE_VIEWPORTS.map((viewport) => ({
     ...viewport,
@@ -196,8 +213,8 @@ const currentBaseline = () => {
 }
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
-  it('uses the breaking schema-v6 contract for authenticated browser evidence', () => {
-    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(6)
+  it('uses the breaking schema-v7 contract for authenticated browser evidence', () => {
+    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(7)
     expect(BROWSER_BASELINE_SCHEMA_VERSION).toBe(4)
     expect(EXPECTED_BROWSER_LOGIN_CYCLES).toBe(37)
     expect(passingEvidence().viewports[0].authentication_challenge_inventory).toMatchObject({
@@ -205,6 +222,10 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       total_count: 74,
       pending_request_count: 0,
     })
+    const staleDiagnostic = passingEvidence()
+    staleDiagnostic.schema_version = 6
+    staleDiagnostic.sha256 = verifiableDocumentDigest(staleDiagnostic)
+    expect(validateBrowserQualityEvidence(staleDiagnostic)).toContain('schema version is invalid')
   })
 
   it('does not close startup on navigation or an offline command center', () => {
@@ -257,6 +278,93 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       competitor_request_starts: expect.any(Array),
     })
     expect(bounded.evidence().competitor_request_starts).toHaveLength(25)
+  })
+
+  it('shares one request-budget listener across viewport lifecycle transitions', async () => {
+    let now = 1_000
+    const pacer = createRequestBudgetPacer('http://127.0.0.1:4312', {
+      now: () => now,
+      sleep: async (milliseconds: number) => { now += milliseconds },
+    })
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const client = {
+      on: (event: string, listener: (value: any) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set())
+        listeners.get(event)!.add(listener)
+        return () => listeners.get(event)?.delete(listener)
+      },
+    }
+    const emit = (event: string, value: any) => {
+      for (const listener of listeners.get(event) ?? []) listener(value)
+    }
+    const detach = attachRequestBudgetPacer(client, pacer)
+    await pacer.beforeLifecycle()
+    emit('Network.requestWillBeSent', { request: { url: 'http://127.0.0.1:4312/api/v1/boards' } })
+    emit('Network.requestWillBeSent', { request: { url: 'https://example.invalid/api/v1/boards' } })
+    await pacer.beforeLifecycle()
+    emit('Network.requestWillBeSent', { request: { url: 'http://127.0.0.1:4312/api/v1/events' } })
+    pacer.finishLifecycle()
+    expect(pacer.evidence()).toMatchObject({
+      observed_request_starts: 2,
+      max_lifecycle_request_starts: 1,
+      rate_limit_response_count: 0,
+    })
+    detach()
+    emit('Network.requestWillBeSent', { request: { url: 'http://127.0.0.1:4312/api/v1/system' } })
+    expect(pacer.evidence().observed_request_starts).toBe(2)
+  })
+
+  it('paces seed and rolling request windows before starting another lifecycle', async () => {
+    let now = 0
+    const waits: number[] = []
+    const pacer = createRequestBudgetPacer('http://127.0.0.1:4312', {
+      now: () => now,
+      sleep: async (milliseconds: number) => { waits.push(milliseconds); now += milliseconds },
+    })
+    const seedStartedAt = now
+    now = 1_000
+    await pacer.waitForSeedWindow(seedStartedAt)
+    expect(waits).toEqual([59_000])
+    for (let lifecycle = 0; lifecycle < 4; lifecycle += 1) {
+      await pacer.beforeLifecycle()
+      for (let request = 0; request < REQUEST_BUDGET_MAX_LIFECYCLE_STARTS; request += 1) {
+        expect(pacer.observeRequest('http://127.0.0.1:4312/api/v1/boards')).toBe(true)
+      }
+    }
+    await pacer.beforeLifecycle()
+    expect(waits).toEqual([59_000, 60_000])
+    expect(pacer.evidence()).toEqual({
+      observed_request_starts: REQUEST_BUDGET_CEILING,
+      wait_count: 2,
+      total_wait_ms: 119_000,
+      window_ms: REQUEST_BUDGET_WINDOW_MS,
+      ceiling: REQUEST_BUDGET_CEILING,
+      reserve: REQUEST_BUDGET_RESERVE,
+      max_lifecycle_request_starts: REQUEST_BUDGET_MAX_LIFECYCLE_STARTS,
+      rate_limit_response_count: 0,
+    })
+    expect(JSON.stringify(pacer.evidence())).not.toMatch(/api|request_id|url/i)
+  })
+
+  it('fails closed on operational 429s and per-lifecycle request explosions', async () => {
+    let now = 0
+    const pacer = createRequestBudgetPacer('http://127.0.0.1:4312', { now: () => now })
+    await pacer.beforeLifecycle()
+    for (let index = 0; index <= REQUEST_BUDGET_MAX_LIFECYCLE_STARTS; index += 1) {
+      pacer.observeRequest('http://127.0.0.1:4312/api/v1/boards')
+    }
+    expect(() => pacer.assertHealthy()).toThrow(/maximum is 200/)
+
+    const limited = createRequestBudgetPacer('http://127.0.0.1:4312', { now: () => now })
+    await limited.beforeLifecycle()
+    limited.observeRequest('http://127.0.0.1:4312/api/v1/system')
+    expect(limited.observeResponse(429, 'http://127.0.0.1:4312/api/v1/system')).toBe(true)
+    expect(() => limited.assertHealthy()).toThrow(/operational 429/)
+    expect(limited.failedRequests()).toEqual([{
+      label: 'http_failure', status: 429,
+      endpoint_sha256: localOwnerChallengeEndpointDigest('/api/v1/system'),
+    }])
+    expect(JSON.stringify(limited.failedRequests())).not.toContain('/api/v1/system')
   })
 
   it('admits only request-id-bound pre-submit owner challenges and fails post-submit 401 closed', () => {
@@ -734,6 +842,30 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     ]))
   })
 
+  it('rejects forged request-budget pacing provenance after self-digesting', () => {
+    const mutations = [
+      (evidence: any) => { delete evidence.request_budget_pacing },
+      (evidence: any) => { evidence.request_budget_pacing.observed_request_starts = 0 },
+      (evidence: any) => { evidence.request_budget_pacing.window_ms = 59_999 },
+      (evidence: any) => { evidence.request_budget_pacing.ceiling = 801 },
+      (evidence: any) => { evidence.request_budget_pacing.reserve = 199 },
+      (evidence: any) => { evidence.request_budget_pacing.max_lifecycle_request_starts = 201 },
+      (evidence: any) => { evidence.request_budget_pacing.rate_limit_response_count = 1 },
+      (evidence: any) => {
+        evidence.request_budget_pacing.wait_count = 0
+        evidence.request_budget_pacing.total_wait_ms = 1
+      },
+      (evidence: any) => { evidence.request_budget_pacing.url = '/api/v1/boards' },
+    ]
+    for (const mutate of mutations) {
+      const evidence = passingEvidence()
+      mutate(evidence)
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('request budget pacing provenance is invalid')
+    }
+  })
+
   it('rejects missing, mismatched, duplicate, or unknown authentication challenge evidence', () => {
     const mutations = [
       (viewport: any) => { delete viewport.authentication_challenge_inventory },
@@ -1134,5 +1266,10 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(qualitySource).toContain('request_sha256')
     expect(source).toContain('observer?.takeRecords?.()')
     expect(source).toContain('candidate.start_ms === entry.start_ms && candidate.duration_ms === entry.duration_ms')
+    expect(source).toContain('const seedWindowStartedAtMs = performance.now()')
+    expect(source).toContain('attachRequestBudgetPacer(client, requestBudgetPacer)')
+    expect(source.match(/attachRequestBudgetPacer\(client, requestBudgetPacer\)/g)).toHaveLength(1)
+    expect(source).toContain('await requestBudgetPacer.beforeLifecycle()')
+    expect(source).not.toContain('mayRetryFixtureMutation')
   })
 })

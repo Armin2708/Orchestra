@@ -25,8 +25,10 @@ import {
   STARTUP_RESOURCE_EVIDENCE_MAX,
   assertFinalBuildManifest,
   assertDistinctArtifactPaths,
+  attachRequestBudgetPacer,
   canonicalRepositoryName,
   compactJourneyEvidence,
+  createRequestBudgetPacer,
   createStartupCompetitorStartTracker,
   finalizeBrowserEvidence,
   finalizeValidatedBrowserEvidence,
@@ -264,39 +266,18 @@ const waitForJson = async (url, predicate = () => true) => {
 }
 
 const jsonRequest = async (baseUrl, method, path, body, headers = {}) => {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(5_000),
-    })
-    const text = await response.text()
-    let parsed
-    try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
-    if (response.ok) return parsed
-    const retryAfterSeconds = Number(response.headers.get('retry-after'))
-    const idempotencyKey = Object.entries(headers)
-      .find(([key]) => key.toLowerCase() === 'idempotency-key')?.[1]
-    const mayRetryFixtureMutation = attempt === 0
-      && response.status === 429
-      && typeof parsed === 'object'
-      && parsed !== null
-      && parsed.error === 'operational rate limit exceeded'
-      && parsed.reason_code === 'limit_exceeded'
-      && typeof idempotencyKey === 'string'
-      && idempotencyKey.length > 0
-      && Number.isFinite(retryAfterSeconds)
-      && retryAfterSeconds > 0
-      && retryAfterSeconds <= 60
-    if (mayRetryFixtureMutation) {
-      await delay((retryAfterSeconds * 1_000) + 100)
-      continue
-    }
-    const responseSha256 = createHash('sha256').update(text).digest('hex')
-    throw new Error(`${method} ${path} returned ${response.status}; response_sha256=${responseSha256}`)
-  }
-  throw new Error(`${method} ${path} exhausted bounded operational rate-limit retry`)
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(5_000),
+  })
+  const text = await response.text()
+  let parsed
+  try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
+  if (response.ok) return parsed
+  const responseSha256 = createHash('sha256').update(text).digest('hex')
+  throw new Error(`${method} ${path} returned ${response.status}; response_sha256=${responseSha256}`)
 }
 
 const seedScenario = async (baseUrl, authHeaders) => {
@@ -463,7 +444,11 @@ const evaluate = async (client, expression) => {
 const waitFor = async (client, expression, label) => {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (await evaluate(client, expression)) return
+    client.requestBudgetPacer?.assertHealthy()
+    if (await evaluate(client, expression)) {
+      client.requestBudgetPacer?.assertHealthy()
+      return
+    }
     await delay(40)
   }
   throw new Error(`timed out waiting for ${label}`)
@@ -1012,7 +997,9 @@ const budgetFor = (baseline, viewportId, surface) => {
   }
 }
 
-const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, operatorToken }) => {
+const measureViewport = async ({
+  client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
+}) => {
   const consoleErrors = []
   const pageErrors = []
   const failedRequests = []
@@ -1078,6 +1065,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
+  await requestBudgetPacer.beforeLifecycle()
   authenticationChallengeTracker.beginLoginCycle()
   const initialNavigation = await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
   if (initialNavigation?.errorText || !initialNavigation?.loaderId) {
@@ -1229,6 +1217,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
+    await requestBudgetPacer.beforeLifecycle()
     authenticationChallengeTracker.beginLoginCycle()
     try {
       return await navigateFreshInteractionMode({
@@ -1249,9 +1238,13 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     const deadline = performance.now() + readinessTimeoutMs
     let consecutiveMatches = 0
     while (performance.now() < deadline) {
+      requestBudgetPacer.assertHealthy()
       if (await evaluate(client, expression)) {
         consecutiveMatches += 1
-        if (consecutiveMatches >= 2) return true
+        if (consecutiveMatches >= 2) {
+          requestBudgetPacer.assertHealthy()
+          return true
+        }
       } else {
         consecutiveMatches = 0
       }
@@ -1580,6 +1573,7 @@ const main = async () => {
   const options = parseArgs(process.argv.slice(2))
   const daemonStdout = [], daemonStderr = [], chromeStderr = []
   let daemon, chrome, client, operatorToken = ''
+  let requestBudgetPacer, detachRequestBudgetPacer
   let buildManifest = null
   let runRoot = null
   let activeViewport = null
@@ -1611,6 +1605,7 @@ const main = async () => {
     const daemonPort = await unusedPort()
     const chromePort = await unusedPort()
     const baseUrl = `http://127.0.0.1:${daemonPort}`
+    requestBudgetPacer = createRequestBudgetPacer(baseUrl)
     const environment = {
       ...process.env,
       ORCHESTRA_AUTOSHIP: '0',
@@ -1639,7 +1634,9 @@ const main = async () => {
     operatorToken = readFileSync(tokenPath, 'utf8').trim()
     if (!operatorToken) throw new Error('operator token is empty')
     const authHeaders = { authorization: `Bearer ${operatorToken}` }
+    const seedWindowStartedAtMs = performance.now()
     const scenario = await seedScenario(baseUrl, authHeaders)
+    await requestBudgetPacer.waitForSeedWindow(seedWindowStartedAtMs)
 
     chrome = spawn(options.chrome, [
       '--headless=new',
@@ -1667,6 +1664,8 @@ const main = async () => {
       client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
       client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
     ])
+    client.requestBudgetPacer = requestBudgetPacer
+    detachRequestBudgetPacer = attachRequestBudgetPacer(client, requestBudgetPacer)
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
         localStorage.setItem('orchestra-command-center-onboarding', 'complete');
@@ -1682,8 +1681,12 @@ const main = async () => {
     const viewports = completedViewports
     for (const viewport of viewportMatrix) {
       activeViewport = viewport.id
-      viewports.push(await measureViewport({ client, viewport, baseUrl, baseline, scenario, operatorToken }))
+      viewports.push(await measureViewport({
+        client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
+      }))
     }
+    requestBudgetPacer.finishLifecycle()
+    requestBudgetPacer.assertHealthy()
     activeViewport = null
     const finalManifest = await loadBuildManifest(options.artifactManifest)
     assertFinalBuildManifest(buildManifest, finalManifest)
@@ -1699,6 +1702,7 @@ const main = async () => {
         qa_013_closure_permitted: false,
       },
       source: sourceEvidence(buildManifest, null, 'passed_preflight_and_final'),
+      request_budget_pacing: requestBudgetPacer.evidence(),
       scenario,
       methodology: {
         isolation: 'disposable Orchestra home and Chrome profile; every pointer, keyboard, and DOM fallback mode starts with a unique same-artifact Page.navigate loader and authenticates through the real loopback login without browser token persistence',
@@ -1764,6 +1768,8 @@ const main = async () => {
       ),
       active_viewport: activeViewport,
       completed_viewports: completedViewports,
+      request_budget_pacing: requestBudgetPacer?.evidence() ?? null,
+      failed_requests: requestBudgetPacer?.failedRequests() ?? [],
       diagnostics,
     })
     const fatalEvidence = finalizeBrowserEvidence(failureEvidence, [safeMessage(error)], 'fatal')
@@ -1771,6 +1777,7 @@ const main = async () => {
     console.error(JSON.stringify(diagnostics, null, 2))
     throw error
   } finally {
+    detachRequestBudgetPacer?.()
     client?.close()
     await stopChild(chrome)
     await stopChild(daemon)

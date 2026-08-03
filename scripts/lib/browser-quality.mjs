@@ -10,7 +10,7 @@ import {
   REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
 } from './browser-auth-challenges.mjs'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 6
+export const BROWSER_QUALITY_SCHEMA_VERSION = 7
 export const BROWSER_BASELINE_SCHEMA_VERSION = 4
 export const BROWSER_BUILD_SCHEMA_VERSION = 3
 
@@ -121,6 +121,10 @@ export const STARTUP_RESOURCE_EVIDENCE_MAX = 25
 // Covers the 40 ms readiness poll plus bounded CDP click/evaluate round trips without
 // allowing the independently measured submit-to-live windows to drift materially.
 export const STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS = 250
+export const REQUEST_BUDGET_WINDOW_MS = 60_000
+export const REQUEST_BUDGET_CEILING = 800
+export const REQUEST_BUDGET_RESERVE = 200
+export const REQUEST_BUDGET_MAX_LIFECYCLE_STARTS = 200
 const startupRouteDigest = (path) => createHash('sha256').update(path).digest('hex')
 export const STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS = Object.freeze({
   boards: startupRouteDigest('/api/v1/boards'),
@@ -179,6 +183,127 @@ export const createStartupCompetitorStartTracker = (baseUrl, now = () => perform
         competitor_request_starts: structuredClone(starts),
       }
     },
+  }
+}
+
+export const createRequestBudgetPacer = (baseUrl, {
+  now = () => performance.now(),
+  sleep = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)),
+} = {}) => {
+  const origin = new URL(baseUrl).origin
+  const starts = []
+  const rateLimitFailures = []
+  let observedStarts = 0
+  let waitCount = 0
+  let totalWaitMs = 0
+  let currentLifecycleStarts = null
+  let maxLifecycleStarts = 0
+  let rateLimitResponseCount = 0
+
+  const isTrackedApiUrl = (rawUrl) => {
+    let url
+    try { url = new URL(rawUrl) } catch { return null }
+    return url.origin === origin && url.pathname.startsWith('/api/') ? url : null
+  }
+  const prune = () => {
+    const cutoff = now() - REQUEST_BUDGET_WINDOW_MS
+    while (starts.length && starts[0] <= cutoff) starts.shift()
+  }
+  const performWait = async (milliseconds) => {
+    if (!(milliseconds > 0)) return
+    const started = now()
+    waitCount += 1
+    await sleep(Math.min(milliseconds, REQUEST_BUDGET_WINDOW_MS))
+    totalWaitMs += Math.max(0, now() - started)
+  }
+  const finishLifecycle = () => {
+    if (currentLifecycleStarts === null) return
+    maxLifecycleStarts = Math.max(maxLifecycleStarts, currentLifecycleStarts)
+    currentLifecycleStarts = null
+  }
+  const healthError = () => {
+    const lifecycleStarts = Math.max(maxLifecycleStarts, currentLifecycleStarts ?? 0)
+    if (rateLimitResponseCount > 0) {
+      return new Error(`browser request budget observed ${rateLimitResponseCount} operational 429 response(s)`)
+    }
+    if (lifecycleStarts > REQUEST_BUDGET_MAX_LIFECYCLE_STARTS) {
+      return new Error(`browser lifecycle started ${lifecycleStarts} API requests; maximum is ${REQUEST_BUDGET_MAX_LIFECYCLE_STARTS}`)
+    }
+    return null
+  }
+
+  return {
+    async waitForSeedWindow(seedStartedAtMs) {
+      const remaining = Math.max(0, Math.min(
+        REQUEST_BUDGET_WINDOW_MS,
+        seedStartedAtMs + REQUEST_BUDGET_WINDOW_MS - now(),
+      ))
+      await performWait(remaining)
+    },
+    async beforeLifecycle() {
+      finishLifecycle()
+      const error = healthError()
+      if (error) throw error
+      while (true) {
+        prune()
+        if (starts.length < REQUEST_BUDGET_CEILING) break
+        await performWait(Math.max(1, starts[0] + REQUEST_BUDGET_WINDOW_MS - now()))
+      }
+      currentLifecycleStarts = 0
+    },
+    observeRequest(rawUrl) {
+      if (!isTrackedApiUrl(rawUrl)) return false
+      const observedAt = now()
+      starts.push(observedAt)
+      observedStarts += 1
+      if (currentLifecycleStarts !== null) currentLifecycleStarts += 1
+      return true
+    },
+    observeResponse(status, rawUrl) {
+      const url = status === 429 ? isTrackedApiUrl(rawUrl) : null
+      if (!url) return false
+      rateLimitResponseCount += 1
+      rateLimitFailures.push({
+        label: 'http_failure',
+        status: 429,
+        endpoint_sha256: startupRouteDigest(url.pathname),
+      })
+      if (rateLimitFailures.length > EVIDENCE_MAX_ARRAY_LENGTH) rateLimitFailures.shift()
+      return true
+    },
+    finishLifecycle,
+    assertHealthy() {
+      const error = healthError()
+      if (error) throw error
+    },
+    failedRequests() {
+      return structuredClone(rateLimitFailures)
+    },
+    evidence() {
+      return {
+        observed_request_starts: observedStarts,
+        wait_count: waitCount,
+        total_wait_ms: totalWaitMs,
+        window_ms: REQUEST_BUDGET_WINDOW_MS,
+        ceiling: REQUEST_BUDGET_CEILING,
+        reserve: REQUEST_BUDGET_RESERVE,
+        max_lifecycle_request_starts: Math.max(maxLifecycleStarts, currentLifecycleStarts ?? 0),
+        rate_limit_response_count: rateLimitResponseCount,
+      }
+    },
+  }
+}
+
+export const attachRequestBudgetPacer = (client, pacer) => {
+  const unsubscribeRequest = client.on('Network.requestWillBeSent', (event) => {
+    pacer.observeRequest(event.request?.url)
+  })
+  const unsubscribeResponse = client.on('Network.responseReceived', (event) => {
+    pacer.observeResponse(event.response?.status, event.response?.url)
+  })
+  return () => {
+    unsubscribeRequest()
+    unsubscribeResponse()
   }
 }
 
@@ -675,6 +800,28 @@ export const validateBaselineAgainstCaptures = (baseline, captures) => {
 export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true } = {}) => {
   const errors = []
   if (evidence?.schema_version !== BROWSER_QUALITY_SCHEMA_VERSION) errors.push('schema version is invalid')
+  const requestBudgetPacing = evidence?.request_budget_pacing
+  const pacingKeys = [
+    'observed_request_starts', 'wait_count', 'total_wait_ms', 'window_ms', 'ceiling', 'reserve',
+    'max_lifecycle_request_starts', 'rate_limit_response_count',
+  ]
+  const validRequestBudgetPacing = requestBudgetPacing && typeof requestBudgetPacing === 'object'
+    && canonicalJson(Object.keys(requestBudgetPacing).sort()) === canonicalJson([...pacingKeys].sort())
+    && Number.isInteger(requestBudgetPacing.observed_request_starts)
+    && requestBudgetPacing.observed_request_starts > 0
+    && Number.isInteger(requestBudgetPacing.wait_count) && requestBudgetPacing.wait_count >= 0
+    && Number.isFinite(requestBudgetPacing.total_wait_ms) && requestBudgetPacing.total_wait_ms >= 0
+    && ((requestBudgetPacing.wait_count === 0 && requestBudgetPacing.total_wait_ms === 0)
+      || (requestBudgetPacing.wait_count > 0 && requestBudgetPacing.total_wait_ms > 0))
+    && requestBudgetPacing.window_ms === REQUEST_BUDGET_WINDOW_MS
+    && requestBudgetPacing.ceiling === REQUEST_BUDGET_CEILING
+    && requestBudgetPacing.reserve === REQUEST_BUDGET_RESERVE
+    && requestBudgetPacing.ceiling + requestBudgetPacing.reserve === 1_000
+    && Number.isInteger(requestBudgetPacing.max_lifecycle_request_starts)
+    && requestBudgetPacing.max_lifecycle_request_starts >= 0
+    && requestBudgetPacing.max_lifecycle_request_starts <= REQUEST_BUDGET_MAX_LIFECYCLE_STARTS
+    && requestBudgetPacing.rate_limit_response_count === 0
+  if (!validRequestBudgetPacing) errors.push('request budget pacing provenance is invalid')
   const viewports = Array.isArray(evidence?.viewports) ? evidence.viewports : []
   const viewportIds = viewports.map((viewport) => viewport?.id)
   if (viewportIds.length !== RESPONSIVE_VIEWPORTS.length

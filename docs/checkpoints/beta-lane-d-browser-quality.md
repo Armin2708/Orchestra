@@ -50,7 +50,7 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   `checked_observation`. Capture mode emits observations only and cannot self-budget.
 - Baseline samples, p95 and budgets are recomputed directly from every retained observation during
   validation; changing claimed values and recomputing the self-digest still fails.
-- Browser evidence schema v6 defines startup as valid owner-token submission through authenticated
+- Browser evidence schema v7 defines startup as valid owner-token submission through authenticated
   `.cc-shell[data-connection="live"]` readiness. Bounded Resource Timing evidence proves boards,
   snapshot, jobs and profile requests each completed exactly once inside that window. Direct CDP
   request-start tracking also proves system, open-work and device-self competitors remained at zero,
@@ -58,6 +58,11 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   SHA-256 identities. Chromium long-task records are drained, merged and deduplicated before bounded
   count and duration summaries are calculated. Baseline schema v4 remains required because older
   navigation-timing startup samples are not comparable.
+- One run-scoped CDP request-budget pacer preserves the production 1,000-request fixed-window limit:
+  the fixture seed window drains first, every same-origin `/api/` start is counted across all viewport
+  lifecycles, and a new navigation waits at the 800-request ceiling with a 200-request reserve. Any
+  429 or lifecycle above 200 starts fails closed; retained pacing evidence contains aggregate numbers
+  only and never URLs, paths or request IDs.
 - Retained paths must resolve to real non-symlink files inside
   `docs/qa-evidence/browser-quality/`; absolute, escaping and symlink paths fail closed.
 - Manifest creation refuses dirty tracked source, hashes every tracked file with SHA-256, builds
