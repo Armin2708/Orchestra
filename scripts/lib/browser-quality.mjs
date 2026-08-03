@@ -131,6 +131,54 @@ export const STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS = Object.freeze({
   device_self: startupRouteDigest('/api/v1/os/devices/self'),
 })
 
+export const createStartupCompetitorStartTracker = (baseUrl, now = () => performance.now()) => {
+  const origin = new URL(baseUrl).origin
+  const routes = new Map([
+    ['/api/v1/system', 'system'],
+    ['/api/v1/os/open-work', 'open_work'],
+    ['/api/v1/os/devices/self', 'device_self'],
+  ])
+  const starts = []
+  let active = false
+  let startedAtMs = 0
+  let windowMs = 0
+  let count = 0
+  return {
+    beginWindow() {
+      active = true
+      startedAtMs = now()
+    },
+    endWindow() {
+      if (active) windowMs = Math.max(0, now() - startedAtMs)
+      active = false
+    },
+    observeRequest(requestId, rawUrl) {
+      if (!active || !requestId || !rawUrl) return false
+      let url
+      try { url = new URL(rawUrl) } catch { return false }
+      const category = url.origin === origin ? routes.get(url.pathname) : null
+      if (!category) return false
+      count += 1
+      starts.push({
+        category,
+        route_sha256: STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS[category],
+        endpoint_sha256: startupRouteDigest(url.pathname),
+        request_sha256: startupRouteDigest(requestId),
+        start_offset_ms: Math.max(0, now() - startedAtMs),
+      })
+      if (starts.length > STARTUP_RESOURCE_EVIDENCE_MAX) starts.shift()
+      return true
+    },
+    evidence() {
+      return {
+        competitor_request_start_count: count,
+        competitor_request_window_ms: windowMs,
+        competitor_request_starts: structuredClone(starts),
+      }
+    },
+  }
+}
+
 export const verifiableDocumentDigest = (value) => {
   const document = structuredClone(value)
   delete document.sha256
@@ -782,6 +830,8 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           ? resourceTiming.critical_resources : []
         const competitorResources = Array.isArray(resourceTiming?.competitor_resources)
           ? resourceTiming.competitor_resources : []
+        const competitorRequestStarts = Array.isArray(resourceTiming?.competitor_request_starts)
+          ? resourceTiming.competitor_request_starts : []
         const expectedCriticalCategories = Object.keys(STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS)
         const exactKeys = (value, keys) => value && typeof value === 'object'
           && canonicalJson(Object.keys(value).sort()) === canonicalJson([...keys].sort())
@@ -795,6 +845,14 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           && entry.response_end_ms <= navigationToReady + 1
           && Number.isFinite(entry.duration_ms) && entry.duration_ms >= 0
           && Math.abs(entry.duration_ms - (entry.response_end_ms - entry.start_ms)) <= 1
+        const validCompetitorRequestStart = (entry) => exactKeys(entry, [
+          'category', 'route_sha256', 'endpoint_sha256', 'request_sha256', 'start_offset_ms',
+        ])
+          && STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS[entry.category] === entry.route_sha256
+          && /^[a-f0-9]{64}$/.test(String(entry.endpoint_sha256 ?? ''))
+          && /^[a-f0-9]{64}$/.test(String(entry.request_sha256 ?? ''))
+          && Number.isFinite(entry.start_offset_ms) && entry.start_offset_ms >= 0
+          && entry.start_offset_ms <= resourceTiming.competitor_request_window_ms + 1
         const longTasks = resourceTiming?.long_tasks
         const validLongTasks = exactKeys(longTasks, [
           'supported', 'count', 'total_duration_ms', 'max_duration_ms',
@@ -808,7 +866,9 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           && (longTasks.supported || longTasks.count === 0)
         const validResourceTiming = exactKeys(resourceTiming, [
           'window', 'window_start_ms', 'window_end_ms', 'critical_resource_count',
-          'competitor_resource_count', 'critical_resources', 'competitor_resources', 'long_tasks',
+          'competitor_resource_count', 'competitor_request_start_count',
+          'competitor_request_window_ms', 'critical_resources', 'competitor_resources',
+          'competitor_request_starts', 'long_tasks',
         ])
           && resourceTiming?.window === 'submit_to_data_ready'
           && Number.isFinite(resourceTiming?.window_start_ms)
@@ -817,8 +877,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           && Math.abs(resourceTiming.window_end_ms - navigationToReady) <= 1
           && Number.isInteger(resourceTiming?.critical_resource_count)
           && resourceTiming.critical_resource_count === criticalResources.length
-          && criticalResources.length >= expectedCriticalCategories.length
+          && criticalResources.length === expectedCriticalCategories.length
           && criticalResources.length <= STARTUP_RESOURCE_EVIDENCE_MAX
+          && new Set(criticalResources.map((entry) => entry?.category)).size
+            === expectedCriticalCategories.length
           && expectedCriticalCategories.every((category) => criticalResources
             .some((entry) => entry?.category === category))
           && criticalResources.every((entry) => validResource(
@@ -831,6 +893,13 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
             entry, STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
           ))
           && resourceTiming?.competitor_resource_count === 0
+          && Number.isFinite(resourceTiming?.competitor_request_window_ms)
+          && resourceTiming.competitor_request_window_ms >= 0
+          && Number.isInteger(resourceTiming?.competitor_request_start_count)
+          && resourceTiming.competitor_request_start_count === competitorRequestStarts.length
+          && competitorRequestStarts.length <= STARTUP_RESOURCE_EVIDENCE_MAX
+          && competitorRequestStarts.every(validCompetitorRequestStart)
+          && resourceTiming.competitor_request_start_count === 0
           && validLongTasks
         if (!/^[a-f0-9]{64}$/.test(String(provenance?.loader_sha256 ?? ''))
           || !Number.isFinite(provenance?.time_origin_ms) || provenance.time_origin_ms <= 0

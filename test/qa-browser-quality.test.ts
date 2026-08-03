@@ -28,6 +28,7 @@ import {
   contrastRatio,
   checkedBudget,
   compactJourneyEvidence,
+  createStartupCompetitorStartTracker,
   deriveRegressionBudgetMs,
   evidenceDigest,
   finalizeBrowserEvidence,
@@ -159,6 +160,8 @@ const passingEvidence = () => {
           window_end_ms: 10,
           critical_resource_count: 4,
           competitor_resource_count: 0,
+          competitor_request_start_count: 0,
+          competitor_request_window_ms: 4,
           critical_resources: [
             { category: 'boards', start_ms: 6, response_end_ms: 6.5, duration_ms: 0.5 },
             { category: 'snapshot', start_ms: 6.5, response_end_ms: 9.5, duration_ms: 3 },
@@ -170,6 +173,7 @@ const passingEvidence = () => {
             endpoint_sha256: evidenceDigest(`endpoint:${entry.category}`),
           })),
           competitor_resources: [],
+          competitor_request_starts: [],
           long_tasks: { supported: true, count: 0, total_duration_ms: 0, max_duration_ms: 0 },
         },
         data_ready_selector: '.cc-shell[data-connection="live"]',
@@ -213,6 +217,45 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(evaluateReady('absent')).toBe(false)
     expect(evaluateReady('offline')).toBe(false)
     expect(evaluateReady('live')).toBe(true)
+  })
+
+  it('retains bounded hashed competitor starts even when no response completes', () => {
+    let now = 100
+    const tracker = createStartupCompetitorStartTracker('http://127.0.0.1:4312', () => now)
+    expect(tracker.observeRequest('before', 'http://127.0.0.1:4312/api/v1/system')).toBe(false)
+    tracker.beginWindow()
+    now = 101
+    expect(tracker.observeRequest('in-flight-system', 'http://127.0.0.1:4312/api/v1/system')).toBe(true)
+    expect(tracker.observeRequest('critical', 'http://127.0.0.1:4312/api/v1/boards')).toBe(false)
+    expect(tracker.observeRequest('foreign', 'https://example.invalid/api/v1/os/open-work')).toBe(false)
+    now = 103
+    expect(tracker.observeRequest('in-flight-open-work', 'http://127.0.0.1:4312/api/v1/os/open-work')).toBe(true)
+    now = 105
+    tracker.endWindow()
+    expect(tracker.observeRequest('after', 'http://127.0.0.1:4312/api/v1/os/devices/self')).toBe(false)
+    const evidence = tracker.evidence()
+    expect(evidence).toMatchObject({
+      competitor_request_start_count: 2,
+      competitor_request_window_ms: 5,
+    })
+    expect(evidence.competitor_request_starts).toHaveLength(2)
+    expect(evidence.competitor_request_starts.every((entry: any) =>
+      /^[a-f0-9]{64}$/.test(entry.endpoint_sha256)
+      && /^[a-f0-9]{64}$/.test(entry.request_sha256))).toBe(true)
+    expect(JSON.stringify(evidence)).not.toContain('/api/')
+    expect(JSON.stringify(evidence)).not.toContain('in-flight-system')
+
+    const bounded = createStartupCompetitorStartTracker('http://127.0.0.1:4312', () => 1)
+    bounded.beginWindow()
+    for (let index = 0; index < 30; index += 1) {
+      bounded.observeRequest(`request-${index}`, 'http://127.0.0.1:4312/api/v1/system')
+    }
+    bounded.endWindow()
+    expect(bounded.evidence()).toMatchObject({
+      competitor_request_start_count: 30,
+      competitor_request_starts: expect.any(Array),
+    })
+    expect(bounded.evidence().competitor_request_starts).toHaveLength(25)
   })
 
   it('admits only request-id-bound pre-submit owner challenges and fails post-submit 401 closed', () => {
@@ -735,7 +778,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(validateBrowserQualityEvidence(reused)).toContain('startup navigation provenance is not unique across viewports')
   })
 
-  it('rejects missing, extra, or competitor startup resource timing evidence', () => {
+  it('rejects missing, duplicate, extra, completed, or in-flight competitor startup evidence', () => {
     const mutations = [
       (timing: any) => {
         timing.critical_resources = timing.critical_resources.filter((entry: any) => entry.category !== 'jobs')
@@ -753,6 +796,10 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         timing.critical_resource_count = timing.critical_resources.length
       },
       (timing: any) => {
+        timing.critical_resources.push({ ...timing.critical_resources[0] })
+        timing.critical_resource_count = timing.critical_resources.length
+      },
+      (timing: any) => {
         timing.competitor_resources.push({
           category: 'system',
           route_sha256: STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS.system,
@@ -764,6 +811,16 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         timing.competitor_resource_count = 1
       },
       (timing: any) => { timing.critical_resources[0].url = '/api/v1/boards?raw=id' },
+      (timing: any) => {
+        timing.competitor_request_starts.push({
+          category: 'device_self',
+          route_sha256: STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS.device_self,
+          endpoint_sha256: evidenceDigest('device-self-endpoint'),
+          request_sha256: evidenceDigest('in-flight-request-id'),
+          start_offset_ms: 2,
+        })
+        timing.competitor_request_start_count = 1
+      },
       (timing: any) => {
         timing.competitor_resources.push({
           category: 'open_work',
@@ -1015,6 +1072,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
   it('locks actual runner source against retaining raw response or page content', () => {
     const source = readFileSync(join(process.cwd(), 'scripts', 'qa-browser-gates.mjs'), 'utf8')
     const authSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'browser-auth-challenges.mjs'), 'utf8')
+    const qualitySource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'browser-quality.mjs'), 'utf8')
     expect(source).not.toContain('response.status}: ${String(text)')
     expect(source).not.toContain('text: text.slice')
     expect(source).not.toContain("localStorage.setItem('orchestra-token'")
@@ -1024,5 +1082,11 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(source).toContain('for (const unsubscribe of subscriptions) unsubscribe()')
     expect(source).toContain("escape_path: shift ? 'Escape+Shift+Tab' : 'Escape+Tab'")
     expect(source).toContain('AUTHENTICATED_DATA_READY_EXPRESSION')
+    expect(source).toContain('first-connection surface')
+    expect(source).toContain('authenticated data readiness')
+    expect(source).toContain("client.on('Network.requestWillBeSent'")
+    expect(qualitySource).toContain('request_sha256')
+    expect(source).toContain('observer?.takeRecords?.()')
+    expect(source).toContain('candidate.start_ms === entry.start_ms && candidate.duration_ms === entry.duration_ms')
   })
 })

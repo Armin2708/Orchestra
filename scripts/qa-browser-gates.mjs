@@ -27,6 +27,7 @@ import {
   assertDistinctArtifactPaths,
   canonicalRepositoryName,
   compactJourneyEvidence,
+  createStartupCompetitorStartTracker,
   finalizeBrowserEvidence,
   finalizeValidatedBrowserEvidence,
   navigateFreshInteractionMode,
@@ -646,7 +647,21 @@ const domActivate = (client, selector) => evaluate(client, `(() => {
   return true;
 })()`)
 
-const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit = () => {}) => {
+const authenticateLocalOwner = async (
+  client,
+  operatorToken,
+  label,
+  beforeSubmit = () => {},
+  afterDataReady = () => {},
+) => {
+  await waitFor(
+    client,
+    `document.readyState === 'complete' && Boolean(
+      document.querySelector('.login-form .login-input')
+      || document.querySelector('main[aria-busy="true"] [role="status"]')
+    )`,
+    `${label} first-connection surface`,
+  )
   await waitFor(client, `Boolean(document.querySelector('.login-form .login-input'))`, `${label} owner login`)
   const loginFormReadyMs = await evaluate(client, `performance.now()`)
   const focused = await evaluate(client, `(() => {
@@ -669,10 +684,11 @@ const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit
   }
   await waitFor(
     client,
-    `Boolean(document.querySelector('.cc-project-nav')) && !document.querySelector('.login-form')`,
-    `${label} authenticated command center`,
+    AUTHENTICATED_DATA_READY_EXPRESSION,
+    `${label} authenticated data readiness`,
   )
   const commandCenterReadyMs = await evaluate(client, `performance.now()`)
+  afterDataReady()
   return {
     login_form_ready_ms: loginFormReadyMs,
     login_entry_ms: Math.max(0, submitStartedMs - loginFormReadyMs),
@@ -1002,6 +1018,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const failedRequests = []
   const authenticationChallenges = []
   const authenticationChallengeTracker = createLocalOwnerChallengeTracker(baseUrl)
+  const startupCompetitorStartTracker = createStartupCompetitorStartTracker(baseUrl)
   const subscriptions = []
   subscriptions.push(client.on('Runtime.consoleAPICalled', (event) => {
     if (event.type === 'error') {
@@ -1017,6 +1034,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   ))))
   subscriptions.push(client.on('Network.requestWillBeSent', (event) => {
     authenticationChallengeTracker.observeRequest(event.requestId, event.request?.url)
+    startupCompetitorStartTracker.observeRequest(event.requestId, event.request?.url)
   }))
   subscriptions.push(client.on('Network.responseReceived', (event) => {
     const { response } = event
@@ -1082,7 +1100,11 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
       client,
       operatorToken,
       `${viewport.id} initial command center`,
-      () => authenticationChallengeTracker.closePreSubmitPhase(),
+      () => {
+        authenticationChallengeTracker.closePreSubmitPhase()
+        startupCompetitorStartTracker.beginWindow()
+      },
+      () => startupCompetitorStartTracker.endWindow(),
     )
   } finally { authenticationChallengeTracker.closePreSubmitPhase() }
   const startupNavigation = await evaluate(client, `(() => {
@@ -1105,14 +1127,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     const entry = entries.at(-1);
     return entry && Number.isFinite(entry.duration) ? entry.duration : null;
   })()`
+  const dataReadyMs = initialAuthentication.command_center_ready_ms
   await waitFor(client, `${snapshotResourceExpression} !== null`, 'authenticated snapshot resource timing')
-  await waitFor(
-    client,
-    AUTHENTICATED_DATA_READY_EXPRESSION,
-    'authenticated command center data readiness',
-  )
   const snapshot = await evaluate(client, snapshotResourceExpression)
-  const dataReadyMs = await evaluate(client, `performance.now()`)
   const startup = Math.max(0, dataReadyMs - initialAuthentication.submit_started_ms)
   const startupResourceRows = await evaluate(client, `(() => {
     const windowStart = ${JSON.stringify(initialAuthentication.submit_started_ms)};
@@ -1140,10 +1157,19 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
         duration_ms: entry.duration,
       }];
     });
-    const longTasks = Array.isArray(window.__orchestraQaLongTasks)
-      ? window.__orchestraQaLongTasks.filter((entry) => entry.start_ms >= windowStart
-        && entry.start_ms + entry.duration_ms <= windowEnd) : [];
-    window.__orchestraQaLongTaskObserver?.disconnect();
+    const observer = window.__orchestraQaLongTaskObserver;
+    const pendingLongTasks = observer?.takeRecords?.().map((entry) => ({
+      start_ms: entry.startTime, duration_ms: entry.duration,
+    })) ?? [];
+    const observedLongTasks = [
+      ...(Array.isArray(window.__orchestraQaLongTasks) ? window.__orchestraQaLongTasks : []),
+      ...pendingLongTasks,
+    ].filter((entry, index, entries) => entries.findIndex((candidate) =>
+      candidate.start_ms === entry.start_ms && candidate.duration_ms === entry.duration_ms) === index);
+    const longTasks = observedLongTasks
+      .filter((entry) => entry.start_ms >= windowStart
+        && entry.start_ms + entry.duration_ms <= windowEnd);
+    observer?.disconnect();
     return { resources, long_tasks: longTasks };
   })()`)
   const startupResourceEvidence = (row) => ({
@@ -1160,16 +1186,20 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const competitorResourceRows = startupResourceRows.resources
     .filter((row) => row.group === 'competitor')
   const startupLongTasks = startupResourceRows.long_tasks
+  const startupCompetitorStarts = startupCompetitorStartTracker.evidence()
   const resourceTiming = {
     window: 'submit_to_data_ready',
     window_start_ms: initialAuthentication.submit_started_ms,
     window_end_ms: dataReadyMs,
     critical_resource_count: criticalResourceRows.length,
     competitor_resource_count: competitorResourceRows.length,
+    competitor_request_start_count: startupCompetitorStarts.competitor_request_start_count,
+    competitor_request_window_ms: startupCompetitorStarts.competitor_request_window_ms,
     critical_resources: criticalResourceRows.slice(0, STARTUP_RESOURCE_EVIDENCE_MAX)
       .map(startupResourceEvidence),
     competitor_resources: competitorResourceRows.slice(0, STARTUP_RESOURCE_EVIDENCE_MAX)
       .map(startupResourceEvidence),
+    competitor_request_starts: startupCompetitorStarts.competitor_request_starts,
     long_tasks: {
       supported: longTaskSupported,
       count: startupLongTasks.length,
