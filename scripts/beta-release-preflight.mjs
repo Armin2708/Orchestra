@@ -7,7 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { evaluateBetaQualityMatrix } from './check-beta-quality-matrix.mjs'
-import { assertTarRegularEntries } from './tar-artifact-integrity.mjs'
+import { inspectRetainedPackageArtifact } from './retained-package-artifact.mjs'
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIRECTORY, '..')
@@ -68,55 +68,7 @@ export const isPublishWorkflowFailClosed = (workflowSource) => {
   }
 }
 
-export const inspectArtifact = ({ artifactDirectory, commit, sourceVersion }) => {
-  if (!artifactDirectory) return { ok: false, blocker: 'supply --artifact-dir for the one retained candidate' }
-  const directory = path.resolve(artifactDirectory)
-  if (!fs.existsSync(directory) || hasSymlinkComponent(directory) || !fs.lstatSync(directory).isDirectory() || fs.lstatSync(directory).isSymbolicLink()) {
-    return { ok: false, blocker: 'retained artifact directory is missing, symlinked, or not a directory' }
-  }
-  const metadataPath = path.join(directory, 'package-metadata.json')
-  if (!fs.existsSync(metadataPath)) return { ok: false, blocker: 'retained artifact metadata is missing' }
-  try {
-    const metadata = readJson(metadataPath, 'retained artifact metadata')
-    const filename = String(metadata.filename ?? '')
-    const tarball = path.join(directory, filename)
-    if (path.basename(filename) !== filename || !filename.endsWith('.tgz') || !fs.existsSync(tarball) || hasSymlinkComponent(tarball)) {
-      throw new Error('metadata does not identify one retained tarball')
-    }
-    const stat = fs.lstatSync(tarball)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1) throw new Error('retained tarball is not one non-empty regular file')
-    assertTarRegularEntries(tarball)
-    const digest = sha256(fs.readFileSync(tarball))
-    const checksumPath = path.join(directory, `${filename}.sha256`)
-    const checksum = fs.existsSync(checksumPath) && !hasSymlinkComponent(checksumPath)
-      ? fs.readFileSync(checksumPath, 'utf8').trim()
-      : ''
-    const exact = metadata.schema_version === 1 && metadata.commit_sha === commit &&
-      metadata.package_version === sourceVersion && metadata.filename === filename &&
-      metadata.bytes === stat.size && metadata.sha256 === digest &&
-      checksum === `${digest}  ${filename}` &&
-      metadata.source_identity?.expected_commit === commit &&
-      metadata.source_identity?.observed_commit === commit &&
-      metadata.source_identity?.tracked_source_clean === true &&
-      metadata.source_identity?.packaged_nonbuild_inputs_tracked === true &&
-      metadata.reproducibility?.byte_identical === true &&
-      metadata.reproducibility?.second_pack_sha256 === digest
-    if (!exact) throw new Error('retained tarball metadata, checksum, source identity, or reproducibility does not bind exact HEAD')
-    return {
-      ok: true,
-      identity: { filename, version: metadata.package_version, bytes: stat.size, sha256: digest },
-      rollbackPassed: metadata.lifecycle?.passed === true &&
-        metadata.lifecycle?.release_gate?.status === 'passed' &&
-        metadata.lifecycle?.release_gate?.prior_evidence_verified === true &&
-        metadata.lifecycle?.upgrade?.passed === true &&
-        metadata.lifecycle?.rollback?.passed === true &&
-        metadata.lifecycle?.previous_artifact?.sha256 !== digest &&
-        metadata.lifecycle?.previous_artifact?.version !== metadata.package_version,
-    }
-  } catch (error) {
-    return { ok: false, blocker: error instanceof Error ? error.message : String(error) }
-  }
-}
+export const inspectArtifact = inspectRetainedPackageArtifact
 
 export const inspectPlatformReports = ({ reportPaths, artifact, commit }) => {
   const observed = new Set()

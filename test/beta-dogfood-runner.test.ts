@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,7 @@ import {
 
 const roots: string[] = []
 const DAY = 86_400_000
+const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -23,6 +25,10 @@ const fixture = () => {
   const artifactParent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-dogfood-artifact-')))
   roots.push(root, evidenceParent, artifactParent)
   fs.writeFileSync(path.join(root, 'tracked.txt'), 'candidate\n')
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    name: 'orchestra-board',
+    version: '0.1.0',
+  }))
   const fakeVitest = path.join(root, 'node_modules', '.bin', 'vitest')
   fs.mkdirSync(path.dirname(fakeVitest), { recursive: true })
   fs.writeFileSync(fakeVitest, `#!/usr/bin/env node
@@ -51,12 +57,41 @@ process.stdout.write(JSON.stringify({
   execFileSync('git', ['init', '-q'], { cwd: root })
   execFileSync('git', ['config', 'user.name', 'QA-016 Test'], { cwd: root })
   execFileSync('git', ['config', 'user.email', 'qa016@example.invalid'], { cwd: root })
-  execFileSync('git', ['add', 'tracked.txt', 'node_modules/.bin/vitest'], { cwd: root })
+  execFileSync('git', ['add', 'tracked.txt', 'package.json', 'node_modules/.bin/vitest'], { cwd: root })
   execFileSync('git', ['commit', '-q', '-m', 'test candidate'], { cwd: root })
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
   const artifact = path.join(artifactParent, 'orchestra-board-0.1.0-beta.1.tgz')
+  const staging = path.join(artifactParent, 'staging', 'package')
+  fs.mkdirSync(staging, { recursive: true })
+  fs.writeFileSync(path.join(staging, 'package.json'), JSON.stringify({
+    name: 'orchestra-board',
+    version: '0.1.0',
+    bin: { orchestra: './dist/cli.js' },
+  }))
+  execFileSync('tar', ['-czf', artifact, '-C', path.dirname(staging), 'package'])
+  const artifactBytes = fs.readFileSync(artifact)
+  const artifactSha256 = digest(artifactBytes)
+  fs.writeFileSync(path.join(artifactParent, 'package-metadata.json'), JSON.stringify({
+    schema_version: 1,
+    commit_sha: commit,
+    package_version: '0.1.0',
+    filename: path.basename(artifact),
+    bytes: artifactBytes.byteLength,
+    sha256: artifactSha256,
+    source_identity: {
+      expected_commit: commit,
+      observed_commit: commit,
+      tracked_source_clean: true,
+      packaged_nonbuild_inputs_tracked: true,
+    },
+    reproducibility: { byte_identical: true, second_pack_sha256: artifactSha256 },
+    lifecycle: { passed: false, release_gate: { status: 'incomplete' } },
+  }))
+  fs.writeFileSync(
+    path.join(artifactParent, `${path.basename(artifact)}.sha256`),
+    `${artifactSha256}  ${path.basename(artifact)}\n`,
+  )
   const observation = path.join(artifactParent, 'observation.json')
-  fs.writeFileSync(artifact, 'retained exact candidate bytes')
   fs.writeFileSync(observation, JSON.stringify({ status: 'observed' }))
   return {
     root,
@@ -196,8 +231,8 @@ describe('QA-016 durable dogfood evidence', () => {
 
   it('rejects dirty candidates, repository-local evidence, and undeclared providers', () => {
     const dirty = fixture()
-    fs.writeFileSync(path.join(dirty.root, 'untracked.txt'), 'dirty')
-    expect(() => initialize(dirty)).toThrow('clean candidate worktree')
+    fs.writeFileSync(path.join(dirty.root, 'tracked.txt'), 'dirty\n')
+    expect(() => initialize(dirty)).toThrow('tracked changes after the exact commit')
 
     const local = fixture()
     expect(() => initializeDogfoodEvidence({
@@ -215,5 +250,68 @@ describe('QA-016 durable dogfood evidence', () => {
       .toThrow('provider declared in the manifest')
     expect(() => append(provider, 'engineering_cycle_passed', 60_000))
       .toThrow('only be created by the pinned cycle command')
+  })
+
+  it('requires the retained tarball metadata, checksum, source identity, and reproducibility contract', () => {
+    const run = fixture()
+    const metadataPath = path.join(path.dirname(run.artifact), 'package-metadata.json')
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+    metadata.source_identity.tracked_source_clean = false
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata))
+
+    expect(() => initialize(run)).toThrow(
+      'retained tarball metadata, checksum, source identity, or reproducibility does not bind exact HEAD',
+    )
+  })
+
+  it('fails cycle and verification when HEAD advances after the retained run begins', () => {
+    const run = fixture()
+    initialize(run)
+    execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'advance candidate'], { cwd: run.root })
+
+    expect(() => runEngineeringCycle({
+      root: run.root,
+      output: run.output,
+      now: new Date(run.started.getTime() + 60_000),
+    })).toThrow('package source commit mismatch')
+
+    const summary = verifyDogfoodEvidence({
+      root: run.root,
+      output: run.output,
+      now: new Date(run.started.getTime() + DAY),
+    })
+    expect(summary.status).toBe('incomplete')
+    expect(summary.errors).toContainEqual(expect.stringContaining('package source commit mismatch'))
+  })
+
+  it('fails cycle and verification when tracked source or retained package bytes change', () => {
+    const dirty = fixture()
+    initialize(dirty)
+    fs.writeFileSync(path.join(dirty.root, 'tracked.txt'), 'changed after init\n')
+
+    expect(() => runEngineeringCycle({
+      root: dirty.root,
+      output: dirty.output,
+      now: new Date(dirty.started.getTime() + 60_000),
+    })).toThrow('tracked changes after the exact commit')
+    expect(verifyDogfoodEvidence({
+      root: dirty.root,
+      output: dirty.output,
+      now: new Date(dirty.started.getTime() + DAY),
+    }).errors).toContain('package source has tracked changes after the exact commit')
+
+    const tampered = fixture()
+    initialize(tampered)
+    fs.appendFileSync(tampered.artifact, 'tampered')
+    expect(() => runEngineeringCycle({
+      root: tampered.root,
+      output: tampered.output,
+      now: new Date(tampered.started.getTime() + 60_000),
+    })).toThrow('retained candidate package verification failed')
+    expect(verifyDogfoodEvidence({
+      root: tampered.root,
+      output: tampered.output,
+      now: new Date(tampered.started.getTime() + DAY),
+    }).errors).toContainEqual(expect.stringContaining('retained candidate package verification failed'))
   })
 })

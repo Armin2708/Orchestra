@@ -12,11 +12,14 @@ disconnect/resume to one reproducible command. Those are deterministic prerequis
 evidence.
 
 `scripts/run-beta-dogfood.mjs` records a hash-chained, append-only observation ledger outside the
-repository. It binds one clean exact commit, one retained tarball digest, every provider actually
+repository. It binds one clean exact commit, one retained tarball plus its package metadata,
+checksum, source-identity, and reproducibility proof, every provider actually
 claimed for the run, a minimum 24-hour duration, at least three retained real-work cycles, one
 deterministic engineering cycle, and ordered daemon/provider/network interruption and recovery
-evidence. Any changed artifact, ledger/evidence tamper, future/non-monotonic timestamp, missing
-pair, or unresolved P0/P1 leaves the result incomplete.
+evidence. The exact candidate must remain `HEAD` with no tracked changes at every record, cycle,
+and verification boundary. Any source drift, changed artifact, metadata/checksum mismatch,
+ledger/evidence tamper, future/non-monotonic timestamp, missing pair, or unresolved P0/P1 leaves
+the result incomplete.
 
 Even a complete ledger reports only `eligible_for_independent_review`, keeps
 `qa016_closed: false`, and carries `release_authorized: false`. An independent reviewer must inspect
@@ -26,8 +29,9 @@ the copied evidence and exact artifact before the authoritative backlog may clos
 ## Runbook
 
 Use a dedicated disposable Orchestra state directory and real work that does not expose secrets in
-the retained observation files. Start from the clean exact candidate worktree with the supported
-Node/npm versions:
+the retained observation files. The artifact path must point to the one `.tgz` in its retained
+package directory beside `package-metadata.json` and `<filename>.sha256`. Start from the clean exact
+candidate worktree with the supported Node/npm versions:
 
 ```sh
 evidence_dir="$(mktemp -d /tmp/orchestra-qa016.XXXXXX)"

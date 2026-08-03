@@ -7,6 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson } from './exact-commit-contract.mjs'
+import { verifyPackageSourceIdentity } from './package-source-identity.mjs'
+import { inspectRetainedPackageArtifact } from './retained-package-artifact.mjs'
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url))
 export const DEFAULT_ROOT = path.resolve(SCRIPT_DIRECTORY, '..')
@@ -116,6 +118,48 @@ const gitHead = (root) => execFileSync('git', ['rev-parse', 'HEAD'], {
   cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).trim()
 
+const sourcePackageVersion = (root) => {
+  const manifest = readJson(path.join(root, 'package.json'))
+  const version = String(manifest?.version ?? '')
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/u.test(version)) {
+    throw new Error('candidate source package version is invalid')
+  }
+  return version
+}
+
+const inspectRetainedCandidate = ({ root, candidateCommit, artifactPath }) => {
+  const artifact = regularFile(artifactPath, 'retained candidate artifact')
+  const inspected = inspectRetainedPackageArtifact({
+    artifactDirectory: path.dirname(artifact),
+    commit: candidateCommit,
+    sourceVersion: sourcePackageVersion(root),
+  })
+  if (!inspected.ok) {
+    throw new Error(`retained candidate package verification failed: ${inspected.blocker}`)
+  }
+  if (artifact !== path.join(path.dirname(artifact), inspected.identity.filename)) {
+    throw new Error('retained candidate artifact does not match package metadata filename')
+  }
+  return { artifact, identity: inspected.identity }
+}
+
+const assertCandidateSource = ({ root, candidateCommit }) =>
+  verifyPackageSourceIdentity({ cwd: root, expectedSha: candidateCommit })
+
+const assertActiveBinding = ({ root, manifest }) => {
+  assertCandidateSource({ root, candidateCommit: manifest.candidate_commit })
+  const inspected = inspectRetainedCandidate({
+    root,
+    candidateCommit: manifest.candidate_commit,
+    artifactPath: manifest.retained_artifact?.path,
+  })
+  if (inspected.identity.bytes !== manifest.retained_artifact?.bytes
+    || inspected.identity.sha256 !== manifest.retained_artifact?.sha256) {
+    throw new Error('retained candidate artifact changed after dogfood began')
+  }
+  return inspected
+}
+
 export function initializeDogfoodEvidence({
   root,
   output,
@@ -129,10 +173,13 @@ export function initializeDogfoodEvidence({
   if (!/^[0-9a-f]{40}$/u.test(candidateCommit) || gitHead(repository) !== candidateCommit) {
     throw new Error('candidate commit must equal exact repository HEAD')
   }
-  if (execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim()) {
-    throw new Error('dogfood evidence requires a clean candidate worktree')
-  }
-  const artifact = regularFile(artifactPath, 'retained candidate artifact')
+  assertCandidateSource({ root: repository, candidateCommit })
+  const inspected = inspectRetainedCandidate({
+    root: repository,
+    candidateCommit,
+    artifactPath,
+  })
+  const artifact = inspected.artifact
   const { plan, digest: planSha256 } = readPlan(planPath)
   const selectedProviders = parseProviders(providers, plan.allowed_providers)
   const directory = assertOutputDirectory(repository, output, { create: true })
@@ -204,11 +251,7 @@ const validateManifest = ({ root, manifest, planSha256, plan, errors }) => {
     } catch { errors.push('manifest candidate commit does not exist') }
   }
   try {
-    const artifact = regularFile(manifest.retained_artifact?.path, 'retained candidate artifact')
-    const bytes = fs.readFileSync(artifact)
-    if (bytes.byteLength !== manifest.retained_artifact.bytes || sha256(bytes) !== manifest.retained_artifact.sha256) {
-      errors.push('retained candidate artifact changed after dogfood began')
-    }
+    assertActiveBinding({ root, manifest })
   } catch (error) { errors.push(error instanceof Error ? error.message : String(error)) }
   try { iso(manifest.started_at) } catch (error) { errors.push(error instanceof Error ? error.message : String(error)) }
   try {
@@ -267,6 +310,7 @@ const appendDogfoodEvent = ({
 }) => {
   if (!EVENT_KINDS.has(kind)) throw new Error(`unknown dogfood event kind: ${kind}`)
   const loaded = readEvidence({ root, output, planPath })
+  assertActiveBinding({ root, manifest: loaded.manifest })
   const sequence = loaded.events.length + 1
   const isProviderEvent = kind.startsWith('provider_') || kind === 'work_cycle_passed'
   if (isProviderEvent && !loaded.manifest.providers.includes(provider)) {
@@ -428,6 +472,7 @@ export function verifyDogfoodEvidence({ root, output, now = new Date(), planPath
 
 export function runEngineeringCycle({ root, output, now = new Date(), planPath = DEFAULT_PLAN }) {
   const loaded = readEvidence({ root, output, planPath })
+  assertActiveBinding({ root, manifest: loaded.manifest })
   const executable = path.resolve(root, loaded.plan.engineering_command[0])
   if (!fs.existsSync(executable) || !isInside(fs.realpathSync(root), fs.realpathSync(executable))) {
     throw new Error('engineering cycle executable is unavailable inside the repository')
