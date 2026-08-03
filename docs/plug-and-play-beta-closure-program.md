@@ -63,3 +63,14 @@ the authoritative IDs in `Agentboard - Agent OS Master Backlog`.
 
 A package may advance only through observed evidence. A skipped external gate remains open; a
 fixture, mock, synthetic key, or same-version artifact cannot close it.
+
+## 2026-08-03 local progress
+
+- PNP-05 is partially verified: the HTTP 429/stability blockers are cleared, three retained
+  exact-artifact desktop/tablet/phone observations passed 108 / 108 journeys, and the fixed-budget
+  matrix passed 36 / 36. `QA-015` is locally closed.
+- PNP-05 is not release-closed: the in-app Browser/visual acceptance surface was unavailable, so
+  `QA-013`, `QA-014`, `UX-GATE`, and `QA-GATE` remain open.
+- Exact code head `87484e1` passed complete default-parallel and one-worker suites at 281 files /
+  2,360 tests. No provider, device, clean-host, elapsed dogfood, publication, or stable-promotion
+  claim changed.

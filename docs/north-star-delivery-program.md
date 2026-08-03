@@ -9,6 +9,13 @@ evidence. Milestone D has secure scoped DeviceSessions, safe phone control, oper
 and a quality-aware outcome dashboard; exact-candidate native mobile and production-duration gates
 remain open. Milestone E is not delivered and the product is not public plug-and-play.
 
+On 2026-08-03 the retained standalone Chromium matrix passed three independent exact-artifact
+desktop/tablet/phone observations (108 / 108 journeys) and one checked-budget matrix (36 / 36),
+with zero validation, request, console, or page errors. `QA-015` is locally closed without
+weakening the 1,000 ms graph or 750 ms search ceilings. `QA-013` and `QA-014` remain open because
+the intended in-app Browser/visual acceptance surface was unavailable; exact code head `87484e1`
+passed both complete suites at 281 files / 2,360 tests.
+
 The [Agent Team Operating Model](./agent-team-operating-model.md) is implemented and verified as a
 cross-cutting organization, authority, communication, quality, traceability, performance, and
 incident-learning control plane. The versioned provider boundary includes deterministic Claude,

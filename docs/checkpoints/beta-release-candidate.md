@@ -39,6 +39,31 @@ fail-closed.
 | Provider/platform audit | 6 files / 76 deterministic tests passed; zero providers are managed-beta accepted; only this macOS host is observed |
 | Security | root/web audits zero at the integrated head; Gitleaks clean; production QA-018 and prior-artifact trust roots empty by design |
 
+## Post-checkpoint local browser closure — 2026-08-03
+
+- Product fix `49e1e5c6b8edf8be49d682680815e22fec5166f4` prevents a semantically unchanged
+  saved-view filter from issuing a duplicate Open Work request. The worst observed phone graph
+  journey fell from 2,061 ms to 539 ms without relaxing the 1,000 ms experience ceiling.
+- Three independent exact-artifact observations passed 108 / 108 desktop, tablet, and phone
+  journeys with zero validation, request, console, or page errors. Their evidence digests are
+  `e4e2ae8db22c654994d1f60a680b21efe02a2c855683a36ec38d7d24cc3e5196`,
+  `666bc674c4ba2f93343b9d57241be8f9501aa5195a909ac1e7865b77391dcf77`, and
+  `ac1e40d5d618976adb5c0d3633af8048681d25a3861e24c307f8a587f31c575f`.
+- The retained QA-015 baseline digest is
+  `de92bb96f2fe7467a1fc1f43b68127c002b229e0e19e1553ca673d29db06d43a`.
+  The budgeted exact-artifact matrix at `3c6b9e08d8235604f4a51823abd07c0c7e0d96de`
+  passed another 36 / 36 journeys; evidence digest
+  `bb58f2fb17735eb11ebd55c1296c7ca6c6103ed5a68b3bc46dee5fec81891eca`.
+- Artifact identity remained byte-identical across the evidence-only commit: root
+  `c92de228f05b4adf575f7e20fb60a1a720fadfd1048e225fab7fec4fb7a4d1dc`, web
+  `c4d2149ba3efec5d3500f8e837bbad661fb5528a9bd17814ad5638179a69eae0`.
+- Exact code head `87484e1` passed complete default-parallel and one-worker suites at 281 files /
+  2,360 tests on Node 22.20.0. The only initial full-suite failure was a date-brittle test whose
+  fixed 2026-08-03 expiry had elapsed; the test now uses its existing frozen fixture clock.
+- `QA-015` is locally closed. The evidence explicitly prohibits closing `QA-013`, and `QA-014`
+  remains open because the intended in-app Browser/visual acceptance surface was unavailable.
+  The standalone Chromium result is not promoted into unsupported in-app evidence.
+
 The four files changed by the candidate commit are excluded from the npm package. Therefore the
 retained candidate built after this commit must be byte-identical to the disposable Phase P
 preflight above. A different digest is a release-blocking source or packaging drift.
@@ -54,7 +79,7 @@ preflight above. A different digest is a release-blocking source or packaging dr
 | macOS arm64 | Node/npm and repository checks observed on the current host | Host evidence only; final clean-machine artifact lifecycle remains open |
 | Ubuntu 24.04 x64 | Repository CI/toolchain contract exists | No exact retained-candidate clean-machine lifecycle evidence |
 | Windows and other platforms | No complete acceptance matrix | Unsupported |
-| Browser/mobile | Repaired standalone CDP harness exists | In-app Browser, successful exact-head desktop/tablet/phone capture, and exact-candidate iOS/Android PWA evidence remain open |
+| Browser/mobile | Standalone CDP exact-artifact desktop/tablet/phone matrix and QA-015 budgets pass | In-app Browser/visual acceptance and exact-candidate iOS/Android PWA evidence remain open |
 
 ## Remaining gates
 
@@ -63,7 +88,7 @@ preflight above. A different digest is a release-blocking source or packaging dr
 - Metrics: exact context-injection totals, model acknowledgements, complete provider-neutral
   duplicate-work attribution, high-fanout predispatch, repository-wide event replacement,
   representative before/after evidence, `MET-015`, and `MET-GATE` remain open.
-- Quality: `QA-013`, `QA-014`, `QA-015`, real-duration `QA-016`, clean-platform `QA-017`, signed
+- Quality: `QA-013`, `QA-014`, real-duration `QA-016`, clean-platform `QA-017`, signed
   production `QA-018`, and `QA-GATE` remain open.
 - Remote/operations: exact-candidate iOS/Android `REM-017`, `REM-GATE`, production every-transition
   `OPS-002`, and `OPS-GATE` remain open.

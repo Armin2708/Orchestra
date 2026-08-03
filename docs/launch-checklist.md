@@ -16,12 +16,14 @@ public push, version change, and stable promotion require explicit human approva
 ## Exact-candidate verification
 
 - [ ] Resolve the full `[beta-release-candidate]` commit SHA and verify the tracked tree is clean.
-- [ ] Pass complete default-parallel and one-worker suites at that exact commit.
+- [x] Pass complete default-parallel and one-worker suites at the exact code head: 281 files /
+  2,360 tests in each mode on Node 22.20.0.
 - [ ] Pass root/web TypeScript, production builds, dependency audits, Gitleaks, and security review.
 - [ ] Run exact-candidate remote pairing, revoke, step-up, lost-device, interruption, and rollback
   journeys without weakening the still-open native/mobile duration gates.
-- [ ] Complete a successful exact-head desktop/tablet/phone accessibility and performance capture;
-  in-app Browser coverage remains separately required.
+- [x] Complete a successful exact-artifact desktop/tablet/phone accessibility and performance
+  capture: three retained observations plus the budgeted matrix passed. In-app Browser/visual
+  acceptance remains separately required and keeps QA-013/QA-014 open.
 - [ ] Build one retained artifact only, verify its source/provenance and expected digest, and run all
   artifact smoke/scan/lifecycle checks against those same bytes.
 - [ ] Obtain a distinct signed prior artifact and pass real cross-version upgrade and rollback.
