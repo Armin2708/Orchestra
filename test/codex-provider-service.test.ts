@@ -45,7 +45,7 @@ describe('Codex provider service', () => {
       }],
       // requiresOpenaiAuth describes the provider requirement; account presence proves current auth.
       readAccount: async () => ({ account, requiresOpenaiAuth: true }),
-      readRateLimits: async () => ({ rateLimits: { primary: { usedPercent: 12 } }, rateLimitsByLimitId: null, rateLimitResetCredits: null }) as any,
+      readRateLimits: async () => ({ rateLimits: { primary: { usedPercent: 12 }, spendControlReached: true }, rateLimitsByLimitId: null, rateLimitResetCredits: null }) as any,
       readUsage: async () => ({ summary: { lifetimeTokens: 42 }, dailyUsageBuckets: null }) as any,
     }
     const service = new CodexProviderService(db, rpc, supervisor, { version: 'codex-cli 0.146.0', refreshMs: 60_000 })
@@ -57,7 +57,7 @@ describe('Codex provider service', () => {
       id: 'codex', available: true, source: 'live',
       health: { status: 'ready', version: 'codex-cli 0.146.0' },
       auth: { status: 'authenticated', account: 'ChatGPT · pro' },
-      usage: { rate_limits: { current: { primary: { usedPercent: 12 } } } },
+      usage: { rate_limits: { current: { primary: { usedPercent: 12 }, spend_control_reached: true } } },
     })
     expect(catalog.models[0]).toMatchObject({ value: 'gpt-5.4', supportedEffortLevels: ['high'] })
     expect(JSON.parse((db.prepare("SELECT value FROM kv WHERE key='provider_models_codex_v1'").get() as any).value)[0])

@@ -721,8 +721,10 @@ const rateLimitSummary = (
   if (values.length === 0) throw new Error('Codex returned no rate-limit windows')
   return {
     snapshot_count: values.length,
+    spend_control_reached: values.some((value) => value.spendControlReached === true),
     exhausted: values.some((value) =>
-      value.rateLimitReachedType != null
+      value.spendControlReached === true
+      || value.rateLimitReachedType != null
       || value.primary?.usedPercent === 100
       || value.secondary?.usedPercent === 100),
     plan_types: [...new Set(

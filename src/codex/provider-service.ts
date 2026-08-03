@@ -54,6 +54,9 @@ const safeRateLimit = (value: unknown): Record<string, unknown> | null => {
     primary: row.primary ?? null,
     secondary: row.secondary ?? null,
     plan_type: row.planType ?? null,
+    spend_control_reached: typeof row.spendControlReached === 'boolean'
+      ? row.spendControlReached
+      : null,
     reached: row.rateLimitReachedType ?? null,
   }
 }

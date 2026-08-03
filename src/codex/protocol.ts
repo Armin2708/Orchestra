@@ -286,7 +286,7 @@ export type CodexModelListResponse = {
 export type CodexAccount =
   | { type: 'apiKey'; [key: string]: unknown }
   | { type: 'chatgpt'; email: string | null; planType: string; [key: string]: unknown }
-  | { type: 'amazonBedrock'; credentialSource: unknown; [key: string]: unknown }
+  | { type: 'amazonBedrock'; usesCodexManagedCredentials: boolean; [key: string]: unknown }
   | { type: string; [key: string]: unknown }
 
 export type CodexAccountResponse = {
@@ -307,6 +307,7 @@ export type CodexRateLimitSnapshot = {
   secondary: CodexRateLimitWindow | null
   credits: unknown | null
   individualLimit: unknown | null
+  spendControlReached: boolean | null
   planType: string | null
   rateLimitReachedType: unknown | null
   [key: string]: unknown

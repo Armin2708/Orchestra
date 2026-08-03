@@ -127,6 +127,7 @@ const fakeService = (
         secondary: null,
         credits: null,
         individualLimit: null,
+        spendControlReached: null,
         planType: 'plus',
         rateLimitReachedType: null,
       },
@@ -300,6 +301,49 @@ describe('Codex TOOL-014 provider adapter', () => {
     expect(authorization).toMatchObject({
       ready: false,
       blockers: expect.arrayContaining(['overage_policy_mismatch']),
+    })
+  })
+
+  it('fails closed when Codex reports that backend spend control is reached', async () => {
+    const service = fakeService()
+    const adapter = createAdapter({
+      service: {
+        ...service,
+        async readRateLimits() {
+          const response = await service.readRateLimits()
+          return {
+            ...response,
+            rateLimits: {
+              ...response.rateLimits,
+              spendControlReached: true,
+            },
+          }
+        },
+      },
+    })
+
+    const observed = await readiness(adapter)
+    expect(observed.readiness.overage_status).toBe('exhausted')
+    expect(authorizeProviderLaunchV1(
+      adapter.manifest,
+      observed.intent,
+      observed.readiness,
+      observed.boundary,
+      {
+        contract_version: 1,
+        kind: 'launch',
+        action_id: 'codex-spend-control-reached',
+        scope_id: 'workspace-1',
+        cwd: '/workspace',
+        prompt: 'test',
+        model: null,
+        effort: null,
+        access_profile: 'workspace_write',
+        cost_limit: null,
+      },
+    )).toMatchObject({
+      ready: false,
+      blockers: expect.arrayContaining(['quota_exhausted']),
     })
   })
 

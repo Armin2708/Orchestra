@@ -234,7 +234,8 @@ const rateLimitWindows = (
 
 const exhausted = (response: CodexRateLimitsResponse): boolean =>
   rateLimitSnapshots(response).some((snapshot) =>
-    snapshot.rateLimitReachedType != null
+    snapshot.spendControlReached === true
+    || snapshot.rateLimitReachedType != null
     || finitePercent(snapshot.primary?.usedPercent) === 100
     || finitePercent(snapshot.secondary?.usedPercent) === 100)
 
