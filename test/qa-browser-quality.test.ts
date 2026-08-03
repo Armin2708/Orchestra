@@ -21,6 +21,7 @@ import {
   EVIDENCE_MAX_STRING_LENGTH,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS,
   STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
   STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
   assertFinalBuildManifest,
@@ -840,6 +841,51 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       expect(validateBrowserQualityEvidence(evidence))
         .toContain('desktop has invalid startup navigation provenance')
     }
+  })
+
+  it('rejects zero or unbound CDP competitor request windows after self-digesting', () => {
+    for (const mutate of [
+      (provenance: any) => { provenance.resource_timing.competitor_request_window_ms = 0 },
+      (provenance: any) => {
+        provenance.resource_timing.competitor_request_window_ms
+          = provenance.submit_to_data_ready_ms + STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS + 1
+      },
+    ]) {
+      const evidence = passingEvidence()
+      mutate(evidence.viewports[0].performance.startup.provenance)
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('desktop has invalid startup navigation provenance')
+    }
+  })
+
+  it('rejects impossible supported long-task summaries after self-digesting', () => {
+    for (const summary of [
+      { supported: true, count: 1, total_duration_ms: 0, max_duration_ms: 0 },
+      { supported: true, count: 1, total_duration_ms: 49, max_duration_ms: 49 },
+      { supported: true, count: 2, total_duration_ms: 99, max_duration_ms: 50 },
+    ]) {
+      const evidence = passingEvidence()
+      evidence.viewports[0].performance.startup.provenance.resource_timing.long_tasks = summary
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('desktop has invalid startup navigation provenance')
+    }
+  })
+
+  it('accepts the explicit CDP overhead and long-task definition boundaries', () => {
+    const evidence = passingEvidence()
+    const provenance = evidence.viewports[0].performance.startup.provenance
+    provenance.resource_timing.competitor_request_window_ms
+      = provenance.submit_to_data_ready_ms + STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS
+    provenance.resource_timing.long_tasks = {
+      supported: true,
+      count: 2,
+      total_duration_ms: 100,
+      max_duration_ms: 50,
+    }
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence)).toEqual([])
   })
 
   it('rejects an xterm escape claim that did not prove documented focus advancement', () => {

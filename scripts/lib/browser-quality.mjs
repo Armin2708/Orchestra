@@ -118,6 +118,9 @@ export const evidenceDigest = (value) => createHash('sha256')
   .digest('hex')
 
 export const STARTUP_RESOURCE_EVIDENCE_MAX = 25
+// Covers the 40 ms readiness poll plus bounded CDP click/evaluate round trips without
+// allowing the independently measured submit-to-live windows to drift materially.
+export const STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS = 250
 const startupRouteDigest = (path) => createHash('sha256').update(path).digest('hex')
 export const STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS = Object.freeze({
   boards: startupRouteDigest('/api/v1/boards'),
@@ -862,8 +865,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           && Number.isFinite(longTasks?.total_duration_ms) && longTasks.total_duration_ms >= 0
           && Number.isFinite(longTasks?.max_duration_ms) && longTasks.max_duration_ms >= 0
           && longTasks.max_duration_ms <= longTasks.total_duration_ms
-          && (longTasks.count > 0 || (longTasks.total_duration_ms === 0 && longTasks.max_duration_ms === 0))
-          && (longTasks.supported || longTasks.count === 0)
+          && (longTasks.count === 0
+            ? longTasks.total_duration_ms === 0 && longTasks.max_duration_ms === 0
+            : longTasks.supported && longTasks.max_duration_ms >= 50
+              && longTasks.total_duration_ms >= longTasks.count * 50)
         const validResourceTiming = exactKeys(resourceTiming, [
           'window', 'window_start_ms', 'window_end_ms', 'critical_resource_count',
           'competitor_resource_count', 'competitor_request_start_count',
@@ -894,7 +899,9 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           ))
           && resourceTiming?.competitor_resource_count === 0
           && Number.isFinite(resourceTiming?.competitor_request_window_ms)
-          && resourceTiming.competitor_request_window_ms >= 0
+          && resourceTiming.competitor_request_window_ms > 0
+          && Math.abs(resourceTiming.competitor_request_window_ms
+            - provenance.submit_to_data_ready_ms) <= STARTUP_CDP_WINDOW_OVERHEAD_TOLERANCE_MS
           && Number.isInteger(resourceTiming?.competitor_request_start_count)
           && resourceTiming.competitor_request_start_count === competitorRequestStarts.length
           && competitorRequestStarts.length <= STARTUP_RESOURCE_EVIDENCE_MAX
