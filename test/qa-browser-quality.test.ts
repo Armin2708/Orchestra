@@ -647,5 +647,8 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     const source = readFileSync(join(process.cwd(), 'scripts', 'qa-browser-gates.mjs'), 'utf8')
     expect(source).not.toContain('response.status}: ${String(text)')
     expect(source).not.toContain('text: text.slice')
+    expect(source).not.toContain("localStorage.setItem('orchestra-token'")
+    expect(source).toContain("label: 'expected_local_owner_challenge'")
+    expect(source).toContain("type: 'keyDown'")
   })
 })

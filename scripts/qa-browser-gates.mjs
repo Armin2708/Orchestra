@@ -305,6 +305,21 @@ const seedScenario = async (baseUrl, authHeaders) => {
     description: 'Public-API-only fixture for browser quality evidence.',
     paths: [],
   }, authHeaders)).card
+  const prerequisite = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+    board_id: board.id,
+    title: 'QA dependency fixture',
+    description: 'Renders a real dependency node and edge for the browser quality journey.',
+    paths: [],
+  }, authHeaders)).card
+  const contract = await jsonRequest(baseUrl, 'GET', `/api/v1/os/cards/${card.id}/contract`, undefined, authHeaders)
+  await jsonRequest(baseUrl, 'PUT', `/api/v1/os/cards/${card.id}/contract`, {
+    dependency_rules: [{
+      card_id: prerequisite.id,
+      blocking_reason: 'QA dependency remains open for graph rendering.',
+      completion_condition: 'card_done',
+    }],
+    expected_market_version: contract.job_market.market_version,
+  }, { ...authHeaders, 'idempotency-key': 'qa-browser-contract-dependency' })
   const workspace = (await jsonRequest(baseUrl, 'POST', `/api/v1/os/boards/${board.id}/workspaces`, {
     name: 'QA browser workspace', kind: 'shared', root_path: repositoryRoot,
   }, { ...authHeaders, 'idempotency-key': 'qa-browser-workspace' })).workspace
@@ -467,7 +482,7 @@ const dispatchKey = async (client, key, { shift = false, meta = false } = {}) =>
         : key.toUpperCase().charCodeAt(0)
   const modifiers = (shift ? 8 : 0) | (meta ? 4 : 0)
   const event = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers }
-  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...event })
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event })
 }
 
@@ -480,8 +495,10 @@ const activeFocusProbe = (client, targetSelector = null) => evaluate(client, `((
   const xtermProxy = element.matches('.xterm-helper-textarea') || Boolean(element.closest('.xterm'));
   const focusSurface = xtermProxy ? element.closest('.xterm') : element;
   const rect = focusSurface.getBoundingClientRect(), style = getComputedStyle(focusSurface);
+  const interactive = [...document.querySelectorAll('button,a[href],input:not([type="hidden"]),select,textarea,[role="button"],[role="tab"],[tabindex]:not([tabindex="-1"])')];
+  const focusIndex = interactive.indexOf(element);
   return {
-    key: xtermProxy ? 'Terminal input' : element.id || element.getAttribute('role') || element.tagName,
+    key: xtermProxy ? 'Terminal input' : element.id || (element.getAttribute('role') || element.tagName) + ':' + focusIndex,
     interactive: true,
     target: element === target,
     xterm_proxy: xtermProxy,
@@ -863,6 +880,8 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const consoleErrors = []
   const pageErrors = []
   const failedRequests = []
+  const authenticationChallenges = []
+  let awaitingLocalOwnerAuthentication = false
   client.on('Runtime.consoleAPICalled', (event) => {
     if (event.type === 'error') {
       retainEvidenceEntry(consoleErrors, diagnosticFingerprint(
@@ -878,11 +897,14 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   client.on('Network.responseReceived', (event) => {
     const { response } = event
     if (response?.url?.startsWith(baseUrl) && response.status >= 400) {
-      retainEvidenceEntry(failedRequests, {
+      const entry = {
         label: 'http_failure',
         status: response.status,
         endpoint_sha256: createHash('sha256').update(new URL(response.url).pathname).digest('hex'),
-      })
+      }
+      if (awaitingLocalOwnerAuthentication && response.status === 401) {
+        retainEvidenceEntry(authenticationChallenges, { ...entry, label: 'expected_local_owner_challenge' })
+      } else retainEvidenceEntry(failedRequests, entry)
     }
   })
   client.on('Network.loadingFailed', (event) => {
@@ -906,8 +928,10 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
+  awaitingLocalOwnerAuthentication = true
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
-  await authenticateLocalOwner(client, operatorToken, `${viewport.id} initial command center`)
+  try { await authenticateLocalOwner(client, operatorToken, `${viewport.id} initial command center`) }
+  finally { awaitingLocalOwnerAuthentication = false }
   const startup = await evaluate(client, `performance.now()`)
   const snapshotResourceExpression = `(() => {
     const expectedPath = '/api/v1/boards/${scenario.board_id}/snapshot';
@@ -928,7 +952,11 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
       url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
       name,
       mode,
-      waitForReady: () => authenticateLocalOwner(client, operatorToken, `${name} ${mode} fresh navigation`),
+      waitForReady: async () => {
+        awaitingLocalOwnerAuthentication = true
+        try { await authenticateLocalOwner(client, operatorToken, `${name} ${mode} fresh navigation`) }
+        finally { awaitingLocalOwnerAuthentication = false }
+      },
     })
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
@@ -1218,6 +1246,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     console_errors: consoleErrors,
     page_errors: pageErrors,
     failed_requests: failedRequests,
+    authentication_challenges: authenticationChallenges,
     accessibility,
     readiness: {
       dependency_graph_nodes_rendered: dependencyGraphNodesRendered,

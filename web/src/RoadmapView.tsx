@@ -135,7 +135,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
 
       {!hideBrainstorm && <div className="rm-brainstorm">
         <span className="rm-spark">✻</span>
-        <input value={brainstorm}
+        <input value={brainstorm} aria-label={`Brainstorm for ${snap.board.name}`}
           placeholder={strategist ? `Ask ${'strategist'} to brainstorm — it researches the repo and adds ideas below` : 'Ask Claude to brainstorm — hires a strategist agent for this project'}
           onChange={(e) => setBrainstorm(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') askStrategist() }} />
@@ -152,7 +152,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
       </div>}
 
       <div className="rm-composer">
-        <textarea value={text} rows={2}
+        <textarea value={text} rows={2} aria-label={`Add an idea to ${snap.board.name}`}
           placeholder={'Or jot an idea yourself — first line becomes the ticket title, the rest its scope.\nEnter to save, Shift+Enter for a new line.'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add() } }} />
@@ -225,7 +225,8 @@ function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => 
   }
   return (
     <div className="quest-new">
-      <input value={title} placeholder="🎯 New milestone — a major goal made of ordered steps"
+      <input value={title} aria-label="Create a new milestone"
+        placeholder="🎯 New milestone — a major goal made of ordered steps"
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') add() }} />
     </div>

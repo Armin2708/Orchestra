@@ -44,7 +44,8 @@ const loadObservation = (path) => {
     if (viewport.console_errors?.length || viewport.page_errors?.length || viewport.failed_requests?.length) {
       throw new Error(`${approvedPath}: runtime/network errors cannot enter the performance baseline`)
     }
-    if (viewport.readiness?.graph_agents_rendered !== 18
+    if (!Number.isInteger(viewport.readiness?.dependency_graph_nodes_rendered)
+      || viewport.readiness.dependency_graph_nodes_rendered < 1
       || viewport.readiness?.transcript_events_rendered < 250
       || viewport.readiness?.search_matches_rendered !== 5) {
       throw new Error(`${approvedPath}: scale/readiness assertions did not pass`)

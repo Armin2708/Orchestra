@@ -4,7 +4,7 @@
   --bg: #F7F6F3;
   --surface: #FFFFFF;
   --ink: #111111;
-  --ink-soft: #787774;
+  --ink-soft: #706F6B;
   --line: #EAEAEA;
   --dot: rgba(17, 17, 17, 0.09);
   --radius: 10px;
@@ -559,7 +559,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; overflow-y: auto; min-height: 0; align-content: start; }
 
-.col-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 6px; text-align: center; }
+.col-empty { font-size: 12.5px; color: #706F6B; padding: 12px 6px; text-align: center; }
 
 
 .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -879,7 +879,7 @@ textarea {
 }
 .rm-ticket.is-done { opacity: 0.5; }
 .rm-ticket-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rm-ticket time { font-size: 10.5px; color: #b8b4ac; }
+.rm-ticket time { font-size: 10.5px; color: #706F6B; }
 .roadmap.focused { grid-template-columns: 1fr; max-width: 1000px; margin: 0 auto; width: 100%; }
 .rm-brainstorm {
   display: flex; align-items: center; gap: 10px;
@@ -1282,7 +1282,7 @@ textarea {
   font-size: 12px; color: var(--ink-soft); white-space: nowrap;
 }
 .meter { display: inline-flex; align-items: center; gap: 7px; cursor: default; }
-.meter-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; color: #9b968e; }
+.meter-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; color: #706F6B; }
 .meter-bar {
   width: 52px; height: 5px; border-radius: 3px; background: #ECEAE5; overflow: hidden;
 }
