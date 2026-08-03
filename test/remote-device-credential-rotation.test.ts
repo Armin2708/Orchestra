@@ -478,7 +478,7 @@ describe('remote credential rotation boundary', () => {
 
 describe('SqliteRemoteMutationAuditStore', () => {
   it('persists policy-produced success and denial envelopes exactly and append-only', () => {
-    const { db, authenticatedDevice } = fixture()
+    const { db, authenticatedDevice, now } = fixture()
     const audit = new SqliteRemoteMutationAuditStore(db, (() => {
       let sequence = 10
       return () => `policy-audit-${++sequence}`
@@ -495,7 +495,7 @@ describe('SqliteRemoteMutationAuditStore', () => {
       messageTarget: 'no-tool',
       audit: 'required',
       rateLimitFamily: 'command',
-    }])
+    }], () => now)
     const requestDigest = digestRemoteMutation('{"body":"redacted before audit"}')
     const principal: RemoteDevicePrincipal = {
       kind: 'device',
