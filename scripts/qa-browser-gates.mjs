@@ -909,16 +909,16 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
   await authenticateLocalOwner(client, operatorToken, `${viewport.id} initial command center`)
   const startup = await evaluate(client, `performance.now()`)
-  const snapshot = await evaluate(client, `(async () => {
-    const started = performance.now();
-    const token = localStorage.getItem('orchestra-token');
-    const response = await fetch('/api/v1/boards/${scenario.board_id}/snapshot', {
-      headers: token ? { authorization: 'Bearer ' + token } : {},
+  const snapshotResourceExpression = `(() => {
+    const expectedPath = '/api/v1/boards/${scenario.board_id}/snapshot';
+    const entries = performance.getEntriesByType('resource').filter((entry) => {
+      try { return new URL(entry.name).pathname === expectedPath; } catch { return false; }
     });
-    if (!response.ok) throw new Error('snapshot request failed: ' + response.status);
-    await response.json();
-    return performance.now() - started;
-  })()`)
+    const entry = entries.at(-1);
+    return entry && Number.isFinite(entry.duration) ? entry.duration : null;
+  })()`
+  await waitFor(client, `${snapshotResourceExpression} !== null`, 'authenticated snapshot resource timing')
+  const snapshot = await evaluate(client, snapshotResourceExpression)
 
   const journeys = []
   const overflowSamples = []
