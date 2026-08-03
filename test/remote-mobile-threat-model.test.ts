@@ -308,6 +308,37 @@ describe('REM-001 remote/mobile threat model', () => {
     }
   })
 
+  it('keeps offline API threat semantics aligned with the generalized bypass and no-store controls', () => {
+    const currentControl = (id: string) => matrix.current_controls.find((control) => control.id === id)
+    const threat = (id: string) => matrix.threats.find((item) => item.id === id)
+    const abuseCase = (id: string) => matrix.abuse_cases.find((item) => item.id === id)
+
+    expect(matrix.observed_at_commit).toBe('e560d2ef59970dad4a79906945a92e3a65586b4f')
+    expect(markdown).toContain(`Observed code: \`${matrix.observed_at_commit}\``)
+    expect(read('web/public/sw.js')).toContain("if (url.pathname.startsWith('/api/')) {")
+    expect(read('web/src/api.ts')).toContain("cache: 'no-store'")
+    expect(read('src/remote-security-integration.ts'))
+      .toContain("reply.header('cache-control', 'no-store')")
+
+    expect(currentControl('CUR-008')?.description).toContain('bypasses every same-origin /api/ request')
+    expect(currentControl('CUR-008')?.description).toContain('neither caches API data nor queues')
+    expect(currentControl('CUR-016')?.status).toBe('implemented')
+    expect(currentControl('CUR-016')?.description).toContain('request-side cache no-store')
+    expect(currentControl('CUR-016')?.description).toContain('response-side Cache-Control no-store')
+
+    expect(threat('REM-T11')?.title).toContain('Regression re-enables offline access')
+    expect(threat('REM-T11')?.gap).toContain('historical shared service-worker API cache is remediated')
+    expect(threat('REM-T11')?.gap).toContain('exact installed-PWA evidence')
+    expect(threat('REM-T16')?.gap).toContain('Current API responses are network-only')
+    expect(threat('REM-T16')?.gap).toContain('cannot receive a purge until it reconnects')
+    expect(abuseCase('AC-04')?.current_expected).toContain('Selective server-side revoke is implemented')
+    expect(abuseCase('AC-09')?.current_expected).toContain('prevents new service-worker API cache entries')
+
+    expect(markdown).toContain('Historical context: the REM-001 baseline worker did cache')
+    expect(markdown).not.toContain('Shared API cache may return stale content')
+    expect(markdown).not.toContain('Authenticated GET responses are cached')
+  })
+
   it('fails closed when credential, stream, read, message, framing, offline, PTY, or approval baseline changes', () => {
     expect(read('src/remote.ts')).toContain(
       'return `${state.url}/#pair=${encodeURIComponent(value.pairing_ticket)}`',

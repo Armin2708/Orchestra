@@ -2,7 +2,7 @@
 
 Status: REM-001 candidate
 
-Observed code: `fefec4c70810f1b5fd196835f0696fc2deaba8fe`
+Observed code: `e560d2ef59970dad4a79906945a92e3a65586b4f`
 
 Machine-readable companion: `docs/remote-mobile-threat-control-matrix.json`
 
@@ -101,9 +101,18 @@ The target request policy is default-deny for every method. Ordinary observe ret
 
 ### Offline and push
 
-The current service worker only handles same-origin `GET`, excludes SSE, and does not queue non-GET requests. Therefore offline mutations fail rather than replay today; that invariant must remain explicit.
+The current service worker returns before `respondWith` for every same-origin `/api/` request,
+including authenticated reads and SSE. Cross-origin and mutation requests also remain on native
+networking, and no Background Sync, outbox, retry, or replay path exists for remote authority.
+The shared API client sets request-side `cache: 'no-store'`, while the server applies
+`Cache-Control: no-store` to responses. API reads therefore fail while offline instead of falling
+back to worker-held authenticated data.
 
-The worker caches successful authenticated API GET responses in one shared API cache and returns cached responses when the network fails. A lost or revoked device can retain transcripts or process output, and the UI has no explicit stale, revoked, or offline-read-only state. The cache is not partitioned by device session and is not purged by logout, token replacement, tunnel stop, or revocation.
+Historical context: the REM-001 baseline worker did cache successful authenticated API GET
+responses in one shared cache and could return them after network failure. That is no longer current
+behavior. Activation deletes non-shell caches, and device-data purge deletes legacy API caches and
+shell state. A phone that is already offline still cannot receive a purge until next contact, so
+installed-PWA upgrade and revoke acceptance remains required without implying remote erase.
 
 Push delivery has per-item cooldown and a global cap. Current server-generated links are relative. However:
 
@@ -188,7 +197,7 @@ These controls reduce risk today but do not collectively make the current QR flo
 | CUR-005 | Partial | Bearer/query authentication | Query token is accepted broadly; master maps to operator |
 | CUR-006 | Partial | Operator/agent separation and explicit high-risk gates | No per-device scopes or exhaustive policy |
 | CUR-007 | Implemented | PTY bounds and signal/process validation | Valid operator requests still control the host |
-| CUR-008 | Implemented | Worker only intercepts same-origin GET and excludes SSE | Authenticated GET responses are cached |
+| CUR-008 | Implemented | Worker bypasses every same-origin `/api/` request before `respondWith`; cross-origin and mutations use native networking | Shell/static caching remains, but API data is neither cached nor available as an offline fallback |
 | CUR-009 | Implemented | Closed approval decisions, bounded answers, live pending request | Broad operator can make risky decisions |
 | CUR-010 | Implemented | Durable, matched, redacted Codex approval outcomes | Actor is not a named device |
 | CUR-011 | Partial | PTY audit records source and byte count, not raw input | No device, scope, or step-up attribution |
@@ -196,7 +205,7 @@ These controls reduce risk today but do not collectively make the current QR flo
 | CUR-013 | Partial | Owner-only tunnel state and provider stop | Stop does not revoke the copied master bearer |
 | CUR-014 | Implemented | Loopback default and authenticated direct expose | Tunnel still makes the daemon remotely reachable |
 | CUR-015 | Partial | Managed agents receive a separate token | Route-local checks are not a device policy |
-| CUR-016 | Partial | Network-first API availability cache | Shared sensitive offline cache has no revoke purge |
+| CUR-016 | Implemented | Generalized `/api/` bypass plus request- and response-side no-store; activation and device-data purge remove legacy API caches | Offline API reads fail; exact installed-PWA upgrade/revoke evidence remains open |
 | CUR-017 | Partial | Closed message kinds and recipient checks | Ask/reply/task-like text is pushed directly into a live tool-capable agent |
 | CUR-018 | Partial | Some reads check object existence, paginate, or require operator | No exhaustive device read, resource, field, or data-class policy |
 
@@ -214,12 +223,12 @@ These controls reduce risk today but do not collectively make the current QR flo
 | REM-T08 | Critical | Approval hijack or over-broad allow-session | CUR-006, CUR-009, CUR-010 | No risk/digest/device-bound step-up | TGT-004, TGT-005, TGT-006, TGT-012 | AC-07, AC-14, AC-15 |
 | REM-T09 | Critical | Agent-control or administration escalation | CUR-006, CUR-015 | Phone bearer has broad operator authority | TGT-004, TGT-005, TGT-006, TGT-015 | AC-08, AC-16 |
 | REM-T10 | High | Generic operator audit attribution | CUR-010, CUR-011 | Durable actions do not identify the remote device | TGT-002, TGT-006, TGT-012 | AC-15 |
-| REM-T11 | High | Sensitive GET responses remain available offline | CUR-008, CUR-016 | Shared cache serves stale authenticated data | TGT-010, TGT-011 | AC-09 |
+| REM-T11 | Medium | Regression re-enables offline access to sensitive authenticated GET responses | CUR-008, CUR-016 | Historical shared API caching is remediated; installed-upgrade evidence and a semantic regression guard remain required | TGT-010, TGT-011 | AC-09 |
 | REM-T12 | Medium | Future offline mutation queue replays authority | CUR-008 | No-queue is current behavior, not yet a release invariant | TGT-005, TGT-010, TGT-016 | AC-10, AC-14 |
 | REM-T13 | High | Push subscription, deep-link, or lock-screen disclosure | CUR-012, CUR-015 | Not device-bound; payload navigation is not allowlisted | TGT-004, TGT-011, TGT-013 | AC-11, AC-17 |
 | REM-T14 | High | Unconfirmed public fallback or stale tunnel reuse | CUR-002, CUR-013 | Automatic public fallback; weak reuse validation can signal a recycled unrelated PID | TGT-008, TGT-009, TGT-015 | AC-12 |
 | REM-T15 | Medium | Authentication and stream abuse without limits | CUR-003, CUR-005 | Entropy prevents guessing but not resource abuse or alert gaps | TGT-008, TGT-014, TGT-015 | AC-03, AC-12 |
-| REM-T16 | High | Revocation does not purge browser caches | CUR-013, CUR-016 | No session partition or purge trigger | TGT-010, TGT-011, TGT-013 | AC-04, AC-09, AC-13 |
+| REM-T16 | High | An unreachable device cannot receive legacy-data purge until next contact | CUR-013, CUR-016 | Current API data is network-only and legacy caches are purgeable, but offline devices cannot be remotely erased; exact installed-PWA evidence remains open | TGT-010, TGT-011, TGT-013 | AC-04, AC-09, AC-13 |
 | REM-T17 | High | Live approval detail visible to every operator client | CUR-009, CUR-010 | Durable redaction does not scope the live channel | TGT-004, TGT-005, TGT-012, TGT-014 | AC-07, AC-15 |
 | REM-T18 | Low | Open health/static fingerprinting | CUR-001, CUR-014 | Product presence and version remain visible | TGT-007, TGT-008, TGT-009 | AC-12 |
 | REM-T19 | Critical | New or overlooked mutation misses route-local auth | CUR-006, CUR-015 | No centralized default-deny device policy | TGT-004, TGT-006, TGT-007, TGT-016 | AC-08, AC-16 |
@@ -440,12 +449,12 @@ These are executable acceptance targets, not prose-only examples.
 | AC-01 | Photograph and replay the QR | Reusable master bearer authenticates until global rotation | Only first correct-origin redemption creates a named device |
 | AC-02 | Read `localStorage` and replay elsewhere | Extracted master bearer authenticates as operator | No master in storage; device credential is scoped, expiring, revocable, and key-bound |
 | AC-03 | Capture an SSE URL and replay its query value | Query bearer works broadly; stream creation lacks specific limits | One-purpose stream credential fails on other routes and is bounded/rate-limited |
-| AC-04 | Lose a paired phone that may already be offline, revoke it, and reconnect later | No selective revoke; token/cache persist | Server access ends selectively; sensitive data was not cached by default; local purge occurs at next contact without claiming remote erase |
+| AC-04 | Lose a paired phone that may already be offline, revoke it, and reconnect later | Selective server revoke is implemented; current API data is network-only and reconnect can purge browser data, while an unreachable phone cannot be remotely erased | Server access ends selectively; sensitive data was not cached by default; local purge occurs at next contact without claiming remote erase |
 | AC-05 | Send unexpected Host/Origin/Fetch Metadata context | Bearer still applies; no explicit contextual rejection | Rejected before auth/handler with privacy-safe signal |
 | AC-06 | Use observe/message/approve to write a PTY | Master browser can; managed agent is gated | Missing terminal scope or matching step-up always denies |
 | AC-07 | Allow/allow-session a risky or altered approval | Master bearer can answer live request | Exact digest and fresh risk-bound step-up required; deny/cancel remains safe |
 | AC-08 | Use agent or low-scope device on privileged route families | Explicit gates cover some paths; no exhaustive device layer | Central policy rejects every unclassified or under-scoped mutation |
-| AC-09 | Read cached transcript while offline before and after device revoke | Shared API cache may return stale content | Sensitive content absent by default; any offline-safe view expires locally and purges at next contact |
+| AC-09 | Revisit legacy API data after an installed-worker upgrade and device revoke | Current `/api/` bypass and request/response no-store prevent new API cache entries; activation removes legacy caches and offline API reads fail, pending exact installed-PWA evidence | Sensitive content absent by default; any offline-safe view expires locally and purges at next contact |
 | AC-10 | Attempt mutations offline and reconnect | Worker currently does not queue non-GET | No mutation replay; intentional retry required |
 | AC-11 | Put external or non-allowlisted URL in push payload | Worker navigates/openWindow using payload value | Only normalized same-origin allowlisted paths open |
 | AC-12 | Force public fallback, recycled PID/stale state, scan, and flood | Fallback automatic; reuse/stop trust PID liveness; no auth-failure cap | Consent, ownership/health check before reuse/stop, bounded open surface, rate limit |
@@ -522,6 +531,9 @@ The JSON matrix is the canonical structured register for REM-001. The Markdown i
   `DeviceSession` receives implicit outcome authority;
 - every outcome mutation rejects a remote device principal before body validation, including
   budget evaluation;
+- the observed code marker matches the exact current behavior checkpoint, and CUR-008, CUR-016,
+  REM-T11, REM-T16, AC-04, and AC-09 remain semantically aligned with the generalized `/api/`
+  bypass plus request- and response-side no-store;
 - default-deny covers every device request, and the current direct message-to-live-agent flow remains explicitly modeled;
 - the absence of an anti-framing policy remains a failing baseline marker until the control is implemented;
 - DeviceSession and PairingTicket are still explicitly classified as unimplemented at this baseline;

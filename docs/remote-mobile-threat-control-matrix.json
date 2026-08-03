@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_commit": "fefec4c70810f1b5fd196835f0696fc2deaba8fe",
+  "observed_at_commit": "e560d2ef59970dad4a79906945a92e3a65586b4f",
   "backlog_item": "REM-001",
   "classification": "threat_model_only",
   "posture": "functional_beta_not_safe_remote_beta",
@@ -445,7 +445,7 @@
     {
       "id": "CUR-008",
       "status": "implemented",
-      "description": "The current service worker bypasses every API request before respondWith, including SSE, and also leaves cross-origin and mutation requests to native networking, so it does not queue or replay remote authority.",
+      "description": "The current service worker bypasses every same-origin /api/ request before respondWith, including authenticated reads and SSE, and leaves cross-origin and mutation requests to native networking, so it neither caches API data nor queues or replays remote authority.",
       "evidence": [
         {
           "file": "web/public/sw.js",
@@ -565,7 +565,7 @@
     {
       "id": "CUR-016",
       "status": "implemented",
-      "description": "The PWA keeps authenticated API responses network-only by bypassing worker interception and setting request-side no-store, fails authenticated reads explicitly while offline, and can purge legacy device data after revocation or authentication failure.",
+      "description": "The PWA keeps authenticated API responses network-only through the generalized worker /api/ bypass, request-side cache no-store, and response-side Cache-Control no-store; authenticated reads fail while offline, and activation or an explicit device-data purge deletes legacy API caches.",
       "evidence": [
         {
           "file": "web/public/sw.js",
@@ -574,6 +574,10 @@
         {
           "file": "web/src/api.ts",
           "contains": "cache: 'no-store'"
+        },
+        {
+          "file": "src/remote-security-integration.ts",
+          "contains": "reply.header('cache-control', 'no-store')"
         },
         {
           "file": "web/public/sw.js",
@@ -1549,13 +1553,13 @@
     },
     {
       "id": "REM-T11",
-      "title": "Sensitive authenticated GET responses remain available offline",
+      "title": "Regression re-enables offline access to sensitive authenticated GET responses",
       "topic_ids": [
         "TOP-005"
       ],
-      "likelihood": "high",
+      "likelihood": "low",
       "impact": "high",
-      "risk": "high",
+      "risk": "medium",
       "assets": [
         "AST-006",
         "AST-012"
@@ -1572,7 +1576,7 @@
         "CUR-008",
         "CUR-016"
       ],
-      "gap": "The service worker caches successful API GET responses in a shared cache and returns them after network failure without an explicit stale or revoked-device state.",
+      "gap": "The historical shared service-worker API cache is remediated at current head. The remaining beta gap is exact installed-PWA evidence that upgrades delete legacy API caches and a regression guard that prevents future worker or client changes from restoring offline authenticated data.",
       "target_control_ids": [
         "TGT-010",
         "TGT-011"
@@ -1726,7 +1730,7 @@
     },
     {
       "id": "REM-T16",
-      "title": "Revocation does not purge browser caches",
+      "title": "An unreachable device cannot receive legacy-data purge until next contact",
       "topic_ids": [
         "TOP-005",
         "TOP-006"
@@ -1752,7 +1756,7 @@
         "CUR-013",
         "CUR-016"
       ],
-      "gap": "There is no device revocation event for the worker to consume, no per-session cache partition, and no cache purge on token replacement, tunnel stop, logout, or authentication failure.",
+      "gap": "Current API responses are network-only and the worker can delete legacy API caches, but an unreachable offline device cannot receive a purge until it reconnects. Exact installed-PWA upgrade and revoke evidence must prove legacy-cache deletion without claiming remote erase.",
       "target_control_ids": [
         "TGT-010",
         "TGT-011",
@@ -2036,7 +2040,7 @@
       ],
       "preconditions": "A paired phone is lost while its browser data remains intact and may already be offline.",
       "action": "Use any retained offline data, have the owner revoke that specific device, and later reconnect.",
-      "current_expected": "There is no selective device revoke; the master token and cached data remain usable until global recovery steps are taken.",
+      "current_expected": "Selective server-side revoke is implemented; current API data is network-only, and a reconnect can trigger browser-data purge. An unreachable offline device still cannot be remotely erased, and exact installed-PWA revoke evidence remains open.",
       "target_expected": "Only that DeviceSession loses API, stream, step-up, and push access; sensitive data was not cached by default, any deliberately offline-safe data has a short local lease or device lock, and server-triggered purge occurs at next contact. Revocation does not falsely claim it can erase an unreachable offline device."
     },
     {
@@ -2089,9 +2093,9 @@
         "REM-T16",
         "REM-T21"
       ],
-      "preconditions": "A paired device has cached transcripts or process output, disconnects before learning about a revoke, and then is revoked.",
+      "preconditions": "A paired device installed a historical worker that may hold legacy cached API data, disconnects before learning about a revoke, and is then revoked.",
       "action": "Remain offline beyond the permitted local lease, revisit authenticated views, and later reconnect.",
-      "current_expected": "A cached API response may be returned without a clear revoked or stale state.",
+      "current_expected": "At current head, the generalized /api/ bypass plus request- and response-side no-store prevents new service-worker API cache entries, activation deletes legacy API caches, and offline API reads fail. Exact installed-PWA upgrade and revoke evidence remains required.",
       "target_expected": "Sensitive API content is absent by default; any explicitly offline-safe content is session-partitioned, locally time-bounded and locked, then purged at next contact. The UI never treats server revocation as an instantaneous remote erase of an unreachable device."
     },
     {
