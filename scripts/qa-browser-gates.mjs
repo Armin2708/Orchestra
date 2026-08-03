@@ -60,6 +60,7 @@ const timeoutMs = 20_000
 const asynchronousReadinessTimeoutMs = 10_000
 const interactionReadinessTimeoutMs = 4_000
 const defaultArtifactRoot = join(repositoryRoot, 'artifacts', 'qa', 'browser-quality')
+const startupDataReadyBinding = 'orchestraQaStartupDataReady'
 
 const parseArgs = (argv) => {
   const options = {
@@ -1061,6 +1062,9 @@ const measureViewport = async ({
     startupCompetitorStartTracker.observeRequest(event.requestId, event.request?.url)
     fatalLifecycleTracker.observeRequest(event.requestId, event.request?.url, event.type)
   }))
+  subscriptions.push(client.on('Runtime.bindingCalled', (event) => {
+    if (event.name === startupDataReadyBinding) startupCompetitorStartTracker.endWindow()
+  }))
   subscriptions.push(client.on('Network.responseReceived', (event) => {
     const { response } = event
     fatalLifecycleTracker.observeResponse(
@@ -1744,12 +1748,30 @@ const startIsolatedBrowser = async ({ chromeExecutable, chromeProfile, chromeStd
       client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
       client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
     ])
+    await client.send('Runtime.addBinding', { name: startupDataReadyBinding })
     client.requestBudgetPacer = requestBudgetPacer
     const detachRequestBudgetPacer = attachRequestBudgetPacer(client, requestBudgetPacer)
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
         localStorage.setItem('orchestra-command-center-onboarding', 'complete');
         localStorage.setItem('orchestra-view', 'board');
+        (() => {
+          let signalled = false;
+          const signalDataReady = () => {
+            if (signalled || !document.querySelector(${JSON.stringify(AUTHENTICATED_DATA_READY_SELECTOR)})) return;
+            signalled = true;
+            globalThis[${JSON.stringify(startupDataReadyBinding)}]();
+          };
+          const observeDataReady = () => {
+            const observer = new MutationObserver(signalDataReady);
+            observer.observe(document.documentElement, {
+              subtree: true, childList: true, attributes: true, attributeFilter: ['data-connection'],
+            });
+            signalDataReady();
+          };
+          if (document.documentElement) observeDataReady();
+          else addEventListener('DOMContentLoaded', observeDataReady, { once: true });
+        })();
       `,
     })
     return { chrome, client, detachRequestBudgetPacer }
