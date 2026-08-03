@@ -79,7 +79,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border: 1px solid transparent; background: none; color: var(--ink-soft);
   border-radius: 9999px; padding: 5px 14px; font-size: 13px; font-weight: 500;
   display: inline-flex; align-items: center; gap: 7px;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: border-color 0.15s;
 }
 .tab:hover { background: rgba(0, 0, 0, 0.04); color: var(--ink); }
 .tab.active { background: var(--ink); color: #fff; }
@@ -623,7 +623,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .owner { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
 
-.owner.unowned { color: #b8b4ac; font-weight: 400; }
+.owner.unowned { color: #706F6B; font-weight: 400; }
 
 .card time { font-size: 10.5px; color: #b8b4ac; }
 
@@ -887,7 +887,7 @@ textarea {
   padding: 8px 8px 8px 14px; background: var(--surface);
 }
 .rm-brainstorm:focus-within { border-color: #ccc8bf; }
-.rm-spark { color: #D97757; }
+.rm-spark { color: #A94E32; }
 .rm-brainstorm input { flex: 1; border: none; background: none; font: inherit; font-size: 13.5px; }
 .rm-brainstorm input:focus-visible { outline: none; }
 .rm-brainstorm .btn:disabled { opacity: 0.6; cursor: default; }
@@ -1039,7 +1039,7 @@ textarea {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   color: var(--ink-soft); font-size: 14px; text-align: center; padding: 24px;
 }
-.rm-placeholder-sub { font-size: 12.5px; color: #b8b4ac; max-width: 320px; }
+.rm-placeholder-sub { font-size: 12.5px; color: #706F6B; max-width: 320px; }
 
 /* idea detail modal */
 .idea-scrim {

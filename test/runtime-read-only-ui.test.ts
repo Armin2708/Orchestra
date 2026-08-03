@@ -75,6 +75,10 @@ describe('offline canonical runtime composition', () => {
     expect(terminal).not.toContain('inert')
   })
 
+  it('releases Tab from xterm so browser focus can leave the terminal', () => {
+    expect(terminalSource).toContain("attachCustomKeyEventHandler((event) => event.key !== 'Tab')")
+  })
+
   it('keeps saved workspace context/process content in the accessibility tree while actions are disabled', () => {
     vi.stubGlobal('window', { location: { hostname: 'localhost' } })
     const context = renderToStaticMarkup(createElement(ContextPane, {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
+import { api, ApiError, getToken, setToken, streamUrl, Snapshot, SystemInfo, Telemetry } from './api'
 import { BoardTab, PrimaryView, resolveStoredNavigation } from './boardNavigation'
 import { CommandCenter } from './CommandCenter'
 import {
@@ -227,8 +227,10 @@ function LocalOwnerApp() {
 
   useEffect(() => {
     if (needsAuth) return // no stream until the token is accepted
-    // a single stream for everything — per-board streams exhaust the browser connection limit
-    const es = new EventSource(streamUrl())
+    // EventSource cannot carry the memory-only owner credential. Keep the stream for
+    // tokenless loopback daemons and use authenticated REST polling after owner login.
+    const authenticatedPolling = Boolean(getToken())
+    const es = authenticatedPolling ? null : new EventSource(streamUrl())
     let pending: number | undefined
     let retry: number | undefined
     let disposed = false
@@ -248,12 +250,12 @@ function LocalOwnerApp() {
       },
       onSettled: () => setLoaded(true),
       onCycle: ({ succeeded, queued }) => {
-        if (!succeeded && !queued && retry === undefined) {
+        if (!queued && retry === undefined && (authenticatedPolling || !succeeded)) {
           retry = window.setTimeout(() => {
             if (disposed) return
             retry = undefined
             controller.request()
-          }, 1_000)
+          }, succeeded ? 5_000 : 1_000)
         }
       },
     })
@@ -261,34 +263,37 @@ function LocalOwnerApp() {
     refreshRequest.current = requestRefresh
     // Subscribe before the first snapshot. Once open, the refresh covers every event that
     // preceded it. Every reconnect refreshes again; failed snapshots retry until REST recovers.
-    es.onopen = () => {
-      if (disposed) return
-      if (retry !== undefined) {
-        clearTimeout(retry)
-        retry = undefined
-      }
-      requestRefresh()
-    }
-    const initialFallback = window.setTimeout(requestRefresh, 1_000)
-    es.onmessage = () => {
-      if (disposed) return
-      // debounce bursts of events into one refresh
-      if (pending) return
-      pending = window.setTimeout(() => {
+    if (es) {
+      es.onopen = () => {
         if (disposed) return
-        pending = undefined
+        if (retry !== undefined) {
+          clearTimeout(retry)
+          retry = undefined
+        }
         requestRefresh()
-      }, 300)
+      }
+      es.onmessage = () => {
+        if (disposed) return
+        // debounce bursts of events into one refresh
+        if (pending) return
+        pending = window.setTimeout(() => {
+          if (disposed) return
+          pending = undefined
+          requestRefresh()
+        }, 300)
+      }
+      es.onerror = () => {
+        if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
+      }
     }
-    es.onerror = () => {
-      if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
-    }
+    const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 1_000)
+    if (authenticatedPolling) requestRefresh()
     return () => {
       disposed = true
       controller.dispose()
       if (refreshRequest.current === requestRefresh) refreshRequest.current = () => {}
-      es.close()
-      clearTimeout(initialFallback)
+      es?.close()
+      if (initialFallback !== undefined) clearTimeout(initialFallback)
       if (retry !== undefined) clearTimeout(retry)
       if (pending) clearTimeout(pending)
     }

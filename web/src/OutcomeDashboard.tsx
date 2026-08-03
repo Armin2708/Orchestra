@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, streamUrl } from './api'
+import { api, getToken, streamUrl } from './api'
 import { createSingleFlightRefresh } from './singleFlightRefresh'
 import './outcome-dashboard.css'
 
@@ -94,7 +94,8 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
     setDashboard(null)
     setError(null)
     setLoading(true)
-    const stream = new EventSource(streamUrl())
+    const authenticatedPolling = Boolean(getToken())
+    const stream = authenticatedPolling ? null : new EventSource(streamUrl())
     let pending: number | undefined
     let retry: number | undefined
     let initialRequest = true
@@ -115,12 +116,12 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
         if (visible) setLoading(false)
       },
       onCycle: ({ succeeded, queued }) => {
-        if (!succeeded && !queued && retry === undefined) {
+        if (!queued && retry === undefined && (authenticatedPolling || !succeeded)) {
           retry = window.setTimeout(() => {
             if (disposed) return
             retry = undefined
             controller.request()
-          }, 1_000)
+          }, succeeded ? 5_000 : 1_000)
         }
       },
     })
@@ -130,33 +131,36 @@ export function OutcomeDashboard({ boardId }: { boardId: number }) {
       controller.request(visible)
     }
     refreshRequest.current = (visible = true) => controller.request(visible)
-    stream.onopen = () => {
-      if (disposed) return
-      if (retry !== undefined) {
-        window.clearTimeout(retry)
-        retry = undefined
-      }
-      requestRefresh()
-    }
-    const initialFallback = window.setTimeout(requestRefresh, 1_000)
-    stream.onmessage = (event) => {
-      if (disposed) return
-      let payload: { board_id?: number; type?: string }
-      try { payload = JSON.parse(event.data) as { board_id?: number; type?: string } } catch { return }
-      if (payload.board_id !== boardId || payload.type !== 'outcome_analytics') return
-      if (pending !== undefined) window.clearTimeout(pending)
-      pending = window.setTimeout(() => {
+    if (stream) {
+      stream.onopen = () => {
         if (disposed) return
-        pending = undefined
-        controller.request()
-      }, 250)
+        if (retry !== undefined) {
+          window.clearTimeout(retry)
+          retry = undefined
+        }
+        requestRefresh()
+      }
+      stream.onmessage = (event) => {
+        if (disposed) return
+        let payload: { board_id?: number; type?: string }
+        try { payload = JSON.parse(event.data) as { board_id?: number; type?: string } } catch { return }
+        if (payload.board_id !== boardId || payload.type !== 'outcome_analytics') return
+        if (pending !== undefined) window.clearTimeout(pending)
+        pending = window.setTimeout(() => {
+          if (disposed) return
+          pending = undefined
+          controller.request()
+        }, 250)
+      }
     }
+    const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 1_000)
+    if (authenticatedPolling) requestRefresh()
     return () => {
       disposed = true
       controller.dispose()
       refreshRequest.current = () => {}
-      stream.close()
-      window.clearTimeout(initialFallback)
+      stream?.close()
+      if (initialFallback !== undefined) window.clearTimeout(initialFallback)
       if (retry !== undefined) window.clearTimeout(retry)
       if (pending !== undefined) window.clearTimeout(pending)
     }

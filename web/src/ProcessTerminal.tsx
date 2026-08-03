@@ -89,6 +89,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
+    terminal.attachCustomKeyEventHandler((event) => event.key !== 'Tab')
     terminal.open(host)
     terminalRef.current = terminal
     fitRef.current = fit

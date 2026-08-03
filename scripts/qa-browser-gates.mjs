@@ -723,7 +723,10 @@ const contrastAudit = (client) => evaluate(client, `(() => {
     const required = large ? 3 : 4.5;
     if (ratio + .01 < required) rows.push({
       tag: element.tagName.toLowerCase(), class_name: String(element.className || '').slice(0, 100),
+      ancestor_class_name: String(element.parentElement?.className || '').slice(0, 100),
       text_length: text.length, ratio: Math.round(ratio * 100) / 100, required,
+      foreground: [foreground.r, foreground.g, foreground.b].map(Math.round),
+      background: [bg.r, bg.g, bg.b].map(Math.round),
     });
   }
   return {

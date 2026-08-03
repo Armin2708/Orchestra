@@ -2,8 +2,8 @@
   --ow-paper: #f7f6f3;
   --ow-panel: #ffffff;
   --ow-ink: #24221f;
-  --ow-muted: #777168;
-  --ow-faint: #9a948b;
+  --ow-muted: #706a62;
+  --ow-faint: #706a62;
   --ow-line: #dedbd4;
   --ow-line-soft: #ebe8e1;
   --ow-ready: #55744d;
@@ -314,7 +314,7 @@
   font-size: 11px;
 }
 
-.ow-filter-chips > span b { color: #8d877e; font-size: 10px; text-transform: uppercase; }
+.ow-filter-chips > span b { color: #706a62; font-size: 10px; text-transform: uppercase; }
 .ow-filter-chips > span.empty { border: 0; background: transparent; color: var(--ow-faint); }
 
 .ow-state-banner {
@@ -427,11 +427,11 @@
 .ow-list button:active { transform: scale(.99); }
 .ow-list button.selected { border-left-color: #302d29; background: #fff; }
 .ow-list button > strong { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.35; }
-.ow-list button > code { grid-column: 1 / -1; color: #817b72; font-size: 10px; }
+.ow-list button > code { grid-column: 1 / -1; color: #706a62; font-size: 10px; }
 .ow-repository {
   grid-column: 1 / -1;
   overflow: hidden;
-  color: #7e786f;
+  color: #706a62;
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
