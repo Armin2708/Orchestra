@@ -70,7 +70,7 @@ import {
   type ProviderAcceptanceFinalizationV1,
 } from '../provider-acceptance-harness.js'
 
-export const CODEX_ACCEPTANCE_VERSION_V1 = '0.144.6'
+export const CODEX_ACCEPTANCE_VERSION_V1 = '0.146.0'
 export const CODEX_ACCEPTANCE_PLATFORM_V1 = 'darwin-arm64'
 export const CODEX_ACCEPTANCE_PACKAGE_V1 =
   `@openai/codex@${CODEX_ACCEPTANCE_VERSION_V1}`
@@ -712,7 +712,7 @@ const assertChatGptSubscription = (
   }
 }
 
-const rateLimitSummary = (
+export const rateLimitSummary = (
   response: CodexRateLimitsResponse,
 ): Record<string, unknown> => {
   const values = response.rateLimitsByLimitId
@@ -721,8 +721,10 @@ const rateLimitSummary = (
   if (values.length === 0) throw new Error('Codex returned no rate-limit windows')
   return {
     snapshot_count: values.length,
+    spend_control_reached: values.some((value) => value.spendControlReached === true),
     exhausted: values.some((value) =>
-      value.rateLimitReachedType != null
+      value.spendControlReached === true
+      || value.rateLimitReachedType != null
       || value.primary?.usedPercent === 100
       || value.secondary?.usedPercent === 100),
     plan_types: [...new Set(

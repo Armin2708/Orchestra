@@ -167,7 +167,7 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(contract.node_version).toBe('22.20.0')
     expect(contract.npm_version).toBe('10.9.3')
     expect(workflow.match(/node-version: 22\.20\.0/g)).toHaveLength(2)
-    expect(contract.codex_cli_version).toBe('0.144.6')
+    expect(contract.codex_cli_version).toBe('0.146.0')
     expect(contract.artifact_retention_days).toBe(30)
     expect(contract.accepted_moderate_packages_by_gate).toEqual({
       'dependency-audit-root': [],
@@ -183,7 +183,9 @@ describe('QA-019 exact-commit CI contract', () => {
     expect(workflow).toContain('audit dependency-audit-root')
     expect(workflow).toContain('audit dependency-audit-web --prefix web')
     expect(workflow).toContain('doctor --provider both --json')
-    expect(workflow).toContain('npm run check:codex-protocol')
+    expect(workflow).toContain(
+      "run codex-protocol --\n          sh -c 'npm run check:codex-protocol && npm run check:codex-app-server'",
+    )
     expect(workflow).toContain('./scripts/e2e.sh')
     expect(workflow).toContain('name: orchestra-package-${{ github.sha }}')
     expect(workflow).toContain('name: orchestra-ci-evidence-${{ github.sha }}')

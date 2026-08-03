@@ -55,7 +55,8 @@ outside tracked source so recording them cannot mutate the tested candidate.
 ## Known limitations and blockers
 
 - **No managed provider is beta-supported.** Claude lacks automation-policy authority and a real
-  native matrix; Codex host version `0.146.0` does not match the pinned `0.144.6`; Qwen managed
+  native matrix; Codex `0.146.0` passes the exact protocol and signed-out lifecycle gates but still
+  lacks the clean-profile native-subscription matrix; Qwen managed
   automation is policy-blocked without an accepted tuple; Kimi lacks native login/Extra Usage
   metering and cap evidence.
 - **Platform acceptance is incomplete.** This macOS arm64 host is observed, but clean retained-

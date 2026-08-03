@@ -28,6 +28,11 @@ the complete marker/provider transaction before its first API call. A concurrent
 closed, while the canonical Job endpoint's durable idempotency key protects the final launch write.
 An unset `ORCHESTRA_HOME` resolves from an absolute home directory; a relative or explicitly empty
 value is rejected before API mutation.
+
+For a private retained-tarball evaluation, run doctor and inspect the onboarding plan first, start
+`orchestra serve`, and invoke this command without `--launch`. This exercises the real local
+Board/card/WorkContract path while leaving provider execution, tokens, worktrees, and acceptance
+untouched. A visible provider name on that safe demo is not a managed-support claim.
 On POSIX, lifecycle lock creation and removal also `fsync` the containing directory. Windows keeps
 the exclusive-lock and exact-token checks, without a documented directory-metadata crash-durability
 guarantee.

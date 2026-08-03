@@ -429,10 +429,161 @@ export const writeFirstRunConfig = (
   writeVerifiedText(file, serialized, 0o600)
 }
 
+export const runFirstRunConfigTransaction = <T>(
+  configFile: string,
+  config: FirstRunConfigV1,
+  action: () => T,
+): T => {
+  if (!path.isAbsolute(configFile)) {
+    throw new Error('first-run configuration path must be absolute')
+  }
+  assertFirstRunConfigCompatible(config)
+  const previous = fs.existsSync(configFile)
+    ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
+    : null
+  if (previous) {
+    let parsed: unknown
+    try { parsed = JSON.parse(previous.content) } catch {
+      throw new Error('existing first-run configuration is invalid; refusing to overwrite it')
+    }
+    assertFirstRunConfigCompatible(parsed)
+  }
+  const serialized = `${JSON.stringify(config, null, 2)}\n`
+  const currentConfig = (): string | null => {
+    try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
+  }
+  try {
+    writeFirstRunConfig(configFile, config)
+    const result = action()
+    if (currentConfig() !== serialized) {
+      throw new Error(`first-run configuration changed during apply: ${configFile}`)
+    }
+    return result
+  } catch (error) {
+    const rollbackErrors: unknown[] = []
+    const current = currentConfig()
+    const unchanged = previous ? current === previous.content : current === null
+    if (current !== serialized && !unchanged) {
+      rollbackErrors.push(new Error(
+        `configuration changed concurrently; refusing rollback for ${configFile}`,
+      ))
+    } else if (current === serialized) {
+      try {
+        if (previous) {
+          assertFirstRunConfigCompatible(JSON.parse(previous.content))
+          writeVerifiedText(configFile, previous.content, previous.mode)
+        } else {
+          fs.unlinkSync(configFile)
+          if (process.platform !== 'win32') {
+            const directoryDescriptor = fs.openSync(path.dirname(configFile), fs.constants.O_RDONLY)
+            try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+          }
+          if (fs.existsSync(configFile)) {
+            throw new Error('new config rollback did not verify')
+          }
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError)
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'first-run setup failed and rollback was incomplete; concurrent files were not overwritten',
+      )
+    }
+    throw error
+  }
+}
+
 export type ApplyFirstRunPlanDeps = {
   now?: () => string
   configPath?: string
   installProviderHooks?: typeof installHooks
+}
+
+export type FirstRunAmbientHooksResult = {
+  schema_version: 1
+  provider_id: HookProvider
+  scope: HookScope
+  managed_launch_ready: boolean
+  managed_launch_blockers: readonly FirstRunBlocker[]
+}
+
+export type ApplyFirstRunAmbientHooksDeps = {
+  installProviderHooks?: typeof installHooks
+}
+
+/**
+ * Installs ambient terminal hooks without authorizing a managed provider launch.
+ *
+ * Ambient Claude/Codex sessions and daemon-managed provider sessions are distinct
+ * trust boundaries. A provider-policy or acceptance blocker must keep the latter
+ * closed, but does not need to prevent a user from explicitly wiring their own
+ * already-running terminal session into the local board.
+ */
+export const applyFirstRunAmbientHooks = (
+  plan: FirstRunPlan,
+  deps: ApplyFirstRunAmbientHooksDeps = {},
+): FirstRunAmbientHooksResult => {
+  if (!plainRecord(plan)
+    || !plainRecord(plan.provider)
+    || !plainRecord(plan.hooks)
+    || !plainRecord(plan.defaults)
+    || typeof plan.project_root !== 'string'
+    || !FIRST_RUN_PROVIDER_IDS.includes(plan.provider.id as FirstRunProviderId)
+    || !['native_subscription', 'provider_api'].includes(String(plan.provider.mode))
+    || !['off', 'project', 'global'].includes(String(plan.hooks.scope))
+    || !['off', 'redacted'].includes(String(plan.defaults.telemetry))) {
+    throw new Error('first-run plan identifiers are invalid; no hooks were changed')
+  }
+  const canonicalPlan = buildFirstRunPlan({
+    project_root: plan.project_root,
+    provider_id: plan.provider.id as FirstRunProviderId,
+    execution_mode: plan.provider.mode as FirstRunExecutionMode,
+    hook_scope: plan.hooks.scope as FirstRunHookChoice,
+    telemetry: plan.defaults.telemetry as FirstRunTelemetryChoice,
+    acknowledge_usage_priced_api: false,
+  })
+  if (!isDeepStrictEqual(plan, canonicalPlan)) {
+    throw new Error('first-run plan is stale or forged relative to the current provider manifest')
+  }
+  if (canonicalPlan.provider.mode !== 'native_subscription') {
+    throw new Error('ambient hooks require native-subscription terminal mode')
+  }
+  if (!path.isAbsolute(canonicalPlan.project_root)
+    || (() => {
+      try { return !fs.statSync(canonicalPlan.project_root).isDirectory() } catch { return true }
+    })()) {
+    throw new Error('ambient hook project must be an existing absolute directory')
+  }
+  if (canonicalPlan.hooks.scope === 'off') {
+    throw new Error('ambient hook installation requires project or global scope')
+  }
+  if (canonicalPlan.provider.id !== 'claude'
+    && canonicalPlan.provider.id !== 'codex') {
+    throw new Error('ambient hooks are available only for Claude Code and Codex CLI')
+  }
+  if (canonicalPlan.hooks.capability_state !== 'supported') {
+    throw new Error('ambient hook capability is not supported for this provider mode')
+  }
+
+  ;(deps.installProviderHooks ?? installHooks)(
+    canonicalPlan.hooks.scope,
+    {
+      provider: canonicalPlan.provider.id,
+      roots: { cwd: canonicalPlan.project_root },
+    },
+  )
+
+  return Object.freeze({
+    schema_version: 1,
+    provider_id: canonicalPlan.provider.id,
+    scope: canonicalPlan.hooks.scope,
+    managed_launch_ready: canonicalPlan.ready_for_managed_launch,
+    managed_launch_blockers: Object.freeze(canonicalPlan.blockers.map((blocker) =>
+      Object.freeze({ ...blocker }))),
+  })
 }
 
 export const applyFirstRunPlan = (
@@ -509,80 +660,22 @@ export const applyFirstRunPlan = (
       ? plan.provider.id
       : (() => { throw new Error('provider hooks are unavailable') })()
   const configFile = deps.configPath ?? firstRunConfigPath()
-  if (!path.isAbsolute(configFile)) {
-    throw new Error('first-run configuration path must be absolute')
-  }
-  const previous = fs.existsSync(configFile)
-    ? { content: fs.readFileSync(configFile, 'utf8'), mode: fs.statSync(configFile).mode & 0o777 }
-    : null
-  if (previous) {
-    let parsed: unknown
-    try { parsed = JSON.parse(previous.content) } catch {
-      throw new Error('existing first-run configuration is invalid; refusing to overwrite it')
-    }
-    assertFirstRunConfigCompatible(parsed)
-  }
-  const serialized = `${JSON.stringify(config, null, 2)}\n`
-  const currentConfig = (): string | null => {
-    try { return fs.readFileSync(configFile, 'utf8') } catch { return null }
-  }
-  try {
-    if (plan.hooks.scope !== 'off' && hookProvider) {
-      const hookOptions = {
-        provider: hookProvider,
-        roots: { cwd: plan.project_root },
-      } as const
-      runHookInstallTransaction(plan.hooks.scope, hookOptions, (transaction) => {
-        writeFirstRunConfig(configFile, config)
+  if (plan.hooks.scope !== 'off' && hookProvider) {
+    const hookOptions = {
+      provider: hookProvider,
+      roots: { cwd: plan.project_root },
+    } as const
+    runHookInstallTransaction(plan.hooks.scope, hookOptions, (transaction) => {
+      runFirstRunConfigTransaction(configFile, config, () => {
         ;(deps.installProviderHooks ?? installHooks)(
           plan.hooks.scope as HookScope,
           hookOptions,
           transaction,
         )
-        if (currentConfig() !== serialized) {
-          throw new Error(`first-run configuration changed during hook setup: ${configFile}`)
-        }
       })
-    } else {
-      writeFirstRunConfig(configFile, config)
-      if (currentConfig() !== serialized) {
-        throw new Error(`first-run configuration changed during apply: ${configFile}`)
-      }
-    }
-  } catch (error) {
-    const rollbackErrors: unknown[] = []
-    const current = currentConfig()
-    const unchanged = previous ? current === previous.content : current === null
-    if (current !== serialized && !unchanged) {
-      rollbackErrors.push(new Error(
-        `configuration changed concurrently; refusing rollback for ${configFile}`,
-      ))
-    } else if (current === serialized) {
-      try {
-        if (previous) {
-          assertFirstRunConfigCompatible(JSON.parse(previous.content))
-          writeVerifiedText(configFile, previous.content, previous.mode)
-        } else {
-          fs.unlinkSync(configFile)
-          if (process.platform !== 'win32') {
-            const directoryDescriptor = fs.openSync(path.dirname(configFile), fs.constants.O_RDONLY)
-            try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
-          }
-          if (fs.existsSync(configFile)) {
-            throw new Error('new config rollback did not verify')
-          }
-        }
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError)
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...rollbackErrors],
-        'hook setup failed and rollback was incomplete; concurrent files were not overwritten',
-      )
-    }
-    throw error
+    })
+  } else {
+    runFirstRunConfigTransaction(configFile, config, () => undefined)
   }
   return config
 }

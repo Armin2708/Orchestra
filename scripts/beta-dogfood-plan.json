@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "purpose": "orchestra-beta-qa016-dogfood-v1",
+  "repository": "Armin2708/Orchestra",
+  "minimum_duration_ms": 86400000,
+  "minimum_work_cycles": 3,
+  "maximum_first_cycle_delay_ms": 3600000,
+  "required_interruptions": [
+    "daemon",
+    "provider",
+    "network"
+  ],
+  "allowed_providers": [
+    "claude",
+    "codex",
+    "qwen",
+    "kimi"
+  ],
+  "engineering_command": [
+    "node_modules/.bin/vitest",
+    "run",
+    "--reporter=json",
+    "test/agent-home-daemon-restart-acceptance.test.ts",
+    "test/operations-chaos-production-adapter.test.ts",
+    "test/provider-agent-manager.test.ts",
+    "test/remote-security-integration.test.ts",
+    "test/runtime-pty-contract.test.ts"
+  ]
+}

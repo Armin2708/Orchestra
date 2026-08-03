@@ -14,6 +14,9 @@ approval.
   upload transport or public support promise.
 - Production-bound `OPS-CHAOS-01` through `OPS-CHAOS-04` evidence is a bounded engineering gate,
   not the elapsed real-provider dogfood required by `QA-016` and `REL-009`.
+  The durable 24-hour recorder and deterministic interruption cycle are documented in
+  `docs/qa016-dogfood.md`; even a complete ledger is only eligible for independent review and
+  never self-authorizes closure or release.
 - The repaired browser harness has no passing final-head capture. The latest integrated diagnostic
   fails closed at HTTP 429 before viewport completion, so QA-014 and fresh QA-015 evidence remain
   open; tablet, phone and in-app Browser are unclaimed.
@@ -113,7 +116,7 @@ disabled and remains outside this beta task.
 The beta package version must be an explicit SemVer prerelease such as `0.1.0-beta.1`, and any
 approved Git tag must be the exact `v`-prefixed package version. A stable-looking
 `0.1.0`/`v0.1.0` pair is not a beta candidate. The `npm-beta` GitHub environment lookup returned
-404 on 2026-08-02, so required-reviewer protection is absent or unobservable. The publish job is
+HTTP 404 again on 2026-08-03, so required-reviewer protection is absent or unobservable. The publish job is
 therefore unconditionally disabled: neither a prerelease tag nor any other event publishes. After
 an operator verifies at least one required reviewer and approves an explicit source change, the
 retained artifact path is prepared to use `npm publish --tag beta`; it must never write the default
@@ -123,6 +126,12 @@ release action requiring human approval.
 Before changing cohorts, retain the exact artifact and evidence, name the cohort, record the one
 control delta, verify backup/restore, and observe install, provider, recovery, token and migration
 signals. Never silently substitute a provider, authentication method or billing mode.
+
+Use the packaged [beta release monitor](beta-release-monitoring.md) to turn that bounded,
+privacy-safe event stream into a digest-bound report. Use the packaged
+[controlled outcome benchmark runner](outcome-benchmarking.md) for before/after token and quality
+evidence. Both tools keep their release-gate claim false: harness output is not a substitute for a
+real observation window or representative exact-artifact tasks.
 
 ## Upgrade and uninstall
 
@@ -219,3 +228,59 @@ the fresh retained evidence directory. It cannot manufacture or repair evidence.
 ancestry and markers, raw artifacts, exact requests, dispositions, and findings. The final release
 checker repeats the same verification. A valid QA-018 receipt authorizes evidence closure only; it
 never authorizes npm publication, tagging, a GitHub release, beta promotion, or stable.
+
+## Release preflight and clean-platform handoff
+
+Run the fail-closed preflight before requesting any release approval. It never changes the source
+version, trust roots, workflow protection, tag, or public package. Missing evidence is emitted as a
+named blocker and the command exits `2`:
+
+```sh
+npm run release:preflight -- \
+  --proposed-version 0.1.0-beta.1 \
+  --artifact-dir /absolute/retained-candidate \
+  --quality-evidence /absolute/qa018/beta-quality-evidence.json \
+  --platform-report /absolute/macos/platform-lifecycle-report.json \
+  --platform-report /absolute/linux/platform-lifecycle-report.json \
+  --rollout-report /absolute/internal-rollout.json \
+  --rollout-report /absolute/canary-rollout.json
+```
+
+The preflight independently binds source HEAD, the source version, retained tarball bytes and
+checksum, package metadata, byte reproducibility, signed-prior upgrade/rollback status, signed
+QA-018 output, clean-platform reports, staged observations, production public-key presence, and the
+still-disabled publication boundary. A zero exit means only **ready for a human publication
+decision**; `public_action_authorized` remains `false` in every report.
+
+The manual `beta-platform-lifecycle` workflow is the clean macOS/Linux evidence producer. Supply
+the exact CI run ID, numeric retained package artifact ID, candidate commit, and approved tarball
+SHA-256. Its matrix checks out that commit, downloads that artifact from the named run, and invokes
+`scripts/validate-beta-platform-lifecycle.mjs` on `macos-15` arm64 and Ubuntu 24.04 x64. It does not
+run `npm pack`, rebuild the candidate, publish, tag, or create a release. Each runner repeats the
+installed doctor/daemon/web/hook/install/upgrade/rollback/uninstall/data-preservation lifecycle and
+retains a digest-bound `platform-lifecycle-report.json` plus the full lifecycle report.
+
+Platform validation requires an already approved explicit prerelease source version and an artifact
+whose metadata contains a different-version, different-digest, production-trusted prior artifact.
+Therefore the current `0.1.0` candidate correctly cannot start this gate. First enroll only reviewed
+public keys, obtain the external signatures, approve the version-only change, and create one new
+retained candidate; never add a private key or rebuild after validation.
+
+## Staged monitoring evidence contract
+
+The preflight requires one `internal` and one named `canary` JSON observation. Each report must bind
+the exact commit plus candidate version and SHA-256; name the cohort and declared required duration;
+record start/end timestamps whose elapsed duration meets that declaration; mark installation,
+provider, recovery, token, and migration signals `healthy`; record zero unresolved P0/P1; and name
+the rollback owner. The rollback drill must restore a distinct retained prior digest and explicitly
+record that no schema down migration occurred. Operator-authored JSON is not self-authenticating:
+the approval reviewer must compare it with hosted run IDs, dashboards, incident records, and the
+retained bytes before accepting it.
+
+Observe `npm-beta` separately with the repository environment API. Record only environment name,
+protection-rule types, and required-reviewer count in the external approval packet; do not retain
+reviewer identities or tokens in source. The preflight remains blocked until at least one required
+reviewer is observed and that observation is recorded in a reviewed source change while publication
+stays disabled. Only after the preflight passes and the human approves the exact commit, artifact
+digest, complete evidence, limitations, rollback owner, and rollback plan may a separate reviewed
+change remove the workflow's unconditional disable.

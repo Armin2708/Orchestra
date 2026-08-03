@@ -20,7 +20,7 @@ const validatedProbe = (overrides: Partial<EnvironmentProbe> = {}): EnvironmentP
   evidenceProfile: null,
   nodeVersion: 'v22.20.0',
   npmVersion: '10.9.3',
-  codexVersion: 'codex-cli 0.144.6',
+  codexVersion: 'codex-cli 0.146.0',
   claudeSdkVersion: '0.3.212',
   claudeNativePackageVersion: '0.3.212',
   claudeBundledCliVersion: '2.1.212',
@@ -40,12 +40,12 @@ describe('environment compatibility contract', () => {
       providers: {
         codex: {
           managed: {
-            validated_versions: ['0.144.6'],
+            validated_versions: ['0.146.0'],
             protocol: {
               upstream_maturity: 'experimental',
               transport: 'stdio JSONL',
-              file_count: 671,
-              sha256: 'd64c8fbadf596041d29fc39a9ed6fb41c2e6eb0ecd70f03c9b544f7f99cb8b2b',
+              file_count: 701,
+              sha256: '62ba8908d54dd936875013976300421b2b47055c450adb36c84ab68eebb3a1e9',
             },
           },
         },
@@ -106,10 +106,10 @@ describe('environment compatibility contract', () => {
 
   it.each([
     ['too old', 'codex-cli 0.143.0'],
-    ['too new', 'codex-cli 0.145.0'],
+    ['too new', 'codex-cli 0.147.0'],
     ['missing', null],
     ['unparseable', 'codex-cli development'],
-    ['a prerelease build', 'codex-cli 0.144.6-dev'],
+    ['a prerelease build', 'codex-cli 0.146.0-dev'],
   ])('fails closed when Codex is %s', (_case, version) => {
     const report = evaluateEnvironmentCompatibility(
       validatedProbe({ codexVersion: version }),
@@ -128,7 +128,7 @@ describe('environment compatibility contract', () => {
     expect(classifyCodexCliVersion('codex-cli 0.145.0')).toMatchObject({
       status: 'unsupported',
       actual: '0.145.0',
-      expected: 'exactly 0.144.6',
+      expected: 'exactly 0.146.0',
     })
   })
 

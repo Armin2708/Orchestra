@@ -30,8 +30,9 @@ public push, version change, and stable promotion require explicit human approva
 ## Provider and product acceptance
 
 - [ ] Claude: obtain automation-policy authority and pass the exact native-subscription matrix.
-- [ ] Codex: install/accept the exact declared version and pass the native ChatGPT subscription
-  matrix; the current installed `0.146.0` correctly fails the pinned `0.144.6` contract.
+- [ ] Codex: the installed `0.146.0` now passes the exact generated-protocol and isolated signed-out
+  app-server lifecycle gates; run and accept the clean-profile native ChatGPT subscription matrix
+  at the exact release commit before changing the managed support claim.
 - [ ] Qwen: establish an allowed managed-subscription policy and accepted adapter/version matrix.
 - [ ] Kimi: pass native login plus Extra Usage consent, metering, and cap evidence.
 - [ ] Complete representative outcome-quality benchmarking; do not claim token savings without

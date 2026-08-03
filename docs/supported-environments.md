@@ -37,7 +37,7 @@ compatibility from the managed beta support decision.
 
 | Surface | Implementation tuple | Managed beta support |
 |---|---|---|
-| Codex managed runtime | Candidate adapter for Codex CLI `0.144.6`, `codex app-server`, stdio JSONL, and the checked-in 671-file protocol digest | **Unsupported** until an exact clean-profile native-subscription acceptance matrix passes; every other CLI version also fails closed |
+| Codex managed runtime | Candidate adapter for Codex CLI `0.146.0`, `codex app-server`, stdio JSONL, the checked-in 701-file protocol digest, and a clean signed-out app-server lifecycle probe | **Unsupported** until an exact clean-profile native-subscription acceptance matrix passes; every other CLI version also fails closed |
 | Claude managed runtime | Deterministic SDK/native tuple `@anthropic-ai/claude-agent-sdk` `0.3.212`, native package `0.3.212`, bundled Claude Code `2.1.212` | **Unsupported** until subscription automation policy authority and an exact clean-profile native acceptance matrix exist |
 | Qwen Code | Credential-safe discovery and an explicit interactive-only personal-plan policy boundary | **Unsupported**; no accepted managed adapter/version/platform tuple and autonomous personal-plan policy remains blocked |
 | Kimi Code | Candidate ACP implementation with an explicit Extra Usage consent boundary | **Unsupported**; no accepted native login/overage/cap matrix |
@@ -51,9 +51,11 @@ stop published installs from silently moving to an unreviewed SDK/CLI pair.
 Codex app-server is the documented
 [deep-integration surface](https://learn.chatgpt.com/docs/app-server) for authentication, thread
 history, approvals, and streamed events. Its generated protocol remains CLI-version-specific.
-Orchestra therefore accepts only CLI `0.144.6`, whose generated schema digest is recorded in
-`scripts/codex-protocol-contract.json`. A nearby version such as the host-observed `0.145.0` is not
-assumed compatible.
+Orchestra therefore accepts only CLI `0.146.0`, whose generated schema digest is recorded in
+`scripts/codex-protocol-contract.json`. The 0.146.0 reconciliation compared its 701 generated files
+with the former 0.144.6 snapshot, audited every request/response shape Orchestra consumes, and ran
+initialize, signed-out account read, model list, read-only thread start/read, and unsubscribe in a
+new isolated profile. Nearby versions are not assumed compatible.
 
 The provider-neutral contract version 1 and the first TOOL-014 integration slice have source-level
 and test validation on the observed Darwin/Node 22.20.0 host. The contract covers gateway-assigned
@@ -84,7 +86,7 @@ The repository now also has a two-phase Codex acceptance harness. It installs th
 package into a new isolated profile, records registry and executable provenance, requires official
 ChatGPT device login through the CLI, and writes one redacted digest-bound artifact per gate. The
 harness requires a clean exact source commit and refuses to persist incomplete evidence. Its
-implementation and fixture tests are not provider acceptance: the clean-profile credentialed run
+implementation, protocol digest, and signed-out live probe are not provider acceptance: the clean-profile credentialed run
 is still pending, Codex remains candidate/unsupported, and no production support claim changes.
 
 ## First-release provider candidates not yet supported

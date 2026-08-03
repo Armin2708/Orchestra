@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import type { Command } from 'commander'
 import {
+  applyFirstRunAmbientHooks,
   applyFirstRunPlan,
   buildFirstRunPlan,
   type FirstRunAnswers,
@@ -29,6 +30,7 @@ export type FirstRunCliDeps = {
   ask?: FirstRunAsk
   output?: (line: string) => void
   applyPlan?: typeof applyFirstRunPlan
+  applyAmbientHooks?: typeof applyFirstRunAmbientHooks
   api?: AgentOsApi
   demoLaunchGate?: LifecycleDemoLaunchGateDeps
 }
@@ -51,6 +53,28 @@ const defaultAsk = async (question: string, defaultValue: string): Promise<strin
   }
 }
 
+const shellArgument = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
+
+const displayNextSteps = (plan: FirstRunPlan): string => {
+  const commands = [
+    'Next safe steps:',
+    `  $ orchestra doctor --provider ${plan.provider.id}`,
+    '  $ orchestra serve',
+  ]
+  if (plan.provider.id === 'claude' || plan.provider.id === 'codex') {
+    commands.push(
+      `  $ orchestra lifecycle-demo --project ${shellArgument(plan.project_root)} --provider ${plan.provider.id}`,
+    )
+  } else {
+    commands.push('  Lifecycle demo unavailable for this provider until its managed adapter is accepted.')
+  }
+  commands.push('  $ orchestra ops diagnostics ./orchestra-diagnostics.json.gz')
+  commands.push(plan.ready_for_managed_launch
+    ? 'Managed actions: apply only after doctor passes; --launch still requires the retained exact acceptance tuple.'
+    : 'Blocked actions: onboarding apply, managed provider launch, and managed hook setup. Resolve every blocker first.')
+  return commands.join('\n')
+}
+
 const displayPlan = (plan: FirstRunPlan): string => [
   `Project: ${plan.project_root}`,
   `Provider: ${plan.provider.display_name} (${plan.provider.release_state})`,
@@ -60,6 +84,8 @@ const displayPlan = (plan: FirstRunPlan): string => [
   'Safe defaults: loopback-only, remote write off, no API fallback, isolated worktrees, manual cleanup',
   `Managed launch: ${plan.ready_for_managed_launch ? 'READY' : 'BLOCKED'}`,
   ...plan.blockers.map((blocker) => `- ${blocker.code}: ${blocker.detail}`),
+  '',
+  displayNextSteps(plan),
 ].join('\n')
 
 export const collectFirstRunAnswers = async (
@@ -126,6 +152,7 @@ export const registerFirstRunCommands = (
     .option('--telemetry <choice>', 'off|redacted')
     .option('--accept-usage-priced-api', 'acknowledge separate provider API billing')
     .option('--apply', 'persist onboarding config and install explicitly selected hooks')
+    .option('--apply-ambient-hooks', 'install selected terminal hooks without enabling managed launches')
     .option('--json', 'print the plan as JSON')
     .action(async (options: {
       project?: string
@@ -135,8 +162,12 @@ export const registerFirstRunCommands = (
       telemetry?: string
       acceptUsagePricedApi?: boolean
       apply?: boolean
+      applyAmbientHooks?: boolean
       json?: boolean
     }) => {
+      if (options.apply && options.applyAmbientHooks) {
+        throw new Error('--apply and --apply-ambient-hooks are mutually exclusive')
+      }
       const partial: Partial<FirstRunAnswers> = {
         project_root: options.project ? path.resolve(cwd(), options.project) : undefined,
         provider_id: options.provider
@@ -155,7 +186,20 @@ export const registerFirstRunCommands = (
       }
       const answers = await collectFirstRunAnswers(partial, ask, cwd())
       const plan = buildFirstRunPlan(answers)
+      if (options.applyAmbientHooks) {
+        const hooks = (deps.applyAmbientHooks ?? applyFirstRunAmbientHooks)(plan)
+        output(options.json
+          ? JSON.stringify({ plan, hooks }, null, 2)
+          : `${displayPlan(plan)}\nAmbient ${hooks.provider_id} hooks installed (${hooks.scope}). Managed provider launch was not enabled.`)
+        return
+      }
       if (options.apply) {
+        if (!plan.ready_for_managed_launch || plan.blockers.length > 0) {
+          const headline = 'Managed onboarding remains BLOCKED; no configuration or hooks were changed.'
+          throw new Error(options.json
+            ? JSON.stringify({ error: headline, plan }, null, 2)
+            : `${headline}\n${displayPlan(plan)}`)
+        }
         const config = (deps.applyPlan ?? applyFirstRunPlan)(plan)
         output(options.json
           ? JSON.stringify({ plan, config }, null, 2)

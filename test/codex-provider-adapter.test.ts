@@ -127,6 +127,7 @@ const fakeService = (
         secondary: null,
         credits: null,
         individualLimit: null,
+        spendControlReached: null,
         planType: 'plus',
         rateLimitReachedType: null,
       },
@@ -164,7 +165,7 @@ const createAdapter = (
   now: () => new Date('2026-07-28T12:00:00.000Z'),
   resolveExecutable: () => '/safe/bin/codex',
   readExecutable: () => EXECUTABLE_BYTES,
-  readVersion: () => 'codex-cli 0.144.6',
+  readVersion: () => 'codex-cli 0.146.0',
   resolveRecoveryTarget: (scopeId) => ({
     workspaceId: scopeId,
     cwd: '/workspace',
@@ -214,7 +215,7 @@ describe('Codex TOOL-014 provider adapter', () => {
     const adapter = createAdapter({
       readVersion: (_resolvedPath, environment) => {
         versionEnvironment = environment
-        return 'codex-cli 0.144.6'
+        return 'codex-cli 0.146.0'
       },
     })
     const observed = await readiness(adapter)
@@ -226,7 +227,7 @@ describe('Codex TOOL-014 provider adapter', () => {
       adapter_id: 'codex-app-server',
       status: 'validated',
       source: 'environment_override',
-      version: '0.144.6',
+      version: '0.146.0',
       platform: 'darwin-arm64',
       resolved_path: '/safe/bin/codex',
       executable_fingerprint: EXECUTABLE_FINGERPRINT,
@@ -303,6 +304,49 @@ describe('Codex TOOL-014 provider adapter', () => {
     })
   })
 
+  it('fails closed when Codex reports that backend spend control is reached', async () => {
+    const service = fakeService()
+    const adapter = createAdapter({
+      service: {
+        ...service,
+        async readRateLimits() {
+          const response = await service.readRateLimits()
+          return {
+            ...response,
+            rateLimits: {
+              ...response.rateLimits,
+              spendControlReached: true,
+            },
+          }
+        },
+      },
+    })
+
+    const observed = await readiness(adapter)
+    expect(observed.readiness.overage_status).toBe('exhausted')
+    expect(authorizeProviderLaunchV1(
+      adapter.manifest,
+      observed.intent,
+      observed.readiness,
+      observed.boundary,
+      {
+        contract_version: 1,
+        kind: 'launch',
+        action_id: 'codex-spend-control-reached',
+        scope_id: 'workspace-1',
+        cwd: '/workspace',
+        prompt: 'test',
+        model: null,
+        effort: null,
+        access_profile: 'workspace_write',
+        cost_limit: null,
+      },
+    )).toMatchObject({
+      ready: false,
+      blockers: expect.arrayContaining(['quota_exhausted']),
+    })
+  })
+
   it('registers the implementation without claiming unsupported canonical routing', () => {
     const registry = new ProviderAdapterRegistryV1()
       .register(createAdapter())
@@ -313,7 +357,7 @@ describe('Codex TOOL-014 provider adapter', () => {
       })
     expect(registry.assessSupport(
       selectProviderExecutionV1(CODEX_PROVIDER_MANIFEST_V1),
-      '0.144.6',
+      '0.146.0',
       'darwin-arm64',
       SOURCE_COMMIT,
     )).toEqual({

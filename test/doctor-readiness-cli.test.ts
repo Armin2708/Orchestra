@@ -23,7 +23,7 @@ const probe: EnvironmentProbe = {
   evidenceProfile: null,
   nodeVersion: '22.20.0',
   npmVersion: '10.9.3',
-  codexVersion: 'codex-cli 0.144.6',
+  codexVersion: 'codex-cli 0.146.0',
   claudeSdkVersion: '0.3.212',
   claudeNativePackageVersion: '0.3.212',
   claudeBundledCliVersion: '2.1.212',

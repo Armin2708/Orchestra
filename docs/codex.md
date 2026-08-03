@@ -12,10 +12,10 @@ back to Claude.
 
 ## Install and verify
 
-The protocol snapshot and CI target Codex CLI `0.144.6`.
+The protocol snapshot and CI target Codex CLI `0.146.0`.
 
 ```sh
-npm i -g @openai/codex@0.144.6
+npm i -g @openai/codex@0.146.0
 codex login
 codex login status
 orchestra install --provider both
@@ -138,12 +138,15 @@ Run the same gate used in CI:
 
 ```sh
 npm run check:codex-protocol
+npm run check:codex-app-server
 ```
 
-It generates experimental app-server TypeScript bindings, checks the pinned CLI version, and
-compares a deterministic protocol digest. A mismatch is a review gate: audit `src/codex/protocol.ts`
-and runtime mappings, then deliberately update `scripts/codex-protocol-contract.json`. For an
-intentional local comparison with another CLI version, set
+The first command generates experimental app-server TypeScript bindings, checks the pinned CLI
+version, and compares a deterministic protocol digest. The second starts that exact CLI with a new,
+signed-out temporary `CODEX_HOME` and verifies initialize, account shape, model discovery,
+read-only thread creation/read, and unsubscribe without reading the user's credentials or making a
+model request. A mismatch is a review gate: audit `src/codex/protocol.ts` and runtime mappings, then
+deliberately update `scripts/codex-protocol-contract.json`. For an intentional local comparison with another CLI version, set
 `ORCHESTRA_CODEX_PROTOCOL_ALLOW_UNSUPPORTED=1`; this does not bypass the digest check.
 
 To use a non-default binary, set `ORCHESTRA_CODEX_COMMAND` to its executable path before starting

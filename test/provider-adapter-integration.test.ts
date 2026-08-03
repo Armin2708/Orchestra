@@ -574,7 +574,7 @@ describe('TOOL-014 capability-aware adapter integration', () => {
     )
     expect(registry.assessSupport(
       selectProviderExecutionV1(CODEX_PROVIDER_MANIFEST_V1),
-      '0.144.6',
+      '0.146.0',
       'darwin-arm64',
       'a'.repeat(40),
     )).toEqual({

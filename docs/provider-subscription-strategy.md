@@ -106,7 +106,7 @@ implementation capabilities only: the candidate provider/mode and exact acceptan
 prevent production support.
 
 The fourth TOOL-014 slice adds the repository acceptance harness invoked by
-`npm run accept:codex`. `prepare` installs the exact official `@openai/codex@0.144.6` package into
+`npm run accept:codex`. `prepare` installs the exact official `@openai/codex@0.146.0` package into
 a new mode-0700 run root, records the registry integrity plus wrapper/native executable digests,
 and creates a distinct empty `CODEX_HOME`. The operator completes the official ChatGPT device
 login in that isolated profile; the harness never reads or copies an auth cache. `run` then

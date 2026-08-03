@@ -37,6 +37,10 @@
 
     { "item": "QA-016", "case": "daemon-mid-session-prerequisite", "status": "prerequisite", "command_ids": ["qa016-interruption-prerequisites"] },
     { "item": "QA-016", "case": "provider-disconnect-prerequisite", "status": "prerequisite", "command_ids": ["qa016-interruption-prerequisites"] },
+    { "item": "QA-016", "case": "daemon-every-lifecycle-transition-prerequisite", "status": "prerequisite", "command_ids": ["qa016-production-interruption-prerequisites"] },
+    { "item": "QA-016", "case": "multi-agent-no-duplicate-recovery-prerequisite", "status": "prerequisite", "command_ids": ["qa016-production-interruption-prerequisites"] },
+    { "item": "QA-016", "case": "lost-device-selective-revoke-prerequisite", "status": "prerequisite", "command_ids": ["qa016-production-interruption-prerequisites"] },
+    { "item": "QA-016", "case": "pty-disconnect-resume-prerequisite", "status": "prerequisite", "command_ids": ["qa016-production-interruption-prerequisites"] },
     { "item": "QA-016", "case": "long-running-dogfood-daemon-provider-network", "status": "lane-dependent", "lane": "D", "command_ids": ["qa016-long-running-dogfood"] },
 
     { "item": "QA-018", "case": "lane-a-tool-reports", "status": "lane-dependent", "lane": "A", "command_ids": ["qa018-tool-reports"] },

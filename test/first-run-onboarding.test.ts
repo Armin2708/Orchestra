@@ -3,10 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  applyFirstRunAmbientHooks,
   applyFirstRunPlan,
   assertFirstRunConfigCompatible,
   buildFirstRunPlan,
   firstRunConfigPath,
+  runFirstRunConfigTransaction,
   writeFirstRunConfig,
   type FirstRunConfigV1,
   type FirstRunPlan,
@@ -102,6 +104,79 @@ describe('first-run onboarding domain', () => {
     expect(fs.existsSync(configPath)).toBe(false)
   })
 
+  it('installs ambient Claude hooks while keeping managed launch policy-blocked', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-ambient-'))
+    const installProviderHooks = vi.fn()
+    const plan = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      execution_mode: 'native_subscription',
+      hook_scope: 'project',
+      telemetry: 'off',
+    })
+
+    const result = applyFirstRunAmbientHooks(plan, { installProviderHooks })
+
+    expect(result).toMatchObject({
+      schema_version: 1,
+      provider_id: 'claude',
+      scope: 'project',
+      managed_launch_ready: false,
+    })
+    expect(result.managed_launch_blockers.map((blocker) => blocker.code))
+      .toEqual(expect.arrayContaining([
+        'provider_not_release_supported',
+        'provider_acceptance_not_ready',
+        'provider_mode_not_supported',
+      ]))
+    expect(installProviderHooks).toHaveBeenCalledWith('project', {
+      provider: 'claude',
+      roots: { cwd: root },
+    })
+  })
+
+  it('keeps ambient hook installation explicit, exact, and provider-scoped', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-ambient-guard-'))
+    const installProviderHooks = vi.fn()
+    const off = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      hook_scope: 'off',
+    })
+    expect(() => applyFirstRunAmbientHooks(off, { installProviderHooks }))
+      .toThrow('requires project or global scope')
+
+    const qwen = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'qwen',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunAmbientHooks(qwen, { installProviderHooks }))
+      .toThrow('available only for Claude Code and Codex CLI')
+
+    const providerApi = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      execution_mode: 'provider_api',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunAmbientHooks(providerApi, { installProviderHooks }))
+      .toThrow('require native-subscription terminal mode')
+
+    const claude = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      hook_scope: 'project',
+    })
+    const forged = {
+      ...claude,
+      provider: { ...claude.provider, release_state: 'validated' },
+    } as FirstRunPlan
+    expect(() => applyFirstRunAmbientHooks(forged, { installProviderHooks }))
+      .toThrow('stale or forged')
+    expect(installProviderHooks).not.toHaveBeenCalled()
+  })
+
   it('rejects forged cleared blockers for Codex and Qwen before any write', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-forged-'))
     const configPath = path.join(root, 'state', 'onboarding.json')
@@ -179,6 +254,46 @@ describe('first-run onboarding domain', () => {
     expect(() => applyFirstRunPlan(invalid, { configPath, installProviderHooks }))
       .toThrow('identifiers are invalid; no files were changed')
     expect(installProviderHooks).not.toHaveBeenCalled()
+    expect(fs.existsSync(configPath)).toBe(false)
+  })
+
+  it('restores the previous config exactly when hook installation fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-rollback-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+    const previous = configFor(root)
+    writeFirstRunConfig(configPath, previous)
+    const previousBytes = fs.readFileSync(configPath, 'utf8')
+    const previousMode = fs.statSync(configPath).mode & 0o777
+
+    const replacement = {
+      ...previous,
+      telemetry: 'off' as const,
+      safe_defaults: {
+        ...previous.safe_defaults,
+        telemetry: 'off' as const,
+      },
+      configured_at: '2026-08-03T08:00:00.000Z',
+    }
+
+    expect(() => runFirstRunConfigTransaction(
+      configPath,
+      replacement,
+      () => { throw new Error('simulated hook failure') },
+    )).toThrow('simulated hook failure')
+
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(previousBytes)
+    expect(fs.statSync(configPath).mode & 0o777).toBe(previousMode)
+  })
+
+  it('removes a newly created config when the surrounding setup fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-onboarding-new-rollback-'))
+    const configPath = path.join(root, 'state', 'onboarding.json')
+
+    expect(() => runFirstRunConfigTransaction(
+      configPath,
+      configFor(root),
+      () => { throw new Error('simulated downstream failure') },
+    )).toThrow('simulated downstream failure')
     expect(fs.existsSync(configPath)).toBe(false)
   })
 

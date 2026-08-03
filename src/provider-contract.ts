@@ -714,7 +714,7 @@ const RESERVED_FIRST_RELEASE_MANIFESTS: ReadonlyMap<string, {
   }],
   ['codex', {
     adapter_id: 'codex-app-server',
-    fingerprint: '2f8f3bcb75cb3fa4e134a9211e38ab2cf623c4675a2d698ac4655e8a091ab740',
+    fingerprint: 'de57aaab109b8d6f6637562fcbcaae50165fa453ce7f795cd15a00795f9ebefe',
   }],
   ['qwen', {
     adapter_id: 'qwen-code-cli',

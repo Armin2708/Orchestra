@@ -117,10 +117,10 @@ describe('first-run CLI registrar', () => {
     expect(applyPlan).not.toHaveBeenCalled()
   })
 
-  it('applies only after an explicit flag', async () => {
-    const applyPlan = vi.fn(() => ({ schema_version: 1 })) as any
+  it('keeps blocked apply requests fail-closed with actionable provider evidence', async () => {
+    const applyPlan = vi.fn()
     const { output, run } = setup({ applyPlan })
-    await run(
+    await expect(run(
       'onboard',
       '--project', '/workspace/project',
       '--provider', 'codex',
@@ -128,9 +128,87 @@ describe('first-run CLI registrar', () => {
       '--hooks', 'off',
       '--telemetry', 'off',
       '--apply',
+    )).rejects.toThrow(
+      /Managed onboarding remains BLOCKED; no configuration or hooks were changed\.[\s\S]*provider_acceptance_not_ready[\s\S]*orchestra doctor --provider codex/,
     )
-    expect(applyPlan).toHaveBeenCalledOnce()
-    expect(output[0]).toContain('Configuration saved')
+    expect(applyPlan).not.toHaveBeenCalled()
+    expect(output).toEqual([])
+  })
+
+  it('prints the safe technical-preview journey without presenting launch as ready', async () => {
+    const { output, run } = setup()
+
+    await run(
+      'onboard',
+      '--project', '/workspace/project',
+      '--provider', 'codex',
+      '--mode', 'native_subscription',
+      '--hooks', 'project',
+      '--telemetry', 'off',
+    )
+
+    expect(output[0]).toContain('Next safe steps:')
+    expect(output[0]).toContain('$ orchestra doctor --provider codex')
+    expect(output[0]).toContain(
+      "$ orchestra lifecycle-demo --project '/workspace/project' --provider codex",
+    )
+    expect(output[0]).toContain('Blocked actions: onboarding apply, managed provider launch')
+    expect(output[0]).not.toContain('lifecycle-demo --launch')
+  })
+
+  it('quotes the project path in suggested shell commands without interpolation', async () => {
+    const project = "/workspace/operator's project/$literal"
+    const { output, run } = setup()
+
+    await run('onboard', '--project', project, '--provider', 'codex')
+
+    expect(output[0]).toContain(
+      "--project '/workspace/operator'\\''s project/$literal' --provider codex",
+    )
+  })
+
+  it('installs ambient Claude hooks without claiming managed launch support', async () => {
+    const applyPlan = vi.fn()
+    const applyAmbientHooks = vi.fn(() => ({
+      schema_version: 1 as const,
+      provider_id: 'claude' as const,
+      scope: 'project' as const,
+      managed_launch_ready: false,
+      managed_launch_blockers: [],
+    }))
+    const { output, run } = setup({ applyPlan, applyAmbientHooks })
+
+    await run(
+      'onboard',
+      '--project', '/workspace/project',
+      '--provider', 'claude',
+      '--mode', 'native_subscription',
+      '--hooks', 'project',
+      '--telemetry', 'off',
+      '--apply-ambient-hooks',
+    )
+
+    expect(applyAmbientHooks).toHaveBeenCalledOnce()
+    expect(applyPlan).not.toHaveBeenCalled()
+    expect(output[0]).toContain('Ambient claude hooks installed (project)')
+    expect(output[0]).toContain('Managed provider launch was not enabled')
+  })
+
+  it('rejects conflicting onboarding mutations before applying either one', async () => {
+    const applyPlan = vi.fn()
+    const applyAmbientHooks = vi.fn()
+    const { run } = setup({ applyPlan, applyAmbientHooks })
+
+    await expect(run(
+      'onboard',
+      '--project', '/workspace/project',
+      '--provider', 'claude',
+      '--hooks', 'project',
+      '--apply',
+      '--apply-ambient-hooks',
+    )).rejects.toThrow('mutually exclusive')
+    expect(applyPlan).not.toHaveBeenCalled()
+    expect(applyAmbientHooks).not.toHaveBeenCalled()
   })
 
   it('rejects an invalid provider before any action', async () => {

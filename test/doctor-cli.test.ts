@@ -16,7 +16,7 @@ const probe = (overrides: Partial<EnvironmentProbe> = {}): EnvironmentProbe => (
   evidenceProfile: null,
   nodeVersion: '22.20.0',
   npmVersion: '10.9.3',
-  codexVersion: '0.144.6',
+  codexVersion: '0.146.0',
   claudeSdkVersion: '0.3.212',
   claudeNativePackageVersion: '0.3.212',
   claudeBundledCliVersion: '2.1.212',
@@ -77,7 +77,7 @@ describe('doctor CLI', () => {
       schema_version: 1,
       fail_closed: true,
       providers: {
-        codex: { managed: { validated_versions: ['0.144.6'] } },
+        codex: { managed: { validated_versions: ['0.146.0'] } },
       },
     })
     expect(runDoctor).not.toHaveBeenCalled()

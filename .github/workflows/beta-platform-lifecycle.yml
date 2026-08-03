@@ -1,0 +1,103 @@
+name: beta-platform-lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Exact CI run that retained the candidate artifact
+        required: true
+        type: string
+      candidate_artifact_id:
+        description: Numeric package artifact ID from that CI run
+        required: true
+        type: string
+      candidate_sha:
+        description: Full candidate commit SHA
+        required: true
+        type: string
+      candidate_sha256:
+        description: Approved retained tarball SHA-256
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  exact-artifact-lifecycle:
+    name: ${{ matrix.platform }} exact-artifact lifecycle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: ubuntu-24.04
+            platform: ubuntu-24.04-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      NPM_CONFIG_FUND: false
+    steps:
+      - name: Check out the exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Verify immutable workflow inputs and checkout identity
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+        run: |
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Use the exact release toolchain
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+
+      - name: Install the verifier dependencies from the exact lockfile
+        run: npm ci
+
+      - name: Download the one retained candidate from the named CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.candidate_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: Armin2708/Orchestra
+          run-id: ${{ inputs.source_run_id }}
+          path: ${{ runner.temp }}/orchestra-retained-candidate
+          digest-mismatch: error
+
+      - name: Run clean install, upgrade, rollback, uninstall, and preservation
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+          PLATFORM: ${{ matrix.platform }}
+        run: >-
+          node scripts/validate-beta-platform-lifecycle.mjs
+          --artifact-dir "$RUNNER_TEMP/orchestra-retained-candidate"
+          --output-dir "$RUNNER_TEMP/orchestra-platform-evidence"
+          --platform "$PLATFORM"
+          --expected-commit "$CANDIDATE_SHA"
+          --expected-sha256 "$CANDIDATE_SHA256"
+
+      - name: Retain the platform-bound lifecycle evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orchestra-platform-${{ matrix.platform }}-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/orchestra-platform-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

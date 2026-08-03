@@ -54,6 +54,9 @@ const safeRateLimit = (value: unknown): Record<string, unknown> | null => {
     primary: row.primary ?? null,
     secondary: row.secondary ?? null,
     plan_type: row.planType ?? null,
+    spend_control_reached: typeof row.spendControlReached === 'boolean'
+      ? row.spendControlReached
+      : null,
     reached: row.rateLimitReachedType ?? null,
   }
 }
@@ -131,7 +134,7 @@ export class CodexProviderService implements AgentProviderService {
     const compatibility = classifyCodexCliVersion(this.version)
     if (compatibility.status !== 'validated') {
       this.runtimeEnabled = false
-      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.144.6, then restart Orchestra.`
+      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.146.0, then restart Orchestra.`
       return false
     }
     try {

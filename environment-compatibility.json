@@ -126,7 +126,7 @@
         "command": "codex",
         "command_env": "ORCHESTRA_CODEX_COMMAND",
         "validated_versions": [
-          "0.144.6"
+          "0.146.0"
         ],
         "experimental_versions": [],
         "other_versions": "unsupported",
@@ -135,8 +135,8 @@
           "upstream_maturity": "experimental",
           "transport": "stdio JSONL",
           "snapshot": "scripts/codex-protocol-contract.json",
-          "file_count": 671,
-          "sha256": "d64c8fbadf596041d29fc39a9ed6fb41c2e6eb0ecd70f03c9b544f7f99cb8b2b"
+          "file_count": 701,
+          "sha256": "62ba8908d54dd936875013976300421b2b47055c450adb36c84ab68eebb3a1e9"
         }
       }
     },
@@ -229,7 +229,7 @@
           "source": "path",
           "command_override_env": "ORCHESTRA_CODEX_COMMAND",
           "exact_versions": [
-            "0.144.6"
+            "0.146.0"
           ],
           "exact_platforms": [
             "darwin-arm64"
