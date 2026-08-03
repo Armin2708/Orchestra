@@ -1715,6 +1715,50 @@ const stopChild = async (child) => {
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
 }
 
+const startIsolatedBrowser = async ({ chromeExecutable, chromeProfile, chromeStderr, requestBudgetPacer }) => {
+  const chromePort = await unusedPort()
+  const chrome = spawn(chromeExecutable, [
+    '--headless=new',
+    `--remote-debugging-port=${chromePort}`,
+    `--user-data-dir=${chromeProfile}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-sync',
+    '--metrics-recording-only',
+    '--safebrowsing-disable-auto-update',
+    'about:blank',
+  ], { stdio: ['ignore', 'ignore', 'pipe'] })
+  chrome.stderr.on('data', (chunk) => retainChunk(chromeStderr, chunk))
+  try {
+    await waitForJson(`http://127.0.0.1:${chromePort}/json/version`, (body) => Boolean(body.webSocketDebuggerUrl))
+    const page = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent('about:blank')}`, {
+      method: 'PUT', signal: AbortSignal.timeout(5_000),
+    }).then((response) => response.json())
+    const client = new CdpClient(page.webSocketDebuggerUrl)
+    await client.connect()
+    await Promise.all([
+      client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
+      client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
+    ])
+    client.requestBudgetPacer = requestBudgetPacer
+    const detachRequestBudgetPacer = attachRequestBudgetPacer(client, requestBudgetPacer)
+    await client.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `
+        localStorage.setItem('orchestra-command-center-onboarding', 'complete');
+        localStorage.setItem('orchestra-view', 'board');
+      `,
+    })
+    return { chrome, client, detachRequestBudgetPacer }
+  } catch (error) {
+    await stopChild(chrome)
+    throw error
+  }
+}
+
 const sourceEvidence = (manifest, currentSource, bindingStatus) => ({
   repository: manifest?.repository ?? currentSource?.repository ?? null,
   commit: manifest?.source_commit ?? currentSource?.source_commit ?? null,
@@ -1755,13 +1799,11 @@ const main = async () => {
     const baseline = options.captureOnly ? null : loadBaseline(options.baseline, buildManifest.artifact_identity)
     runRoot = mkdtempSync(join(tmpdir(), 'orchestra-browser-quality-'))
     const orchestraHome = join(runRoot, 'orchestra-home')
-    const chromeProfile = join(runRoot, 'chrome-profile')
     const fakeCodex = join(runRoot, 'fake-codex')
     const fakeCodexState = join(runRoot, 'fake-codex-state.json')
     copyFileSync(join(repositoryRoot, 'test', 'fixtures', 'fake-codex-app-server.mjs'), fakeCodex)
     chmodSync(fakeCodex, 0o755)
     const daemonPort = await unusedPort()
-    const chromePort = await unusedPort()
     const baseUrl = `http://127.0.0.1:${daemonPort}`
     seedBudgetPacer = createSeedBudgetPacer()
     const environment = {
@@ -1796,41 +1838,6 @@ const main = async () => {
     await seedBudgetPacer.finishAndDrain()
     requestBudgetPacer = createRequestBudgetPacer(baseUrl)
 
-    chrome = spawn(options.chrome, [
-      '--headless=new',
-      `--remote-debugging-port=${chromePort}`,
-      `--user-data-dir=${chromeProfile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-extensions',
-      '--disable-sync',
-      '--metrics-recording-only',
-      '--safebrowsing-disable-auto-update',
-      'about:blank',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] })
-    chrome.stderr.on('data', (chunk) => retainChunk(chromeStderr, chunk))
-    await waitForJson(`http://127.0.0.1:${chromePort}/json/version`, (body) => Boolean(body.webSocketDebuggerUrl))
-    const page = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent('about:blank')}`, {
-      method: 'PUT', signal: AbortSignal.timeout(5_000),
-    }).then((response) => response.json())
-    client = new CdpClient(page.webSocketDebuggerUrl)
-    await client.connect()
-    await Promise.all([
-      client.send('Page.enable'), client.send('Runtime.enable'), client.send('Network.enable'),
-      client.send('Log.enable'), client.send('Performance.enable'), client.send('DOM.enable'),
-    ])
-    client.requestBudgetPacer = requestBudgetPacer
-    detachRequestBudgetPacer = attachRequestBudgetPacer(client, requestBudgetPacer)
-    await client.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: `
-        localStorage.setItem('orchestra-command-center-onboarding', 'complete');
-        localStorage.setItem('orchestra-view', 'board');
-      `,
-    })
-
     const requestedViewport = process.env.ORCHESTRA_QA_VIEWPORT
     const viewportMatrix = requestedViewport
       ? RESPONSIVE_VIEWPORTS.filter((viewport) => viewport.id === requestedViewport)
@@ -1839,10 +1846,26 @@ const main = async () => {
     const viewports = completedViewports
     for (const viewport of viewportMatrix) {
       activeViewport = viewport.id
-      viewports.push(await measureViewport({
-        client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
-        onFatalDiagnostics: (diagnostics) => { fatalViewportDiagnostics = diagnostics },
-      }))
+      const isolatedBrowser = await startIsolatedBrowser({
+        chromeExecutable: options.chrome,
+        chromeProfile: join(runRoot, `chrome-profile-${viewport.id}`),
+        chromeStderr,
+        requestBudgetPacer,
+      })
+      ;({ chrome, client, detachRequestBudgetPacer } = isolatedBrowser)
+      try {
+        viewports.push(await measureViewport({
+          client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
+          onFatalDiagnostics: (diagnostics) => { fatalViewportDiagnostics = diagnostics },
+        }))
+      } finally {
+        detachRequestBudgetPacer?.()
+        detachRequestBudgetPacer = null
+        client?.close()
+        client = null
+        await stopChild(chrome)
+        chrome = null
+      }
     }
     requestBudgetPacer.finishLifecycle()
     requestBudgetPacer.assertHealthy()
