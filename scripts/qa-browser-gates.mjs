@@ -305,6 +305,12 @@ const seedScenario = async (baseUrl, authHeaders) => {
     description: 'Public-API-only fixture for browser quality evidence.',
     paths: [],
   }, authHeaders)).card
+  const graphCard = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
+    board_id: board.id,
+    title: 'QA dependency graph fixture',
+    description: 'Keeps a real Open Work dependency graph visible while the browser session runs.',
+    paths: [],
+  }, authHeaders)).card
   const prerequisite = (await jsonRequest(baseUrl, 'POST', '/api/v1/cards', {
     board_id: board.id,
     title: 'QA dependency fixture',
@@ -312,8 +318,8 @@ const seedScenario = async (baseUrl, authHeaders) => {
     paths: [],
     column: 'done',
   }, authHeaders)).card
-  const contract = await jsonRequest(baseUrl, 'GET', `/api/v1/os/cards/${card.id}/contract`, undefined, authHeaders)
-  await jsonRequest(baseUrl, 'PUT', `/api/v1/os/cards/${card.id}/contract`, {
+  const contract = await jsonRequest(baseUrl, 'GET', `/api/v1/os/cards/${graphCard.id}/contract`, undefined, authHeaders)
+  await jsonRequest(baseUrl, 'PUT', `/api/v1/os/cards/${graphCard.id}/contract`, {
     dependency_rules: [{
       card_id: prerequisite.id,
       blocking_reason: 'QA dependency remains open for graph rendering.',
@@ -482,7 +488,11 @@ const dispatchKey = async (client, key, { shift = false, meta = false } = {}) =>
       : key === 'ArrowUp' ? 38 : key === 'ArrowRight' ? 39 : key === 'ArrowDown' ? 40
         : key.toUpperCase().charCodeAt(0)
   const modifiers = (shift ? 8 : 0) | (meta ? 4 : 0)
-  const event = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers }
+  const text = key === 'Enter' ? '\r' : key === ' ' ? ' ' : key.length === 1 ? key : ''
+  const event = {
+    key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers,
+    ...(text && !meta ? { text, unmodifiedText: text } : {}),
+  }
   await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...event })
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event })
 }

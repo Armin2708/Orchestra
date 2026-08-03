@@ -201,7 +201,7 @@ function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }:
                 : <span className="owner unowned">unassigned</span>}
               <time>{timeAgo(c.updated_at)}</time>
               {agents.length > 0 && (
-                <select className="assign-select" defaultValue=""
+                <select className="assign-select" defaultValue="" aria-label={`Assign ${c.title}`}
                   onChange={(e) => { assign(c.id, e.target.value); e.target.value = '' }}>
                   <option value="" disabled>assign…</option>
                   {agents.filter((a) => a.name !== c.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
