@@ -363,7 +363,7 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
     return agentHomeApi.searchConversation(selectedConversation.id, {
       query: searchQuery || undefined,
       after,
-      limit: 200,
+      limit: 500,
       kinds: eventKind === 'all' ? undefined : [eventKind],
       sessionId: selectedEventId ? undefined : selectedSession?.id,
     })

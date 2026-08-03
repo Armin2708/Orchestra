@@ -170,13 +170,14 @@
 @media (max-width: 768px) {
   .phone-remote-dock {
     position: fixed; z-index: 60; left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom));
+    width: calc(100vw - 16px); max-width: calc(100vw - 16px); min-width: 0; overflow: hidden;
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px;
     border: 1px solid rgba(87, 81, 72, .24); border-radius: 13px; background: rgba(249, 248, 244, .94);
     padding: 4px; box-shadow: 0 10px 34px rgba(32, 29, 23, .18); backdrop-filter: blur(18px);
   }
   .phone-remote-dock button {
     min-width: 0; min-height: 49px; display: grid; justify-items: center; align-content: center; gap: 2px;
-    border: 0; border-radius: 9px; background: transparent; color: #817b72;
+    border: 0; border-radius: 9px; background: transparent; color: #706a62;
   }
   .phone-remote-dock button.active { background: #201f1c; color: #f7f4ee; }
   .phone-remote-dock button:disabled { opacity: .4; }

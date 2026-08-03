@@ -223,6 +223,7 @@ export const compactJourneyEvidence = (journey) => ({
   elapsed_ms: journey.elapsed_ms,
   performance_sample_mode: journey.performance_sample_mode,
   horizontal_overflow_px: journey.horizontal_overflow_px,
+  ...(journey.horizontal_overflow_px > 0 ? { overflow_measurement: journey.overflow_measurement } : {}),
   interaction_modes: Object.fromEntries(Object.entries(journey.interaction_modes ?? {}).map(([mode, result]) => {
     const compact = {
       passed: result.passed,

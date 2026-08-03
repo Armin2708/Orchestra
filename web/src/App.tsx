@@ -286,7 +286,7 @@ function LocalOwnerApp() {
         if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
       }
     }
-    const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 1_000)
+    const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 0)
     if (authenticatedPolling) requestRefresh()
     return () => {
       disposed = true

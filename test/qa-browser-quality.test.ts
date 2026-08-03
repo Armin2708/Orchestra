@@ -170,10 +170,20 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     })
     expect(failed.accessibility.text_contrast.violations).toEqual([{ ratio: 4.2 }])
 
+    journey.horizontal_overflow_px = 18
+    journey.overflow_measurement = {
+      visible_overflow_px: 18,
+      document_extent_overflow_px: 21,
+      offenders: [{ class_name: 'real-overflow', right: 408 }],
+    }
+    const overflowFailure = compactJourneyEvidence(journey)
+    expect(overflowFailure.overflow_measurement).toEqual(journey.overflow_measurement)
+
     const matrix = passingEvidence()
     for (const viewport of matrix.viewports) {
       viewport.journeys = viewport.journeys.map((rawJourney: any) => compactJourneyEvidence({
         ...rawJourney,
+        horizontal_overflow_px: 0,
         overflow_measurement: { offenders: Array.from({ length: 100 }, (_, index) => ({ index })) },
         interaction_modes: Object.fromEntries(Object.entries(rawJourney.interaction_modes)
           .map(([mode, result]: [string, any]) => [mode, {
