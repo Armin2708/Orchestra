@@ -286,6 +286,8 @@ function LocalOwnerApp() {
         if (!disposed) setConnectionState(hasConnectedRef.current ? 'stale' : 'offline')
       }
     }
+    // A fresh navigation cannot inherit the memory-only token. Probe REST immediately so a
+    // token-required daemon can return 401 and present Login without a dead one-second wait.
     const initialFallback = authenticatedPolling ? undefined : window.setTimeout(requestRefresh, 0)
     if (authenticatedPolling) requestRefresh()
     return () => {
