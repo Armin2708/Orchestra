@@ -477,7 +477,7 @@ export class BuildServerRemoteAdversarialTarget implements RemoteOpsAdversarialT
 
   private async browserCacheAttempt(): Promise<AdversarialObservation> {
     const worker = await this.serviceWorkerProbe(false)
-    return worker.apiGetNoStore && worker.cacheWrites === 0
+    return worker.apiBypassed && worker.cacheReads === 0 && worker.cacheWrites === 0
       ? { status: 204, cached: false }
       : { status: 500, cached: worker.cacheWrites > 0 }
   }
@@ -505,7 +505,7 @@ export class BuildServerRemoteAdversarialTarget implements RemoteOpsAdversarialT
   }
 
   private async serviceWorkerProbe(offline: boolean): Promise<{
-    apiGetNoStore: boolean
+    apiBypassed: boolean
     cacheReads: number
     cacheWrites: number
     mutationIntercepted: boolean
@@ -515,7 +515,6 @@ export class BuildServerRemoteAdversarialTarget implements RemoteOpsAdversarialT
     const listeners = new Map<string, Array<(event: any) => void>>()
     let cacheReads = 0
     let cacheWrites = 0
-    let fetchOptions: RequestInit | undefined
     const self = {
       addEventListener(type: string, listener: (event: any) => void) {
         listeners.set(type, [...(listeners.get(type) ?? []), listener])
@@ -532,8 +531,7 @@ export class BuildServerRemoteAdversarialTarget implements RemoteOpsAdversarialT
       delete: async () => true,
       match: async () => { cacheReads += 1; return undefined },
     }
-    const fetch = async (_request: unknown, options?: RequestInit) => {
-      fetchOptions = options
+    const fetch = async (_request: unknown) => {
       if (offline) throw new Error('fixture network offline')
       return new Response('{}', { status: 200 })
     }
@@ -548,15 +546,19 @@ export class BuildServerRemoteAdversarialTarget implements RemoteOpsAdversarialT
       request: { url: 'https://remote.example/api/v1/os/remote/boards', method: 'GET', mode: 'cors' },
       respondWith(value: Promise<unknown>) { getResponse = Promise.resolve(value) },
     })
+    const apiBypassed = getResponse === undefined
     let networkFailed = false
-    try { await getResponse } catch { networkFailed = true }
+    try {
+      if (getResponse) await getResponse
+      else await fetch({ url: 'https://remote.example/api/v1/os/remote/boards', method: 'GET' })
+    } catch { networkFailed = true }
     let mutationIntercepted = false
     fetchHandler({
       request: { url: 'https://remote.example/api/v1/os/remote/messages', method: 'POST', mode: 'cors' },
       respondWith() { mutationIntercepted = true },
     })
     return {
-      apiGetNoStore: fetchOptions?.cache === 'no-store',
+      apiBypassed,
       cacheReads,
       cacheWrites,
       mutationIntercepted,

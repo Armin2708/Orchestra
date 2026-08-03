@@ -25,14 +25,15 @@ self.addEventListener('message', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url)
-  // Mutation requests always go directly to the network. There is deliberately no
-  // Background Sync, outbox, retry, or replay path for remote authority.
+  // Cross-origin and mutation requests always go directly to the network. There is
+  // deliberately no Background Sync, outbox, retry, or replay path for remote authority.
   if (url.origin !== location.origin || e.request.method !== 'GET') return
+
+  // Authenticated API requests must remain entirely outside the worker. Not calling
+  // respondWith lets the browser perform its native request, so failures surface to the
+  // client instead of being hidden behind a worker-owned fetch or cache lifecycle. This
+  // also covers SSE without maintaining a brittle endpoint-specific exception.
   if (url.pathname.startsWith('/api/')) {
-    if (url.pathname.endsWith('/events')) return // SSE — never intercept
-    // Authenticated API responses are never persisted in a shared browser cache.
-    // Offline reads fail explicitly; the rendered client may retain only its in-memory view.
-    e.respondWith(fetch(e.request, { cache: 'no-store' }))
     return
   }
   if (e.request.mode === 'navigate') {

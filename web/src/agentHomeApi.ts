@@ -262,6 +262,7 @@ const agentHomeFetch = async (
   if (options.idempotencyScope) headers['idempotency-key'] = idempotencyKey(options.idempotencyScope)
   const response = await fetch(`/api/v1${path}`, {
     method,
+    cache: 'no-store',
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   })

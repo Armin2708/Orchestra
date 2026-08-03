@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   AgentConversation,
   AgentHomeCapabilities,
@@ -7,7 +7,7 @@ import type {
   AgentSessionRecord,
   ConversationEvent,
 } from '../web/src/agentHomeApi.js'
-import { normalizeAgentHomeEventLookup } from '../web/src/agentHomeApi.js'
+import { agentHomeApi, normalizeAgentHomeEventLookup } from '../web/src/agentHomeApi.js'
 import {
   agentHomeDeepLink,
   capabilityFor,
@@ -131,6 +131,19 @@ const event = (overrides: Partial<ConversationEvent> = {}): ConversationEvent =>
 })
 
 describe('Agent Home selection and provenance presentation', () => {
+  it('keeps direct Agent Home requests out of browser HTTP caches', async () => {
+    const fetchMock = vi.fn(async () => new Response('retained export', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await agentHomeApi.readExport('conversation-7', 'human')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/os/conversations/conversation-7/export?format=human',
+      expect.objectContaining({ method: 'GET', cache: 'no-store' }),
+    )
+  })
+
   it('honors exact deep-link selection before saved and fallback identity', () => {
     const profiles = [profile('saved'), profile('requested'), profile('archived', 'archived')]
     expect(chooseProfile(profiles, 'requested', 'saved')?.id).toBe('requested')

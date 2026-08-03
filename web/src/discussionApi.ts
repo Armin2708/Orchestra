@@ -73,6 +73,7 @@ async function request<T>(
 ): Promise<T> {
   const response = await fetch(`/api/v1/os${path}`, {
     method,
+    cache: 'no-store',
     headers: {
       'content-type': 'application/json',
       ...(getToken() ? { authorization: `Bearer ${getToken()}` } : {}),

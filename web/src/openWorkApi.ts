@@ -837,6 +837,7 @@ const requestJson = async (
   if (options.idempotencyKey) headers['idempotency-key'] = options.idempotencyKey
   const response = await fetch(`/api/v1${path}`, {
     method,
+    cache: 'no-store',
     headers: Object.keys(headers).length ? headers : undefined,
     body: body === undefined ? undefined : JSON.stringify(body),
   })

@@ -445,7 +445,7 @@
     {
       "id": "CUR-008",
       "status": "implemented",
-      "description": "The current service worker only intercepts same-origin GET requests and excludes SSE, so it does not queue or replay mutations today.",
+      "description": "The current service worker bypasses every API request before respondWith, including SSE, and also leaves cross-origin and mutation requests to native networking, so it does not queue or replay remote authority.",
       "evidence": [
         {
           "file": "web/public/sw.js",
@@ -453,7 +453,7 @@
         },
         {
           "file": "web/public/sw.js",
-          "contains": "if (url.pathname.endsWith('/events')) return // SSE — never intercept"
+          "contains": "if (url.pathname.startsWith('/api/')) {"
         }
       ]
     },
@@ -565,11 +565,15 @@
     {
       "id": "CUR-016",
       "status": "implemented",
-      "description": "The PWA keeps authenticated API responses network-only, fails authenticated reads explicitly while offline, and can purge legacy device data after revocation or authentication failure.",
+      "description": "The PWA keeps authenticated API responses network-only by bypassing worker interception and setting request-side no-store, fails authenticated reads explicitly while offline, and can purge legacy device data after revocation or authentication failure.",
       "evidence": [
         {
           "file": "web/public/sw.js",
-          "contains": "e.respondWith(fetch(e.request, { cache: 'no-store' }))"
+          "contains": "if (url.pathname.startsWith('/api/')) {"
+        },
+        {
+          "file": "web/src/api.ts",
+          "contains": "cache: 'no-store'"
         },
         {
           "file": "web/public/sw.js",

@@ -361,6 +361,7 @@ describe('Open Work query and protocol', () => {
       '/api/v1/os/open-work?board_id=7&capability=typescript&capability=ui',
       expect.objectContaining({
         method: 'GET',
+        cache: 'no-store',
         headers: undefined,
       }),
     )
