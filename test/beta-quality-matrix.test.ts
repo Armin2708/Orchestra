@@ -334,7 +334,7 @@ describe('beta quality coverage contract', () => {
 
     expect(result.errors).toEqual([])
     expect(result.ok).toBe(true)
-    expect(result.unresolved).toHaveLength(37)
+    expect(result.unresolved).toHaveLength(41)
     expect(result.unresolved.some((entry) => entry.item === 'QA-018')).toBe(true)
   })
 

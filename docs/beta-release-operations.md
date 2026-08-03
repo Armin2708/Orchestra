@@ -14,6 +14,9 @@ approval.
   upload transport or public support promise.
 - Production-bound `OPS-CHAOS-01` through `OPS-CHAOS-04` evidence is a bounded engineering gate,
   not the elapsed real-provider dogfood required by `QA-016` and `REL-009`.
+  The durable 24-hour recorder and deterministic interruption cycle are documented in
+  `docs/qa016-dogfood.md`; even a complete ledger is only eligible for independent review and
+  never self-authorizes closure or release.
 - The repaired browser harness has no passing final-head capture. The latest integrated diagnostic
   fails closed at HTTP 429 before viewport completion, so QA-014 and fresh QA-015 evidence remain
   open; tablet, phone and in-app Browser are unclaimed.
