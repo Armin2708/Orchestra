@@ -1,7 +1,7 @@
 # Beta artifact, upgrade, rollback, and hotfix operations
 
-Status: **integrated implementation contract at code head
-`58fc112a94c2253dd04f2ba617a6477b11d3d966`, not a candidate-artifact or publication claim**.
+Status: **integrated implementation contract; the exact source candidate is defined by the
+`[beta-release-candidate]` marker checkpoint, not a publication claim**.
 No npm package, tag, GitHub release, version change or stable promotion is authorized by this
 document. Public actions still require the exact-artifact evidence bundle and explicit human
 approval.
@@ -17,9 +17,11 @@ approval.
   The durable 24-hour recorder and deterministic interruption cycle are documented in
   `docs/qa016-dogfood.md`; even a complete ledger is only eligible for independent review and
   never self-authorizes closure or release.
-- The repaired browser harness has no passing final-head capture. The latest integrated diagnostic
-  fails closed at HTTP 429 before viewport completion, so QA-014 and fresh QA-015 evidence remain
-  open; tablet, phone and in-app Browser are unclaimed.
+- The repaired standalone Chromium harness passed three retained exact-artifact desktop, tablet,
+  and phone observations (108 / 108 journeys) plus the checked-budget matrix (36 / 36), all with
+  zero validation, request, console, or page errors. `QA-015` is locally closed. `QA-013` and
+  `QA-014` remain open because the intended in-app Browser/visual acceptance surface was
+  unavailable; no fallback result is credited as in-app evidence.
 - Exact context-injection token totals and model acknowledgements remain unavailable. Managed
   Claude `Read` duplicate evidence is partial, and representative MET-015/MET-GATE evidence does
   not exist.
