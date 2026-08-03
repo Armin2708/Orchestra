@@ -38,6 +38,10 @@ import {
   verifiableDocumentDigest,
   writeBrowserArtifact,
 } from './lib/browser-quality.mjs'
+import {
+  createLocalOwnerChallengeTracker,
+  recordLocalOwnerHttpFailure,
+} from './lib/browser-auth-challenges.mjs'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const defaultChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
@@ -586,7 +590,7 @@ const domActivate = (client, selector) => evaluate(client, `(() => {
   return true;
 })()`)
 
-const authenticateLocalOwner = async (client, operatorToken, label) => {
+const authenticateLocalOwner = async (client, operatorToken, label, beforeSubmit = () => {}) => {
   await waitFor(client, `Boolean(document.querySelector('.login-form .login-input'))`, `${label} owner login`)
   const focused = await evaluate(client, `(() => {
     const input = document.querySelector('.login-form .login-input');
@@ -601,6 +605,7 @@ const authenticateLocalOwner = async (client, operatorToken, label) => {
     `document.querySelector('.login-form .login-btn')?.disabled === false`,
     `${label} owner token input`,
   )
+  beforeSubmit()
   if (!await domActivate(client, '.login-form .login-btn')) {
     throw new Error(`${label} owner login could not be submitted`)
   }
@@ -896,7 +901,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const pageErrors = []
   const failedRequests = []
   const authenticationChallenges = []
-  let awaitingLocalOwnerAuthentication = false
+  const authenticationChallengeTracker = createLocalOwnerChallengeTracker(baseUrl)
   client.on('Runtime.consoleAPICalled', (event) => {
     if (event.type === 'error') {
       retainEvidenceEntry(consoleErrors, diagnosticFingerprint(
@@ -909,6 +914,9 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     'page_exception',
     event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception',
   )))
+  client.on('Network.requestWillBeSent', (event) => {
+    authenticationChallengeTracker.observeRequest(event.requestId, event.request?.url)
+  })
   client.on('Network.responseReceived', (event) => {
     const { response } = event
     if (response?.url?.startsWith(baseUrl) && response.status >= 400) {
@@ -917,12 +925,19 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
         status: response.status,
         endpoint_sha256: createHash('sha256').update(new URL(response.url).pathname).digest('hex'),
       }
-      if (awaitingLocalOwnerAuthentication && response.status === 401) {
-        retainEvidenceEntry(authenticationChallenges, { ...entry, label: 'expected_local_owner_challenge' })
-      } else retainEvidenceEntry(failedRequests, entry)
+      recordLocalOwnerHttpFailure({
+        tracker: authenticationChallengeTracker,
+        requestId: event.requestId,
+        status: response.status,
+        entry,
+        authenticationChallenges,
+        failedRequests,
+        retain: retainEvidenceEntry,
+      })
     }
   })
   client.on('Network.loadingFailed', (event) => {
+    authenticationChallengeTracker.observeFailure(event.requestId)
     if (!event.canceled && !String(event.errorText).includes('ERR_ABORTED')) {
       retainEvidenceEntry(failedRequests, diagnosticFingerprint('network_loading_failed', event.errorText))
     }
@@ -943,10 +958,16 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
-  awaitingLocalOwnerAuthentication = true
+  authenticationChallengeTracker.beginLoginCycle()
   await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
-  try { await authenticateLocalOwner(client, operatorToken, `${viewport.id} initial command center`) }
-  finally { awaitingLocalOwnerAuthentication = false }
+  try {
+    await authenticateLocalOwner(
+      client,
+      operatorToken,
+      `${viewport.id} initial command center`,
+      () => authenticationChallengeTracker.closePreSubmitPhase(),
+    )
+  } finally { authenticationChallengeTracker.closePreSubmitPhase() }
   const startup = await evaluate(client, `performance.now()`)
   const snapshotResourceExpression = `(() => {
     const expectedPath = '/api/v1/boards/${scenario.board_id}/snapshot';
@@ -962,17 +983,21 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
-    return navigateFreshInteractionMode({
-      client,
-      url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
-      name,
-      mode,
-      waitForReady: async () => {
-        awaitingLocalOwnerAuthentication = true
-        try { await authenticateLocalOwner(client, operatorToken, `${name} ${mode} fresh navigation`) }
-        finally { awaitingLocalOwnerAuthentication = false }
-      },
-    })
+    authenticationChallengeTracker.beginLoginCycle()
+    try {
+      return await navigateFreshInteractionMode({
+        client,
+        url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
+        name,
+        mode,
+        waitForReady: () => authenticateLocalOwner(
+          client,
+          operatorToken,
+          `${name} ${mode} fresh navigation`,
+          () => authenticationChallengeTracker.closePreSubmitPhase(),
+        ),
+      })
+    } finally { authenticationChallengeTracker.closePreSubmitPhase() }
   }
   const modeReady = async (expression, readinessTimeoutMs = interactionReadinessTimeoutMs) => {
     const deadline = performance.now() + readinessTimeoutMs
@@ -1219,6 +1244,14 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   accessibility.keyboard_focus.modal_focus = modalFocus
   if (modalFocus.supported && !modalFocus.passed) accessibility.keyboard_focus.passed = false
   const metrics = { startup, snapshot_loading: snapshot, transcript_loading: transcript, graph_view: graph, search }
+  const authenticationChallengeInventory = authenticationChallengeTracker.inventory()
+  if (!authenticationChallengeInventory.passed) {
+    retainEvidenceEntry(failedRequests, {
+      label: 'invalid_local_owner_challenge_inventory',
+      login_cycles: authenticationChallengeInventory.login_cycles,
+      total_count: authenticationChallengeInventory.total_count,
+    })
+  }
   const qualityLinkedPass = {
     startup: true,
     snapshot_loading: true,
@@ -1262,6 +1295,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     page_errors: pageErrors,
     failed_requests: failedRequests,
     authentication_challenges: authenticationChallenges,
+    authentication_challenge_inventory: authenticationChallengeInventory,
     accessibility,
     readiness: {
       dependency_graph_nodes_rendered: dependencyGraphNodesRendered,

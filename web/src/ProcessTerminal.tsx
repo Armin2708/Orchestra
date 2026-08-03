@@ -1,4 +1,4 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import React, { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
@@ -9,6 +9,31 @@ import { runRuntimeMutation } from './runtimeReadOnly'
 import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 
 export type ProcessTerminalHandle = { focus: () => void; fit: () => void }
+
+export type TerminalFocusDirection = 'forward' | 'backward'
+
+export function routeTerminalKeyEvent(
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'type' | 'preventDefault' | 'stopPropagation'>,
+  escapeArmed: boolean,
+  setEscapeArmed: (armed: boolean) => void,
+  moveFocus: (direction: TerminalFocusDirection) => boolean,
+): boolean {
+  if (event.type !== 'keydown') return true
+  if (event.key === 'Escape') {
+    setEscapeArmed(true)
+    return true
+  }
+  if (event.key === 'Tab' && escapeArmed) {
+    setEscapeArmed(false)
+    if (moveFocus(event.shiftKey ? 'backward' : 'forward')) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    return false
+  }
+  if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key)) setEscapeArmed(false)
+  return true
+}
 
 export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   process: WorkspaceProcess | null
@@ -31,6 +56,9 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
   const resizeTimerRef = useRef<number | undefined>()
   const writableRef = useRef(writable)
   const [streamError, setStreamError] = useState<string | null>(null)
+  const escapeArmedRef = useRef(false)
+  const [escapeArmed, setEscapeArmedState] = useState(false)
+  const keyboardHelpId = useId()
 
   processRef.current = process
   readOnlyRef.current = readOnly
@@ -89,7 +117,29 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
-    terminal.attachCustomKeyEventHandler((event) => event.key !== 'Tab')
+    const setEscapeArmed = (armed: boolean) => {
+      escapeArmedRef.current = armed
+      setEscapeArmedState(armed)
+    }
+    const moveFocus = (direction: TerminalFocusDirection) => {
+      const current = terminal.textarea
+      if (!current) return false
+      const focusable = [...document.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => element.getClientRects().length > 0
+        && element.getAttribute('aria-hidden') !== 'true')
+      const index = focusable.indexOf(current)
+      const target = index < 0 ? undefined : focusable[index + (direction === 'forward' ? 1 : -1)]
+      if (!target) return false
+      target.focus()
+      return document.activeElement === target
+    }
+    terminal.attachCustomKeyEventHandler((event) => routeTerminalKeyEvent(
+      event,
+      escapeArmedRef.current,
+      setEscapeArmed,
+      moveFocus,
+    ))
     terminal.open(host)
     terminalRef.current = terminal
     fitRef.current = fit
@@ -227,7 +277,11 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     <div className="os-terminal-wrap">
       <div ref={hostRef} className="os-xterm" role="application"
         aria-readonly={!writable || undefined}
+        aria-describedby={keyboardHelpId}
         aria-label={process ? `Terminal for ${process.name}` : 'Terminal without a process'} />
+      <p id={keyboardHelpId} className={`os-terminal-keyboard-help${escapeArmed ? ' is-armed' : ''}`} aria-live="polite">
+        {escapeArmed ? 'Escape armed: Tab moves focus; Shift+Tab moves backward.' : 'Tab completes in terminal. Press Escape, then Tab to leave.'}
+      </p>
       {readOnly && <p className="sr-only" role="status">Terminal output is available read only while Orchestra reconnects.</p>}
       {!process && (
         <div className="os-terminal-empty" aria-hidden="true">

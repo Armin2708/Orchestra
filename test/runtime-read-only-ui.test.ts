@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentHomeHeader, AgentTerminalPanel } from '../web/src/AgentHomePanels.js'
 import { ContextPane, ProcessesPane } from '../web/src/WorkspacePanes.js'
+import { routeTerminalKeyEvent } from '../web/src/ProcessTerminal.js'
 import { runRuntimeMutation } from '../web/src/runtimeReadOnly.js'
 
 const requireFromWeb = createRequire(new URL('../web/package.json', import.meta.url))
@@ -75,8 +76,48 @@ describe('offline canonical runtime composition', () => {
     expect(terminal).not.toContain('inert')
   })
 
-  it('releases Tab from xterm so browser focus can leave the terminal', () => {
-    expect(terminalSource).toContain("attachCustomKeyEventHandler((event) => event.key !== 'Tab')")
+  it('keeps plain Tab in xterm and exposes the keyboard escape description', () => {
+    let armed = false
+    const moved: string[] = []
+    const event = {
+      key: 'Tab', shiftKey: false, type: 'keydown',
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    }
+    const handledByXterm = routeTerminalKeyEvent(event, armed, (next) => { armed = next }, (direction) => {
+      moved.push(direction)
+      return true
+    })
+    const emitted: string[] = []
+    if (handledByXterm) emitted.push('\t')
+    expect(handledByXterm).toBe(true)
+    expect(armed).toBe(false)
+    expect(moved).toEqual([])
+    expect(emitted).toEqual(['\t'])
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(terminalSource).toContain('Tab completes in terminal. Press Escape, then Tab to leave.')
+    expect(terminalSource).toContain('aria-describedby={keyboardHelpId}')
+  })
+
+  it('routes Escape then Tab or Shift+Tab out of xterm', () => {
+    let armed = false
+    const directions: string[] = []
+    const key = (value: string, shiftKey = false) => ({
+      key: value, shiftKey, type: 'keydown', preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    })
+    const move = (direction: 'forward' | 'backward') => { directions.push(direction); return true }
+    expect(routeTerminalKeyEvent(key('Escape'), armed, (next) => { armed = next }, move)).toBe(true)
+    expect(armed).toBe(true)
+    const forward = key('Tab')
+    expect(routeTerminalKeyEvent(forward, armed, (next) => { armed = next }, move)).toBe(false)
+    expect(armed).toBe(false)
+    expect(forward.preventDefault).toHaveBeenCalledOnce()
+    expect(directions).toEqual(['forward'])
+
+    routeTerminalKeyEvent(key('Escape'), armed, (next) => { armed = next }, move)
+    const backward = key('Tab', true)
+    expect(routeTerminalKeyEvent(backward, armed, (next) => { armed = next }, move)).toBe(false)
+    expect(backward.preventDefault).toHaveBeenCalledOnce()
+    expect(directions).toEqual(['forward', 'backward'])
   })
 
   it('keeps saved workspace context/process content in the accessibility tree while actions are disabled', () => {

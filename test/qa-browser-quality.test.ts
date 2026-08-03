@@ -42,6 +42,11 @@ import {
   verifiableDocumentDigest,
   writeBrowserArtifact,
 } from '../scripts/lib/browser-quality.mjs'
+import {
+  LOCAL_OWNER_CHALLENGE_PATHS,
+  createLocalOwnerChallengeTracker,
+  recordLocalOwnerHttpFailure,
+} from '../scripts/lib/browser-auth-challenges.mjs'
 
 const chromeForDomFixture = [
   process.env.ORCHESTRA_QA_CHROME,
@@ -112,6 +117,66 @@ const passingEvidence = () => {
 }
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
+  it('admits only request-id-bound pre-submit owner challenges and fails post-submit 401 closed', () => {
+    const tracker = createLocalOwnerChallengeTracker('http://127.0.0.1:4312')
+    tracker.beginLoginCycle()
+    expect(tracker.observeRequest('boards-pre', 'http://127.0.0.1:4312/api/v1/boards')).toBe(true)
+    expect(tracker.observeRequest('events-pre', 'http://127.0.0.1:4312/api/v1/events')).toBe(true)
+    expect(tracker.observeRequest('snapshot-pre', 'http://127.0.0.1:4312/api/v1/boards/7/snapshot')).toBe(false)
+    expect(tracker.observeRequest('foreign-pre', 'https://example.invalid/api/v1/boards')).toBe(false)
+    tracker.closePreSubmitPhase()
+    expect(tracker.observeRequest('boards-post', 'http://127.0.0.1:4312/api/v1/boards')).toBe(false)
+    expect(tracker.observeResponse('boards-pre', 401).expected).toBe(true)
+    expect(tracker.observeResponse('events-pre', 401).expected).toBe(true)
+    expect(tracker.observeResponse('snapshot-pre', 401).expected).toBe(false)
+    expect(tracker.observeResponse('boards-post', 401).expected).toBe(false)
+    expect(tracker.inventory()).toMatchObject({
+      passed: true,
+      login_cycles: 1,
+      total_count: 2,
+      endpoints: expect.arrayContaining(LOCAL_OWNER_CHALLENGE_PATHS.map(() => expect.objectContaining({ count: 1 }))),
+    })
+  })
+
+  it('retains an adversarial post-submit 401 as a failed request', () => {
+    const tracker = createLocalOwnerChallengeTracker('http://127.0.0.1:4312')
+    const authenticationChallenges: any[] = []
+    const failedRequests: any[] = []
+    tracker.beginLoginCycle()
+    tracker.observeRequest('boards-pre', 'http://127.0.0.1:4312/api/v1/boards')
+    tracker.closePreSubmitPhase()
+    recordLocalOwnerHttpFailure({
+      tracker,
+      requestId: 'boards-pre',
+      status: 401,
+      entry: { label: 'http_failure', status: 401 },
+      authenticationChallenges,
+      failedRequests,
+      retain: (target: any[], entry: any) => target.push(entry),
+    })
+    expect(authenticationChallenges).toHaveLength(1)
+    tracker.observeRequest('snapshot-post', 'http://127.0.0.1:4312/api/v1/boards/7/snapshot')
+    recordLocalOwnerHttpFailure({
+      tracker,
+      requestId: 'snapshot-post',
+      status: 401,
+      entry: { label: 'http_failure', status: 401 },
+      authenticationChallenges,
+      failedRequests,
+      retain: (target: any[], entry: any) => target.push(entry),
+    })
+    expect(failedRequests).toEqual([{ label: 'http_failure', status: 401 }])
+  })
+
+  it('rejects a challenge inventory that did not prove every login cycle through boards', () => {
+    const tracker = createLocalOwnerChallengeTracker('http://127.0.0.1:4312')
+    tracker.beginLoginCycle()
+    tracker.observeRequest('events-only', 'http://127.0.0.1:4312/api/v1/events')
+    tracker.closePreSubmitPhase()
+    expect(tracker.observeResponse('events-only', 401).expected).toBe(true)
+    expect(tracker.inventory()).toMatchObject({ passed: false, login_cycles: 1, total_count: 1 })
+  })
+
   it('freezes the desktop, tablet, and phone matrix and all required quality surfaces', () => {
     expect(RESPONSIVE_VIEWPORTS).toEqual([
       { id: 'desktop', width: 1440, height: 1000, mobile: false },
@@ -703,10 +768,11 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
 
   it('locks actual runner source against retaining raw response or page content', () => {
     const source = readFileSync(join(process.cwd(), 'scripts', 'qa-browser-gates.mjs'), 'utf8')
+    const authSource = readFileSync(join(process.cwd(), 'scripts', 'lib', 'browser-auth-challenges.mjs'), 'utf8')
     expect(source).not.toContain('response.status}: ${String(text)')
     expect(source).not.toContain('text: text.slice')
     expect(source).not.toContain("localStorage.setItem('orchestra-token'")
-    expect(source).toContain("label: 'expected_local_owner_challenge'")
+    expect(authSource).toContain("label: 'expected_local_owner_challenge'")
     expect(source).toContain("type: 'keyDown'")
     expect(source).toContain("...(result.violations ?? []), ...(result.unsupported ?? [])")
   })
