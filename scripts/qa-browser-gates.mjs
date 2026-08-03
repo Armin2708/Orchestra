@@ -891,6 +891,7 @@ const keyboardAudit = async (client) => {
     checked: focusOrder.length + reverseOrder.length,
     focus_order: focusOrder,
     reverse_focus_order: reverseOrder,
+    xterm_focus_encounters: xtermEscapePaths.length,
     xterm_escape_paths: xtermEscapePaths,
     activation,
     violations,

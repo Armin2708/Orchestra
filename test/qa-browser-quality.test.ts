@@ -15,6 +15,7 @@ import {
   BROWSER_JOURNEYS,
   BROWSER_OVERFLOW_AUDIT_EXPRESSION,
   BROWSER_QUALITY_SCHEMA_VERSION,
+  EXPECTED_BROWSER_LOGIN_CYCLES,
   EVIDENCE_MAX_ARRAY_LENGTH,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MAX_STRING_LENGTH,
@@ -46,7 +47,6 @@ import {
 import {
   LOCAL_OWNER_CHALLENGE_DIGESTS,
   LOCAL_OWNER_CHALLENGE_PATHS,
-  REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
   createLocalOwnerChallengeTracker,
   recordLocalOwnerHttpFailure,
 } from '../scripts/lib/browser-auth-challenges.mjs'
@@ -82,19 +82,21 @@ const passingEvidence = () => {
     console_errors: [],
     page_errors: [],
     failed_requests: [],
-    authentication_challenges: REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
+    authentication_challenges: Array.from({ length: EVIDENCE_MAX_ARRAY_LENGTH }, (_, index) => ({
       label: 'expected_local_owner_challenge',
       status: 401,
-      endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
+      endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[
+        LOCAL_OWNER_CHALLENGE_PATHS[index % LOCAL_OWNER_CHALLENGE_PATHS.length]
+      ],
     })),
     authentication_challenge_inventory: {
       passed: true,
-      login_cycles: 1,
-      total_count: 2,
+      login_cycles: EXPECTED_BROWSER_LOGIN_CYCLES,
+      total_count: LOCAL_OWNER_CHALLENGE_PATHS.length * EXPECTED_BROWSER_LOGIN_CYCLES,
       pending_request_count: 0,
       endpoints: LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
         endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
-        count: REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS.includes(path) ? 1 : 0,
+        count: EXPECTED_BROWSER_LOGIN_CYCLES,
       })),
     },
     accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
@@ -108,7 +110,10 @@ const passingEvidence = () => {
         },
         keyboard: {
           passed: true, counts_toward_pass: true, elapsed_ms: 20, performance_eligible: false, diagnostic_only: false,
-          action_evidence: { focus_acquisition: 'tab_navigation', programmatic_focus: false, tab_events: 3 },
+          action_evidence: {
+            focus_acquisition: 'tab_navigation', programmatic_focus: false, tab_events: 3,
+            xterm_focus_encounters: 0, xterm_escape_paths: [],
+          },
           reset: reset(name, 'keyboard'),
         },
         dom_fallback: {
@@ -119,7 +124,10 @@ const passingEvidence = () => {
       elapsed_ms: 10,
       performance_sample_mode: ['graph overview', 'durable transcript', 'conversation search'].includes(name)
         ? 'pointer' : 'diagnostic_only',
-      accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, { passed: true }])),
+      accessibility: Object.fromEntries(ACCESSIBILITY_GATES.map((gate) => [gate, {
+        passed: true,
+        ...(gate === 'keyboard_focus' ? { xterm_focus_encounters: 0, xterm_escape_paths: [] } : {}),
+      }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
       observed_ms: surface === 'startup' ? 4 : 10,
@@ -142,7 +150,7 @@ const passingEvidence = () => {
         command_center_to_data_ready_ms: 3,
         submit_to_data_ready_ms: 4,
         navigation_to_data_ready_ms: 10,
-        snapshot_resource_ms: 3,
+        snapshot_resource_ms: 10,
         data_ready_selector: '.cc-shell[data-connection="live"]',
       } } : {}),
     }])),
@@ -296,16 +304,17 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       from: 'Terminal input', to: 'BUTTON:6',
     }
     journey.interaction_modes.keyboard.action_evidence.xterm_escape_paths = [escapePath]
+    journey.interaction_modes.keyboard.action_evidence.xterm_focus_encounters = 1
     journey.accessibility.keyboard_focus = {
       passed: true, checked: 20, focus_order: Array.from({ length: 100 }, (_, index) => index),
-      xterm_escape_paths: [escapePath],
+      xterm_focus_encounters: 1, xterm_escape_paths: [escapePath],
     }
     const compact = compactJourneyEvidence(journey)
     expect(compact.interaction_modes.pointer).not.toHaveProperty('readiness_asserted')
     expect(compact.interaction_modes.pointer).not.toHaveProperty('action_evidence')
     expect(compact.interaction_modes.keyboard.action_evidence.xterm_escape_paths).toEqual([escapePath])
     expect(compact.accessibility.keyboard_focus).toEqual({
-      passed: true, checked: 20, xterm_escape_paths: [escapePath],
+      passed: true, checked: 20, xterm_escape_paths: [escapePath], xterm_focus_encounters: 1,
     })
 
     journey.interaction_modes.pointer.passed = false
@@ -667,6 +676,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       },
       (viewport: any) => { viewport.authentication_challenges[0].endpoint_sha256 = 'f'.repeat(64) },
       (viewport: any) => { viewport.authentication_challenges.pop() },
+      (viewport: any) => { viewport.authentication_challenge_inventory.login_cycles = 1 },
     ]
     for (const mutate of mutations) {
       const evidence = passingEvidence()
@@ -683,6 +693,12 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     inconsistent.sha256 = verifiableDocumentDigest(inconsistent)
     expect(validateBrowserQualityEvidence(inconsistent)).toContain('desktop has invalid startup navigation provenance')
 
+    const mismatchedSnapshot = passingEvidence()
+    mismatchedSnapshot.viewports[0].performance.startup.provenance.snapshot_resource_ms = 8
+    mismatchedSnapshot.sha256 = verifiableDocumentDigest(mismatchedSnapshot)
+    expect(validateBrowserQualityEvidence(mismatchedSnapshot))
+      .toContain('desktop has invalid startup navigation provenance')
+
     const reused = passingEvidence()
     reused.viewports[1].performance.startup.provenance.loader_sha256
       = reused.viewports[0].performance.startup.provenance.loader_sha256
@@ -694,6 +710,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
 
   it('rejects an xterm escape claim that did not prove documented focus advancement', () => {
     const evidence = passingEvidence()
+    evidence.viewports[0].journeys[0].accessibility.keyboard_focus.xterm_focus_encounters = 1
     evidence.viewports[0].journeys[0].accessibility.keyboard_focus.xterm_escape_paths = [{
       escape_path: 'Escape+Tab', documented: true, armed: true, advanced: false,
       from: 'Terminal input', to: 'Terminal input',
@@ -701,6 +718,21 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     evidence.sha256 = verifiableDocumentDigest(evidence)
     expect(validateBrowserQualityEvidence(evidence))
       .toContain('desktop graph overview has invalid xterm keyboard escape evidence')
+  })
+
+  it('rejects xterm encounters whose escape path evidence was deleted', () => {
+    for (const evidenceSource of ['action', 'audit']) {
+      const evidence = passingEvidence()
+      const journey = evidence.viewports[0].journeys[0]
+      const source = evidenceSource === 'action'
+        ? journey.interaction_modes.keyboard.action_evidence
+        : journey.accessibility.keyboard_focus
+      source.xterm_focus_encounters = 1
+      source.xterm_escape_paths = []
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('desktop graph overview has invalid xterm keyboard escape evidence')
+    }
   })
 
   it('rejects duplicate, missing, or unknown canonical journeys', () => {

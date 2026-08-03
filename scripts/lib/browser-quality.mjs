@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import {
   LOCAL_OWNER_CHALLENGE_DIGESTS,
   LOCAL_OWNER_CHALLENGE_PATHS,
+  REPEATED_LOCAL_OWNER_CHALLENGE_PATHS,
   REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
 } from './browser-auth-challenges.mjs'
 
@@ -49,6 +50,9 @@ export const BROWSER_JOURNEYS = Object.freeze([
   'Settings primary view',
   'Command center primary view',
 ])
+
+export const BROWSER_INTERACTION_MODES = Object.freeze(['pointer', 'keyboard', 'dom_fallback'])
+export const EXPECTED_BROWSER_LOGIN_CYCLES = 1 + BROWSER_JOURNEYS.length * BROWSER_INTERACTION_MODES.length
 
 export const EVIDENCE_MAX_STRING_LENGTH = 1_024
 export const EVIDENCE_MAX_ARRAY_LENGTH = 25
@@ -262,6 +266,8 @@ export const compactJourneyEvidence = (journey) => ({
     ...(result.checked !== undefined ? { checked: result.checked } : {}),
     ...(gate === 'keyboard_focus' && Array.isArray(result.xterm_escape_paths)
       ? { xterm_escape_paths: result.xterm_escape_paths.slice(0, EVIDENCE_MAX_ARRAY_LENGTH) } : {}),
+    ...(gate === 'keyboard_focus' && result.xterm_focus_encounters !== undefined
+      ? { xterm_focus_encounters: result.xterm_focus_encounters } : {}),
     ...(result.passed === true ? {} : {
       violations: result.violations ?? [],
       unsupported: result.unsupported ?? [],
@@ -638,6 +644,8 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     const allowedChallengeDigests = new Set(Object.values(LOCAL_OWNER_CHALLENGE_DIGESTS))
     const requiredChallengeDigests = new Set(REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS
       .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
+    const repeatedChallengeDigests = new Set(REPEATED_LOCAL_OWNER_CHALLENGE_PATHS
+      .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
     const challengeDigests = challengeEndpoints.map((entry) => entry?.endpoint_sha256)
     const challengeCycles = challengeInventory?.login_cycles
     const challengeTotal = challengeEndpoints.reduce((sum, entry) => sum
@@ -645,14 +653,17 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     const retainedChallenges = Array.isArray(actual.authentication_challenges)
       ? actual.authentication_challenges : []
     const validChallengeInventory = challengeInventory?.passed === true
-      && Number.isInteger(challengeCycles) && challengeCycles > 0
+      && challengeCycles === EXPECTED_BROWSER_LOGIN_CYCLES
       && challengeEndpoints.length === LOCAL_OWNER_CHALLENGE_PATHS.length
       && new Set(challengeDigests).size === LOCAL_OWNER_CHALLENGE_PATHS.length
       && challengeDigests.every((digest) => allowedChallengeDigests.has(digest))
       && challengeEndpoints.every((entry) => Number.isInteger(entry?.count)
-        && entry.count >= 0 && entry.count <= challengeCycles
-        && (!requiredChallengeDigests.has(entry.endpoint_sha256) || entry.count === challengeCycles))
+        && ((requiredChallengeDigests.has(entry.endpoint_sha256) && entry.count === challengeCycles)
+          || (repeatedChallengeDigests.has(entry.endpoint_sha256)
+            && entry.count >= challengeCycles && entry.count <= 2 * challengeCycles)))
       && challengeInventory.total_count === challengeTotal
+      && challengeTotal >= 5 * challengeCycles
+      && challengeTotal <= 6 * challengeCycles
       && challengeInventory.pending_request_count === 0
       && retainedChallenges.length === Math.min(challengeTotal, EVIDENCE_MAX_ARRAY_LENGTH)
       && retainedChallenges.every((entry) => entry?.label === 'expected_local_owner_challenge'
@@ -679,7 +690,7 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     }
     for (const journey of journeys) {
       const isolationIds = []
-      for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
+      for (const mode of BROWSER_INTERACTION_MODES) {
         if (mode !== 'dom_fallback' && journey.interaction_modes?.[mode]?.passed !== true) {
           errors.push(`${expected.id} ${journey.name} failed independent ${mode} interaction`)
         }
@@ -701,14 +712,17 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         || keyboardEvidence.tab_events < 1) {
         errors.push(`${expected.id} ${journey.name} lacks keyboard-only activation evidence`)
       }
-      const xtermEscapePaths = [
-        ...(Array.isArray(keyboardEvidence?.xterm_escape_paths) ? keyboardEvidence.xterm_escape_paths : []),
-        ...(Array.isArray(journey.accessibility?.keyboard_focus?.xterm_escape_paths)
-          ? journey.accessibility.keyboard_focus.xterm_escape_paths : []),
-      ]
-      if (xtermEscapePaths.some((path) => !['Escape+Tab', 'Escape+Shift+Tab'].includes(path?.escape_path)
-        || path.documented !== true || path.armed !== true || path.advanced !== true
-        || typeof path.from !== 'string' || typeof path.to !== 'string' || path.from === path.to)) {
+      const xtermEvidenceSources = [keyboardEvidence, journey.accessibility?.keyboard_focus]
+      const validXtermEvidence = xtermEvidenceSources.every((source) => {
+        const encounters = source?.xterm_focus_encounters
+        const paths = Array.isArray(source?.xterm_escape_paths) ? source.xterm_escape_paths : []
+        return Number.isInteger(encounters) && encounters >= 0
+          && ((encounters === 0 && paths.length === 0) || (encounters > 0 && paths.length > 0))
+          && paths.every((path) => ['Escape+Tab', 'Escape+Shift+Tab'].includes(path?.escape_path)
+            && path.documented === true && path.armed === true && path.advanced === true
+            && typeof path.from === 'string' && typeof path.to === 'string' && path.from !== path.to)
+      })
+      if (!validXtermEvidence) {
         errors.push(`${expected.id} ${journey.name} has invalid xterm keyboard escape evidence`)
       }
       if (!journey.interaction_modes?.dom_fallback || journey.interaction_modes.dom_fallback.counts_toward_pass !== false) {
@@ -768,6 +782,8 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           || !Number.isFinite(provenance?.submit_to_data_ready_ms) || provenance.submit_to_data_ready_ms < 0
           || !Number.isFinite(provenance?.navigation_to_data_ready_ms) || provenance.navigation_to_data_ready_ms < 0
           || !Number.isFinite(provenance?.snapshot_resource_ms) || provenance.snapshot_resource_ms < 0
+          || Math.abs(provenance.snapshot_resource_ms
+            - actual.performance?.snapshot_loading?.observed_ms) > 1
           || provenance?.data_ready_selector !== AUTHENTICATED_DATA_READY_SELECTOR
           || Math.abs(commandCenterReady - provenance.command_center_ready_ms) > 1
           || Math.abs(navigationToReady - provenance.navigation_to_data_ready_ms) > 1
