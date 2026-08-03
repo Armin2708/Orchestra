@@ -178,7 +178,7 @@
 .cc-project-nav button:hover { color: var(--ink); }
 .cc-project-nav button.active { color: var(--ink); }
 .cc-project-nav button.active::after { background: var(--ink); }
-.cc-project-nav button b { min-width: 18px; border-radius: 999px; background: #efede8; padding: 0 5px; font: 600 9px/17px ui-monospace, monospace; text-align: center; }
+.cc-project-nav button b { min-width: 18px; border-radius: 999px; background: #efede8; color: #6a6965; padding: 0 5px; font: 600 9px/17px ui-monospace, monospace; text-align: center; }
 
 .cc-saved-views { grid-column: 1 / -1; display: flex; min-height: 37px; align-items: center; gap: 7px; overflow-x: auto; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); scrollbar-width: none; }
 .cc-saved-views::-webkit-scrollbar { display: none; }

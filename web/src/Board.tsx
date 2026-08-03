@@ -18,7 +18,7 @@ import {
 } from './canvasViewport'
 
 export const STATUS: Record<string, { label: string; bg: string; ink: string }> = {
-  backlog: { label: 'Queued', bg: '#F1F0EC', ink: '#787774' },
+  backlog: { label: 'Queued', bg: '#F1F0EC', ink: '#686762' },
   in_progress: { label: 'Working', bg: '#FBF3DB', ink: '#956400' },
   blocked: { label: 'Blocked', bg: '#FDEBEC', ink: '#9F2F2D' },
   review: { label: 'Review', bg: '#E1F3FE', ink: '#1F6C9F' },
