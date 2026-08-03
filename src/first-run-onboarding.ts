@@ -548,6 +548,9 @@ export const applyFirstRunAmbientHooks = (
   if (!isDeepStrictEqual(plan, canonicalPlan)) {
     throw new Error('first-run plan is stale or forged relative to the current provider manifest')
   }
+  if (canonicalPlan.provider.mode !== 'native_subscription') {
+    throw new Error('ambient hooks require native-subscription terminal mode')
+  }
   if (!path.isAbsolute(canonicalPlan.project_root)
     || (() => {
       try { return !fs.statSync(canonicalPlan.project_root).isDirectory() } catch { return true }

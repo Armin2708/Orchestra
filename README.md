@@ -95,7 +95,7 @@ For a guided technical private-beta setup that keeps managed provider automation
 already-authenticated terminal provider into the local board with:
 
 ```sh
-node dist/cli.js onboard --project "$PWD" --provider claude --mode native_subscription \
+orchestra onboard --project "$PWD" --provider claude --mode native_subscription \
   --hooks project --telemetry off --apply-ambient-hooks
 ```
 

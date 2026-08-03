@@ -154,6 +154,15 @@ describe('first-run onboarding domain', () => {
     expect(() => applyFirstRunAmbientHooks(qwen, { installProviderHooks }))
       .toThrow('available only for Claude Code and Codex CLI')
 
+    const providerApi = buildFirstRunPlan({
+      project_root: root,
+      provider_id: 'claude',
+      execution_mode: 'provider_api',
+      hook_scope: 'project',
+    })
+    expect(() => applyFirstRunAmbientHooks(providerApi, { installProviderHooks }))
+      .toThrow('require native-subscription terminal mode')
+
     const claude = buildFirstRunPlan({
       project_root: root,
       provider_id: 'claude',

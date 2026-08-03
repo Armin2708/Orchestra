@@ -145,10 +145,10 @@ readiness fails.
 2. Start the local product with `orchestra serve`, open `http://127.0.0.1:4750`, and inspect the
    Board before enabling hooks.
 3. Only after the exact provider doctor passes, optionally install project-local observation hooks
-   with `orchestra install --project --provider codex` (or `claude`). These reversible hooks expose
-   ordinary terminal sessions to the Board; they do not authorize managed launch or turn the
-   provider into a supported claim. Remove them with the matching project/provider uninstall
-   command shown below.
+   with the explicit `orchestra onboard ... --hooks project --apply-ambient-hooks` command above.
+   These reversible hooks expose ordinary terminal sessions to the Board; they do not authorize
+   managed launch or turn the provider into a supported claim. Remove them with the matching
+   project/provider uninstall command shown below.
 4. Do not use the bundled plugin manifests as an unpublished-tarball shortcut: they intentionally
    reference the pinned npm package and require the separately verified public/plugin gate.
 5. Run `orchestra lifecycle-demo --project /absolute/path/to/test-project --provider codex`; omit
