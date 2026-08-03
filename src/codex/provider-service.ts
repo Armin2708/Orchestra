@@ -131,7 +131,7 @@ export class CodexProviderService implements AgentProviderService {
     const compatibility = classifyCodexCliVersion(this.version)
     if (compatibility.status !== 'validated') {
       this.runtimeEnabled = false
-      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.144.6, then restart Orchestra.`
+      this.lastDetail = `${compatibility.detail} Install @openai/codex@0.146.0, then restart Orchestra.`
       return false
     }
     try {

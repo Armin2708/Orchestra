@@ -164,7 +164,7 @@ const createAdapter = (
   now: () => new Date('2026-07-28T12:00:00.000Z'),
   resolveExecutable: () => '/safe/bin/codex',
   readExecutable: () => EXECUTABLE_BYTES,
-  readVersion: () => 'codex-cli 0.144.6',
+  readVersion: () => 'codex-cli 0.146.0',
   resolveRecoveryTarget: (scopeId) => ({
     workspaceId: scopeId,
     cwd: '/workspace',
@@ -214,7 +214,7 @@ describe('Codex TOOL-014 provider adapter', () => {
     const adapter = createAdapter({
       readVersion: (_resolvedPath, environment) => {
         versionEnvironment = environment
-        return 'codex-cli 0.144.6'
+        return 'codex-cli 0.146.0'
       },
     })
     const observed = await readiness(adapter)
@@ -226,7 +226,7 @@ describe('Codex TOOL-014 provider adapter', () => {
       adapter_id: 'codex-app-server',
       status: 'validated',
       source: 'environment_override',
-      version: '0.144.6',
+      version: '0.146.0',
       platform: 'darwin-arm64',
       resolved_path: '/safe/bin/codex',
       executable_fingerprint: EXECUTABLE_FINGERPRINT,
@@ -313,7 +313,7 @@ describe('Codex TOOL-014 provider adapter', () => {
       })
     expect(registry.assessSupport(
       selectProviderExecutionV1(CODEX_PROVIDER_MANIFEST_V1),
-      '0.144.6',
+      '0.146.0',
       'darwin-arm64',
       SOURCE_COMMIT,
     )).toEqual({

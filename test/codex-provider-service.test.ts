@@ -48,14 +48,14 @@ describe('Codex provider service', () => {
       readRateLimits: async () => ({ rateLimits: { primary: { usedPercent: 12 } }, rateLimitsByLimitId: null, rateLimitResetCredits: null }) as any,
       readUsage: async () => ({ summary: { lifetimeTokens: 42 }, dailyUsageBuckets: null }) as any,
     }
-    const service = new CodexProviderService(db, rpc, supervisor, { version: 'codex-cli 0.144.6', refreshMs: 60_000 })
+    const service = new CodexProviderService(db, rpc, supervisor, { version: 'codex-cli 0.146.0', refreshMs: 60_000 })
 
     expect(await service.initialize()).toBe(true)
     expect(service.isRuntimeAvailable()).toBe(true)
     const catalog = await service.catalog()
     expect(catalog).toMatchObject({
       id: 'codex', available: true, source: 'live',
-      health: { status: 'ready', version: 'codex-cli 0.144.6' },
+      health: { status: 'ready', version: 'codex-cli 0.146.0' },
       auth: { status: 'authenticated', account: 'ChatGPT · pro' },
       usage: { rate_limits: { current: { primary: { usedPercent: 12 } } } },
     })
@@ -75,7 +75,7 @@ describe('Codex provider service', () => {
       readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
       readRateLimits: async () => ({}) as any,
       readUsage: async () => ({}) as any,
-    }, new FakeSupervisor(), { version: 'codex-cli 0.144.6' })
+    }, new FakeSupervisor(), { version: 'codex-cli 0.146.0' })
     expect(await unauthenticated.initialize()).toBe(false)
     expect(await unauthenticated.catalog()).toMatchObject({
       available: false,
@@ -87,7 +87,7 @@ describe('Codex provider service', () => {
     const missing = new CodexProviderService(db, {
       listModels: async () => [], readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
       readRateLimits: async () => ({}) as any, readUsage: async () => ({}) as any,
-    }, new FakeSupervisor(new Error('spawn codex ENOENT')), { version: 'codex-cli 0.144.6' })
+    }, new FakeSupervisor(new Error('spawn codex ENOENT')), { version: 'codex-cli 0.146.0' })
     expect(await missing.initialize()).toBe(false)
     expect(await missing.health()).toMatchObject({ available: false, detail: 'spawn codex ENOENT' })
     missing.dispose()
@@ -95,7 +95,7 @@ describe('Codex provider service', () => {
 
   it.each([
     ['too old', 'codex-cli 0.143.0'],
-    ['too new', 'codex-cli 0.145.0'],
+    ['too new', 'codex-cli 0.147.0'],
     ['missing', 'not found'],
   ])('does not start app-server when the CLI is %s', async (_case, version) => {
     const db = openDb(':memory:')
@@ -112,7 +112,7 @@ describe('Codex provider service', () => {
     expect(await service.health()).toMatchObject({
       available: false,
       status: 'unavailable',
-      detail: expect.stringContaining('Install @openai/codex@0.144.6'),
+      detail: expect.stringContaining('Install @openai/codex@0.146.0'),
     })
     service.dispose()
   })

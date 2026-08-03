@@ -110,11 +110,13 @@ jobs:
         continue-on-error: true
         run: >-
           node scripts/exact-commit-evidence.mjs run codex-cli-install --
-          npm install --global @openai/codex@0.144.6
+          npm install --global @openai/codex@0.146.0
 
       - name: Verify the Codex app-server protocol snapshot
         continue-on-error: true
-        run: node scripts/exact-commit-evidence.mjs run codex-protocol -- npm run check:codex-protocol
+        run: >-
+          node scripts/exact-commit-evidence.mjs run codex-protocol --
+          npm run check:codex-protocol && npm run check:codex-app-server
 
       - name: Run credential-free end-to-end smoke
         continue-on-error: true

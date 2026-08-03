@@ -268,5 +268,6 @@ OS boundary.
 - collaborative ownership through Teams;
 - full publish → match/assign → dependency-ready → exactly-one-job acceptance gate;
 - desktop and phone browser acceptance still requires an available configured browser instance;
-- the release-level Codex protocol contract must be deliberately reconciled from pinned CLI
-  0.144.6 to the installed 0.145.0 protocol before a release claim.
+- the release-level Codex protocol contract is reconciled to pinned CLI 0.146.0 with a generated
+  schema digest and isolated signed-out lifecycle probe; managed support still requires the real
+  clean-profile native-subscription acceptance matrix at the exact release commit.

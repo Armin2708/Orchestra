@@ -70,7 +70,7 @@ import {
   type ProviderAcceptanceFinalizationV1,
 } from '../provider-acceptance-harness.js'
 
-export const CODEX_ACCEPTANCE_VERSION_V1 = '0.144.6'
+export const CODEX_ACCEPTANCE_VERSION_V1 = '0.146.0'
 export const CODEX_ACCEPTANCE_PLATFORM_V1 = 'darwin-arm64'
 export const CODEX_ACCEPTANCE_PACKAGE_V1 =
   `@openai/codex@${CODEX_ACCEPTANCE_VERSION_V1}`

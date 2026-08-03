@@ -191,7 +191,7 @@ export const CODEX_PROVIDER_MANIFEST_V1 = defineProviderManifestV1({
     command: 'codex',
     source: 'path',
     command_override_env: 'ORCHESTRA_CODEX_COMMAND',
-    validated_versions: ['0.144.6'],
+    validated_versions: ['0.146.0'],
     supported_platforms: ['darwin-arm64'],
   },
   environment: {

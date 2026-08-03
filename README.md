@@ -69,7 +69,7 @@ For daemon-managed Codex agents, install the tested CLI and authenticate it befo
 Orchestra:
 
 ```bash
-npm i -g @openai/codex@0.144.6
+npm i -g @openai/codex@0.146.0
 codex login
 codex login status
 node dist/cli.js doctor --provider codex

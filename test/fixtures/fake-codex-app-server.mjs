@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import readline from 'node:readline'
 
 if (process.argv.includes('--version')) {
-  process.stdout.write('codex-cli 0.144.6\n')
+  process.stdout.write('codex-cli 0.146.0\n')
   process.exit(0)
 }
 
@@ -52,7 +52,7 @@ const threadShape = (stored) => ({
     ? { type: 'active', activeFlags: [] }
     : { type: 'idle' },
   cwd: stored.cwd,
-  cliVersion: '0.144.6-fake',
+  cliVersion: '0.146.0-fake',
   agentNickname: null,
   agentRole: null,
   createdAt: 1_700_000_000,

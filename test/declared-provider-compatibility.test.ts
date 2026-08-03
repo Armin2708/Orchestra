@@ -177,7 +177,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
       executable: {
         source: 'path',
         command_override_env: 'ORCHESTRA_CODEX_COMMAND',
-        exact_versions: ['0.144.6'],
+        exact_versions: ['0.146.0'],
         exact_platforms: ['darwin-arm64'],
       },
       native_subscription: {
@@ -215,7 +215,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
       copy.providers.reverse()
     }],
     ['executable version drift', (copy: any) => {
-      copy.providers[1].executable.exact_versions = ['0.146.0']
+      copy.providers[1].executable.exact_versions = ['0.145.0']
     }],
     ['executable source drift', (copy: any) => {
       copy.providers[0].executable.source = 'path'
@@ -270,7 +270,7 @@ describe('BASE-010 declared-provider compatibility contract', () => {
 
   it('fails closed on nearby versions, executable-source changes, and missing real matrices', () => {
     const nearby = evidence('codex')
-    nearby.discovery.version = '0.146.0'
+    nearby.discovery.version = '0.145.0'
     nearby.discovery.status = 'incompatible'
     const nearbyAssessment = assessDeclaredProviderCompatibilityV1(nearby)
     expect(nearbyAssessment.blockers).toEqual(expect.arrayContaining([
