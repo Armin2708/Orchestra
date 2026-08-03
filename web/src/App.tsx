@@ -35,6 +35,7 @@ import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
 import type { BrowserAuthorityMode } from './deviceAuth'
 import { createSingleFlightRefresh } from './singleFlightRefresh'
 import {
+  beginLocalOwnerAuthentication,
   beginLocalOwnerRetry,
   LocalOwnerConnecting,
   LocalOwnerInitialOffline,
@@ -314,7 +315,12 @@ function LocalOwnerApp() {
     loaded,
   })
   if (localOwnerSurface === 'login') {
-    return <Login onSubmit={(t) => { setToken(t); setNeedsAuth(false) }} />
+    return <Login onSubmit={(token) => beginLocalOwnerAuthentication({
+      token,
+      acceptToken: setToken,
+      markLoading: () => setLoaded(false),
+      clearAuthenticationChallenge: () => setNeedsAuth(false),
+    })} />
   }
   if (localOwnerSurface === 'connecting') return <LocalOwnerConnecting />
   if (localOwnerSurface === 'initial-offline') {

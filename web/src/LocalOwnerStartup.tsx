@@ -27,6 +27,22 @@ export const beginLocalOwnerRetry = (
   requestRefresh()
 }
 
+export const beginLocalOwnerAuthentication = ({
+  token,
+  acceptToken,
+  markLoading,
+  clearAuthenticationChallenge,
+}: {
+  token: string
+  acceptToken: (token: string) => void
+  markLoading: () => void
+  clearAuthenticationChallenge: () => void
+}) => {
+  acceptToken(token)
+  markLoading()
+  clearAuthenticationChallenge()
+}
+
 export function LocalOwnerConnecting() {
   return (
     <main className="empty-hero" aria-busy="true">
