@@ -35,7 +35,7 @@ fail-closed.
 | Combined code integration | default-parallel and one-worker suites each passed 273 files / 2,261 tests on Node 22.20.0 / npm 10.9.3 |
 | Final integration review | ACCEPT, P0=0, P1=0, P2=0; root/web types and production builds passed |
 | Packaged-document phase | exact commit `10e430747c41d9335bacd5fa041c4bd359e196e5`; 21 files / 123 focused tests, root/web types/builds, audits, Gitleaks, package inventory, GitNexus, and Graphify passed; independent P0/P1/P2=0 |
-| Disposable package preflight | byte-identical packs; 1,222,371 bytes; expected candidate SHA-256 `38ab73f75566fcd9977183390a53860bec135a1d5d8313033bb70e005e3a8c96`; local lifecycle passed; release gate correctly remained incomplete |
+| Historical disposable package preflight | Earlier source candidate `7c147c4` produced byte-identical 1,222,371-byte packs with SHA-256 `38ab73f75566fcd9977183390a53860bec135a1d5d8313033bb70e005e3a8c96`; later plug-and-play product changes invalidate that digest for the current source, so the current retained-artifact gate remains open |
 | Provider/platform audit | 6 files / 76 deterministic tests passed; zero providers are managed-beta accepted; only this macOS host is observed |
 | Security | root/web audits zero at the integrated head; Gitleaks clean; production QA-018 and prior-artifact trust roots empty by design |
 
@@ -64,9 +64,10 @@ fail-closed.
   remains open because the intended in-app Browser/visual acceptance surface was unavailable.
   The standalone Chromium result is not promoted into unsupported in-app evidence.
 
-The four files changed by the candidate commit are excluded from the npm package. Therefore the
-retained candidate built after this commit must be byte-identical to the disposable Phase P
-preflight above. A different digest is a release-blocking source or packaging drift.
+No retained package has been built for the current successor source. The historical `38ab73f…`
+digest must not be reused as current evidence. Final packaging requires an approved prerelease
+version and one newly retained artifact whose exact source, digest, lifecycle, and provenance are
+verified without rebuilding it between tests and release.
 
 ## Provider and platform matrix
 

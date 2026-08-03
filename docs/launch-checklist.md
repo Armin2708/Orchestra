@@ -9,8 +9,9 @@ public push, version change, and stable promotion require explicit human approva
 - [x] Combined code tree passed complete default-parallel and one-worker suites at 273 files /
   2,261 tests, plus root/web TypeScript and production builds.
 - [x] Independent code-integration and packaged-document reviews report P0/P1/P2 = 0/0/0.
-- [x] Package preflight is byte-reproducible; expected candidate SHA-256 is
-  `38ab73f75566fcd9977183390a53860bec135a1d5d8313033bb70e005e3a8c96`.
+- [x] Historical candidate `7c147c4` had a byte-reproducible package preflight. Its `38ab73f…`
+  digest is invalid for the current successor source; the current retained-artifact item below
+  remains open.
 - [x] Publication and stable promotion are disabled; both production trust-root lists are empty.
 
 ## Exact-candidate verification
