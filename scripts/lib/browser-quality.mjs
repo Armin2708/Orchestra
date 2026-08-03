@@ -7,11 +7,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import {
   LOCAL_OWNER_CHALLENGE_DIGESTS,
   LOCAL_OWNER_CHALLENGE_PATHS,
-  REPEATED_LOCAL_OWNER_CHALLENGE_PATHS,
   REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS,
 } from './browser-auth-challenges.mjs'
 
-export const BROWSER_QUALITY_SCHEMA_VERSION = 5
+export const BROWSER_QUALITY_SCHEMA_VERSION = 6
 export const BROWSER_BASELINE_SCHEMA_VERSION = 4
 export const BROWSER_BUILD_SCHEMA_VERSION = 3
 
@@ -117,6 +116,20 @@ export const canonicalJson = (value) => {
 export const evidenceDigest = (value) => createHash('sha256')
   .update(canonicalJson(redactEvidence(value)))
   .digest('hex')
+
+export const STARTUP_RESOURCE_EVIDENCE_MAX = 25
+const startupRouteDigest = (path) => createHash('sha256').update(path).digest('hex')
+export const STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS = Object.freeze({
+  boards: startupRouteDigest('/api/v1/boards'),
+  snapshot: startupRouteDigest('/api/v1/boards/:id/snapshot'),
+  jobs: startupRouteDigest('/api/v1/os/boards/:id/jobs'),
+  profiles: startupRouteDigest('/api/v1/os/boards/:id/agent-profiles'),
+})
+export const STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS = Object.freeze({
+  system: startupRouteDigest('/api/v1/system'),
+  open_work: startupRouteDigest('/api/v1/os/open-work'),
+  device_self: startupRouteDigest('/api/v1/os/devices/self'),
+})
 
 export const verifiableDocumentDigest = (value) => {
   const document = structuredClone(value)
@@ -644,8 +657,6 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
     const allowedChallengeDigests = new Set(Object.values(LOCAL_OWNER_CHALLENGE_DIGESTS))
     const requiredChallengeDigests = new Set(REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS
       .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
-    const repeatedChallengeDigests = new Set(REPEATED_LOCAL_OWNER_CHALLENGE_PATHS
-      .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
     const challengeDigests = challengeEndpoints.map((entry) => entry?.endpoint_sha256)
     const challengeCycles = challengeInventory?.login_cycles
     const challengeTotal = challengeEndpoints.reduce((sum, entry) => sum
@@ -658,12 +669,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
       && new Set(challengeDigests).size === LOCAL_OWNER_CHALLENGE_PATHS.length
       && challengeDigests.every((digest) => allowedChallengeDigests.has(digest))
       && challengeEndpoints.every((entry) => Number.isInteger(entry?.count)
-        && ((requiredChallengeDigests.has(entry.endpoint_sha256) && entry.count === challengeCycles)
-          || (repeatedChallengeDigests.has(entry.endpoint_sha256)
-            && entry.count >= challengeCycles && entry.count <= 2 * challengeCycles)))
+        && requiredChallengeDigests.has(entry.endpoint_sha256)
+        && entry.count === challengeCycles)
       && challengeInventory.total_count === challengeTotal
-      && challengeTotal >= 5 * challengeCycles
-      && challengeTotal <= 6 * challengeCycles
+      && challengeTotal === 2 * challengeCycles
       && challengeInventory.pending_request_count === 0
       && retainedChallenges.length === Math.min(challengeTotal, EVIDENCE_MAX_ARRAY_LENGTH)
       && retainedChallenges.every((entry) => entry?.label === 'expected_local_owner_challenge'
@@ -768,6 +777,61 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         const submitStarted = provenance?.login_form_ready_ms + provenance?.login_entry_ms
         const navigationToReady = submitStarted + provenance?.submit_to_data_ready_ms
         const commandCenterReady = submitStarted + provenance?.submit_to_command_center_ms
+        const resourceTiming = provenance?.resource_timing
+        const criticalResources = Array.isArray(resourceTiming?.critical_resources)
+          ? resourceTiming.critical_resources : []
+        const competitorResources = Array.isArray(resourceTiming?.competitor_resources)
+          ? resourceTiming.competitor_resources : []
+        const expectedCriticalCategories = Object.keys(STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS)
+        const exactKeys = (value, keys) => value && typeof value === 'object'
+          && canonicalJson(Object.keys(value).sort()) === canonicalJson([...keys].sort())
+        const validResource = (entry, routes) => exactKeys(entry, [
+          'category', 'route_sha256', 'endpoint_sha256', 'start_ms', 'response_end_ms', 'duration_ms',
+        ])
+          && routes[entry.category] === entry.route_sha256
+          && /^[a-f0-9]{64}$/.test(String(entry.endpoint_sha256 ?? ''))
+          && Number.isFinite(entry.start_ms) && entry.start_ms >= submitStarted - 1
+          && Number.isFinite(entry.response_end_ms) && entry.response_end_ms >= entry.start_ms
+          && entry.response_end_ms <= navigationToReady + 1
+          && Number.isFinite(entry.duration_ms) && entry.duration_ms >= 0
+          && Math.abs(entry.duration_ms - (entry.response_end_ms - entry.start_ms)) <= 1
+        const longTasks = resourceTiming?.long_tasks
+        const validLongTasks = exactKeys(longTasks, [
+          'supported', 'count', 'total_duration_ms', 'max_duration_ms',
+        ])
+          && typeof longTasks?.supported === 'boolean'
+          && Number.isInteger(longTasks?.count) && longTasks.count >= 0
+          && Number.isFinite(longTasks?.total_duration_ms) && longTasks.total_duration_ms >= 0
+          && Number.isFinite(longTasks?.max_duration_ms) && longTasks.max_duration_ms >= 0
+          && longTasks.max_duration_ms <= longTasks.total_duration_ms
+          && (longTasks.count > 0 || (longTasks.total_duration_ms === 0 && longTasks.max_duration_ms === 0))
+          && (longTasks.supported || longTasks.count === 0)
+        const validResourceTiming = exactKeys(resourceTiming, [
+          'window', 'window_start_ms', 'window_end_ms', 'critical_resource_count',
+          'competitor_resource_count', 'critical_resources', 'competitor_resources', 'long_tasks',
+        ])
+          && resourceTiming?.window === 'submit_to_data_ready'
+          && Number.isFinite(resourceTiming?.window_start_ms)
+          && Math.abs(resourceTiming.window_start_ms - submitStarted) <= 1
+          && Number.isFinite(resourceTiming?.window_end_ms)
+          && Math.abs(resourceTiming.window_end_ms - navigationToReady) <= 1
+          && Number.isInteger(resourceTiming?.critical_resource_count)
+          && resourceTiming.critical_resource_count === criticalResources.length
+          && criticalResources.length >= expectedCriticalCategories.length
+          && criticalResources.length <= STARTUP_RESOURCE_EVIDENCE_MAX
+          && expectedCriticalCategories.every((category) => criticalResources
+            .some((entry) => entry?.category === category))
+          && criticalResources.every((entry) => validResource(
+            entry, STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
+          ))
+          && Number.isInteger(resourceTiming?.competitor_resource_count)
+          && resourceTiming.competitor_resource_count === competitorResources.length
+          && competitorResources.length <= STARTUP_RESOURCE_EVIDENCE_MAX
+          && competitorResources.every((entry) => validResource(
+            entry, STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
+          ))
+          && resourceTiming?.competitor_resource_count === 0
+          && validLongTasks
         if (!/^[a-f0-9]{64}$/.test(String(provenance?.loader_sha256 ?? ''))
           || !Number.isFinite(provenance?.time_origin_ms) || provenance.time_origin_ms <= 0
           || provenance?.navigation_start_ms !== 0
@@ -789,7 +853,8 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           || Math.abs(navigationToReady - provenance.navigation_to_data_ready_ms) > 1
           || Math.abs(provenance.command_center_ready_ms + provenance.command_center_to_data_ready_ms
             - provenance.navigation_to_data_ready_ms) > 1
-          || Math.abs(result.observed_ms - provenance.submit_to_data_ready_ms) > 1) {
+          || Math.abs(result.observed_ms - provenance.submit_to_data_ready_ms) > 1
+          || !validResourceTiming) {
           errors.push(`${expected.id} has invalid startup navigation provenance`)
         }
       }

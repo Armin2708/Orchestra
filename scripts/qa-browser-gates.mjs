@@ -20,6 +20,9 @@ import {
   BROWSER_QUALITY_SCHEMA_VERSION,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
+  STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
+  STARTUP_RESOURCE_EVIDENCE_MAX,
   assertFinalBuildManifest,
   assertDistinctArtifactPaths,
   canonicalRepositoryName,
@@ -1062,6 +1065,17 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   if (initialNavigation?.errorText || !initialNavigation?.loaderId) {
     throw new Error(`${viewport.id} initial navigation did not create a loader`)
   }
+  const longTaskSupported = await evaluate(client, `(() => {
+    window.__orchestraQaLongTasks = [];
+    if (!globalThis.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) return false;
+    window.__orchestraQaLongTaskObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        window.__orchestraQaLongTasks.push({ start_ms: entry.startTime, duration_ms: entry.duration });
+      }
+    });
+    window.__orchestraQaLongTaskObserver.observe({ type: 'longtask', buffered: true });
+    return true;
+  })()`)
   let initialAuthentication
   try {
     initialAuthentication = await authenticateLocalOwner(
@@ -1100,6 +1114,69 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
   const snapshot = await evaluate(client, snapshotResourceExpression)
   const dataReadyMs = await evaluate(client, `performance.now()`)
   const startup = Math.max(0, dataReadyMs - initialAuthentication.submit_started_ms)
+  const startupResourceRows = await evaluate(client, `(() => {
+    const windowStart = ${JSON.stringify(initialAuthentication.submit_started_ms)};
+    const windowEnd = ${JSON.stringify(dataReadyMs)};
+    const classify = (pathname) => {
+      if (pathname === '/api/v1/boards') return { group: 'critical', category: 'boards' };
+      if (new RegExp('^/api/v1/boards/[^/]+/snapshot$').test(pathname)) return { group: 'critical', category: 'snapshot' };
+      if (new RegExp('^/api/v1/os/boards/[^/]+/jobs$').test(pathname)) return { group: 'critical', category: 'jobs' };
+      if (new RegExp('^/api/v1/os/boards/[^/]+/agent-profiles$').test(pathname)) return { group: 'critical', category: 'profiles' };
+      if (pathname === '/api/v1/system') return { group: 'competitor', category: 'system' };
+      if (pathname === '/api/v1/os/open-work') return { group: 'competitor', category: 'open_work' };
+      if (pathname === '/api/v1/os/devices/self') return { group: 'competitor', category: 'device_self' };
+      return null;
+    };
+    const resources = performance.getEntriesByType('resource').flatMap((entry) => {
+      let url;
+      try { url = new URL(entry.name); } catch { return []; }
+      const classification = url.origin === location.origin ? classify(url.pathname) : null;
+      if (!classification || entry.startTime < windowStart || entry.startTime > windowEnd) return [];
+      return [{
+        ...classification,
+        pathname: url.pathname,
+        start_ms: entry.startTime,
+        response_end_ms: entry.responseEnd,
+        duration_ms: entry.duration,
+      }];
+    });
+    const longTasks = Array.isArray(window.__orchestraQaLongTasks)
+      ? window.__orchestraQaLongTasks.filter((entry) => entry.start_ms >= windowStart
+        && entry.start_ms + entry.duration_ms <= windowEnd) : [];
+    window.__orchestraQaLongTaskObserver?.disconnect();
+    return { resources, long_tasks: longTasks };
+  })()`)
+  const startupResourceEvidence = (row) => ({
+    category: row.category,
+    route_sha256: (row.group === 'critical'
+      ? STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS : STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS)[row.category],
+    endpoint_sha256: createHash('sha256').update(row.pathname).digest('hex'),
+    start_ms: row.start_ms,
+    response_end_ms: row.response_end_ms,
+    duration_ms: row.duration_ms,
+  })
+  const criticalResourceRows = startupResourceRows.resources
+    .filter((row) => row.group === 'critical')
+  const competitorResourceRows = startupResourceRows.resources
+    .filter((row) => row.group === 'competitor')
+  const startupLongTasks = startupResourceRows.long_tasks
+  const resourceTiming = {
+    window: 'submit_to_data_ready',
+    window_start_ms: initialAuthentication.submit_started_ms,
+    window_end_ms: dataReadyMs,
+    critical_resource_count: criticalResourceRows.length,
+    competitor_resource_count: competitorResourceRows.length,
+    critical_resources: criticalResourceRows.slice(0, STARTUP_RESOURCE_EVIDENCE_MAX)
+      .map(startupResourceEvidence),
+    competitor_resources: competitorResourceRows.slice(0, STARTUP_RESOURCE_EVIDENCE_MAX)
+      .map(startupResourceEvidence),
+    long_tasks: {
+      supported: longTaskSupported,
+      count: startupLongTasks.length,
+      total_duration_ms: startupLongTasks.reduce((sum, entry) => sum + entry.duration_ms, 0),
+      max_duration_ms: Math.max(0, ...startupLongTasks.map((entry) => entry.duration_ms)),
+    },
+  }
   const startupProvenance = {
     loader_sha256: createHash('sha256').update(initialNavigation.loaderId).digest('hex'),
     time_origin_ms: startupNavigation.time_origin_ms,
@@ -1115,6 +1192,7 @@ const measureViewport = async ({ client, viewport, baseUrl, baseline, scenario, 
     submit_to_data_ready_ms: startup,
     navigation_to_data_ready_ms: dataReadyMs,
     snapshot_resource_ms: snapshot,
+    resource_timing: resourceTiming,
     data_ready_selector: AUTHENTICATED_DATA_READY_SELECTOR,
   }
 

@@ -3,20 +3,11 @@ import { createHash } from 'node:crypto'
 export const LOCAL_OWNER_CHALLENGE_PATHS = Object.freeze([
   '/api/v1/boards',
   '/api/v1/events',
-  '/api/v1/system',
-  '/api/v1/os/open-work',
-  '/api/v1/os/devices/self',
 ])
 
 export const REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS = Object.freeze([
   '/api/v1/boards',
   '/api/v1/events',
-  '/api/v1/system',
-  '/api/v1/os/devices/self',
-])
-
-export const REPEATED_LOCAL_OWNER_CHALLENGE_PATHS = Object.freeze([
-  '/api/v1/os/open-work',
 ])
 
 export const localOwnerChallengeEndpointDigest = (path) => createHash('sha256').update(path).digest('hex')
@@ -66,14 +57,11 @@ export const createLocalOwnerChallengeTracker = (baseUrl) => {
       const totalCount = endpoints.reduce((sum, entry) => sum + entry.count, 0)
       const requiredDigests = new Set(REQUIRED_LOCAL_OWNER_CHALLENGE_PATHS
         .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
-      const repeatedDigests = new Set(REPEATED_LOCAL_OWNER_CHALLENGE_PATHS
-        .map((path) => LOCAL_OWNER_CHALLENGE_DIGESTS[path]))
       return {
         passed: loginCycles > 0
           && endpoints.every((entry) => Number.isInteger(entry.count)
-            && ((requiredDigests.has(entry.endpoint_sha256) && entry.count === loginCycles)
-              || (repeatedDigests.has(entry.endpoint_sha256)
-                && entry.count >= loginCycles && entry.count <= 2 * loginCycles)))
+            && requiredDigests.has(entry.endpoint_sha256)
+            && entry.count === loginCycles)
           && admittedRequests.size === 0,
         login_cycles: loginCycles,
         total_count: totalCount,

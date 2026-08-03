@@ -42,18 +42,20 @@ gate must fail closed on stale artifacts or unverified budgets and retain bounde
   flow. The interaction method and any fallback remain visible in source and evidence.
 - Contrast only evaluates opaque computed text over opaque solid backgrounds. Translucent,
   composited, image or opacity cases are marked unsupported instead of being reported as passes.
-- No network failure is blanket-ignored. `/events` failures are treated like every other failed
-  request. The retained observations and checked rerun had zero failed requests, console errors and
-  page exceptions.
+- No network failure is blanket-ignored. Only the exact same-origin pre-submit `/boards` and
+  `/events` owner challenges are classified as expected. A post-submit 401 from `/system`,
+  `/os/open-work` or `/os/devices/self` fails closed.
 - Normal mode requires an explicit `--baseline`, a valid baseline digest, retained observation
   digests, exact viewports/surfaces and finite `budget_ms` values whose `budget_source` is
   `checked_observation`. Capture mode emits observations only and cannot self-budget.
 - Baseline samples, p95 and budgets are recomputed directly from every retained observation during
   validation; changing claimed values and recomputing the self-digest still fails.
-- Browser evidence schema v5 defines startup as valid owner-token submission through authenticated
-  snapshot and `.cc-shell[data-connection="live"]` readiness. Navigation/login phases, fresh loader
-  identity and unique `performance.timeOrigin` remain diagnostic provenance. Baseline schema v4 is
-  required because older navigation-timing startup samples are not comparable.
+- Browser evidence schema v6 defines startup as valid owner-token submission through authenticated
+  `.cc-shell[data-connection="live"]` readiness. Bounded Resource Timing evidence proves boards,
+  snapshot, jobs and profile requests all completed inside that window, while system, open-work and
+  device-self competitors remained at zero. Paths are retained only as SHA-256 identities; long-task
+  count and duration are summarized when Chromium supports them. Baseline schema v4 remains required
+  because older navigation-timing startup samples are not comparable.
 - Retained paths must resolve to real non-symlink files inside
   `docs/qa-evidence/browser-quality/`; absolute, escaping and symlink paths fail closed.
 - Manifest creation refuses dirty tracked source, hashes every tracked file with SHA-256, builds

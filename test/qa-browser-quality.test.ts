@@ -21,6 +21,8 @@ import {
   EVIDENCE_MAX_STRING_LENGTH,
   PERFORMANCE_SURFACES,
   RESPONSIVE_VIEWPORTS,
+  STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS,
+  STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS,
   assertFinalBuildManifest,
   compositeRgba,
   contrastRatio,
@@ -130,7 +132,7 @@ const passingEvidence = () => {
       }])),
     })),
     performance: Object.fromEntries(PERFORMANCE_SURFACES.map((surface) => [surface, {
-      observed_ms: surface === 'startup' ? 4 : 10,
+      observed_ms: surface === 'startup' ? 4 : surface === 'snapshot_loading' ? 3 : 10,
       measurement_mode: surface === 'startup' ? 'authenticated_submit_to_ready'
         : surface === 'snapshot_loading' ? 'authenticated_fetch' : 'pointer',
       quality_gate_passed: true,
@@ -150,7 +152,26 @@ const passingEvidence = () => {
         command_center_to_data_ready_ms: 3,
         submit_to_data_ready_ms: 4,
         navigation_to_data_ready_ms: 10,
-        snapshot_resource_ms: 10,
+        snapshot_resource_ms: 3,
+        resource_timing: {
+          window: 'submit_to_data_ready',
+          window_start_ms: 6,
+          window_end_ms: 10,
+          critical_resource_count: 4,
+          competitor_resource_count: 0,
+          critical_resources: [
+            { category: 'boards', start_ms: 6, response_end_ms: 6.5, duration_ms: 0.5 },
+            { category: 'snapshot', start_ms: 6.5, response_end_ms: 9.5, duration_ms: 3 },
+            { category: 'jobs', start_ms: 6.25, response_end_ms: 7.25, duration_ms: 1 },
+            { category: 'profiles', start_ms: 6.25, response_end_ms: 7.25, duration_ms: 1 },
+          ].map((entry) => ({
+            ...entry,
+            route_sha256: STARTUP_CRITICAL_RESOURCE_ROUTE_DIGESTS[entry.category],
+            endpoint_sha256: evidenceDigest(`endpoint:${entry.category}`),
+          })),
+          competitor_resources: [],
+          long_tasks: { supported: true, count: 0, total_duration_ms: 0, max_duration_ms: 0 },
+        },
         data_ready_selector: '.cc-shell[data-connection="live"]',
       } } : {}),
     }])),
@@ -170,9 +191,15 @@ const currentBaseline = () => {
 }
 
 describe('QA-013–QA-015 browser quality evidence contract', () => {
-  it('uses the breaking schema-v5 contract for authenticated browser evidence', () => {
-    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(5)
+  it('uses the breaking schema-v6 contract for authenticated browser evidence', () => {
+    expect(BROWSER_QUALITY_SCHEMA_VERSION).toBe(6)
     expect(BROWSER_BASELINE_SCHEMA_VERSION).toBe(4)
+    expect(EXPECTED_BROWSER_LOGIN_CYCLES).toBe(37)
+    expect(passingEvidence().viewports[0].authentication_challenge_inventory).toMatchObject({
+      login_cycles: 37,
+      total_count: 74,
+      pending_request_count: 0,
+    })
   })
 
   it('does not close startup on navigation or an offline command center', () => {
@@ -193,8 +220,8 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     tracker.beginLoginCycle()
     expect(tracker.observeRequest('boards-pre', 'http://127.0.0.1:4312/api/v1/boards')).toBe(true)
     expect(tracker.observeRequest('events-pre', 'http://127.0.0.1:4312/api/v1/events')).toBe(true)
-    for (const [index, path] of LOCAL_OWNER_CHALLENGE_PATHS.slice(2).entries()) {
-      expect(tracker.observeRequest(`optional-${index}`, `http://127.0.0.1:4312${path}`)).toBe(true)
+    for (const [index, path] of ['/api/v1/system', '/api/v1/os/open-work', '/api/v1/os/devices/self'].entries()) {
+      expect(tracker.observeRequest(`competitor-${index}`, `http://127.0.0.1:4312${path}`)).toBe(false)
     }
     expect(tracker.observeRequest('snapshot-pre', 'http://127.0.0.1:4312/api/v1/boards/7/snapshot')).toBe(false)
     expect(tracker.observeRequest('foreign-pre', 'https://example.invalid/api/v1/boards')).toBe(false)
@@ -202,9 +229,6 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(tracker.observeRequest('boards-post', 'http://127.0.0.1:4312/api/v1/boards')).toBe(false)
     expect(tracker.observeResponse('boards-pre', 401).expected).toBe(true)
     expect(tracker.observeResponse('events-pre', 401).expected).toBe(true)
-    for (const [index] of LOCAL_OWNER_CHALLENGE_PATHS.slice(2).entries()) {
-      expect(tracker.observeResponse(`optional-${index}`, 401).expected).toBe(true)
-    }
     expect(tracker.observeResponse('snapshot-pre', 401).expected).toBe(false)
     expect(tracker.observeResponse('boards-post', 401).expected).toBe(false)
     const inventory = tracker.inventory()
@@ -237,17 +261,20 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       retain: (target: any[], entry: any) => target.push(entry),
     })
     expect(authenticationChallenges).toHaveLength(1)
-    tracker.observeRequest('snapshot-post', 'http://127.0.0.1:4312/api/v1/boards/7/snapshot')
-    recordLocalOwnerHttpFailure({
-      tracker,
-      requestId: 'snapshot-post',
-      status: 401,
-      entry: { label: 'http_failure', status: 401 },
-      authenticationChallenges,
-      failedRequests,
-      retain: (target: any[], entry: any) => target.push(entry),
-    })
-    expect(failedRequests).toEqual([{ label: 'http_failure', status: 401 }])
+    for (const [index, path] of ['/api/v1/system', '/api/v1/os/open-work', '/api/v1/os/devices/self'].entries()) {
+      const requestId = `competitor-post-${index}`
+      expect(tracker.observeRequest(requestId, `http://127.0.0.1:4312${path}`)).toBe(false)
+      recordLocalOwnerHttpFailure({
+        tracker,
+        requestId,
+        status: 401,
+        entry: { label: 'http_failure', status: 401 },
+        authenticationChallenges,
+        failedRequests,
+        retain: (target: any[], entry: any) => target.push(entry),
+      })
+    }
+    expect(failedRequests).toEqual(Array.from({ length: 3 }, () => ({ label: 'http_failure', status: 401 })))
   })
 
   it('rejects a challenge inventory that did not prove every login cycle through boards', () => {
@@ -671,7 +698,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
         viewport.authentication_challenge_inventory.total_count = 1
       },
       (viewport: any) => {
-        viewport.authentication_challenge_inventory.endpoints[4]
+        viewport.authentication_challenge_inventory.endpoints[1]
           = { ...viewport.authentication_challenge_inventory.endpoints[0] }
       },
       (viewport: any) => { viewport.authentication_challenges[0].endpoint_sha256 = 'f'.repeat(64) },
@@ -706,6 +733,56 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       = reused.viewports[0].performance.startup.provenance.time_origin_ms
     reused.sha256 = verifiableDocumentDigest(reused)
     expect(validateBrowserQualityEvidence(reused)).toContain('startup navigation provenance is not unique across viewports')
+  })
+
+  it('rejects missing, extra, or competitor startup resource timing evidence', () => {
+    const mutations = [
+      (timing: any) => {
+        timing.critical_resources = timing.critical_resources.filter((entry: any) => entry.category !== 'jobs')
+        timing.critical_resource_count = timing.critical_resources.length
+      },
+      (timing: any) => {
+        timing.critical_resources.push({
+          category: 'unknown',
+          route_sha256: evidenceDigest('unknown-route'),
+          endpoint_sha256: evidenceDigest('unknown-endpoint'),
+          start_ms: 7,
+          response_end_ms: 8,
+          duration_ms: 1,
+        })
+        timing.critical_resource_count = timing.critical_resources.length
+      },
+      (timing: any) => {
+        timing.competitor_resources.push({
+          category: 'system',
+          route_sha256: STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS.system,
+          endpoint_sha256: evidenceDigest('system-endpoint'),
+          start_ms: 7,
+          response_end_ms: 8,
+          duration_ms: 1,
+        })
+        timing.competitor_resource_count = 1
+      },
+      (timing: any) => { timing.critical_resources[0].url = '/api/v1/boards?raw=id' },
+      (timing: any) => {
+        timing.competitor_resources.push({
+          category: 'open_work',
+          route_sha256: STARTUP_COMPETITOR_RESOURCE_ROUTE_DIGESTS.open_work,
+          endpoint_sha256: evidenceDigest('open-work-endpoint'),
+          start_ms: 7,
+          response_end_ms: 12,
+          duration_ms: 5,
+        })
+        timing.competitor_resource_count = 1
+      },
+    ]
+    for (const mutate of mutations) {
+      const evidence = passingEvidence()
+      mutate(evidence.viewports[0].performance.startup.provenance.resource_timing)
+      evidence.sha256 = verifiableDocumentDigest(evidence)
+      expect(validateBrowserQualityEvidence(evidence))
+        .toContain('desktop has invalid startup navigation provenance')
+    }
   })
 
   it('rejects an xterm escape claim that did not prove documented focus advancement', () => {
