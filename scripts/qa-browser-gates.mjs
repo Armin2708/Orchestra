@@ -1760,7 +1760,7 @@ const startIsolatedBrowser = async ({ chromeExecutable, chromeProfile, chromeStd
           const signalDataReady = () => {
             if (signalled || !document.querySelector(${JSON.stringify(AUTHENTICATED_DATA_READY_SELECTOR)})) return;
             signalled = true;
-            globalThis[${JSON.stringify(startupDataReadyBinding)}]();
+            globalThis[${JSON.stringify(startupDataReadyBinding)}]('data-ready');
           };
           const observeDataReady = () => {
             const observer = new MutationObserver(signalDataReady);

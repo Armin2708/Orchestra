@@ -2031,6 +2031,7 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(source).toContain("client.send('Runtime.addBinding', { name: startupDataReadyBinding })")
     expect(source).toContain("client.on('Runtime.bindingCalled'")
     expect(source).toContain('new MutationObserver(signalDataReady)')
+    expect(source).toContain("]('data-ready')")
     expect(source).toContain('chromeProfile: join(runRoot, `chrome-profile-${viewport.id}`)')
     expect(source.indexOf('for (const viewport of viewportMatrix)'))
       .toBeLessThan(source.indexOf('const isolatedBrowser = await startIsolatedBrowser'))
