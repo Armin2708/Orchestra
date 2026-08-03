@@ -54,7 +54,7 @@
 }
 .remote-access-unavailable p { margin-top: 5px; color: #716d66; line-height: 1.5; }
 .remote-device-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.remote-device-list > p { grid-column: 1 / -1; color: #8f8a82; padding: 20px 0; font-size: 12px; }
+.remote-device-list > p { grid-column: 1 / -1; color: #69645d; padding: 20px 0; font-size: 12px; }
 .remote-device-card { display: grid; gap: 12px; border: 1px solid #dcd8d0; border-radius: 10px; background: #fff; padding: 15px; }
 .remote-device-card.revoked { opacity: .62; background: #f2f0eb; }
 .remote-device-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -80,7 +80,7 @@
 }
 .remote-notification-settings > div { grid-column: 1; align-self: start; }
 .remote-notification-settings h3, .remote-install-guide h3 { font-size: 16px; letter-spacing: -.02em; }
-.remote-notification-settings p { max-width: 330px; margin-top: 5px; color: #817b72; font-size: 10.5px; line-height: 1.5; }
+.remote-notification-settings p { max-width: 330px; margin-top: 5px; color: #69645d; font-size: 10.5px; line-height: 1.5; }
 .remote-notification-settings > button:first-of-type { grid-column: 1; justify-self: start; }
 .remote-notification-settings label { display: grid; gap: 5px; }
 .remote-notification-settings label span { color: #716d66; font-size: 9.5px; font-weight: 650; }
@@ -95,7 +95,7 @@
   border-top: 1px solid #dcd8d0; margin-top: 28px; padding-top: 25px;
 }
 .remote-install-guide strong { font-size: 11.5px; }
-.remote-install-guide p, .remote-install-guide small { margin-top: 5px; color: #817b72; font-size: 10.5px; line-height: 1.5; }
+.remote-install-guide p, .remote-install-guide small { margin-top: 5px; color: #69645d; font-size: 10.5px; line-height: 1.5; }
 .remote-install-guide small { grid-column: 1 / -1; }
 
 .remote-pairing-required, .remote-device-shell {
