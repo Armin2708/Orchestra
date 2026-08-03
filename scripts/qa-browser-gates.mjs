@@ -310,6 +310,7 @@ const seedScenario = async (baseUrl, authHeaders) => {
     title: 'QA dependency fixture',
     description: 'Renders a real dependency node and edge for the browser quality journey.',
     paths: [],
+    column: 'done',
   }, authHeaders)).card
   const contract = await jsonRequest(baseUrl, 'GET', `/api/v1/os/cards/${card.id}/contract`, undefined, authHeaders)
   await jsonRequest(baseUrl, 'PUT', `/api/v1/os/cards/${card.id}/contract`, {
