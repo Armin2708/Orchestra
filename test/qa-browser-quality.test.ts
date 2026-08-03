@@ -19,6 +19,7 @@ import {
   EVIDENCE_MAX_ARRAY_LENGTH,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MAX_STRING_LENGTH,
+  FATAL_VIEWPORT_DIAGNOSTIC_MAX_ENTRIES,
   FIXTURE_SEED_EXPECTED_COMMAND_STARTS,
   FIXTURE_SEED_EXPECTED_PROVIDER_STARTS,
   FIXTURE_SEED_EXPECTED_REQUEST_STARTS,
@@ -44,6 +45,7 @@ import {
   contrastRatio,
   checkedBudget,
   compactJourneyEvidence,
+  createFatalLifecycleDiagnosticTracker,
   createRequestBudgetPacer,
   createSeedBudgetPacer,
   createStartupCompetitorStartTracker,
@@ -60,6 +62,7 @@ import {
   validateBaselineAgainstCaptures,
   validateArtifactIdentity,
   validateBuildSourceIdentity,
+  validateFatalViewportDiagnostics,
   validatePerformanceBaseline,
   validateBrowserQualityEvidence,
   verifiableDocumentDigest,
@@ -85,6 +88,17 @@ const passingEvidence = () => {
   const reset = (name: string, mode: string) => ({
     strategy: 'fresh_page_navigation',
     loader_sha256: evidenceDigest(`${name}:${mode}`),
+    navigation_synchronization: {
+      expected_loader_sha256: evidenceDigest(`${name}:${mode}`),
+      observed_loader_sha256: evidenceDigest(`${name}:${mode}`),
+      main_frame_loader_matched: true,
+      location_matched: true,
+      time_origin_changed: true,
+      document_complete: true,
+      load_event_observed: true,
+      elapsed_ms: 20,
+      time_origin_delta_ms: 10,
+    },
   })
   const evidence: any = {
   schema_version: BROWSER_QUALITY_SCHEMA_VERSION,
@@ -212,6 +226,17 @@ const passingEvidence = () => {
       budget_source: 'checked_observation',
       ...(surface === 'startup' ? { provenance: {
         loader_sha256: evidenceDigest(`startup:${viewport.id}`),
+        navigation_synchronization: {
+          expected_loader_sha256: evidenceDigest(`startup:${viewport.id}`),
+          observed_loader_sha256: evidenceDigest(`startup:${viewport.id}`),
+          main_frame_loader_matched: true,
+          location_matched: true,
+          time_origin_changed: true,
+          document_complete: true,
+          load_event_observed: true,
+          elapsed_ms: 4,
+          time_origin_delta_ms: 10,
+        },
         time_origin_ms: 1_000 + RESPONSIVE_VIEWPORTS.findIndex((candidate) => candidate.id === viewport.id),
         navigation_start_ms: 0,
         navigation_type: 'navigate',
@@ -255,6 +280,93 @@ const passingEvidence = () => {
   return finalizeBrowserEvidence(evidence, [])
 }
 
+const passingFatalViewportDiagnostics = () => {
+  const emptyStatuses = () => ({
+    informational: 0,
+    successful: 0,
+    redirection: 0,
+    client_error: 0,
+    server_error: 0,
+    other: 0,
+  })
+  const route = (path: '/api/v1/boards' | '/api/v1/events') => ({
+    route_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path],
+    request_start_count: 0,
+    response_count: 0,
+    status_category_counts: emptyStatuses(),
+    loading_finished_count: 0,
+    loading_failed_count: 0,
+    from_service_worker_count: 0,
+    event_source_open_count: 0,
+    event_source_close_count: 0,
+    pending_request_count: 0,
+  })
+  return {
+    viewport_id: 'desktop',
+    context: {
+      journey: 'Settings primary view',
+      interaction_mode: 'keyboard',
+      stage: 'owner_login',
+      lifecycle_ordinal: 32,
+    },
+    dom_surface: {
+      document_complete: true,
+      login: false,
+      connecting: true,
+      initial_offline: false,
+      application: false,
+    },
+    document_state: { ready_state: 'complete', surface: 'connecting' },
+    service_worker: {
+      controller: true,
+      registration_count: 1,
+      active: true,
+      waiting: false,
+      installing: false,
+    },
+    navigation_synchronization: {
+      expected_loader_sha256: 'a'.repeat(64),
+      observed_loader_sha256: 'a'.repeat(64),
+      main_frame_loader_matched: true,
+      location_matched: true,
+      time_origin_changed: true,
+      document_complete: true,
+      load_event_observed: true,
+      elapsed_ms: 12,
+      time_origin_delta_ms: 10,
+    },
+    authentication_challenge_inventory: {
+      login_cycles: 1,
+      total_count: 0,
+      pending_request_count: 2,
+      endpoints: LOCAL_OWNER_CHALLENGE_PATHS.map((path) => ({
+        endpoint_sha256: LOCAL_OWNER_CHALLENGE_DIGESTS[path], count: 0,
+      })),
+    },
+    local_evidence: {
+      failed_request_count: 0,
+      failed_requests: [],
+      authentication_challenge_count: 0,
+      authentication_challenges: [],
+      console_error_count: 0,
+      console_errors: [],
+      page_error_count: 0,
+      page_errors: [],
+    },
+    last_lifecycle: {
+      request_start_count: 0,
+      response_count: 0,
+      status_category_counts: emptyStatuses(),
+      loading_finished_count: 0,
+      from_service_worker_count: 0,
+      pending_request_count: 0,
+      routes: { boards: route('/api/v1/boards'), events: route('/api/v1/events') },
+      loading_failed_count: 0,
+      loading_failed: [],
+    },
+  }
+}
+
 const currentBaseline = () => {
   const upgraded = structuredClone(baseline) as any
   upgraded.schema_version = BROWSER_BASELINE_SCHEMA_VERSION
@@ -292,6 +404,105 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(evaluateReady('absent')).toBe(false)
     expect(evaluateReady('offline')).toBe(false)
     expect(evaluateReady('live')).toBe(true)
+  })
+
+  it('retains exact current-lifecycle boards, EventSource, and service-worker-safe fatal evidence', () => {
+    const tracker = createFatalLifecycleDiagnosticTracker('http://127.0.0.1:4312')
+    tracker.beginLifecycle()
+    expect(tracker.observeRequest(
+      'boards-current', 'http://127.0.0.1:4312/api/v1/boards?secret=never-retained', 'Fetch',
+    )).toBe(true)
+    expect(tracker.observeResponse(
+      'boards-current', 401, 'http://127.0.0.1:4312/api/v1/boards?secret=never-retained', true,
+    )).toBe(true)
+    expect(tracker.observeFinished('boards-current')).toBe(true)
+    expect(tracker.observeRequest(
+      'events-current', 'http://127.0.0.1:4312/api/v1/events?token=never-retained', 'EventSource',
+    )).toBe(true)
+    expect(tracker.observeResponse(
+      'events-current', 200, 'http://127.0.0.1:4312/api/v1/events?token=never-retained', false,
+    )).toBe(true)
+    expect(tracker.observeFailure('events-current', 'net::ERR_ABORTED private-url', true)).toBe(true)
+    const evidence = tracker.evidence()
+    expect(evidence).toMatchObject({
+      request_start_count: 2,
+      response_count: 2,
+      loading_finished_count: 1,
+      loading_failed_count: 1,
+      pending_request_count: 0,
+      from_service_worker_count: 1,
+      routes: {
+        boards: {
+          request_start_count: 1,
+          response_count: 1,
+          loading_finished_count: 1,
+          loading_failed_count: 0,
+          from_service_worker_count: 1,
+          event_source_open_count: 0,
+          event_source_close_count: 0,
+          pending_request_count: 0,
+        },
+        events: {
+          request_start_count: 1,
+          response_count: 1,
+          loading_finished_count: 0,
+          loading_failed_count: 1,
+          from_service_worker_count: 0,
+          event_source_open_count: 1,
+          event_source_close_count: 1,
+          pending_request_count: 0,
+        },
+      },
+    })
+    expect(JSON.stringify(evidence)).not.toMatch(/boards-current|events-current|secret|token|private-url|\/api\//)
+
+    const diagnostics = passingFatalViewportDiagnostics()
+    diagnostics.last_lifecycle = evidence
+    expect(validateFatalViewportDiagnostics(diagnostics)).toEqual([])
+  })
+
+  it('ignores late prior-lifecycle terminals and does not call a rejected EventSource closed', () => {
+    const tracker = createFatalLifecycleDiagnosticTracker('http://127.0.0.1:4312')
+    tracker.observeRequest('prior-events', 'http://127.0.0.1:4312/api/v1/events', 'EventSource')
+    tracker.beginLifecycle()
+    expect(tracker.observeResponse(
+      'prior-events', 200, 'http://127.0.0.1:4312/api/v1/events', true,
+    )).toBe(false)
+    expect(tracker.observeFailure('prior-events', 'late failure', true)).toBe(false)
+    expect(tracker.evidence()).toEqual(passingFatalViewportDiagnostics().last_lifecycle)
+
+    tracker.observeRequest('rejected-events', 'http://127.0.0.1:4312/api/v1/events', 'EventSource')
+    tracker.observeResponse('rejected-events', 401, 'http://127.0.0.1:4312/api/v1/events', true)
+    tracker.observeFinished('rejected-events')
+    expect(tracker.evidence().routes.events).toMatchObject({
+      event_source_open_count: 0,
+      event_source_close_count: 0,
+      loading_finished_count: 1,
+    })
+  })
+
+  it('rejects fatal diagnostic privacy, shape, bounds, and lifecycle-accounting violations', () => {
+    expect(validateFatalViewportDiagnostics(passingFatalViewportDiagnostics())).toEqual([])
+    const adversarialCases: Array<(diagnostics: any) => void> = [
+      (diagnostics) => { diagnostics.service_worker.scope = '/private/scope' },
+      (diagnostics) => { diagnostics.context.journey = 'raw dynamic journey' },
+      (diagnostics) => { diagnostics.last_lifecycle.routes.boards.request_id = 'raw-request' },
+      (diagnostics) => { diagnostics.last_lifecycle.routes.events.route_sha256 = 'not-a-digest' },
+      (diagnostics) => { diagnostics.last_lifecycle.routes.boards.pending_request_count = 1 },
+      (diagnostics) => { diagnostics.last_lifecycle.response_count = 1 },
+      (diagnostics) => { diagnostics.local_evidence.authentication_challenge_count = 1 },
+      (diagnostics) => {
+        diagnostics.last_lifecycle.loading_failed = Array.from(
+          { length: FATAL_VIEWPORT_DIAGNOSTIC_MAX_ENTRIES + 1 },
+          () => ({ error_sha256: 'a'.repeat(64), route_sha256: null, canceled: false }),
+        )
+      },
+    ]
+    for (const mutate of adversarialCases) {
+      const diagnostics = passingFatalViewportDiagnostics()
+      mutate(diagnostics)
+      expect(validateFatalViewportDiagnostics(diagnostics).length).toBeGreaterThan(0)
+    }
   })
 
   it('retains bounded hashed competitor starts even when no response completes', () => {
@@ -1407,14 +1618,47 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     }
   })
 
+  it('rejects startup provenance without a synchronized initial document boundary', () => {
+    const evidence = passingEvidence()
+    evidence.viewports[0].performance.startup.provenance.navigation_synchronization.time_origin_changed = false
+    evidence.sha256 = verifiableDocumentDigest(evidence)
+    expect(validateBrowserQualityEvidence(evidence))
+      .toContain('desktop has invalid startup navigation provenance')
+  })
+
   it('creates 36 distinct page loaders for the exact journey and mode inventory', async () => {
     const navigations: string[] = []
     let readinessChecks = 0
+    let currentHref = 'about:blank'
+    let currentLoader = 'initial-loader'
+    let timeOrigin = 1_000
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const emit = (method: string, event: any) => {
+      for (const listener of listeners.get(method) ?? []) listener(event)
+    }
     const client = {
-      send: async (method: string, { url }: { url: string }) => {
+      on(method: string, listener: (event: any) => void) {
+        const methodListeners = listeners.get(method) ?? new Set()
+        methodListeners.add(listener)
+        listeners.set(method, methodListeners)
+        return () => methodListeners.delete(listener)
+      },
+      async send(method: string, params: any = {}) {
+        if (method === 'Page.setLifecycleEventsEnabled') return {}
+        if (method === 'Runtime.evaluate') return { result: { value: {
+          href: currentHref, time_origin_ms: timeOrigin, document_complete: true,
+        } } }
+        if (method === 'Page.getFrameTree') return {
+          frameTree: { frame: { loaderId: currentLoader, url: currentHref } },
+        }
         expect(method).toBe('Page.navigate')
-        navigations.push(url)
-        return { loaderId: `loader-${navigations.length}` }
+        navigations.push(params.url)
+        currentHref = new URL(params.url).href
+        currentLoader = `loader-${navigations.length}`
+        timeOrigin += 10
+        emit('Page.frameNavigated', { frame: { loaderId: currentLoader, url: currentHref } })
+        emit('Page.lifecycleEvent', { name: 'load', loaderId: currentLoader })
+        return { loaderId: currentLoader }
       },
     }
     const resets = []
@@ -1434,6 +1678,216 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(readinessChecks).toBe(36)
     expect(new Set(resets.map((reset) => reset.loader_sha256))).toHaveLength(36)
     expect(resets.every((reset) => reset.strategy === 'fresh_page_navigation')).toBe(true)
+    expect(resets.every((reset) => reset.navigation_synchronization.main_frame_loader_matched)).toBe(true)
+    expect([...listeners.values()].every((methodListeners) => methodListeners.size === 0)).toBe(true)
+  })
+
+  it.each(['before', 'after'])('synchronizes lifecycle events delivered %s Page.navigate resolves', async (timing) => {
+    const expectedUrl = 'http://127.0.0.1:4747/?journey=settings&mode=keyboard'
+    const expectedLoader = 'new-main-loader'
+    let currentHref = 'http://127.0.0.1:4747/?retiring=settings'
+    let currentLoader = 'retiring-loader'
+    let timeOrigin = 1_000
+    let navigationResolved = false
+    let emitted = false
+    let readinessChecks = 0
+    let fakeNow = 0
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const emitLifecycle = () => {
+      if (emitted) return
+      emitted = true
+      currentHref = new URL(expectedUrl).href
+      currentLoader = expectedLoader
+      timeOrigin = 2_000
+      for (const listener of listeners.get('Page.frameNavigated') ?? []) {
+        listener({ frame: { loaderId: expectedLoader, url: currentHref } })
+      }
+      for (const listener of listeners.get('Page.lifecycleEvent') ?? []) {
+        listener({ name: 'load', loaderId: expectedLoader })
+      }
+    }
+    const client = {
+      on(method: string, listener: (event: any) => void) {
+        const methodListeners = listeners.get(method) ?? new Set()
+        methodListeners.add(listener)
+        listeners.set(method, methodListeners)
+        return () => methodListeners.delete(listener)
+      },
+      async send(method: string, params: any = {}) {
+        if (method === 'Page.setLifecycleEventsEnabled') return {}
+        if (method === 'Runtime.evaluate') return { result: { value: {
+          href: currentHref, time_origin_ms: timeOrigin, document_complete: true,
+        } } }
+        if (method === 'Page.navigate') {
+          expect(params.url).toBe(expectedUrl)
+          if (timing === 'before') emitLifecycle()
+          navigationResolved = true
+          return { loaderId: expectedLoader }
+        }
+        if (method === 'Page.getFrameTree') {
+          expect(navigationResolved).toBe(true)
+          if (timing === 'after') emitLifecycle()
+          return { frameTree: { frame: { loaderId: currentLoader, url: currentHref } } }
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+    const result = await navigateFreshInteractionMode({
+      client,
+      url: expectedUrl,
+      name: 'Settings primary view',
+      mode: 'keyboard',
+      waitForReady: async () => { readinessChecks += 1 },
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => { fakeNow += milliseconds },
+      synchronizationTimeoutMs: 100,
+    })
+    expect(readinessChecks).toBe(1)
+    expect(result.navigation_synchronization).toMatchObject({
+      main_frame_loader_matched: true,
+      location_matched: true,
+      time_origin_changed: true,
+      document_complete: true,
+      load_event_observed: true,
+    })
+    expect([...listeners.values()].every((methodListeners) => methodListeners.size === 0)).toBe(true)
+  })
+
+  it('does not let a stale retiring document pass readiness', async () => {
+    const expectedUrl = 'http://127.0.0.1:4747/?journey=settings&mode=keyboard'
+    const expectedHref = new URL(expectedUrl).href
+    const expectedLoader = 'new-main-loader'
+    let boundaryReads = 0
+    let readinessChecks = 0
+    let fakeNow = 0
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const client = {
+      on(method: string, listener: (event: any) => void) {
+        const methodListeners = listeners.get(method) ?? new Set()
+        methodListeners.add(listener)
+        listeners.set(method, methodListeners)
+        return () => methodListeners.delete(listener)
+      },
+      async send(method: string, params: any = {}) {
+        if (method === 'Page.setLifecycleEventsEnabled') return {}
+        if (method === 'Runtime.evaluate') {
+          boundaryReads += 1
+          const isNewDocument = boundaryReads >= 4
+          return { result: { value: {
+            href: isNewDocument ? expectedHref : 'http://127.0.0.1:4747/?retiring=settings',
+            time_origin_ms: isNewDocument ? 2_000 : 1_000,
+            document_complete: true,
+          } } }
+        }
+        if (method === 'Page.navigate') {
+          for (const listener of listeners.get('Page.frameNavigated') ?? []) {
+            listener({ frame: { loaderId: expectedLoader, url: expectedHref } })
+          }
+          for (const listener of listeners.get('Page.lifecycleEvent') ?? []) {
+            listener({ name: 'load', loaderId: expectedLoader })
+          }
+          return { loaderId: expectedLoader }
+        }
+        if (method === 'Page.getFrameTree') return {
+          frameTree: { frame: { loaderId: expectedLoader, url: expectedHref } },
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+    await navigateFreshInteractionMode({
+      client,
+      url: expectedUrl,
+      name: 'Settings primary view',
+      mode: 'keyboard',
+      waitForReady: async () => { readinessChecks += 1 },
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => { fakeNow += milliseconds },
+      synchronizationTimeoutMs: 100,
+    })
+    expect(boundaryReads).toBe(4)
+    expect(readinessChecks).toBe(1)
+  })
+
+  it('rejects a mismatched main-frame loader and removes lifecycle listeners', async () => {
+    let fakeNow = 0
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const client = {
+      on(method: string, listener: (event: any) => void) {
+        const methodListeners = listeners.get(method) ?? new Set()
+        methodListeners.add(listener)
+        listeners.set(method, methodListeners)
+        return () => methodListeners.delete(listener)
+      },
+      async send(method: string) {
+        if (method === 'Page.setLifecycleEventsEnabled') return {}
+        if (method === 'Runtime.evaluate') return { result: { value: {
+          href: fakeNow ? 'http://127.0.0.1:4747/?fresh=1' : 'about:blank',
+          time_origin_ms: fakeNow ? 2_000 : 1_000,
+          document_complete: true,
+        } } }
+        if (method === 'Page.navigate') return { loaderId: 'expected-loader' }
+        if (method === 'Page.getFrameTree') return {
+          frameTree: { frame: { loaderId: 'wrong-loader', url: 'http://127.0.0.1:4747/?fresh=1' } },
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+    await expect(navigateFreshInteractionMode({
+      client,
+      url: 'http://127.0.0.1:4747/?fresh=1',
+      name: 'Settings primary view',
+      mode: 'keyboard',
+      waitForReady: async () => { throw new Error('readiness must not run') },
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => { fakeNow += milliseconds },
+      synchronizationTimeoutMs: 20,
+    })).rejects.toThrow(/did not synchronize/)
+    expect([...listeners.values()].every((methodListeners) => methodListeners.size === 0)).toBe(true)
+  })
+
+  it('does not correlate a load lifecycle event from a different loader', async () => {
+    let fakeNow = 0
+    const href = 'http://127.0.0.1:4747/?fresh=1'
+    const listeners = new Map<string, Set<(event: any) => void>>()
+    const client = {
+      on(method: string, listener: (event: any) => void) {
+        const methodListeners = listeners.get(method) ?? new Set()
+        methodListeners.add(listener)
+        listeners.set(method, methodListeners)
+        return () => methodListeners.delete(listener)
+      },
+      async send(method: string) {
+        if (method === 'Page.setLifecycleEventsEnabled') return {}
+        if (method === 'Runtime.evaluate') return { result: { value: {
+          href: fakeNow ? href : 'about:blank',
+          time_origin_ms: fakeNow ? 2_000 : 1_000,
+          document_complete: true,
+        } } }
+        if (method === 'Page.navigate') {
+          for (const listener of listeners.get('Page.frameNavigated') ?? []) {
+            listener({ frame: { loaderId: 'expected-loader', url: href } })
+          }
+          for (const listener of listeners.get('Page.lifecycleEvent') ?? []) {
+            listener({ name: 'load', loaderId: 'unrelated-loader' })
+          }
+          return { loaderId: 'expected-loader' }
+        }
+        if (method === 'Page.getFrameTree') return {
+          frameTree: { frame: { loaderId: 'expected-loader', url: href } },
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+    await expect(navigateFreshInteractionMode({
+      client,
+      url: href,
+      name: 'Settings primary view',
+      mode: 'keyboard',
+      waitForReady: async () => { throw new Error('readiness must not run') },
+      now: () => fakeNow,
+      sleep: async (milliseconds: number) => { fakeNow += milliseconds },
+      synchronizationTimeoutMs: 20,
+    })).rejects.toThrow(/did not synchronize/)
   })
 
   it('rejects artifact identity mutation between preflight and finalization', () => {
@@ -1576,5 +2030,11 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
     expect(source.match(/attachRequestBudgetPacer\(client, requestBudgetPacer\)/g)).toHaveLength(1)
     expect(source).toContain('await requestBudgetPacer.beforeLifecycle()')
     expect(source).not.toContain('mayRetryFixtureMutation')
+    expect(source).toContain('fatal_viewport_diagnostics: fatalViewportDiagnostics')
+    expect(source).toContain('navigator.serviceWorker?.controller')
+    expect(source).not.toContain('registration.scope')
+    expect(source).not.toContain('registration.active.scriptURL')
+    expect(qualitySource).toContain("client.on('Page.lifecycleEvent'")
+    expect(qualitySource).not.toContain("client.on('Page.loadEventFired'")
   })
 })

@@ -466,6 +466,353 @@ export const attachRequestBudgetPacer = (client, pacer) => {
   }
 }
 
+export const FATAL_VIEWPORT_DIAGNOSTIC_MAX_ENTRIES = EVIDENCE_MAX_ARRAY_LENGTH
+export const FATAL_VIEWPORT_STATUS_CATEGORIES = Object.freeze([
+  'informational', 'successful', 'redirection', 'client_error', 'server_error', 'other',
+])
+
+const emptyStatusCategoryCounts = () => Object.fromEntries(
+  FATAL_VIEWPORT_STATUS_CATEGORIES.map((category) => [category, 0]),
+)
+
+const statusCategory = (status) => {
+  if (!Number.isInteger(status)) return 'other'
+  if (status >= 100 && status < 200) return 'informational'
+  if (status >= 200 && status < 300) return 'successful'
+  if (status >= 300 && status < 400) return 'redirection'
+  if (status >= 400 && status < 500) return 'client_error'
+  if (status >= 500 && status < 600) return 'server_error'
+  return 'other'
+}
+
+export const createFatalLifecycleDiagnosticTracker = (baseUrl) => {
+  const origin = new URL(baseUrl).origin
+  const routeDefinitions = Object.freeze({
+    boards: Object.freeze({ path: '/api/v1/boards', digest: LOCAL_OWNER_CHALLENGE_DIGESTS['/api/v1/boards'] }),
+    events: Object.freeze({ path: '/api/v1/events', digest: LOCAL_OWNER_CHALLENGE_DIGESTS['/api/v1/events'] }),
+  })
+  let requests = new Map()
+  let requestStartCount = 0
+  let responseCount = 0
+  let loadingFinishedCount = 0
+  let fromServiceWorkerCount = 0
+  let responseStatusCounts = emptyStatusCategoryCounts()
+  let loadingFailed = []
+  let loadingFailedCount = 0
+  let routes = {}
+
+  const resetRoutes = () => Object.fromEntries(Object.entries(routeDefinitions).map(([key, route]) => [key, {
+    route_sha256: route.digest,
+    request_start_count: 0,
+    response_count: 0,
+    status_category_counts: emptyStatusCategoryCounts(),
+    loading_finished_count: 0,
+    loading_failed_count: 0,
+    from_service_worker_count: 0,
+    event_source_open_count: 0,
+    event_source_close_count: 0,
+  }]))
+  const classifyUrl = (rawUrl) => {
+    let url
+    try { url = new URL(rawUrl) } catch { return null }
+    if (url.origin !== origin || !url.pathname.startsWith('/api/')) return null
+    const route = Object.entries(routeDefinitions).find(([, definition]) => definition.path === url.pathname)?.[0] ?? null
+    return { route }
+  }
+  const retainFailure = (entry) => {
+    loadingFailed.push(entry)
+    if (loadingFailed.length > FATAL_VIEWPORT_DIAGNOSTIC_MAX_ENTRIES) loadingFailed.shift()
+  }
+
+  routes = resetRoutes()
+  return {
+    beginLifecycle() {
+      requests = new Map()
+      requestStartCount = 0
+      responseCount = 0
+      loadingFinishedCount = 0
+      fromServiceWorkerCount = 0
+      responseStatusCounts = emptyStatusCategoryCounts()
+      loadingFailed = []
+      loadingFailedCount = 0
+      routes = resetRoutes()
+    },
+    observeRequest(requestId, rawUrl, resourceType = null) {
+      const classification = requestId ? classifyUrl(rawUrl) : null
+      if (!classification) return false
+      classification.eventSource = resourceType === 'EventSource'
+      requests.set(requestId, classification)
+      requestStartCount += 1
+      if (classification.route) routes[classification.route].request_start_count += 1
+      return true
+    },
+    observeResponse(requestId, status, rawUrl, fromServiceWorker = false, resourceType = null) {
+      const tracked = requestId ? requests.get(requestId) : null
+      if (!tracked || !classifyUrl(rawUrl)) return false
+      if (resourceType === 'EventSource') tracked.eventSource = true
+      const category = statusCategory(status)
+      responseCount += 1
+      responseStatusCounts[category] += 1
+      if (fromServiceWorker === true) fromServiceWorkerCount += 1
+      if (tracked.route) {
+        const route = routes[tracked.route]
+        route.response_count += 1
+        route.status_category_counts[category] += 1
+        if (fromServiceWorker === true) route.from_service_worker_count += 1
+        if (tracked.eventSource && status >= 200 && status < 300) {
+          tracked.opened = true
+          route.event_source_open_count += 1
+        }
+      }
+      return true
+    },
+    observeFinished(requestId) {
+      const classification = requests.get(requestId) ?? null
+      if (!classification) return false
+      requests.delete(requestId)
+      loadingFinishedCount += 1
+      if (classification.route) {
+        routes[classification.route].loading_finished_count += 1
+        if (classification.eventSource && classification.opened) {
+          routes[classification.route].event_source_close_count += 1
+        }
+      }
+      return true
+    },
+    observeFailure(requestId, errorText, canceled = false) {
+      const classification = requests.get(requestId) ?? null
+      if (!classification) return false
+      requests.delete(requestId)
+      if (classification?.route) {
+        routes[classification.route].loading_failed_count += 1
+        if (classification.eventSource && classification.opened) {
+          routes[classification.route].event_source_close_count += 1
+        }
+      }
+      loadingFailedCount += 1
+      retainFailure({
+        error_sha256: startupRouteDigest(redactText(String(errorText ?? 'network loading failed'))),
+        route_sha256: classification?.route ? routeDefinitions[classification.route].digest : null,
+        canceled: canceled === true,
+      })
+      return true
+    },
+    evidence() {
+      const pendingByRoute = { boards: 0, events: 0 }
+      for (const request of requests.values()) {
+        if (request.route) pendingByRoute[request.route] += 1
+      }
+      return {
+        request_start_count: requestStartCount,
+        response_count: responseCount,
+        status_category_counts: structuredClone(responseStatusCounts),
+        loading_finished_count: loadingFinishedCount,
+        from_service_worker_count: fromServiceWorkerCount,
+        pending_request_count: requests.size,
+        routes: Object.fromEntries(Object.entries(routes).map(([key, route]) => [key, {
+          ...structuredClone(route),
+          pending_request_count: pendingByRoute[key],
+        }])),
+        loading_failed_count: loadingFailedCount,
+        loading_failed: structuredClone(loadingFailed),
+      }
+    },
+  }
+}
+
+const exactObjectKeys = (value, expectedKeys) => value && typeof value === 'object'
+  && !Array.isArray(value)
+  && canonicalJson(Object.keys(value).sort()) === canonicalJson([...expectedKeys].sort())
+
+const validDigest = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+const validNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0
+const validStatusCounts = (value) => exactObjectKeys(value, FATAL_VIEWPORT_STATUS_CATEGORIES)
+  && FATAL_VIEWPORT_STATUS_CATEGORIES.every((category) => validNonNegativeInteger(value[category]))
+const NAVIGATION_SYNCHRONIZATION_BOOLEAN_KEYS = Object.freeze([
+  'main_frame_loader_matched', 'location_matched', 'time_origin_changed',
+  'document_complete', 'load_event_observed',
+])
+const NAVIGATION_SYNCHRONIZATION_KEYS = Object.freeze([
+  'expected_loader_sha256', 'observed_loader_sha256',
+  ...NAVIGATION_SYNCHRONIZATION_BOOLEAN_KEYS, 'elapsed_ms', 'time_origin_delta_ms',
+])
+const validPassedNavigationSynchronization = (navigation, loaderDigest) => (
+  exactObjectKeys(navigation, NAVIGATION_SYNCHRONIZATION_KEYS)
+  && validDigest(loaderDigest)
+  && navigation.expected_loader_sha256 === loaderDigest
+  && navigation.observed_loader_sha256 === loaderDigest
+  && NAVIGATION_SYNCHRONIZATION_BOOLEAN_KEYS.every((key) => navigation[key] === true)
+  && validNonNegativeInteger(navigation.elapsed_ms)
+  && Number.isFinite(navigation.time_origin_delta_ms)
+  && navigation.time_origin_delta_ms > 0
+)
+
+export const validateFatalViewportDiagnostics = (diagnostics) => {
+  const errors = []
+  const topLevelKeys = [
+    'viewport_id', 'context', 'dom_surface', 'document_state', 'service_worker',
+    'navigation_synchronization', 'authentication_challenge_inventory', 'local_evidence',
+    'last_lifecycle',
+  ]
+  if (!exactObjectKeys(diagnostics, topLevelKeys)) return ['fatal viewport diagnostics keys are invalid']
+  if (!RESPONSIVE_VIEWPORTS.some((viewport) => viewport.id === diagnostics.viewport_id)) {
+    errors.push('fatal viewport diagnostics viewport is invalid')
+  }
+  const context = diagnostics.context
+  const contextStages = [
+    'navigation_sync', 'first_connection', 'owner_login', 'authenticated_ready',
+    'journey_setup', 'journey_action', 'journey_readiness',
+  ]
+  const validInitialContext = context?.journey === null
+    && context?.interaction_mode === 'initial' && context?.lifecycle_ordinal === 0
+  const validJourneyContext = BROWSER_JOURNEYS.includes(context?.journey)
+    && BROWSER_INTERACTION_MODES.includes(context?.interaction_mode)
+    && Number.isInteger(context?.lifecycle_ordinal) && context.lifecycle_ordinal >= 1
+    && context.lifecycle_ordinal <= BROWSER_JOURNEYS.length * BROWSER_INTERACTION_MODES.length
+  if (!exactObjectKeys(context, ['journey', 'interaction_mode', 'stage', 'lifecycle_ordinal'])
+    || !contextStages.includes(context.stage) || (!validInitialContext && !validJourneyContext)) {
+    errors.push('fatal viewport lifecycle context is invalid')
+  }
+  const domKeys = ['document_complete', 'login', 'connecting', 'initial_offline', 'application']
+  if (!exactObjectKeys(diagnostics.dom_surface, domKeys)
+    || domKeys.some((key) => typeof diagnostics.dom_surface[key] !== 'boolean')) {
+    errors.push('fatal viewport DOM surface diagnostics are invalid')
+  }
+  const documentState = diagnostics.document_state
+  if (!exactObjectKeys(documentState, ['ready_state', 'surface'])
+    || !['loading', 'interactive', 'complete', 'unavailable'].includes(documentState.ready_state)
+    || !['login', 'connecting', 'initial_offline', 'application', 'unknown'].includes(documentState.surface)) {
+    errors.push('fatal viewport document state is invalid')
+  }
+  const serviceWorker = diagnostics.service_worker
+  if (!exactObjectKeys(serviceWorker, ['controller', 'registration_count', 'active', 'waiting', 'installing'])
+    || typeof serviceWorker.controller !== 'boolean'
+    || !validNonNegativeInteger(serviceWorker.registration_count)
+    || ['active', 'waiting', 'installing'].some((key) => typeof serviceWorker[key] !== 'boolean')) {
+    errors.push('fatal viewport service worker state is invalid')
+  }
+  const navigation = diagnostics.navigation_synchronization
+  const validNullableDigest = (value) => value === null || validDigest(value)
+  if (navigation !== null && (!exactObjectKeys(navigation, NAVIGATION_SYNCHRONIZATION_KEYS)
+    || !validNullableDigest(navigation.expected_loader_sha256)
+    || !validNullableDigest(navigation.observed_loader_sha256)
+    || NAVIGATION_SYNCHRONIZATION_BOOLEAN_KEYS.some((key) => typeof navigation[key] !== 'boolean')
+    || !validNonNegativeInteger(navigation.elapsed_ms)
+    || !(navigation.time_origin_delta_ms === null
+      || (Number.isFinite(navigation.time_origin_delta_ms) && navigation.time_origin_delta_ms >= 0)))) {
+    errors.push('fatal viewport navigation synchronization is invalid')
+  }
+  const inventory = diagnostics.authentication_challenge_inventory
+  const inventoryKeys = ['login_cycles', 'total_count', 'pending_request_count', 'endpoints']
+  const validInventory = exactObjectKeys(inventory, inventoryKeys)
+    && validNonNegativeInteger(inventory.login_cycles)
+    && validNonNegativeInteger(inventory.total_count)
+    && validNonNegativeInteger(inventory.pending_request_count)
+    && Array.isArray(inventory.endpoints)
+    && inventory.endpoints.length === LOCAL_OWNER_CHALLENGE_PATHS.length
+    && inventory.endpoints.every((endpoint) => exactObjectKeys(endpoint, ['endpoint_sha256', 'count'])
+      && Object.values(LOCAL_OWNER_CHALLENGE_DIGESTS).includes(endpoint.endpoint_sha256)
+      && validNonNegativeInteger(endpoint.count))
+    && new Set(inventory.endpoints.map((endpoint) => endpoint.endpoint_sha256)).size
+      === LOCAL_OWNER_CHALLENGE_PATHS.length
+    && inventory.total_count === inventory.endpoints.reduce((sum, endpoint) => sum + endpoint.count, 0)
+  if (!validInventory) errors.push('fatal viewport authentication diagnostics are invalid')
+  const local = diagnostics.local_evidence
+  const localKeys = [
+    'failed_request_count', 'failed_requests', 'authentication_challenge_count',
+    'authentication_challenges', 'console_error_count', 'console_errors', 'page_error_count',
+    'page_errors',
+  ]
+  const boundedArray = (value) => Array.isArray(value) && value.length <= FATAL_VIEWPORT_DIAGNOSTIC_MAX_ENTRIES
+  const validFingerprintEntry = (entry, label) => exactObjectKeys(entry, ['label', 'sha256'])
+    && entry.label === label && validDigest(entry.sha256)
+  const validHttpEntry = (entry, label) => exactObjectKeys(entry, ['label', 'status', 'endpoint_sha256'])
+    && entry.label === label && Number.isInteger(entry.status) && entry.status >= 100 && entry.status <= 599
+    && validDigest(entry.endpoint_sha256)
+  const validFailedRequestEntry = (entry) => validFingerprintEntry(entry, 'network_loading_failed')
+    || validHttpEntry(entry, 'http_failure')
+    || (exactObjectKeys(entry, ['label', 'login_cycles', 'total_count'])
+      && entry.label === 'invalid_local_owner_challenge_inventory'
+      && validNonNegativeInteger(entry.login_cycles) && validNonNegativeInteger(entry.total_count))
+  const validLocal = exactObjectKeys(local, localKeys)
+    && validNonNegativeInteger(local.failed_request_count)
+    && validNonNegativeInteger(local.authentication_challenge_count)
+    && validNonNegativeInteger(local.console_error_count)
+    && validNonNegativeInteger(local.page_error_count)
+    && boundedArray(local.failed_requests) && local.failed_requests.every(validFailedRequestEntry)
+    && boundedArray(local.authentication_challenges)
+    && local.authentication_challenges.every((entry) => validHttpEntry(entry, 'expected_local_owner_challenge'))
+    && boundedArray(local.console_errors) && local.console_errors.every((entry) => validFingerprintEntry(entry, 'console_error'))
+    && boundedArray(local.page_errors) && local.page_errors.every((entry) => validFingerprintEntry(entry, 'page_exception'))
+    && local.failed_request_count >= local.failed_requests.length
+    && local.authentication_challenge_count >= local.authentication_challenges.length
+    && local.console_error_count >= local.console_errors.length
+    && local.page_error_count >= local.page_errors.length
+    && local.authentication_challenge_count === inventory.total_count
+  if (!validLocal) errors.push('fatal viewport local evidence is invalid')
+  const lifecycle = diagnostics.last_lifecycle
+  const lifecycleKeys = [
+    'request_start_count', 'response_count', 'status_category_counts', 'loading_finished_count',
+    'from_service_worker_count', 'pending_request_count', 'routes', 'loading_failed_count',
+    'loading_failed',
+  ]
+  const routeKeys = [
+    'route_sha256', 'request_start_count', 'response_count', 'status_category_counts',
+    'loading_finished_count', 'loading_failed_count', 'from_service_worker_count',
+    'event_source_open_count', 'event_source_close_count', 'pending_request_count',
+  ]
+  const expectedRouteDigests = {
+    boards: LOCAL_OWNER_CHALLENGE_DIGESTS['/api/v1/boards'],
+    events: LOCAL_OWNER_CHALLENGE_DIGESTS['/api/v1/events'],
+  }
+  const validLifecycle = exactObjectKeys(lifecycle, lifecycleKeys)
+    && validNonNegativeInteger(lifecycle.request_start_count)
+    && validNonNegativeInteger(lifecycle.response_count)
+    && validStatusCounts(lifecycle.status_category_counts)
+    && lifecycle.response_count === Object.values(lifecycle.status_category_counts)
+      .reduce((sum, count) => sum + count, 0)
+    && lifecycle.response_count <= lifecycle.request_start_count
+    && validNonNegativeInteger(lifecycle.loading_finished_count)
+    && validNonNegativeInteger(lifecycle.from_service_worker_count)
+    && lifecycle.from_service_worker_count <= lifecycle.response_count
+    && validNonNegativeInteger(lifecycle.pending_request_count)
+    && lifecycle.request_start_count === lifecycle.loading_finished_count
+      + lifecycle.loading_failed_count + lifecycle.pending_request_count
+    && exactObjectKeys(lifecycle.routes, ['boards', 'events'])
+    && Object.entries(expectedRouteDigests).every(([key, digest]) => {
+      const route = lifecycle.routes[key]
+      return exactObjectKeys(route, routeKeys)
+        && route.route_sha256 === digest
+        && validNonNegativeInteger(route.request_start_count)
+        && validNonNegativeInteger(route.response_count)
+        && validStatusCounts(route.status_category_counts)
+        && route.response_count === Object.values(route.status_category_counts)
+          .reduce((sum, count) => sum + count, 0)
+        && route.response_count <= route.request_start_count
+        && validNonNegativeInteger(route.loading_finished_count)
+        && validNonNegativeInteger(route.loading_failed_count)
+        && validNonNegativeInteger(route.from_service_worker_count)
+        && route.from_service_worker_count <= route.response_count
+        && validNonNegativeInteger(route.event_source_open_count)
+        && validNonNegativeInteger(route.event_source_close_count)
+        && route.event_source_close_count <= route.event_source_open_count
+        && route.event_source_close_count <= route.loading_finished_count + route.loading_failed_count
+        && validNonNegativeInteger(route.pending_request_count)
+        && route.request_start_count === route.loading_finished_count
+          + route.loading_failed_count + route.pending_request_count
+    })
+    && validNonNegativeInteger(lifecycle.loading_failed_count)
+    && boundedArray(lifecycle.loading_failed)
+    && lifecycle.loading_failed_count >= lifecycle.loading_failed.length
+    && lifecycle.loading_failed.every((entry) => exactObjectKeys(entry, ['error_sha256', 'route_sha256', 'canceled'])
+      && validDigest(entry.error_sha256)
+      && (entry.route_sha256 === null || Object.values(expectedRouteDigests).includes(entry.route_sha256))
+      && typeof entry.canceled === 'boolean')
+  if (!validLifecycle) errors.push('fatal viewport lifecycle evidence is invalid')
+  if (evidenceBoundaryViolations(diagnostics)) errors.push('fatal viewport diagnostics exceed bounded retention limits')
+  return errors
+}
+
 export const verifiableDocumentDigest = (value) => {
   const document = structuredClone(value)
   delete document.sha256
@@ -506,15 +853,117 @@ export const assertFinalBuildManifest = (initial, final) => {
   }
 }
 
-export const navigateFreshInteractionMode = async ({ client, url, waitForReady, name, mode }) => {
-  const navigation = await client.send('Page.navigate', { url })
-  if (navigation?.errorText || !navigation?.loaderId) {
-    throw new Error(`${name} ${mode} fresh navigation did not create a loader`)
+export const navigateFreshInteractionMode = async ({
+  client,
+  url,
+  waitForReady,
+  name,
+  mode,
+  onSynchronizationEvidence = () => {},
+  now = () => performance.now(),
+  sleep = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)),
+  synchronizationTimeoutMs = 10_000,
+}) => {
+  const expectedHref = new URL(url).href
+  const digestLoader = (loaderId) => typeof loaderId === 'string' && loaderId.length
+    ? createHash('sha256').update(loaderId).digest('hex') : null
+  const evaluateDocumentBoundary = async () => {
+    const result = await client.send('Runtime.evaluate', {
+      expression: `({
+        href: location.href,
+        time_origin_ms: performance.timeOrigin,
+        document_complete: document.readyState === 'complete',
+      })`,
+      returnByValue: true,
+    })
+    return result?.result?.value ?? null
   }
-  await waitForReady()
-  return {
-    strategy: 'fresh_page_navigation',
-    loader_sha256: createHash('sha256').update(navigation.loaderId).digest('hex'),
+  const priorDocument = await evaluateDocumentBoundary()
+  if (!Number.isFinite(priorDocument?.time_origin_ms)) {
+    throw new Error(`${name} ${mode} fresh navigation could not capture the prior document boundary`)
+  }
+
+  let eventSequence = 0
+  const frameNavigations = []
+  const lifecycleLoads = []
+  let expectedLoaderId = null
+  let observedLoaderId = null
+  let lastDocument = null
+  const startedAt = now()
+  const synchronizationEvidence = () => {
+    const timeOriginDelta = Number.isFinite(lastDocument?.time_origin_ms)
+      ? Math.abs(lastDocument.time_origin_ms - priorDocument.time_origin_ms) : null
+    return {
+      expected_loader_sha256: digestLoader(expectedLoaderId),
+      observed_loader_sha256: digestLoader(observedLoaderId),
+      main_frame_loader_matched: Boolean(expectedLoaderId && observedLoaderId === expectedLoaderId),
+      location_matched: lastDocument?.href === expectedHref,
+      time_origin_changed: Number.isFinite(timeOriginDelta) && timeOriginDelta > 0,
+      document_complete: lastDocument?.document_complete === true,
+      load_event_observed: frameNavigations.some((frameEvent) => frameEvent.loaderId === expectedLoaderId
+        && frameEvent.href === expectedHref
+        && lifecycleLoads.some((loadEvent) => loadEvent.loaderId === expectedLoaderId
+          && loadEvent.sequence > frameEvent.sequence)),
+      elapsed_ms: Math.max(0, Math.round(now() - startedAt)),
+      time_origin_delta_ms: Number.isFinite(timeOriginDelta) ? timeOriginDelta : null,
+    }
+  }
+  const publishSynchronizationEvidence = () => {
+    const evidence = synchronizationEvidence()
+    onSynchronizationEvidence(structuredClone(evidence))
+    return evidence
+  }
+  const unsubscribeFrame = client.on('Page.frameNavigated', (event) => {
+    if (!event.frame?.parentId) {
+      eventSequence += 1
+      frameNavigations.push({
+        sequence: eventSequence,
+        loaderId: event.frame?.loaderId ?? null,
+        href: event.frame?.url ?? null,
+      })
+    }
+  })
+  const unsubscribeLoad = client.on('Page.lifecycleEvent', (event) => {
+    if (event.name !== 'load') return
+    eventSequence += 1
+    lifecycleLoads.push({ sequence: eventSequence, loaderId: event.loaderId ?? null })
+  })
+
+  try {
+    await client.send('Page.setLifecycleEventsEnabled', { enabled: true })
+    const navigation = await client.send('Page.navigate', { url })
+    expectedLoaderId = navigation?.loaderId ?? null
+    if (navigation?.errorText || !expectedLoaderId) {
+      publishSynchronizationEvidence()
+      throw new Error(`${name} ${mode} fresh navigation did not create a loader`)
+    }
+    const deadline = now() + synchronizationTimeoutMs
+    while (now() <= deadline) {
+      const frameTree = await client.send('Page.getFrameTree')
+      const mainFrame = frameTree?.frameTree?.frame ?? null
+      observedLoaderId = mainFrame?.loaderId ?? null
+      lastDocument = await evaluateDocumentBoundary()
+      const evidence = publishSynchronizationEvidence()
+      if (mainFrame?.url === expectedHref
+        && evidence.main_frame_loader_matched
+        && evidence.location_matched
+        && evidence.time_origin_changed
+        && evidence.document_complete
+        && evidence.load_event_observed) {
+        await waitForReady()
+        return {
+          strategy: 'fresh_page_navigation',
+          loader_sha256: digestLoader(expectedLoaderId),
+          navigation_synchronization: evidence,
+        }
+      }
+      await sleep(10)
+    }
+    throw new Error(`${name} ${mode} fresh navigation did not synchronize the new document lifecycle`)
+  } finally {
+    publishSynchronizationEvidence()
+    unsubscribeFrame()
+    unsubscribeLoad()
   }
 }
 
@@ -1124,7 +1573,11 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
         }
         const reset = journey.interaction_modes?.[mode]?.reset
         if (reset?.strategy !== 'fresh_page_navigation'
-          || !/^[a-f0-9]{64}$/.test(String(reset?.loader_sha256 ?? ''))) {
+          || !validDigest(reset?.loader_sha256)
+          || !exactObjectKeys(reset, ['strategy', 'loader_sha256', 'navigation_synchronization'])
+          || !validPassedNavigationSynchronization(
+            reset?.navigation_synchronization, reset?.loader_sha256,
+          )) {
           errors.push(`${expected.id} ${journey.name} ${mode} lacks fresh navigation isolation`)
         } else {
           isolationIds.push(reset.loader_sha256)
@@ -1276,7 +1729,10 @@ export const validateBrowserQualityEvidence = (evidence, { requireBudgets = true
           && competitorRequestStarts.every(validCompetitorRequestStart)
           && resourceTiming.competitor_request_start_count === 0
           && validLongTasks
-        if (!/^[a-f0-9]{64}$/.test(String(provenance?.loader_sha256 ?? ''))
+        if (!validDigest(provenance?.loader_sha256)
+          || !validPassedNavigationSynchronization(
+            provenance?.navigation_synchronization, provenance?.loader_sha256,
+          )
           || !Number.isFinite(provenance?.time_origin_ms) || provenance.time_origin_ms <= 0
           || provenance?.navigation_start_ms !== 0
           || provenance?.navigation_type !== 'navigate'

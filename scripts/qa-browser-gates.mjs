@@ -28,6 +28,7 @@ import {
   attachRequestBudgetPacer,
   canonicalRepositoryName,
   compactJourneyEvidence,
+  createFatalLifecycleDiagnosticTracker,
   createRequestBudgetPacer,
   createSeedBudgetPacer,
   createStartupCompetitorStartTracker,
@@ -42,6 +43,7 @@ import {
   validateArtifactIdentity,
   validateBaselineAgainstCaptures,
   validateBuildSourceIdentity,
+  validateFatalViewportDiagnostics,
   validatePerformanceBaseline,
   validateBrowserQualityEvidence,
   verifiableDocumentDigest,
@@ -650,15 +652,18 @@ const authenticateLocalOwner = async (
   label,
   beforeSubmit = () => {},
   afterDataReady = () => {},
+  onStage = () => {},
 ) => {
+  onStage('first_connection')
   await waitFor(
     client,
     `document.readyState === 'complete' && Boolean(
       document.querySelector('.login-form .login-input')
-      || document.querySelector('main[aria-busy="true"] [role="status"]')
+      || document.querySelector('main.empty-hero[aria-busy="true"] > section.empty-card[role="status"][aria-live="polite"][aria-atomic="true"]')
     )`,
     `${label} first-connection surface`,
   )
+  onStage('owner_login')
   await waitFor(client, `Boolean(document.querySelector('.login-form .login-input'))`, `${label} owner login`)
   const loginFormReadyMs = await evaluate(client, `performance.now()`)
   const focused = await evaluate(client, `(() => {
@@ -679,6 +684,7 @@ const authenticateLocalOwner = async (
   if (!await domActivate(client, '.login-form .login-btn')) {
     throw new Error(`${label} owner login could not be submitted`)
   }
+  onStage('authenticated_ready')
   await waitFor(
     client,
     AUTHENTICATED_DATA_READY_EXPRESSION,
@@ -1011,6 +1017,7 @@ const budgetFor = (baseline, viewportId, surface) => {
 
 const measureViewport = async ({
   client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
+  onFatalDiagnostics = () => {},
 }) => {
   const consoleErrors = []
   const pageErrors = []
@@ -1018,32 +1025,58 @@ const measureViewport = async ({
   const authenticationChallenges = []
   const authenticationChallengeTracker = createLocalOwnerChallengeTracker(baseUrl)
   const startupCompetitorStartTracker = createStartupCompetitorStartTracker(baseUrl)
+  const fatalLifecycleTracker = createFatalLifecycleDiagnosticTracker(baseUrl)
+  let consoleErrorCount = 0
+  let pageErrorCount = 0
+  let failedRequestCount = 0
+  let authenticationChallengeCount = 0
+  let lastNavigationSynchronization = null
+  let lifecycleOrdinal = 0
+  let diagnosticContext = {
+    journey: null,
+    interaction_mode: 'initial',
+    stage: 'navigation_sync',
+    lifecycle_ordinal: lifecycleOrdinal,
+  }
+  const setDiagnosticStage = (stage) => { diagnosticContext = { ...diagnosticContext, stage } }
   const subscriptions = []
   subscriptions.push(client.on('Runtime.consoleAPICalled', (event) => {
     if (event.type === 'error') {
+      consoleErrorCount += 1
       retainEvidenceEntry(consoleErrors, diagnosticFingerprint(
         'console_error',
         event.args?.map((arg) => arg.value ?? arg.description ?? '').join(' '),
       ))
     }
   }))
-  subscriptions.push(client.on('Runtime.exceptionThrown', (event) => retainEvidenceEntry(pageErrors, diagnosticFingerprint(
-    'page_exception',
-    event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception',
-  ))))
+  subscriptions.push(client.on('Runtime.exceptionThrown', (event) => {
+    pageErrorCount += 1
+    retainEvidenceEntry(pageErrors, diagnosticFingerprint(
+      'page_exception',
+      event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? 'page exception',
+    ))
+  }))
   subscriptions.push(client.on('Network.requestWillBeSent', (event) => {
     authenticationChallengeTracker.observeRequest(event.requestId, event.request?.url)
     startupCompetitorStartTracker.observeRequest(event.requestId, event.request?.url)
+    fatalLifecycleTracker.observeRequest(event.requestId, event.request?.url, event.type)
   }))
   subscriptions.push(client.on('Network.responseReceived', (event) => {
     const { response } = event
+    fatalLifecycleTracker.observeResponse(
+      event.requestId,
+      response?.status,
+      response?.url,
+      response?.fromServiceWorker,
+      event.type,
+    )
     if (response?.url?.startsWith(baseUrl) && response.status >= 400) {
       const entry = {
         label: 'http_failure',
         status: response.status,
         endpoint_sha256: createHash('sha256').update(new URL(response.url).pathname).digest('hex'),
       }
-      recordLocalOwnerHttpFailure({
+      const classification = recordLocalOwnerHttpFailure({
         tracker: authenticationChallengeTracker,
         requestId: event.requestId,
         status: response.status,
@@ -1052,11 +1085,18 @@ const measureViewport = async ({
         failedRequests,
         retain: retainEvidenceEntry,
       })
+      if (classification.expected) authenticationChallengeCount += 1
+      else failedRequestCount += 1
     }
+  }))
+  subscriptions.push(client.on('Network.loadingFinished', (event) => {
+    fatalLifecycleTracker.observeFinished(event.requestId)
   }))
   subscriptions.push(client.on('Network.loadingFailed', (event) => {
     authenticationChallengeTracker.observeFailure(event.requestId)
+    fatalLifecycleTracker.observeFailure(event.requestId, event.errorText, event.canceled)
     if (!event.canceled && !String(event.errorText).includes('ERR_ABORTED')) {
+      failedRequestCount += 1
       retainEvidenceEntry(failedRequests, diagnosticFingerprint('network_loading_failed', event.errorText))
     }
   }))
@@ -1078,34 +1118,43 @@ const measureViewport = async ({
   await client.send('Page.bringToFront')
   await client.send('Network.clearBrowserCache')
   await requestBudgetPacer.beforeLifecycle()
+  fatalLifecycleTracker.beginLifecycle()
   authenticationChallengeTracker.beginLoginCycle()
-  const initialNavigation = await client.send('Page.navigate', { url: `${baseUrl}/?qa=${viewport.id}` })
-  if (initialNavigation?.errorText || !initialNavigation?.loaderId) {
-    throw new Error(`${viewport.id} initial navigation did not create a loader`)
-  }
-  const longTaskSupported = await evaluate(client, `(() => {
-    window.__orchestraQaLongTasks = [];
-    if (!globalThis.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) return false;
-    window.__orchestraQaLongTaskObserver = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        window.__orchestraQaLongTasks.push({ start_ms: entry.startTime, duration_ms: entry.duration });
-      }
-    });
-    window.__orchestraQaLongTaskObserver.observe({ type: 'longtask', buffered: true });
-    return true;
-  })()`)
+  let longTaskSupported = false
   let initialAuthentication
   try {
-    initialAuthentication = await authenticateLocalOwner(
+    const initialNavigation = await navigateFreshInteractionMode({
       client,
-      operatorToken,
-      `${viewport.id} initial command center`,
-      () => {
-        authenticationChallengeTracker.closePreSubmitPhase()
-        startupCompetitorStartTracker.beginWindow()
+      url: `${baseUrl}/?qa=${viewport.id}`,
+      name: viewport.id,
+      mode: 'initial',
+      onSynchronizationEvidence: (evidence) => { lastNavigationSynchronization = evidence },
+      waitForReady: async () => {
+        longTaskSupported = await evaluate(client, `(() => {
+          window.__orchestraQaLongTasks = [];
+          if (!globalThis.PerformanceObserver?.supportedEntryTypes?.includes('longtask')) return false;
+          window.__orchestraQaLongTaskObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              window.__orchestraQaLongTasks.push({ start_ms: entry.startTime, duration_ms: entry.duration });
+            }
+          });
+          window.__orchestraQaLongTaskObserver.observe({ type: 'longtask', buffered: true });
+          return true;
+        })()`)
+        initialAuthentication = await authenticateLocalOwner(
+          client,
+          operatorToken,
+          `${viewport.id} initial command center`,
+          () => {
+            authenticationChallengeTracker.closePreSubmitPhase()
+            startupCompetitorStartTracker.beginWindow()
+          },
+          () => startupCompetitorStartTracker.endWindow(),
+          setDiagnosticStage,
+        )
       },
-      () => startupCompetitorStartTracker.endWindow(),
-    )
+    })
+    lastNavigationSynchronization = initialNavigation.navigation_synchronization
   } finally { authenticationChallengeTracker.closePreSubmitPhase() }
   const startupNavigation = await evaluate(client, `(() => {
     const entry = performance.getEntriesByType('navigation').at(-1);
@@ -1208,7 +1257,8 @@ const measureViewport = async ({
     },
   }
   const startupProvenance = {
-    loader_sha256: createHash('sha256').update(initialNavigation.loaderId).digest('hex'),
+    loader_sha256: lastNavigationSynchronization.expected_loader_sha256,
+    navigation_synchronization: lastNavigationSynchronization,
     time_origin_ms: startupNavigation.time_origin_ms,
     navigation_start_ms: startupNavigation.navigation_start_ms,
     navigation_type: startupNavigation.navigation_type,
@@ -1229,7 +1279,15 @@ const measureViewport = async ({
   const journeys = []
   const overflowSamples = []
   const resetJourney = async (name, mode) => {
+    lifecycleOrdinal += 1
+    diagnosticContext = {
+      journey: name,
+      interaction_mode: mode,
+      stage: 'navigation_sync',
+      lifecycle_ordinal: lifecycleOrdinal,
+    }
     await requestBudgetPacer.beforeLifecycle()
+    fatalLifecycleTracker.beginLifecycle()
     authenticationChallengeTracker.beginLoginCycle()
     try {
       return await navigateFreshInteractionMode({
@@ -1237,11 +1295,14 @@ const measureViewport = async ({
         url: `${baseUrl}/?qa=${viewport.id}&journey=${encodeURIComponent(name)}&mode=${mode}`,
         name,
         mode,
+        onSynchronizationEvidence: (evidence) => { lastNavigationSynchronization = evidence },
         waitForReady: () => authenticateLocalOwner(
           client,
           operatorToken,
           `${name} ${mode} fresh navigation`,
           () => authenticationChallengeTracker.closePreSubmitPhase(),
+          () => {},
+          setDiagnosticStage,
         ),
       })
     } finally { authenticationChallengeTracker.closePreSubmitPhase() }
@@ -1271,6 +1332,7 @@ const measureViewport = async ({
     const interactionModes = {}
     for (const mode of ['pointer', 'keyboard', 'dom_fallback']) {
       const reset = await resetJourney(name, mode)
+      setDiagnosticStage('journey_setup')
       let setupError = null
       try {
         await prepare(mode)
@@ -1283,10 +1345,12 @@ const measureViewport = async ({
       let actionEvidence = null
       if (!setupError) {
         try {
+          setDiagnosticStage('journey_action')
           actionEvidence = await action(mode) ?? null
           if (actionEvidence?.error) error = actionEvidence.error
         } catch (caught) { error = safeMessage(caught) }
       }
+      setDiagnosticStage('journey_readiness')
       const passed = !error && await modeReady(ready)
       const modeElapsed = performance.now() - started
       interactionModes[mode] = {
@@ -1497,6 +1561,7 @@ const measureViewport = async ({
   const metrics = { startup, snapshot_loading: snapshot, transcript_loading: transcript, graph_view: graph, search }
   const authenticationChallengeInventory = authenticationChallengeTracker.inventory()
   if (!authenticationChallengeInventory.passed) {
+    failedRequestCount += 1
     retainEvidenceEntry(failedRequests, {
       label: 'invalid_local_owner_challenge_inventory',
       login_cycles: authenticationChallengeInventory.login_cycles,
@@ -1558,6 +1623,86 @@ const measureViewport = async ({
     },
     performance: performanceEvidence,
   })
+  } catch (error) {
+    let documentDiagnostics = {
+      dom_surface: {
+        document_complete: false,
+        login: false,
+        connecting: false,
+        initial_offline: false,
+        application: false,
+      },
+      document_state: { ready_state: 'unavailable', surface: 'unknown' },
+      service_worker: {
+        controller: false,
+        registration_count: 0,
+        active: false,
+        waiting: false,
+        installing: false,
+      },
+    }
+    try {
+      documentDiagnostics = await evaluate(client, `(async () => {
+        const dom_surface = {
+          document_complete: document.readyState === 'complete',
+          login: Boolean(document.querySelector('.login-form .login-input')),
+          connecting: Boolean(document.querySelector('main.empty-hero[aria-busy="true"] > section.empty-card[role="status"][aria-live="polite"][aria-atomic="true"]')),
+          initial_offline: Boolean(document.querySelector('main.empty-hero:not([aria-busy]) > section.empty-card[role="alert"]')),
+          application: Boolean(document.querySelector('.app')),
+        };
+        const registrations = navigator.serviceWorker
+          ? await navigator.serviceWorker.getRegistrations().catch(() => []) : [];
+        const surface = ['application', 'login', 'connecting', 'initial_offline']
+          .find((key) => dom_surface[key]) ?? 'unknown';
+        return {
+          dom_surface,
+          document_state: {
+            ready_state: ['loading', 'interactive', 'complete'].includes(document.readyState)
+              ? document.readyState : 'unavailable',
+            surface,
+          },
+          service_worker: {
+            controller: Boolean(navigator.serviceWorker?.controller),
+            registration_count: registrations.length,
+            active: registrations.some((registration) => Boolean(registration.active)),
+            waiting: registrations.some((registration) => Boolean(registration.waiting)),
+            installing: registrations.some((registration) => Boolean(registration.installing)),
+          },
+        };
+      })()`)
+    } catch {}
+    const inventory = authenticationChallengeTracker.inventory()
+    const diagnostics = redactEvidence({
+      viewport_id: viewport.id,
+      context: diagnosticContext,
+      dom_surface: documentDiagnostics.dom_surface,
+      document_state: documentDiagnostics.document_state,
+      service_worker: documentDiagnostics.service_worker,
+      navigation_synchronization: lastNavigationSynchronization,
+      authentication_challenge_inventory: {
+        login_cycles: inventory.login_cycles,
+        total_count: inventory.total_count,
+        pending_request_count: inventory.pending_request_count,
+        endpoints: inventory.endpoints,
+      },
+      local_evidence: {
+        failed_request_count: failedRequestCount,
+        failed_requests: failedRequests,
+        authentication_challenge_count: authenticationChallengeCount,
+        authentication_challenges: authenticationChallenges,
+        console_error_count: consoleErrorCount,
+        console_errors: consoleErrors,
+        page_error_count: pageErrorCount,
+        page_errors: pageErrors,
+      },
+      last_lifecycle: fatalLifecycleTracker.evidence(),
+    })
+    const diagnosticErrors = validateFatalViewportDiagnostics(diagnostics)
+    if (diagnosticErrors.length) {
+      throw new Error(`fatal viewport diagnostics are invalid: ${diagnosticErrors.join('; ')}`, { cause: error })
+    }
+    onFatalDiagnostics(diagnostics)
+    throw error
   } finally {
     for (const unsubscribe of subscriptions) unsubscribe()
   }
@@ -1589,6 +1734,7 @@ const main = async () => {
   let buildManifest = null
   let runRoot = null
   let activeViewport = null
+  let fatalViewportDiagnostics = null
   let completeEvidenceWritten = false
   const completedViewports = []
   try {
@@ -1695,6 +1841,7 @@ const main = async () => {
       activeViewport = viewport.id
       viewports.push(await measureViewport({
         client, viewport, baseUrl, baseline, scenario, operatorToken, requestBudgetPacer,
+        onFatalDiagnostics: (diagnostics) => { fatalViewportDiagnostics = diagnostics },
       }))
     }
     requestBudgetPacer.finishLifecycle()
@@ -1787,6 +1934,7 @@ const main = async () => {
         ...(seedBudgetPacer?.failedRequests() ?? []),
         ...(requestBudgetPacer?.failedRequests() ?? []),
       ],
+      fatal_viewport_diagnostics: fatalViewportDiagnostics,
       diagnostics,
     })
     const fatalEvidence = finalizeBrowserEvidence(failureEvidence, [safeMessage(error)], 'fatal')
