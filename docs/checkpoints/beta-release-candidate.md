@@ -105,8 +105,9 @@ After resolving this commit's full SHA, run the complete parallel and one-worker
 types and production builds, audits, Gitleaks, quality gates, provider doctor, remote/security
 journeys, browser capture, and rollback drill. Then build exactly one retained tarball in
 `/Users/arminrad/Desktop/agentboard-beta-artifacts/<candidate-sha>` and never rebuild it. Verify its
-source/provenance SHA and exact digest above, scan and exercise those same bytes, and retain the
-fail-closed release metadata.
+source/provenance SHA and newly generated successor digest recorded in the external approval
+packet, scan and exercise those same bytes, and retain the fail-closed release metadata. Never use
+the historical `38ab73f…` digest for the successor artifact.
 
 Post-commit run IDs, timestamps, and the resolved SHA belong in the external approval packet and
 Vault. Adding them to tracked files would create a different candidate.
