@@ -22,7 +22,7 @@ describe('packaging documentation truthfulness', () => {
     expect(readme).toContain('private password sign-in or scoped pairing')
     expect(readme).toContain('Public Cloudflare access always')
     expect(readme).toContain('owner-password sign-in is rejected on public tunnels')
-    expect(readme).toContain('scoped DeviceSession pairing')
+    expect(readme).toContain('scoped, revocable DeviceSession per phone')
     expect(readme).not.toContain('tear the tunnel down')
     expect(cli).not.toContain('expose the board over a secure tunnel and pair your phone')
     expect(cli).not.toContain('tear the tunnel down')

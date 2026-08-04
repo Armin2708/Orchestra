@@ -7,8 +7,10 @@
 The current engineering train also includes milestone review gates, independent delivery
 verification, a test-gated auto-ship queue, shipped-commit history, a scoped phone/tunnel beta,
 push notifications, per-agent token accounting, and manual/automatic wake for agents paused by
-Claude usage limits. The remote path uses scoped DeviceSession pairing and remains an engineering
-beta whose exact build must satisfy the lane checkpoint.
+Claude usage limits. The remote path mints a scoped, revocable DeviceSession per phone: private
+Tailscale access may exchange the owner password once, while public Cloudflare access requires a
+single-use pairing ticket. It remains an engineering beta whose exact build must satisfy the lane
+checkpoint.
 
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,

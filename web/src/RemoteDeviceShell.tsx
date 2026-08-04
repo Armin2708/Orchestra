@@ -97,6 +97,7 @@ export function PairingRequired({ error }: { error?: string | null }) {
         <p className="settings-kicker">Remote device</p>
         <h1 id="pairing-required-title">Sign in</h1>
         <p>{error || 'This browser has no active DeviceSession yet.'}</p>
+        <p>Password sign-in is available only through the private Tailscale tunnel.</p>
         <form className="remote-password-form" onSubmit={(event) => void signIn(event)}>
           <input className="login-input" type="password" placeholder="Orchestra password"
             autoFocus autoComplete="current-password" value={password}
@@ -106,11 +107,11 @@ export function PairingRequired({ error }: { error?: string | null }) {
           </button>
         </form>
         {signInError && <p className="remote-pairing-safety" role="alert">{signInError}</p>}
-        <p>No password set? Pair with a single-use ticket instead:</p>
+        <p>For public Cloudflare access or narrower board scopes, use a single-use pairing ticket:</p>
         <ol>
           <li>On the machine running Orchestra, create a named single-use pairing ticket.</li>
-          <li>Open its HTTPS or private-tailnet link on this device before it expires.</li>
-          <li>Approve only the boards and scopes this device needs.</li>
+          <li>Open its HTTPS link on this device before it expires.</li>
+          <li>Grant only the boards and scopes this device needs.</li>
         </ol>
         <p className="remote-pairing-safety">Do not paste a master token here. No token field exists on remote origins.</p>
         {recoverable && <button type="button" className="remote-authority-recover" disabled={recovering}
