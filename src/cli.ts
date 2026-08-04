@@ -674,7 +674,7 @@ registerFirstRunCommands(program, {
   demoLaunchGate: createCentralFirstRunDemoLaunchGate(),
 })
 
-async function splash() {
+async function splash(): Promise<boolean> {
   const art = [
     '   ___  ____   ____ _   _ _____ ____ _____ ____      _',
     '  / _ \\|  _ \\ / ___| | | | ____/ ___|_   _|  _ \\    / \\',
@@ -689,19 +689,24 @@ async function splash() {
   } catch { /* daemon not running */ }
   console.log(health?.ok
     ? `  ● daemon running — ${baseUrl()}`
-    : '  ○ daemon not running — it starts automatically with most commands')
-  console.log(`  ${passwordConfigured() ? '●' : '○'} password ${passwordConfigured() ? 'set' : 'not set'} — ${passwordConfigured() ? 'sign in on web or phone with it' : 'create one on first local web login'}`)
+    : '  ○ daemon not running — starting it now')
+  console.log(`  ${passwordConfigured() ? '●' : '○'} password ${passwordConfigured() ? 'set' : 'not set'} — ${passwordConfigured() ? 'phone signs in with it; localhost needs none' : 'create one to enable phone sign-in'}`)
   console.log(['',
-    '  orchestra serve      run the daemon in the foreground',
     '  orchestra password   local browser password status / reset',
     '  orchestra remote     QR code to open the board on your phone',
     '  orchestra snapshot   current board state',
     '  orchestra --help     all commands',
   ].join('\n') + '\n')
+  return health?.ok === true
 }
 
 if (process.argv.length <= 2) {
-  void splash().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
+  // bare `orchestra` boots the daemon; splash first so status is visible either way
+  void splash().then(async (running) => {
+    if (running) return
+    await serve({})
+    console.log(`orchestra on ${baseUrl()}`)
+  }).catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
 } else {
   program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
 }
