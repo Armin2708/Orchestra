@@ -269,9 +269,9 @@ describe('DOM-019 compatibility migration failure journal Phase A', () => {
 
     expect(fs.statSync(files.journal).mode & 0o777).toBe(0o600)
     expect(journal.durabilityProfile()).toEqual({
-      journal_mode: 'delete',
-      synchronous: 3,
-      fullfsync: 1,
+      journal_mode: 'wal',
+      synchronous: 1,
+      fullfsync: 0,
       cell_size_check: 1,
       secure_delete: 1,
     })

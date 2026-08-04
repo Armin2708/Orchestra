@@ -317,10 +317,16 @@ export interface OpenCompatibilityMigrationFailureJournalInput {
   readonly runtime_instance?: string
 }
 
+// WAL + NORMAL: the journal shares the daemon's event loop, so every commit's
+// fsync cost is paid inside request handling. DELETE + EXTRA + fullfsync forced
+// multiple F_FULLFSYNC barriers per telemetry write and stalled the whole
+// daemon for seconds under load; WAL + NORMAL bounds loss on power failure to
+// the last few telemetry attempts, which reconcile as unexpected_failure on
+// the next drain instead of corrupting the chain.
 export interface CompatibilityMigrationFailureJournalDurabilityProfile {
-  readonly journal_mode: 'delete'
-  readonly synchronous: 3
-  readonly fullfsync: 1
+  readonly journal_mode: 'wal'
+  readonly synchronous: 1
+  readonly fullfsync: 0
   readonly cell_size_check: 1
   readonly secure_delete: 1
 }
@@ -2374,9 +2380,9 @@ implements CompatibilityMigrationFailureJournalBinding {
       ),
     }
     if (
-      profile.journal_mode !== 'delete'
-      || profile.synchronous !== 3
-      || profile.fullfsync !== 1
+      profile.journal_mode !== 'wal'
+      || profile.synchronous !== 1
+      || profile.fullfsync !== 0
       || profile.cell_size_check !== 1
       || profile.secure_delete !== 1
     ) {
@@ -2781,9 +2787,9 @@ export function openCompatibilityMigrationFailureJournal(
   try {
     sidecar = new Database(input.journal_path)
     const sidecarDb = sidecar
-    sidecar.pragma('journal_mode = DELETE')
-    sidecar.pragma('synchronous = EXTRA')
-    sidecar.pragma('fullfsync = ON')
+    sidecar.pragma('journal_mode = WAL')
+    sidecar.pragma('synchronous = NORMAL')
+    sidecar.pragma('fullfsync = OFF')
     sidecar.pragma('cell_size_check = ON')
     sidecar.pragma('secure_delete = ON')
     sidecar.pragma('foreign_keys = ON')
