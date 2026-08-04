@@ -218,6 +218,12 @@ export function openDb(file: string): Database.Database {
   // Existing targeted mail retains ask semantics. Old targetless rows become inert for
   // agents because only explicit, snapshotted swarms enter the fan-out inbox path.
   try { db.exec(`ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'ask'`) } catch { /* exists */ }
+  // operator mail (#99): a message is inbox mail only when explicitly addressed to the
+  // human (to_human=1) — targetless broadcasts stay board coordination traffic
+  try { db.exec(`ALTER TABLE messages ADD COLUMN to_human INTEGER NOT NULL DEFAULT 0`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE messages ADD COLUMN subject TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE messages ADD COLUMN mail_type TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`) } catch { /* exists */ }
   applyAgentOsMigrations(db)
   return db
 }

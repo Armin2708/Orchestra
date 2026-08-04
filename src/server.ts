@@ -121,6 +121,7 @@ const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'sw
 // the operator has no agent row — these recipient names mean "no agent recipient", which an
 // ask already renders as "to You" and surfaces in open_questions (the operator inbox)
 const HUMAN_RECIPIENTS = new Set(['human', 'operator', 'owner', 'you'])
+const MAIL_TYPES = new Set(['question', 'action', 'update', 'blocker', 'fyi'])
 type MessageKind = 'ask' | 'reply' | 'task' | 'notify' | 'announce' | 'swarm'
 
 export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
@@ -1446,10 +1447,28 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return r
     })
 
-  server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number; kind?: MessageKind; confirm?: boolean } }>(
+  server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number; kind?: MessageKind; confirm?: boolean; subject?: string; mail_type?: string; attachments?: { type: string; ref: string }[] } }>(
     '/api/v1/messages', (req, reply) => {
       const { board_id, from, card_id, body, reply_to, confirm } = req.body
       const to = req.body.to && HUMAN_RECIPIENTS.has(req.body.to.trim().toLowerCase()) ? undefined : req.body.to
+      // explicitly addressed to the operator — becomes inbox mail, not board traffic
+      const toHuman = Boolean(req.body.to) && to === undefined
+      const subject = typeof req.body.subject === 'string' ? req.body.subject.trim().slice(0, 200) : undefined
+      const mailType = req.body.mail_type
+      if (mailType !== undefined && !MAIL_TYPES.has(mailType))
+        return reply.code(400).send({ error: `mail_type must be one of: ${[...MAIL_TYPES].join(', ')}` })
+      if ((subject || mailType || req.body.attachments) && !toHuman)
+        return reply.code(400).send({ error: 'subject/mail_type/attachments are operator mail fields — address the message to "human"' })
+      let attachments: { type: string; ref: string }[] | undefined
+      if (req.body.attachments !== undefined) {
+        const list = req.body.attachments
+        const valid = Array.isArray(list) && list.length <= 12 && list.every((a) =>
+          a && typeof a === 'object'
+          && ['file', 'card', 'commit', 'url'].includes((a as any).type)
+          && typeof (a as any).ref === 'string' && (a as any).ref.length > 0 && (a as any).ref.length <= 500)
+        if (!valid) return reply.code(400).send({ error: 'attachments must be up to 12 of {type: file|card|commit|url, ref}' })
+        attachments = list.map((a) => ({ type: a.type, ref: a.ref }))
+      }
       const requestedKind = req.body.kind
       if (requestedKind && !MESSAGE_KINDS.has(requestedKind))
         return reply.code(400).send({ error: `kind must be one of: ${[...MESSAGE_KINDS].join(', ')}` })
@@ -1496,9 +1515,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         })
       }
       const { lastInsertRowid } = db.prepare(`
-        INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, kind, body, reply_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(board_id, fromA?.id ?? null, toId, card_id ?? null, kind, body, reply_to ?? null)
+        INSERT INTO messages (board_id, from_agent_id, to_agent_id, card_id, kind, body, reply_to, to_human, subject, mail_type, attachments)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(board_id, fromA?.id ?? null, toId, card_id ?? null, kind, body, reply_to ?? null,
+          toHuman && !reply_to ? 1 : 0, subject ?? null, mailType ?? null,
+          attachments ? JSON.stringify(attachments) : null)
       let msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)) as any
       const addSwarmTarget = db.prepare(`INSERT INTO message_targets (message_id, agent_id) VALUES (?, ?)`)
       db.transaction(() => swarmTargets.forEach((id) => addSwarmTarget.run(msg.id, id)))()
@@ -1788,6 +1809,33 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/inbox', (req) => {
     const a = db.prepare(`SELECT * FROM agents WHERE id=?`).get(Number(req.params.id)) as any
     return db.prepare(inboxSql + ' ORDER BY m.id').all(a.board_id, a.id, a.id, a.id, a.id)
+  })
+
+  // read-only viewer for file attachments on operator mail; the file must resolve
+  // inside the board's project directory — no reads outside the repo, ever
+  server.get<{ Params: { id: string; index: string } }>('/api/v1/messages/:id/attachments/:index', (req, reply) => {
+    const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(req.params.id)) as any
+    if (!msg?.attachments) return reply.code(404).send({ error: 'not found' })
+    let list: { type: string; ref: string }[]
+    try { list = JSON.parse(msg.attachments) } catch { return reply.code(404).send({ error: 'not found' }) }
+    const attachment = list[Number(req.params.index)]
+    if (!attachment) return reply.code(404).send({ error: 'not found' })
+    if (attachment.type !== 'file') return reply.code(400).send({ error: 'only file attachments have readable content' })
+    const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(msg.board_id) as any
+    if (!board) return reply.code(404).send({ error: 'not found' })
+    let root: string, resolved: string
+    try {
+      root = fs.realpathSync(board.project_path)
+      resolved = fs.realpathSync(path.resolve(root, attachment.ref))
+    } catch { return reply.code(404).send({ error: 'attachment file not found' }) }
+    if (resolved !== root && !resolved.startsWith(root + path.sep))
+      return reply.code(403).send({ error: 'attachment path is outside the project' })
+    const stat = fs.statSync(resolved)
+    if (!stat.isFile()) return reply.code(400).send({ error: 'attachment is not a regular file' })
+    if (stat.size > 256 * 1024) return reply.code(413).send({ error: 'attachment too large to preview (256KB cap)' })
+    const content = fs.readFileSync(resolved)
+    if (content.includes(0)) return reply.code(415).send({ error: 'binary attachment — open it locally' })
+    return { ref: attachment.ref, size: stat.size, content: content.toString('utf8') }
   })
 
   server.delete<{ Params: { id: string } }>('/api/v1/messages/:id', (req, reply) => {

@@ -126,6 +126,11 @@ export type BoardMessage = {
   delivered_at: string | null
   recipient_count: number
   delivered_count: number
+  // operator mail fields — set when an agent addressed the human explicitly
+  to_human?: number
+  subject?: string | null
+  mail_type?: string | null
+  attachments?: string | null
 }
 export type Thread = BoardMessage & { answered: boolean; replies: BoardMessage[] }
 export type Snapshot = { board: { id: number; name: string }; agents: Agent[]; cards: Card[]; open_questions: BoardMessage[]; threads: Thread[]; ideas: Idea[]; milestones: Milestone[] }

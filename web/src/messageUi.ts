@@ -99,14 +99,50 @@ export const swarmRecipientCount = (agents: Agent[]) =>
 
 // --- inbox (email-style Messages tab) ---
 
-export type Mailbox = 'inbox' | 'needs_reply' | 'sent' | 'all'
+export type Mailbox = 'inbox' | 'needs_reply' | 'sent'
 
 export const MAILBOXES: { key: Mailbox; label: string }[] = [
   { key: 'inbox', label: 'Inbox' },
   { key: 'needs_reply', label: 'Needs reply' },
   { key: 'sent', label: 'Sent' },
-  { key: 'all', label: 'All' },
 ]
+
+export type MailType = 'question' | 'action' | 'update' | 'blocker' | 'fyi'
+
+export const MAIL_TYPE_META: Record<MailType, { label: string; tone: 'open' | 'pending' | 'quiet' | 'done' }> = {
+  question: { label: 'Question', tone: 'open' },
+  action: { label: 'Action required', tone: 'pending' },
+  blocker: { label: 'Blocker', tone: 'pending' },
+  update: { label: 'Update', tone: 'quiet' },
+  fyi: { label: 'FYI', tone: 'quiet' },
+}
+
+export const mailType = (message: Pick<BoardMessage, 'mail_type'> & { kind?: BoardMessage['kind'] }): MailType => {
+  if (message.mail_type && message.mail_type in MAIL_TYPE_META) return message.mail_type as MailType
+  // a bare `orchestra ask human` carries no mail_type — it is a question by nature
+  return messageKind(message) === 'ask' ? 'question' : 'update'
+}
+
+// a mail expecting something back stays in the queue until you answer it
+export const mailExpectsReply = (message: Pick<BoardMessage, 'mail_type'> & { kind?: BoardMessage['kind'] }) => {
+  const type = mailType(message)
+  return type === 'question' || type === 'action' || type === 'blocker'
+}
+
+export type MailAttachment = { type: 'file' | 'card' | 'commit' | 'url'; ref: string }
+
+export function parseAttachments(message: Pick<BoardMessage, 'attachments'>): MailAttachment[] {
+  if (!message.attachments) return []
+  try {
+    const parsed = JSON.parse(message.attachments)
+    return Array.isArray(parsed)
+      ? parsed.filter((a) => a && typeof a.ref === 'string' && ['file', 'card', 'commit', 'url'].includes(a.type))
+      : []
+  } catch { return [] }
+}
+
+export const subjectOf = (thread: Pick<BoardMessage, 'subject' | 'body'>) =>
+  thread.subject?.trim() || splitSubject(thread.body).subject
 
 // email convention: first line of the body is the subject, the rest previews
 export function splitSubject(body: string): { subject: string; snippet: string } {
@@ -121,23 +157,22 @@ export function splitSubject(body: string): { subject: string; snippet: string }
   }
 }
 
-// inbox = an agent wrote to you (no agent recipient); sent = you wrote the root
+// inbox = mail explicitly addressed to the operator; sent = you wrote the root.
+// Agent↔agent traffic and broadcasts are board coordination — they never show here.
 export function mailboxOf(thread: Thread): 'inbox' | 'sent' | 'board' {
   if (!thread.from_name) return 'sent'
-  const kind = messageKind(thread)
-  if (!thread.to_name && (kind === 'ask' || kind === 'notify')) return 'inbox'
+  if (thread.to_human) return 'inbox'
   return 'board'
 }
 
-// a question in your inbox stays open until *you* answer, not until anyone replies
+// mail stays in your queue until *you* answer, not until anyone replies
 export const answeredByYou = (thread: Thread) => thread.replies.some((reply) => !reply.from_name)
 
 export function inboxMatches(thread: Thread, mailbox: Mailbox): boolean {
-  if (mailbox === 'all') return true
   const box = mailboxOf(thread)
   if (mailbox === 'inbox') return box === 'inbox'
   if (mailbox === 'sent') return box === 'sent'
-  return box === 'inbox' && messageKind(thread) === 'ask' && !answeredByYou(thread)
+  return box === 'inbox' && mailExpectsReply(thread) && !answeredByYou(thread)
 }
 
 export const latestMessage = (thread: Thread): BoardMessage =>

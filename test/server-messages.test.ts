@@ -31,6 +31,7 @@ it('ask human lands in the operator inbox instead of failing recipient lookup', 
   const m = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
     board_id: b.id, from: 'amber-fox', to: 'human', kind: 'ask', body: 'Cert expired\nRenew or roll back?' } })).json()
   expect(m.to_agent_id).toBeNull()
+  expect(m.to_human).toBe(1)
 
   const snap = (await s.inject({ method: 'GET', url: `/api/v1/boards/${b.id}/snapshot` })).json()
   expect(snap.open_questions.map((q: any) => q.id)).toContain(m.id)
@@ -39,6 +40,46 @@ it('ask human lands in the operator inbox instead of failing recipient lookup', 
   const bad = await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
     board_id: b.id, from: 'amber-fox', to: 'Operator', kind: 'notify', body: 'x' } })
   expect(bad.statusCode).toBe(400)
+})
+
+it('operator mail carries subject, type, and attachments; file preview stays inside the project', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mail-'))
+  fs.writeFileSync(path.join(root, 'notes.md'), '# release notes')
+
+  const s = buildServer(openDb(':memory:')); await s.ready()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: root } })).json()
+  await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })
+
+  const m = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', to: 'human', kind: 'ask',
+    subject: 'Release notes ready', mail_type: 'action',
+    attachments: [{ type: 'file', ref: 'notes.md' }, { type: 'card', ref: '12' }],
+    body: 'Please review the attached notes and approve the release.' } })).json()
+  expect(m.subject).toBe('Release notes ready')
+  expect(m.mail_type).toBe('action')
+  expect(JSON.parse(m.attachments)).toHaveLength(2)
+
+  const ok = (await s.inject({ method: 'GET', url: `/api/v1/messages/${m.id}/attachments/0` })).json()
+  expect(ok.content).toBe('# release notes')
+
+  // non-file attachments have no readable content; escapes never leave the project
+  expect((await s.inject({ method: 'GET', url: `/api/v1/messages/${m.id}/attachments/1` })).statusCode).toBe(400)
+  const evil = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', to: 'human', kind: 'ask', subject: 'x', body: 'x',
+    attachments: [{ type: 'file', ref: '../../etc/passwd' }] } })).json()
+  const escape = await s.inject({ method: 'GET', url: `/api/v1/messages/${evil.id}/attachments/0` })
+  expect([403, 404]).toContain(escape.statusCode)
+
+  // mail fields without the human recipient are a contract violation, not board spam
+  const stray = await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', subject: 'oops', body: 'x' } })
+  expect(stray.statusCode).toBe(400)
+  const badType = await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
+    board_id: b.id, from: 'amber-fox', to: 'human', kind: 'ask', mail_type: 'shout', body: 'x' } })
+  expect(badType.statusCode).toBe(400)
 })
 
 it('operator reply on a human-rooted thread reaches the latest agent participant', async () => {

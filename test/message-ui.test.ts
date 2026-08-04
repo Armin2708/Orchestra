@@ -7,8 +7,12 @@ import {
   isUnread,
   latestForeignId,
   mailboxOf,
+  mailExpectsReply,
+  mailType,
   messageRoute,
+  parseAttachments,
   splitSubject,
+  subjectOf,
   swarmRecipientCount,
   threadMatches,
 } from '../web/src/messageUi.js'
@@ -66,16 +70,38 @@ describe('message UI semantics', () => {
     expect(long.snippet.startsWith('…')).toBe(true)
   })
 
-  it('sorts threads into inbox, sent, and board traffic', () => {
-    expect(mailboxOf(message() as any)).toBe('inbox') // agent → you
-    expect(mailboxOf(message({ from_name: null }) as any)).toBe('sent') // you wrote the root
+  it('inbox holds only mail explicitly addressed to the operator', () => {
+    expect(mailboxOf(message({ to_human: 1 }) as any)).toBe('inbox')
+    expect(mailboxOf(message() as any)).toBe('board') // targetless broadcast = coordination noise
     expect(mailboxOf(message({ to_name: 'jade-lynx' }) as any)).toBe('board') // agent ↔ agent
-    expect(mailboxOf(message({ kind: 'announce' }) as any)).toBe('board')
-    expect(inboxMatches(message() as any, 'needs_reply')).toBe(true)
-    expect(inboxMatches(message({ replies: [message({ id: 2, from_name: null, kind: 'reply' })] }) as any, 'needs_reply')).toBe(false)
+    expect(mailboxOf(message({ from_name: null }) as any)).toBe('sent') // you wrote the root
+  })
+
+  it('typed mail queues only when it expects something from you', () => {
+    const mail = (over: Record<string, unknown> = {}) => message({ to_human: 1, ...over }) as any
+    expect(inboxMatches(mail({ mail_type: 'question' }), 'needs_reply')).toBe(true)
+    expect(inboxMatches(mail({ mail_type: 'action' }), 'needs_reply')).toBe(true)
+    expect(inboxMatches(mail({ mail_type: 'blocker' }), 'needs_reply')).toBe(true)
+    expect(inboxMatches(mail({ mail_type: 'update' }), 'needs_reply')).toBe(false)
+    expect(inboxMatches(mail({ mail_type: 'fyi' }), 'needs_reply')).toBe(false)
+    // a bare `ask human` has no mail_type — it is a question by nature
+    expect(mailType(mail())).toBe('question')
+    expect(mailExpectsReply(mail())).toBe(true)
+    expect(inboxMatches(mail({ replies: [message({ id: 2, from_name: null, kind: 'reply' })] }), 'needs_reply')).toBe(false)
     // another agent chiming in does not clear your queue — only your reply does
-    expect(inboxMatches(message({ replies: [message({ id: 2, kind: 'reply' })] }) as any, 'needs_reply')).toBe(true)
+    expect(inboxMatches(mail({ replies: [message({ id: 2, kind: 'reply' })] }), 'needs_reply')).toBe(true)
     expect(answeredByYou(message({ replies: [message({ id: 2, from_name: null, kind: 'reply' })] }) as any)).toBe(true)
+  })
+
+  it('prefers the explicit subject and parses attachments defensively', () => {
+    expect(subjectOf({ subject: 'Cert expired', body: 'first line\nrest' })).toBe('Cert expired')
+    expect(subjectOf({ subject: null, body: 'first line\nrest' })).toBe('first line')
+    expect(parseAttachments({ attachments: JSON.stringify([
+      { type: 'file', ref: 'src/server.ts' }, { type: 'card', ref: '12' },
+      { type: 'bogus', ref: 'x' }, { type: 'url' },
+    ]) })).toEqual([{ type: 'file', ref: 'src/server.ts' }, { type: 'card', ref: '12' }])
+    expect(parseAttachments({ attachments: 'not json' })).toEqual([])
+    expect(parseAttachments({ attachments: null })).toEqual([])
   })
 
   it('computes unread from the newest agent-authored message id', () => {

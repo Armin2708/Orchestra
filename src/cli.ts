@@ -497,6 +497,32 @@ program.command('ask <to> [body]').option('--card <id>').option('--from <a>')
     const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), to, kind: 'ask', body: text, card_id: o.card ? Number(o.card) : undefined })
     console.log(`asked ${to} (msg #${m.id})`)
   })
+// '#12' → card, hex → commit, http(s) → url, anything else → repo-relative file path
+const parseAttachment = (ref: string) => {
+  const trimmed = ref.trim()
+  if (/^#\d+$/.test(trimmed)) return { type: 'card', ref: trimmed.slice(1) }
+  if (/^[0-9a-f]{7,40}$/i.test(trimmed) && /\d/.test(trimmed) && /[a-f]/i.test(trimmed)) return { type: 'commit', ref: trimmed }
+  if (/^https?:\/\//.test(trimmed)) return { type: 'url', ref: trimmed }
+  return { type: 'file', ref: trimmed }
+}
+program.command('mail <subject> [body]')
+  .description('email the human operator: one subject, full context in the body, docs attached')
+  .option('--type <t>', 'question|action|update|blocker|fyi', 'update')
+  .option('--attach <refs>', 'comma-separated file paths, #cards, commit hashes, URLs', csv)
+  .option('--card <id>').option('--from <a>')
+  .option('--stdin', 'read the body from stdin (no shell interpolation)')
+  .action(async (subject, body, o) => {
+    const text = await messageBody(body, o.stdin)
+    if (!text?.trim()) { console.error('mail needs a body: include every detail the operator needs to act without asking you anything'); process.exit(1) }
+    await up(); const b = await board()
+    const m = await api('POST', '/messages', {
+      board_id: b.id, from: await inferAgent(b.id, o.from), to: 'human', kind: 'ask',
+      subject, mail_type: o.type, body: text,
+      attachments: o.attach?.length ? o.attach.map(parseAttachment) : undefined,
+      card_id: o.card ? Number(o.card) : undefined,
+    })
+    console.log(`mailed the operator (msg #${m.id})`)
+  })
 program.command('reply <msgId> [body]').option('--from <a>')
   .option('--stdin', 'read the body from stdin (no shell interpolation)')
   .action(async (msgId, body, o) => {

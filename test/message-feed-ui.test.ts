@@ -48,6 +48,17 @@ describe('email-style inbox UI', () => {
     expect(view).toContain('dateTime={last.created_at}')
   })
 
+  it('renders mail like email: type chip, explicit subject, letter body, attachments', () => {
+    expect(view).toContain('mail-type-chip')
+    expect(view).toContain('subjectOf')
+    expect(view).toContain('className="mail-letter"')
+    expect(view).toContain('parseAttachments')
+    expect(view).toContain('/attachments/')
+    expect(css).toContain('.mail-type-chip.type-blocker')
+    expect(css).toContain('.mail-attachment-preview')
+    expect(css).toContain('.mail-letter')
+  })
+
   it('keeps the lossless protocol escape hatch in every message body', () => {
     expect(body).toContain('<summary>Raw protocol</summary>')
     expect(body).toContain('aria-label="Exact agent protocol message"')
