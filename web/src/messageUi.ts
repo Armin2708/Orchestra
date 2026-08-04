@@ -97,6 +97,76 @@ export const availableAgents = (agents: Agent[]) => agents.filter((agent) => age
 export const swarmRecipientCount = (agents: Agent[]) =>
   agents.filter((agent) => agent.status !== 'gone' && agent.status !== 'paused_limit').length
 
+// --- inbox (email-style Messages tab) ---
+
+export type Mailbox = 'inbox' | 'needs_reply' | 'sent' | 'all'
+
+export const MAILBOXES: { key: Mailbox; label: string }[] = [
+  { key: 'inbox', label: 'Inbox' },
+  { key: 'needs_reply', label: 'Needs reply' },
+  { key: 'sent', label: 'Sent' },
+  { key: 'all', label: 'All' },
+]
+
+// email convention: first line of the body is the subject, the rest previews
+export function splitSubject(body: string): { subject: string; snippet: string } {
+  const text = body.replace(/\r\n/g, '\n').trim()
+  const nl = text.indexOf('\n')
+  const first = (nl === -1 ? text : text.slice(0, nl)).trim()
+  const rest = nl === -1 ? '' : text.slice(nl + 1).replace(/\s+/g, ' ').trim()
+  if (first.length <= 120) return { subject: first || '(no subject)', snippet: rest }
+  return {
+    subject: `${first.slice(0, 119).trimEnd()}…`,
+    snippet: [`…${first.slice(119).trimStart()}`, rest].filter(Boolean).join(' '),
+  }
+}
+
+// inbox = an agent wrote to you (no agent recipient); sent = you wrote the root
+export function mailboxOf(thread: Thread): 'inbox' | 'sent' | 'board' {
+  if (!thread.from_name) return 'sent'
+  const kind = messageKind(thread)
+  if (!thread.to_name && (kind === 'ask' || kind === 'notify')) return 'inbox'
+  return 'board'
+}
+
+// a question in your inbox stays open until *you* answer, not until anyone replies
+export const answeredByYou = (thread: Thread) => thread.replies.some((reply) => !reply.from_name)
+
+export function inboxMatches(thread: Thread, mailbox: Mailbox): boolean {
+  if (mailbox === 'all') return true
+  const box = mailboxOf(thread)
+  if (mailbox === 'inbox') return box === 'inbox'
+  if (mailbox === 'sent') return box === 'sent'
+  return box === 'inbox' && messageKind(thread) === 'ask' && !answeredByYou(thread)
+}
+
+export const latestMessage = (thread: Thread): BoardMessage =>
+  thread.replies.length > 0 ? thread.replies[thread.replies.length - 1] : thread
+
+// newest message id written by an agent — the watermark that makes a thread unread
+export const latestForeignId = (thread: Thread) => Math.max(
+  thread.from_name ? thread.id : 0,
+  ...thread.replies.filter((reply) => reply.from_name).map((reply) => reply.id),
+)
+
+export type ReadMap = Record<string, number>
+const READ_KEY = 'orchestra-inbox-read-v1'
+export const threadReadKey = (boardId: number, threadId: number) => `${boardId}:${threadId}`
+
+export function loadReadMap(): ReadMap {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(READ_KEY) ?? '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch { return {} }
+}
+
+export function saveReadMap(map: ReadMap) {
+  try { window.localStorage.setItem(READ_KEY, JSON.stringify(map)) } catch { /* private mode */ }
+}
+
+export const isUnread = (thread: Thread, boardId: number, map: ReadMap) =>
+  latestForeignId(thread) > (map[threadReadKey(boardId, thread.id)] ?? 0)
+
 export function buildMessagePayload(input: {
   boardId: number
   kind: ComposeKind

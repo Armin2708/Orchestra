@@ -116,6 +116,9 @@ export interface ServerOptions {
 }
 
 const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
+// the operator has no agent row — these recipient names mean "no agent recipient", which an
+// ask already renders as "to You" and surfaces in open_questions (the operator inbox)
+const HUMAN_RECIPIENTS = new Set(['human', 'operator', 'owner', 'you'])
 type MessageKind = 'ask' | 'reply' | 'task' | 'notify' | 'announce' | 'swarm'
 
 export function buildServer(db: Database.Database, conductor?: (bus: Bus) => ConductorLike, opts: ServerOptions = {}): FastifyInstance {
@@ -1300,7 +1303,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.post<{ Body: { board_id: number; from?: string; to?: string; card_id?: number; body: string; reply_to?: number; kind?: MessageKind; confirm?: boolean } }>(
     '/api/v1/messages', (req, reply) => {
-      const { board_id, from, to, card_id, body, reply_to, confirm } = req.body
+      const { board_id, from, card_id, body, reply_to, confirm } = req.body
+      const to = req.body.to && HUMAN_RECIPIENTS.has(req.body.to.trim().toLowerCase()) ? undefined : req.body.to
       const requestedKind = req.body.kind
       if (requestedKind && !MESSAGE_KINDS.has(requestedKind))
         return reply.code(400).send({ error: `kind must be one of: ${[...MESSAGE_KINDS].join(', ')}` })
@@ -1324,6 +1328,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (toId === null && reply_to) {
         const orig = db.prepare(`SELECT from_agent_id FROM messages WHERE id=?`).get(reply_to) as any
         toId = orig?.from_agent_id ?? null
+        // human-rooted thread: route an *operator* follow-up to the latest agent
+        // participant so it reaches whoever answered, not nobody (an agent replying
+        // here must not be bounced back to itself)
+        if (toId === null && !fromA) {
+          const last = db.prepare(`
+            SELECT from_agent_id FROM messages
+            WHERE reply_to=? AND from_agent_id IS NOT NULL ORDER BY id DESC LIMIT 1`).get(reply_to) as any
+          toId = last?.from_agent_id ?? null
+        }
       }
       // A swarm is deliberate fan-out to the agents live at send time. Snapshotting the
       // recipients prevents agents that join later from consuming stale broadcast work.
