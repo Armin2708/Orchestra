@@ -1848,9 +1848,9 @@ export class CodexAgentDriver implements AgentDriver {
       case 'read-only':
         return { sandbox: 'read-only', approvalPolicy: 'on-request' }
       case 'danger-full-access':
-        return { sandbox: 'danger-full-access', approvalPolicy: 'on-request' }
       case 'bypassPermissions':
-        throw new Error('Refusing to map Claude bypassPermissions to Codex danger-full-access implicitly')
+        // provider parity: a bypass hire never prompts, whatever CLI runs underneath
+        return { sandbox: 'danger-full-access', approvalPolicy: 'never' }
       default:
         throw new Error(`Unsupported Codex permission mode: ${permissionMode}`)
     }
@@ -1863,7 +1863,7 @@ export class CodexAgentDriver implements AgentDriver {
       case 'workspace_write':
         return { sandbox: 'workspace-write', approvalPolicy: 'on-request' }
       case 'full_access':
-        return { sandbox: 'danger-full-access', approvalPolicy: 'on-request' }
+        return { sandbox: 'danger-full-access', approvalPolicy: 'never' }
     }
   }
 
@@ -1886,7 +1886,7 @@ export class CodexAgentDriver implements AgentDriver {
         },
       }
     }
-    return { approvalPolicy: 'on-request', sandboxPolicy: { type: 'dangerFullAccess' } }
+    return { approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } }
   }
 
   private approvalDecisionForResponse(response: unknown): CodexApprovalAuditDecision {

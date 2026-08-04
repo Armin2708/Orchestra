@@ -309,14 +309,36 @@ describe('Codex AgentDriver lifecycle', () => {
     await expect(unresolvedDriver.attach('known')).rejects.toThrow('workspace for Codex thread known is unknown')
   })
 
-  it('refuses an implicit Claude bypass-permissions translation', async () => {
+  it('maps Claude bypass-permissions to full-auto Codex: danger sandbox, never ask', async () => {
     const service = new FakeService()
     const driver = new CodexAgentDriver({ service: service.asPort() })
     drivers.push(driver)
-    await expect(driver.launch({
+    await driver.launch({
       workspaceId: 'workspace-1', cwd: '/repo', permissionMode: 'bypassPermissions',
-    })).rejects.toThrow('Refusing to map Claude bypassPermissions')
-    expect(service.starts).toEqual([])
+    })
+    expect(service.starts[0]).toMatchObject({
+      sandbox: 'danger-full-access', approvalPolicy: 'never',
+    })
+  })
+
+  it('launches full-access profiles as full-auto: danger sandbox, never ask', async () => {
+    const service = new FakeService()
+    const driver = new CodexAgentDriver({ service: service.asPort() })
+    drivers.push(driver)
+    const session = await driver.launch({
+      workspaceId: 'workspace-1', cwd: '/repo', accessProfile: 'full_access',
+    } as any)
+    expect(service.starts[0]).toMatchObject({
+      sandbox: 'danger-full-access', approvalPolicy: 'never',
+    })
+    await driver.updateSession(session.id, { accessProfile: 'full_access' })
+    await driver.send(session.id, 'go')
+    expect(service.turnStarts.at(-1)).toMatchObject({
+      overrides: {
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      },
+    })
   })
 
   it('automatically resumes and rereads known threads after supervisor reconnect', async () => {

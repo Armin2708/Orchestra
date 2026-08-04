@@ -235,12 +235,12 @@ it('routes the stored worker default to Codex and queues work until the thread i
   })
 
   const agent = t.manager.hire({ boardId: 1, cwd: '/project', name: 'codex-owl' })
-  expect(agent).toMatchObject({ provider: 'codex', status: 'starting', access_profile: 'workspace_write' })
+  expect(agent).toMatchObject({ provider: 'codex', status: 'starting', access_profile: 'full_access' })
   expect(t.claude.calls).toHaveLength(0)
   expect(t.manager.task(agent.id, 'implement the card')).toBe(true)
 
   await until(() => t.driver.sends.length === 1)
-  expect(t.driver.launches[0]).toMatchObject({ model: 'gpt-5.4', accessProfile: 'workspace_write' })
+  expect(t.driver.launches[0]).toMatchObject({ model: 'gpt-5.4', accessProfile: 'full_access' })
   expect(t.driver.launches[0].metadata).toMatchObject({ agentId: agent.id, effort: 'high' })
   expect(t.driver.sends[0][1]).toBe('implement the card')
   expect(t.db.prepare('SELECT status, external_session_id FROM agents WHERE id=?').get(agent.id))
@@ -270,7 +270,7 @@ it('routes the stored worker default to Codex and queues work until the thread i
   await until(() => t.manager.transcript(agent.id).lines.some((line: any) => line.text === 'working'))
   expect(t.manager.transcript(agent.id).info).toMatchObject({
     provider: 'codex', model: 'gpt-5.4', requestedModel: 'gpt-5.4', resolvedModel: 'gpt-5.4-runtime',
-    effort: 'high', resolvedEffort: 'medium', accessProfile: 'workspace_write',
+    effort: 'high', resolvedEffort: 'medium', accessProfile: 'full_access',
   })
 
   expect(await t.manager.setModel(agent.id, 'gpt-5.5')).toBe(true)
@@ -596,7 +596,7 @@ it('accepts provider and access-profile controls through the server API', async 
     payload: { provider: 'codex', name: 'api-owl', model: 'gpt-5.4', effort: 'ultra' },
   })
   expect(hire.statusCode).toBe(200)
-  expect(hire.json()).toMatchObject({ provider: 'codex', access_profile: 'workspace_write' })
+  expect(hire.json()).toMatchObject({ provider: 'codex', access_profile: 'full_access' })
   const id = hire.json().id
   await until(() => driver.launches.length === 1)
   expect(driver.launches[0]).toMatchObject({ model: 'gpt-5.4' })

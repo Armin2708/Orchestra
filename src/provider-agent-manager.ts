@@ -1193,9 +1193,9 @@ export class ProviderAgentManager implements ConductorLike {
     const profile = options.resumeSession ? null : defaultsForRole(this.db, options.role)
     const provider = safeProvider(options.provider ?? stored?.provider ?? profile?.provider ?? 'claude')
     const matchingProfile = profile?.provider === provider ? profile : null
-    const defaultAccess: AccessProfile = options.role
-      ? 'read_only'
-      : provider === CODEX_PROVIDER_ID ? 'workspace_write' : 'full_access'
+    // every provider hires in its native bypass mode unless the caller narrows it;
+    // role launches (auditors) stay read_only by design
+    const defaultAccess: AccessProfile = options.role ? 'read_only' : 'full_access'
     const storedAccess = isAccessProfile(stored?.access_profile) ? stored.access_profile : undefined
     const accessProfile = options.accessProfile ?? accessForPermissionMode(options.permissionMode) ?? storedAccess ?? defaultAccess
     return {
@@ -1216,7 +1216,7 @@ export class ProviderAgentManager implements ConductorLike {
       provider,
       model: request.model ?? matchingProfile?.model ?? undefined,
       effort: request.effort ?? matchingProfile?.effort ?? undefined,
-      accessProfile: request.accessProfile ?? (provider === CODEX_PROVIDER_ID ? 'workspace_write' : 'full_access'),
+      accessProfile: request.accessProfile ?? 'full_access',
     }
   }
 
