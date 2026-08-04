@@ -1390,6 +1390,12 @@ export function registerRemoteSecurityIntegration(
           redemption.device_session.created_from_ticket_id,
           redemption.device_session.id,
         )
+        // The owner password authenticates the whole installation, so the session
+        // sees every board — unlike scoped pairing tickets issued with --board.
+        options.db.prepare(`INSERT OR IGNORE INTO os_remote_resource_grants (
+          device_session_id, resource_type, resource_id, permissions_json, data_classes_json, created_at
+        ) SELECT ?, 'board', id, '["read","mutate"]', '["redacted_observe"]', ? FROM boards`)
+          .run(redemption.device_session.id, nowIso())
         return redemption
       })
       return redeem.immediate()

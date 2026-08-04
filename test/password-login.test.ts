@@ -71,7 +71,7 @@ describe('POST /api/v1/os/devices/password-login', () => {
   it('mints device authority for the active tunnel origin with the owner password', async () => {
     configurePassword('phone-sign-in-pass')
     writeTunnelState()
-    const { server } = fixture()
+    const { db, server } = fixture()
     const response = await remoteLogin(server, 'phone-sign-in-pass')
     expect(response.statusCode, response.body).toBe(200)
     const envelope = response.json()
@@ -79,6 +79,9 @@ describe('POST /api/v1/os/devices/password-login', () => {
     expect(envelope.device_session.id).toBeTruthy()
     expect(envelope.credential_issue.credential).toMatch(/^orchestra_device_v1\./u)
     expect(response.body).not.toContain('owner-secret')
+    const grants = db.prepare(`SELECT resource_type, resource_id FROM os_remote_resource_grants
+      WHERE device_session_id=?`).all(envelope.device_session.id) as Array<{ resource_type: string; resource_id: string }>
+    expect(grants).toContainEqual({ resource_type: 'board', resource_id: '1' })
   })
 
   it('accepts requests proxied by the loopback tunnel daemon (tailscale x-forwarded-host)', async () => {
