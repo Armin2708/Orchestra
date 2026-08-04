@@ -50,6 +50,25 @@ it('rejects a rank request with no position', async () => {
   })).statusCode).toBe(400)
 })
 
+it('flags cards idle past their column threshold as stale in the snapshot', async () => {
+  const { db, server } = await boot()
+  const fresh = await mkCard(server, 'fresh work')
+  const oldWip = await mkCard(server, 'old wip')
+  const oldReview = await mkCard(server, 'old review')
+  const oldBacklog = await mkCard(server, 'old backlog')
+  db.prepare(`UPDATE cards SET column_name='in_progress', updated_at=datetime('now', '-4 days') WHERE id=?`).run(oldWip.id)
+  db.prepare(`UPDATE cards SET column_name='review', updated_at=datetime('now', '-8 days') WHERE id=?`).run(oldReview.id)
+  db.prepare(`UPDATE cards SET updated_at=datetime('now', '-30 days') WHERE id=?`).run(oldBacklog.id)
+  db.prepare(`UPDATE cards SET column_name='in_progress' WHERE id=?`).run(fresh.id)
+
+  const cards = (await server.inject({ url: '/api/v1/boards/1/snapshot' })).json().cards
+  const byId = Object.fromEntries(cards.map((c: any) => [c.id, c]))
+  expect(byId[oldWip.id].stale).toBe(true)
+  expect(byId[oldReview.id].stale).toBe(true)
+  expect(byId[fresh.id].stale).toBe(false)
+  expect(byId[oldBacklog.id].stale).toBe(false) // backlog never goes stale
+})
+
 it('PUT /cards/:id/contract grooms a card: unready -> ready -> claimable', async () => {
   const { server } = await boot()
   const raw = await mkCard(server, 'raw note')

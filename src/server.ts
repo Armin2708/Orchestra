@@ -1912,7 +1912,20 @@ export function listThreads(db: Database.Database, boardId: number) {
     .reverse() // newest thread first
 }
 
+// staleness nudge thresholds in days per column; backlog/done never go stale.
+// Override: ORCHESTRA_STALE_DAYS="in_progress:3,review:7,blocked:7"
+const staleDays = (): Record<string, number> => {
+  const days: Record<string, number> = { in_progress: 3, review: 7, blocked: 7 }
+  for (const pair of (process.env.ORCHESTRA_STALE_DAYS ?? '').split(',')) {
+    const [column, value] = pair.split(':')
+    if (column?.trim() && Number(value) > 0) days[column.trim()] = Number(value)
+  }
+  return days
+}
+
 export function listCards(db: Database.Database, boardId: number) {
+  const thresholds = staleDays()
+  const now = Date.now()
   return (db.prepare(`
     SELECT c.*, a.name AS owner,
       CASE WHEN t.card_id IS NOT NULL AND trim(t.objective) != ''
@@ -1921,5 +1934,13 @@ export function listCards(db: Database.Database, boardId: number) {
     LEFT JOIN agents a ON a.id = c.owner_agent_id
     LEFT JOIN task_contracts t ON t.card_id = c.id
     WHERE c.board_id=? ORDER BY c.updated_at DESC`).all(boardId) as any[])
-    .map((c) => ({ ...c, column: c.column_name, paths: JSON.parse(c.paths), ready: !!c.ready }))
+    .map((c) => ({
+      ...c,
+      column: c.column_name,
+      paths: JSON.parse(c.paths),
+      ready: !!c.ready,
+      stale: thresholds[c.column_name] != null
+        && now - new Date(`${String(c.updated_at).replace(' ', 'T')}Z`).getTime()
+          > thresholds[c.column_name] * 86_400_000,
+    }))
 }
