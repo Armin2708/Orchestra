@@ -376,6 +376,17 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
               <button key={rowKey(row)} type="button" role="listitem"
                 className={`inbox-row ${unread ? 'unread' : ''} ${selectedKey === rowKey(row) ? 'active' : ''}`}
                 onClick={() => open(row)}>
+                <span className="inbox-row-delete" role="button" tabIndex={0}
+                  aria-label="Delete mail" title="Delete this mail and its replies"
+                  onClick={async (event) => {
+                    event.stopPropagation()
+                    if (!window.confirm('Delete this mail and its replies?')) return
+                    try {
+                      await api('DELETE', `/messages/${row.thread.id}`)
+                      if (selectedKey === rowKey(row)) setSelectedKey(null)
+                      await onChange()
+                    } catch { /* surfaced by the next refresh */ }
+                  }}>✕</span>
                 {unread && <span className="inbox-unread-dot" aria-label="Unread" />}
                 <Avatar name={sender} />
                 <span className="inbox-row-main">

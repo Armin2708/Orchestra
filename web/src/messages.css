@@ -1831,3 +1831,14 @@
   .inbox-mail-scroll { padding: 12px 14px 18px; }
   .mail-attachment-preview pre { max-height: 220px; }
 }
+
+/* per-row delete — visible on hover/focus so stuck mail can die without opening it */
+.inbox-row { position: relative; }
+.inbox-row-delete {
+  position: absolute; top: 8px; right: 10px; z-index: 2;
+  opacity: 0; padding: 2px 6px; border-radius: 6px;
+  color: var(--message-dim, #8a867e); font-size: 12px; line-height: 1;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.inbox-row:hover .inbox-row-delete, .inbox-row-delete:focus-visible { opacity: 1; }
+.inbox-row-delete:hover { color: #E5716A; background: rgba(229, 113, 106, 0.12); }
