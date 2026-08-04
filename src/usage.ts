@@ -225,6 +225,20 @@ export function boardUsage(db: Database.Database, boardId: number) {
   }
 }
 
+export type AgentEffortRank = { agent_id: number; total_tokens: number; rank: number }
+
+// rank agents on a board by real recorded tokens, 1..N desc; ties share the
+// lower rank number (competition ranking). Agents with no recorded usage are
+// omitted — callers surface them as effort_rank null.
+export function agentEffortRanks(db: Database.Database, boardId: number): AgentEffortRank[] {
+  return db.prepare(`
+    SELECT agent_id, SUM(total_tokens) AS total_tokens,
+      RANK() OVER (ORDER BY SUM(total_tokens) DESC) AS "rank"
+    FROM agent_usage WHERE board_id=?
+    GROUP BY agent_id HAVING SUM(total_tokens) > 0
+    ORDER BY "rank", agent_id`).all(boardId) as AgentEffortRank[]
+}
+
 export function usageTotal(db: Database.Database): UsageSplit {
   return db.prepare(`SELECT ${SUMS} FROM agent_usage`).get() as UsageSplit
 }

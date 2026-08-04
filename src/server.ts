@@ -17,7 +17,7 @@ import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
 import { ExternalTranscriptService, loadSdkSessionTranscript } from './external-transcript.js'
-import { boardUsage, providerUsageTotal, usageTotal } from './usage.js'
+import { agentEffortRanks, boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
@@ -569,12 +569,16 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get<{ Params: { id: string } }>('/api/v1/boards/:id/snapshot', (req) => {
     const id = Number(req.params.id)
+    // effort rank = position by real recorded tokens (#109); null when nothing recorded
+    const effort = new Map(agentEffortRanks(db, id).map((r) => [r.agent_id, r]))
     return {
       board: db.prepare(`SELECT * FROM boards WHERE id=?`).get(id),
       agents: (db.prepare(`SELECT * FROM agents WHERE board_id=? ORDER BY name`).all(id) as any[]).map((a) => ({
         ...a,
         capabilities: maestro?.capabilities?.(a.id) ?? [],
         subagents: maestro?.isHired(a.id) ? maestro.subagents(a.id) : liveTermSubs(a.id),
+        effort_rank: effort.get(a.id)?.rank ?? null,
+        effort_tokens: effort.get(a.id)?.total_tokens ?? 0,
       })),
       // review cards carry their latest verification (#52); ship_status marks cards the
       // auto-ship queue currently holds (#59)
