@@ -444,6 +444,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-tool { color: #DED9D1; }
 .cc-result { color: #8a867e; padding-left: 18px; }
 .cc-status { color: #6f6b64; font-style: italic; }
+/* board-message lines reveal their delete on hover — transcript lines never have one */
+.cc-msg-delete {
+  opacity: 0; margin-left: 8px; border: none; background: none; padding: 0 3px;
+  color: #6f6b64; font: inherit; font-size: 11px; transition: opacity 0.15s, color 0.15s;
+}
+.cc-user:hover .cc-msg-delete, .cc-text:hover .cc-msg-delete, .cc-msg-delete:focus-visible { opacity: 1; }
+.cc-msg-delete:hover { color: #E5716A; }
 .cc-error { color: #E5716A; }
 .cc-spinner { color: #D97757; }
 .cc-star { display: inline-block; animation: cc-spin 1.4s ease-in-out infinite; }

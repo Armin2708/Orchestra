@@ -27,7 +27,8 @@ import {
 } from './agentTerminalControls'
 import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 
-type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string }
+// messageId marks a line backed by a board-message row — deletable, unlike transcript lines
+type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string; messageId?: number }
 
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
@@ -388,12 +389,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const streamed = hired || visibleLines.length > 0
   // board messages involving this agent, as chat lines with sortable ISO timestamps
   // (created_at is SQL 'YYYY-MM-DD HH:MM:SS' UTC)
-  const messageLine = (m: { from_name: string | null; to_name: string | null; body: string; created_at: string }): Line => ({
+  const messageLine = (m: { id: number; from_name: string | null; to_name: string | null; body: string; created_at: string }): Line => ({
     at: `${m.created_at.replace(' ', 'T')}Z`,
     kind: m.from_name === agent.name ? 'text' : 'user',
     text: m.from_name === agent.name
       ? (m.to_name ? `→ ${m.to_name}: ${m.body}` : m.body)
       : (m.from_name ? `${m.from_name}: ${m.body}` : m.body),
+    messageId: m.id,
   })
   const threadLines: Line[] = [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
@@ -736,11 +738,21 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const isLifecycleStatus = (text: string) =>
     /^(?:(?:claude|codex)\s+)?(?:session (?:started|configured)|turn (?:started|finished))\b/i.test(text)
 
+  const deleteMessage = async (id: number) => {
+    if (!window.confirm('Delete this board message (and its replies)?')) return
+    try { await api('DELETE', `/messages/${id}`); onChange() } catch (cause) { setControlError(controlErrorText(cause)) }
+  }
+  // only board-message-backed lines can be removed; transcript lines are history
+  const msgDelete = (l: Line) => l.messageId !== undefined && canPromptAgent
+    ? <button type="button" className="cc-msg-delete" title="Delete this board message"
+        aria-label="Delete message" onClick={() => void deleteMessage(l.messageId!)}>✕</button>
+    : null
+
   const renderLine = (l: Line, i: number) => {
     if (l.kind === 'status' && isLifecycleStatus(l.text)) return null
     switch (l.kind) {
       case 'user':
-        return <p key={i} className="cc-user">&gt; {l.text}</p>
+        return <p key={i} className="cc-user">&gt; {l.text}{msgDelete(l)}</p>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
@@ -756,7 +768,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       case 'error':
         return <p key={i} className="cc-error">✗ {l.text}</p>
       default:
-        return <p key={i} className="cc-text"><span className="cc-dot">⏺</span> {l.text}</p>
+        return <p key={i} className="cc-text"><span className="cc-dot">⏺</span> {l.text}{msgDelete(l)}</p>
     }
   }
 
