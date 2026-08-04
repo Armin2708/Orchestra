@@ -41,4 +41,71 @@ export function reap(db: Database.Database): void {
     WHERE status != 'gone' AND kind != 'hired' AND last_seen < datetime('now', '-30 minutes')`).run()
   db.prepare(`UPDATE agents SET status='idle'
     WHERE status = 'active' AND last_seen < datetime('now', '-5 minutes')`).run()
+  syncAgentProfiles(db)
+}
+
+// Agent Home lists agent_profiles, but terminal agents live and die in the legacy agents
+// table — the 022 projection only snapshotted them once, so profiles drifted from reality
+// (dead agents stayed listed as active; agents registered later never appeared at all).
+// Mirror liveness both ways on every reap tick. Only rows tied to a legacy agent are
+// managed; user-created identities (legacy_agent_id NULL) are never touched.
+export function syncAgentProfiles(db: Database.Database): void {
+  const hasProfiles = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_profiles'`).get()
+  if (!hasProfiles) return
+  db.transaction(() => {
+    // a mirror still driving a canonical session is not dead, whatever the legacy row says
+    db.prepare(`UPDATE agent_profiles
+      SET status='archived', archived_at=coalesce(archived_at, datetime('now')), updated_at=datetime('now')
+      WHERE status='active'
+        AND legacy_agent_id IN (SELECT id FROM agents WHERE status='gone')
+        AND NOT EXISTS (SELECT 1 FROM agent_sessions s WHERE s.profile_id=agent_profiles.id
+          AND s.status IN ('reserved','starting','running','idle','stopping'))`).run()
+
+    db.prepare(`UPDATE agent_profiles
+      SET status='active', archived_at=NULL, updated_at=datetime('now')
+      WHERE status='archived'
+        AND legacy_agent_id IN (SELECT id FROM agents WHERE status != 'gone')`).run()
+    db.prepare(`UPDATE agent_conversations
+      SET status='active', archived_at=NULL, updated_at=datetime('now')
+      WHERE is_default=1 AND status='archived'
+        AND profile_id IN (
+          SELECT p.id FROM agent_profiles p JOIN agents a ON a.id=p.legacy_agent_id
+          WHERE p.status='active' AND a.status != 'gone')
+        AND NOT EXISTS (SELECT 1 FROM agent_conversations live
+          WHERE live.profile_id=agent_conversations.profile_id
+            AND live.is_default=1 AND live.status='active')`).run()
+
+    const missing = db.prepare(`SELECT a.* FROM agents a
+      LEFT JOIN agent_profiles p ON p.legacy_agent_id=a.id
+      WHERE a.status != 'gone' AND p.id IS NULL`).all() as Record<string, unknown>[]
+    const insertProfile = db.prepare(`INSERT INTO agent_profiles (
+        id, board_id, legacy_agent_id, name, role, default_provider, default_model,
+        default_effort, default_access_profile, capabilities_json, owner_actor_type,
+        owner_actor_id, status, provenance_json, created_at, updated_at, archived_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'system', 'reaper-profile-sync',
+        'active', '{"source":"legacy_agents","sync":"reaper"}', ?, ?, NULL)`)
+    const insertConversation = db.prepare(`INSERT INTO agent_conversations (
+        id, board_id, profile_id, title, status, is_default, next_sequence,
+        created_by_actor_type, created_by_actor_id, created_at, updated_at, archived_at
+      ) VALUES (?, ?, ?, ?, 'active', 1, 1, 'system', 'reaper-profile-sync', ?, ?, NULL)`)
+    for (const agent of missing) {
+      const agentId = Number(agent.id)
+      const profileId = `legacy-agent:${agentId}`
+      const conversationId = `legacy-conversation:${agentId}`
+      const clash = db.prepare(`SELECT 1 FROM agent_profiles WHERE id=? OR (board_id=? AND name=?)`)
+        .get(profileId, agent.board_id, agent.name)
+      if (clash) continue
+      const accessProfile = ['read_only', 'workspace_write', 'full_access']
+        .includes(String(agent.access_profile)) ? String(agent.access_profile) : null
+      insertProfile.run(
+        profileId, agent.board_id, agentId, agent.name, agent.role ?? null,
+        agent.provider ?? null, agent.model ?? null, agent.effort ?? null, accessProfile,
+        agent.created_at, agent.last_seen)
+      if (!db.prepare(`SELECT 1 FROM agent_conversations WHERE id=?`).get(conversationId)) {
+        insertConversation.run(conversationId, agent.board_id, profileId,
+          `${agent.name} conversation`, agent.created_at, agent.last_seen)
+      }
+    }
+  }).immediate()
 }
