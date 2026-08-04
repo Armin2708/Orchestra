@@ -98,6 +98,44 @@ describe('local owner password authentication', () => {
     await server.close()
   })
 
+  it('grants loopback browsers operator access without a password when opted in', async () => {
+    const { passwordFile } = fixture()
+    const localOwnerAuth = new LocalOwnerPasswordAuth(passwordFile)
+    localOwnerAuth.setup('local dashboard password')
+    const server = buildServer(openDb(':memory:'), undefined, {
+      token: 'internal-master-token', localOwnerAuth, trustLoopbackBrowsers: true,
+    })
+    await server.ready()
+
+    const local = await server.inject({ method: 'GET', url: '/api/v1/boards' })
+    expect(local.statusCode).toBe(200)
+
+    const sameOrigin = await server.inject({
+      method: 'GET', url: '/api/v1/boards', headers: { 'sec-fetch-site': 'same-origin' },
+    })
+    expect(sameOrigin.statusCode).toBe(200)
+
+    const crossSite = await server.inject({
+      method: 'GET', url: '/api/v1/boards', headers: { 'sec-fetch-site': 'cross-site' },
+    })
+    expect(crossSite.statusCode).toBe(401)
+
+    const remote = await server.inject({
+      method: 'GET', url: '/api/v1/boards', remoteAddress: '203.0.113.8',
+      headers: { host: 'phone.example.test' },
+    })
+    expect(remote.statusCode).toBe(401)
+    await server.close()
+  })
+
+  it('still requires credentials on loopback without the opt-in', async () => {
+    const server = buildServer(openDb(':memory:'), undefined, { token: 'internal-master-token' })
+    await server.ready()
+    const local = await server.inject({ method: 'GET', url: '/api/v1/boards' })
+    expect(local.statusCode).toBe(401)
+    await server.close()
+  })
+
   it('keeps sessions valid across a restart without storing the raw session', () => {
     const { root, passwordFile } = fixture()
     let now = 1_000

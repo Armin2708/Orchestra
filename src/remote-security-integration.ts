@@ -66,6 +66,8 @@ export interface RemoteSecurityOptions {
   masterToken?: string
   agentToken?: string
   authenticateLocalOwnerSession?: (session: string) => boolean
+  /** Treat same-origin loopback browser requests as the operator without a password. */
+  trustLoopbackBrowsers?: boolean
   /** Verifies the local owner password for remote device sign-in; issues no session. */
   verifyLocalOwnerPassword?: (password: string, partition: string) => 'ok' | 'incorrect' | 'rate_limited' | 'not_configured'
   operations?: OperationsRuntime
@@ -1060,8 +1062,14 @@ export function registerRemoteSecurityIntegration(
       }
       request.orchestraPrincipal = 'anonymous'
     }
-    if (!options.masterToken && !authorization
-      && loopback(address) && loopbackIngressHost(request)) {
+    // With trustLoopbackBrowsers, loopback ingress is the owner's own machine:
+    // no password prompt locally. sec-fetch-site blocks cross-site browser
+    // requests (CSRF) and loopbackIngressHost blocks DNS-rebinding hosts; the
+    // password remains required for every tunnel/remote origin.
+    const secFetchSite = request.headers['sec-fetch-site']
+    if ((options.trustLoopbackBrowsers || !options.masterToken) && !authorization
+      && loopback(address) && loopbackIngressHost(request)
+      && (secFetchSite === undefined || secFetchSite === 'same-origin' || secFetchSite === 'none')) {
       request.orchestraPrincipal = 'operator'
       return
     }

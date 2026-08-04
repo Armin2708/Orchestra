@@ -100,6 +100,8 @@ export interface ServerOptions {
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
   // test seam: serve the web UI from this directory instead of ../web/dist
   webDist?: string
+  // daemon opt-in: loopback browsers act as the operator without a password
+  trustLoopbackBrowsers?: boolean
   // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
   autowakeAt?: () => string | null
   // daemon-only Agent OS runtime/driver seams; in-process tests keep the durable read APIs
@@ -130,6 +132,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     masterToken: opts.token,
     agentToken: opts.agentToken,
     authenticateLocalOwnerSession: (session) => opts.localOwnerAuth?.authenticate(session) ?? false,
+    trustLoopbackBrowsers: opts.trustLoopbackBrowsers,
     verifyLocalOwnerPassword: (password, partition) => {
       if (!opts.localOwnerAuth?.isConfigured()) return 'not_configured'
       try {

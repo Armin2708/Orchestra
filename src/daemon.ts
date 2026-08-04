@@ -635,6 +635,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       token,
       agentToken,
       localOwnerAuth,
+      // local browsers skip the password; set ORCHESTRA_REQUIRE_LOCAL_PASSWORD=1 to restore the prompt
+      trustLoopbackBrowsers: process.env.ORCHESTRA_REQUIRE_LOCAL_PASSWORD !== '1',
       autowakeAt: () => autowake?.scheduledAt() ?? null,
       operations: operationsRuntime,
       vapidKeys,
