@@ -238,6 +238,7 @@ async function deliver(input: any, hookEventName: string, throttleMs: number, pr
   fs.writeFileSync(throttle, '')
   const r = await api('POST', `/agents/${sess.agent_id}/pulse`, {
     ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
+    ...(sess.transcript_path ? { transcript_path: sess.transcript_path } : {}),
   })
   const lines = r.messages.map((m: any) => {
     const from = m.from_name ?? 'human'
@@ -289,6 +290,7 @@ async function stop(input: any, provider: HookProvider): Promise<void> {
   // heartbeat only — pulse would consume undelivered messages with no way to show them
   await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
     ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
+    ...(sess.transcript_path ? { transcript_path: sess.transcript_path } : {}),
   })
   if (input.stop_hook_active) return // already continued once for this — never loop
   const snap = await api('GET', `/boards/${sess.board_id}/snapshot`)
@@ -325,6 +327,7 @@ async function providerHeartbeat(input: any, provider: HookProvider): Promise<Se
   if (!sess) return undefined
   await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
     ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
+    ...(sess.transcript_path ? { transcript_path: sess.transcript_path } : {}),
   })
   return sess
 }

@@ -240,6 +240,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const remoteAccess = useRemoteAccess()
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
+  const [external, setExternal] = useState(false)
   const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
   const [info, setInfo] = useState<TranscriptInfo | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
@@ -278,6 +279,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     setFollowing(true)
     setControlPanel(null)
     setControlError(null)
+    setExternal(false)
     setLocalLines([])
     setPromptHistory([])
     setHistoryIdx(null)
@@ -288,12 +290,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     setSubmitError(null)
   }, [agent.id])
 
-  // hired agents stream their real transcript; terminal agents show the board conversation
+  // hired agents stream their real transcript; terminal agents stream the read-only
+  // tail of their local session transcript (hooks-reported), else the board conversation
   useEffect(() => {
-    if (!hired) return
     let alive = true
     const load = () => api('GET', `/agents/${agent.id}/transcript`).then((r) => {
       if (!alive) return
+      setExternal(Boolean(r.external))
       const next: Line[] = r.lines ?? r
       // avoid re-rendering the whole history when nothing changed — keeps scrolling smooth
       setLines((prev) => (prev.length === next.length && prev.every((line, index) =>
@@ -326,13 +329,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })
     }).catch(() => {})
     load()
-    const t = setInterval(load, 1000)
+    // external tails only change as fast as the agent works — poll them gently
+    const t = setInterval(load, hired ? 1000 : 2000)
     return () => { alive = false; clearInterval(t) }
   }, [agent.id, agent.provider, hired])
 
   // interleave local command echo with the streamed transcript by timestamp
   const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
-  const convo: Line[] = hired ? (localLines.length
+  const streamed = hired || visibleLines.length > 0
+  const convo: Line[] = streamed ? (localLines.length
     ? [...visibleLines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
     : visibleLines) : [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
@@ -712,7 +717,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <span className="cc-head-star" aria-hidden="true">•</span>
             <span>{agent.name}</span>
             {hired && <ProviderBadge provider={provider} compact />}
-            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}` : `terminal session · ${agent.status}`}</span>
+            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}`
+              : external ? `terminal session · live transcript (read-only) · ${agent.status}`
+                : `terminal session · ${agent.status}`}</span>
             {agentControlActive && agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
               <select className="cc-assign" defaultValue=""
                 title="Assign a ticket — the agent gets briefed and starts"
