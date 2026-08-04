@@ -111,17 +111,71 @@ program.command('token').description('print the internal operator transport cred
     console.log(ensureToken())
   })
 
+/** Minimal arrow-key select on raw stdin; resolves the chosen index or null on cancel. */
+function promptSelect(title: string, choices: readonly string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    const stdin = process.stdin
+    let selected = 0
+    const render = (first = false) => {
+      if (!first) process.stdout.write(`\u001b[${choices.length}A`)
+      for (let i = 0; i < choices.length; i += 1) {
+        process.stdout.write(`\u001b[2K  ${i === selected ? '\u001b[36m❯ ' : '  '}${choices[i]}\u001b[0m\n`)
+      }
+    }
+    console.log(`${title} (↑/↓, enter to select, q to cancel)`)
+    render(true)
+    stdin.setRawMode?.(true)
+    stdin.resume()
+    const finish = (value: number | null) => {
+      stdin.off('data', onData)
+      stdin.setRawMode?.(false)
+      stdin.pause()
+      resolve(value)
+    }
+    const onData = (chunk: Buffer) => {
+      const key = chunk.toString('utf8')
+      if (key === '\u0003' || key === 'q' || key === '\u001b') return finish(null)
+      if (key === '\u001b[A' || key === 'k') { selected = (selected + choices.length - 1) % choices.length; render(); return }
+      if (key === '\u001b[B' || key === 'j') { selected = (selected + 1) % choices.length; render(); return }
+      if (key === '\r' || key === '\n') return finish(selected)
+    }
+    stdin.on('data', onData)
+  })
+}
+
+const passwordStatus = () =>
+  console.log(fs.existsSync(localOwnerPasswordPath()) ? 'password configured' : 'password not configured')
+const passwordReset = () => {
+  const removed = resetLocalOwnerPassword()
+  console.log(removed
+    ? 'local browser password reset; open the loopback UI to create a new password'
+    : 'no local browser password was configured')
+}
+
 const password = program.command('password').description('inspect or reset the local browser password')
+password.action(async () => {
+  if (!process.stdin.isTTY) return password.outputHelp()
+  const choice = await promptSelect('Orchestra password', [
+    `Status (${fs.existsSync(localOwnerPasswordPath()) ? 'configured' : 'not configured'})`,
+    'Reset password',
+    'Cancel',
+  ])
+  if (choice === 0) return passwordStatus()
+  if (choice !== 1) return
+  const confirmed = await promptSelect('Reset the password? Every browser and phone signs in again with the new one.', [
+    'No, keep it',
+    'Yes, reset now',
+  ])
+  if (confirmed !== 1) { console.log('cancelled'); return }
+  passwordReset()
+})
 password.command('status').description('show whether a local browser password is configured')
-  .action(() => console.log(fs.existsSync(localOwnerPasswordPath()) ? 'password configured' : 'password not configured'))
+  .action(passwordStatus)
 password.command('reset').description('remove the local browser password so the UI can create a new one')
   .requiredOption('--confirm <phrase>', 'must be RESET_LOCAL_PASSWORD')
   .action((options) => {
     if (options.confirm !== 'RESET_LOCAL_PASSWORD') throw new Error('confirmation must be RESET_LOCAL_PASSWORD')
-    const removed = resetLocalOwnerPassword()
-    console.log(removed
-      ? 'local browser password reset; open the loopback UI to create a new password'
-      : 'no local browser password was configured')
+    passwordReset()
   })
 
 const ops = program.command('ops').description('local operations, recovery, and retention controls')
