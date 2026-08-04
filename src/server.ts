@@ -1377,7 +1377,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       // leaves the message queued for ordinary hook delivery.
       if ((kind === 'ask' || kind === 'reply' || kind === 'task') && toId && !maestro?.isHired(toId)) {
         const messageId = Number(msg.id)
-        const injected = formatInjectedMessage(kind, messageId, fromA?.name ?? null, body, reply_to ?? null)
+        // a human chatting types plain text; only agent-to-agent traffic needs the
+        // reply-routing wrapper so protocol rules still apply
+        const injected = fromA
+          ? formatInjectedMessage(kind, messageId, fromA.name, body, reply_to ?? null)
+          : body
         void injectTerminalMessage(toId, injected).then((ok) => {
           if (!ok) return
           db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(messageId, toId)

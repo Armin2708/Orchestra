@@ -120,7 +120,9 @@ const ITERM_SCRIPT = `on run argv
       repeat with t in tabs of w
         repeat with s in sessions of t
           if tty of s ends with targetTty then
-            tell s to write text msg
+            tell s to write text msg newline NO
+            delay 0.3
+            tell s to write text (character id 13) newline NO
             return "ok"
           end if
         end repeat
@@ -160,6 +162,8 @@ export async function injectTerminalMessage(agentId: number, text: string): Prom
   if (endpoint.tmux_socket && endpoint.tmux_pane) {
     try {
       await run('tmux', ['-S', endpoint.tmux_socket, 'send-keys', '-t', endpoint.tmux_pane, '-l', message])
+      // outside the TUI's paste-detection window, so Enter submits instead of inserting
+      await new Promise((resolve) => setTimeout(resolve, 300))
       await run('tmux', ['-S', endpoint.tmux_socket, 'send-keys', '-t', endpoint.tmux_pane, 'Enter'])
       return true
     } catch { /* pane gone — try the tty backends */ }
