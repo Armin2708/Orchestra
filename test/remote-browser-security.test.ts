@@ -132,7 +132,11 @@ describe('remote browser authority boundary', () => {
     expect(app.indexOf("authorityMode === 'pairing-required'"))
       .toBeLessThan(app.indexOf('return <LocalOwnerApp />'))
     expect(shell).toContain('No token field exists on remote origins.')
-    expect(shell).not.toContain('type="password"')
+    // The only secret field on remote origins is the operator password, which is exchanged
+    // for scoped device authority via password-login — never stored or used as a token.
+    expect(shell).not.toContain('Paste token')
+    expect(shell).not.toContain('setToken')
+    expect(shell).toContain('passwordDeviceLogin')
   })
 
   it('uses a class-only dedicated shell and only classified remote data routes', () => {

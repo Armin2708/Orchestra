@@ -560,18 +560,37 @@ function PushBell() {
 }
 
 function Login({ onSubmit }: { onSubmit: (token: string) => void }) {
-  const [token, setTokenInput] = useState('')
+  const [secret, setSecretInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  // A password submits through /password-login and yields the token; anything else is the token itself.
+  const submit = async (value: string) => {
+    setBusy(true)
+    try {
+      const response = await fetch('/api/v1/os/devices/password-login', {
+        method: 'POST', cache: 'no-store', credentials: 'omit',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: value }),
+      })
+      if (response.ok) {
+        const envelope = await response.json() as { token?: string | null }
+        if (typeof envelope.token === 'string' && envelope.token) return onSubmit(envelope.token)
+      }
+    } catch { /* fall through to the token path */ }
+    finally { setBusy(false) }
+    onSubmit(value)
+  }
   return (
     <div className="empty-hero">
       <div className="empty-card">
         <Mark />
         <h1>Connect to Orchestra</h1>
-        <p>This daemon requires a token. Print it from the machine running Orchestra:</p>
-        <pre>orchestra token</pre>
-        <form className="login-form" onSubmit={(e) => { e.preventDefault(); if (token.trim()) onSubmit(token.trim()) }}>
-          <input className="login-input" type="password" placeholder="Paste token" autoFocus
-            value={token} onChange={(e) => setTokenInput(e.target.value)} />
-          <button className="login-btn" type="submit" disabled={!token.trim()}>Connect</button>
+        <p>Enter your Orchestra password, or paste the token from the machine running Orchestra:</p>
+        <pre>orchestra password · orchestra token</pre>
+        <form className="login-form" onSubmit={(e) => { e.preventDefault(); if (secret.trim() && !busy) void submit(secret.trim()) }}>
+          <input className="login-input" type="password" placeholder="Password or token" autoFocus
+            autoComplete="current-password"
+            value={secret} onChange={(e) => setSecretInput(e.target.value)} />
+          <button className="login-btn" type="submit" disabled={!secret.trim() || busy}>{busy ? 'Connecting…' : 'Connect'}</button>
         </form>
         <p className="hint">Accepted only on loopback, held only in this tab's memory, and cleared when the page closes.</p>
       </div>
