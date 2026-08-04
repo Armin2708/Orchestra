@@ -12,6 +12,8 @@ export const AGENT_OS_LEGACY_COMPATIBILITY_TABLES = Object.freeze([
   'ideas',
   'review_decisions',
   'token_telemetry',
+  'agent_transcripts',
+  'teams',
 ] as const)
 
 export type AgentOsLegacyCompatibilityTable =
@@ -389,6 +391,48 @@ export const AGENT_OS_LEGACY_PROJECTION_CONTRACT: AgentOsLegacyProjectionContrac
           'Hook accounting may update this estimate only; it cannot synthesize provider usage evidence.',
         cutover_gate:
           'Phase 12 either retains the distinct estimate or migrates it with explicit units and comparison telemetry.',
+      }),
+      projection({
+        table: 'agent_transcripts',
+        inventory_class: 'legacy',
+        current_mode: 'isolated_legacy_domain',
+        target_disposition: 'retain_distinct_semantics',
+        canonical_tables: [],
+        legacy_owned_scope:
+          'Persisted hired-agent chat transcript lines keyed by agent, restored across daemon restarts.',
+        canonical_owned_scope: null,
+        not_authoritative_for: [
+          'conversation events',
+          'provider session state',
+          'agent identity',
+        ],
+        read_boundary:
+          'Transcript restore reads the stored lines for UI continuity only; canonical conversation history stays in conversation_events.',
+        write_boundary:
+          'Only the conductor transcript flush writes here; it cannot synthesize canonical conversation events.',
+        cutover_gate:
+          'A canonical conversation projection replays hired-agent transcripts before this cache retires.',
+      }),
+      projection({
+        table: 'teams',
+        inventory_class: 'legacy',
+        current_mode: 'isolated_legacy_domain',
+        target_disposition: 'retain_distinct_semantics',
+        canonical_tables: [],
+        legacy_owned_scope:
+          'Operator-approved team specs (roles, hierarchy, workflow) and their draft/approved/hired/archived lifecycle.',
+        canonical_owned_scope: null,
+        not_authoritative_for: [
+          'agent lifecycle',
+          'organization membership',
+          'planning sessions',
+        ],
+        read_boundary:
+          'Team reads describe structure and staffing intent; live agent state stays authoritative in agents.',
+        write_boundary:
+          'Team mutations never spawn or retire agents directly; hiring flows through the conductor.',
+        cutover_gate:
+          'A canonical org/team domain (os_teams) absorbs specs with an explicit import before this table retires.',
       }),
     ]),
   })
