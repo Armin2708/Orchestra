@@ -177,6 +177,24 @@
 .ah-profile-avatar i.paused { background: #a57831; }
 .ah-profile-avatar i.failed,
 .ah-profile-avatar i.lost { background: #a34e47; }
+.ah-profile-avatar i.working { background: #2da44e; }
+/* green circle orbiting the avatar while the agent is mid-turn */
+.ah-profile-card.working .ah-profile-avatar::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid rgba(45, 164, 78, 0.18);
+  border-top-color: #2da44e;
+  animation: ah-working-orbit 1s linear infinite;
+  pointer-events: none;
+}
+@keyframes ah-working-orbit { to { transform: rotate(360deg); } }
+.ah-profile-card.working { border-color: rgba(45, 164, 78, 0.45); }
+.ah-working-label { font-weight: 750; font-style: normal; color: #1a7f37; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+@media (prefers-reduced-motion: reduce) {
+  .ah-profile-card.working .ah-profile-avatar::before { animation: none; border-color: rgba(45, 164, 78, 0.55); }
+}
 
 .ah-profile-copy { min-width: 0; display: grid; line-height: 1.2; }
 .ah-profile-copy strong { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, Card, Milestone, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
+import { agentActivity } from './agentActivity'
 import './kanban.css'
 
 // Kanban lanes: real columns plus a derived Triage lane — backlog cards that are not yet
@@ -68,6 +69,9 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
     })
   }, [snapshot.cards])
   const epics = snapshot.milestones ?? []
+  const workingOwners = useMemo(() =>
+    new Set(snapshot.agents.filter((a) => agentActivity(a) === 'working').map((a) => a.name)),
+  [snapshot.agents])
   const owners = useMemo(
     () => [...new Set(cards.map((c) => c.owner).filter(Boolean))] as string[],
     [cards])
@@ -210,6 +214,7 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
                   <React.Fragment key={card.id}>
                     {lineBefore(card.id)}
                     <KanbanCardChip card={card} epics={epics} onChange={onChange}
+                      ownerWorking={card.owner != null && workingOwners.has(card.owner)}
                       dragging={dragging === card.id}
                       onDragStart={(e) => {
                         e.dataTransfer.setData('text/orchestra-card', String(card.id))
@@ -244,10 +249,11 @@ const doneWhenLines = (description: string): string[] => {
     .slice(0, 8)
 }
 
-function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEnd, onDragOver, onDrop }: {
+function KanbanCardChip({ card, epics, dragging, ownerWorking, onChange, onDragStart, onDragEnd, onDragOver, onDrop }: {
   card: KanbanCard
   epics: Milestone[]
   dragging: boolean
+  ownerWorking: boolean
   onChange: () => void
   onDragStart: (event: React.DragEvent) => void
   onDragEnd: () => void
@@ -308,8 +314,11 @@ function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEn
       <footer>
         {epic && <span className="kanban-epic-tag" title={epic.title}>{epic.title}</span>}
         {card.owner && (
-          <span className="kanban-owner" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>
+          <span className={`kanban-owner${ownerWorking ? ' working' : ''}`}
+            title={ownerWorking ? `${card.owner} — working now` : card.owner}
+            style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>
             {initials(card.owner)}
+            {ownerWorking && <i className="kanban-owner-pulse" aria-hidden="true" />}
           </span>
         )}
         <span className="kanban-when">{timeAgo(card.updated_at)}</span>

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AgentTerminal } from './AgentTerminal'
+import { agentActivity } from './agentActivity'
 import {
   agentHomeApi,
   AgentHomeApiError,
@@ -173,6 +174,8 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
   const legacySnapshot = useMemo(() =>
     selectedProfile ? snaps.find((snapshot) => snapshot.board.id === selectedProfile.board_id) : undefined,
   [selectedProfile, snaps])
+  const liveAgentById = useMemo(() =>
+    new Map(snaps.flatMap((snapshot) => snapshot.agents).map((agent) => [agent.id, agent])), [snaps])
 
   const loadProfiles = useCallback(async (quiet = false) => {
     if (!quiet) setProfiles((current) => ({ ...current, status: 'loading', error: null }))
@@ -712,17 +715,21 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
             const profileSessionPresentation = profileSession
               ? agentHomeSessionPresentation(profileSession)
               : null
+            const liveAgent = profile.legacy_agent_id != null ? liveAgentById.get(profile.legacy_agent_id) : undefined
+            const working = liveAgent ? agentActivity(liveAgent) === 'working' : false
             return (
-              <button className={`ah-profile-card${active ? ' active' : ''}`} type="button"
+              <button className={`ah-profile-card${active ? ' active' : ''}${working ? ' working' : ''}`} type="button"
                 onClick={() => selectProfile(profile)} key={profile.id} aria-current={active ? 'page' : undefined}>
                 <span className="ah-profile-avatar">
                   {profile.name.split(/[\s-_]+/).map((part) => part[0]?.toUpperCase()).slice(0, 2).join('')}
-                  <i className={profileSessionPresentation?.status ?? profile.status} />
+                  <i className={working ? 'working' : profileSessionPresentation?.status ?? profile.status} />
                 </span>
                 <span className="ah-profile-copy">
                   <strong>{profile.name}</strong>
                   <small>{profile.role ?? 'General agent'}</small>
-                  <span>{profileSessionPresentation?.status ?? profile.status} · {profileSession?.mode ?? 'identity'}</span>
+                  <span>{working
+                    ? <><b className="ah-working-label">working</b> · {profileSession?.mode ?? 'identity'}</>
+                    : <>{profileSessionPresentation?.status ?? profile.status} · {profileSession?.mode ?? 'identity'}</>}</span>
                 </span>
                 {profileSession?.provider || profile.default_provider
                   ? <ProviderBadge provider={profileSession?.provider ?? profile.default_provider!} compact />

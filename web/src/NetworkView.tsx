@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
+import { agentActivity } from './agentActivity'
 import { STATUS } from './Board'
 import { CanvasPoint, CanvasViewport, canvasSceneOffset, screenToCanvasLocal } from './canvasViewport'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -240,9 +241,9 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
                 </div>
               </div>
             )}
-            <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
+            <span className={`net-avatar round ${a.status} ${agentActivity(a) === 'working' ? 'working' : ''} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-              title={`${a.name} — drag to move, click to open console, drop a ticket to assign`}
+              title={`${a.name}${agentActivity(a) === 'working' ? ' — working now' : ''} — drag to move, click to open console, drop a ticket to assign`}
               onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}
               onDragOver={(e) => { if (a.name === 'strategist' || a.name.startsWith('auditor-')) return; e.preventDefault(); setDropTarget(a.name) }}
               onDragLeave={() => setDropTarget(null)}

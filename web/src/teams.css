@@ -77,6 +77,38 @@
   color: var(--ink); font-size: 12.5px; cursor: pointer;
 }
 .teams-solo-agent em { font-style: normal; font-size: 10.5px; color: var(--ink-soft, #999); }
-.teams-dot { width: 7px; height: 7px; border-radius: 50%; background: #999; }
+.teams-dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: #999; flex-shrink: 0; }
 .teams-dot-active, .teams-dot-working { background: #2da44e; }
-.teams-dot-idle { background: #d4a72c; }
+.teams-dot-idle { background: #c2c7cd; }
+.teams-dot-gone { background: #d0d4d9; }
+/* working is the only animated state — a green circle orbits the dot; everything else stays still and muted */
+.teams-dot-working::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(45, 164, 78, 0.22);
+  border-top-color: #2da44e;
+  animation: teams-working-orbit 1s linear infinite;
+}
+@keyframes teams-working-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .teams-dot-working::after { animation: none; border-color: rgba(45, 164, 78, 0.55); }
+}
+
+.teams-working-label {
+  font-style: normal; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: #1a7f37; background: rgba(45, 164, 78, 0.12);
+  border-radius: 999px; padding: 1px 7px;
+}
+.teams-member {
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 10px;
+}
+.teams-member-idle, .teams-member-gone { color: var(--ink-soft, #999); font-weight: 400; }
+.teams-member-working { color: #1a7f37; }
+.teams-working-now {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  font-weight: 700; color: #1a7f37;
+}
+.teams-solo-working { border-color: rgba(45, 164, 78, 0.5); }
+.teams-solo-idle, .teams-solo-gone { opacity: 0.72; }

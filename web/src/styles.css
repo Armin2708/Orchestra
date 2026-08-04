@@ -329,6 +329,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .net-avatar .presence.active { background: #346538; }
 .net-avatar .presence.idle { background: #956400; }
+/* green circle orbiting the agent bubble while it is mid-turn */
+.net-avatar.working::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  border: 3px solid rgba(45, 164, 78, 0.16);
+  border-top-color: #2da44e;
+  animation: net-working-orbit 1s linear infinite;
+  pointer-events: none;
+}
+@keyframes net-working-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .net-avatar.working::before { animation: none; border-color: rgba(45, 164, 78, 0.55); }
+}
 .net-name { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
 .net-cards { display: flex; flex-direction: column; gap: 3px; align-items: center; }
 .net-card {
