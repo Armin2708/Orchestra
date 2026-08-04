@@ -16,7 +16,7 @@ import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-
 import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
-import { ExternalTranscriptService } from './external-transcript.js'
+import { ExternalTranscriptService, loadSdkSessionTranscript } from './external-transcript.js'
 import { boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
@@ -1794,11 +1794,18 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const external = externalTranscripts.transcript(id)
     if (external.lines.length > 0) return { lines: external.lines, working: null, external: true }
     if (!hired?.lines.length) {
-      // a hired agent between daemon restart and its resume still shows its history
+      // a hired agent between daemon restart and its resume still shows its history —
+      // from the daemon store, else from the SDK session file it will resume from
       try {
         const row = db.prepare('SELECT lines FROM agent_transcripts WHERE agent_id=?').get(id) as { lines: string } | undefined
         const stored = row ? JSON.parse(row.lines) as unknown[] : []
         if (Array.isArray(stored) && stored.length) return { lines: stored, working: null, restored: true }
+        const agentRow = db.prepare(`SELECT a.sdk_session, b.project_path FROM agents a
+          JOIN boards b ON b.id=a.board_id WHERE a.id=?`).get(id) as { sdk_session: string | null; project_path: string } | undefined
+        if (agentRow?.sdk_session) {
+          const sdk = loadSdkSessionTranscript(agentRow.project_path, agentRow.sdk_session)
+          if (sdk.length) return { lines: sdk, working: null, restored: true }
+        }
       } catch { /* unreadable history never blocks the live view */ }
     }
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })

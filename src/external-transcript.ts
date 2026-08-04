@@ -79,6 +79,39 @@ export function parseTranscriptEntry(entry: unknown): ExternalTranscriptLine[] {
   return []
 }
 
+/**
+ * A hired session's own transcript file — Claude Code stores it under
+ * ~/.claude/projects/<cwd with [/.] replaced by '-'>/<session>.jsonl. This is
+ * the ground truth the SDK resumes from, so it recovers drawer history that
+ * predates the daemon's agent_transcripts store.
+ */
+export function loadSdkSessionTranscript(cwd: string, sessionId: string, limit = MAX_LINES): ExternalTranscriptLine[] {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId) || !path.isAbsolute(cwd)) return []
+  const file = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[/.]/g, '-'), `${sessionId}.jsonl`)
+  const real = validTranscriptPath(file)
+  if (!real) return []
+  try {
+    const size = fs.statSync(real).size
+    const fd = fs.openSync(real, 'r')
+    let raw: string
+    try {
+      const start = Math.max(0, size - FIRST_READ_TAIL_BYTES)
+      const buffer = Buffer.alloc(size - start)
+      fs.readSync(fd, buffer, 0, buffer.length, start)
+      raw = buffer.toString('utf8')
+    } finally { fs.closeSync(fd) }
+    const rows = raw.split('\n')
+    if (rows.length > 1 && size > FIRST_READ_TAIL_BYTES) rows.shift() // drop the partial first line of a tail read
+    const lines: ExternalTranscriptLine[] = []
+    for (const row of rows) {
+      const trimmed = row.trim()
+      if (!trimmed) continue
+      try { lines.push(...parseTranscriptEntry(JSON.parse(trimmed))) } catch { /* partial write */ }
+    }
+    return lines.slice(-limit)
+  } catch { return [] }
+}
+
 // hook-supplied paths are authenticated but still external input — only ever read
 // .jsonl files that truly live under the invoking user's home directory
 export function validTranscriptPath(p: unknown): string | null {

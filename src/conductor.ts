@@ -20,6 +20,7 @@ import {
   writeProviderModelCache,
   type AgentProviderCatalog,
 } from './agent-providers.js'
+import { loadSdkSessionTranscript } from './external-transcript.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 import {
   issueManagedAgentLaunchBootstrap,
@@ -677,11 +678,14 @@ export class Conductor {
     const input = createInput()
     const transcript: TranscriptLine[] = []
     // a resumed session keeps its drawer history across daemon restarts; the
-    // setEffort internal restart carries its own lines and opts out
+    // setEffort internal restart carries its own lines and opts out. The SDK's
+    // own session file is the deeper source when the daemon store is behind.
     if (opts.resumeSession && opts.restoreTranscript !== false) {
       const stored = loadStoredTranscript(this.db, agent.id)
-      if (stored.length) {
-        transcript.push(...stored.slice(-500))
+      const sdk = loadSdkSessionTranscript(opts.cwd, opts.resumeSession)
+      const restored = sdk.length > stored.length ? sdk : stored
+      if (restored.length) {
+        transcript.push(...restored.slice(-500))
         transcript.push({ at: new Date().toISOString(), kind: 'status', text: 'conversation restored after daemon restart' })
       }
     }
