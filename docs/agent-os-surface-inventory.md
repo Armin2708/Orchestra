@@ -442,18 +442,23 @@ GET /api/v1/boards/:id/snapshot
 GET /api/v1/boards/:id/telemetry
 GET /api/v1/boards/:id/timeline
 GET /api/v1/cards/:id/events
+GET /api/v1/cards/:id/ledger
 GET /api/v1/cards/:id/reviews
 PATCH /api/v1/cards/:id
+PATCH /api/v1/milestones/:id
 POST /api/v1/boards/:id/hire
+POST /api/v1/boards/:id/next
 POST /api/v1/boards/:id/wake
 POST /api/v1/boards/resolve
 POST /api/v1/cards
 POST /api/v1/cards/:id/assign
+POST /api/v1/cards/:id/rank
 POST /api/v1/ideas
 POST /api/v1/ideas/:id/promote
 POST /api/v1/messages
 POST /api/v1/milestones
 POST /api/v1/milestones/:id/steps
+PUT /api/v1/cards/:id/contract
 ```
 
 Direct Hire is included here because it explicitly returns `mode: "ambient"` and does not create

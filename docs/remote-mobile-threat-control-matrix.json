@@ -336,7 +336,7 @@
       "evidence": [
         {
           "file": "src/remote.ts",
-          "contains": "if (authDisabled()) throw new Error('remote requires token auth — unset ORCHESTRA_NO_AUTH first')"
+          "contains": "if (authDisabled()) throw new Error('remote requires token auth \u2014 unset ORCHESTRA_NO_AUTH first')"
         }
       ]
     },
@@ -543,7 +543,7 @@
         },
         {
           "file": "src/daemon.ts",
-          "contains": "throw new Error('--expose requires token auth — unset ORCHESTRA_NO_AUTH to start exposed')"
+          "contains": "throw new Error('--expose requires token auth \u2014 unset ORCHESTRA_NO_AUTH to start exposed')"
         }
       ]
     },
@@ -1148,22 +1148,22 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 84,
+    "total_get_routes": 85,
     "by_classification": {
       "canonical": 66,
       "compatibility": 3,
-      "legacy": 9,
+      "legacy": 10,
       "infrastructure": 6
     },
     "interpretation": "The count includes authenticated and intentionally public GET routes and is not an observe grant list. Any read-surface change requires explicit data/resource classification and REM-001 review."
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 150,
+    "total_non_get_routes": 154,
     "by_classification": {
       "canonical": 102,
       "compatibility": 26,
-      "legacy": 16,
+      "legacy": 20,
       "infrastructure": 6
     },
     "interpretation": "These routes are not individually granted to future devices. The count is a drift tripwire: any mutation surface change requires REM-001 and the centralized default-deny policy to be reconsidered."

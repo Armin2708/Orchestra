@@ -6,6 +6,7 @@ describe('board-local navigation', () => {
   it('keeps operational and history views together under Board', () => {
     expect(BOARD_TABS).toEqual([
       { id: 'overview', label: 'Overview' },
+      { id: 'kanban', label: 'Kanban' },
       { id: 'agents', label: 'Agents' },
       { id: 'messages', label: 'Messages' },
       { id: 'workspace', label: 'Workspace' },

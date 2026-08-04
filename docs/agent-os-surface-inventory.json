@@ -634,18 +634,23 @@
       "GET /api/v1/boards/:id/telemetry",
       "GET /api/v1/boards/:id/timeline",
       "GET /api/v1/cards/:id/events",
+      "GET /api/v1/cards/:id/ledger",
       "GET /api/v1/cards/:id/reviews",
       "PATCH /api/v1/cards/:id",
+      "PATCH /api/v1/milestones/:id",
       "POST /api/v1/boards/:id/hire",
+      "POST /api/v1/boards/:id/next",
       "POST /api/v1/boards/:id/wake",
       "POST /api/v1/boards/resolve",
       "POST /api/v1/cards",
       "POST /api/v1/cards/:id/assign",
+      "POST /api/v1/cards/:id/rank",
       "POST /api/v1/ideas",
       "POST /api/v1/ideas/:id/promote",
       "POST /api/v1/messages",
       "POST /api/v1/milestones",
-      "POST /api/v1/milestones/:id/steps"
+      "POST /api/v1/milestones/:id/steps",
+      "PUT /api/v1/cards/:id/contract"
     ],
     "infrastructure": [
       "GET /api/v1/auth/status",
@@ -777,12 +782,14 @@
       "card",
       "card create",
       "card move",
+      "card rank",
       "card update",
       "idea",
       "idea-done",
       "ideas",
       "join",
       "milestone",
+      "next",
       "note",
       "notify",
       "pulse",
@@ -1071,13 +1078,13 @@
     {
       "id": "agent-home.knowledge-manifest",
       "classification": "canonical",
-      "file": "web/src/AgentHome.tsx",
+      "file": "web/src/AgentHomePanels.tsx",
       "evidence": "<AgentKnowledgeManifest"
     },
     {
       "id": "agent-home.discussions",
       "classification": "canonical",
-      "file": "web/src/AgentHome.tsx",
+      "file": "web/src/AgentHomePanels.tsx",
       "evidence": "<AgentHomeDiscussions"
     },
     {
@@ -1151,6 +1158,12 @@
       "classification": "infrastructure",
       "file": "web/public/manifest.webmanifest",
       "evidence": "\"display\": \"standalone\""
+    },
+    {
+      "id": "board.kanban",
+      "classification": "legacy",
+      "file": "web/src/KanbanView.tsx",
+      "evidence": "export function KanbanView"
     }
   ],
   "planned_not_implemented": []
