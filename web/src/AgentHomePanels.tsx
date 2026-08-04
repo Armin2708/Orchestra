@@ -56,6 +56,9 @@ export type Loadable<T> = {
 
 const activeStatuses = new Set(['reserved', 'starting', 'running', 'idle', 'stopping'])
 
+const fmtEffortTokens = (n: number) =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+
 export function AgentHomeHeader({
   profile,
   session,
@@ -70,6 +73,7 @@ export function AgentHomeHeader({
   error,
   copied,
   readOnly = false,
+  liveAgent = null,
   onAction,
   onRefresh,
   onCopyLink,
@@ -87,6 +91,7 @@ export function AgentHomeHeader({
   error: string | null
   copied: boolean
   readOnly?: boolean
+  liveAgent?: Agent | null
   onAction: (action: AgentHomeAction) => void
   onRefresh: () => void
   onCopyLink: () => void
@@ -135,6 +140,12 @@ export function AgentHomeHeader({
           badge={session?.provider ?? profile.default_provider ?? undefined} />
         <HeaderFact label="Model" value={session?.model ?? profile.default_model ?? 'Provider default'} />
         <HeaderFact label="Effort" value={session?.effort ?? profile.default_effort ?? 'Default'} />
+        {liveAgent && (
+          <HeaderFact label="Effort rank" mono
+            value={liveAgent.effort_rank
+              ? `#${liveAgent.effort_rank} · ${fmtEffortTokens(liveAgent.effort_tokens ?? 0)} tok`
+              : 'No usage yet'} />
+        )}
         <HeaderFact label="Access" value={session?.access_profile ?? profile.default_access_profile ?? 'Not set'} />
         <HeaderFact label="Recovery" value={session?.recovery_state ?? 'Not started'} tone={session?.recovery_state === 'lost' ? 'danger' : undefined} />
         <HeaderFact label="Cursor" value={shortId(session?.provider_cursor, 12)} mono />

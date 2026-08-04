@@ -110,6 +110,9 @@ export type Agent = {
   model?: string | null
   effort?: string | null
   subagents?: { key: string; label: string }[]
+  // rank by real recorded tokens on the board (#109); null until usage exists
+  effort_rank?: number | null
+  effort_tokens?: number
 }
 export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string; status?: 'open' | 'shipped' | 'dropped'; outcome?: string; rank?: number | null }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }

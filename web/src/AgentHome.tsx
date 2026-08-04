@@ -756,7 +756,7 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
         )}
         {selectedProfile && (home.status === 'loading' && !home.data ? <AgentHomeStageSkeleton /> : home.data ? (
           <>
-            <AgentHomeHeader profile={selectedProfile} session={selectedSession}
+            <AgentHomeHeader profile={selectedProfile} session={selectedSession} liveAgent={legacyAgent}
               conversation={selectedConversation} workspace={runtime.workspace} job={runtime.job}
               contract={runtime.contract}
               process={selectedProcess} attention={runtime.attention} capabilities={sessionCapabilities}
