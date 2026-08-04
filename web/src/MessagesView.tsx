@@ -205,7 +205,20 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
 
   const visible = rows.filter((row) => inboxMatches(row.thread, mailbox))
   const selected = selectedKey ? rows.find((row) => rowKey(row) === selectedKey) ?? null : null
-  const unreadTotal = rows.filter((row) => mailboxOf(row.thread) !== 'sent' && isUnread(row.thread, row.boardId, readMap)).length
+  const unreadTotal = rows.filter((row) => inboxMatches(row.thread, 'inbox') && isUnread(row.thread, row.boardId, readMap)).length
+
+  const markAllRead = () => {
+    setReadMap((current) => {
+      const next = { ...current }
+      for (const row of rows) {
+        const watermark = latestForeignId(row.thread)
+        const key = threadReadKey(row.boardId, row.thread.id)
+        if ((next[key] ?? 0) < watermark) next[key] = watermark
+      }
+      saveReadMap(next)
+      return next
+    })
+  }
 
   const markRead = (row: ThreadRow) => {
     const watermark = latestForeignId(row.thread)
@@ -237,10 +250,17 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
             <h2>Messages</h2>
             <p className="inbox-unread-total">{unreadTotal === 0 ? 'All caught up' : `${unreadTotal} unread`}</p>
           </div>
-          <button className="btn primary inbox-compose-btn" type="button"
-            onClick={() => { setComposing(true); setSelectedKey(null) }}>
-            Compose
-          </button>
+          <div className="inbox-head-actions">
+            {unreadTotal > 0 && (
+              <button className="btn ghost inbox-mark-read" type="button" onClick={markAllRead}>
+                Mark all read
+              </button>
+            )}
+            <button className="btn primary inbox-compose-btn" type="button"
+              onClick={() => { setComposing(true); setSelectedKey(null) }}>
+              Compose
+            </button>
+          </div>
         </header>
 
         <nav className="inbox-tabs" aria-label="Mailboxes">

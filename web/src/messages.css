@@ -1659,3 +1659,12 @@
   .inbox-compose .message-composer { padding: 0 14px 24px; }
   .inbox-compose .message-project-field { margin: 10px 14px 0; }
 }
+
+.inbox-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.inbox-mark-read { white-space: nowrap; font-size: 12.5px; }
