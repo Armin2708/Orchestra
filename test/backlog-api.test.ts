@@ -50,6 +50,48 @@ it('rejects a rank request with no position', async () => {
   })).statusCode).toBe(400)
 })
 
+it('PUT /cards/:id/contract grooms a card: unready -> ready -> claimable', async () => {
+  const { server } = await boot()
+  const raw = await mkCard(server, 'raw note')
+  await server.inject({ method: 'POST', url: `/api/v1/cards/${raw.id}/rank`, payload: { top: true } })
+
+  expect((await server.inject({
+    method: 'POST', url: '/api/v1/boards/1/next', payload: {},
+  })).statusCode).toBe(404)
+
+  expect((await server.inject({
+    method: 'PUT', url: `/api/v1/cards/${raw.id}/contract`,
+    payload: { objective: 'Ship the raw note', acceptance_criteria: [] },
+  })).statusCode).toBe(400)
+
+  const groomed = (await server.inject({
+    method: 'PUT', url: `/api/v1/cards/${raw.id}/contract`,
+    payload: { objective: 'Ship the raw note', acceptance_criteria: ['tests pass', 'deployed'] },
+  }))
+  expect(groomed.statusCode).toBe(200)
+  expect(groomed.json().ready).toBe(true)
+
+  const claimed = (await server.inject({
+    method: 'POST', url: '/api/v1/boards/1/next', payload: {},
+  })).json().card
+  expect(claimed.id).toBe(raw.id)
+})
+
+it('contract upsert bumps the version monotonically', async () => {
+  const { db, server } = await boot()
+  const card = await mkCard(server, 'versioned')
+  await server.inject({
+    method: 'PUT', url: `/api/v1/cards/${card.id}/contract`,
+    payload: { objective: 'v1', acceptance_criteria: ['a'] },
+  })
+  await server.inject({
+    method: 'PUT', url: `/api/v1/cards/${card.id}/contract`,
+    payload: { objective: 'v2', acceptance_criteria: ['a', 'b'] },
+  })
+  expect(db.prepare(`SELECT objective, version FROM task_contracts WHERE card_id=?`).get(card.id))
+    .toMatchObject({ objective: 'v2', version: 2 })
+})
+
 it('POST /boards/:id/next claims the top ready card and 404s when drained', async () => {
   const { db, server } = await boot()
   db.prepare(`INSERT INTO agents (board_id, name) VALUES (1, 'picker-otter')`).run()

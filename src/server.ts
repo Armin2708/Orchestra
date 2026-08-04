@@ -9,7 +9,7 @@ import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
-import { claimNext, rankBetween } from './backlog.js'
+import { claimNext, isReady, rankBetween } from './backlog.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-auth.js'
@@ -779,6 +779,36 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
       return { card: updated }
+    })
+
+  // grooming shortcut for the kanban triage lane: a card is Ready once it has an
+  // objective and acceptance criteria. Job-market cards keep using the versioned
+  // /os contract flow; this thin upsert covers plain board cards.
+  server.put<{ Params: { id: string }; Body: { objective?: string; acceptance_criteria?: string[]; agent?: string } }>(
+    '/api/v1/cards/:id/contract', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      const objective = String(req.body?.objective ?? '').trim()
+      const criteria = Array.isArray(req.body?.acceptance_criteria)
+        ? req.body.acceptance_criteria.map((c) => String(c).trim()).filter(Boolean)
+        : []
+      if (!objective || !criteria.length) {
+        return reply.code(400).send({ error: 'objective and at least one acceptance criterion are required' })
+      }
+      const existing = db.prepare(`SELECT 1 FROM task_contracts WHERE card_id=?`).get(card.id)
+      if (existing) {
+        db.prepare(`UPDATE task_contracts SET objective=?, acceptance_criteria=?,
+            version=version+1, updated_at=datetime('now') WHERE card_id=?`)
+          .run(objective, JSON.stringify(criteria), card.id)
+      } else {
+        db.prepare(`INSERT INTO task_contracts (card_id, objective, acceptance_criteria) VALUES (?, ?, ?)`)
+          .run(card.id, objective, JSON.stringify(criteria))
+      }
+      const actor = agentByName(card.board_id, req.body?.agent)
+      logEvent(card.id, actor?.id ?? null, 'contract', { objective, criteria: criteria.length })
+      const updated = getCard(card.id)
+      emit(card.board_id, 'card', updated)
+      return { card: updated, ready: isReady(db, card.id) }
     })
 
   // hand an agent the top-ranked READY backlog card — atomic, so concurrent pickers

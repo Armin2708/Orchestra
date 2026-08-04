@@ -121,7 +121,7 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
                 )}
               </div>
               {!collapsed && laneCards.map((card) => (
-                <KanbanCardChip key={card.id} card={card} epics={epics}
+                <KanbanCardChip key={card.id} card={card} epics={epics} onChange={onChange}
                   dragging={dragging === card.id}
                   onDragStart={(e) => {
                     e.dataTransfer.setData('text/orchestra-card', String(card.id))
@@ -141,26 +141,76 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
   )
 }
 
-function KanbanCardChip({ card, epics, dragging, onDragStart, onDragEnd, onDrop }: {
+// prefill acceptance criteria from the card description's DONE WHEN section, one per line
+const doneWhenLines = (description: string): string[] => {
+  const match = /done\s+when:?/i.exec(description)
+  if (!match) return []
+  return description.slice(match.index + match[0].length).split('\n')
+    .map((line) => line.replace(/^[\s•*–—-]+/, '').trim())
+    .filter((line) => line && !/^[A-Z ]{4,}:$/.test(line))
+    .slice(0, 8)
+}
+
+function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEnd, onDrop }: {
   card: KanbanCard
   epics: Milestone[]
   dragging: boolean
+  onChange: () => void
   onDragStart: (event: React.DragEvent) => void
   onDragEnd: () => void
   onDrop: (event: React.DragEvent) => void
 }) {
   const epic = card.milestone_id ? epics.find((m) => m.id === card.milestone_id) : undefined
+  const [grooming, setGrooming] = useState(false)
+  const [objective, setObjective] = useState('')
+  const [criteria, setCriteria] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const unready = card.column === 'backlog' && !card.ready
+
+  const openGroom = () => {
+    setObjective(card.title)
+    setCriteria(doneWhenLines(card.description).join('\n'))
+    setGrooming(true)
+  }
+  const saveContract = async () => {
+    setSaveError(null)
+    try {
+      await api('PUT', `/cards/${card.id}/contract`, {
+        objective: objective.trim(),
+        acceptance_criteria: criteria.split('\n').map((c) => c.trim()).filter(Boolean),
+      })
+      setGrooming(false)
+      onChange()
+    } catch (e) { setSaveError(e instanceof Error ? e.message : 'save failed') }
+  }
+
   return (
-    <article className={`kanban-card${dragging ? ' dragging' : ''}`} draggable
+    <article className={`kanban-card${dragging ? ' dragging' : ''}`} draggable={!grooming}
       onDragStart={onDragStart} onDragEnd={onDragEnd}
       onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header>
         <span className="kanban-card-id">#{card.id}</span>
         {card.stale && <span className="kanban-dot-stale" title="Idle past threshold" />}
-        {card.column === 'backlog' && !card.ready
-          && <span className="kanban-badge-unready" title="Needs a contract (objective + acceptance criteria)">not ready</span>}
+        {unready && (
+          <button type="button" className="kanban-badge-unready"
+            title="Needs a contract (objective + acceptance criteria) — click to groom"
+            onClick={openGroom}>not ready</button>
+        )}
       </header>
       <p className="kanban-card-title">{card.title}</p>
+      {grooming && (
+        <div className="kanban-groom">
+          <input value={objective} onChange={(e) => setObjective(e.target.value)}
+            placeholder="Objective" aria-label="Objective" />
+          <textarea value={criteria} onChange={(e) => setCriteria(e.target.value)} rows={3}
+            placeholder={'Acceptance criteria, one per line'} aria-label="Acceptance criteria" />
+          {saveError && <span className="kanban-error">{saveError}</span>}
+          <div className="kanban-groom-actions">
+            <button type="button" onClick={saveContract}>Make ready</button>
+            <button type="button" onClick={() => setGrooming(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
       <footer>
         {epic && <span className="kanban-epic-tag" title={epic.title}>{epic.title}</span>}
         {card.owner && (

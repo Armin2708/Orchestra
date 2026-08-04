@@ -62,9 +62,20 @@
 .kanban-card footer { display: flex; align-items: center; gap: 6px; }
 
 .kanban-badge-unready {
-  padding: 1px 6px; border-radius: 999px; background: #f6e8e8; color: #8f3d3d;
-  font: 600 9.5px 'SF Mono', ui-monospace, monospace;
+  padding: 1px 6px; border: 0; border-radius: 999px; background: #f6e8e8; color: #8f3d3d;
+  font: 600 9.5px 'SF Mono', ui-monospace, monospace; cursor: pointer;
 }
+.kanban-groom { display: flex; flex-direction: column; gap: 5px; }
+.kanban-groom input, .kanban-groom textarea {
+  width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 11.5px; font-family: inherit; resize: vertical;
+}
+.kanban-groom-actions { display: flex; gap: 6px; }
+.kanban-groom-actions button {
+  padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); font-size: 11px; cursor: pointer;
+}
+.kanban-groom-actions button:first-child { background: var(--ink); border-color: var(--ink); color: #fff; }
 .kanban-dot-stale { width: 7px; height: 7px; border-radius: 50%; background: #e2a53e; }
 .kanban-epic-tag {
   max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
