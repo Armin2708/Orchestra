@@ -15,6 +15,7 @@ import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-
 import { hardware, claudeUsage } from './system.js'
 import { ShipQueue, ShipHooks, shipGate, autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from './telemetry.js'
+import { ExternalTranscriptService } from './external-transcript.js'
 import { boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
 import { shiplog } from './shiplog.js'
@@ -120,6 +121,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.decorateRequest('orchestraPrincipal', 'anonymous')
   server.decorateRequest('orchestraRemoteDevice', null)
   const maestro = conductor?.(server.bus)
+  // conversation text for agents running in their own terminal (hooks-only sessions)
+  const externalTranscripts = new ExternalTranscriptService()
   registerRemoteSecurityIntegration(server, {
     db,
     masterToken: opts.token,
@@ -1568,8 +1571,15 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
     if (!requireOperator(req, reply)) return
+    const id = Number(req.params.id)
+    const hired = maestro?.transcript(id)
+    // `info` only exists for live hired sessions; anything else falls back to the
+    // read-only tail of the agent's own terminal transcript (hooks-reported path)
+    if (hired && (hired as { info?: unknown }).info) return hired
+    const external = externalTranscripts.transcript(id)
+    if (external.lines.length > 0) return { lines: external.lines, working: null, external: true }
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
-    return maestro.transcript(Number(req.params.id))
+    return hired ?? { lines: [], working: null }
   })
 
   const inboxSql = `
@@ -1643,22 +1653,24 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string; transcript_path?: string } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
     const id = Number(req.params.id)
     const a = hookAgent(id, req.body)
     if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
     if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
+    if (req.body?.transcript_path) externalTranscripts.track(id, req.body.transcript_path)
     const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id)
     emit(a.board_id, 'agent', updated)
     return updated
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string } | null }>('/api/v1/agents/:id/pulse', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string; transcript_path?: string } | null }>('/api/v1/agents/:id/pulse', (req, reply) => {
     const a = hookAgent(Number(req.params.id), req.body)
     if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
     db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(a.id)
     if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
+    if (req.body?.transcript_path) externalTranscripts.track(a.id, req.body.transcript_path)
     // per-recipient delivery: one agent consuming a broadcast must not hide it from the others
     const messages = db.prepare(inboxSql +
       ` AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.message_id = m.id AND d.agent_id = ?) ORDER BY m.id`)
