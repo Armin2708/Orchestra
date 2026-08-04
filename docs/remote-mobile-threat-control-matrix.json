@@ -385,7 +385,7 @@
         },
         {
           "file": "web/src/main.tsx",
-          "contains": "const authorityMode = await prepareBrowserAuthority()"
+          "contains": "setMode(await prepareBrowserAuthority())"
         },
         {
           "file": "web/src/api.ts",
