@@ -189,7 +189,7 @@ const BOARD_PAN_EXCLUDE = [
 ].join(', ')
 const BOARD_NATIVE_SCROLL = '.ticket-rail, .project-cards, .threads, .net-thread'
 
-function BoardCanvas({ children, focused, storageKey }: {
+export function BoardCanvas({ children, focused, storageKey }: {
   children: (viewport: CanvasViewport) => React.ReactNode
   focused: boolean
   storageKey: string

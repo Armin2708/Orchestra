@@ -1159,11 +1159,11 @@
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 162,
+    "total_non_get_routes": 164,
     "by_classification": {
       "canonical": 102,
       "compatibility": 26,
-      "legacy": 28,
+      "legacy": 30,
       "infrastructure": 6
     },
     "interpretation": "These routes are not individually granted to future devices. The count is a drift tripwire: any mutation surface change requires REM-001 and the centralized default-deny policy to be reconsidered."

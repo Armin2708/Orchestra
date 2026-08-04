@@ -408,6 +408,7 @@ POST /api/v1/agents/:id/permission-mode
 POST /api/v1/agents/:id/permissions/:requestId
 POST /api/v1/agents/:id/plugins/reload
 POST /api/v1/agents/:id/pulse
+POST /api/v1/agents/:id/rename
 POST /api/v1/agents/:id/subping
 POST /api/v1/agents/:id/task
 POST /api/v1/agents/register
@@ -456,6 +457,7 @@ POST /api/v1/boards/:id/teams
 POST /api/v1/boards/:id/teams/design
 POST /api/v1/teams/:id/approve
 POST /api/v1/teams/:id/hire
+POST /api/v1/teams/:id/refine
 DELETE /api/v1/teams/:id
 POST /api/v1/boards/:id/wake
 POST /api/v1/boards/resolve

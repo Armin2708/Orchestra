@@ -112,3 +112,65 @@
 }
 .teams-solo-working { border-color: rgba(45, 164, 78, 0.5); }
 .teams-solo-idle, .teams-solo-gone { opacity: 0.72; }
+
+/* ---- Overview-style canvas rework: team panels are project sections on a BoardCanvas ---- */
+.teams-canvas-view { padding: 12px 0 0; gap: 12px; }
+.teams-canvas-view .teams-toolbar, .teams-canvas-view .teams-error { padding: 0 24px; }
+.teams-canvas-view .teams-solo { padding: 0 24px 16px; }
+.teams-canvas-view .board-canvas { flex: 1; min-height: 0; }
+.teams-toggle .avatar.mini { margin-right: 6px; }
+
+.teams-panel { min-width: 640px; }
+.teams-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.teams-panel-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.teams-panel-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.teams-panel-title .teams-goal { margin: 0; }
+.teams-panel-actions { display: flex; gap: 8px; }
+.teams-panel-actions button {
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.teams-panel-actions button:disabled { opacity: 0.55; cursor: default; }
+.teams-net-wrap, .teams-net-wrap .network { min-height: 380px; }
+.teams-panel-hired .teams-net-wrap { outline: 1px solid #2da44e33; border-radius: 12px; }
+
+.teams-edge { stroke: #b8b4ab; stroke-width: 1.5; }
+
+/* unstaffed role: dashed ghost of the overview agent avatar */
+.net-avatar.teams-ghost {
+  background: transparent; color: var(--ink-soft, #777);
+  border: 1.5px dashed #b8b4ab;
+}
+.teams-node-role {
+  display: block; text-align: center; font-size: 10px; color: var(--ink-soft, #999); margin-top: 1px;
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.teams-role-editor {
+  position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%);
+  z-index: 30; width: 240px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+  display: flex; flex-direction: column; gap: 7px; cursor: default;
+}
+.teams-role-editor label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 600; color: var(--ink-soft, #777); }
+.teams-role-editor input, .teams-role-editor textarea {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 12px; font-family: inherit; resize: vertical;
+}
+.teams-editor-actions { display: flex; gap: 6px; }
+.teams-editor-actions button {
+  padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+
+.teams-refine { display: flex; gap: 8px; padding: 0 4px 4px; }
+.teams-refine input {
+  flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font-size: 12.5px;
+}
+.teams-refine button {
+  padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.teams-refine button:disabled { opacity: 0.55; cursor: default; }

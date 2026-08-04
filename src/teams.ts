@@ -237,6 +237,21 @@ export function mastermindBrief(goal: string): string {
   ].join('\n')
 }
 
+// Follow-up instruction to a live mastermind: adjust an existing (non-hired) team in place.
+export function mastermindRefineBrief(team: TeamRow, spec: TeamSpec, instruction: string): string {
+  return [
+    `The operator wants team #${team.id} "${team.name}" refined. Their instruction:`,
+    instruction,
+    ``,
+    `Current spec:`,
+    JSON.stringify(spec, null, 2),
+    ``,
+    `Produce the FULL updated TeamSpec JSON (same schema and rules as before) and apply it with:`,
+    `printf '%s' '<the JSON>' | orchestra team update ${team.id} --stdin`,
+    `Keep everything the operator did not ask to change. Never approve or hire.`,
+  ].join('\n')
+}
+
 // A member's standing orders: its charter, its reporting line, and the team norms.
 export function memberBrief(team: TeamRow, spec: TeamSpec, role: TeamRole): string {
   const manager = role.reports_to ? spec.roles.find((r) => r.key === role.reports_to) : null

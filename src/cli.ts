@@ -597,6 +597,21 @@ team.command('design <goal>').description('hand a goal to the mastermind agent; 
     const r = await api('POST', `/boards/${b.id}/teams/design`, { goal })
     console.log(`mastermind ${r.agent.name} is designing a team for: ${goal}`)
   })
+team.command('update <id>').description('replace a draft/approved team spec (mastermind refine flow)')
+  .option('--name <n>')
+  .option('--goal <g>')
+  .option('--spec-file <path>', 'read the TeamSpec JSON from a file')
+  .option('--stdin', 'read the TeamSpec JSON from stdin')
+  .action(async (id, o) => {
+    const body: Record<string, unknown> = { name: o.name, goal: o.goal }
+    if (o.specFile || o.stdin) {
+      const raw = o.specFile ? fs.readFileSync(o.specFile, 'utf8') : await messageBody(undefined, true)
+      try { body.spec = JSON.parse(raw) } catch { console.error('spec is not valid JSON'); process.exit(1) }
+    }
+    await up()
+    const r = await api('PATCH', `/teams/${id}`, body)
+    console.log(`team #${id} "${r.team.name}" updated [${r.team.status}] — ${JSON.parse(r.team.spec_json).roles.length} roles`)
+  })
 team.command('hire-member <role>').description('staff one role from your team spec (team leads only)')
   .option('--team <id>', 'team id (inferred from your lead seat if omitted)')
   .option('--from <a>')

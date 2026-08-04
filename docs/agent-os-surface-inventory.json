@@ -663,7 +663,9 @@
       "GET /api/v1/messages/:id/attachments/:index",
       "POST /api/v1/boards/:id/teams/design",
       "POST /api/v1/teams/:id/hire-member",
-      "POST /api/v1/cards/:id/assign-team"
+      "POST /api/v1/cards/:id/assign-team",
+      "POST /api/v1/teams/:id/refine",
+      "POST /api/v1/agents/:id/rename"
     ],
     "infrastructure": [
       "GET /api/v1/auth/status",
@@ -816,7 +818,8 @@
       "team list",
       "team design",
       "team hire-member",
-      "team assign"
+      "team assign",
+      "team update"
     ],
     "infrastructure": [
       "hook",

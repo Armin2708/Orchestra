@@ -244,6 +244,28 @@ it('assigning a card to a team hands it to the lead with routing orders', async 
   } })).statusCode).toBe(404)
 })
 
+it('refine hands the current spec + instruction to the mastermind; hired teams refuse', async () => {
+  const { server, stub } = await boot()
+  const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Refinable', goal: 'Goal', spec: spec(),
+  } })).json().team
+
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/refine`, payload: {} })).statusCode).toBe(400)
+  const refined = (await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/refine`, payload: {
+    instruction: 'Add a QA role under the lead',
+  } })).json()
+  expect(refined.agent.name).toBe('mastermind')
+  const brief = stub().tasks.at(-1)!.text
+  expect(brief).toContain('Add a QA role under the lead')
+  expect(brief).toContain('"reviewer"')
+  expect(brief).toContain(`orchestra team update ${team.id} --stdin`)
+
+  const hired = await hireTeamOverApi(server)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${hired.team.id}/refine`, payload: {
+    instruction: 'x',
+  } })).statusCode).toBe(409)
+})
+
 it('team hire returns 501 without a conductor', async () => {
   const { server } = await boot(false)
   const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
