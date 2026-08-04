@@ -234,7 +234,7 @@ function PermissionModeHint({ agentId, profile, onChange, onError, compact = fal
         }}>
         {ACCESS_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
       </select>
-      <span className="cc-dim">{selected.hint}</span>
+      {!compact && <span className="cc-dim">{selected.hint}</span>}
     </span>
   )
 }

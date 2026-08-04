@@ -386,9 +386,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-head-star { color: #D97757; }
 .cc-head-dim { color: #6f6b64; }
 /* header chips: quieter and tighter than their footer-era styling */
-.cc-head .cc-model-trigger { padding: 3px 10px; font-size: 11.5px; }
+.cc-head { flex-wrap: wrap; row-gap: 6px; }
+.cc-head .cc-model-trigger { flex: none; padding: 3px 10px; font-size: 11.5px; }
+.cc-head .cc-model-trigger > strong { max-width: 120px; }
 .cc-mode-compact {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; flex: none; align-items: center; gap: 6px; white-space: nowrap;
   border: 1px solid #4a463f; border-radius: 999px; padding: 3px 10px;
 }
 .cc-mode-compact .cc-mode-label {
