@@ -89,19 +89,33 @@ describe('local-owner support-case export route', () => {
 
   it('retains the central mutation rate limit ahead of support-case authorization', async () => {
     const server = fixture()
+    // proxied traffic (x-forwarded-host) is not direct-local, so it stays
+    // governed by the operational limiter while still authenticating on loopback
+    const proxied = { host: 'localhost', 'x-forwarded-host': 'localhost', authorization: 'Bearer owner-secret' }
     for (let index = 0; index < 240; index += 1) {
+      const response = await server.inject({
+        method: 'POST', url: '/api/v1/ops/support-case', headers: proxied, payload: {},
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    const limited = await server.inject({
+      method: 'POST', url: '/api/v1/ops/support-case', headers: proxied, payload: {},
+    })
+    expect(limited.statusCode).toBe(429)
+    expect(limited.headers['retry-after']).toBeDefined()
+    expect(limited.json()).toMatchObject({ error: 'operational rate limit exceeded' })
+  })
+
+  it('exempts direct-local traffic from the operational limiter (#106)', async () => {
+    const server = fixture()
+    // the operator's own machine (loopback socket, loopback Host, no forwarded
+    // host) must never starve into 429s — agent hooks alone exceed the budget
+    for (let index = 0; index < 245; index += 1) {
       const response = await server.inject({
         method: 'POST', url: '/api/v1/ops/support-case',
         headers: { host: 'localhost', authorization: 'Bearer owner-secret' }, payload: {},
       })
       expect(response.statusCode).toBe(400)
     }
-    const limited = await server.inject({
-      method: 'POST', url: '/api/v1/ops/support-case',
-      headers: { host: 'localhost', authorization: 'Bearer owner-secret' }, payload: {},
-    })
-    expect(limited.statusCode).toBe(429)
-    expect(limited.headers['retry-after']).toBeDefined()
-    expect(limited.json()).toMatchObject({ error: 'operational rate limit exceeded' })
   })
 })

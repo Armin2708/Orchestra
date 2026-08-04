@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from 'fastify'
+import Fastify, { FastifyInstance, FastifyRequest } from 'fastify'
 import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -171,8 +171,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   })
   const capacityAdmissions = new Map<object, { requestId: string; provider: string }>()
   const activeRequestReleases = new WeakMap<object, () => void>()
+  // The operational limiter guards against remote abuse. Direct-local traffic —
+  // the operator's own browser and every agent's hook pulses — legitimately runs
+  // thousands of requests a minute and all shares the 127.0.0.1 partition, so
+  // limiting it starves /os/devices/self and flips the localhost UI to view-only.
+  const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i
+  const directLocalRequest = (request: FastifyRequest): boolean => {
+    if (request.orchestraRemoteDevice) return false
+    if (request.headers['x-forwarded-host'] !== undefined) return false
+    const address = request.ip || request.raw.socket.remoteAddress || ''
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) return false
+    return LOOPBACK_HOST.test(String(request.headers.host ?? ''))
+  }
   server.addHook('onRequest', async (request, reply) => {
-    if (request.url.startsWith('/api/')) {
+    if (request.url.startsWith('/api/') && !directLocalRequest(request)) {
       const rawPartition = request.orchestraRemoteDevice?.deviceSessionId
         ?? request.ip ?? request.raw.socket.remoteAddress ?? 'unknown'
       const requestLimit = operationalRateLimiter.consume('request', rawPartition)
