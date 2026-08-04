@@ -665,7 +665,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     } catch (error) { setControlError(controlErrorText(error)) }
   }
 
+  // daemon lifecycle bookkeeping — real in the transcript, noise in a conversation
+  const isLifecycleStatus = (text: string) =>
+    /^(?:(?:claude|codex)\s+)?(?:session (?:started|configured)|turn (?:started|finished))\b/i.test(text)
+
   const renderLine = (l: Line, i: number) => {
+    if (l.kind === 'status' && isLifecycleStatus(l.text)) return null
     switch (l.kind) {
       case 'user':
         return <p key={i} className="cc-user">&gt; {l.text}</p>
