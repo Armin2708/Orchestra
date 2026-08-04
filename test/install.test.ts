@@ -68,10 +68,11 @@ describe('provider hook installation', () => {
     expect(codex.hooks.Stop).toHaveLength(2)
     expect(codex.hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
     expect(Object.keys(codex.hooks).sort()).toEqual([
-      'PermissionRequest', 'PostToolUse', 'SessionStart', 'Stop',
+      'PermissionRequest', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop',
       'SubagentStart', 'SubagentStop', 'UserPromptSubmit',
     ].sort())
-    expect(codex.hooks.SessionEnd).toBeUndefined()
+    expect(codex.hooks.SessionEnd).toHaveLength(1)
+    expect(codex.hooks.SessionEnd[0].hooks[0].command).toBe('orchestra hook session-end --provider codex')
     expect(JSON.stringify(codex)).toContain('--provider codex')
 
     uninstallHooks('global', { provider: 'both', roots: { home } })
@@ -97,7 +98,7 @@ describe('provider hook installation', () => {
     expect(claudePath).toBe(path.join(cwd, '.claude', 'settings.json'))
     expect(fs.existsSync(codexPath)).toBe(true)
     expect(fs.existsSync(claudePath)).toBe(false)
-    expect(read(codexPath).hooks.SessionEnd).toBeUndefined()
+    expect(read(codexPath).hooks.SessionEnd).toHaveLength(1)
     log.mockRestore()
   })
 

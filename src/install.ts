@@ -39,6 +39,7 @@ const CODEX_HOOKS: Record<string, any> = {
   PermissionRequest: { matcher: '*', hooks: [{ type: 'command', command: command('permission-request', 'codex') }] },
   SubagentStart: { matcher: '*', hooks: [{ type: 'command', command: command('subagent-start', 'codex') }] },
   SubagentStop: { matcher: '*', hooks: [{ type: 'command', command: command('subagent-stop', 'codex') }] },
+  SessionEnd: { hooks: [{ type: 'command', command: command('session-end', 'codex') }] },
 }
 
 const hooksFor = (provider: HookProvider) => provider === 'claude' ? CLAUDE_HOOKS : CODEX_HOOKS
