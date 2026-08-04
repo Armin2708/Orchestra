@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { upgradeEnumOnlySchemaDrift } from './schema-enum-upgrade.js'
 import {
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_STATE_TABLE,
@@ -2797,6 +2798,10 @@ export function openCompatibilityMigrationFailureJournal(
     sidecar.pragma('busy_timeout = 5000')
     fs.chmodSync(input.journal_path, 0o600)
 
+    if (existed) {
+      // Enum-only contract growth in the sidecar CHECK lists upgrades in place (#123).
+      upgradeEnumOnlySchemaDrift(sidecarDb, SIDECAR_SCHEMA)
+    }
     if (!existed) {
       sidecar.exec(SIDECAR_SCHEMA.map(({ sql }) => `${sql};`).join('\n'))
       const generation = randomUUID()

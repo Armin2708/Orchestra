@@ -6,6 +6,7 @@ import {
   AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID,
   applyCompatibilityMigrationTelemetryMigration,
   refreshCompatibilityMigrationTelemetryCollectorEpoch,
+  upgradeCompatibilityTelemetryEnumContracts,
 } from './compatibility-migration-telemetry.js'
 import {
   AGENT_OS_COMPATIBILITY_MIGRATION_FAILURE_JOURNAL_ID,
@@ -7863,6 +7864,8 @@ export function applyAgentOsMigrations(db: Database.Database): void {
     applyOutcomeAnalyticsMigration(db)
   })
   migrate()
+  // enum-only telemetry contract growth upgrades in place before any exact schema assert (#123)
+  upgradeCompatibilityTelemetryEnumContracts(db)
   refreshCompatibilityMigrationTelemetryCollectorEpoch(db, {
     now: new Date(),
   })

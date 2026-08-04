@@ -6,6 +6,7 @@ import {
   AGENT_OS_LEGACY_COMPATIBILITY_TABLES,
   type AgentOsLegacyCompatibilityTable,
 } from './compatibility-projection-contract.js'
+import { upgradeEnumOnlySchemaDrift } from './schema-enum-upgrade.js'
 import type {
   CompatibilityMigrationFailureJournalBinding,
 } from './compatibility-migration-failure-journal.js'
@@ -1008,6 +1009,23 @@ export function assertCompatibilityMigrationTelemetrySchemaCompatible(
  * This function deliberately starts no transaction. `applyAgentOsMigrations` owns the outer
  * all-migrations transaction and records the 023 marker only after this function returns.
  */
+/**
+ * Boot-time upgrade for enum-only telemetry contract growth (#123). Runs before any exact
+ * schema assert so existing databases whose CHECK lists predate newly registered legacy
+ * tables (e.g. teams, agent_transcripts) upgrade in place instead of failing to boot.
+ */
+export function upgradeCompatibilityTelemetryEnumContracts(
+  db: Database.Database,
+): string[] {
+  const hasAnyTelemetryObject = COMPATIBILITY_TELEMETRY_SCHEMA.some(
+    ({ name }) => !!db.prepare(`
+      SELECT 1 FROM sqlite_master WHERE name=?
+    `).get(name),
+  )
+  if (!hasAnyTelemetryObject) return []
+  return upgradeEnumOnlySchemaDrift(db, COMPATIBILITY_TELEMETRY_SCHEMA)
+}
+
 export function applyCompatibilityMigrationTelemetryMigration(
   db: Database.Database,
 ): void {
@@ -1018,6 +1036,9 @@ export function applyCompatibilityMigrationTelemetryMigration(
     `).get(name),
   )
   if (hasAnyTelemetryObject) {
+    // Enum-only contract growth (e.g. new legacy tables in the CHECK lists) upgrades the
+    // stored schema text in place; anything else still fails the exact assert (#123).
+    upgradeEnumOnlySchemaDrift(db, COMPATIBILITY_TELEMETRY_SCHEMA)
     assertCompatibilityMigrationTelemetrySchemaCompatible(db)
     return
   }
