@@ -603,7 +603,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       }
 
       if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
-      else await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
+      else {
+        // terminal sessions receive board messages on their next hook fire — without a
+        // local echo the send looks like it silently vanished
+        await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
+        echoLocal('user', text)
+        echoLocal('status', `queued as a board message — ${agent.name} receives it on its next turn in that terminal`)
+      }
       setInput('')
       onChange()
     } catch (cause) {
