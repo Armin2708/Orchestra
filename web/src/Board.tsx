@@ -120,8 +120,9 @@ function TicketRail({ snap, providers, onOpen, onChange }: {
           {milestones.map(({ m, steps, open: openSteps, done }) => (
             <div key={m.id} className="rail-mile">
               <button className="rail-mile-head" onClick={() => toggle(m.id)}>
-                <span className="rail-mile-flag">{done === steps.length ? '🏆' : '⛳'}</span>
+                <span className="rail-mile-flag">{m.status === 'shipped' ? '🏆' : m.status === 'dropped' ? '✕' : done === steps.length ? '🏆' : '⛳'}</span>
                 <span className="rail-mile-title">{m.title}</span>
+                {m.status && m.status !== 'open' && <span className="rm-count">{m.status}</span>}
                 <span className="rm-count">{done}/{steps.length}</span>
                 <span className="thread-caret">{collapsed.has(m.id) ? '▸' : '▾'}</span>
               </button>

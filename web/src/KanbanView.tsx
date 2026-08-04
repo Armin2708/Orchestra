@@ -98,7 +98,11 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
         </select>
         <select value={epicFilter} onChange={(e) => setEpicFilter(Number(e.target.value))} aria-label="Filter by epic">
           <option value={0}>All epics</option>
-          {epics.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
+          {epics.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.title}{m.status && m.status !== 'open' ? ` (${m.status})` : ''}
+            </option>
+          ))}
         </select>
         {staleCount > 0 && <span className="kanban-stale-count" title="Cards idle past their column's threshold">{staleCount} stale</span>}
         {error && <span className="kanban-error" role="alert">{error}</span>}

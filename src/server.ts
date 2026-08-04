@@ -1135,6 +1135,33 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return m
   })
 
+  // milestones act as epics: open → shipped (all steps done) | dropped (detaches open steps).
+  // Reopening a shipped/dropped epic is allowed — humans un-ship premature calls.
+  server.patch<{ Params: { id: string }; Body: { status?: string; outcome?: string; title?: string; description?: string } }>(
+    '/api/v1/milestones/:id', (req, reply) => {
+      const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(req.params.id)) as any
+      if (!m) return reply.code(404).send({ error: 'not found' })
+      const { status, outcome, title, description } = req.body ?? {}
+      if (status !== undefined && !['open', 'shipped', 'dropped'].includes(status)) {
+        return reply.code(400).send({ error: 'status must be open, shipped, or dropped' })
+      }
+      if (status === 'shipped') {
+        const open = db.prepare(`SELECT count(*) AS n FROM cards WHERE milestone_id=? AND column_name != 'done'`)
+          .get(m.id) as { n: number }
+        if (open.n > 0) return reply.code(409).send({ error: `${open.n} step card(s) still open` })
+      }
+      if (status === 'dropped') {
+        db.prepare(`UPDATE cards SET milestone_id=NULL, step_order=NULL, updated_at=datetime('now')
+          WHERE milestone_id=? AND column_name != 'done'`).run(m.id)
+      }
+      db.prepare(`UPDATE milestones SET status=coalesce(?, status), outcome=coalesce(?, outcome),
+          title=coalesce(?, title), description=coalesce(?, description) WHERE id=?`)
+        .run(status ?? null, outcome ?? null, title ?? null, description ?? null, m.id)
+      const updated = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(m.id)
+      emit(m.board_id, 'milestone', updated)
+      return updated
+    })
+
   server.delete<{ Params: { id: string } }>('/api/v1/milestones/:id', (req, reply) => {
     const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(req.params.id)) as any
     if (!m) return reply.code(404).send({ error: 'not found' })
