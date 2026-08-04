@@ -28,11 +28,11 @@
 **Interfaces:**
 - Produces: `rankBetween(db, cardId, {before?, after?, top?, bottom?}): number` (new rank, renormalizes on underflow), `isReady(db, cardId): boolean`, `claimNext(db, boardId, agentName?): Card | null`.
 
-- [ ] Step 1: failing tests (rank midpoint, renormalize, isReady via task_contracts, claimNext atomicity + gate)
-- [ ] Step 2: run, verify fail
-- [ ] Step 3: implement `src/backlog.ts` + db.ts ALTERs (`cards.rank REAL`, `milestones.status TEXT DEFAULT 'open'`, `milestones.outcome TEXT DEFAULT ''`, `milestones.rank REAL`)
-- [ ] Step 4: run, verify pass
-- [ ] Step 5: commit
+- [x] Step 1: failing tests (rank midpoint, renormalize, isReady via task_contracts, claimNext atomicity + gate)
+- [x] Step 2: run, verify fail
+- [x] Step 3: implement `src/backlog.ts` + db.ts ALTERs (`cards.rank REAL`, `milestones.status TEXT DEFAULT 'open'`, `milestones.outcome TEXT DEFAULT ''`, `milestones.rank REAL`)
+- [x] Step 4: run, verify pass
+- [x] Step 5: commit
 
 ### Task 2: API + CLI (P1)
 
@@ -43,7 +43,7 @@
 **Interfaces:**
 - Produces: `POST /api/v1/cards/:id/rank {before?|after?|top?|bottom?, agent?}` → `{card}`; `POST /api/v1/boards/:id/next {agent}` → `{card}` or 404 `{error:'no ready cards'}`; snapshot cards gain `rank`, `ready`; CLI `orchestra card rank <id> --before/--after/--top/--bottom`, `orchestra next [--agent]`.
 
-- [ ] Steps: failing route tests → implement (routes call backlog.ts; `logEvent` type `'ranked'` payload `{rank}` for audit; `next` emits existing `moved` event) → CLI subcommands → pass → commit
+- [x] Steps: failing route tests → implement (routes call backlog.ts; `logEvent` type `'ranked'` payload `{rank}` for audit; `next` emits existing `moved` event) → CLI subcommands → pass → commit
 
 ### Task 3: Kanban tab (P1)
 
@@ -56,7 +56,7 @@
 - Consumes: snapshot `cards[].rank/ready`, `POST /cards/:id/rank`, `/cards/:id/move`, approve endpoint for done.
 - Produces: `KanbanView({snaps, onChange})` — columns Triage(derived)/Backlog/In progress/Review/Blocked/Done(count+expand); drag within Backlog → rank; across → move; filters epic/owner/text; chips: epic tag, DoR badge, staleness dot (thresholds task 5).
 
-- [ ] Steps: tab entry → component with DnD (native draggable/onDrop) → wire api → build + manual check → commit
+- [x] Steps: tab entry → component with DnD (native draggable/onDrop) → wire api → build + manual check → commit
 
 ### Task 4: DoR gate + triage + draft contract (P2)
 
@@ -68,7 +68,7 @@
 - Consumes: `TaskContractService` (src/agent-os/task-contracts.ts) via existing `/api/v1/os/cards/:id/contract` routes (verify path; else add thin legacy `PUT /api/v1/cards/:id/contract {objective, acceptance_criteria[]}`).
 - Produces: draft-contract prefill parses `DONE WHEN` section from card description.
 
-- [ ] Steps: failing test (unready card not claimable; contract upsert makes it claimable) → implement → UI affordance → pass → commit
+- [x] Steps: failing test (unready card not claimable; contract upsert makes it claimable) → implement → UI affordance → pass → commit
 
 ### Task 5: Staleness nudges (P2)
 
@@ -79,7 +79,7 @@
 **Interfaces:**
 - Produces: card `stale: true` when `updated_at` older than per-column threshold (in_progress 3d, review 7d, blocked 7d; env `ORCHESTRA_STALE_DAYS="in_progress:3,review:7,blocked:7"` override).
 
-- [ ] Steps: failing snapshot test with aged fixtures → implement → pass → commit
+- [x] Steps: failing snapshot test with aged fixtures → implement → pass → commit
 
 ### Task 6: Epic upgrade (P3)
 
@@ -90,7 +90,7 @@
 **Interfaces:**
 - Produces: `PATCH /api/v1/milestones/:id {status?, outcome?}`; ship guard: every step card `done` (or detached via existing step removal) else 409; drop always allowed, cards keep `milestone_id`? No — dropped epic detaches its non-done cards (`milestone_id=NULL, step_order=NULL`).
 
-- [ ] Steps: failing transition tests → implement → UI chips → pass → commit
+- [x] Steps: failing transition tests → implement → UI chips → pass → commit
 
 ### Task 7: Delivery ledger (P3)
 
@@ -101,8 +101,8 @@
 **Interfaces:**
 - Produces: `{origin: {created_at, creator, milestone}, contract: {objective, criteria, version} | null, work: {branch, commits: [...from card_events 'shipped'/'moved' payloads...]}, reviews: [review_decision events], verification: latest verification event | null, shipped: shipped-record | null}` — all from existing tables (`cards`, `card_events`, `task_contracts`, `milestones`).
 
-- [ ] Steps: fixture-DB failing test → implement assembly → drawer section → pass → commit
+- [x] Steps: fixture-DB failing test → implement assembly → drawer section → pass → commit
 
 ### Task 8: Full suite + deploy
 
-- [ ] `npx tsc --noEmit`, full `npx vitest run` (expect only the pre-existing docs-drift failure), `npm run build`, `detect_changes`, orchestra cards → review.
+- [x] `npx tsc --noEmit`, full `npx vitest run` (expect only the pre-existing docs-drift failure), `npm run build`, `detect_changes`, orchestra cards → review.
