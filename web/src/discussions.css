@@ -27,3 +27,11 @@
 .dc-error { color:#a43b34; background:#fff0ed; padding:8px; border-radius:6px; }
 .dc-empty { color:#756d61; text-align:center; margin:60px 0; }
 @media (max-width:720px) { .dc-layout { grid-template-columns:1fr; } .dc-list { max-height:230px; } }
+
+/* agent-home surface: rendered inside the 304px inspector panel */
+.dc-agent-home { padding:15px 13px; min-height:0; gap:10px; }
+.dc-agent-home .dc-header { flex-wrap:wrap; }
+.dc-agent-home .dc-header h2 { font-size:16px; }
+.dc-agent-home .dc-layout { grid-template-columns:1fr; }
+.dc-agent-home .dc-list { max-height:230px; }
+.dc-agent-home .dc-empty { margin:24px 0; }

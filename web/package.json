@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build && node scripts/compress-dist.mjs dist"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

@@ -42,8 +42,10 @@ import {
   type ToolPolicyDecision,
 } from './agentToolApi'
 import { runRuntimeMutation } from './runtimeReadOnly'
+import { AgentHomeDiscussions } from './DiscussionCenter'
+import { AgentKnowledgeManifest } from './AgentKnowledgeManifest'
 
-export type AgentHomeDetailTab = 'work' | 'context' | 'tools' | 'usage' | 'history'
+export type AgentHomeDetailTab = 'work' | 'context' | 'tools' | 'usage' | 'discuss' | 'history'
 export type AgentHomeMobilePane = 'conversation' | 'terminal' | 'details'
 
 export type Loadable<T> = {
@@ -485,6 +487,7 @@ export function AgentInspector({
     { id: 'context', label: 'Context' },
     { id: 'tools', label: 'Tools' },
     { id: 'usage', label: 'Usage' },
+    { id: 'discuss', label: 'Discuss' },
     { id: 'history', label: 'History' },
   ]
   return (
@@ -500,9 +503,16 @@ export function AgentInspector({
       <div className="ah-detail-panel" role="tabpanel" tabIndex={0}>
         {tab === 'work' && <WorkDetail workspace={workspace} job={job} contract={contract} session={session}
           processes={processes} attention={attention} />}
-        {tab === 'context' && <ContextDetail context={context} />}
+        {tab === 'context' && <>
+          <ContextDetail context={context} />
+          {typeof session?.context.knowledge_context_build_id === 'string'
+            && <AgentKnowledgeManifest boardId={profile.board_id}
+              buildId={session.context.knowledge_context_build_id} />}
+        </>}
         {tab === 'tools' && <ToolsDetail profile={profile} session={session} events={events} readOnly={readOnly} />}
         {tab === 'usage' && <UsageDetail events={events} job={job} />}
+        {tab === 'discuss' && <AgentHomeDiscussions boardId={profile.board_id}
+          profileId={profile.id} linkType="agent" linkTarget={profile.id} />}
         {tab === 'history' && <HistoryDetail home={home} session={session} conversation={conversation}
           onSelectSession={onSelectSession} onSelectConversation={onSelectConversation} />}
       </div>
