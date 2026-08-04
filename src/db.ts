@@ -209,6 +209,12 @@ export function openDb(file: string): Database.Database {
       ON agent_usage(board_id, provider, day);
   `)
   try { db.exec(`ALTER TABLE cards ADD COLUMN branch TEXT`) } catch { /* exists */ }
+  // stack-ranked backlog (spec 2026-08-04-backlog-system): smaller rank = higher priority
+  try { db.exec(`ALTER TABLE cards ADD COLUMN rank REAL`) } catch { /* exists */ }
+  // milestones act as epics: lifecycle status + shipped outcome
+  try { db.exec(`ALTER TABLE milestones ADD COLUMN status TEXT NOT NULL DEFAULT 'open'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE milestones ADD COLUMN outcome TEXT NOT NULL DEFAULT ''`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE milestones ADD COLUMN rank REAL`) } catch { /* exists */ }
   // Existing targeted mail retains ask semantics. Old targetless rows become inert for
   // agents because only explicit, snapshotted swarms enter the fan-out inbox path.
   try { db.exec(`ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'ask'`) } catch { /* exists */ }
