@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -89,11 +90,13 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
     ? process.env[MANAGED_AGENT_BOOTSTRAP_ENV]?.trim() || null : null
   const agentHomeSessionId = managed
     ? process.env[MANAGED_AGENT_HOME_SESSION_ENV]?.trim() || null : null
+  const terminal = managed ? null : terminalIdentity()
   const agent = await api('POST', '/agents/register', {
     board_id: board.id, session_id: input.session_id, name: process.env.ORCHESTRA_NAME, provider,
     ...(managedAgentId ? { agent_id: managedAgentId } : {}),
     ...(bootstrapNonce ? { bootstrap_nonce: bootstrapNonce } : {}),
     ...(agentHomeSessionId ? { agent_home_session_id: agentHomeSessionId } : {}),
+    ...(terminal ? { terminal } : {}),
   })
   if (typeof agent.session_token !== 'string') return undefined
   const sess: Session = {
@@ -104,6 +107,26 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
   }
   saveSession(provider, sess)
   return sess
+}
+
+// Where does this session's CLI sit? The hook is a child of the provider CLI,
+// so the parent pid's controlling tty is the terminal to inject into. All
+// best-effort: a null just means queued (hook-fire) delivery.
+function terminalIdentity(): Record<string, string> | null {
+  const identity: Record<string, string> = {}
+  try {
+    const tty = execFileSync('/bin/ps', ['-o', 'tty=', '-p', String(process.ppid)],
+      { encoding: 'utf8', timeout: 1_000 }).trim()
+    if (tty && tty !== '??' && /^[a-zA-Z0-9]+$/.test(tty)) identity.tty = tty
+  } catch { /* ps unavailable — env hints may still work */ }
+  if (process.env.TERM_PROGRAM) identity.term_program = process.env.TERM_PROGRAM
+  if (process.env.ITERM_SESSION_ID) identity.iterm_session_id = process.env.ITERM_SESSION_ID
+  const tmuxSocket = process.env.TMUX?.split(',')[0]
+  if (tmuxSocket && process.env.TMUX_PANE) {
+    identity.tmux_socket = tmuxSocket
+    identity.tmux_pane = process.env.TMUX_PANE
+  }
+  return Object.keys(identity).length ? identity : null
 }
 
 function positiveEnvironmentInteger(value: string | undefined): number | null {

@@ -55,6 +55,7 @@ import type { ActiveWorkRegistration } from './agent-os/operations-recovery.js'
 import { OperationsRateLimiter } from './operations/capacity.js'
 import { classifyOperationalFailure, OPERATIONS_FAILURE_POLICIES } from './operations/failure-policy.js'
 import type { VapidKeys } from './push.js'
+import { formatInjectedMessage, injectTerminalMessage, recordTerminalEndpoint } from './terminal-inject.js'
 
 export type Bus = EventEmitter
 // minimal surface the server needs from the conductor (injected by the daemon)
@@ -460,7 +461,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/api/v1/boards', () => db.prepare(`SELECT * FROM boards ORDER BY id`).all())
 
-  server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string; agent_id?: number; bootstrap_nonce?: string; agent_home_session_id?: string } }>(
+  server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string; agent_id?: number; bootstrap_nonce?: string; agent_home_session_id?: string; terminal?: unknown } }>(
     '/api/v1/agents/register', (req, reply) => {
       const { board_id, session_id } = req.body
       const requestedProvider = req.body.provider?.trim().toLowerCase()
@@ -545,6 +546,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         throw error
       }
       const stored = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name) as any
+      // terminal seat for instant message injection — hooks refresh it each SessionStart
+      if (req.body.terminal) recordTerminalEndpoint(Number(stored.id), req.body.terminal)
       const { hook_token_hash: _secretHash, ...agent } = stored
       emit(board_id, 'agent', agent)
       return { ...agent, ...(sessionToken ? { session_token: sessionToken } : {}) }
@@ -1369,6 +1372,19 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         }
       }
       if (targets.size) msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(msg.id)
+      // terminal sessions get their message typed into the terminal (fire-and-forget);
+      // marking delivery keeps the next hook pulse from injecting a duplicate. Failure
+      // leaves the message queued for ordinary hook delivery.
+      if ((kind === 'ask' || kind === 'reply' || kind === 'task') && toId && !maestro?.isHired(toId)) {
+        const messageId = Number(msg.id)
+        const injected = formatInjectedMessage(kind, messageId, fromA?.name ?? null, body, reply_to ?? null)
+        void injectTerminalMessage(toId, injected).then((ok) => {
+          if (!ok) return
+          db.prepare(`INSERT OR IGNORE INTO deliveries (message_id, agent_id) VALUES (?, ?)`).run(messageId, toId)
+          db.prepare(`UPDATE messages SET delivered_at=coalesce(delivered_at, datetime('now')) WHERE id=?`).run(messageId)
+          emit(board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(messageId))
+        }).catch(() => {})
+      }
       msg.recipient_count = kind === 'swarm' ? swarmTargets.length : toId ? 1 : 0
       msg.delivered_count = (db.prepare(`SELECT COUNT(*) AS c FROM deliveries WHERE message_id=?`).get(msg.id) as any).c
       emit(board_id, 'message', msg)
