@@ -208,6 +208,34 @@ export function leadBrief(team: TeamRow, spec: TeamSpec): string {
   ].filter(Boolean).join('\n')
 }
 
+// Reserved name for the team-design agent: it designs org structures, it never hires.
+export const MASTERMIND_NAME = 'mastermind'
+
+export function mastermindBrief(goal: string): string {
+  return [
+    `You are the MASTERMIND: you design engineering team structures, you never hire or implement.`,
+    `Design a team for this goal:\n${goal}`,
+    ``,
+    `Model the structure on how high-scale tech orgs (Google/Apple-style) actually staff work:`,
+    `a single accountable lead, clear role charters, review gates, and no role that exists "just in case".`,
+    `Keep it as small as the goal allows.`,
+    ``,
+    `Produce a TeamSpec JSON object with exactly this shape:`,
+    `{`,
+    `  "roles": [{ "key": "lead", "title": "...", "charter": "...", "reports_to": null, "max_agents": 1 },`,
+    `            { "key": "...", "title": "...", "charter": "...", "reports_to": "<role key>", "max_agents": N }],`,
+    `  "workflow": [{ "stage": "...", "role": "<role key>", "gate": "review" | "none" }],`,
+    `  "norms": "team-wide working agreements"`,
+    `}`,
+    `Rules: exactly one role with reports_to null (the lead); every reports_to references an`,
+    `existing role key; role keys are lowercase-kebab; every workflow stage maps to a role.`,
+    ``,
+    `Submit it as a draft for operator approval (never approve or hire yourself):`,
+    `printf '%s' '<the JSON>' | orchestra team propose '<team name>' --goal '<one-line goal>' --stdin`,
+    `Then report what you designed and why via a short board note.`,
+  ].join('\n')
+}
+
 export type TeamHireResult = { team: TeamRow; agent: Record<string, unknown> }
 
 type MaestroLike = {

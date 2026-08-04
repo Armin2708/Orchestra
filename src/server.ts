@@ -12,7 +12,7 @@ import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { claimNext, isReady, rankBetween } from './backlog.js'
 import {
   approveTeam, archiveTeam, createTeam, getTeam, hireTeam, listTeams,
-  teamMembers, updateTeam, TeamSpecError, type TeamSpec,
+  mastermindBrief, teamMembers, updateTeam, MASTERMIND_NAME, TeamSpecError, type TeamSpec,
 } from './teams.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
@@ -1705,6 +1705,30 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { team }
     } catch (error) { return teamError(reply, error) }
   })
+
+  // hand a goal to the mastermind (reused if already live); it submits a draft team for approval
+  server.post<{ Params: { id: string }; Body: { goal?: string } }>(
+    '/api/v1/boards/:id/teams/design', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      const goal = req.body?.goal?.trim()
+      if (!goal) return reply.code(400).send({ error: 'goal is required' })
+      const existing = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=? AND kind='hired' AND status != 'gone'`)
+        .get(board.id, MASTERMIND_NAME) as any
+      try {
+        const agent = existing && maestro.isHired(existing.id)
+          ? existing
+          : maestro.hire({ boardId: board.id, cwd: board.project_path, name: MASTERMIND_NAME })
+        maestro.task(Number(agent.id), mastermindBrief(goal))
+        emit(board.id, 'agent', agent)
+        return { agent, designing: true }
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+        throw error
+      }
+    })
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {

@@ -569,6 +569,35 @@ program.command('idea-done <id>').description('remove a roadmap idea (after conv
     await api('DELETE', `/ideas/${id}`)
     console.log(`idea #${id} removed from the roadmap`)
   })
+const team = program.command('team').description('design, propose, and inspect agent teams')
+team.command('propose <name>').description('submit a TeamSpec JSON as a draft team for operator approval')
+  .option('--goal <g>', 'one-line team goal')
+  .option('--spec-file <path>', 'read the TeamSpec JSON from a file')
+  .option('--stdin', 'read the TeamSpec JSON from stdin')
+  .action(async (name, o) => {
+    const raw = o.specFile ? fs.readFileSync(o.specFile, 'utf8') : await messageBody(undefined, true)
+    let spec: unknown
+    try { spec = JSON.parse(raw) } catch { console.error('spec is not valid JSON'); process.exit(1) }
+    await up(); const b = await board()
+    const r = await api('POST', `/boards/${b.id}/teams`, { name, goal: o.goal, spec })
+    console.log(`team #${r.team.id} "${r.team.name}" drafted — awaiting operator approval`)
+  })
+team.command('list').description('list teams on this board with status and live members')
+  .action(async () => {
+    await up(); const b = await board()
+    const r = await api('GET', `/boards/${b.id}/teams`)
+    for (const t of r.teams ?? []) {
+      const members = t.members.map((m: any) => `${m.name}(${m.team_role ?? '?'})`).join(', ')
+      console.log(`#${t.id} ${t.name} [${t.status}] roles:${t.spec.roles.length}${members ? ` live: ${members}` : ''}`)
+    }
+  })
+team.command('design <goal>').description('hand a goal to the mastermind agent; it drafts a team for approval')
+  .action(async (goal) => {
+    await up(); const b = await board()
+    const r = await api('POST', `/boards/${b.id}/teams/design`, { goal })
+    console.log(`mastermind ${r.agent.name} is designing a team for: ${goal}`)
+  })
+
 program.command('ideas').description('list roadmap ideas').action(async () => {
   await up(); const b = await board()
   const snap = await api('GET', `/boards/${b.id}/snapshot`)

@@ -453,6 +453,7 @@ PATCH /api/v1/teams/:id
 POST /api/v1/boards/:id/hire
 POST /api/v1/boards/:id/next
 POST /api/v1/boards/:id/teams
+POST /api/v1/boards/:id/teams/design
 POST /api/v1/teams/:id/approve
 POST /api/v1/teams/:id/hire
 DELETE /api/v1/teams/:id

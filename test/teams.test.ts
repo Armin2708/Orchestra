@@ -150,6 +150,27 @@ it('rejects invalid specs on create and 404s unknown teams', async () => {
   expect((await server.inject({ method: 'POST', url: '/api/v1/boards/999/teams', payload: { name: 'X', spec: spec() } })).statusCode).toBe(404)
 })
 
+it('design hires the mastermind once, re-tasks it on later goals, and briefs the schema', async () => {
+  const { db, server, stub } = await boot()
+  expect((await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams/design', payload: {} })).statusCode).toBe(400)
+
+  const first = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams/design', payload: {
+    goal: 'Ship a realtime sync engine',
+  } })).json()
+  expect(first.agent.name).toBe('mastermind')
+  expect(stub().tasks).toHaveLength(1)
+  expect(stub().tasks[0].text).toContain('MASTERMIND')
+  expect(stub().tasks[0].text).toContain('orchestra team propose')
+  expect(stub().tasks[0].text).toContain('Ship a realtime sync engine')
+
+  const second = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams/design', payload: {
+    goal: 'Harden auth',
+  } })).json()
+  expect(second.agent.id).toBe(first.agent.id)
+  expect(stub().tasks).toHaveLength(2)
+  expect(db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE name='mastermind'`).get()).toEqual({ c: 1 })
+})
+
 it('team hire returns 501 without a conductor', async () => {
   const { server } = await boot(false)
   const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
