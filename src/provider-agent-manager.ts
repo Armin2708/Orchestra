@@ -1107,6 +1107,10 @@ export class ProviderAgentManager implements ConductorLike {
       : this.claude.setModel?.(agentId, model) ?? Promise.resolve(false)
   }
 
+  renameAgent(agentId: number, name: string): void {
+    this.claude.renameAgent?.(agentId, name)
+  }
+
   setEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
     return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
       ? this.usesAgentOs(agentId)

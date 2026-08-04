@@ -83,6 +83,7 @@ export interface ConductorLike extends AgentSessionControlHost {
   resolveApproval?(agentId: number, requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel', message?: string, answers?: Record<string, string[]>): boolean | Promise<boolean>
   setAccessProfile?(agentId: number, profile: AccessProfile): Promise<boolean>
   setModel?(agentId: number, model: string): Promise<boolean>
+  renameAgent?(agentId: number, name: string): void
   setEffort?(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'>
   providerCatalog?(): Promise<AgentProviderCatalog[]>
   capabilities?(agentId: number): string[]
@@ -512,9 +513,10 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const identity = externalSessionId ? db.prepare(`SELECT * FROM agents WHERE provider=? AND external_session_id=?`)
         .get(provider, externalSessionId) as any : undefined
       if (identity) {
-        if (!['session', 'hired'].includes(identity.kind)
-          || identity.board_id !== board_id || (name && name !== identity.name))
+        if (!['session', 'hired'].includes(identity.kind) || identity.board_id !== board_id)
           return reply.code(409).send({ error: 'provider session identity is already bound to another agent' })
+        // the stored identity name wins over the session's (possibly stale) env
+        // name — an operator rename must not strand the agent's hooks (#129)
         name = identity.name
       }
       if (!name) {
@@ -1921,6 +1923,28 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         rawAnswers as Record<string, string[]> | undefined,
       )) ?? false
       return ok ? { ok: true, decision } : reply.code(404).send({ error: 'no compatible pending approval request with that id' })
+    })
+
+  // rename an agent — board addressing follows immediately; the session's own env
+  // name goes stale but registration resolves identities by session, not name (#129)
+  server.post<{ Params: { id: string }; Body: { name?: string } | null }>(
+    '/api/v1/agents/:id/rename', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      const id = Number(req.params.id)
+      const name = req.body?.name?.trim().toLowerCase() ?? ''
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name))
+        return reply.code(400).send({ error: 'name must be 1-32 chars of lowercase letters, digits and hyphens' })
+      const agent = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+      if (!agent) return reply.code(404).send({ error: 'not found' })
+      if (agent.name === name) return { ok: true, name }
+      if (db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(agent.board_id, name))
+        return reply.code(409).send({ error: `an agent named "${name}" already exists on this board` })
+      db.prepare(`UPDATE agents SET name=? WHERE id=?`).run(name, id)
+      maestro?.renameAgent?.(id, name)
+      const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id) as any
+      const { hook_token_hash: _h, ...safe } = updated
+      emit(agent.board_id, 'agent', safe)
+      return { ok: true, name }
     })
 
   // live-switch a hired agent's model — applies from the next turn (persisted for restart resume)

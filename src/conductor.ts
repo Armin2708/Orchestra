@@ -1276,6 +1276,12 @@ export class Conductor {
     return true
   }
 
+  // keep the live session's board addressing in sync after an operator rename
+  renameAgent(agentId: number, name: string): void {
+    const h = this.hired.get(agentId)
+    if (h) h.name = name
+  }
+
   resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string, answers?: Record<string, string[]>): boolean {
     const p = this.hired.get(agentId)?.pending.get(requestId)
     if (!p) return false

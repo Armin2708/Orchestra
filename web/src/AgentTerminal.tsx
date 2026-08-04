@@ -308,6 +308,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [openTaskId, setOpenTaskId] = useState<number | null>(null)
   const [assignOpen, setAssignOpen] = useState(false)
   const [confirmDeleteMsg, setConfirmDeleteMsg] = useState<number | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
   const [deletedMsgIds, setDeletedMsgIds] = useState<ReadonlySet<number>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
@@ -879,7 +880,28 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         <div className="terminal-col">
           <header className="cc-head">
             <span className="cc-head-star" aria-hidden="true">•</span>
-            <span>{agent.name}</span>
+            {renaming !== null ? (
+              <input className="cc-name-input" autoFocus value={renaming} maxLength={32}
+                aria-label="Rename agent"
+                onChange={(e) => setRenaming(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); return }
+                  if (e.key !== 'Enter') return
+                  const next = renaming.trim().toLowerCase()
+                  if (!next || next === agent.name) { setRenaming(null); return }
+                  try {
+                    await api('POST', `/agents/${agent.id}/rename`, { name: next })
+                    setRenaming(null)
+                    onChange()
+                  } catch (cause) { setControlError(controlErrorText(cause)) }
+                }}
+                onBlur={() => setRenaming(null)} />
+            ) : (
+              <button type="button" className="cc-name" title="Click to rename this agent"
+                onClick={() => canPromptAgent && setRenaming(agent.name)}>
+                {agent.name}<span className="cc-name-pencil" aria-hidden="true">✎</span>
+              </button>
+            )}
             {hired && <ProviderBadge provider={provider} compact />}
             <span className="cc-head-dim">{hired ? agent.status
               : external ? `terminal session · live transcript (read-only) · ${agent.status}`
