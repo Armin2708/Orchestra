@@ -11,10 +11,13 @@ Tailscale route by default. Public Cloudflare fallback requires both
 `ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1` and `--public`. Before starting or reusing a tunnel, the CLI
 checks daemon health, durable rollback state, tunnel ownership, origin, and end-to-end auth.
 
-The QR fragment contains a short-lived, single-use, origin-bound `PairingTicket`—never the master
-operator token. Redemption creates a named, scoped, expiring `DeviceSession` with a hashed,
-rotating, P-256 key-bound credential that is individually revocable without rotating unrelated
-sessions. The master and agent tokens remain loopback-only and are not
+The QR never contains the master operator token. On a private Tailscale origin, the owner password
+may be exchanged once for a named DeviceSession with the standard limited phone scopes and access
+to current boards; the password is not stored on the phone. Public Cloudflare origins, narrower
+board grants, and explicitly selected scopes use a short-lived, single-use, origin-bound
+`PairingTicket`. Both paths create a scoped, expiring DeviceSession with a hashed, rotating, P-256
+key-bound credential that is individually revocable without rotating unrelated sessions. The
+master and agent tokens remain loopback-only and are not
 accepted through public or forwarded Host headers, query strings, browser storage, logs, referrers,
 analytics, push payloads, or stream URLs.
 

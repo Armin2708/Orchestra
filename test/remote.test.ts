@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   enableNewRemotePairing,
   pairUrl,
+  privatePasswordBootstrapAllowed,
   publicTunnelAllowed,
   readRemoteState,
   remoteStatePath,
@@ -55,6 +56,17 @@ it('requires both the public-tunnel control and explicit per-command confirmatio
   process.env.ORCHESTRA_REMOTE_PUBLIC_TUNNEL = '1'
   expect(publicTunnelAllowed()).toBe(false)
   expect(publicTunnelAllowed({ confirmPublic: true })).toBe(true)
+})
+
+it('allows password bootstrap only through a private Tailscale tunnel', () => {
+  expect(privatePasswordBootstrapAllowed({
+    provider: 'tailscale', url: 'https://device.tailnet.test', started_at: '2026-08-04T00:00:00.000Z',
+  })).toBe(true)
+  expect(privatePasswordBootstrapAllowed({
+    provider: 'cloudflared', url: 'https://device.trycloudflare.com', pid: 123,
+    process_fingerprint: 'fingerprint', started_at: '2026-08-04T00:00:00.000Z',
+  })).toBe(false)
+  expect(privatePasswordBootstrapAllowed(undefined)).toBe(false)
 })
 
 it('round-trips tunnel state through remote.json with 0600 perms', () => {

@@ -9,6 +9,7 @@ import { localOwnerPasswordPath, resetLocalOwnerPassword } from './local-owner-a
 import {
   enableNewRemotePairing,
   pairUrl,
+  privatePasswordBootstrapAllowed,
   rollbackRemoteAccess,
   startRemote,
   stopRemote,
@@ -395,9 +396,10 @@ program.command('remote').description('start private remote access with secure d
     }
     const { state, reused } = await startRemote({ confirmPublic: o.public === true })
     try {
-      // Explicit boards/scopes always use a single-use pairing ticket; otherwise a set
-      // password lets the phone open the plain URL and sign in with it.
-      const passwordFlow = passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
+      // Only the private tailnet may exchange the owner password. Public tunnels and
+      // explicit boards/scopes always use a single-use pairing ticket.
+      const passwordFlow = privatePasswordBootstrapAllowed(state)
+        && passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
       const url = passwordFlow ? state.url : await pairUrl(state, boardIds, scopes as never)
       console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
       console.log(state.provider === 'tailscale'

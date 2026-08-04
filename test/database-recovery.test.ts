@@ -105,12 +105,10 @@ describe('OPS checksummed SQLite backup and restore', () => {
 describe('OPS repository and path safety', () => {
   it('accepts only the registered worktree/branch/cwd tuple and rejects escape paths', async () => {
     const repositoryRoot = process.cwd()
-    const branch = fs.readFileSync(path.join(repositoryRoot, '.git'), 'utf8')
-      .match(/worktrees\/([^/\n]+)/)?.[1]
-    expect(branch).toBeTruthy()
     const currentBranch = String((await import('node:child_process')).execFileSync(
       'git', ['branch', '--show-current'], { cwd: repositoryRoot },
     )).trim()
+    expect(currentBranch).toBeTruthy()
     await expect(assertRepositoryExecutionTarget({
       repositoryRoot,
       workspaceRoot: repositoryRoot,
