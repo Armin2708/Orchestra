@@ -5,6 +5,7 @@ import { AgentTerminal } from './AgentTerminal'
 import { NetworkView } from './NetworkView'
 import { ProviderBadge } from './ProviderBadge'
 import { ProviderLaunchControl } from './ProviderLaunchControl'
+import { HireControl } from './HireModal'
 import { AgentProviderCatalog, osApi } from './osApi'
 import { boardIdFromSearch, cardDrawerDeepLink, cardIdFromSearch } from './boardDeepLink'
 import {
@@ -532,9 +533,8 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
             <section key={s.board.id} className="project network-mode">
               <header className="project-head">
                 <div className="project-head-right">
-                  <ProviderLaunchControl providers={providers} variant="hire" label="+ Hire"
-                    title="Spawn an autonomous agent on this project"
-                    onLaunch={async (body) => { await api('POST', `/boards/${s.board.id}/hire`, body); onChange() }} />
+                  <HireControl providers={providers} boardId={s.board.id}
+                    takenNames={agents.map((a) => a.name)} onHired={onChange} />
                   <div className="project-crew">
                     {agents.map((a) => (
                       <span key={a.id} className="crew-slot">

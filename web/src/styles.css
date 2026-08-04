@@ -1277,6 +1277,35 @@ textarea {
 .idea-modal-spacer { flex: 1; }
 .idea-modal-hint { font-size: 11.5px; color: #b0954e; max-width: 220px; line-height: 1.4; }
 
+/* hire quick-card */
+.hire-modal {
+  position: fixed; z-index: 71; left: 50%; top: 46%; transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 48px)); max-height: 78vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(20, 18, 12, 0.22);
+  padding: 24px 26px 20px; display: flex; flex-direction: column; gap: 10px;
+  animation: idea-pop 0.28s var(--ease);
+}
+.hire-modal h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
+.hire-modal .idea-modal-actions { border-top-color: var(--line); }
+.hire-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; margin-top: 6px; }
+.hire-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hire-field-wide { grid-column: 1 / -1; }
+.hire-field > span { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-soft); }
+.hire-field > span > i { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 400; color: #b0aca4; }
+.hire-field input, .hire-field select, .hire-field textarea {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg);
+  padding: 7px 10px; font: inherit; font-size: 13px; color: var(--ink); min-width: 0;
+}
+.hire-field textarea { resize: vertical; line-height: 1.45; }
+.hire-field input::placeholder, .hire-field textarea::placeholder { color: #b0aca4; }
+.hire-field-hint { font-style: normal; font-size: 11px; line-height: 1.4; color: var(--ink-soft); min-height: 15px; }
+.hire-field-warn { font-style: normal; font-size: 11px; color: #9F2F2D; }
+.hire-create { background: var(--ink); color: #fff; }
+.hire-create:hover { background: #333; }
+.hire-create:disabled { opacity: 0.5; cursor: not-allowed; }
+.hire-modal-error { position: static; max-width: 240px; }
+
 /* auditing state */
 .rm-idea.auditing {
   border-color: #D97757;
@@ -1415,6 +1444,8 @@ textarea {
   .ask-row { flex-wrap: nowrap; overflow-x: auto; }
   .ask-row .agent-chip { flex-shrink: 0; }
   .idea-modal { width: calc(100vw - 24px); max-height: 82dvh; }
+  .hire-modal { width: calc(100vw - 24px); max-height: 82dvh; }
+  .hire-modal-grid { grid-template-columns: 1fr; }
   .empty-card { padding: 36px 24px; }
 }
 
