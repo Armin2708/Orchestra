@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, Agent, Card, Thread } from './api'
+import { api, Agent, Card, Thread, timeAgo } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { followIntent } from './follow'
 import { ProviderBadge } from './ProviderBadge'
@@ -235,6 +235,27 @@ function PermissionModeHint({ agentId, profile, onChange, onError }: {
     </span>
   )
 }
+const TASK_STATUS: Record<string, string> = {
+  backlog: 'queued', in_progress: 'working', blocked: 'blocked', review: 'review', done: 'done',
+}
+
+function TaskCard({ card }: { card: Card }) {
+  return (
+    <article className="tt-card" title={card.description || card.title}>
+      <p className="tt-title">{card.title}</p>
+      <p className="tt-meta">
+        <span className={`tt-status ${card.column}`}>{TASK_STATUS[card.column] ?? card.column}</span>
+        {card.column === 'review' && card.verification?.verdict === 'pass' && <span className="tt-verified">✓ verified</span>}
+        <span>#{card.id}</span>
+        <time>{timeAgo(card.updated_at)}</time>
+      </p>
+      {card.paths.length > 0 && (
+        <p className="tt-paths">{card.paths.slice(0, 2).join(' · ')}{card.paths.length > 2 ? ` +${card.paths.length - 2}` : ''}</p>
+      )}
+    </article>
+  )
+}
+
 export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = false, extraCommands = BOARD_COMMANDS, onClose, onChange }:
   { agent: Agent; boardId: number; threads: Thread[]; cards?: Card[]; embedded?: boolean; extraCommands?: CommandItem[]; onClose: () => void; onChange: () => void }) {
   const remoteAccess = useRemoteAccess()
@@ -693,10 +714,17 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     }
   }
 
+  const ownedCards = cards.filter((c) => c.owner === agent.name)
+  const activeTasks = ownedCards.filter((c) => c.column === 'in_progress' || c.column === 'blocked')
+  const queuedTasks = ownedCards.filter((c) => c.column === 'backlog')
+  const historyTasks = ownedCards.filter((c) => c.column === 'review' || c.column === 'done')
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+  const showTasks = !embedded && ownedCards.length > 0
+
   return (
     <>
       {!embedded && <div className="scrim" onClick={onClose} />}
-      <aside className={embedded ? 'terminal embedded' : 'terminal'}
+      <aside className={embedded ? 'terminal embedded' : showTasks ? 'terminal has-tasks' : 'terminal'}
         role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true}
         aria-label={`${agent.name} console`}
         onKeyDown={(e) => {
@@ -719,6 +747,26 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             else if (!embedded) onClose()
           }
         }}>
+        {showTasks && (
+          <nav className="terminal-tasks" aria-label={`${agent.name} tasks`}>
+            <section>
+              <h3>Working on</h3>
+              {activeTasks.length === 0 && <p className="tt-empty">Nothing in progress</p>}
+              {activeTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+            </section>
+            {queuedTasks.length > 0 && (
+              <section>
+                <h3>Queued</h3>
+                {queuedTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+              </section>
+            )}
+            <section>
+              <h3>Task history</h3>
+              {historyTasks.length === 0 && <p className="tt-empty">No finished tasks yet</p>}
+              {historyTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+            </section>
+          </nav>
+        )}
         <div className="terminal-col">
           <header className="cc-head">
             <span className="cc-head-star" aria-hidden="true">•</span>
