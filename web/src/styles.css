@@ -1532,3 +1532,10 @@ textarea {
   .shiplog { padding: 12px 12px 60px; }
   .shiplog-date, .shiplog-row .shiplog-stat { display: none; }
 }
+
+/* card drawer ledger (traceability chain) */
+.card-ledger summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.card-ledger summary::before { content: '▸'; font-size: 11px; color: var(--ink-soft); transition: transform 140ms var(--ease); }
+.card-ledger[open] summary::before { transform: rotate(90deg); }
+.card-ledger summary h3 { display: inline; margin: 0; }
+.card-ledger-chain { margin-top: 6px; }

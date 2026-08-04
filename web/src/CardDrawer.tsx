@@ -235,6 +235,8 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
           {events.length === 0 && <li className="tl-empty">No activity yet</li>}
         </ol>
 
+        <LedgerSection cardId={card.id} updatedAt={card.updated_at} />
+
         <h3>Conversation</h3>
         <section className="card-conversation" aria-label={`Conversation for card ${card.id}`}>
           {conversationLoading && <p className="card-conversation-loading">Loading messages…</p>}
@@ -272,5 +274,56 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], onClose
         </div>
       </aside>
     </>
+  )
+}
+
+// the card's traceability chain: origin → contract → work → reviews → verification (#ledger).
+// Fetched lazily when the section is opened; read-only projection of existing records.
+type Ledger = {
+  origin: { created_at: string; creator: string | null; epic: { title: string; status?: string; outcome?: string } | null }
+  contract: { objective: string; criteria: string[]; version: number } | null
+  work: { branch: string | null; commits: { hash: string | null; subject: string | null; by: string | null; at: string }[] }
+  reviews: { decision: string; note: string | null; decided_at: string }[]
+  verification: { verdict?: string; at: string } | null
+}
+
+function LedgerSection({ cardId, updatedAt }: { cardId: number; updatedAt: string }) {
+  const [ledger, setLedger] = useState<Ledger | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (open) api('GET', `/cards/${cardId}/ledger`).then(setLedger).catch(() => setLedger(null))
+  }, [open, cardId, updatedAt])
+  return (
+    <details className="card-ledger" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary><h3>Ledger</h3></summary>
+      {open && !ledger && <p className="tl-empty">Loading…</p>}
+      {ledger && (
+        <ol className="timeline card-ledger-chain">
+          <li>
+            <span>created by <b>{ledger.origin.creator ?? 'you'}</b> <time>{timeAgo(ledger.origin.created_at)}</time>
+              {ledger.origin.epic && <> · epic <b>{ledger.origin.epic.title}</b>{ledger.origin.epic.status && ledger.origin.epic.status !== 'open' ? ` (${ledger.origin.epic.status})` : ''}</>}</span>
+          </li>
+          <li>
+            {ledger.contract
+              ? <span>contract v{ledger.contract.version}: <b>{ledger.contract.objective}</b> — {ledger.contract.criteria.length} criteria</span>
+              : <span className="tl-empty">no contract — not ready</span>}
+          </li>
+          {ledger.work.branch && <li><span>branch <b>{ledger.work.branch}</b></span></li>}
+          {ledger.work.commits.map((commit) => (
+            <li key={`${commit.hash}-${commit.at}`}>
+              <span>shipped <b>{commit.hash ? commit.hash.slice(0, 7) : '?'}</b> {commit.subject} <time>{timeAgo(commit.at)}</time></span>
+            </li>
+          ))}
+          {ledger.reviews.map((review, index) => (
+            <li key={index}>
+              <span>review: <b>{review.decision}</b>{review.note ? ` — ${review.note}` : ''} <time>{timeAgo(review.decided_at)}</time></span>
+            </li>
+          ))}
+          {ledger.verification && (
+            <li><span>verification: <b>{ledger.verification.verdict ?? 'ran'}</b> <time>{timeAgo(ledger.verification.at)}</time></span></li>
+          )}
+        </ol>
+      )}
+    </details>
   )
 }

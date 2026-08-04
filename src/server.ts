@@ -824,6 +824,55 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { card }
     })
 
+  // ── delivery ledger: the card's full traceability chain, assembled read-only from
+  // records that already exist (spec 2026-08-04-backlog-system §6) ──
+  server.get<{ Params: { id: string } }>('/api/v1/cards/:id/ledger', (req, reply) => {
+    const card = getCard(Number(req.params.id))
+    if (!card) return reply.code(404).send({ error: 'not found' })
+    const events = (db.prepare(`
+      SELECT e.id, e.type, e.payload, e.created_at, a.name AS agent
+      FROM card_events e LEFT JOIN agents a ON a.id = e.agent_id
+      WHERE e.card_id=? ORDER BY e.id`).all(card.id) as any[])
+      .map((e) => {
+        let payload: Record<string, unknown> = {}
+        try { payload = JSON.parse(e.payload ?? '{}') } catch { /* legacy free-form payloads */ }
+        return { ...e, payload }
+      })
+    const contractRow = db.prepare(`SELECT objective, acceptance_criteria, version FROM task_contracts WHERE card_id=?`)
+      .get(card.id) as { objective: string; acceptance_criteria: string; version: number } | undefined
+    let criteria: string[] = []
+    try { criteria = contractRow ? JSON.parse(contractRow.acceptance_criteria) : [] } catch { /* invalid json */ }
+    const epic = card.milestone_id
+      ? db.prepare(`SELECT id, title, status, outcome FROM milestones WHERE id=?`).get(card.milestone_id) ?? null
+      : null
+    const verification = events.filter((e) => e.type === 'verification').at(-1)
+    return {
+      card_id: card.id,
+      origin: {
+        created_at: card.created_at,
+        creator: events.find((e) => e.type === 'created')?.agent ?? null,
+        epic,
+      },
+      contract: contractRow
+        ? { objective: contractRow.objective, criteria, version: contractRow.version }
+        : null,
+      work: {
+        branch: card.branch ?? null,
+        commits: events.filter((e) => e.type === 'shipped').map((e) => ({
+          hash: e.payload.hash ?? null,
+          subject: e.payload.subject ?? null,
+          by: e.payload.by ?? null,
+          at: e.created_at,
+        })),
+      },
+      reviews: listCardDecisions(db, card.id),
+      verification: verification ? { ...verification.payload, at: verification.created_at } : null,
+      timeline: events.map((e) => ({
+        id: e.id, type: e.type, agent: e.agent, at: e.created_at, payload: e.payload,
+      })),
+    }
+  })
+
   // earlier milestone steps aren't hard blocks — they're context the assignee must coordinate on
   const prereqSteps = (card: any): any[] => {
     if (!card.milestone_id || card.step_order == null) return []
