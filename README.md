@@ -7,8 +7,10 @@
 The current engineering train also includes milestone review gates, independent delivery
 verification, a test-gated auto-ship queue, shipped-commit history, a scoped phone/tunnel beta,
 push notifications, per-agent token accounting, and manual/automatic wake for agents paused by
-Claude usage limits. The remote path uses scoped DeviceSession pairing and remains an engineering
-beta whose exact build must satisfy the lane checkpoint.
+Claude usage limits. The remote path mints a scoped, revocable DeviceSession per phone: private
+Tailscale access may exchange the owner password once, while public Cloudflare access requires a
+single-use pairing ticket. It remains an engineering beta whose exact build must satisfy the lane
+checkpoint.
 
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
@@ -166,7 +168,7 @@ Message fan-out is explicit: `ask` wakes one recipient and requires a substantiv
 | `orchestra notify [--test] [--ntfy TOPIC]` | With no agent argument, configure or test phone notifications |
 | `orchestra install [--project] [--provider claude\|codex\|both]` | Add provider hooks idempotently (default: `claude`) |
 | `orchestra uninstall [--project] [--provider claude\|codex\|both]` | Remove only Orchestra's selected provider hooks |
-| `orchestra remote [--stop]` | Start/stop verified remote access with a one-time PairingTicket and scoped DeviceSession |
+| `orchestra remote [--stop]` | Start/stop verified remote access with private password bootstrap or a one-time PairingTicket into a scoped DeviceSession |
 
 ### Safe message composition
 
@@ -196,22 +198,28 @@ Rules of thumb:
 - The CLI warns (without blocking) when a body looks like leaked command output —
   credential dumps, unmatched backticks, an unclosed `$(`.
 
-## Remote/mobile beta — scoped device pairing
+## Remote/mobile beta — private password sign-in or scoped pairing
 
-`orchestra remote` starts verified remote access and prints a one-time, origin-bound pairing QR:
+`orchestra remote` starts verified remote access and prints a QR:
 
 ```
 orchestra remote
 ```
 
-Open the camera on a phone that is connected to the same private Tailscale network and scan the
-printed QR. The one-use link pairs that browser as a named, expiring device; the local dashboard
-password is never entered on the phone. Use `--board <id>` and the narrowest necessary `--scope`
-arguments before pairing when the phone should see less than the default grant.
+On the same private Tailscale network, scan the printed QR and sign in with the Orchestra password.
+The password is exchanged once over that private tunnel and is never stored in the phone browser.
+The resulting named, expiring and revocable DeviceSession can see the current boards but receives
+only the default phone scopes: `observe`, `stream`, `message`, and `approve`. It does not receive
+agent control, terminal write, or administration authority.
+
+Use `--board <id>` and the narrowest necessary `--scope` arguments to force a single-use pairing
+ticket when the phone should see fewer boards or different scopes. Public Cloudflare access always
+requires the pairing-ticket flow; owner-password sign-in is rejected on public tunnels.
 
 It keeps the daemon on loopback and asks either verified private `tailscale serve` or explicitly
-confirmed public `cloudflared` to forward to it. The QR never contains the master token. Redemption
-creates a named, scoped, expiring, rotating, key-bound and individually revocable DeviceSession.
+confirmed public `cloudflared` to forward to it. The QR never contains the master token. Password
+exchange or ticket redemption creates a named, scoped, expiring, rotating, key-bound and
+individually revocable DeviceSession.
 Remote terminal is view-only by default; write, destructive, and administrative actions require
 action-bound step-up.
 

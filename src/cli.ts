@@ -9,6 +9,7 @@ import { localOwnerPasswordPath, resetLocalOwnerPassword } from './local-owner-a
 import {
   enableNewRemotePairing,
   pairUrl,
+  privatePasswordBootstrapAllowed,
   rollbackRemoteAccess,
   startRemote,
   stopRemote,
@@ -352,7 +353,7 @@ ops.command('revoke-credential <reference>')
     console.log(JSON.stringify({ revoked: true }))
   })
 
-program.command('remote').description('start private remote access with secure device pairing')
+program.command('remote').description('start verified remote access with private password sign-in or secure device pairing')
   .option('--stop', 'stop the verified Orchestra-owned tunnel')
   .option('--rollback <confirmation>', 'durably revoke all remote authority; requires REVOKE_ALL_REMOTE_AUTHORITY')
   .option('--reason <reason>', 'operator reason recorded with an emergency rollback')
@@ -395,17 +396,20 @@ program.command('remote').description('start private remote access with secure d
     }
     const { state, reused } = await startRemote({ confirmPublic: o.public === true })
     try {
-      // Explicit boards/scopes always use a single-use pairing ticket; otherwise a set
-      // password lets the phone open the plain URL and sign in with it.
-      const passwordFlow = passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
+      // Only the private tailnet may exchange the owner password. Public tunnels and
+      // explicit boards/scopes always use a single-use pairing ticket.
+      const passwordFlow = privatePasswordBootstrapAllowed(state)
+        && passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
       const url = passwordFlow ? state.url : await pairUrl(state, boardIds, scopes as never)
       console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
       console.log(state.provider === 'tailscale'
-        ? 'Private tailnet exposure selected. Pair only a device you control:\n'
+        ? 'Private tailnet exposure selected. Connect only a device you control:\n'
         : 'PUBLIC exposure selected. Pair promptly, keep scopes narrow, and stop the tunnel when finished:\n')
       qrcode.generate(url, { small: true })
       console.log(`\n${url}`)
-      if (passwordFlow) console.log('scan the QR on your phone, then sign in with your Orchestra password')
+      console.log(passwordFlow
+        ? 'scan the QR on your phone, then sign in with your Orchestra password'
+        : 'scan the QR on your phone before the single-use pairing ticket expires')
       console.log('stop the verified tunnel with: orchestra remote --stop')
     } catch (error) {
       if (!reused) stopRemote()

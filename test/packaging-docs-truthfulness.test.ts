@@ -14,20 +14,24 @@ const files = [
 ] as const
 
 describe('packaging documentation truthfulness', () => {
-  it('documents scoped pairing without reviving master-token bootstrap', () => {
+  it('documents private password bootstrap and public ticket pairing without reviving master-token bootstrap', () => {
     const readme = read('README.md')
     const remote = read('docs/remote-preview.md')
     const cli = read('src/cli.ts')
 
-    expect(readme).toContain('one-time, origin-bound pairing QR')
-    expect(readme).toContain('scoped DeviceSession pairing')
+    expect(readme).toContain('private password sign-in or scoped pairing')
+    expect(readme).toContain('Public Cloudflare access always')
+    expect(readme).toContain('owner-password sign-in is rejected on public tunnels')
+    expect(readme).toContain('scoped, revocable DeviceSession per phone')
     expect(readme).not.toContain('tear the tunnel down')
     expect(cli).not.toContain('expose the board over a secure tunnel and pair your phone')
     expect(cli).not.toContain('tear the tunnel down')
     expect(cli).not.toContain('tunnel down')
     expect(cli).toContain('secure device pairing')
+    expect(cli).toContain('privatePasswordBootstrapAllowed(state)')
     expect(cli).toContain('remote stop requested')
-    expect(remote).toContain('never the master')
+    expect(remote).toContain('never contains the master operator token')
+    expect(remote).toContain('Public Cloudflare origins')
     expect(remote).toContain('individually revocable')
     expect(remote).toContain('REVOKE_ALL_REMOTE_AUTHORITY')
     expect(remote).toContain('`REM-017` and `REM-GATE` remain open')

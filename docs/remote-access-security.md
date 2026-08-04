@@ -10,11 +10,14 @@ and the remaining remote gate are accepted.
 
 ## Current boundary
 
-Remote browsers do not receive or accept the reusable local owner token. A non-loopback browser
-must redeem one short-lived, single-use, origin-bound PairingTicket into a named DeviceSession.
-The credential is stored only as a hash and P-256 key binding; its scopes, board grants, expiry,
-last-seen state and revocation audit are durable. Legacy token URL values and browser storage are
-rejected and scrubbed on remote origins.
+Remote browsers do not receive or accept the reusable local owner token. A browser on the active
+private Tailscale origin may exchange the local owner password once for a limited named
+DeviceSession. The server checks the private tunnel and request origin before verifying the
+password; the phone never stores the password. Public Cloudflare origins cannot use this path and
+must redeem a short-lived, single-use, origin-bound PairingTicket. The resulting device credential
+is stored only as a hash and P-256 key binding; its scopes, board grants, expiry, last-seen state and
+revocation audit are durable. Legacy token URL values and browser storage are rejected and scrubbed
+on remote origins.
 
 The remote shell is deliberately narrower than the local operator application. It exposes only
 classified board summaries, no-tool messages, bounded agent controls, approval decisions and
@@ -24,6 +27,11 @@ for DeviceSession principals.
 
 ## Pairing and scopes
 
+For a trusted phone already on the same private tailnet, plain `orchestra remote` may use password
+bootstrap. It grants all current boards with only `observe`, `stream`, `message`, and `approve`.
+It never grants `agent-control`, `terminal-write`, or `admin`; those capabilities and any narrower
+board selection require an explicit pairing ticket and remain subject to step-up policy.
+
 Start private access from a trusted local session and grant only the required boards and scopes:
 
 ```sh
@@ -32,7 +40,8 @@ orchestra remote --board 1 --scope observe --scope message --scope approve
 
 The default transport is a private Tailscale exposure. Public Cloudflare exposure requires both
 `ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1` and the explicit `--public` CLI confirmation. Transport security
-does not replace application authorization.
+does not replace application authorization, and public exposure always uses ticket pairing rather
+than owner-password bootstrap.
 
 Scopes are closed and independent: `observe`, `stream`, `message`, `approve`, `agent-control`,
 `terminal-write`, and `admin`. Agent control, terminal write, privileged approval and administration

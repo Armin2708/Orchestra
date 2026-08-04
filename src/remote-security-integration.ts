@@ -16,7 +16,7 @@ import {
   REMOTE_BROWSER_SECURITY_HEADERS,
   evaluateRemoteRequestContext,
 } from './remote-request-security.js'
-import { readRemoteState, stopRemote } from './remote.js'
+import { privatePasswordBootstrapAllowed, readRemoteState, stopRemote } from './remote.js'
 import { OperationsRecoveryService } from './agent-os/operations-recovery.js'
 import type { OutboxDelivery } from './agent-os/operations-recovery.js'
 import type { OperationsRuntime } from './operations/runtime.js'
@@ -1337,25 +1337,16 @@ export function registerRemoteSecurityIntegration(
     try { password = bounded(request.body?.password, 'password', 512) } catch {
       return reply.code(400).send({ error: 'password is required' })
     }
-    const verdict = verify(password, `remote:${address}`)
-    if (verdict === 'not_configured') {
-      return reply.code(404).send({ error: 'password login is not enabled — create a password on the local web UI first' })
-    }
-    if (verdict === 'rate_limited') {
-      return reply.code(429).send({ error: 'too many attempts — wait a moment and try again' })
-    }
-    if (verdict !== 'ok') {
-      recordSecurityEvent(options.db, {
-        eventType: 'authentication_denied', outcome: 'denied', actorType: 'anonymous',
-        actorId: address, requestId: request.id, reasonCode: 'password_login_denied',
-      })
-      return reply.code(401).send({ error: 'invalid password' })
-    }
+
+    const tunnel = readRemoteState()
+    let tunnelOrigin: string
+    let origin: string
     try {
-      const tunnelUrl = readRemoteState()?.url
-      if (!tunnelUrl) throw new Error('no active remote tunnel')
-      const tunnelOrigin = new URL(tunnelUrl).origin
-      const origin = safeOrigin(request.headers.origin)
+      if (!privatePasswordBootstrapAllowed(tunnel)) {
+        throw new Error('password login requires a private Tailscale tunnel')
+      }
+      tunnelOrigin = new URL(tunnel.url).origin
+      origin = safeOrigin(request.headers.origin)
       if (origin !== tunnelOrigin) throw new Error('password login requires the active tunnel origin')
       const expected = new URL(tunnelOrigin)
       const context = evaluateRemoteRequestContext({
@@ -1374,6 +1365,29 @@ export function registerRemoteSecurityIntegration(
         requestPurpose: 'api',
       })
       if (!context.allowed) throw new Error(`password login context denied: ${context.code}`)
+    } catch {
+      recordSecurityEvent(options.db, {
+        eventType: 'authentication_denied', outcome: 'denied', actorType: 'anonymous',
+        actorId: address, requestId: request.id, reasonCode: 'password_login_private_tunnel_required',
+      })
+      return reply.code(401).send({ error: 'password login was rejected' })
+    }
+
+    const verdict = verify(password, `remote:${address}`)
+    if (verdict === 'not_configured') {
+      return reply.code(404).send({ error: 'password login is not enabled — create a password on the local web UI first' })
+    }
+    if (verdict === 'rate_limited') {
+      return reply.code(429).send({ error: 'too many attempts — wait a moment and try again' })
+    }
+    if (verdict !== 'ok') {
+      recordSecurityEvent(options.db, {
+        eventType: 'authentication_denied', outcome: 'denied', actorType: 'anonymous',
+        actorId: address, requestId: request.id, reasonCode: 'password_login_denied',
+      })
+      return reply.code(401).send({ error: 'invalid password' })
+    }
+    try {
       const redeem = options.db.transaction(() => {
         const created = repository.createPairingTicket({
           expectedOrigin: tunnelOrigin,

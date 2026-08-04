@@ -25,6 +25,7 @@ afterEach(async () => {
 function fixture() {
   const db = openDb(':memory:')
   db.prepare("INSERT INTO boards (project_path, name) VALUES ('/remote', 'Remote')").run()
+  db.prepare("INSERT INTO boards (project_path, name) VALUES ('/second', 'Second')").run()
   const server = buildServer(db, undefined, {
     token: 'owner-secret',
     agentToken: 'agent-secret',
@@ -38,9 +39,15 @@ const configurePassword = (password: string) => {
   new LocalOwnerPasswordAuth(path.join(home, 'owner-password.json')).setup(password)
 }
 
-const writeTunnelState = (url = 'https://phone.example.test') => {
+const writeTunnelState = (
+  url = 'https://phone.example.test',
+  provider: 'tailscale' | 'cloudflared' = 'tailscale',
+) => {
   fs.writeFileSync(path.join(home, 'remote.json'), JSON.stringify({
-    provider: 'tailscale', url, started_at: new Date().toISOString(),
+    provider,
+    url,
+    started_at: new Date().toISOString(),
+    ...(provider === 'cloudflared' ? { pid: process.pid, process_fingerprint: 'test-fingerprint' } : {}),
   }), { mode: 0o600 })
 }
 
@@ -68,7 +75,7 @@ describe('POST /api/v1/os/devices/password-login', () => {
     expect(response.statusCode).toBe(404)
   })
 
-  it('mints device authority for the active tunnel origin with the owner password', async () => {
+  it('mints limited revocable device authority for the active private tunnel', async () => {
     configurePassword('phone-sign-in-pass')
     writeTunnelState()
     const { db, server } = fixture()
@@ -77,11 +84,40 @@ describe('POST /api/v1/os/devices/password-login', () => {
     const envelope = response.json()
     expect(envelope.token).toBeUndefined()
     expect(envelope.device_session.id).toBeTruthy()
+    expect(envelope.device_session.scopes).toEqual(['observe', 'stream', 'message', 'approve'])
+    expect(envelope.device_session.scopes).not.toContain('agent-control')
+    expect(envelope.device_session.scopes).not.toContain('terminal-write')
+    expect(envelope.device_session.scopes).not.toContain('admin')
     expect(envelope.credential_issue.credential).toMatch(/^orchestra_device_v1\./u)
     expect(response.body).not.toContain('owner-secret')
     const grants = db.prepare(`SELECT resource_type, resource_id FROM os_remote_resource_grants
       WHERE device_session_id=?`).all(envelope.device_session.id) as Array<{ resource_type: string; resource_id: string }>
-    expect(grants).toContainEqual({ resource_type: 'board', resource_id: '1' })
+    expect(grants).toEqual([
+      { resource_type: 'board', resource_id: '1' },
+      { resource_type: 'board', resource_id: '2' },
+      { resource_type: 'device', resource_id: envelope.device_session.id },
+      { resource_type: 'tunnel', resource_id: 'primary' },
+    ])
+  })
+
+  it('rejects owner-password login through a public Cloudflare tunnel', async () => {
+    configurePassword('phone-sign-in-pass')
+    writeTunnelState('https://phone.trycloudflare.com', 'cloudflared')
+    const { db, server } = fixture()
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/devices/password-login',
+      remoteAddress: '127.0.0.1',
+      headers: {
+        host: 'phone.trycloudflare.com',
+        'x-forwarded-host': 'phone.trycloudflare.com',
+        origin: 'https://phone.trycloudflare.com',
+        'sec-fetch-site': 'same-origin',
+      },
+      payload: { password: 'phone-sign-in-pass', device_name: 'Public phone', device_public_key_jwk: deviceJwk() },
+    })
+    expect(response.statusCode).toBe(401)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM os_device_sessions').get()).toEqual({ count: 0 })
   })
 
   it('accepts requests proxied by the loopback tunnel daemon (tailscale x-forwarded-host)', async () => {

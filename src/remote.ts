@@ -22,6 +22,10 @@ export type StartRemoteOptions = {
 export const publicTunnelAllowed = (options: StartRemoteOptions = {}): boolean =>
   process.env.ORCHESTRA_REMOTE_PUBLIC_TUNNEL === '1' && options.confirmPublic === true
 
+/** Owner-password bootstrap is intentionally confined to the user's private tailnet. */
+export const privatePasswordBootstrapAllowed = (state: RemoteState | undefined): state is RemoteState =>
+  state?.provider === 'tailscale'
+
 // other features (push deep links, status displays) read this file for the public base URL
 export const remoteStatePath = () => path.join(dataDir(), 'remote.json')
 
