@@ -66,16 +66,18 @@ const messageFor = (cause: unknown): string => {
   return cause instanceof Error ? cause.message : 'The remote request failed.'
 }
 
-export function PairingRequired({ error }: { error?: string | null }) {
+export function PairingRequired({ error, onSignedIn }: { error?: string | null; onSignedIn?: () => void }) {
   const [recoverable, setRecoverable] = useState(() => hasPendingDeviceAuthorityRecovery())
   const [recovering, setRecovering] = useState(false)
   const [password, setPassword] = useState('')
   const [signingIn, setSigningIn] = useState(false)
   const [signInError, setSignInError] = useState<string | null>(null)
+  // reload only when no host wired a transition — it re-fetches the shell through the tunnel
+  const signedIn = () => (onSignedIn ? onSignedIn() : location.reload())
   const recover = async () => {
     setRecovering(true)
     try {
-      if (await recoverPendingDeviceAuthority()) location.reload()
+      if (await recoverPendingDeviceAuthority()) signedIn()
       else setRecoverable(false)
     } finally { setRecovering(false) }
   }
@@ -86,7 +88,7 @@ export function PairingRequired({ error }: { error?: string | null }) {
     setSignInError(null)
     try {
       await passwordDeviceLogin(password)
-      location.reload()
+      signedIn()
     } catch (cause) {
       setSignInError(cause instanceof Error ? cause.message : 'Sign-in failed.')
     } finally { setSigningIn(false) }
@@ -400,7 +402,9 @@ function RemoteDeviceShellContent() {
     finally { setBusy(null) }
   }
 
-  if (!access.checking && (!access.session || access.error)) return <PairingRequired error={access.error || error} />
+  if (!access.checking && (!access.session || access.error)) {
+    return <PairingRequired error={access.error || error} onSignedIn={() => void access.refresh()} />
+  }
 
   return (
     <main className="remote-device-shell">

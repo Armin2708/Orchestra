@@ -128,7 +128,7 @@ describe('remote browser authority boundary', () => {
   it('renders pairing-required instead of the owner Login on an unpaired remote origin', () => {
     const app = read('web/src/App.tsx')
     const shell = read('web/src/RemoteDeviceShell.tsx')
-    expect(app).toContain("if (authorityMode === 'pairing-required') return <PairingRequired />")
+    expect(app).toContain("if (authorityMode === 'pairing-required') return <PairingRequired onSignedIn={onAuthorityChanged} />")
     expect(app.indexOf("authorityMode === 'pairing-required'"))
       .toBeLessThan(app.indexOf('return <LocalOwnerApp />'))
     expect(shell).toContain('No token field exists on remote origins.')

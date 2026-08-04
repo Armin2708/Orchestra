@@ -69,9 +69,12 @@ export const Mark = () => (
   </svg>
 )
 
-export function App({ authorityMode = 'local-owner' }: { authorityMode?: BrowserAuthorityMode }) {
+export function App({ authorityMode = 'local-owner', onAuthorityChanged }: {
+  authorityMode?: BrowserAuthorityMode
+  onAuthorityChanged?: () => void
+}) {
   if (authorityMode === 'paired-device') return <RemoteDeviceShell />
-  if (authorityMode === 'pairing-required') return <PairingRequired />
+  if (authorityMode === 'pairing-required') return <PairingRequired onSignedIn={onAuthorityChanged} />
   return <LocalOwnerApp />
 }
 
