@@ -81,6 +81,46 @@ describe('POST /api/v1/os/devices/password-login', () => {
     expect(response.body).not.toContain('owner-secret')
   })
 
+  it('accepts requests proxied by the loopback tunnel daemon (tailscale x-forwarded-host)', async () => {
+    configurePassword('phone-sign-in-pass')
+    writeTunnelState()
+    const { server } = fixture()
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/devices/password-login',
+      remoteAddress: '127.0.0.1',
+      headers: {
+        host: 'phone.example.test',
+        'x-forwarded-host': 'phone.example.test',
+        'x-forwarded-proto': 'https',
+        origin: 'https://phone.example.test',
+        'sec-fetch-site': 'same-origin',
+      },
+      payload: { password: 'phone-sign-in-pass', device_name: 'Tailscale phone', device_public_key_jwk: deviceJwk() },
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().credential_issue.credential).toMatch(/^orchestra_device_v1\./u)
+  })
+
+  it('still refuses forwarded hosts from non-loopback peers', async () => {
+    configurePassword('phone-sign-in-pass')
+    writeTunnelState()
+    const { server } = fixture()
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/devices/password-login',
+      remoteAddress: '203.0.113.10',
+      headers: {
+        host: 'phone.example.test',
+        'x-forwarded-host': 'phone.example.test',
+        origin: 'https://phone.example.test',
+        'sec-fetch-site': 'same-origin',
+      },
+      payload: { password: 'phone-sign-in-pass', device_name: 'Spoofed proxy', device_public_key_jwk: deviceJwk() },
+    })
+    expect(response.statusCode).toBe(401)
+  })
+
   it('rejects a wrong password without leaking authority', async () => {
     configurePassword('phone-sign-in-pass')
     writeTunnelState()

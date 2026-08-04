@@ -96,6 +96,10 @@ const LOCAL_OWNER_AUTH_PATHS = new Set([
   '/api/v1/auth/setup',
   '/api/v1/auth/login',
 ])
+// The daemon listens on loopback only; the Orchestra-owned tunnel daemon (tailscale serve /
+// cloudflared) is the sole loopback peer and injects x-forwarded-host for proxied requests.
+const LOOPBACK_PROXY_ADDRESSES = ['127.0.0.1', '::1', '::ffff:127.0.0.1']
+
 const REMOTE_STREAM_TTL_MS = 30_000
 const REMOTE_STREAM_CREDENTIAL = /^orchestra_stream_v1\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/u
 
@@ -940,8 +944,8 @@ export function registerRemoteSecurityIntegration(
     const context = evaluateRemoteRequestContext({
       expectedHosts: [expected.host],
       expectedOrigins: [row.expected_origin],
-      trustedProxyAddresses: [],
-      trustForwardedHost: false,
+      trustedProxyAddresses: LOOPBACK_PROXY_ADDRESSES,
+      trustForwardedHost: true,
     }, {
       method: request.method,
       host: request.headers.host,
@@ -1116,8 +1120,8 @@ export function registerRemoteSecurityIntegration(
       const context = evaluateRemoteRequestContext({
         expectedHosts: [expected.host],
         expectedOrigins: [origin],
-        trustedProxyAddresses: [],
-        trustForwardedHost: false,
+        trustedProxyAddresses: LOOPBACK_PROXY_ADDRESSES,
+        trustForwardedHost: true,
       }, {
         method: request.method,
         host: request.headers.host,
@@ -1267,7 +1271,7 @@ export function registerRemoteSecurityIntegration(
       const expected = new URL(ticket.expected_origin)
       const context = evaluateRemoteRequestContext({
         expectedHosts: [expected.host], expectedOrigins: [ticket.expected_origin],
-        trustedProxyAddresses: [], trustForwardedHost: false,
+        trustedProxyAddresses: LOOPBACK_PROXY_ADDRESSES, trustForwardedHost: true,
       }, {
         method: request.method, host: request.headers.host,
         forwardedHost: typeof request.headers['x-forwarded-host'] === 'string'
@@ -1356,7 +1360,7 @@ export function registerRemoteSecurityIntegration(
       const expected = new URL(tunnelOrigin)
       const context = evaluateRemoteRequestContext({
         expectedHosts: [expected.host], expectedOrigins: [tunnelOrigin],
-        trustedProxyAddresses: [], trustForwardedHost: false,
+        trustedProxyAddresses: LOOPBACK_PROXY_ADDRESSES, trustForwardedHost: true,
       }, {
         method: request.method, host: request.headers.host,
         forwardedHost: typeof request.headers['x-forwarded-host'] === 'string'
