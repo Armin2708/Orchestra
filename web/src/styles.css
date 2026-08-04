@@ -389,14 +389,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-head { flex-wrap: wrap; row-gap: 6px; }
 .cc-head .cc-model-trigger { flex: none; padding: 3px 10px; font-size: 11.5px; }
 .cc-head .cc-model-trigger > strong { max-width: 120px; }
-.cc-mode-compact {
-  display: inline-flex; flex: none; align-items: center; gap: 6px; white-space: nowrap;
+.cc-mode-compact { position: relative; display: inline-flex; flex: none; }
+.cc-mode-trigger {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   border: 1px solid #4a463f; border-radius: 999px; padding: 3px 10px;
+  background: none; color: #D97757; font: inherit; font-size: 11.5px;
+  transition: border-color 0.15s;
 }
-.cc-mode-compact .cc-mode-label {
-  color: #777168; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em;
+.cc-mode-trigger:hover, .cc-mode-trigger[aria-expanded='true'] { border-color: #D97757; }
+.cc-mode-trigger > i {
+  width: 6px; height: 6px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: translateY(-1px) rotate(45deg); transition: transform 0.15s;
 }
-.cc-mode-compact .cc-mode-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cc-mode-trigger[aria-expanded='true'] > i { transform: translateY(1px) rotate(225deg); }
+.cc-mode-compact .cc-mode-label { color: #777168; font-size: 10px; letter-spacing: 0.05em; }
+.cc-mode-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 300px;
+  border: 1px solid #4a463f; border-radius: 10px; background: #262624; padding: 5px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.cc-mode-option {
+  display: flex; width: 100%; gap: 10px; align-items: flex-start; text-align: left;
+  border: none; border-radius: 7px; background: none; color: #DED9D1; font: inherit;
+  padding: 8px 10px;
+}
+.cc-mode-option:hover { background: #302e29; }
+.cc-mode-option.active { color: #D97757; }
+.cc-mode-opt-icon { flex: none; width: 22px; color: #D97757; }
+.cc-mode-opt-text { display: flex; flex-direction: column; gap: 2px; }
+.cc-mode-opt-text strong { font-size: 12.5px; font-weight: 560; }
+.cc-mode-opt-text small { font-size: 11px; color: #8a867e; line-height: 1.4; }
 /* stop only exists while a turn runs — a quiet danger action, not chrome */
 .cc-stop {
   border: none; background: none; color: #8a5a55; font: inherit; font-size: 12px;

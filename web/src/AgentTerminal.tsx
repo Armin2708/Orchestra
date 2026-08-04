@@ -209,32 +209,54 @@ type TranscriptInfo = {
   usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
 }
 
-function PermissionModeHint({ agentId, profile, onChange, onError, compact = false }: {
+function PermissionModeHint({ agentId, profile, onChange, onError }: {
   agentId: number
   profile: AccessProfile
   onChange: () => void
   onError: (error: unknown) => void
-  compact?: boolean
 }) {
   const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open])
+  const choose = async (next: AccessProfile) => {
+    setOpen(false)
+    if (next === profile) return
+    if (next === 'full_access'
+      && !window.confirm('Bypass permissions removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
+    try {
+      await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
+      onChange()
+    } catch (cause) { onError(cause) }
+  }
   return (
-    <span className={compact ? 'cc-mode cc-mode-compact' : 'cc-mode'}>
-      <span className="cc-mode-dot" aria-hidden="true" />
-      {compact && <span className="cc-mode-label">{selected.icon}</span>}
-      <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
+    <span className="cc-mode cc-mode-compact" ref={rootRef}>
+      <button type="button" className="cc-mode-trigger" aria-haspopup="listbox" aria-expanded={open}
         title={`${selected.hint}. Shift+Tab also cycles profiles.`}
-        onChange={async (event) => {
-          const next = event.target.value as AccessProfile
-          if (next === 'full_access'
-            && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
-          try {
-            await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
-            onChange()
-          } catch (cause) { onError(cause) }
-        }}>
-        {ACCESS_PROFILES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-      </select>
-      {!compact && <span className="cc-dim">{selected.hint}</span>}
+        onClick={() => setOpen((current) => !current)}>
+        <span className="cc-mode-label">{selected.icon}</span>
+        {selected.label}
+        <i aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="cc-mode-menu" role="listbox" aria-label="Permission mode">
+          {ACCESS_PROFILES.map((item) => (
+            <button type="button" key={item.value} role="option" aria-selected={item.value === profile}
+              className={item.value === profile ? 'cc-mode-option active' : 'cc-mode-option'}
+              onClick={() => void choose(item.value)}>
+              <span className="cc-mode-opt-icon" aria-hidden="true">{item.icon}</span>
+              <span className="cc-mode-opt-text"><strong>{item.label}</strong><small>{item.hint}</small></span>
+            </button>
+          ))}
+        </div>
+      )}
     </span>
   )
 }
@@ -842,7 +864,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
               : external ? `terminal session · live transcript (read-only) · ${agent.status}`
                 : `terminal session · ${agent.status}`}</span>
             {hired && canAccessProfile && (
-              <PermissionModeHint compact agentId={agent.id} profile={accessProfile}
+              <PermissionModeHint agentId={agent.id} profile={accessProfile}
                 onChange={onChange} onError={(cause) => setControlError(controlErrorText(cause))} />
             )}
             {hired && (canSelectModel || canSetEffort) && (

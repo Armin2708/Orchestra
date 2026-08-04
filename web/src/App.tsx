@@ -743,40 +743,12 @@ function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
 
 function SystemMeter({ boards }: { boards: number[] }) {
   const [sys, setSys] = useState<SystemInfo | null>(null)
-  const [inj, setInj] = useState<Telemetry | null>(null)
   const loadSys = useCallback(() => api('GET', '/system').then(setSys).catch(() => {}), [])
   useEffect(() => {
     loadSys()
     const t = setInterval(loadSys, 60_000)
     return () => clearInterval(t)
   }, [loadSys])
-  // injected-context accounting; daemons without the telemetry route just hide the stat
-  const boardKey = boards.join(',')
-  useEffect(() => {
-    let dead = false
-    const load = async () => {
-      const parts: Telemetry[] = (await Promise.all(
-        boardKey.split(',').filter(Boolean).map((id) => api('GET', `/boards/${id}/telemetry`).catch(() => null)),
-      )).filter(Boolean)
-      if (dead || parts.length === 0) return
-      const agents = new Map<string, number>()
-      for (const p of parts) for (const a of p.by_agent) agents.set(a.agent_name, (agents.get(a.agent_name) ?? 0) + a.tokens)
-      setInj({
-        total: {
-          chars: parts.reduce((n, p) => n + p.total.chars, 0),
-          tokens: parts.reduce((n, p) => n + p.total.tokens, 0),
-          count: parts.reduce((n, p) => n + p.total.count, 0),
-        },
-        by_event: [],
-        by_agent: [...agents].map(([agent_name, tokens]) => ({ agent_id: 0, agent_name, tokens, chars: 0, count: 0 }))
-          .sort((a, b) => b.tokens - a.tokens),
-        days: [],
-      })
-    }
-    load()
-    const t = setInterval(load, 60_000)
-    return () => { dead = true; clearInterval(t) }
-  }, [boardKey])
   if (!sys) return null
   return (
     <div className="sysmeter">
@@ -786,27 +758,8 @@ function SystemMeter({ boards }: { boards: number[] }) {
       </span>
       <WakeButton boards={boards} sys={sys} reload={loadSys} />
       <SubscriptionUsage sys={sys} />
-      {sys.injected && sys.injected.count > 0 && (
-        <span className="meter"
-          title={`orchestra injected ~${sys.injected.tokens.toLocaleString()} tokens into agent contexts across ${sys.injected.count} hook emissions (estimated as chars/4)${inj && inj.by_agent.length > 0 ? ` — top agents: ${inj.by_agent.slice(0, 5).map((a) => `${a.agent_name} ${fmtTokens(a.tokens)}`).join(', ')}` : ''}`}>
-          <span className="meter-label">injected</span>
-          <span className="meter-val">{fmtTokens(sys.injected.tokens)} tok</span>
-        </span>
-      )}
-      {sys.agent_usage && (() => {
-        // real API tokens (from SDK usage reports) — a different animal than the injected estimate above
-        const u = sys.agent_usage
-        const inTok = u.input_tokens + u.cache_read + u.cache_creation
-        if (inTok + u.output_tokens === 0) return null
-        const cached = inTok > 0 ? Math.round(100 * u.cache_read / inTok) : 0
-        return (
-          <span className="meter"
-            title={`real API tokens consumed by hired agents (all boards, from SDK usage reports — not an estimate): input ${u.input_tokens.toLocaleString()} · cache read ${u.cache_read.toLocaleString()} (${cached}% of intake) · cache write ${u.cache_creation.toLocaleString()} · output ${u.output_tokens.toLocaleString()}`}>
-            <span className="meter-label">api tok</span>
-            <span className="meter-val">↑ {fmtTokens(inTok)} · ↓ {fmtTokens(u.output_tokens)}</span>
-          </span>
-        )
-      })()}
+      {/* per-session token detail lives in each agent's chat footer — the
+          dashboard header stays free of token counts (operator request, #121) */}
     </div>
   )
 }
