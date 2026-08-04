@@ -280,6 +280,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [sending, setSending] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [openTaskId, setOpenTaskId] = useState<number | null>(null)
+  const [assignOpen, setAssignOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
@@ -736,11 +737,14 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   }
 
   const ownedCards = cards.filter((c) => c.owner === agent.name)
+  const assignable = cards.filter((c) => c.column !== 'done' && c.owner !== agent.name)
+  const canAssignTickets = agentControlActive && agent.name !== 'strategist'
+    && !agent.name.startsWith('auditor-') && assignable.length > 0
   const activeTasks = ownedCards.filter((c) => c.column === 'in_progress' || c.column === 'blocked')
   const queuedTasks = ownedCards.filter((c) => c.column === 'backlog')
   const historyTasks = ownedCards.filter((c) => c.column === 'review' || c.column === 'done')
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-  const showTasks = !embedded && ownedCards.length > 0
+  const showTasks = !embedded && (ownedCards.length > 0 || canAssignTickets)
   // hold only the id — the drawer re-renders from the freshest snapshot copy of the card
   const openTask = openTaskId === null ? null : cards.find((c) => c.id === openTaskId) ?? null
 
@@ -780,6 +784,35 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         )}
         {showTasks && !openTask && (
           <nav className="terminal-tasks" aria-label={`${agent.name} tasks`}>
+            {canAssignTickets && (
+              <section className="tt-assign-block">
+                <button type="button" className="tt-assign" aria-expanded={assignOpen}
+                  title="Assign a ticket — the agent gets briefed and starts"
+                  onClick={() => setAssignOpen((open) => !open)}>
+                  <span className="tt-assign-plus" aria-hidden="true">＋</span>
+                  <span>Assign ticket</span>
+                </button>
+                {assignOpen && (
+                  <div className="tt-assign-list" role="listbox" aria-label="Assignable tickets">
+                    {assignable.map((c) => (
+                      <button type="button" key={c.id} className="tt-card" role="option" aria-selected={false}
+                        onClick={async () => {
+                          setAssignOpen(false)
+                          try { await api('POST', `/cards/${c.id}/assign`, { agent: agent.name }) } catch { /* locked */ }
+                          onChange()
+                        }}>
+                        <p className="tt-title">{c.title}</p>
+                        <p className="tt-meta">
+                          <span className={`tt-status ${c.column}`}>{TASK_STATUS[c.column] ?? c.column}</span>
+                          <span>#{c.id}</span>
+                          {c.owner && <span>{c.owner}</span>}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
             <section>
               <h3>Working on</h3>
               {activeTasks.length === 0 && <p className="tt-empty">Nothing in progress</p>}
@@ -806,8 +839,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}`
               : external ? `terminal session · live transcript (read-only) · ${agent.status}`
                 : `terminal session · ${agent.status}`}</span>
-            {agentControlActive && agent.name !== 'strategist' && !agent.name.startsWith('auditor-') && cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).length > 0 && (
-              <select className="cc-assign" defaultValue=""
+            {canAssignTickets && (
+              // narrow viewports hide the task rail (and its assign tile) — this
+              // select is the phone fallback, display-gated in styles.css
+              <select className="cc-assign cc-assign-mobile" defaultValue=""
                 title="Assign a ticket — the agent gets briefed and starts"
                 aria-label="Assign ticket"
                 onChange={async (e) => {
@@ -818,7 +853,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   onChange()
                 }}>
                 <option value="" disabled>assign ticket…</option>
-                {cards.filter((c) => c.column !== 'done' && c.owner !== agent.name).map((c) => (
+                {assignable.map((c) => (
                   <option key={c.id} value={c.id}>#{c.id} {c.title.slice(0, 48)}{c.owner ? ` (${c.owner})` : ''}</option>
                 ))}
               </select>

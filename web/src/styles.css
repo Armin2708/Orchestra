@@ -644,6 +644,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; gap: 16px;
 }
+/* the assign square — its own box at the top of the rail, outside the chat */
+.tt-assign {
+  display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px;
+  border: 1px dashed #4c4841; border-radius: 10px; padding: 14px 10px;
+  background: #1c1b17; color: #bdb7ac; font: inherit; font-size: 12.5px;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.tt-assign:hover, .tt-assign[aria-expanded='true'] {
+  border-color: #D97757; border-style: solid; color: #DED9D1; background: #201f1b;
+}
+.tt-assign-plus { font-size: 15px; line-height: 1; color: #D97757; }
+.tt-assign-list { margin-top: 8px; max-height: 300px; overflow-y: auto; }
+/* header select is only the phone fallback — the rail owns assignment on desktop */
+.cc-assign-mobile { display: none; }
 .terminal-tasks section + section { border-top: 1px solid #26241f; padding-top: 14px; }
 .terminal-tasks h3 {
   margin: 0 0 8px; font-size: 11px; font-weight: 600;
@@ -670,6 +684,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .terminal.has-tasks, .terminal.has-task-open { width: min(560px, 100vw); }
   .terminal.has-task-open .terminal-col { flex: 1; width: auto; }
   .terminal-tasks, .terminal-task-detail { display: none; }
+  /* the rail (and its assign square) is hidden here — fall back to the header select */
+  .cc-assign-mobile { display: inline-block; }
 }
 
 .project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; overflow-y: auto; min-height: 0; align-content: start; }
