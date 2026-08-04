@@ -93,7 +93,7 @@ export const streamUrl = () => '/api/v1/events'
 export type VerificationCriterion = { text: string; met: boolean | 'unverifiable'; evidence: string }
 // latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict
 export type Verification = { running: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
-export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification }
+export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean }
 export type Agent = {
   id: number
   name: string
@@ -108,7 +108,7 @@ export type Agent = {
   effort?: string | null
   subagents?: { key: string; label: string }[]
 }
-export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string }
+export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string; status?: 'open' | 'shipped' | 'dropped'; outcome?: string; rank?: number | null }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }
 export type ReviewDecision = { id: number; board_id: number; card_id: number; card_title?: string; milestone_id: number | null; step_order: number | null; decision: 'approve' | 'send_back'; note: string | null; decided_at: string }
 export const MESSAGE_KINDS = ['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const

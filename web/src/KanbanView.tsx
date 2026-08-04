@@ -1,0 +1,175 @@
+import React, { useMemo, useState } from 'react'
+import { api, Card, Milestone, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
+import './kanban.css'
+
+// Kanban lanes: real columns plus a derived Triage lane — backlog cards that are not yet
+// ready (no contract) or not yet ranked. Done is read-only (accept flow owns it).
+const LANES = [
+  { id: 'triage', label: 'Triage' },
+  { id: 'backlog', label: 'Backlog' },
+  { id: 'in_progress', label: 'In progress' },
+  { id: 'review', label: 'Review' },
+  { id: 'blocked', label: 'Blocked' },
+  { id: 'done', label: 'Done' },
+] as const
+
+type LaneId = typeof LANES[number]['id']
+
+type KanbanCard = Card & { rank?: number | null; ready?: boolean; stale?: boolean }
+
+const laneOf = (card: KanbanCard): LaneId => {
+  if (card.column !== 'backlog') return card.column as LaneId
+  return card.ready && card.rank != null ? 'backlog' : 'triage'
+}
+
+const byRank = (a: KanbanCard, b: KanbanCard) =>
+  (a.rank ?? Number.MAX_VALUE) - (b.rank ?? Number.MAX_VALUE) || a.id - b.id
+
+export function KanbanView({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
+  return (
+    <div className="kanban-view">
+      {snaps.map((snapshot) => (
+        <BoardKanban key={snapshot.board.id} snapshot={snapshot} onChange={onChange} />
+      ))}
+    </div>
+  )
+}
+
+function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () => void }) {
+  const [query, setQuery] = useState('')
+  const [ownerFilter, setOwnerFilter] = useState('')
+  const [epicFilter, setEpicFilter] = useState(0)
+  const [showDone, setShowDone] = useState(false)
+  const [dragging, setDragging] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const cards = snapshot.cards as KanbanCard[]
+  const epics = snapshot.milestones ?? []
+  const owners = useMemo(
+    () => [...new Set(cards.map((c) => c.owner).filter(Boolean))] as string[],
+    [cards])
+  const visible = useMemo(() => cards.filter((c) =>
+    (!query || `${c.id} ${c.title}`.toLowerCase().includes(query.toLowerCase()))
+    && (!ownerFilter || c.owner === ownerFilter)
+    && (!epicFilter || c.milestone_id === epicFilter)), [cards, query, ownerFilter, epicFilter])
+  const staleCount = cards.filter((c) => c.stale).length
+
+  const act = async (run: () => Promise<unknown>) => {
+    setError(null)
+    try { await run(); onChange() } catch (e) { setError(e instanceof Error ? e.message : 'action failed') }
+  }
+  const dropOnLane = (lane: LaneId) => (event: React.DragEvent) => {
+    event.preventDefault()
+    const id = Number(event.dataTransfer.getData('text/orchestra-card'))
+    if (!id) return
+    const card = cards.find((c) => c.id === id)
+    setDragging(null)
+    if (!card || lane === 'done' || laneOf(card) === lane) return
+    if (lane === 'backlog' || lane === 'triage') {
+      if (card.column !== 'backlog') return act(() => api('POST', `/cards/${id}/move`, { column: 'backlog' }))
+      if (lane === 'backlog') return act(() => api('POST', `/cards/${id}/rank`, { bottom: true }))
+      return
+    }
+    return act(() => api('POST', `/cards/${id}/move`, { column: lane }))
+  }
+  const dropOnCard = (target: KanbanCard) => (event: React.DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const id = Number(event.dataTransfer.getData('text/orchestra-card'))
+    setDragging(null)
+    if (!id || id === target.id) return
+    const card = cards.find((c) => c.id === id)
+    if (!card) return
+    if (laneOf(target) === 'backlog' && card.column === 'backlog') {
+      return act(() => api('POST', `/cards/${id}/rank`, { before: target.id }))
+    }
+    return dropOnLane(laneOf(target))(event)
+  }
+
+  return (
+    <section className="kanban-board" aria-label={`${snapshot.board.name} kanban`}>
+      <header className="kanban-header">
+        <h2>{snapshot.board.name}</h2>
+        <input className="kanban-search" placeholder="Filter cards…" value={query}
+          onChange={(e) => setQuery(e.target.value)} aria-label="Filter cards" />
+        <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)} aria-label="Filter by owner">
+          <option value="">All owners</option>
+          {owners.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={epicFilter} onChange={(e) => setEpicFilter(Number(e.target.value))} aria-label="Filter by epic">
+          <option value={0}>All epics</option>
+          {epics.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
+        </select>
+        {staleCount > 0 && <span className="kanban-stale-count" title="Cards idle past their column's threshold">{staleCount} stale</span>}
+        {error && <span className="kanban-error" role="alert">{error}</span>}
+      </header>
+      <div className="kanban-lanes">
+        {LANES.map((lane) => {
+          const laneCards = visible.filter((c) => laneOf(c) === lane.id)
+            .sort(lane.id === 'backlog' ? byRank : (a, b) => b.id - a.id)
+          const collapsed = lane.id === 'done' && !showDone
+          return (
+            <div key={lane.id} className={`kanban-lane kanban-lane-${lane.id}`}
+              onDragOver={(e) => e.preventDefault()} onDrop={dropOnLane(lane.id)}>
+              <div className="kanban-lane-head">
+                <span>{lane.label}</span>
+                <span className="kanban-lane-count">{laneCards.length}</span>
+                {lane.id === 'done' && laneCards.length > 0 && (
+                  <button type="button" className="kanban-done-toggle" onClick={() => setShowDone(!showDone)}>
+                    {showDone ? 'collapse' : 'show'}
+                  </button>
+                )}
+              </div>
+              {!collapsed && laneCards.map((card) => (
+                <KanbanCardChip key={card.id} card={card} epics={epics}
+                  dragging={dragging === card.id}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/orchestra-card', String(card.id))
+                    setDragging(card.id)
+                  }}
+                  onDragEnd={() => setDragging(null)}
+                  onDrop={dropOnCard(card)} />
+              ))}
+              {lane.id === 'triage' && laneCards.length === 0 && (
+                <p className="kanban-empty">Ungroomed backlog cards land here.</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function KanbanCardChip({ card, epics, dragging, onDragStart, onDragEnd, onDrop }: {
+  card: KanbanCard
+  epics: Milestone[]
+  dragging: boolean
+  onDragStart: (event: React.DragEvent) => void
+  onDragEnd: () => void
+  onDrop: (event: React.DragEvent) => void
+}) {
+  const epic = card.milestone_id ? epics.find((m) => m.id === card.milestone_id) : undefined
+  return (
+    <article className={`kanban-card${dragging ? ' dragging' : ''}`} draggable
+      onDragStart={onDragStart} onDragEnd={onDragEnd}
+      onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+      <header>
+        <span className="kanban-card-id">#{card.id}</span>
+        {card.stale && <span className="kanban-dot-stale" title="Idle past threshold" />}
+        {card.column === 'backlog' && !card.ready
+          && <span className="kanban-badge-unready" title="Needs a contract (objective + acceptance criteria)">not ready</span>}
+      </header>
+      <p className="kanban-card-title">{card.title}</p>
+      <footer>
+        {epic && <span className="kanban-epic-tag" title={epic.title}>{epic.title}</span>}
+        {card.owner && (
+          <span className="kanban-owner" style={{ background: agentWash(card.owner), color: agentInk(card.owner) }}>
+            {initials(card.owner)}
+          </span>
+        )}
+        <span className="kanban-when">{timeAgo(card.updated_at)}</span>
+      </footer>
+    </article>
+  )
+}
