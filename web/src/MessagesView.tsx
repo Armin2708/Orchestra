@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, ApiError, agentInk, agentWash, initials, BoardMessage, Snapshot, Thread, timeAgo } from './api'
+import { ConfirmDialog } from './ConfirmDialog'
 import { MessageBody } from './MessageBody'
 import { MessageComposer } from './MessageComposer'
 import {
@@ -141,11 +142,11 @@ function MailBody({ message, boardId, cardTitles }: {
   return <MessageBody message={message} boardId={boardId} cardTitles={cardTitles} />
 }
 
-function ReadingPane({ row, onChange, onBack, onDeleted }: {
+function ReadingPane({ row, onChange, onBack, requestDelete }: {
   row: ThreadRow
   onChange: () => void | Promise<void>
   onBack: () => void
-  onDeleted: () => void
+  requestDelete: (id: number) => void
 }) {
   const { thread } = row
   const [reply, setReply] = useState('')
@@ -181,19 +182,8 @@ function ReadingPane({ row, onChange, onBack, onDeleted }: {
     }
   }
 
-  const remove = async () => {
-    if (!window.confirm('Delete this mail and its replies?')) return
-    setBusy(true)
-    try {
-      await api('DELETE', `/messages/${thread.id}`)
-      onDeleted()
-      await onChange()
-    } catch (err) {
-      setError(readableError(err))
-    } finally {
-      setBusy(false)
-    }
-  }
+  // confirmation + optimistic removal live in the parent's shared modal flow
+  const remove = () => requestDelete(thread.id)
 
   return (
     <article className="inbox-reading" aria-label={`Mail: ${subject}`}>
@@ -308,7 +298,20 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
     }))
   }).sort((a, b) => latestMessage(b.thread).id - latestMessage(a.thread).id), [snaps])
 
-  const visible = rows.filter((row) => inboxMatches(row.thread, mailbox))
+  // in-app delete confirmation + optimistic removal: hidden ids vanish from the
+  // list immediately; a failed DELETE unhides on the next refresh
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<number>>(new Set())
+  const executeDelete = (id: number) => {
+    setConfirmDeleteId(null)
+    setHiddenIds((prev) => new Set(prev).add(id))
+    setSelectedKey((key) => (key?.endsWith(`-${id}`) ? null : key))
+    void api('DELETE', `/messages/${id}`)
+      .catch(() => setHiddenIds((prev) => { const next = new Set(prev); next.delete(id); return next }))
+      .finally(() => { void onChange() })
+  }
+
+  const visible = rows.filter((row) => inboxMatches(row.thread, mailbox) && !hiddenIds.has(row.thread.id))
   const selected = selectedKey ? rows.find((row) => rowKey(row) === selectedKey) ?? null : null
   const unreadTotal = rows.filter((row) => mailboxOf(row.thread) !== 'board' && isUnread(row.thread, row.boardId, readMap)).length
 
@@ -378,15 +381,7 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
                 onClick={() => open(row)}>
                 <span className="inbox-row-delete" role="button" tabIndex={0}
                   aria-label="Delete mail" title="Delete this mail and its replies"
-                  onClick={async (event) => {
-                    event.stopPropagation()
-                    if (!window.confirm('Delete this mail and its replies?')) return
-                    try {
-                      await api('DELETE', `/messages/${row.thread.id}`)
-                      if (selectedKey === rowKey(row)) setSelectedKey(null)
-                      await onChange()
-                    } catch { /* surfaced by the next refresh */ }
-                  }}>✕</span>
+                  onClick={(event) => { event.stopPropagation(); setConfirmDeleteId(row.thread.id) }}>✕</span>
                 {unread && <span className="inbox-unread-dot" aria-label="Unread" />}
                 <Avatar name={sender} />
                 <span className="inbox-row-main">
@@ -456,7 +451,7 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
           </div>
         ) : selected ? (
           <ReadingPane row={selected} onChange={onChange}
-            onBack={() => setSelectedKey(null)} onDeleted={() => setSelectedKey(null)} />
+            onBack={() => setSelectedKey(null)} requestDelete={setConfirmDeleteId} />
         ) : (
           <div className="inbox-placeholder" aria-hidden="true">
             <h3>Select a mail</h3>
@@ -464,6 +459,10 @@ export function MessagesView({ snaps, focused = false, onChange }: Props) {
           </div>
         )}
       </section>
+      <ConfirmDialog open={confirmDeleteId !== null} title="Delete this mail?"
+        body="The message and all of its replies are removed for everyone. This cannot be undone."
+        onConfirm={() => { if (confirmDeleteId !== null) executeDelete(confirmDeleteId) }}
+        onCancel={() => setConfirmDeleteId(null)} />
     </main>
   )
 }

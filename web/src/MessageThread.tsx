@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { api, ApiError, initials, Thread, timeAgo } from './api'
+import { ConfirmDialog } from './ConfirmDialog'
 import { MessageBody } from './MessageBody'
 import { deliverySummary, MESSAGE_KIND_META, messageKind, messageRoute } from './messageUi'
 
@@ -52,20 +53,19 @@ export function MessageThread({ thread, boardLabel, cardTitle, cardTitles, compa
     }
   }
 
-  const remove = async () => {
-    if (!window.confirm(`Delete this ${meta.label.toLowerCase()} and its answers?`)) return
-    setBusy(true)
-    try {
-      await api('DELETE', `/messages/${thread.id}`)
-      await onChange()
-    } catch (err) {
-      setError(readableError(err))
-    } finally {
-      setBusy(false)
-    }
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [gone, setGone] = useState(false) // optimistic: vanish before the refresh lands
+  const remove = () => setConfirmingDelete(true)
+  const executeDelete = () => {
+    setConfirmingDelete(false)
+    setGone(true)
+    void api('DELETE', `/messages/${thread.id}`)
+      .catch((err) => { setGone(false); setError(readableError(err)) })
+      .finally(() => { void onChange() })
   }
 
   const authorId = `message-thread-${thread.id}-author`
+  if (gone) return null
 
   return (
     <article className={`message-thread kind-${kind} ${thread.replies.length > 0 ? 'has-replies' : ''} ${compact ? 'compact' : ''}`}
@@ -152,6 +152,9 @@ export function MessageThread({ thread, boardLabel, cardTitle, cardTitles, compa
           </form>
         )}
       </div>
+      <ConfirmDialog open={confirmingDelete} title={`Delete this ${meta.label.toLowerCase()}?`}
+        body="The message and all of its replies are removed for everyone. This cannot be undone."
+        onConfirm={executeDelete} onCancel={() => setConfirmingDelete(false)} />
     </article>
   )
 }

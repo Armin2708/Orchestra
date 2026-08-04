@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
 import { STATUS } from './Board'
 import { CanvasPoint, CanvasViewport, canvasSceneOffset, screenToCanvasLocal } from './canvasViewport'
+import { ConfirmDialog } from './ConfirmDialog'
 import { ProviderBadge } from './ProviderBadge'
 
 type Norm = { x: number; y: number }
@@ -76,6 +77,8 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
   const W = size.w, H = size.h
   const [pos, setPos] = useState<Record<string, Norm>>(() => loadPos(boardId))
   const [openThread, setOpenThread] = useState<Thread | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Thread | null>(null)
+  const [deletedIds, setDeletedIds] = useState<ReadonlySet<number>>(new Set())
   const [promptFor, setPromptFor] = useState<Agent | null>(null)
   const [prompt, setPrompt] = useState('')
   const [reply, setReply] = useState('')
@@ -126,8 +129,10 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
     if (!wasDrag && a) onOpenAgent(a) // click (no movement) opens the console
   }
 
-  // one edge per question; answered ones linger green for 3 minutes, then vanish
+  // one edge per question; answered ones linger green for 3 minutes, then vanish.
+  // deletedIds hides a bubble the instant its delete is confirmed.
   const edges = (snap.threads as Thread[]).filter((t) => {
+    if (deletedIds.has(t.id)) return false
     const src = t.from_name ?? 'you', dst = t.to_name ?? 'you'
     if (src === dst || !nodes.has(src) || !nodes.has(dst)) return false
     if (!t.answered) return true
@@ -309,16 +314,25 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
           )}
           <div className="net-thread-actions">
             <button className="btn ghost danger" title="Delete this message and its replies"
-              onClick={async () => {
-                if (!window.confirm('Delete this message and its replies?')) return
-                try { await api('DELETE', `/messages/${openThread.id}`) } catch { /* refresh reconciles */ }
-                setOpenThread(null)
-                onChange?.()
-              }}>Delete</button>
+              onClick={() => setConfirmDelete(openThread)}>Delete</button>
             <button className="btn ghost" onClick={() => setOpenThread(null)}>Close</button>
           </div>
         </div>
       )}
+
+      <ConfirmDialog open={confirmDelete !== null} title="Delete this message?"
+        body="The message and all of its replies are removed for everyone. This cannot be undone."
+        onConfirm={() => {
+          const target = confirmDelete
+          setConfirmDelete(null)
+          if (!target) return
+          setDeletedIds((prev) => new Set(prev).add(target.id)) // bubble vanishes now
+          setOpenThread((current) => (current?.id === target.id ? null : current))
+          void api('DELETE', `/messages/${target.id}`)
+            .catch(() => setDeletedIds((prev) => { const next = new Set(prev); next.delete(target.id); return next }))
+            .finally(() => onChange?.())
+        }}
+        onCancel={() => setConfirmDelete(null)} />
 
       <div className="net-legend">
         <span><i className="leg-line open" /> open question</span>

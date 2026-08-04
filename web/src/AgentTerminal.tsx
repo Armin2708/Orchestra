@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread, timeAgo } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { CardDrawer } from './CardDrawer'
+import { ConfirmDialog } from './ConfirmDialog'
 import { followIntent } from './follow'
 import { ProviderBadge } from './ProviderBadge'
 import {
@@ -306,6 +307,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [openTaskId, setOpenTaskId] = useState<number | null>(null)
   const [assignOpen, setAssignOpen] = useState(false)
+  const [confirmDeleteMsg, setConfirmDeleteMsg] = useState<number | null>(null)
+  const [deletedMsgIds, setDeletedMsgIds] = useState<ReadonlySet<number>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
@@ -399,8 +402,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   })
   const threadLines: Line[] = [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
-    .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
-    .flatMap((t) => [messageLine(t), ...t.replies.map(messageLine)])
+    .filter((t) => (t.from_name === agent.name || t.to_name === agent.name) && !deletedMsgIds.has(t.id))
+    .flatMap((t) => [messageLine(t), ...t.replies.filter((r) => !deletedMsgIds.has(r.id)).map(messageLine)])
   // a terminal session's chat runs over board messages — merge them into the streamed
   // transcript so the drawer reads as one conversation (hired agents get messages
   // pushed into their real transcript already)
@@ -738,14 +741,20 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const isLifecycleStatus = (text: string) =>
     /^(?:(?:claude|codex)\s+)?(?:session (?:started|configured)|turn (?:started|finished))\b/i.test(text)
 
-  const deleteMessage = async (id: number) => {
-    if (!window.confirm('Delete this board message (and its replies)?')) return
-    try { await api('DELETE', `/messages/${id}`); onChange() } catch (cause) { setControlError(controlErrorText(cause)) }
+  const confirmedDelete = (id: number) => {
+    setConfirmDeleteMsg(null)
+    setDeletedMsgIds((prev) => new Set(prev).add(id)) // line vanishes immediately
+    void api('DELETE', `/messages/${id}`)
+      .catch((cause) => {
+        setDeletedMsgIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+        setControlError(controlErrorText(cause))
+      })
+      .finally(() => onChange())
   }
   // only board-message-backed lines can be removed; transcript lines are history
   const msgDelete = (l: Line) => l.messageId !== undefined && canPromptAgent
     ? <button type="button" className="cc-msg-delete" title="Delete this board message"
-        aria-label="Delete message" onClick={() => void deleteMessage(l.messageId!)}>✕</button>
+        aria-label="Delete message" onClick={() => setConfirmDeleteMsg(l.messageId!)}>✕</button>
     : null
 
   const renderLine = (l: Line, i: number) => {
@@ -1039,6 +1048,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             </span>
           </div>
         </div>
+        <ConfirmDialog open={confirmDeleteMsg !== null} title="Delete this board message?"
+          body="The message and all of its replies are removed for everyone. This cannot be undone."
+          onConfirm={() => { if (confirmDeleteMsg !== null) confirmedDelete(confirmDeleteMsg) }}
+          onCancel={() => setConfirmDeleteMsg(null)} />
       </aside>
     </>
   )

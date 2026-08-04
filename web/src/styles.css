@@ -1718,3 +1718,17 @@ textarea {
 .net-thread-actions { display: flex; gap: 8px; align-items: center; }
 .btn.ghost.danger { color: #b8544e; }
 .btn.ghost.danger:hover { color: #E5716A; background: rgba(229, 113, 106, 0.1); }
+
+/* in-app destructive-action confirmation (replaces window.confirm) */
+.confirm-backdrop {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 9, 8, 0.55); backdrop-filter: blur(2px);
+}
+.confirm-dialog {
+  min-width: 300px; max-width: 420px; border: 1px solid #4a463f; border-radius: 12px;
+  background: #262624; color: #DED9D1; padding: 18px 20px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.confirm-title { font-size: 14px; font-weight: 600; }
+.confirm-body { margin-top: 6px; font-size: 12.5px; color: #8a867e; line-height: 1.5; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
