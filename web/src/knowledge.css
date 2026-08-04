@@ -27,3 +27,7 @@
 .knowledge-error { color:#a33b32; }.knowledge-empty { color:var(--k-muted); }
 .knowledge-manifest { display:grid; gap:8px; }.knowledge-manifest>header { margin-bottom:4px; }.knowledge-manifest article { display:grid; grid-template-columns:minmax(0,1fr) minmax(200px,2fr) auto; gap:12px; border:1px solid var(--k-line); border-radius:8px; padding:12px; }.knowledge-manifest article.omitted { opacity:.58; }.knowledge-manifest article div { display:grid; }.knowledge-manifest article p { margin:0; color:var(--k-muted); }.knowledge-manifest article span { white-space:nowrap; }
 @media (max-width:900px) { .knowledge-view { padding:18px; }.knowledge-layout { grid-template-columns:1fr; }.knowledge-review-panel { position:static; }.knowledge-search { flex-wrap:wrap; }.knowledge-search>label:first-child { flex-basis:100%; }.knowledge-manifest article { grid-template-columns:1fr; } }
+
+/* agent-home inspector embedding: narrow panel, stack manifest columns */
+.ah-detail-panel .knowledge-manifest { padding:15px 13px; }
+.ah-detail-panel .knowledge-manifest article { grid-template-columns:1fr; }

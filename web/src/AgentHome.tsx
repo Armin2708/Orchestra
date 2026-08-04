@@ -44,8 +44,6 @@ import {
   type WorkspaceProcess,
 } from './osApi'
 import { ProviderBadge } from './ProviderBadge'
-import { AgentHomeDiscussions } from './DiscussionCenter'
-import { AgentKnowledgeManifest } from './AgentKnowledgeManifest'
 import { useModalFocusTrap } from './useModalFocusTrap'
 import { runRuntimeMutation } from './runtimeReadOnly'
 import './agentHome.css'
@@ -874,13 +872,6 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
           </div>
         ))}
       </main>
-
-      {selectedProfile && selectedSession
-        && typeof selectedSession.context.knowledge_context_build_id === 'string'
-        && <AgentKnowledgeManifest boardId={selectedProfile.board_id}
-          buildId={selectedSession.context.knowledge_context_build_id} />}
-      {selectedProfile && <AgentHomeDiscussions boardId={selectedProfile.board_id}
-        profileId={selectedProfile.id} linkType="agent" linkTarget={selectedProfile.id} />}
 
       {createOpen && !readOnly && (
         <CreateAgentDialog snaps={snaps} onClose={() => setCreateOpen(false)}
