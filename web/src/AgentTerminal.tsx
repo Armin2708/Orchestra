@@ -739,7 +739,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   return (
     <>
       {!embedded && <div className="scrim" onClick={onClose} />}
-      <aside className={embedded ? 'terminal embedded' : showTasks ? 'terminal has-tasks' : 'terminal'}
+      <aside className={embedded ? 'terminal embedded'
+        : `terminal${showTasks ? ' has-tasks' : ''}${openTask ? ' has-task-open' : ''}`}
         role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true}
         aria-label={`${agent.name} console`}
         onKeyDown={(e) => {
@@ -758,11 +759,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           }
           if (e.key === 'Escape') {
             e.preventDefault()
-            if (hired && working) void interrupt()
+            if (openTask) setOpenTaskId(null)
+            else if (hired && working) void interrupt()
             else if (!embedded) onClose()
           }
         }}>
-        {showTasks && (
+        {openTask && (
+          <div className="terminal-task-detail">
+            <CardDrawer embedded card={openTask} boardId={boardId}
+              onClose={() => setOpenTaskId(null)} onChange={onChange} />
+          </div>
+        )}
+        {showTasks && !openTask && (
           <nav className="terminal-tasks" aria-label={`${agent.name} tasks`}>
             <section>
               <h3>Working on</h3>
@@ -947,10 +955,6 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
         </div>
       </aside>
-      {openTask && (
-        <CardDrawer card={openTask} boardId={boardId}
-          onClose={() => setOpenTaskId(null)} onChange={onChange} />
-      )}
     </>
   )
 }
