@@ -200,15 +200,15 @@
 .cc-offline-banner div { display: grid; }
 .cc-offline-banner span { font-size: 11px; }
 
-.cc-status { display: inline-flex; width: fit-content; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; background: #f4f3f0; color: #66635e; padding: 3px 8px; font-size: 10.5px; font-weight: 650; white-space: nowrap; }
-.cc-status > span:first-child { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.cc-status.compact { gap: 5px; padding: 1px 6px; font-size: 9px; }
-.cc-status-running { border-color: #afcebd; background: #eaf4ee; color: #2f6b4b; }
-.cc-status-success { border-color: #bcd5bd; background: #edf5ec; color: #346538; }
-.cc-status-warning { border-color: #e2c98f; background: #fbf4df; color: #805b19; }
-.cc-status-danger { border-color: #dfb0aa; background: #fff0ee; color: #922e2b; }
-.cc-status-info { border-color: #bdd1df; background: #edf4f8; color: #325f81; }
-.cc-status-unsupported { border-style: dashed; border-color: #c5c1b9; background: #f1efeb; color: #6f6b65; }
+.cc-shell .cc-status { display: inline-flex; width: fit-content; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; background: #f4f3f0; color: #66635e; padding: 3px 8px; font-size: 10.5px; font-weight: 650; white-space: nowrap; }
+.cc-shell .cc-status > span:first-child { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cc-shell .cc-status.compact { gap: 5px; padding: 1px 6px; font-size: 9px; }
+.cc-shell .cc-status-running { border-color: #afcebd; background: #eaf4ee; color: #2f6b4b; }
+.cc-shell .cc-status-success { border-color: #bcd5bd; background: #edf5ec; color: #346538; }
+.cc-shell .cc-status-warning { border-color: #e2c98f; background: #fbf4df; color: #805b19; }
+.cc-shell .cc-status-danger { border-color: #dfb0aa; background: #fff0ee; color: #922e2b; }
+.cc-shell .cc-status-info { border-color: #bdd1df; background: #edf4f8; color: #325f81; }
+.cc-shell .cc-status-unsupported { border-style: dashed; border-color: #c5c1b9; background: #f1efeb; color: #6f6b65; }
 
 .cc-state {
   display: grid;
@@ -299,7 +299,7 @@
 a.cc-graph-node:hover { transform: translateY(-1px); border-color: #c7c3ba; }
 .cc-node-kind { grid-row: 1 / 4; align-self: start; border: 1px solid var(--line); border-radius: 999px; padding: 1px 5px; color: var(--ink-soft); font-size: 8px; font-weight: 700; text-transform: uppercase; }
 .cc-graph-node small { overflow: hidden; color: var(--ink-soft); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.cc-graph-node .cc-status { margin-top: 3px; }
+.cc-shell .cc-graph-node .cc-status { margin-top: 3px; }
 .cc-edge-list { display: grid; gap: 0; list-style: none; border-top: 1px solid var(--line); }
 .cc-edge-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 11px; }
 .cc-edge-list li b { color: var(--ink-soft); font-size: 9px; text-transform: uppercase; }
