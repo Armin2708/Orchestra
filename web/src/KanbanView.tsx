@@ -35,12 +35,17 @@ export function KanbanView({ snaps, onChange }: { snaps: Snapshot[]; onChange: (
   )
 }
 
+// while dragging: which lane the pointer is over, and which card the drop would land above
+// (null = end of the lane). Rendered as a GitHub-Projects-style insertion line.
+type DropHint = { lane: LaneId; beforeId: number | null }
+
 function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () => void }) {
   const [query, setQuery] = useState('')
   const [ownerFilter, setOwnerFilter] = useState('')
   const [epicFilter, setEpicFilter] = useState(0)
   const [showDone, setShowDone] = useState(false)
   const [dragging, setDragging] = useState<number | null>(null)
+  const [hint, setHint] = useState<DropHint | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const cards = snapshot.cards as KanbanCard[]
@@ -58,32 +63,55 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
     setError(null)
     try { await run(); onChange() } catch (e) { setError(e instanceof Error ? e.message : 'action failed') }
   }
-  const dropOnLane = (lane: LaneId) => (event: React.DragEvent) => {
+  const moveHint = (next: DropHint | null) => setHint((current) => (
+    current?.lane === next?.lane && current?.beforeId === next?.beforeId ? current : next
+  ))
+  const clearDrag = () => { setDragging(null); setHint(null) }
+
+  const overLane = (lane: LaneId) => (event: React.DragEvent) => {
     event.preventDefault()
-    const id = Number(event.dataTransfer.getData('text/orchestra-card'))
-    if (!id) return
-    const card = cards.find((c) => c.id === id)
-    setDragging(null)
-    if (!card || lane === 'done' || laneOf(card) === lane) return
-    if (lane === 'backlog' || lane === 'triage') {
-      if (card.column !== 'backlog') return act(() => api('POST', `/cards/${id}/move`, { column: 'backlog' }))
-      if (lane === 'backlog') return act(() => api('POST', `/cards/${id}/rank`, { bottom: true }))
-      return
-    }
-    return act(() => api('POST', `/cards/${id}/move`, { column: lane }))
+    if (lane === 'done') return moveHint(null)
+    moveHint({ lane, beforeId: null })
   }
-  const dropOnCard = (target: KanbanCard) => (event: React.DragEvent) => {
+  const overCard = (lane: LaneId, laneCards: KanbanCard[], index: number) => (event: React.DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (lane === 'done') return moveHint(null)
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const beforeId = event.clientY < rect.top + rect.height / 2
+      ? laneCards[index].id
+      : laneCards[index + 1]?.id ?? null
+    moveHint({ lane, beforeId })
+  }
+  const drop = (event: React.DragEvent) => {
     event.preventDefault()
     event.stopPropagation()
     const id = Number(event.dataTransfer.getData('text/orchestra-card'))
-    setDragging(null)
-    if (!id || id === target.id) return
+    const target = hint
+    clearDrag()
+    if (!id || !target) return
     const card = cards.find((c) => c.id === id)
-    if (!card) return
-    if (laneOf(target) === 'backlog' && card.column === 'backlog') {
-      return act(() => api('POST', `/cards/${id}/rank`, { before: target.id }))
+    if (!card || target.lane === 'done') return
+    const sameLane = laneOf(card) === target.lane
+    if (target.lane === 'backlog') {
+      const reposition = target.beforeId && target.beforeId !== id
+        ? { before: target.beforeId }
+        : target.beforeId === null ? { bottom: true } : null
+      if (card.column !== 'backlog') {
+        // entering the backlog from another column: move first, then slot into place
+        return act(async () => {
+          await api('POST', `/cards/${id}/move`, { column: 'backlog' })
+          if (reposition) await api('POST', `/cards/${id}/rank`, reposition)
+        })
+      }
+      return reposition ? act(() => api('POST', `/cards/${id}/rank`, reposition)) : undefined
     }
-    return dropOnLane(laneOf(target))(event)
+    if (target.lane === 'triage') {
+      return card.column !== 'backlog'
+        ? act(() => api('POST', `/cards/${id}/move`, { column: 'backlog' }))
+        : undefined
+    }
+    return sameLane ? undefined : act(() => api('POST', `/cards/${id}/move`, { column: target.lane }))
   }
 
   return (
@@ -112,10 +140,19 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
           const laneCards = visible.filter((c) => laneOf(c) === lane.id)
             .sort(lane.id === 'backlog' ? byRank : (a, b) => b.id - a.id)
           const collapsed = lane.id === 'done' && !showDone
+          const laneActive = dragging !== null && hint?.lane === lane.id
+          const lineBefore = (id: number | null) =>
+            laneActive && hint?.beforeId === id && hint.beforeId !== dragging
+              && <div className="kanban-drop-line" aria-hidden="true" />
           return (
-            <div key={lane.id} className={`kanban-lane kanban-lane-${lane.id}`}
-              onDragOver={(e) => e.preventDefault()} onDrop={dropOnLane(lane.id)}>
+            <div key={lane.id}
+              className={`kanban-lane kanban-lane-${lane.id}${laneActive ? ' drop-target' : ''}`}
+              onDragOver={overLane(lane.id)} onDrop={drop}
+              onDragLeave={(e) => {
+                if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) moveHint(null)
+              }}>
               <div className="kanban-lane-head">
+                <span className={`kanban-lane-dot dot-${lane.id}`} aria-hidden="true" />
                 <span>{lane.label}</span>
                 <span className="kanban-lane-count">{laneCards.length}</span>
                 {lane.id === 'done' && laneCards.length > 0 && (
@@ -124,19 +161,27 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
                   </button>
                 )}
               </div>
-              {!collapsed && laneCards.map((card) => (
-                <KanbanCardChip key={card.id} card={card} epics={epics} onChange={onChange}
-                  dragging={dragging === card.id}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('text/orchestra-card', String(card.id))
-                    setDragging(card.id)
-                  }}
-                  onDragEnd={() => setDragging(null)}
-                  onDrop={dropOnCard(card)} />
-              ))}
-              {lane.id === 'triage' && laneCards.length === 0 && (
-                <p className="kanban-empty">Ungroomed backlog cards land here.</p>
-              )}
+              <div className="kanban-lane-body">
+                {!collapsed && laneCards.map((card, index) => (
+                  <React.Fragment key={card.id}>
+                    {lineBefore(card.id)}
+                    <KanbanCardChip card={card} epics={epics} onChange={onChange}
+                      dragging={dragging === card.id}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/orchestra-card', String(card.id))
+                        e.dataTransfer.effectAllowed = 'move'
+                        setDragging(card.id)
+                      }}
+                      onDragEnd={clearDrag}
+                      onDragOver={overCard(lane.id, laneCards, index)}
+                      onDrop={drop} />
+                  </React.Fragment>
+                ))}
+                {lineBefore(null)}
+                {lane.id === 'triage' && laneCards.length === 0 && (
+                  <p className="kanban-empty">Ungroomed backlog cards land here.</p>
+                )}
+              </div>
             </div>
           )
         })}
@@ -155,13 +200,14 @@ const doneWhenLines = (description: string): string[] => {
     .slice(0, 8)
 }
 
-function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEnd, onDrop }: {
+function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEnd, onDragOver, onDrop }: {
   card: KanbanCard
   epics: Milestone[]
   dragging: boolean
   onChange: () => void
   onDragStart: (event: React.DragEvent) => void
   onDragEnd: () => void
+  onDragOver: (event: React.DragEvent) => void
   onDrop: (event: React.DragEvent) => void
 }) {
   const epic = card.milestone_id ? epics.find((m) => m.id === card.milestone_id) : undefined
@@ -191,7 +237,7 @@ function KanbanCardChip({ card, epics, dragging, onChange, onDragStart, onDragEn
   return (
     <article className={`kanban-card${dragging ? ' dragging' : ''}`} draggable={!grooming}
       onDragStart={onDragStart} onDragEnd={onDragEnd}
-      onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+      onDragOver={onDragOver} onDrop={onDrop}>
       <header>
         <span className="kanban-card-id">#{card.id}</span>
         {card.stale && <span className="kanban-dot-stale" title="Idle past threshold" />}
