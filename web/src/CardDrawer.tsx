@@ -26,8 +26,8 @@ const actionErrorText = (error: unknown, fallback: string) => {
   return message.trim() || fallback
 }
 
-export function CardDrawer({ card, boardId, agents = [], providers = [], embedded = false, onClose, onChange }:
-  { card: Card; boardId: number; agents?: Agent[]; providers?: AgentProviderCatalog[]; embedded?: boolean; onClose: () => void; onChange: () => void }) {
+export function CardDrawer({ card, boardId, agents = [], providers = [], onClose, onChange }:
+  { card: Card; boardId: number; agents?: Agent[]; providers?: AgentProviderCatalog[]; onClose: () => void; onChange: () => void }) {
   const [events, setEvents] = useState<any[]>([])
   const [editingDesc, setEditingDesc] = useState(false)
   const [desc, setDesc] = useState(card.description)
@@ -111,10 +111,9 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], embedde
 
   return (
     <>
-      {!embedded && <div className="scrim" onClick={onClose} />}
-      <aside className={embedded ? 'drawer embedded' : 'drawer'} ref={panelRef} tabIndex={-1}
-        role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true}
-        aria-label={`Card #${card.id} — ${card.title}`}>
+      <div className="scrim" onClick={onClose} />
+      <aside className="drawer" ref={panelRef} tabIndex={-1}
+        role="dialog" aria-modal="true" aria-label={`Card #${card.id} — ${card.title}`}>
         <button className="close" onClick={onClose} aria-label="Close">×</button>
         <p className="drawer-kicker">Card #{card.id}</p>
         <h2>{card.title}</h2>
