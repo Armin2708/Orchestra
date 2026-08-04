@@ -570,36 +570,74 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .terminal.has-task-open { width: min(1240px, 100vw); }
 .terminal.has-task-open .terminal-col { flex: none; width: 656px; }
 .terminal-task-detail {
-  flex: 1; min-width: 0; min-height: 0;
-  display: flex; flex-direction: column;
+  flex: 1; min-width: 0; min-height: 0; display: flex;
   border-right: 1px solid #33312c; background: #171613;
-  padding: 14px 22px 16px;
+  /* remap the light board theme onto the terminal palette so the full
+     CardDrawer (trackbook, review, conversation) reads as chat-native */
+  --surface: #171613;
+  --bg: #201f1b;
+  --ink: #DED9D1;
+  --ink-soft: #999489;
+  --line: #33312c;
+  --dot: rgba(255, 255, 255, 0.05);
+  --shadow: none;
+  --shadow-hover: none;
+  --message-line-strong: #3a3733;
+  --message-muted: #8a867e;
 }
-.ttd-head { display: flex; align-items: center; gap: 10px; padding: 4px 0 12px; color: #999489; font-size: 12.5px; }
-.ttd-head .tt-status { font-size: 11px; }
-.ttd-scroll {
-  flex: 1; min-height: 0; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 18px; padding: 8px 0 16px;
+.drawer.embedded {
+  position: relative; inset: auto; z-index: auto; width: 100%; height: 100%;
+  border-left: none; box-shadow: none; animation: none;
+  padding: 18px 22px 40px; overflow-y: auto;
+  font-family: inherit; font-size: 12.5px; line-height: 1.6; color: var(--ink);
 }
-.ttd-title { font-size: 15px; font-weight: 600; color: #DED9D1; line-height: 1.5; word-break: break-word; }
-.ttd-byline { margin-top: 4px; color: #8a867e; font-size: 12px; }
-.ttd-section h3 {
-  margin: 0 0 8px; font-size: 11px; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase; color: #8a867e;
+.drawer.embedded h2 { font-size: 15px; }
+/* re-tint the drawer pieces that hardcode light-theme colors */
+.terminal-task-detail .status-chip.pick:hover { border-color: #4c4841; }
+.terminal-task-detail .btn.primary { background: #DED9D1; color: #1B1A17; }
+.terminal-task-detail .btn.primary:hover { background: #f0ece4; }
+.terminal-task-detail .timeline time { color: #6f6b64; }
+.terminal-task-detail .review-panel { border-color: #5a5030; background: #26231c; }
+.terminal-task-detail .review-diffstat { background: #1B1A17; border-color: #3a3733; }
+.terminal-task-detail .verify-verdict.v-pass, .terminal-task-detail .crit-met .crit-mark { color: #7fbc8c; }
+.terminal-task-detail .verify-verdict.v-gaps, .terminal-task-detail .crit-unknown .crit-mark { color: #d9a94e; }
+.terminal-task-detail .verify-verdict.v-fail, .terminal-task-detail .crit-unmet .crit-mark { color: #e0837b; }
+.terminal-task-detail .verify-running, .terminal-task-detail .crit-evidence { color: #8a867e; }
+.terminal-task-detail .review-history li.approved b { color: #7fbc8c; }
+.terminal-task-detail .card-conversation-loading { background: #201f1b; }
+.terminal-task-detail .card-conversation-loading::after {
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.08) 45%, transparent 70%);
 }
-.ttd-desc { white-space: pre-wrap; word-break: break-word; color: #DED9D1; font-size: 12.5px; }
-.ttd-paths { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.ttd-paths code { color: #bdb7ac; font-size: 11.5px; word-break: break-all; }
-.ttd-verdict { text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; margin-bottom: 6px; }
-.ttd-verdict.pass { color: #7fbc8c; }
-.ttd-verdict.gaps { color: #d9a94e; }
-.ttd-verdict.fail { color: #e0837b; }
-.ttd-criterion { font-size: 12px; color: #bdb7ac; }
-.ttd-criterion.unmet { color: #e0837b; }
-.ttd-criterion.unknown { color: #8a867e; }
-.ttd-event { font-size: 12px; color: #8a867e; }
-.ttd-event b { color: #bdb7ac; font-weight: 600; }
-.ttd-event time { color: #6f6b64; }
+.terminal-task-detail .drawer-trackbook { border-color: var(--line); }
+.terminal-task-detail .drawer .drawer-trackbook h3 { color: var(--ink); }
+.terminal-task-detail .drawer-trackbook-icon { color: #d9a94e; }
+.terminal-task-detail .drawer-trackbook-revision,
+.terminal-task-detail .drawer-trackbook-compare dt { color: var(--ink-soft); }
+.terminal-task-detail .drawer-trackbook-headline,
+.terminal-task-detail .drawer-trackbook-compare dd { color: var(--ink); }
+.terminal-task-detail .drawer-trackbook-compare > div { border-color: var(--line); }
+.terminal-task-detail .drawer-trackbook-open { border-color: #4c4841; background: #201f1b; color: var(--ink); }
+.terminal-task-detail .drawer-trackbook-open:hover { background: #262521; }
+.terminal-task-detail .drawer-trackbook-loading > span:not(.sr-only) { background: #2a2823; }
+.terminal-task-detail input, .terminal-task-detail textarea, .terminal-task-detail select {
+  background: #201f1b; color: var(--ink); border-color: #4c4841;
+}
+.terminal-task-detail .drawer-trackbook-claims { background: #2a2620; color: #d9a94e; }
+/* the conversation block re-declares its own light message vars — re-scope them dark */
+.terminal-task-detail .card-conversation {
+  --message-bg: #171613;
+  --message-surface: #201f1b;
+  --message-surface-soft: #262521;
+  --message-ink: #DED9D1;
+  --message-muted: #8a867e;
+  --message-faint: #6f6b64;
+  --message-line: #33312c;
+  --message-line-strong: #3a3733;
+  --message-accent: #7db4dd;
+  --message-accent-dark: #a3cbe8;
+  --message-accent-soft: #232c33;
+}
+.terminal-task-detail .message-composer { box-shadow: none; }
 .terminal-tasks {
   width: 264px; flex: none; overflow-y: auto;
   border-right: 1px solid #33312c; background: #171613;

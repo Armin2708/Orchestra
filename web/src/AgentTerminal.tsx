@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread, timeAgo } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
+import { CardDrawer } from './CardDrawer'
 import { followIntent } from './follow'
 import { ProviderBadge } from './ProviderBadge'
 import {
@@ -254,76 +255,6 @@ function TaskCard({ card, onOpen }: { card: Card; onOpen: (card: Card) => void }
         <p className="tt-paths">{card.paths.slice(0, 2).join(' · ')}{card.paths.length > 2 ? ` +${card.paths.length - 2}` : ''}</p>
       )}
     </button>
-  )
-}
-
-const EVENT_VERB: Record<string, string> = {
-  created: 'created the card', updated: 'updated the card', moved: 'moved the card', comment: 'commented',
-  review_request: 'parked it for review', review_decision: 'recorded a review decision',
-}
-
-type CardEvent = { id: number; agent: string | null; type: string; created_at: string }
-
-// terminal-styled task details, rendered in place of the task rail
-function TaskDetail({ card, onClose }: { card: Card; onClose: () => void }) {
-  const [events, setEvents] = useState<CardEvent[]>([])
-  useEffect(() => {
-    let live = true
-    api('GET', `/cards/${card.id}/events`)
-      .then((list: CardEvent[]) => { if (live) setEvents(list) })
-      .catch(() => {})
-    return () => { live = false }
-  }, [card.id, card.updated_at])
-  const verification = card.verification
-  return (
-    <section className="terminal-task-detail" aria-label={`Task #${card.id} details`}>
-      <header className="ttd-head">
-        <span className="cc-head-star" aria-hidden="true">•</span>
-        <span>task #{card.id}</span>
-        <span className={`tt-status ${card.column}`}>{TASK_STATUS[card.column] ?? card.column}</span>
-        <button type="button" className="cc-close" onClick={onClose} aria-label="Back to task list">esc·back ×</button>
-      </header>
-      <div className="ttd-scroll">
-        <div>
-          <h2 className="ttd-title">{card.title}</h2>
-          <p className="ttd-byline">{card.owner ?? 'unassigned'} · updated {timeAgo(card.updated_at)}</p>
-        </div>
-        {card.description && (
-          <section className="ttd-section">
-            <h3>Scope</h3>
-            <p className="ttd-desc">{card.description}</p>
-          </section>
-        )}
-        {card.paths.length > 0 && (
-          <section className="ttd-section">
-            <h3>Paths</h3>
-            <ul className="ttd-paths">{card.paths.map((p) => <li key={p}><code>{p}</code></li>)}</ul>
-          </section>
-        )}
-        {verification?.verdict && (
-          <section className="ttd-section">
-            <h3>Verification</h3>
-            <p className={`ttd-verdict ${verification.verdict}`}>
-              {verification.verdict}{verification.by ? ` · by ${verification.by}` : ''}{verification.at ? ` · ${timeAgo(verification.at)}` : ''}
-            </p>
-            {(verification.criteria ?? []).map((criterion, i) => (
-              <p key={i} className={`ttd-criterion ${criterion.met === true ? 'met' : criterion.met === 'unverifiable' ? 'unknown' : 'unmet'}`}>
-                {criterion.met === true ? '✓' : criterion.met === 'unverifiable' ? '?' : '✗'} {criterion.text}
-              </p>
-            ))}
-          </section>
-        )}
-        <section className="ttd-section">
-          <h3>Activity</h3>
-          {events.length === 0 && <p className="tt-empty">No activity yet</p>}
-          {[...events].reverse().map((event) => (
-            <p key={event.id} className="ttd-event">
-              <b>{event.agent ?? 'you'}</b> {EVENT_VERB[event.type] ?? event.type} <time>{timeAgo(event.created_at)}</time>
-            </p>
-          ))}
-        </section>
-      </div>
-    </section>
   )
 }
 
@@ -833,7 +764,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             else if (!embedded) onClose()
           }
         }}>
-        {openTask && <TaskDetail card={openTask} onClose={() => setOpenTaskId(null)} />}
+        {openTask && (
+          <div className="terminal-task-detail">
+            <CardDrawer embedded card={openTask} boardId={boardId}
+              onClose={() => setOpenTaskId(null)} onChange={onChange} />
+          </div>
+        )}
         {showTasks && !openTask && (
           <nav className="terminal-tasks" aria-label={`${agent.name} tasks`}>
             <section>
