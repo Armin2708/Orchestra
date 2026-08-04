@@ -8,6 +8,37 @@
 .remote-offline-banner strong { flex: none; }
 .remote-offline-banner span { color: #806b43; }
 
+.daemon-down-overlay {
+  position: fixed; inset: 0; z-index: 94;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(46, 42, 35, .28);
+  -webkit-backdrop-filter: blur(7px) saturate(.85); backdrop-filter: blur(7px) saturate(.85);
+}
+.daemon-down-card {
+  display: grid; justify-items: center; gap: 10px; text-align: center;
+  width: min(430px, 100%); border: 1px solid #d8bd81; border-radius: 12px;
+  background: #fbf4df; color: #654e23; padding: 28px 26px 24px;
+  box-shadow: 0 18px 48px rgba(53, 44, 23, .28);
+}
+.daemon-down-sign {
+  display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%;
+  border: 1.5px solid #d8a94e; background: #f6e5bd; color: #9a6c14; font-size: 25px; line-height: 1;
+}
+.daemon-down-card strong { font-size: 17px; letter-spacing: -.02em; color: #4c3a17; }
+.daemon-down-card p { margin: 0; font-size: 12.5px; line-height: 1.55; color: #806b43; }
+.daemon-down-hint code {
+  background: #f1e6c8; border: 1px solid #e2d3a8; border-radius: 4px;
+  padding: 1px 5px; font-size: 11.5px;
+}
+.daemon-down-card button {
+  margin-top: 6px; min-height: 36px; border: 1px solid #b99b56; border-radius: 8px;
+  background: #654e23; color: #f8f2e2; padding: 8px 18px; font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.daemon-down-card button:disabled { opacity: .55; }
+@supports not (backdrop-filter: blur(1px)) {
+  .daemon-down-overlay { background: rgba(46, 42, 35, .55); }
+}
+
 .phone-remote-dock { display: none; }
 
 .remote-control-gate {

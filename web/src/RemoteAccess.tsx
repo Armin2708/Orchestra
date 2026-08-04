@@ -14,6 +14,9 @@ type RemoteAccessState = {
   checking: boolean
   isRemote: boolean
   online: boolean
+  // the daemon itself is unreachable (network failure or dead upstream) —
+  // distinct from lacking a scope or step-up grant
+  daemonDown: boolean
   session: RemoteDeviceSession | null
   error: string | null
   refresh: () => Promise<void>
@@ -32,6 +35,7 @@ const localFallback: RemoteAccessState = {
   checking: true,
   isRemote: true,
   online: typeof navigator === 'undefined' || navigator.onLine,
+  daemonDown: false,
   session: null,
   error: null,
   refresh: async () => {},
@@ -56,12 +60,16 @@ export function RemoteAccessProvider({ children }: { children: React.ReactNode }
   const [isRemote, setIsRemote] = useState(true)
   const [session, setSession] = useState<RemoteDeviceSession | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [daemonDown, setDaemonDown] = useState(false)
   const [authorizationEpoch, setAuthorizationEpoch] = useState(0)
 
   const refresh = useCallback(async () => {
     if (!navigator.onLine) return
+    let responded = false
     try {
       const response = await api('GET', '/os/devices/self')
+      responded = true
+      setDaemonDown(false)
       if (response?.local_owner === true) {
         setSession(null)
         setIsRemote(false)
@@ -74,6 +82,10 @@ export function RemoteAccessProvider({ children }: { children: React.ReactNode }
       setIsRemote(true)
       setError(null)
     } catch (cause) {
+      // an ApiError means the daemon (or its proxy) answered; anything else is a
+      // dead socket. 502/503/504 are a live proxy in front of a dead daemon.
+      setDaemonDown(!responded && (!(cause instanceof ApiError)
+        || cause.status === 502 || cause.status === 503 || cause.status === 504))
       if (cause instanceof ApiError && cause.status === 404) {
         setSession(null)
         setIsRemote(true)
@@ -102,6 +114,12 @@ export function RemoteAccessProvider({ children }: { children: React.ReactNode }
       window.clearInterval(timer)
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (!daemonDown) return
+    const timer = window.setInterval(() => { if (navigator.onLine) void refresh() }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [daemonDown, refresh])
 
   useEffect(() => {
     if (!session) return
@@ -147,13 +165,37 @@ export function RemoteAccessProvider({ children }: { children: React.ReactNode }
   }, [isRemote, online, refresh, session])
 
   const value = useMemo<RemoteAccessState>(() => ({
-    checking, isRemote, online, session, error, refresh, hasScope, hasStepUp, canUse, requestStepUp,
-  }), [checking, isRemote, online, session, error, refresh, hasScope, hasStepUp, canUse, requestStepUp])
+    checking, isRemote, online, daemonDown, session, error, refresh, hasScope, hasStepUp, canUse, requestStepUp,
+  }), [checking, isRemote, online, daemonDown, session, error, refresh, hasScope, hasStepUp, canUse, requestStepUp])
 
   return <RemoteAccessContext.Provider value={value}>{children}</RemoteAccessContext.Provider>
 }
 
 export const useRemoteAccess = () => useContext(RemoteAccessContext)
+
+/** Full-viewport blur over the board while the daemon is unreachable. */
+export function DaemonDownOverlay() {
+  const access = useRemoteAccess()
+  const [busy, setBusy] = useState(false)
+  if (access.checking || !access.daemonDown || !access.online) return null
+  const retry = async () => {
+    setBusy(true)
+    try { await access.refresh() } finally { setBusy(false) }
+  }
+  return (
+    <div className="daemon-down-overlay" role="alertdialog" aria-modal="true" aria-labelledby="daemon-down-title">
+      <div className="daemon-down-card">
+        <span className="daemon-down-sign" aria-hidden="true">⚠</span>
+        <strong id="daemon-down-title">Daemon unreachable</strong>
+        <p>The Orchestra daemon is not responding. The board behind this notice is frozen and may be stale — this is not a permissions problem.</p>
+        <p className="daemon-down-hint">Start it with <code>orchestra</code> in a terminal; this screen clears on its own once it answers (checking every 5 seconds).</p>
+        <button type="button" disabled={busy} onClick={() => void retry()}>
+          {busy ? 'Checking…' : 'Retry now'}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export function OfflineStateBanner() {
   const access = useRemoteAccess()
@@ -180,6 +222,8 @@ export function RemoteControlGate({
   const access = useRemoteAccess()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // an unreachable daemon is not a permission problem — DaemonDownOverlay owns that state
+  if (access.daemonDown) return null
   if (!access.isRemote || access.canUse(scope, resourceType, resourceId)) return null
   const request = async () => {
     setBusy(true)
