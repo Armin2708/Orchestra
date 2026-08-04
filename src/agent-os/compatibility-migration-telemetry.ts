@@ -59,6 +59,8 @@ export const AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS = Object.freeze({
   ideas: Object.freeze(['deferred_replacement'] as const),
   review_decisions: CANONICAL_LINK_COHORTS,
   token_telemetry: Object.freeze(['legacy_only'] as const),
+  agent_transcripts: Object.freeze(['legacy_only'] as const),
+  teams: Object.freeze(['legacy_only'] as const),
 } satisfies Readonly<
   Record<
     AgentOsLegacyCompatibilityTable,
@@ -87,6 +89,8 @@ export const AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_OPERATIONS = Object.freeze({
   ideas: LEGACY_TARGET_OPERATIONS,
   review_decisions: AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS,
   token_telemetry: LEGACY_TARGET_OPERATIONS,
+  agent_transcripts: LEGACY_TARGET_OPERATIONS,
+  teams: LEGACY_TARGET_OPERATIONS,
 } satisfies Readonly<
   Record<
     AgentOsLegacyCompatibilityTable,

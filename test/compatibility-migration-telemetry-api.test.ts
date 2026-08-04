@@ -367,7 +367,7 @@ describe('compatibility migration telemetry API', () => {
       SELECT COUNT(*) AS count
       FROM os_compatibility_migration_telemetry_coverage
       WHERE day=?
-    `).get(observedDay)).toEqual({ count: 13 })
+    `).get(observedDay)).toEqual({ count: 15 })
 
     const observation = await server.inject({
       method: 'GET',

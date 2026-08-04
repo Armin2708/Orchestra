@@ -108,6 +108,8 @@ const SINGLE_COHORTS = Object.freeze({
   milestones: 'deferred_replacement',
   ideas: 'deferred_replacement',
   token_telemetry: 'legacy_only',
+  agent_transcripts: 'legacy_only',
+  teams: 'legacy_only',
 } as const satisfies Readonly<
   Partial<
     Record<
