@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, Card, Milestone, Snapshot, agentInk, agentWash, initials, timeAgo } from './api'
 import './kanban.css'
 
@@ -47,8 +47,26 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
   const [dragging, setDragging] = useState<number | null>(null)
   const [hint, setHint] = useState<DropHint | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // optimistic view of a just-dropped card, keyed by the updated_at we saw at drop time;
+  // the override retires as soon as the server confirms with a newer updated_at
+  const [overrides, setOverrides] = useState<Record<number, Partial<KanbanCard> & { seen: string }>>({})
 
-  const cards = snapshot.cards as KanbanCard[]
+  const cards = useMemo(() => (snapshot.cards as KanbanCard[]).map((c) => {
+    const patch = overrides[c.id]
+    return patch && patch.seen === c.updated_at ? { ...c, ...patch } : c
+  }), [snapshot.cards, overrides])
+  useEffect(() => {
+    setOverrides((current) => {
+      const next: typeof current = {}
+      let dropped = false
+      for (const [id, patch] of Object.entries(current)) {
+        const card = (snapshot.cards as KanbanCard[]).find((c) => c.id === Number(id))
+        if (card && card.updated_at === patch.seen) next[Number(id)] = patch
+        else dropped = true
+      }
+      return dropped ? next : current
+    })
+  }, [snapshot.cards])
   const epics = snapshot.milestones ?? []
   const owners = useMemo(
     () => [...new Set(cards.map((c) => c.owner).filter(Boolean))] as string[],
@@ -59,14 +77,35 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
     && (!epicFilter || c.milestone_id === epicFilter)), [cards, query, ownerFilter, epicFilter])
   const staleCount = cards.filter((c) => c.stale).length
 
-  const act = async (run: () => Promise<unknown>) => {
+  const act = async (run: () => Promise<unknown>, revertId?: number) => {
     setError(null)
-    try { await run(); onChange() } catch (e) { setError(e instanceof Error ? e.message : 'action failed') }
+    try { await run(); onChange() } catch (e) {
+      if (revertId !== undefined) setOverrides(({ [revertId]: gone, ...rest }) => rest)
+      setError(e instanceof Error ? e.message : 'action failed')
+    }
   }
-  const moveHint = (next: DropHint | null) => setHint((current) => (
-    current?.lane === next?.lane && current?.beforeId === next?.beforeId ? current : next
-  ))
-  const clearDrag = () => { setDragging(null); setHint(null) }
+  // paint the drop immediately; the server round-trip only has to agree later
+  const applyLocal = (card: KanbanCard, patch: Partial<KanbanCard>) =>
+    setOverrides((current) => ({ ...current, [card.id]: { ...patch, seen: card.updated_at } }))
+  const optimisticRank = (beforeId: number | null): number => {
+    const ranked = cards.filter((c) => laneOf(c) === 'backlog').sort(byRank)
+    if (beforeId === null) return ranked.length ? (ranked.at(-1)!.rank ?? 0) + 1024 : 0
+    const index = ranked.findIndex((c) => c.id === beforeId)
+    if (index < 0) return 0
+    const hi = ranked[index].rank ?? 0
+    const lo = index > 0 ? ranked[index - 1].rank ?? hi - 2048 : hi - 2048
+    return (lo + hi) / 2
+  }
+  // drop() must read the hint set by the very last dragover, not the last render's — a
+  // fast drop can outrun React's state flush, so the ref carries the live value
+  const hintRef = useRef<DropHint | null>(null)
+  const moveHint = (next: DropHint | null) => {
+    hintRef.current = next
+    setHint((current) => (
+      current?.lane === next?.lane && current?.beforeId === next?.beforeId ? current : next
+    ))
+  }
+  const clearDrag = () => { setDragging(null); moveHint(null) }
 
   const overLane = (lane: LaneId) => (event: React.DragEvent) => {
     event.preventDefault()
@@ -87,7 +126,7 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
     event.preventDefault()
     event.stopPropagation()
     const id = Number(event.dataTransfer.getData('text/orchestra-card'))
-    const target = hint
+    const target = hintRef.current
     clearDrag()
     if (!id || !target) return
     const card = cards.find((c) => c.id === id)
@@ -99,19 +138,24 @@ function BoardKanban({ snapshot, onChange }: { snapshot: Snapshot; onChange: () 
         : target.beforeId === null ? { bottom: true } : null
       if (card.column !== 'backlog') {
         // entering the backlog from another column: move first, then slot into place
+        applyLocal(card, { column: 'backlog', rank: optimisticRank(target.beforeId) })
         return act(async () => {
           await api('POST', `/cards/${id}/move`, { column: 'backlog' })
           if (reposition) await api('POST', `/cards/${id}/rank`, reposition)
-        })
+        }, id)
       }
-      return reposition ? act(() => api('POST', `/cards/${id}/rank`, reposition)) : undefined
+      if (!reposition) return
+      applyLocal(card, { rank: optimisticRank(target.beforeId) })
+      return act(() => api('POST', `/cards/${id}/rank`, reposition), id)
     }
     if (target.lane === 'triage') {
-      return card.column !== 'backlog'
-        ? act(() => api('POST', `/cards/${id}/move`, { column: 'backlog' }))
-        : undefined
+      if (card.column === 'backlog') return
+      applyLocal(card, { column: 'backlog', rank: null })
+      return act(() => api('POST', `/cards/${id}/move`, { column: 'backlog' }), id)
     }
-    return sameLane ? undefined : act(() => api('POST', `/cards/${id}/move`, { column: target.lane }))
+    if (sameLane) return
+    applyLocal(card, { column: target.lane })
+    return act(() => api('POST', `/cards/${id}/move`, { column: target.lane }), id)
   }
 
   return (
