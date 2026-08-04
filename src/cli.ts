@@ -8,7 +8,6 @@ import { ensureToken } from './token.js'
 import { localOwnerPasswordPath, resetLocalOwnerPassword } from './local-owner-auth.js'
 import {
   enableNewRemotePairing,
-  pairUrl,
   rollbackRemoteAccess,
   startRemote,
   stopRemote,
@@ -352,14 +351,14 @@ ops.command('revoke-credential <reference>')
     console.log(JSON.stringify({ revoked: true }))
   })
 
-program.command('remote').description('start private remote access with secure device pairing')
+program.command('remote').description('start private remote access — scan the QR and sign in with your password')
   .option('--stop', 'stop the verified Orchestra-owned tunnel')
   .option('--rollback <confirmation>', 'durably revoke all remote authority; requires REVOKE_ALL_REMOTE_AUTHORITY')
   .option('--reason <reason>', 'operator reason recorded with an emergency rollback')
   .option('--enable-new-pairing <confirmation>', 're-enable only new pairing; requires ENABLE_NEW_REMOTE_PAIRING')
   .option('--public', 'confirm public Cloudflare exposure (also requires ORCHESTRA_REMOTE_PUBLIC_TUNNEL=1)')
-  .option('--board <id...>', 'grant this device access only to the selected board ids')
-  .option('--scope <scope...>', 'explicit device scopes: observe stream message approve agent-control terminal-write admin')
+  .option('--board <id...>', 'DEPRECATED — pairing tickets are retired; devices sign in with the password')
+  .option('--scope <scope...>', 'DEPRECATED — pairing tickets are retired; devices sign in with the password')
   .action(async (o) => {
     const controlActions = [o.stop === true, Boolean(o.rollback), Boolean(o.enableNewPairing)]
       .filter(Boolean).length
@@ -390,22 +389,21 @@ program.command('remote').description('start private remote access with secure d
     if (scopes?.some((scope) => !allowedScopes.has(scope))) {
       throw new Error('--scope contains an unsupported device scope')
     }
-    if (scopes?.some((scope) => ['agent-control', 'terminal-write', 'admin'].includes(scope))) {
-      console.error('WARNING: high-risk device authority requested; keep the device locked and revoke it immediately if lost.')
+    if (boardIds.length > 0 || (scopes?.length ?? 0) > 0) {
+      throw new Error('pairing tickets are deprecated — every device signs in with the owner password; --board/--scope scoping is no longer offered')
+    }
+    if (!passwordConfigured()) {
+      throw new Error('no password set — open the local web UI and create one on first login, then rerun orchestra remote')
     }
     const { state, reused } = await startRemote({ confirmPublic: o.public === true })
     try {
-      // Explicit boards/scopes always use a single-use pairing ticket; otherwise a set
-      // password lets the phone open the plain URL and sign in with it.
-      const passwordFlow = passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
-      const url = passwordFlow ? state.url : await pairUrl(state, boardIds, scopes as never)
       console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
       console.log(state.provider === 'tailscale'
-        ? 'Private tailnet exposure selected. Pair only a device you control:\n'
-        : 'PUBLIC exposure selected. Pair promptly, keep scopes narrow, and stop the tunnel when finished:\n')
-      qrcode.generate(url, { small: true })
-      console.log(`\n${url}`)
-      if (passwordFlow) console.log('scan the QR on your phone, then sign in with your Orchestra password')
+        ? 'Private tailnet exposure selected. Sign in only from a device you control:\n'
+        : 'PUBLIC exposure selected. Keep the password strong and stop the tunnel when finished:\n')
+      qrcode.generate(state.url, { small: true })
+      console.log(`\n${state.url}`)
+      console.log('scan the QR on your phone, then sign in with your Orchestra password')
       console.log('stop the verified tunnel with: orchestra remote --stop')
     } catch (error) {
       if (!reused) stopRemote()

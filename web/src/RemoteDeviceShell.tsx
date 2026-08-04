@@ -106,12 +106,7 @@ export function PairingRequired({ error }: { error?: string | null }) {
           </button>
         </form>
         {signInError && <p className="remote-pairing-safety" role="alert">{signInError}</p>}
-        <p>No password set? Pair with a single-use ticket instead:</p>
-        <ol>
-          <li>On the machine running Orchestra, create a named single-use pairing ticket.</li>
-          <li>Open its HTTPS or private-tailnet link on this device before it expires.</li>
-          <li>Approve only the boards and scopes this device needs.</li>
-        </ol>
+        <p>No password yet? Create one on the machine running Orchestra: open its local web UI and set the password on first login.</p>
         <p className="remote-pairing-safety">Do not paste a master token here. No token field exists on remote origins.</p>
         {recoverable && <button type="button" className="remote-authority-recover" disabled={recovering}
           onClick={() => void recover()}>{recovering ? 'Recovering…' : 'Recover credential storage'}</button>}

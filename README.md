@@ -7,8 +7,9 @@
 The current engineering train also includes milestone review gates, independent delivery
 verification, a test-gated auto-ship queue, shipped-commit history, a scoped phone/tunnel beta,
 push notifications, per-agent token accounting, and manual/automatic wake for agents paused by
-Claude usage limits. The remote path uses scoped DeviceSession pairing and remains an engineering
-beta whose exact build must satisfy the lane checkpoint.
+Claude usage limits. The remote path signs each phone in with the owner password and mints a
+scoped, revocable DeviceSession per device; it remains an engineering beta whose exact build must
+satisfy the lane checkpoint.
 
 The new [Agent OS workspace cockpit](docs/agent-os.md) adds isolated worktrees, real PTY terminals,
 provider-neutral agent sessions, executable task contracts, evidence, context manifests, policy,
@@ -196,18 +197,19 @@ Rules of thumb:
 - The CLI warns (without blocking) when a body looks like leaked command output —
   credential dumps, unmatched backticks, an unclosed `$(`.
 
-## Remote/mobile beta — scoped device pairing
+## Remote/mobile beta — password sign-in
 
-`orchestra remote` starts verified remote access and prints a one-time, origin-bound pairing QR:
+`orchestra remote` starts verified remote access and prints a QR of the private tunnel URL:
 
 ```
 orchestra remote
 ```
 
 Open the camera on a phone that is connected to the same private Tailscale network and scan the
-printed QR. The one-use link pairs that browser as a named, expiring device; the local dashboard
-password is never entered on the phone. Use `--board <id>` and the narrowest necessary `--scope`
-arguments before pairing when the phone should see less than the default grant.
+printed QR. The page asks for the Orchestra owner password (created on first local web login) and
+signs the browser in as a named, expiring DeviceSession bound to the tunnel origin; the owner
+transport token is never entered on the phone. One-time pairing tickets (`--board`/`--scope`) are
+deprecated in favor of password sign-in.
 
 It keeps the daemon on loopback and asks either verified private `tailscale serve` or explicitly
 confirmed public `cloudflared` to forward to it. The QR never contains the master token. Redemption
