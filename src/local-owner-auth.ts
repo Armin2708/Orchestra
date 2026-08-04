@@ -57,11 +57,46 @@ const validatePassword = (password: string) => {
 export class LocalOwnerPasswordAuth {
   private readonly sessions = new Map<string, number>()
   private readonly failures = new Map<string, FailureWindow>()
+  private readonly sessionsFile: string
 
   constructor(
     private readonly passwordFile = localOwnerPasswordPath(),
     private readonly now: () => number = () => Date.now(),
-  ) {}
+  ) {
+    this.sessionsFile = path.join(path.dirname(this.passwordFile), 'owner-sessions.json')
+    this.loadSessions()
+  }
+
+  // Sessions persist as sha256 digests so a daemon restart does not sign the
+  // owner out; the raw session value never touches disk.
+  private loadSessions() {
+    if (!this.isConfigured()) return
+    let value: unknown
+    try {
+      value = JSON.parse(fs.readFileSync(this.sessionsFile, 'utf8'))
+    } catch {
+      return
+    }
+    const record = value as { version?: unknown; sessions?: Record<string, unknown> } | null
+    if (record?.version !== 1 || typeof record.sessions !== 'object' || !record.sessions) return
+    for (const [digest, expiresAt] of Object.entries(record.sessions)) {
+      if (/^[0-9a-f]{64}$/iu.test(digest) && typeof expiresAt === 'number' && expiresAt > this.now()) {
+        this.sessions.set(digest, expiresAt)
+      }
+    }
+  }
+
+  private persistSessions() {
+    for (const [digest, expiresAt] of this.sessions) {
+      if (expiresAt <= this.now()) this.sessions.delete(digest)
+    }
+    if (!this.sessions.size) {
+      try { fs.unlinkSync(this.sessionsFile) } catch { /* already absent */ }
+      return
+    }
+    fs.writeFileSync(this.sessionsFile,
+      `${JSON.stringify({ version: 1, sessions: Object.fromEntries(this.sessions) })}\n`, { mode: 0o600 })
+  }
 
   isConfigured() {
     return fs.existsSync(this.passwordFile)
@@ -86,6 +121,7 @@ export class LocalOwnerPasswordAuth {
     const session = crypto.randomBytes(32).toString('hex')
     const expiresAt = this.now() + SESSION_TTL_MS
     this.sessions.set(digestSession(session), expiresAt)
+    this.persistSessions()
     return { session, expiresAt: new Date(expiresAt).toISOString() }
   }
 
@@ -139,14 +175,19 @@ export class LocalOwnerPasswordAuth {
   }
 
   authenticate(session: string | undefined) {
-    if (!this.isConfigured() || !session) {
+    if (!this.isConfigured()) {
       this.sessions.clear()
+      try { fs.unlinkSync(this.sessionsFile) } catch { /* already absent */ }
       return false
     }
+    if (!session) return false
     const key = digestSession(session)
     const expiresAt = this.sessions.get(key)
     if (!expiresAt || expiresAt <= this.now()) {
-      if (expiresAt) this.sessions.delete(key)
+      if (expiresAt) {
+        this.sessions.delete(key)
+        this.persistSessions()
+      }
       return false
     }
     return true

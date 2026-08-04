@@ -27,7 +27,7 @@ describe('local owner password authentication', () => {
     expect(JSON.parse(stored)).toMatchObject({ version: 1, salt: expect.any(String), hash: expect.any(String) })
   })
 
-  it('issues expiring memory-only sessions and rejects wrong passwords', () => {
+  it('issues expiring sessions and rejects wrong passwords', () => {
     const { passwordFile } = fixture()
     let now = 1_000
     const auth = new LocalOwnerPasswordAuth(passwordFile, () => now)
@@ -96,5 +96,32 @@ describe('local owner password authentication', () => {
     expect(rejected.statusCode).toBe(401)
     expect(rejected.json()).toMatchObject({ code: 'password_incorrect' })
     await server.close()
+  })
+
+  it('keeps sessions valid across a restart without storing the raw session', () => {
+    const { root, passwordFile } = fixture()
+    let now = 1_000
+    const issued = new LocalOwnerPasswordAuth(passwordFile, () => now).setup('graph board password')
+
+    const restarted = new LocalOwnerPasswordAuth(passwordFile, () => now)
+    expect(restarted.authenticate(issued.session)).toBe(true)
+
+    const sessionsFile = path.join(root, 'owner-sessions.json')
+    expect(fs.statSync(sessionsFile).mode & 0o777).toBe(0o600)
+    expect(fs.readFileSync(sessionsFile, 'utf8')).not.toContain(issued.session)
+
+    now += 12 * 60 * 60 * 1_000 + 1
+    expect(new LocalOwnerPasswordAuth(passwordFile, () => now).authenticate(issued.session)).toBe(false)
+  })
+
+  it('drops persisted sessions when the password is deconfigured', () => {
+    const { root, passwordFile } = fixture()
+    const auth = new LocalOwnerPasswordAuth(passwordFile)
+    const issued = auth.setup('graph board password')
+    fs.unlinkSync(passwordFile)
+
+    expect(auth.authenticate(issued.session)).toBe(false)
+    expect(fs.existsSync(path.join(root, 'owner-sessions.json'))).toBe(false)
+    expect(new LocalOwnerPasswordAuth(passwordFile).authenticate(issued.session)).toBe(false)
   })
 })
