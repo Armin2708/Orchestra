@@ -97,6 +97,8 @@ export interface ServerOptions {
   localOwnerAuth?: LocalOwnerPasswordAuth
   // test seam: replace the real ShipQueue (which runs git + the full suite)
   makeShipQueue?: (projectPath: string, hooks: ShipHooks) => Pick<ShipQueue, 'enqueue' | 'status'>
+  // test seam: serve the web UI from this directory instead of ../web/dist
+  webDist?: string
   // the daemon's autowake timer, read lazily — the meter shows when paused agents auto-resume
   autowakeAt?: () => string | null
   // daemon-only Agent OS runtime/driver seams; in-process tests keep the durable read APIs
@@ -1729,9 +1731,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   registerCompatibilityReadObserver(server, db)
 
   // static web UI (built by Task 13; 404s harmlessly before that)
-  const webDist = fileURLToPath(new URL('../web/dist', import.meta.url))
+  const webDist = opts.webDist ?? fileURLToPath(new URL('../web/dist', import.meta.url))
   if (fs.existsSync(webDist)) {
-    server.register(import('@fastify/static'), { root: webDist })
+    server.register(import('@fastify/static'), {
+      root: webDist,
+      // build precompresses .br/.gz siblings (web/scripts/compress-dist.mjs)
+      preCompressed: true,
+      cacheControl: false,
+      setHeaders: (res, filePath) => {
+        // vite content-hashes everything under assets/, so those never change in place;
+        // the shell (index.html, sw.js, manifest) must revalidate every load
+        const immutable = /[\\/]assets[\\/]/.test(filePath)
+        res.header('cache-control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache')
+      },
+    })
   }
 
   return server
