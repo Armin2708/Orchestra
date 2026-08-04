@@ -73,7 +73,7 @@ export interface ConductorLike extends AgentSessionControlHost {
   isLaunched(cardId: number): boolean
   // optional so existing test stubs stay valid; the real Conductor implements all of these
   setPermissionMode?(agentId: number, mode: string): Promise<boolean>
-  resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean | Promise<boolean>
+  resolvePermission?(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string, answers?: Record<string, string[]>): boolean | Promise<boolean>
   resolveApproval?(agentId: number, requestId: string, decision: 'allow' | 'allow_session' | 'deny' | 'cancel', message?: string, answers?: Record<string, string[]>): boolean | Promise<boolean>
   setAccessProfile?(agentId: number, profile: AccessProfile): Promise<boolean>
   setModel?(agentId: number, model: string): Promise<boolean>
@@ -1511,13 +1511,27 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   // answer a pending canUseTool ask surfaced in the terminal
-  server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string } | null }>(
+  server.post<{ Params: { id: string; requestId: string }; Body: { behavior?: string; message?: string; answers?: Record<string, unknown> } | null }>(
     '/api/v1/agents/:id/permissions/:requestId', async (req, reply) => {
       if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const behavior = req.body?.behavior
       if (behavior !== 'allow' && behavior !== 'deny') return reply.code(400).send({ error: `behavior must be 'allow' or 'deny'` })
-      const ok = (await maestro.resolvePermission?.(Number(req.params.id), req.params.requestId, behavior, req.body?.message)) ?? false
+      const rawAnswers = req.body?.answers
+      if (rawAnswers !== undefined && (
+        !rawAnswers || typeof rawAnswers !== 'object' || Array.isArray(rawAnswers)
+        || Object.keys(rawAnswers).length > 50
+        || Object.values(rawAnswers).some((value) => !Array.isArray(value)
+          || value.length > 50
+          || value.some((answer) => typeof answer !== 'string' || answer.length > 8_000))
+      )) return reply.code(400).send({ error: 'answers must map question ids to bounded string arrays' })
+      const ok = (await maestro.resolvePermission?.(
+        Number(req.params.id),
+        req.params.requestId,
+        behavior,
+        req.body?.message,
+        rawAnswers as Record<string, string[]> | undefined,
+      )) ?? false
       return ok ? { ok: true } : reply.code(404).send({ error: 'no pending permission request with that id' })
     })
 

@@ -1076,12 +1076,12 @@ export class ProviderAgentManager implements ConductorLike {
     return ok
   }
 
-  async resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): Promise<boolean> {
+  async resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string, answers?: Record<string, string[]>): Promise<boolean> {
     if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
       if (this.usesAgentOs(agentId)) return this.agentOs!.resolveManagedApproval(agentId, requestId, behavior, message)
       return this.codex?.resolvePermission(agentId, requestId, behavior, message) ?? false
     }
-    return this.claude.resolvePermission?.(agentId, requestId, behavior, message) ?? false
+    return this.claude.resolvePermission?.(agentId, requestId, behavior, message, answers) ?? false
   }
 
   async resolveApproval(
@@ -1096,7 +1096,7 @@ export class ProviderAgentManager implements ConductorLike {
         ? this.agentOs!.resolveManagedApproval(agentId, requestId, decision, message, answers)
         : this.codex?.resolveApproval(agentId, requestId, decision, message, answers) ?? false
     if (decision !== 'allow' && decision !== 'deny') return false
-    return this.claude.resolvePermission?.(agentId, requestId, decision, message) ?? false
+    return this.claude.resolvePermission?.(agentId, requestId, decision, message, answers) ?? false
   }
 
   setModel(agentId: number, model: string): Promise<boolean> {

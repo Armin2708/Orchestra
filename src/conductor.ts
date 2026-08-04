@@ -83,13 +83,71 @@ export type HiredPermissionMode = (typeof PERMISSION_MODES)[number]
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortLevel = (typeof EFFORT_LEVELS)[number]
 
+type PendingQuestion = {
+  id: string
+  header?: string
+  question: string
+  options: { label: string; description?: string }[]
+  multiSelect: boolean
+  isOther: boolean
+}
+
 type PendingPermission = {
   id: string
   tool: string
   summary: string
   title: string | null
   at: string
-  finish: (allow: boolean, message?: string) => void
+  approvalKind?: 'user-input'
+  questions?: PendingQuestion[]
+  finish: (allow: boolean, message?: string, answers?: Record<string, string[]>) => void
+}
+
+// AskUserQuestion asks the operator, not for permission — surface its questions as a
+// form the board can answer instead of a bare allow/deny on the raw tool input.
+export function askUserQuestions(toolInput: Record<string, unknown>): PendingQuestion[] | null {
+  const raw = toolInput.questions
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const questions: PendingQuestion[] = []
+  for (const [index, entry] of raw.entries()) {
+    if (!entry || typeof entry !== 'object') return null
+    const q = entry as Record<string, unknown>
+    if (typeof q.question !== 'string' || !q.question.trim()) return null
+    const options = Array.isArray(q.options)
+      ? q.options.flatMap((option) => {
+          const o = option as Record<string, unknown>
+          return o && typeof o.label === 'string' && o.label.trim()
+            ? [{ label: o.label, ...(typeof o.description === 'string' ? { description: o.description } : {}) }]
+            : []
+        })
+      : []
+    questions.push({
+      id: String(index),
+      ...(typeof q.header === 'string' && q.header ? { header: q.header } : {}),
+      question: q.question,
+      options,
+      multiSelect: q.multiSelect === true,
+      isOther: true,
+    })
+  }
+  return questions
+}
+
+// AskUserQuestion answers travel as updatedInput.answers keyed by question text —
+// the same shape the interactive permission component produces.
+export function askUserQuestionInput(
+  toolInput: Record<string, unknown>,
+  questions: PendingQuestion[],
+  answers: Record<string, string[]>,
+): Record<string, unknown> {
+  return {
+    ...toolInput,
+    answers: Object.fromEntries(questions.flatMap((question) => {
+      const chosen = (answers[question.id] ?? [])
+        .filter((answer) => answer.trim()).join(', ')
+      return chosen ? [[question.question, chosen]] : []
+    })),
+  }
 }
 
 type Hired = {
@@ -590,7 +648,10 @@ export class Conductor {
     // pending request the board resolves via approve/deny buttons in the terminal
     const canUseTool = (toolName: string, toolInput: Record<string, unknown>, o: any): Promise<any> => {
       const id = String(o?.toolUseID ?? o?.requestId ?? `${Date.now()}-${pending.size}`)
-      const summary = toolSummary(toolName, toolInput)
+      const questions = toolName === 'AskUserQuestion' ? askUserQuestions(toolInput) : null
+      const summary = questions
+        ? questions.map((question) => question.question).join(' · ')
+        : toolSummary(toolName, toolInput)
       const requestId = typeof o?.requestId === 'string' ? o.requestId : id
       const toolUseId = typeof o?.toolUseID === 'string' ? o.toolUseID : null
       const providerSessionId = (this.db.prepare('SELECT sdk_session FROM agents WHERE id=?')
@@ -669,12 +730,15 @@ export class Conductor {
           log('status', `policy evaluation needs review: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
-      log('status', `permission requested: ${o?.title ?? summary}`)
+      log('status', questions
+        ? `input requested: ${summary}`
+        : `permission requested: ${o?.title ?? summary}`)
       this.emit(opts.boardId, 'permission', { agent_id: agent.id, request_id: id, tool: toolName, summary, title: o?.title ?? null, status: 'pending' })
       return new Promise((resolve) => {
         pending.set(id, {
           id, tool: toolName, summary, title: o?.title ?? null, at: new Date().toISOString(),
-          finish: (allow, message) => {
+          ...(questions ? { approvalKind: 'user-input' as const, questions } : {}),
+          finish: (allow, message, answers) => {
             let effectiveAllow = allow
             let effectiveMessage = message
             try {
@@ -692,8 +756,11 @@ export class Conductor {
               request_id: id,
               status: effectiveAllow ? 'allowed' : 'denied',
             })
+            const answered = effectiveAllow && questions && answers
+              ? askUserQuestionInput(toolInput, questions, answers)
+              : toolInput
             resolve(effectiveAllow
-              ? { behavior: 'allow', updatedInput: toolInput }
+              ? { behavior: 'allow', updatedInput: answered }
               : { behavior: 'deny', message: effectiveMessage || 'denied from the board' })
           },
         })
@@ -1151,10 +1218,10 @@ export class Conductor {
     return true
   }
 
-  resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string): boolean {
+  resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string, answers?: Record<string, string[]>): boolean {
     const p = this.hired.get(agentId)?.pending.get(requestId)
     if (!p) return false
-    p.finish(behavior === 'allow', message)
+    p.finish(behavior === 'allow', message, answers)
     return true
   }
 

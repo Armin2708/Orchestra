@@ -655,7 +655,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     const path = provider === 'codex'
       ? `/agents/${agent.id}/approvals/${encodeURIComponent(requestId)}`
       : `/agents/${agent.id}/permissions/${encodeURIComponent(requestId)}`
-    const body = provider === 'codex' ? { decision, ...(answers ? { answers } : {}) } : { behavior: decision }
+    const body = provider === 'codex'
+      ? { decision, ...(answers ? { answers } : {}) }
+      : { behavior: decision === 'cancel' ? 'deny' : decision, ...(answers ? { answers } : {}) }
     try {
       await api('POST', path, body)
       setControlError(null)
@@ -773,7 +775,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                     {p.approvalKind === 'mcp-elicitation' && p.url && (
                       <p><a className="cc-perm-link" href={p.url} target="_blank" rel="noreferrer noopener">Open the provider sign-in page ↗</a></p>
                     )}
-                    {canAllowApproval(p.id) && provider === 'codex'
+                    {canAllowApproval(p.id)
                       && (p.approvalKind === 'user-input' || p.approvalKind === 'mcp-elicitation')
                       && questionsFor(p).length > 0 ? (
                       <UserInputApproval permission={p}
