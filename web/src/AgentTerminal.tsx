@@ -220,7 +220,7 @@ function PermissionModeHint({ agentId, profile, onChange, onError, compact = fal
   return (
     <span className={compact ? 'cc-mode cc-mode-compact' : 'cc-mode'}>
       <span className="cc-mode-dot" aria-hidden="true" />
-      {compact && <span className="cc-mode-label">access</span>}
+      {compact && <span className="cc-mode-label">{selected.icon}</span>}
       <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
         title={`${selected.hint}. Shift+Tab also cycles profiles.`}
         onChange={async (event) => {

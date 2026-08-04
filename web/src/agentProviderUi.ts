@@ -1,7 +1,9 @@
+// Claude Code's own permission-mode names — the wire values stay orchestra's
+// access-profile ids (#45 contract); only the display vocabulary is Claude's.
 export const ACCESS_PROFILES = [
-  { value: 'read_only', label: 'read only', icon: '⏸', hint: 'inspect only; writes require a different profile' },
-  { value: 'workspace_write', label: 'workspace write', icon: '⏵', hint: 'may edit the workspace; sensitive actions still ask' },
-  { value: 'full_access', label: 'full access', icon: '⏵⏵', hint: 'no sandbox restrictions; use only in a trusted workspace' },
+  { value: 'read_only', label: 'plan mode', icon: '⏸', hint: 'read-only: the agent explores and plans but cannot modify anything' },
+  { value: 'workspace_write', label: 'accept edits', icon: '⏵', hint: 'file edits are auto-approved; sensitive commands still ask' },
+  { value: 'full_access', label: 'bypass permissions', icon: '⏵⏵', hint: 'no permission prompts at all; use only in a trusted workspace' },
 ] as const
 
 export type AccessProfile = (typeof ACCESS_PROFILES)[number]['value']
