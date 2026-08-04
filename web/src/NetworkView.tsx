@@ -307,7 +307,16 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
               <button className="btn primary" onClick={sendReply}>Reply</button>
             </div>
           )}
-          <button className="btn ghost" onClick={() => setOpenThread(null)}>Close</button>
+          <div className="net-thread-actions">
+            <button className="btn ghost danger" title="Delete this message and its replies"
+              onClick={async () => {
+                if (!window.confirm('Delete this message and its replies?')) return
+                try { await api('DELETE', `/messages/${openThread.id}`) } catch { /* refresh reconciles */ }
+                setOpenThread(null)
+                onChange?.()
+              }}>Delete</button>
+            <button className="btn ghost" onClick={() => setOpenThread(null)}>Close</button>
+          </div>
         </div>
       )}
 

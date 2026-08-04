@@ -1713,3 +1713,8 @@ textarea {
 .card-ledger[open] summary::before { transform: rotate(90deg); }
 .card-ledger summary h3 { display: inline; margin: 0; }
 .card-ledger-chain { margin-top: 6px; }
+
+/* graph-thread actions: delete is quiet red text, not a filled danger button */
+.net-thread-actions { display: flex; gap: 8px; align-items: center; }
+.btn.ghost.danger { color: #b8544e; }
+.btn.ghost.danger:hover { color: #E5716A; background: rgba(229, 113, 106, 0.1); }
