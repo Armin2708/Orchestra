@@ -59,7 +59,10 @@ export const boundedIdempotencyKey = (value: string): string => {
 }
 
 export const api = async (method: string, p: string, body?: unknown, extraHeaders: Record<string, string> = {}) => {
-  const headers: Record<string, string> = await deviceRequestHeaders(method, p)
+  // a loopback browser IS the operator (#91-93); presenting a leftover remote
+  // device credential would demote it to that device's scopes, so never attach
+  // device proof on loopback origins
+  const headers: Record<string, string> = isLoopbackBrowser() ? {} : await deviceRequestHeaders(method, p)
   for (const name of ['x-orchestra-step-up-grant', 'x-orchestra-step-up-nonce']) {
     if (extraHeaders[name]) headers[name] = extraHeaders[name]
   }
