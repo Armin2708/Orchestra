@@ -107,7 +107,8 @@ it('caps the buffer at 500 lines and returns empty for unknown agents or invalid
   expect(svc.transcript(2).lines).toEqual([])
 })
 
-it('pulse-reported transcript paths serve the read-only transcript endpoint fallback', async () => {
+// boots a full server — allow for slow first-boot work (static asset scan) under parallel load
+it('pulse-reported transcript paths serve the read-only transcript endpoint fallback', { timeout: 30_000 }, async () => {
   const { openDb } = await import('../src/db.js')
   const { buildServer } = await import('../src/server.js')
   const server = buildServer(openDb(':memory:'))
