@@ -662,7 +662,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (menuOpen) {
       if (e.key === 'ArrowDown' || (e.ctrlKey && key === 'n')) { e.preventDefault(); setMenuIdx((i) => (i + 1) % visibleCommands.length); return }
       if (e.key === 'ArrowUp' || (e.ctrlKey && key === 'p')) { e.preventDefault(); setMenuIdx((i) => (i - 1 + visibleCommands.length) % visibleCommands.length); return }
-      if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'Enter') { e.preventDefault(); activateCommand(visibleCommands[Math.min(menuIdx, visibleCommands.length - 1)]); return }
+      if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'Enter') {
+        e.preventDefault()
+        const selected = visibleCommands[Math.min(menuIdx, visibleCommands.length - 1)]
+        // Enter on an already-complete command submits it — otherwise the reopened
+        // menu would swallow Enter forever and the command could never run
+        if (e.key === 'Enter' && selected && input.trim().toLowerCase() === `/${selected.name.toLowerCase()}`) { void send(); return }
+        activateCommand(selected)
+        return
+      }
       // dismiss the menu only — must not bubble to the terminal's interrupt/close handler
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenuHidden(true); return }
     }
