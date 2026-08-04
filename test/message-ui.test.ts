@@ -10,6 +10,7 @@ import {
   mailExpectsReply,
   mailType,
   messageRoute,
+  needsAttention,
   parseAttachments,
   splitSubject,
   subjectOf,
@@ -112,6 +113,24 @@ describe('message UI semantics', () => {
     expect(isUnread(t, 1, { '1:5': 5 })).toBe(true) // a newer agent reply re-unreads
     // your own sent thread with no agent replies never shows unread
     expect(isUnread(message({ from_name: null }) as any, 1, {})).toBe(false)
+  })
+
+  it('badges only operator mail — never agent↔agent board traffic (#126)', () => {
+    const inboxMail = message({ id: 5, to_human: 1, mail_type: 'action' }) as any
+    // unanswered operator mail badges even after it was read
+    expect(needsAttention(inboxMail, 1, {})).toBe(true)
+    expect(needsAttention(inboxMail, 1, { '1:5': 5 })).toBe(true)
+    // an operator reply clears it (read + answered)
+    const answered = { ...inboxMail, replies: [message({ id: 9, kind: 'reply', from_name: null })] }
+    expect(needsAttention(answered, 1, { '1:5': 5 })).toBe(false)
+    // FYI mail badges only while unread
+    const fyi = message({ id: 6, to_human: 1, mail_type: 'fyi' }) as any
+    expect(needsAttention(fyi, 1, {})).toBe(true)
+    expect(needsAttention(fyi, 1, { '1:6': 6 })).toBe(false)
+    // the old badge bug: an unanswered agent→agent ask must not badge
+    expect(needsAttention(message({ id: 7, to_name: 'teal-ibex' }) as any, 1, {})).toBe(false)
+    // your own sent mail never badges
+    expect(needsAttention(message({ id: 8, from_name: null, to_human: 1 }) as any, 1, {})).toBe(false)
   })
 
   it('counts only agents a confirmed swarm can currently wake', () => {

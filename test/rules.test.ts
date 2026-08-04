@@ -19,6 +19,8 @@ const DIRECTIVES = [
   'human-accepted only',          // ...but agents cannot self-declare acceptance
   'Delivered/Evidence/Remaining', // structured completion report
   'move review, never done',      // agent completion parks for review
+  'orchestra mail',               // completion report lands in the operator inbox...
+  '--type action',                // ...as mail that stays badged until answered
   'claimed path',                 // don't touch claimed paths
   'Subagents: no orchestra commands', // subagent prohibition
   'snapshot --full',              // where the full board lives now

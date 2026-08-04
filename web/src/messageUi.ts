@@ -195,12 +195,22 @@ export function loadReadMap(): ReadMap {
   } catch { return {} }
 }
 
+// same-tab listeners (the nav badge) don't get 'storage' events — announce explicitly
+export const READ_MAP_EVENT = 'orchestra-inbox-read-changed'
+
 export function saveReadMap(map: ReadMap) {
   try { window.localStorage.setItem(READ_KEY, JSON.stringify(map)) } catch { /* private mode */ }
+  window.dispatchEvent(new Event(READ_MAP_EVENT))
 }
 
 export const isUnread = (thread: Thread, boardId: number, map: ReadMap) =>
   latestForeignId(thread) > (map[threadReadKey(boardId, thread.id)] ?? 0)
+
+// what the Messages badge counts: operator mail you haven't seen, or mail still
+// waiting on your answer — never agent↔agent board traffic
+export const needsAttention = (thread: Thread, boardId: number, map: ReadMap) =>
+  mailboxOf(thread) === 'inbox'
+  && (isUnread(thread, boardId, map) || (mailExpectsReply(thread) && !answeredByYou(thread)))
 
 export function buildMessagePayload(input: {
   boardId: number

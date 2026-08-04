@@ -32,6 +32,7 @@ import {
   type CommandCenterSection,
   type SavedCommandCenterView,
 } from './commandCenterModel'
+import { loadReadMap, needsAttention, READ_MAP_EVENT } from './messageUi'
 import { RoadmapView } from './RoadmapView'
 import { NeedsYou } from './NeedsYou'
 import { OutcomeDashboard } from './OutcomeDashboard'
@@ -96,6 +97,15 @@ function LocalOwnerApp() {
   }, [])
   const [locationSearch, setLocationSearch] = useState(location.search)
   const [needsAuth, setNeedsAuth] = useState(false)
+  // read state lives in localStorage (written by MessagesView); resync so the
+  // badge clears as mail is read, in this tab and others
+  const [inboxRead, setInboxRead] = useState(() => loadReadMap())
+  useEffect(() => {
+    const sync = () => setInboxRead(loadReadMap())
+    window.addEventListener(READ_MAP_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => { window.removeEventListener(READ_MAP_EVENT, sync); window.removeEventListener('storage', sync) }
+  }, [])
   const [focus, setFocus] = useState<number | 'all'>(() => {
     return normalizeCommandCenterFocus(localStorage.getItem('orchestra-focus'))
   })
@@ -447,7 +457,8 @@ function LocalOwnerApp() {
               ? <CommandCenterState kind="offline" detail="The daemon could not be reached. Start Orchestra and retry; no empty project state is being inferred." />
               : <GettingStarted onSettings={() => pickView('settings')} />
             : <BoardSection tab={boardTab} snaps={shown} focused={focus !== 'all' && focusScope.kind === 'project'}
-                openMessages={shown.reduce((sum, snapshot) => sum + snapshot.open_questions.length, 0)}
+                openMessages={shown.reduce((sum, snapshot) => sum
+                  + snapshot.threads.filter((thread) => needsAttention(thread, snapshot.board.id, inboxRead)).length, 0)}
                 onTabChange={pickBoardTab} onChange={refresh} />
         : commandCenterActive
         ? loaded && focusScope.kind === 'missing'
