@@ -209,16 +209,18 @@ type TranscriptInfo = {
   usage?: { turn: ProviderTokenUsage; session: ProviderTokenUsage }
 }
 
-function PermissionModeHint({ agentId, profile, onChange, onError }: {
+function PermissionModeHint({ agentId, profile, onChange, onError, compact = false }: {
   agentId: number
   profile: AccessProfile
   onChange: () => void
   onError: (error: unknown) => void
+  compact?: boolean
 }) {
   const selected = ACCESS_PROFILES.find((candidate) => candidate.value === profile) ?? ACCESS_PROFILES[1]
   return (
-    <span className="cc-mode">
+    <span className={compact ? 'cc-mode cc-mode-compact' : 'cc-mode'}>
       <span className="cc-mode-dot" aria-hidden="true" />
+      {compact && <span className="cc-mode-label">access</span>}
       <select className="cc-mode-select" value={selected.value} aria-label="Access profile"
         title={`${selected.hint}. Shift+Tab also cycles profiles.`}
         onChange={async (event) => {
@@ -836,9 +838,24 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <span className="cc-head-star" aria-hidden="true">•</span>
             <span>{agent.name}</span>
             {hired && <ProviderBadge provider={provider} compact />}
-            <span className="cc-head-dim">{hired ? `${providerLabel(provider)} agent · ${agent.status}`
+            <span className="cc-head-dim">{hired ? agent.status
               : external ? `terminal session · live transcript (read-only) · ${agent.status}`
                 : `terminal session · ${agent.status}`}</span>
+            {hired && canAccessProfile && (
+              <PermissionModeHint compact agentId={agent.id} profile={accessProfile}
+                onChange={onChange} onError={(cause) => setControlError(controlErrorText(cause))} />
+            )}
+            {hired && (canSelectModel || canSetEffort) && (
+              <button type="button" className={`cc-model-trigger${modelSelection.pending ? ' pending' : ''}`}
+                title={modelControlTitle || 'Model controls'} aria-label={modelControlTitle || 'Open model controls'}
+                aria-expanded={controlPanel === 'model'}
+                onClick={() => setControlPanel((current) => current === 'model' ? null : 'model')}>
+                <span>Model</span>
+                <strong>{info ? modelTriggerLabel : 'Loading model'}</strong>
+                {effortLabel && <em>{info?.effort ? effortLabel : `default ${effortLabel}`}</em>}
+                <i aria-hidden="true" />
+              </button>
+            )}
             {canAssignTickets && (
               // narrow viewports hide the task rail (and its assign tile) — this
               // select is the phone fallback, display-gated in styles.css
@@ -858,10 +875,12 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                 ))}
               </select>
             )}
-            {hired && canStop && (
-              <button type="button" className="cc-close"
+            {hired && canStop && working && (
+              <button type="button" className="cc-stop"
                 title="Stop this agent — terminates its session; a launched ticket moves to blocked"
-                onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>■ stop</button>
+                onClick={async () => { await api('POST', `/agents/${agent.id}/fire`); onChange(); onClose() }}>
+                <span className="cc-stop-square" aria-hidden="true">■</span> stop
+              </button>
             )}
             {!embedded && <button type="button" className="cc-close" onClick={onClose} aria-label="Close">esc·close ×</button>}
           </header>
@@ -968,20 +987,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           <div className="cc-hints">
             {hired
               ? <span className="cc-controls">
-                  {canAccessProfile && <PermissionModeHint agentId={agent.id} profile={accessProfile}
-                    onChange={onChange} onError={(cause) => setControlError(controlErrorText(cause))} />}
-                  {(canSelectModel || canSetEffort) && (
-                    <button type="button" className={`cc-model-trigger${modelSelection.pending ? ' pending' : ''}`}
-                      title={modelControlTitle || 'Model controls'} aria-label={modelControlTitle || 'Open model controls'}
-                      aria-expanded={controlPanel === 'model'}
-                      onClick={() => setControlPanel((current) => current === 'model' ? null : 'model')}>
-                      <span>Model</span>
-                      <strong>{info ? modelTriggerLabel : 'Loading model'}</strong>
-                      {effortLabel && <em>{info?.effort ? effortLabel : `default ${effortLabel}`}</em>}
-                      <i aria-hidden="true" />
-                    </button>
-                  )}
-                  {controlError && <span className="cc-inline-control-error" role="alert">{controlError}</span>}
+                  {controlError
+                    ? <span className="cc-inline-control-error" role="alert">{controlError}</span>
+                    : <span>enter to send · shift+enter for newline</span>}
                 </span>
               : <span>enter to send · shift+enter for newline</span>}
             <span title={info?.cwd}>
