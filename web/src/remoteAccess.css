@@ -99,7 +99,9 @@
 .remote-install-guide small { grid-column: 1 / -1; }
 
 .remote-pairing-required, .remote-device-shell {
-  min-height: 100vh; background: #f4f1eb; color: #292722; padding: max(28px, env(safe-area-inset-top)) 22px max(36px, env(safe-area-inset-bottom));
+  background: #f4f1eb; color: #292722; padding: max(28px, env(safe-area-inset-top)) 22px max(36px, env(safe-area-inset-bottom));
+  /* body is overflow:hidden for the board canvas — these full-screen views scroll themselves */
+  height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
 }
 .remote-pairing-required { display: grid; place-items: center; }
 .remote-pairing-card { width: min(540px, 100%); border: 1px solid #d9d4cb; border-radius: 16px; background: #fbfaf7; padding: 30px; }
