@@ -1,0 +1,82 @@
+.teams-view {
+  flex: 1; min-width: 0; min-height: 0; overflow: auto;
+  display: flex; flex-direction: column; gap: 20px; padding: 16px 24px 24px;
+}
+
+.teams-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.teams-design { display: flex; gap: 8px; flex: 1; min-width: 260px; }
+.teams-design input {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 13px;
+}
+.teams-toolbar button, .teams-card-actions button {
+  padding: 7px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+}
+.teams-toolbar button:hover:not(:disabled), .teams-card-actions button:hover:not(:disabled) { border-color: #8f8b83; }
+.teams-toolbar button:disabled, .teams-card-actions button:disabled { opacity: 0.55; cursor: default; }
+.teams-primary { background: #1f6feb !important; border-color: #1f6feb !important; color: #fff !important; }
+.teams-danger { color: #a33 !important; }
+.teams-toggle { white-space: nowrap; }
+.teams-error { color: #a33; font-size: 12px; }
+.teams-empty {
+  padding: 40px 24px; text-align: center; color: var(--ink-soft, #777);
+  border: 1px dashed var(--line); border-radius: var(--radius); font-size: 13px;
+}
+
+.teams-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px;
+  align-items: start;
+}
+
+.teams-card {
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.teams-card-hired { border-color: #2da44e55; }
+.teams-card-head { display: flex; justify-content: space-between; gap: 10px; padding: 12px 14px; cursor: pointer; }
+.teams-card-head h3 { margin: 0; font-size: 14px; font-weight: 700; }
+.teams-goal { margin: 3px 0 0; font-size: 12px; color: var(--ink-soft, #777); }
+.teams-card-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.teams-status {
+  padding: 2px 8px; border-radius: 999px; font: 600 10.5px 'SF Mono', ui-monospace, monospace;
+  background: #f0efeb; color: #57534a; white-space: nowrap;
+}
+.teams-status-draft { background: #fdf3e0; color: #8a6116; }
+.teams-status-approved { background: #e2ecfd; color: #1f5dbb; }
+.teams-status-hired { background: #dcf2e3; color: #1a7f37; }
+.teams-counts { font-size: 11px; color: var(--ink-soft, #777); white-space: nowrap; }
+
+.teams-card-body { padding: 0 14px 12px; border-top: 1px solid var(--line); }
+.teams-role-tree { list-style: none; margin: 8px 0 0; padding-left: 0; }
+.teams-role-tree .teams-role-tree { padding-left: 18px; border-left: 2px solid var(--line); margin-left: 6px; }
+.teams-role-tree li { margin: 8px 0; }
+.teams-role-node { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.teams-role-title { font-size: 12.5px; font-weight: 700; }
+.teams-role-key { font: 500 10.5px 'SF Mono', ui-monospace, monospace; color: var(--ink-soft, #777); }
+.teams-role-live { font-size: 11px; color: var(--ink-soft, #999); }
+.teams-role-live.on { color: #1a7f37; font-weight: 600; }
+.teams-role-charter { font-size: 11.5px; color: var(--ink-soft, #777); margin-top: 2px; }
+
+.teams-workflow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.teams-stage {
+  padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px;
+}
+.teams-stage em { font-style: normal; color: var(--ink-soft, #777); }
+.teams-stage.gated { border-color: #8a6116; }
+.teams-norms { font-size: 11.5px; color: var(--ink-soft, #777); margin: 10px 0 0; font-style: italic; }
+
+.teams-card-actions { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+
+.teams-solo h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft, #777); }
+.teams-solo-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.teams-solo-agent {
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--ink); font-size: 12.5px; cursor: pointer;
+}
+.teams-solo-agent em { font-style: normal; font-size: 10.5px; color: var(--ink-soft, #999); }
+.teams-dot { width: 7px; height: 7px; border-radius: 50%; background: #999; }
+.teams-dot-active, .teams-dot-working { background: #2da44e; }
+.teams-dot-idle { background: #d4a72c; }

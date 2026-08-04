@@ -1018,7 +1018,7 @@
       "id": "board.agent-home",
       "classification": "canonical",
       "file": "web/src/boardNavigation.ts",
-      "evidence": "{ id: 'agents', label: 'Agents' }"
+      "evidence": "{ id: 'agents', label: 'Teams' }"
     },
     {
       "id": "board.messages",

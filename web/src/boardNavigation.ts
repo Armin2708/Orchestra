@@ -1,7 +1,7 @@
 export const BOARD_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'kanban', label: 'Kanban' },
-  { id: 'agents', label: 'Agents' },
+  { id: 'agents', label: 'Teams' },
   { id: 'messages', label: 'Messages' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'timeline', label: 'Timeline' },

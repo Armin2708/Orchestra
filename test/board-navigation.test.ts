@@ -7,7 +7,7 @@ describe('board-local navigation', () => {
     expect(BOARD_TABS).toEqual([
       { id: 'overview', label: 'Overview' },
       { id: 'kanban', label: 'Kanban' },
-      { id: 'agents', label: 'Agents' },
+      { id: 'agents', label: 'Teams' },
       { id: 'messages', label: 'Messages' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'timeline', label: 'Timeline' },
@@ -59,7 +59,7 @@ describe('board-local navigation', () => {
     expect(app).toContain('<CanonicalActivity')
     expect(boardSection).toContain('<TimelineView')
     expect(boardSection).toContain('<ShippedView')
-    expect(boardSection).toContain('<AgentHome')
+    expect(boardSection).toContain('<TeamsView')
   })
 
   it('keeps the spatial agent graph reachable while preserving the canonical system under Advanced', () => {
