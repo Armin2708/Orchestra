@@ -171,6 +171,79 @@ it('design hires the mastermind once, re-tasks it on later goals, and briefs the
   expect(db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE name='mastermind'`).get()).toEqual({ c: 1 })
 })
 
+const hireTeamOverApi = async (server: any) => {
+  const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Core', goal: 'Ship it', spec: spec(),
+  } })).json().team
+  await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/approve` })
+  return (await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire` })).json()
+}
+
+it('lead staffs roles on demand within spec bounds; non-leads are refused', async () => {
+  const { db, server, stub } = await boot()
+  const { team } = await hireTeamOverApi(server)
+  const lead = team.lead_agent
+
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: {} })).statusCode).toBe(400)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: {
+    role: 'ghost', requested_by: lead,
+  } })).statusCode).toBe(409)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: {
+    role: 'eng', requested_by: 'impostor',
+  } })).statusCode).toBe(409)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: {
+    role: 'lead', requested_by: lead,
+  } })).statusCode).toBe(409)
+
+  // stub always hires the same name, so rename each hire to keep names unique
+  let n = 0
+  const origHire = stub().hire.bind(stub())
+  stub().hire = (input: any) => {
+    const agent = origHire({ ...input, name: `member-${++n}` } as any)
+    return agent
+  }
+  const first = (await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: {
+    role: 'eng', requested_by: lead,
+  } })).json()
+  expect(first.agent.name).toBe('member-1')
+  const memberTask = stub().tasks.find((t) => t.text.startsWith('You are a "Staff Engineer"'))
+  expect(memberTask?.text).toContain('you report to')
+  expect(memberTask?.text).toContain('do not contact the operator directly')
+
+  await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: { role: 'eng', requested_by: lead } })
+  const over = await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire-member`, payload: { role: 'eng', requested_by: lead } })
+  expect(over.statusCode).toBe(409)
+  expect(over.json().error).toMatch(/fully staffed \(2\/2\)/)
+  expect(db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE team_id=? AND team_role='eng'`).get(team.id)).toEqual({ c: 2 })
+})
+
+it('assigning a card to a team hands it to the lead with routing orders', async () => {
+  const { server, stub } = await boot()
+  const { team, agent } = await hireTeamOverApi(server)
+  const card = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+    board_id: 1, title: 'Build the sync engine',
+  } })).json().card
+
+  const assigned = (await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/assign-team`, payload: {
+    team_id: team.id,
+  } })).json()
+  expect(assigned.card.owner).toBe(team.lead_agent)
+  expect(assigned.card.column).toBe('in_progress')
+  const routing = stub().tasks.filter((t) => t.id === agent.id).map((t) => t.text)
+  expect(routing.some((t) => t.includes('Route it through your team workflow'))).toBe(true)
+
+  // draft teams cannot take cards
+  const draft = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Draft team', spec: spec(),
+  } })).json().team
+  expect((await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/assign-team`, payload: {
+    team_id: draft.id,
+  } })).statusCode).toBe(409)
+  expect((await server.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/assign-team`, payload: {
+    team_id: 999,
+  } })).statusCode).toBe(404)
+})
+
 it('team hire returns 501 without a conductor', async () => {
   const { server } = await boot(false)
   const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {

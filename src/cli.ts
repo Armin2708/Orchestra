@@ -597,6 +597,28 @@ team.command('design <goal>').description('hand a goal to the mastermind agent; 
     const r = await api('POST', `/boards/${b.id}/teams/design`, { goal })
     console.log(`mastermind ${r.agent.name} is designing a team for: ${goal}`)
   })
+team.command('hire-member <role>').description('staff one role from your team spec (team leads only)')
+  .option('--team <id>', 'team id (inferred from your lead seat if omitted)')
+  .option('--from <a>')
+  .action(async (role, o) => {
+    await up(); const b = await board()
+    const me = o.from ?? envAgent()
+    let teamId = o.team ? Number(o.team) : undefined
+    if (!teamId) {
+      const r = await api('GET', `/boards/${b.id}/teams`)
+      const mine = (r.teams ?? []).find((t: any) => t.lead_agent === me && t.status === 'hired')
+      if (!mine) { console.error('no hired team where you are the lead — pass --team <id>'); process.exit(1) }
+      teamId = mine.id
+    }
+    const r = await api('POST', `/teams/${teamId}/hire-member`, { role, requested_by: me })
+    console.log(`hired ${r.agent.name} as ${role} on team #${teamId}`)
+  })
+team.command('assign <cardId> <teamId>').description('assign a card to a team; the lead decomposes and routes it')
+  .action(async (cardId, teamId) => {
+    await up()
+    const r = await api('POST', `/cards/${cardId}/assign-team`, { team_id: Number(teamId) })
+    console.log(`card #${cardId} assigned to team "${r.team.name}" — lead ${r.team.lead_agent} will route it`)
+  })
 
 program.command('ideas').description('list roadmap ideas').action(async () => {
   await up(); const b = await board()

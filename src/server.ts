@@ -11,7 +11,7 @@ import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { claimNext, isReady, rankBetween } from './backlog.js'
 import {
-  approveTeam, archiveTeam, createTeam, getTeam, hireTeam, listTeams,
+  approveTeam, archiveTeam, createTeam, getTeam, hireTeam, hireTeamMember, listTeams,
   mastermindBrief, teamMembers, updateTeam, MASTERMIND_NAME, TeamSpecError, type TeamSpec,
 } from './teams.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
@@ -1705,6 +1705,45 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { team }
     } catch (error) { return teamError(reply, error) }
   })
+
+  // lead-only on-demand staffing, bounded by the approved spec
+  server.post<{ Params: { id: string }; Body: { role?: string; requested_by?: string; cwd?: string } }>(
+    '/api/v1/teams/:id/hire-member', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+      const team = getTeam(db, Number(req.params.id))
+      if (!team) return reply.code(404).send({ error: 'not found' })
+      if (!req.body?.role) return reply.code(400).send({ error: 'role is required' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(team.board_id) as any
+      try {
+        const agent = hireTeamMember(db, team.id, req.body.role, maestro, req.body?.cwd ?? board.project_path, req.body?.requested_by)
+        emit(team.board_id, 'agent', agent)
+        emit(team.board_id, 'team', getTeam(db, team.id))
+        return { agent, team: getTeam(db, team.id) }
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+        return teamError(reply, error)
+      }
+    })
+
+  // assign a card to a team: the lead owns it and routes it through the team workflow
+  server.post<{ Params: { id: string }; Body: { team_id?: number } }>(
+    '/api/v1/cards/:id/assign-team', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      if (!req.body?.team_id) return reply.code(400).send({ error: 'team_id is required' })
+      const team = getTeam(db, Number(req.body.team_id))
+      if (!team || team.board_id !== card.board_id) return reply.code(404).send({ error: 'team not found on this board' })
+      if (team.status !== 'hired' || !team.lead_agent)
+        return reply.code(409).send({ error: `team is not hired (status: ${team.status})` })
+      const lead = agentByName(card.board_id, team.lead_agent)
+      if (!lead || lead.status === 'gone') return reply.code(409).send({ error: `team lead ${team.lead_agent} is not live` })
+      const updated = notifyAssignment(card, lead)
+      if (maestro?.isHired(lead.id))
+        maestro.task(lead.id, `Card #${card.id} was assigned to your team "${team.name}". Route it through your team workflow: decompose, delegate stages to the matching roles (staff them on demand), review at every gate, and report completion.`)
+      logEvent(card.id, lead.id, 'updated', { assigned_team: team.id, team_name: team.name })
+      return { card: updated, team }
+    })
 
   // hand a goal to the mastermind (reused if already live); it submits a draft team for approval
   server.post<{ Params: { id: string }; Body: { goal?: string } }>(

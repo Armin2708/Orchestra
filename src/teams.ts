@@ -203,7 +203,8 @@ export function leadBrief(team: TeamRow, spec: TeamSpec): string {
     `\nOperating rules:`,
     `- You are the single point of contact: the operator assigns cards to the team or messages you directly.`,
     `- Decompose incoming work, delegate stages to the matching role, review results at every review gate before accepting.`,
-    `- Staff roles only when work requires them and release members who are idle.`,
+    `- Staff a role with: orchestra team hire-member <role-key> (bounded by the spec); release idle members with: orchestra fire <name>.`,
+    `- Delegate with: orchestra task <member-name> '<what and why>'; members report back to you.`,
     `- Report progress and completion back to the operator; escalate blockers to the operator, not around the hierarchy.`,
   ].filter(Boolean).join('\n')
 }
@@ -234,6 +235,54 @@ export function mastermindBrief(goal: string): string {
     `printf '%s' '<the JSON>' | orchestra team propose '<team name>' --goal '<one-line goal>' --stdin`,
     `Then report what you designed and why via a short board note.`,
   ].join('\n')
+}
+
+// A member's standing orders: its charter, its reporting line, and the team norms.
+export function memberBrief(team: TeamRow, spec: TeamSpec, role: TeamRole): string {
+  const manager = role.reports_to ? spec.roles.find((r) => r.key === role.reports_to) : null
+  const managerName = team.lead_agent ?? 'the team lead'
+  return [
+    `You are a "${role.title}" (${role.key}) on team "${team.name}".`,
+    role.charter,
+    team.goal ? `Team goal: ${team.goal}` : '',
+    spec.norms ? `Team norms:\n${spec.norms}` : '',
+    `Reporting line: you report to ${manager ? `the ${manager.title}` : 'the lead'} (${managerName}).`,
+    `Work only what your manager delegates to you (orchestra reply to their messages with results).`,
+    `Escalate blockers to your manager, never around the hierarchy; do not contact the operator directly.`,
+  ].filter(Boolean).join('\n')
+}
+
+export function hireTeamMember(
+  db: Database.Database,
+  teamId: number,
+  roleKey: string,
+  maestro: MaestroLike,
+  cwd: string,
+  requestedBy?: string,
+): Record<string, unknown> {
+  const team = getTeam(db, teamId)
+  if (!team) throw new Error('team not found')
+  if (team.status !== 'hired') throw new Error(`team is not hired (status: ${team.status})`)
+  if (requestedBy && requestedBy !== team.lead_agent)
+    throw new Error(`only the team lead (${team.lead_agent}) can hire members`)
+  const spec = JSON.parse(team.spec_json) as TeamSpec
+  const role = spec.roles.find((r) => r.key === roleKey)
+  if (!role) throw new Error(`unknown role "${roleKey}" — spec roles: ${spec.roles.map((r) => r.key).join(', ')}`)
+  if (role.reports_to == null) throw new Error('the lead is already hired; hire member roles only')
+  const live = db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE team_id=? AND team_role=? AND status != 'gone'`)
+    .get(teamId, roleKey) as { c: number }
+  if (live.c >= role.max_agents)
+    throw new Error(`role "${roleKey}" is fully staffed (${live.c}/${role.max_agents})`)
+  const agent = maestro.hire({
+    boardId: team.board_id,
+    cwd,
+    provider: role.provider,
+    model: role.model,
+    effort: role.effort,
+  })
+  db.prepare(`UPDATE agents SET team_id=?, team_role=? WHERE id=?`).run(teamId, roleKey, Number(agent.id))
+  maestro.task(Number(agent.id), memberBrief(team, spec, role))
+  return agent
 }
 
 export type TeamHireResult = { team: TeamRow; agent: Record<string, unknown> }

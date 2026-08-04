@@ -461,7 +461,9 @@ POST /api/v1/boards/:id/wake
 POST /api/v1/boards/resolve
 POST /api/v1/cards
 POST /api/v1/cards/:id/assign
+POST /api/v1/cards/:id/assign-team
 POST /api/v1/cards/:id/rank
+POST /api/v1/teams/:id/hire-member
 POST /api/v1/ideas
 POST /api/v1/ideas/:id/promote
 POST /api/v1/messages
