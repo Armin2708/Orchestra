@@ -358,19 +358,25 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // interleave local command echo with the streamed transcript by timestamp
   const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
   const streamed = hired || visibleLines.length > 0
-  const convo: Line[] = streamed ? (localLines.length
-    ? [...visibleLines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
-    : visibleLines) : [...threads]
+  // board messages involving this agent, as chat lines with sortable ISO timestamps
+  // (created_at is SQL 'YYYY-MM-DD HH:MM:SS' UTC)
+  const messageLine = (m: { from_name: string | null; to_name: string | null; body: string; created_at: string }): Line => ({
+    at: `${m.created_at.replace(' ', 'T')}Z`,
+    kind: m.from_name === agent.name ? 'text' : 'user',
+    text: m.from_name === agent.name
+      ? (m.to_name ? `→ ${m.to_name}: ${m.body}` : m.body)
+      : (m.from_name ? `${m.from_name}: ${m.body}` : m.body),
+  })
+  const threadLines: Line[] = [...threads]
     .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
     .filter((t) => (t.from_name === agent.name || t.to_name === agent.name))
-    .flatMap((t) => [
-      { kind: (t.from_name === agent.name ? 'text' : 'user') as Line['kind'],
-        text: t.from_name === agent.name ? t.body : t.body },
-      ...t.replies.map((r) => ({
-        kind: (r.from_name === agent.name ? 'text' : 'user') as Line['kind'],
-        text: r.body,
-      })),
-    ])
+    .flatMap((t) => [messageLine(t), ...t.replies.map(messageLine)])
+  // a terminal session's chat runs over board messages — merge them into the streamed
+  // transcript so the drawer reads as one conversation (hired agents get messages
+  // pushed into their real transcript already)
+  const mergedLines = hired ? visibleLines : [...visibleLines, ...threadLines]
+  const convo: Line[] = streamed ? ([...mergedLines, ...localLines]
+    .sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)) : threadLines
 
   const provider = normalizeProvider(info?.provider ?? agent.provider)
   const capabilities = info?.capabilities ?? agent.capabilities
@@ -604,10 +610,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
 
       if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
       else {
-        // terminal sessions receive board messages on their next hook fire — without a
-        // local echo the send looks like it silently vanished
+        // the sent message itself lands in the merged board-message thread on refresh
         await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
-        echoLocal('user', text)
         echoLocal('status', `queued as a board message — ${agent.name} receives it on its next turn in that terminal`)
       }
       setInput('')
