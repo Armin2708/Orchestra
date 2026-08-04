@@ -578,7 +578,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   letter-spacing: 0.08em; text-transform: uppercase; color: #8a867e;
 }
 .tt-empty { color: #6f6b64; font-size: 12px; font-style: italic; }
-.tt-card { border: 1px solid #33312c; border-radius: 10px; padding: 8px 10px; background: #201f1b; }
+.tt-card {
+  display: block; width: 100%; text-align: left; color: inherit;
+  border: 1px solid #33312c; border-radius: 10px; padding: 8px 10px; background: #201f1b;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tt-card:hover { border-color: #4c4841; background: #262521; }
 .tt-card + .tt-card { margin-top: 8px; }
 .tt-title { font-size: 12.5px; line-height: 1.45; color: #DED9D1; word-break: break-word; }
 .tt-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; font-size: 11px; color: #8a867e; }

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, Agent, Card, Thread, timeAgo } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
+import { CardDrawer } from './CardDrawer'
 import { followIntent } from './follow'
 import { ProviderBadge } from './ProviderBadge'
 import {
@@ -239,9 +240,10 @@ const TASK_STATUS: Record<string, string> = {
   backlog: 'queued', in_progress: 'working', blocked: 'blocked', review: 'review', done: 'done',
 }
 
-function TaskCard({ card }: { card: Card }) {
+function TaskCard({ card, onOpen }: { card: Card; onOpen: (card: Card) => void }) {
   return (
-    <article className="tt-card" title={card.description || card.title}>
+    <button type="button" className="tt-card" title={card.description || card.title}
+      onClick={() => onOpen(card)}>
       <p className="tt-title">{card.title}</p>
       <p className="tt-meta">
         <span className={`tt-status ${card.column}`}>{TASK_STATUS[card.column] ?? card.column}</span>
@@ -252,7 +254,7 @@ function TaskCard({ card }: { card: Card }) {
       {card.paths.length > 0 && (
         <p className="tt-paths">{card.paths.slice(0, 2).join(' · ')}{card.paths.length > 2 ? ` +${card.paths.length - 2}` : ''}</p>
       )}
-    </article>
+    </button>
   )
 }
 
@@ -277,6 +279,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const [clearedAt, setClearedAt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [openTaskId, setOpenTaskId] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const firstScroll = useRef(true)
@@ -730,6 +733,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const historyTasks = ownedCards.filter((c) => c.column === 'review' || c.column === 'done')
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
   const showTasks = !embedded && ownedCards.length > 0
+  // hold only the id — the drawer re-renders from the freshest snapshot copy of the card
+  const openTask = openTaskId === null ? null : cards.find((c) => c.id === openTaskId) ?? null
 
   return (
     <>
@@ -762,18 +767,18 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             <section>
               <h3>Working on</h3>
               {activeTasks.length === 0 && <p className="tt-empty">Nothing in progress</p>}
-              {activeTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+              {activeTasks.map((c) => <TaskCard key={c.id} card={c} onOpen={(card) => setOpenTaskId(card.id)} />)}
             </section>
             {queuedTasks.length > 0 && (
               <section>
                 <h3>Queued</h3>
-                {queuedTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+                {queuedTasks.map((c) => <TaskCard key={c.id} card={c} onOpen={(card) => setOpenTaskId(card.id)} />)}
               </section>
             )}
             <section>
               <h3>Task history</h3>
               {historyTasks.length === 0 && <p className="tt-empty">No finished tasks yet</p>}
-              {historyTasks.map((c) => <TaskCard key={c.id} card={c} />)}
+              {historyTasks.map((c) => <TaskCard key={c.id} card={c} onOpen={(card) => setOpenTaskId(card.id)} />)}
             </section>
           </nav>
         )}
@@ -942,6 +947,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
         </div>
       </aside>
+      {openTask && (
+        <CardDrawer card={openTask} boardId={boardId}
+          onClose={() => setOpenTaskId(null)} onChange={onChange} />
+      )}
     </>
   )
 }
