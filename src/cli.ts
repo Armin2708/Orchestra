@@ -463,6 +463,31 @@ card.command('move <id> <column>').option('--agent <a>').action(async (id, colum
   const r = await api('POST', `/cards/${id}/move`, { column, agent: o.agent ?? envAgent() })
   console.log(`card #${r.card.id} → ${r.card.column}`)
 })
+card.command('rank <id>')
+  .option('--before <id>', 'place above this backlog card')
+  .option('--after <id>', 'place below this backlog card')
+  .option('--top').option('--bottom').option('--agent <a>')
+  .action(async (id, o) => {
+    await up()
+    const r = await api('POST', `/cards/${id}/rank`, {
+      before: o.before ? Number(o.before) : undefined,
+      after: o.after ? Number(o.after) : undefined,
+      top: !!o.top, bottom: !!o.bottom, agent: o.agent ?? envAgent(),
+    })
+    console.log(`card #${r.card.id} ranked (${r.card.rank})`)
+  })
+
+program.command('next').option('--agent <a>')
+  .description('claim the top-ranked ready backlog card')
+  .action(async (o) => {
+    await up(); const b = await board()
+    try {
+      const r = await api('POST', `/boards/${b.id}/next`, { agent: await inferAgent(b.id, o.agent) })
+      console.log(`card #${r.card.id} → in_progress (${r.card.owner ?? 'unowned'}): ${r.card.title}`)
+    } catch {
+      console.log('no ready cards — groom the backlog (cards need a contract + rank)')
+    }
+  })
 
 program.command('ask <to> [body]').option('--card <id>').option('--from <a>')
   .option('--stdin', 'read the body from stdin (no shell interpolation)')

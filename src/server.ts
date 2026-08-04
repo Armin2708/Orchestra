@@ -9,6 +9,7 @@ import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
+import { claimNext, rankBetween } from './backlog.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-auth.js'
@@ -756,6 +757,41 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       emit(card.board_id, 'card', updated)
       if (req.body.column === 'review') await requestReview(updated, null, updated.owner)
       return { card: updated }
+    })
+
+  // ── stack-ranked backlog (spec 2026-08-04-backlog-system) ──
+  server.post<{ Params: { id: string }; Body: { before?: number; after?: number; top?: boolean; bottom?: boolean; agent?: string } }>(
+    '/api/v1/cards/:id/rank', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      const { before, after, top, bottom, agent } = req.body ?? {}
+      if (before == null && after == null && !top && !bottom) {
+        return reply.code(400).send({ error: 'rank position requires before, after, top, or bottom' })
+      }
+      let rank: number
+      try {
+        rank = rankBetween(db, card.id, { before, after, top, bottom })
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message })
+      }
+      const actor = agentByName(card.board_id, agent)
+      logEvent(card.id, actor?.id ?? null, 'ranked', { rank })
+      const updated = getCard(card.id)
+      emit(card.board_id, 'card', updated)
+      return { card: updated }
+    })
+
+  // hand an agent the top-ranked READY backlog card — atomic, so concurrent pickers
+  // get different cards; unready (triage) cards are never served
+  server.post<{ Params: { id: string }; Body: { agent?: string } }>(
+    '/api/v1/boards/:id/next', (req, reply) => {
+      const boardId = Number(req.params.id)
+      const claimed = claimNext(db, boardId, req.body?.agent)
+      if (!claimed) return reply.code(404).send({ error: 'no ready cards' })
+      const card = getCard(Number(claimed.id))
+      logEvent(card.id, card.owner_agent_id ?? null, 'moved', { to: 'in_progress', via: 'next' })
+      emit(boardId, 'card', card)
+      return { card }
     })
 
   // earlier milestone steps aren't hard blocks — they're context the assignee must coordinate on
@@ -1848,8 +1884,12 @@ export function listThreads(db: Database.Database, boardId: number) {
 
 export function listCards(db: Database.Database, boardId: number) {
   return (db.prepare(`
-    SELECT c.*, a.name AS owner FROM cards c
+    SELECT c.*, a.name AS owner,
+      CASE WHEN t.card_id IS NOT NULL AND trim(t.objective) != ''
+        AND json_array_length(t.acceptance_criteria) > 0 THEN 1 ELSE 0 END AS ready
+    FROM cards c
     LEFT JOIN agents a ON a.id = c.owner_agent_id
+    LEFT JOIN task_contracts t ON t.card_id = c.id
     WHERE c.board_id=? ORDER BY c.updated_at DESC`).all(boardId) as any[])
-    .map((c) => ({ ...c, column: c.column_name, paths: JSON.parse(c.paths) }))
+    .map((c) => ({ ...c, column: c.column_name, paths: JSON.parse(c.paths), ready: !!c.ready }))
 }
