@@ -1793,6 +1793,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (hired && (hired as { info?: unknown }).info) return hired
     const external = externalTranscripts.transcript(id)
     if (external.lines.length > 0) return { lines: external.lines, working: null, external: true }
+    if (!hired?.lines.length) {
+      // a hired agent between daemon restart and its resume still shows its history
+      try {
+        const row = db.prepare('SELECT lines FROM agent_transcripts WHERE agent_id=?').get(id) as { lines: string } | undefined
+        const stored = row ? JSON.parse(row.lines) as unknown[] : []
+        if (Array.isArray(stored) && stored.length) return { lines: stored, working: null, restored: true }
+      } catch { /* unreadable history never blocks the live view */ }
+    }
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
     return hired ?? { lines: [], working: null }
   })

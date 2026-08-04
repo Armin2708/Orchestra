@@ -150,6 +150,26 @@ export function askUserQuestionInput(
   }
 }
 
+const transcriptSig = (lines: TranscriptLine[]): string => {
+  const tail = lines[lines.length - 1]
+  return tail ? `${lines.length}:${tail.at}:${tail.text.slice(0, 80)}` : ''
+}
+
+/** Drawer history persisted across daemon restarts — best-effort, capped at 500 lines. */
+export function loadStoredTranscript(db: Database.Database, agentId: number): TranscriptLine[] {
+  try {
+    const row = db.prepare('SELECT lines FROM agent_transcripts WHERE agent_id=?')
+      .get(agentId) as { lines: string } | undefined
+    if (!row) return []
+    const parsed = JSON.parse(row.lines) as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter((line): line is TranscriptLine => Boolean(line
+          && typeof (line as TranscriptLine).text === 'string'
+          && typeof (line as TranscriptLine).kind === 'string'))
+      : []
+  } catch { return [] }
+}
+
 type Hired = {
   agentId: number
   boardId: number
@@ -165,6 +185,9 @@ type Hired = {
   // this session's slash commands, kept fresh by init + commands_changed (REPLACE semantics)
   commands: { name: string; description: string }[]
   transcript: TranscriptLine[]
+  // signature of the last flushed transcript state (length + tail line), so the
+  // 3s flusher only writes agent_transcripts rows that actually changed
+  persistedSig: string
   turnStart: number | null
   turnTokens: number
   sessionTokens: number
@@ -300,7 +323,27 @@ export class Conductor {
     private bus: EventEmitter,
     private readonly agentToken?: string,
     private readonly options: ConductorOptions = {},
-  ) {}
+  ) {
+    this.transcriptFlushTimer = setInterval(() => this.flushTranscripts(), 3_000)
+    this.transcriptFlushTimer.unref()
+  }
+
+  private readonly transcriptFlushTimer: ReturnType<typeof setInterval>
+
+  // Drawer history is memory-first; this flusher makes it survive daemon restarts.
+  private flushTranscripts(): void {
+    for (const h of this.hired.values()) {
+      const sig = transcriptSig(h.transcript)
+      if (sig === h.persistedSig || !h.transcript.length) continue
+      try {
+        this.db.prepare(`INSERT INTO agent_transcripts (agent_id, lines, updated_at)
+          VALUES (?, ?, datetime('now'))
+          ON CONFLICT(agent_id) DO UPDATE SET lines=excluded.lines, updated_at=excluded.updated_at`)
+          .run(h.agentId, JSON.stringify(h.transcript.slice(-500)))
+        h.persistedSig = sig
+      } catch { /* history persistence is best-effort */ }
+    }
+  }
 
   private emit(boardId: number, type: string, data: unknown) {
     this.bus.emit('event', { board_id: boardId, type, data })
@@ -549,7 +592,7 @@ export class Conductor {
     return { woke, queued, skipped }
   }
 
-  hire(opts: { boardId: number; cwd: string; env?: Record<string, string | undefined>; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number; agentHome?: ClaudeAgentHomeBinding }): any {
+  hire(opts: { boardId: number; cwd: string; env?: Record<string, string | undefined>; name?: string; provider?: string; model?: string; role?: 'strategist' | 'auditor' | 'verifier'; ephemeral?: boolean; resumeSession?: string; permissionMode?: string; accessProfile?: string; effort?: string; cardId?: number; maxBudgetUsd?: number; taskBudgetTokens?: number; agentHome?: ClaudeAgentHomeBinding; restoreTranscript?: boolean }): any {
     if (opts.provider && opts.provider !== DEFAULT_AGENT_PROVIDER)
       throw new Error(`provider ${opts.provider} must be routed through ProviderAgentManager`)
     const providerEnvironment = prepareManagedSubscriptionEnvironmentV1(
@@ -633,6 +676,15 @@ export class Conductor {
 
     const input = createInput()
     const transcript: TranscriptLine[] = []
+    // a resumed session keeps its drawer history across daemon restarts; the
+    // setEffort internal restart carries its own lines and opts out
+    if (opts.resumeSession && opts.restoreTranscript !== false) {
+      const stored = loadStoredTranscript(this.db, agent.id)
+      if (stored.length) {
+        transcript.push(...stored.slice(-500))
+        transcript.push({ at: new Date().toISOString(), kind: 'status', text: 'conversation restored after daemon restart' })
+      }
+    }
     const log = (kind: TranscriptLine['kind'], text: string) => {
       transcript.push({ at: new Date().toISOString(), kind, text })
       if (transcript.length > 500) transcript.shift()
@@ -848,6 +900,7 @@ export class Conductor {
       pending,
       commands: [],
       transcript,
+      persistedSig: transcriptSig(transcript),
       turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(), sessionCostUsd: 0,
       model: model ?? null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: cachedModels, role: opts.role, handoff: false, limitHit: false,
@@ -1193,6 +1246,7 @@ export class Conductor {
       boardId: h.boardId, cwd: h.cwd, name: h.name, role: prior.role,
       resumeSession: row.sdk_session, permissionMode: prior.permissionMode,
       model: prior.model ?? undefined, effort: level, cardId: prior.cardId ?? undefined,
+      restoreTranscript: false, // prior.lines below carry the live history verbatim
     })
     const nh = this.hired.get(agentId)
     if (!nh) return 'not-found' // respawn failed; agent row already re-marked active by hire's upsert
@@ -1247,6 +1301,7 @@ export class Conductor {
 
   /** End local SDK streams while preserving provider sessions and board ownership for daemon resume. */
   async detachAll(): Promise<void> {
+    this.flushTranscripts() // graceful restarts keep every last drawer line
     const active = [...this.hired.values()]
     await Promise.all(active.map(async (h) => {
       h.handoff = true

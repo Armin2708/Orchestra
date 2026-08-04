@@ -84,6 +84,11 @@ export function openDb(file: string): Database.Database {
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS agent_transcripts (
+    agent_id INTEGER PRIMARY KEY,
+    lines TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS deliveries (
     message_id INTEGER NOT NULL,
     agent_id INTEGER NOT NULL,
