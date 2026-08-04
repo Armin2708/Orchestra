@@ -66,6 +66,8 @@ export interface RemoteSecurityOptions {
   masterToken?: string
   agentToken?: string
   authenticateLocalOwnerSession?: (session: string) => boolean
+  /** Verifies the local owner password for remote device sign-in; issues no session. */
+  verifyLocalOwnerPassword?: (password: string, partition: string) => 'ok' | 'incorrect' | 'rate_limited' | 'not_configured'
   operations?: OperationsRuntime
   vapidKeys?: VapidKeys
   runtime?: AgentOsRuntimeAdapter
@@ -1014,6 +1016,18 @@ export function registerRemoteSecurityIntegration(
       }
       return
     }
+    if (path === '/api/v1/os/devices/password-login') {
+      if (process.env.ORCHESTRA_REMOTE_KILL_SWITCH === '1' || remoteAccessDisabled(options.db)) {
+        reply.header('clear-site-data', '"cache", "storage"')
+        recordSecurityEvent(options.db, {
+          eventType: 'pairing_disabled', outcome: 'denied', actorType: 'anonymous',
+          actorId: request.ip || request.raw.socket.remoteAddress || 'unknown',
+          requestId: request.id, reasonCode: 'operator_kill_switch',
+        })
+        return reply.code(503).send({ error: 'remote access is disabled by the operator kill switch' })
+      }
+      return
+    }
     const authorization = request.headers.authorization
     if (authorization?.startsWith('Bearer ')) {
       const supplied = authorization.slice(7)
@@ -1300,6 +1314,87 @@ export function registerRemoteSecurityIntegration(
         requestId: request.id, reasonCode: denialReason,
       })
       return reply.code(401).send({ error: 'invalid or expired pairing ticket' })
+    }
+  })
+
+  server.post<{ Body: {
+    password?: string
+    device_name?: string
+    device_public_key_jwk?: { kty: 'EC'; crv: 'P-256'; x: string; y: string }
+  } }>('/api/v1/os/devices/password-login', (request, reply) => {
+    const address = request.ip || request.raw.socket.remoteAddress || 'unknown'
+    if (!consumeDurableRateLimit(options.db, 'password-login', [`ingress:${address}`], 5, 5 * 60_000)
+      || !consumeDurableRateLimit(options.db, 'password-login', ['all-ingress'], 20, 5 * 60_000)) {
+      return reply.code(429).send({ error: 'password login rate limit exceeded' })
+    }
+    const verify = options.verifyLocalOwnerPassword
+    if (!verify) return reply.code(404).send({ error: 'password login is not enabled' })
+    let password: string
+    try { password = bounded(request.body?.password, 'password', 512) } catch {
+      return reply.code(400).send({ error: 'password is required' })
+    }
+    const verdict = verify(password, `remote:${address}`)
+    if (verdict === 'not_configured') {
+      return reply.code(404).send({ error: 'password login is not enabled — create a password on the local web UI first' })
+    }
+    if (verdict === 'rate_limited') {
+      return reply.code(429).send({ error: 'too many attempts — wait a moment and try again' })
+    }
+    if (verdict !== 'ok') {
+      recordSecurityEvent(options.db, {
+        eventType: 'authentication_denied', outcome: 'denied', actorType: 'anonymous',
+        actorId: address, requestId: request.id, reasonCode: 'password_login_denied',
+      })
+      return reply.code(401).send({ error: 'invalid password' })
+    }
+    try {
+      const tunnelUrl = readRemoteState()?.url
+      if (!tunnelUrl) throw new Error('no active remote tunnel')
+      const tunnelOrigin = new URL(tunnelUrl).origin
+      const origin = safeOrigin(request.headers.origin)
+      if (origin !== tunnelOrigin) throw new Error('password login requires the active tunnel origin')
+      const expected = new URL(tunnelOrigin)
+      const context = evaluateRemoteRequestContext({
+        expectedHosts: [expected.host], expectedOrigins: [tunnelOrigin],
+        trustedProxyAddresses: [], trustForwardedHost: false,
+      }, {
+        method: request.method, host: request.headers.host,
+        forwardedHost: typeof request.headers['x-forwarded-host'] === 'string'
+          ? request.headers['x-forwarded-host'] : undefined,
+        origin,
+        secFetchSite: typeof request.headers['sec-fetch-site'] === 'string'
+          ? request.headers['sec-fetch-site'] : undefined,
+        remoteAddress: request.ip,
+        clientKind: 'browser',
+        credentialTransport: 'authorization-header',
+        requestPurpose: 'api',
+      })
+      if (!context.allowed) throw new Error(`password login context denied: ${context.code}`)
+      const redeem = options.db.transaction(() => {
+        const created = repository.createPairingTicket({
+          expectedOrigin: tunnelOrigin,
+          actor: { type: 'local-operator', id: 'password-login' },
+        })
+        const redemption = repository.redeemPairingTicket({
+          pairingTicket: created.pairing_ticket,
+          origin,
+          deviceName: bounded(request.body?.device_name, 'device name', 120),
+          devicePublicKeyJwk: request.body?.device_public_key_jwk as never,
+        })
+        grantTicketResources(
+          options.db,
+          redemption.device_session.created_from_ticket_id,
+          redemption.device_session.id,
+        )
+        return redemption
+      })
+      return redeem.immediate()
+    } catch {
+      recordSecurityEvent(options.db, {
+        eventType: 'authentication_denied', outcome: 'denied', actorType: 'anonymous',
+        actorId: address, requestId: request.id, reasonCode: 'password_login_denied',
+      })
+      return reply.code(401).send({ error: 'password login was rejected' })
     }
   })
 

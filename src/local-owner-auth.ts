@@ -113,6 +113,12 @@ export class LocalOwnerPasswordAuth {
   }
 
   login(password: string, partition = 'loopback') {
+    this.verify(password, partition)
+    return this.issueSession()
+  }
+
+  /** Same lockout accounting as login, but issues no session — for remote device sign-in. */
+  verify(password: string, partition = 'loopback') {
     const now = this.now()
     const previous = this.failures.get(partition)
     if (previous && previous.blockedUntil > now) {
@@ -130,7 +136,6 @@ export class LocalOwnerPasswordAuth {
       throw new LocalOwnerAuthError('password_incorrect', 401, 'Password is incorrect.')
     }
     this.failures.delete(partition)
-    return this.issueSession()
   }
 
   authenticate(session: string | undefined) {

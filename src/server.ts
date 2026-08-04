@@ -125,6 +125,20 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     masterToken: opts.token,
     agentToken: opts.agentToken,
     authenticateLocalOwnerSession: (session) => opts.localOwnerAuth?.authenticate(session) ?? false,
+    verifyLocalOwnerPassword: (password, partition) => {
+      if (!opts.localOwnerAuth?.isConfigured()) return 'not_configured'
+      try {
+        opts.localOwnerAuth.verify(password, partition)
+        return 'ok'
+      } catch (error) {
+        if (error instanceof LocalOwnerAuthError) {
+          if (error.code === 'rate_limited') return 'rate_limited'
+          if (error.code === 'password_incorrect') return 'incorrect'
+          return 'not_configured'
+        }
+        throw error
+      }
+    },
     operations: opts.operations,
     vapidKeys: opts.vapidKeys,
     stopRemoteTunnel: opts.stopRemoteTunnel,

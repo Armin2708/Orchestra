@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from './api'
 import {
   hasPendingDeviceAuthorityRecovery,
+  passwordDeviceLogin,
   recoverPendingDeviceAuthority,
   remoteMutationDigest,
   rotateDeviceAuthority,
@@ -68,6 +69,9 @@ const messageFor = (cause: unknown): string => {
 export function PairingRequired({ error }: { error?: string | null }) {
   const [recoverable, setRecoverable] = useState(() => hasPendingDeviceAuthorityRecovery())
   const [recovering, setRecovering] = useState(false)
+  const [password, setPassword] = useState('')
+  const [signingIn, setSigningIn] = useState(false)
+  const [signInError, setSignInError] = useState<string | null>(null)
   const recover = async () => {
     setRecovering(true)
     try {
@@ -75,12 +79,34 @@ export function PairingRequired({ error }: { error?: string | null }) {
       else setRecoverable(false)
     } finally { setRecovering(false) }
   }
+  const signIn = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!password.trim() || signingIn) return
+    setSigningIn(true)
+    setSignInError(null)
+    try {
+      await passwordDeviceLogin(password)
+      location.reload()
+    } catch (cause) {
+      setSignInError(cause instanceof Error ? cause.message : 'Sign-in failed.')
+    } finally { setSigningIn(false) }
+  }
   return (
     <main className="remote-pairing-required" aria-labelledby="pairing-required-title">
       <section className="remote-pairing-card">
         <p className="settings-kicker">Remote device</p>
-        <h1 id="pairing-required-title">Pairing required</h1>
-        <p>{error || 'This browser has no active DeviceSession. Remote browsers never accept the Orchestra owner token.'}</p>
+        <h1 id="pairing-required-title">Sign in</h1>
+        <p>{error || 'This browser has no active DeviceSession yet.'}</p>
+        <form className="remote-password-form" onSubmit={(event) => void signIn(event)}>
+          <input className="login-input" type="password" placeholder="Orchestra password"
+            autoFocus autoComplete="current-password" value={password}
+            onChange={(event) => setPassword(event.target.value)} />
+          <button className="login-btn" type="submit" disabled={!password.trim() || signingIn}>
+            {signingIn ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+        {signInError && <p className="remote-pairing-safety" role="alert">{signInError}</p>}
+        <p>No password set? Pair with a single-use ticket instead:</p>
         <ol>
           <li>On the machine running Orchestra, create a named single-use pairing ticket.</li>
           <li>Open its HTTPS or private-tailnet link on this device before it expires.</li>

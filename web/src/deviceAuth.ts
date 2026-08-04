@@ -362,6 +362,40 @@ export async function redeemPairingFromLocation(): Promise<void> {
   })
 }
 
+/** Exchange the operator password for device authority on a remote origin. */
+export async function passwordDeviceLogin(password: string): Promise<void> {
+  if (!password) throw new Error('a password is required')
+  const pair = await generateDeviceKeyPair()
+  const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  await stageKeyMaterial({
+    purpose: 'pair', privateKey: pair.privateKey, publicJwk,
+    requestId: crypto.randomUUID(), createdAt: new Date().toISOString(),
+  })
+  const response = await fetch('/api/v1/os/devices/password-login', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      password,
+      device_name: deviceName(),
+      device_public_key_jwk: publicJwk,
+    }),
+  })
+  if (!response.ok) {
+    await clearStagedKeyMaterial()
+    if (response.status === 429) throw new Error('too many attempts — wait a few minutes and try again')
+    if (response.status === 404) throw new Error('no password is set yet — create one on the local web UI first, or pair with a ticket')
+    throw new Error('the password was rejected')
+  }
+  const authority = parseCredentialIssue(await response.json())
+  await commitIssuedAuthority({
+    ...authority, privateKey: pair.privateKey, publicJwk, tunnelOrigin: location.origin,
+  })
+}
+
 /** Rotate credential/key together; ambiguous post-commit failures enter explicit recovery. */
 export async function rotateDeviceAuthority(): Promise<{ credentialExpiresAt: string }> {
   const current = await readDeviceAuthority()

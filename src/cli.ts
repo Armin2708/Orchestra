@@ -60,6 +60,7 @@ const resolveOperationsStateDirectory = async (
   }
   return canonicalCandidate
 }
+const passwordConfigured = () => fs.existsSync(localOwnerPasswordPath())
 const providerOption = (allowBoth: boolean) => (value: string) => {
   const accepted = allowBoth ? ['claude', 'codex', 'both'] : ['claude', 'codex']
   if (!accepted.includes(value))
@@ -340,13 +341,17 @@ program.command('remote').description('start private remote access with secure d
     }
     const { state, reused } = await startRemote({ confirmPublic: o.public === true })
     try {
-      const url = await pairUrl(state, boardIds, scopes as never)
+      // Explicit boards/scopes always use a single-use pairing ticket; otherwise a set
+      // password lets the phone open the plain URL and sign in with it.
+      const passwordFlow = passwordConfigured() && boardIds.length === 0 && (scopes?.length ?? 0) === 0
+      const url = passwordFlow ? state.url : await pairUrl(state, boardIds, scopes as never)
       console.log(`board exposed via ${state.provider}: ${state.url}${reused ? ' (already running)' : ''}`)
       console.log(state.provider === 'tailscale'
         ? 'Private tailnet exposure selected. Pair only a device you control:\n'
         : 'PUBLIC exposure selected. Pair promptly, keep scopes narrow, and stop the tunnel when finished:\n')
       qrcode.generate(url, { small: true })
       console.log(`\n${url}`)
+      if (passwordFlow) console.log('scan the QR on your phone, then sign in with your Orchestra password')
       console.log('stop the verified tunnel with: orchestra remote --stop')
     } catch (error) {
       if (!reused) stopRemote()
@@ -611,4 +616,34 @@ registerFirstRunCommands(program, {
   demoLaunchGate: createCentralFirstRunDemoLaunchGate(),
 })
 
-program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
+async function splash() {
+  const art = [
+    '   ___  ____   ____ _   _ _____ ____ _____ ____      _',
+    '  / _ \\|  _ \\ / ___| | | | ____/ ___|_   _|  _ \\    / \\',
+    ' | | | | |_) | |   | |_| |  _| \\___ \\ | | | |_) |  / _ \\',
+    ' | |_| |  _ <| |___|  _  | |___ ___) || | |  _ <  / ___ \\',
+    '  \\___/|_| \\_\\\\____|_| |_|_____|____/ |_| |_| \\_\\/_/   \\_\\',
+  ].join('\n')
+  console.log(`\n${art}\n\n  v${VERSION} — agents coordinating on a live board\n`)
+  let health: { ok?: boolean } | undefined
+  try {
+    health = await (await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(400) })).json()
+  } catch { /* daemon not running */ }
+  console.log(health?.ok
+    ? `  ● daemon running — ${baseUrl()}`
+    : '  ○ daemon not running — it starts automatically with most commands')
+  console.log(`  ${passwordConfigured() ? '●' : '○'} password ${passwordConfigured() ? 'set' : 'not set'} — ${passwordConfigured() ? 'sign in on web or phone with it' : 'create one on first local web login'}`)
+  console.log(['',
+    '  orchestra serve      run the daemon in the foreground',
+    '  orchestra password   local browser password status / reset',
+    '  orchestra remote     QR code to open the board on your phone',
+    '  orchestra snapshot   current board state',
+    '  orchestra --help     all commands',
+  ].join('\n') + '\n')
+}
+
+if (process.argv.length <= 2) {
+  void splash().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
+} else {
+  program.parseAsync().catch((e) => { console.error(String(e?.message ?? e)); process.exit(1) })
+}
