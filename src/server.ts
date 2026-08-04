@@ -10,6 +10,10 @@ import { pathsIntersect } from './overlap.js'
 import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { claimNext, isReady, rankBetween } from './backlog.js'
+import {
+  approveTeam, archiveTeam, createTeam, getTeam, hireTeam, listTeams,
+  teamMembers, updateTeam, TeamSpecError, type TeamSpec,
+} from './teams.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-auth.js'
@@ -1617,6 +1621,89 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
     if (!board) return reply.code(404).send({ error: 'not found' })
     return maestro.wake(board.id)
+  })
+
+  // Teams: mastermind/operator-designed specs hired as a unit (lead-first, staff on demand).
+  // Spec: docs/superpowers/specs/2026-08-04-teams-tab-design.md
+  const teamError = (reply: any, error: unknown) => {
+    if (error instanceof TeamSpecError) return reply.code(400).send({ error: error.message, details: error.errors })
+    const msg = error instanceof Error ? error.message : String(error)
+    if (msg.includes('not found')) return reply.code(404).send({ error: msg })
+    return reply.code(409).send({ error: msg })
+  }
+
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/teams', (req, reply) => {
+    const board = db.prepare(`SELECT id FROM boards WHERE id=?`).get(Number(req.params.id))
+    if (!board) return reply.code(404).send({ error: 'not found' })
+    return { teams: listTeams(db, Number(req.params.id)) }
+  })
+
+  server.post<{ Params: { id: string }; Body: { name?: string; goal?: string; spec?: TeamSpec } }>(
+    '/api/v1/boards/:id/teams', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      const board = db.prepare(`SELECT id FROM boards WHERE id=?`).get(Number(req.params.id))
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      if (!req.body?.name?.trim()) return reply.code(400).send({ error: 'name is required' })
+      if (!req.body?.spec) return reply.code(400).send({ error: 'spec is required' })
+      try {
+        const team = createTeam(db, Number(req.params.id), {
+          name: req.body.name.trim(), goal: req.body.goal, spec: req.body.spec,
+        })
+        emit(team.board_id, 'team', team)
+        return { team }
+      } catch (error) { return teamError(reply, error) }
+    })
+
+  server.get<{ Params: { id: string } }>('/api/v1/teams/:id', (req, reply) => {
+    const team = getTeam(db, Number(req.params.id))
+    if (!team) return reply.code(404).send({ error: 'not found' })
+    return { team: { ...team, spec: JSON.parse(team.spec_json), members: teamMembers(db, team.id) } }
+  })
+
+  server.patch<{ Params: { id: string }; Body: { name?: string; goal?: string; spec?: TeamSpec } }>(
+    '/api/v1/teams/:id', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      try {
+        const team = updateTeam(db, Number(req.params.id), req.body ?? {})
+        emit(team.board_id, 'team', team)
+        return { team }
+      } catch (error) { return teamError(reply, error) }
+    })
+
+  server.post<{ Params: { id: string } }>('/api/v1/teams/:id/approve', (req, reply) => {
+    if (!requireOperator(req, reply)) return
+    try {
+      const team = approveTeam(db, Number(req.params.id))
+      emit(team.board_id, 'team', team)
+      return { team }
+    } catch (error) { return teamError(reply, error) }
+  })
+
+  server.post<{ Params: { id: string }; Body: { cwd?: string } | null }>(
+    '/api/v1/teams/:id/hire', (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+      const existing = getTeam(db, Number(req.params.id))
+      if (!existing) return reply.code(404).send({ error: 'not found' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(existing.board_id) as any
+      try {
+        const hired = hireTeam(db, existing.id, maestro, req.body?.cwd ?? board.project_path)
+        emit(existing.board_id, 'team', hired.team)
+        emit(existing.board_id, 'agent', hired.agent)
+        return hired
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+        return teamError(reply, error)
+      }
+    })
+
+  server.delete<{ Params: { id: string } }>('/api/v1/teams/:id', (req, reply) => {
+    if (!requireOperator(req, reply)) return
+    try {
+      const team = archiveTeam(db, Number(req.params.id))
+      emit(team.board_id, 'team', team)
+      return { team }
+    } catch (error) { return teamError(reply, error) }
   })
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(

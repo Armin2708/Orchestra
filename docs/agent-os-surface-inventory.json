@@ -334,7 +334,9 @@
       "messages",
       "milestones",
       "review_decisions",
-      "token_telemetry"
+      "token_telemetry",
+      "teams",
+      "agent_transcripts"
     ],
     "infrastructure": [
       "kv",
@@ -650,7 +652,15 @@
       "POST /api/v1/messages",
       "POST /api/v1/milestones",
       "POST /api/v1/milestones/:id/steps",
-      "PUT /api/v1/cards/:id/contract"
+      "PUT /api/v1/cards/:id/contract",
+      "GET /api/v1/boards/:id/teams",
+      "POST /api/v1/boards/:id/teams",
+      "GET /api/v1/teams/:id",
+      "PATCH /api/v1/teams/:id",
+      "POST /api/v1/teams/:id/approve",
+      "POST /api/v1/teams/:id/hire",
+      "DELETE /api/v1/teams/:id",
+      "GET /api/v1/messages/:id/attachments/:index"
     ],
     "infrastructure": [
       "GET /api/v1/auth/status",
@@ -796,7 +806,8 @@
       "reply",
       "snapshot",
       "step",
-      "swarm"
+      "swarm",
+      "mail"
     ],
     "infrastructure": [
       "hook",
@@ -895,6 +906,7 @@
       "policy",
       "review",
       "ship",
+      "team",
       "transcript"
     ],
     "canonical_bus_event_types": [

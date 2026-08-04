@@ -446,8 +446,16 @@ GET /api/v1/cards/:id/ledger
 GET /api/v1/cards/:id/reviews
 PATCH /api/v1/cards/:id
 PATCH /api/v1/milestones/:id
+GET /api/v1/boards/:id/teams
+GET /api/v1/messages/:id/attachments/:index
+GET /api/v1/teams/:id
+PATCH /api/v1/teams/:id
 POST /api/v1/boards/:id/hire
 POST /api/v1/boards/:id/next
+POST /api/v1/boards/:id/teams
+POST /api/v1/teams/:id/approve
+POST /api/v1/teams/:id/hire
+DELETE /api/v1/teams/:id
 POST /api/v1/boards/:id/wake
 POST /api/v1/boards/resolve
 POST /api/v1/cards

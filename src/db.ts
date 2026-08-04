@@ -89,6 +89,17 @@ export function openDb(file: string): Database.Database {
     lines TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS teams (
+    id INTEGER PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES boards(id),
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    lead_agent TEXT,
+    spec_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS deliveries (
     message_id INTEGER NOT NULL,
     agent_id INTEGER NOT NULL,
@@ -153,6 +164,8 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE agents ADD COLUMN effort TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN external_session_id TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN team_id INTEGER REFERENCES teams(id)`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE agents ADD COLUMN team_role TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN provider_state_json TEXT NOT NULL DEFAULT '{}'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN access_profile TEXT`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE agents ADD COLUMN hook_token_hash TEXT`) } catch { /* exists */ }
