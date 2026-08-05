@@ -63,6 +63,7 @@ import type { VapidKeys } from './push.js'
 import { formatInjectedMessage, injectTerminalMessage, recordTerminalEndpoint } from './terminal-inject.js'
 
 export type Bus = EventEmitter
+
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike extends AgentSessionControlHost {
   isHired(agentId: number): boolean
@@ -920,7 +921,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       summary,
     })
     if (hasOpenReviewRequest(db, card.id)) return
-    const stat = await diffStat(boardPath(card.board_id), card.branch).catch(() => '')
+    const stat = await diffStat(boardPath(card.board_id), card.branch, card.id).catch(() => '')
     logEvent(card.id, null, 'review_request', {
       summary,
       diffstat: stat,
@@ -934,8 +935,12 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       delivery_id: delivery.id,
       branch: card.branch ?? null,
     })
-    // opt-in: every card entering review gets an independent verifier pass (default manual)
-    if (process.env.ORCHESTRA_AUTO_VERIFY === '1') { try { startVerification(getCard(card.id)) } catch { /* manual verify still available */ } }
+    // every card entering review gets an independent verifier pass so evidence + tests
+    // are captured automatically (the drawer's proof block is verifier-driven). Default on;
+    // set ORCHESTRA_AUTO_VERIFY=0 to opt out and verify manually. Needs the daemon/conductor.
+    if (process.env.ORCHESTRA_AUTO_VERIFY !== '0' && maestro) {
+      try { startVerification(getCard(card.id)) } catch { /* manual verify still available */ }
+    }
   }
 
   // ── delivery verification (#52): an ephemeral verifier checks DONE-WHEN before approval ──
@@ -950,6 +955,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   const verificationFor = (cardId: number): any => {
     const v = lastEvent(cardId, 'verification')
     const r = lastEvent(cardId, 'verify_requested')
+    // waiting for the single verifier slot (#150) — distinct from running, so the drawer can
+    // say "queued" instead of showing an empty proof block
+    if (verifyQueue.includes(cardId)) return { running: false, queued: true, verdict: null }
     if (!v && !r) return undefined
     const fresh = !!r && Date.now() - new Date(r.created_at.replace(' ', 'T') + 'Z').getTime() < VERIFY_STALE_MS
     const running = fresh && (!v || r.id > v.id)
@@ -981,14 +989,85 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       `-d '{"criteria":[{"text":"<criterion>","met":true,"evidence":"<one line>"}],"verdict":"pass","tested":true,"by":"<your agent name>"}'`
   }
 
-  const startVerification = (card: any): any => {
+  const spawnVerifier = (card: any): any => {
     const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(card.board_id) as any
     const worktree = card.branch ? cardWorktree(board.project_path, card.id) : null
     const cwd = worktree && fs.existsSync(worktree) ? worktree : board.project_path
-    const agent = maestro!.hire({ boardId: card.board_id, cwd, role: 'verifier', ephemeral: true })
+    // A verifier must RUN things — the test suite, git inspection, and the curl that posts
+    // its verdict. Role agents otherwise default to read_only/plan, where every tool call is
+    // parked for operator approval; an ephemeral headless verifier has nobody to approve it,
+    // so it hung and died without reporting (8 spawned, 1 reported). It stays behaviourally
+    // read-only through its system prompt ("never modify files, cards, approvals").
+    const agent = maestro!.hire({
+      boardId: card.board_id, cwd, role: 'verifier', ephemeral: true, accessProfile: 'full_access',
+    })
     logEvent(card.id, agent?.id ?? null, 'verify_requested', { agent: agent?.name ?? null })
     emit(card.board_id, 'card', { ...getCard(card.id), verification: verificationFor(card.id) })
     maestro!.task(agent.id, verifierBrief(card))
+    return agent
+  }
+
+  // ── serial verification queue (#150) ──────────────────────────────────────────
+  // Large-scale work used to spawn one verifier per card entering review, uncapped —
+  // verification was the only agent type bypassing the capacity admission that gates
+  // /cards/:id/launch, so parking 20 cards swarmed the machine with 20 agents.
+  // At most ONE verifier runs board-wide; the rest queue and drain one by one, each
+  // still getting a fresh single-purpose agent (independence is the point of the role).
+  const verifyQueue: number[] = []
+  let verifyActive: { cardId: number; agentId: number | null; startedAt: number } | null = null
+
+  // A verifier that dies without reporting (crash, usage limit) must not wedge the queue.
+  // Same staleness window the badge already uses, so UI and queue agree on "still running".
+  // The DB is the source of truth: verificationFor() already ages a verify_requested out of
+  // "running", so a crashed verifier frees the slot on exactly the same window the badge uses.
+  // The in-memory clock is only a fallback for the pre-first-event moment.
+  const activeIsStale = () => {
+    if (!verifyActive) return false
+    const active = verificationFor(verifyActive.cardId)
+    if (active && active.running === false) return true
+    return Date.now() - verifyActive.startedAt > VERIFY_STALE_MS
+  }
+  const verifierFinished = (cardId: number) => {
+    if (verifyActive?.cardId === cardId) verifyActive = null
+    drainVerifyQueue()
+  }
+
+  function drainVerifyQueue(): void {
+    if (!maestro) return
+    if (verifyActive && !activeIsStale()) return
+    verifyActive = null
+    while (verifyQueue.length) {
+      const cardId = verifyQueue.shift()!
+      const card = getCard(cardId)
+      // skip cards that left review while waiting, or already got a verdict some other way
+      if (!card || card.column !== 'review') continue
+      try {
+        const agent = spawnVerifier(card)
+        verifyActive = { cardId, agentId: agent?.id ?? null, startedAt: Date.now() }
+        return
+      } catch { /* spawn failed — fall through and try the next queued card */ }
+    }
+  }
+
+  // A verifier can die without ever POSTing a verdict, which would leave the slot held and
+  // queued cards waiting forever. Sweep on a timer so the queue self-heals; unref'd so it
+  // never keeps the process (or a test run) alive, and cleared when the server closes.
+  const verifySweep = setInterval(() => { if (activeIsStale()) drainVerifyQueue() }, 60_000)
+  verifySweep.unref?.()
+  server.addHook('onClose', () => { clearInterval(verifySweep) })
+
+  // queue-aware entry point: everything (auto-verify + the manual button) goes through here
+  const startVerification = (card: any): any => {
+    if (verifyActive && !activeIsStale()) {
+      if (verifyActive.cardId !== card.id && !verifyQueue.includes(card.id)) {
+        verifyQueue.push(card.id)
+        logEvent(card.id, null, 'verify_queued', { position: verifyQueue.length })
+        emit(card.board_id, 'card', { ...getCard(card.id), verification: verificationFor(card.id) })
+      }
+      return null
+    }
+    const agent = spawnVerifier(card)
+    verifyActive = { cardId: card.id, agentId: agent?.id ?? null, startedAt: Date.now() }
     return agent
   }
 
@@ -1000,6 +1079,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const v = verificationFor(card.id)
     if (v?.running) return reply.code(409).send({ error: 'verification already running' })
     const agent = startVerification(card)
+    // null means another verifier holds the single slot — this card is queued, not rejected
+    if (!agent) return { ok: true, queued: true, position: verifyQueue.indexOf(card.id) + 1 }
     return { ok: true, agent_id: agent.id, agent_name: agent.name }
   })
 
@@ -1044,6 +1125,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         .run(card.board_id, card.id, noteBody)
       emit(card.board_id, 'message', db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(lastInsertRowid)))
       emit(card.board_id, 'card', { ...card, verification: verificationFor(card.id) })
+      // this verifier is done — release the single slot and start the next queued card (#150)
+      verifierFinished(card.id)
       reviewEvent(card, 'verified', { verdict, delivery_id: delivery.id })
       return { ok: true, verdict, criteria_count: criteria.length, delivery }
     })
@@ -2071,6 +2154,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     if (content.includes(0)) return reply.code(415).send({ error: 'binary attachment — open it locally' })
     return { ref: attachment.ref, size: stat.size, content: content.toString('utf8') }
   })
+
 
   server.delete<{ Params: { id: string } }>('/api/v1/messages/:id', (req, reply) => {
     const id = Number(req.params.id)

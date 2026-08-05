@@ -109,17 +109,25 @@ it('diffStat reports changed paths inside a git repo', async () => {
   git('init', '--initial-branch=master'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
   fs.writeFileSync(path.join(dir, 'a.txt'), 'one\n')
   git('add', '.'); git('commit', '-m', 'init')
-  fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\n')
-  expect(await diffStat(dir)).toContain('a.txt')          // working-tree changes
-  git('add', '.'); git('commit', '-m', 'change')
-  expect(await diffStat(dir)).toContain('a.txt')          // falls back to the last commit
-  const base = String(git('branch', '--show-current')).trim()
-  git('switch', '-c', 'card-77')
+  // no branch, no card id: the shared working tree is NEVER shown — it would be every
+  // agent's mixed uncommitted state, which polluted diffstats with unrelated files.
+  fs.writeFileSync(path.join(dir, 'stray.txt'), 'other agent WIP\n')
+  git('add', '.'); git('commit', '-m', 'unrelated change')
+  expect(await diffStat(dir)).toBe('')                    // no branch/card → empty, not HEAD leak
+  // with a card id, show the card's OWN commit found by the "#id" message convention
   fs.writeFileSync(path.join(dir, 'delivery.txt'), 'feature\n')
-  git('add', '.'); git('commit', '-m', 'delivery')
+  git('add', '.'); git('commit', '-m', 'ship the feature (#77)')
+  const byCard = await diffStat(dir, null, 77)
+  expect(byCard).toContain('delivery.txt')                // the card's commit
+  expect(byCard).not.toContain('stray.txt')               // not the unrelated commit
+  expect(await diffStat(dir, null, 999)).toBe('')         // unknown card → empty
+  const base = String(git('branch', '--show-current')).trim()
+  git('switch', '-c', 'card-88-branch')
+  fs.writeFileSync(path.join(dir, 'branchwork.txt'), 'feature\n')
+  git('add', '.'); git('commit', '-m', 'branch delivery')
   git('switch', base)
-  const branch = await diffStat(dir, 'card-77')
-  expect(branch).toContain('delivery.txt')                // card branch, not shared HEAD
+  const branch = await diffStat(dir, 'card-88-branch')
+  expect(branch).toContain('branchwork.txt')              // card branch, not shared HEAD
   expect(branch).not.toContain('a.txt')
   expect(await diffStat('/nonexistent-path-xyz')).toBe('') // not a repo → empty, not an error
 })

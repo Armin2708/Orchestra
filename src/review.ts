@@ -1,9 +1,13 @@
 import { execFile } from 'node:child_process'
 import type Database from 'better-sqlite3'
 
-// Changed-paths summary for a review request. A card branch is authoritative: review
-// the delivery against main instead of accidentally showing the shared checkout's HEAD.
-export async function diffStat(cwd: string, branch?: string | null): Promise<string> {
+// Changed-paths summary for a review request. Only the card's OWN delivery is
+// authoritative — a per-card branch, or (in the shared-checkout workflow where
+// cards have no branch) the card's own commits found by the "(#id)" convention.
+// We deliberately never fall back to `git diff HEAD`: on a shared checkout that
+// is every agent's mixed working tree, which pollutes the diffstat with stray
+// files that have nothing to do with this card. Better empty than misleading.
+export async function diffStat(cwd: string, branch?: string | null, cardId?: number | null): Promise<string> {
   const git = (args: string[]) => new Promise<{ ok: boolean; out: string }>((resolve) => {
     execFile('git', args, { cwd, timeout: 5_000, maxBuffer: 256 * 1024 },
       (err, out) => resolve({ ok: !err, out: err ? '' : String(out).trim() }))
@@ -22,9 +26,17 @@ export async function diffStat(cwd: string, branch?: string | null): Promise<str
       return delivery.out || `branch ${branch}: no changes relative to ${base}`
     }
   }
-  const working = await git(['diff', '--stat', 'HEAD'])
-  if (working.out) return working.out
-  return (await git(['show', '--stat', '--format=%h %s', 'HEAD'])).out
+  // no branch: show the card's own shipped commit(s) if the history records them,
+  // matching the "feat(x): … (#id)" / "#id" message convention. Never the working tree.
+  if (cardId) {
+    // -E (POSIX ERE — git has no \b on macOS); anchor so #135 never matches #1350
+    const hash = await git(['log', '-1', '--format=%H', '-E', `--grep=#${cardId}([^0-9]|$)`])
+    if (hash.ok && hash.out) {
+      const show = await git(['show', '--stat', '--format=%h %s', hash.out])
+      if (show.out) return show.out
+    }
+  }
+  return ''
 }
 
 // one open request per review cycle: a request is open until a decision lands after it

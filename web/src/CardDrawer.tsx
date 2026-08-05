@@ -153,10 +153,18 @@ export function CardDrawer({ card, boardId, agents = [], providers = [], embedde
         {card.column === 'review' && (
           <section className="review-panel">
             <h3>Needs your review</h3>
-            {reviewReq?.summary && <p className="review-summary">{reviewReq.summary}</p>}
+            {reviewReq?.summary
+              ? <p className="review-summary">{reviewReq.summary}</p>
+              : <p className="review-summary muted">No summary from the agent — its evidence is the verifier check below and any completion mail in your Inbox.</p>}
             {reviewReq?.diffstat && <pre className="review-diffstat">{reviewReq.diffstat}</pre>}
             <div className="verify-block">
-              {verification?.running && <p className="verify-running">◌ verifier running…</p>}
+              {verification?.running && <p className="verify-running">◌ verifier running — capturing evidence &amp; running tests…</p>}
+              {verification?.queued && (
+                <p className="verify-running">◌ queued for verification — one verifier runs at a time, this card is next in line.</p>
+              )}
+              {!verification?.running && !verification?.queued && !verification?.verdict && (
+                <p className="verify-empty">Not verified yet — no evidence or tests captured. Run the verifier to check this delivery against its acceptance criteria.</p>
+              )}
               {!verification?.running && verification?.verdict && (
                 <>
                   <p className={`verify-verdict v-${verification.verdict}`}>

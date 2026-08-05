@@ -189,3 +189,45 @@ it('an unmerged delivery branch is explicit and its worktree is the verifier cwd
     await server.close()
   }
 })
+
+// #150 — large-scale work must not swarm the machine: verification is serial.
+it('many cards entering review spawn exactly ONE verifier; the rest queue', async () => {
+  const { server, stub, board } = await boot()
+  const before = stub.hires.length
+  const ids: number[] = []
+  for (let i = 0; i < 5; i++) {
+    const c = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: board.id, title: `bulk ${i}`, column: 'in_progress',
+      description: 'DONE WHEN: it works.' } })).json().card
+    ids.push(c.id)
+    await server.inject({ method: 'POST', url: `/api/v1/cards/${c.id}/move`, payload: { column: 'review' } })
+  }
+  // one running, four waiting — not five concurrent agents
+  expect(stub.hires.length).toBe(before + 1)
+  const snap = (await server.inject({ method: 'GET', url: `/api/v1/boards/${board.id}/snapshot` })).json()
+  expect(snap.cards.find((c: any) => c.id === ids[3]).verification.queued).toBe(true)
+  await server.close()
+})
+
+it('the queue drains one at a time as each verdict lands', async () => {
+  const { server, stub, board } = await boot()
+  const before = stub.hires.length
+  const ids: number[] = []
+  for (let i = 0; i < 3; i++) {
+    const c = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: board.id, title: `drain ${i}`, column: 'in_progress',
+      description: 'DONE WHEN: it works.' } })).json().card
+    ids.push(c.id)
+    await server.inject({ method: 'POST', url: `/api/v1/cards/${c.id}/move`, payload: { column: 'review' } })
+  }
+  expect(stub.hires.length).toBe(before + 1)
+  const report = (cardId: number) => server.inject({
+    method: 'POST', url: `/api/v1/cards/${cardId}/verification`,
+    payload: { verdict: 'pass', tested: true, by: 'test', criteria: [{ text: 'it works', met: true, evidence: 'ran' }] },
+  })
+  await report(ids[0])
+  expect(stub.hires.length).toBe(before + 2) // next card picked up, still only one at a time
+  await report(ids[1])
+  expect(stub.hires.length).toBe(before + 3)
+  await server.close()
+})

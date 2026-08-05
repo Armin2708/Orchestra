@@ -95,7 +95,8 @@ export const streamUrl = () => '/api/v1/events'
 
 export type VerificationCriterion = { text: string; met: boolean | 'unverifiable'; evidence: string }
 // latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict
-export type Verification = { running: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
+// queued = waiting for the single verifier slot (#150); only one verifier runs board-wide
+export type Verification = { running: boolean; queued?: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
 export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean }
 export type Agent = {
   id: number
