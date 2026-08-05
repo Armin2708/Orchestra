@@ -17,7 +17,8 @@ it('resolves boards idempotently and registers agents', async () => {
 
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b1.id, session_id: 's1' } })).json()
   expect(a.name).toMatch(/^[a-z]+-[a-z]+$/)
-  expect(a.status).toBe('active')
+  // registration is a (re)start event, not turn-activity — starts idle until real work begins
+  expect(a.status).toBe('idle')
 
   const snap = (await s.inject({ method: 'GET', url: `/api/v1/boards/${b1.id}/snapshot` })).json()
   expect(snap.agents).toHaveLength(1)

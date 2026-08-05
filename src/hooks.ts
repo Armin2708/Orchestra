@@ -310,9 +310,10 @@ async function stop(input: any, provider: HookProvider): Promise<void> {
   const sess = await ensureSession(input, provider)
   if (!sess) return
   stampTranscript(sess, input, provider)
-  // heartbeat only — pulse would consume undelivered messages with no way to show them
+  // heartbeat only — pulse would consume undelivered messages with no way to show them.
+  // idle:true — the turn just ended, don't let the working ring linger.
   await api('POST', `/agents/${sess.agent_id}/heartbeat`, {
-    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id),
+    ...sessionIdentity(sess), telemetry: takeSpool(provider, input.session_id), idle: true,
     ...(sess.transcript_path ? { transcript_path: sess.transcript_path } : {}),
   })
   if (input.stop_hook_active) return // already continued once for this — never loop

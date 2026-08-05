@@ -329,8 +329,9 @@ it('detaches managed Codex threads on daemon shutdown without marking agents gon
   await t.manager.shutdown()
 
   expect(t.driver.detaches).toEqual(['codex:1'])
+  // never given a task — attach leaves it idle, not falsely "working"
   expect(t.db.prepare('SELECT status, external_session_id FROM agents WHERE id=?').get(agent.id))
-    .toMatchObject({ status: 'active', external_session_id: 'thread-1' })
+    .toMatchObject({ status: 'idle', external_session_id: 'thread-1' })
   expect(JSON.parse((t.db.prepare('SELECT provider_state_json FROM agents WHERE id=?').get(agent.id) as any).provider_state_json))
     .toMatchObject({ lifecycle: 'detached', thread_id: 'thread-1' })
 })

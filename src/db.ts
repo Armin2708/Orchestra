@@ -42,7 +42,7 @@ export function openDb(file: string): Database.Database {
     board_id INTEGER NOT NULL REFERENCES boards(id),
     name TEXT NOT NULL,
     session_id TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
+    status TEXT NOT NULL DEFAULT 'idle',
     last_seen TEXT NOT NULL DEFAULT (datetime('now')),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(board_id, name)

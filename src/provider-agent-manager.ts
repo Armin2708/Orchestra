@@ -441,6 +441,8 @@ export class CodexManagedAgentRuntime {
     if (!state || state.ended || !state.session) return false
     await this.driver.interrupt(state.session.id)
     state.activeTurnId = null
+    if (!state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(agentId)
     this.log(state, 'status', 'interrupted by user')
     this.persist(state)
     return true
@@ -568,7 +570,8 @@ export class CodexManagedAgentRuntime {
       return
     }
     state.session = session
-    this.db.prepare(`UPDATE agents SET status='active', external_session_id=?,
+    // session is attached and ready, not mid-turn — 'idle' until a real turn starts (applyEvent flips it)
+    this.db.prepare(`UPDATE agents SET status='idle', external_session_id=?,
       last_seen=datetime('now') WHERE id=?`).run(session.externalId, state.agentId)
     const collaboration = this.ensureLegacyCollaborationSession(state, session)
     provisionManagedAgentSessionCredential(this.db, {
@@ -606,6 +609,11 @@ export class CodexManagedAgentRuntime {
 
   private flush(state: CodexState): void {
     if (!state.session || state.ended || state.detaching) return
+    // work is actually being dispatched — mark active now rather than waiting on a
+    // provider turnActive event, which may lag or never arrive for some drivers
+    if (state.queue.length && !state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'")
+        .run(state.agentId)
     state.sending = state.sending.then(async () => {
       while (state.session && state.queue.length && !state.ended) {
         const text = state.queue[0]
@@ -668,8 +676,16 @@ export class CodexManagedAgentRuntime {
       state.rateLimitPause = null
       this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?").run(state.agentId)
     }
-    if (typeof metadata.turnId === 'string') state.activeTurnId = metadata.turnId
-    if (metadata.turnActive === false || this.isTurnCompleted(event)) state.activeTurnId = null
+    if (typeof metadata.turnId === 'string' && state.activeTurnId !== metadata.turnId) {
+      state.activeTurnId = metadata.turnId
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'").run(state.agentId)
+    }
+    if ((metadata.turnActive === false || this.isTurnCompleted(event)) && state.activeTurnId !== null) {
+      state.activeTurnId = null
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(state.agentId)
+    }
     const requestId = typeof metadata.requestId === 'string' ? metadata.requestId : undefined
     if (requestId && (metadata.approval === true || metadata.kind === 'approval')) {
       const approvalKind = typeof metadata.approvalKind === 'string' ? metadata.approvalKind : 'tool'

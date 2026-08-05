@@ -5,7 +5,7 @@ import { reap, removeAgentCards } from '../src/reaper.js'
 it('marks stale agents idle then gone; only their in_progress cards leave with them', () => {
   const db = openDb(':memory:')
   db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/p','p')`).run()
-  const ins = db.prepare(`INSERT INTO agents (board_id, name, last_seen) VALUES (1, ?, datetime('now', ?))`)
+  const ins = db.prepare(`INSERT INTO agents (board_id, name, status, last_seen) VALUES (1, ?, 'active', datetime('now', ?))`)
   ins.run('fresh-otter', '-1 minutes')
   ins.run('idle-otter', '-10 minutes')
   ins.run('gone-otter', '-40 minutes')

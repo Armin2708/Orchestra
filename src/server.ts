@@ -542,7 +542,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       try {
         if (hired && sessionToken && tokenHash) {
           const oldToken = String(req.headers['x-orchestra-session-token'] ?? '')
-          const rotated = db.prepare(`UPDATE agents SET hook_token_hash=?, status='active',
+          // registering/rotating a session credential only happens at (re)start, never mid-turn —
+          // 'idle' until the first real turn-activity heartbeat flips it
+          const rotated = db.prepare(`UPDATE agents SET hook_token_hash=?, status='idle',
               last_seen=datetime('now')
             WHERE id=? AND board_id=? AND provider=? AND external_session_id=?
               AND hook_token_hash=?`)
@@ -553,11 +555,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
           }
         } else {
         db.prepare(`
-          INSERT INTO agents (board_id, name, session_id, provider, external_session_id, hook_token_hash)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO agents (board_id, name, session_id, status, provider, external_session_id, hook_token_hash)
+          VALUES (?, ?, ?, 'idle', ?, ?, ?)
           ON CONFLICT(board_id, name) DO UPDATE SET
             session_id=excluded.session_id, external_session_id=excluded.external_session_id,
-            hook_token_hash=excluded.hook_token_hash, status='active', last_seen=datetime('now')
+            hook_token_hash=excluded.hook_token_hash, status='idle', last_seen=datetime('now')
         `).run(board_id, name, session_id ?? null, provider, externalSessionId, tokenHash)
         }
       } catch (error) {
@@ -2127,11 +2129,13 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ok: true }
   })
 
-  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string; transcript_path?: string } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { telemetry?: TelemetryEntry[]; provider?: string; session_id?: string; session_token?: string; transcript_path?: string; idle?: boolean } | null }>('/api/v1/agents/:id/heartbeat', (req, reply) => {
     const id = Number(req.params.id)
     const a = hookAgent(id, req.body)
     if (!a) return reply.code(403).send({ error: 'hook session identity does not match this agent' })
-    db.prepare(`UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?`).run(id)
+    // the Stop hook heartbeats with idle:true — the turn just ended, don't show the working ring
+    db.prepare(`UPDATE agents SET status=?, last_seen=datetime('now') WHERE id=?`)
+      .run(req.body?.idle ? 'idle' : 'active', id)
     if (req.body?.telemetry) recordTelemetry(db, a.board_id, a.id, req.body.telemetry)
     if (req.body?.transcript_path) externalTranscripts.track(id, req.body.transcript_path)
     const updated = db.prepare(`SELECT * FROM agents WHERE id=?`).get(id)

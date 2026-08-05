@@ -565,6 +565,7 @@ export class Conductor {
       this.emit(a.board_id, 'card', this.cardRow(card.id))
     }
     h.push(`The Claude usage window that paused you has reset — your session is resumed with memory intact. Continue where you left off${card ? ` on card #${card.id}` : ''}.`)
+    this.touch(agentId, 'active')
     return 'woken'
   }
 
@@ -625,10 +626,10 @@ export class Conductor {
     const bootstrap = issueManagedAgentLaunchBootstrap()
     this.db.prepare(`
       INSERT INTO agents (
-        board_id, name, session_id, kind, role, provider, sdk_session,
+        board_id, name, session_id, status, kind, role, provider, sdk_session,
         external_session_id, hook_token_hash
-      ) VALUES (?, ?, ?, 'hired', ?, 'claude', ?, ?, ?)
-      ON CONFLICT(board_id, name) DO UPDATE SET status='active', last_seen=datetime('now'),
+      ) VALUES (?, ?, ?, 'idle', 'hired', ?, 'claude', ?, ?, ?)
+      ON CONFLICT(board_id, name) DO UPDATE SET status='idle', last_seen=datetime('now'),
         session_id=excluded.session_id, kind='hired', role=excluded.role, provider='claude',
         sdk_session=excluded.sdk_session, external_session_id=excluded.external_session_id,
         provider_state_json='{}', hook_token_hash=excluded.hook_token_hash
