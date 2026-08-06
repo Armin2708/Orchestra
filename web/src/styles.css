@@ -219,6 +219,41 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transition: border-color 0.15s, color 0.15s;
 }
 .hire-btn:hover { border-color: #ccc8bf; color: var(--ink); }
+/* new hires spawn in a pool floating right under the hire bar; drag one out to activate it */
+.project-head-col { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.hire-pool {
+  pointer-events: auto;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 14px;
+  padding: 16px 14px 10px;
+  border: 1.5px dashed #c3bfb6; border-radius: 14px;
+  background: rgba(128, 125, 118, 0.08); backdrop-filter: blur(8px);
+  transform-origin: top left;
+  transition: transform 0.32s var(--ease), opacity 0.32s var(--ease);
+}
+.hire-pool.collapsing { transform: scale(0); opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .hire-pool { transition: none; }
+  .hire-pool.collapsing { display: none; }
+}
+.pool-node {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  gap: 5px; max-width: 110px; text-align: center;
+}
+.pool-node.dragging { z-index: 30; pointer-events: none; }
+.pool-node.dragging .net-avatar { transform: scale(1.14); box-shadow: var(--shadow-hover); }
+.pool-node:not(.dragging) { transition: transform 0.22s var(--ease); }
+.pool-node .net-name { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.pool-node .new-tag { top: -10px; }
+.pool-hint {
+  flex-basis: 100%; text-align: center; font-style: normal;
+  font-size: 9px; letter-spacing: .04em; color: #b8b4ac; margin-top: 2px;
+}
+.new-tag {
+  position: absolute; top: -9px; left: 50%; transform: translateX(-50%); z-index: 3;
+  background: #346538; color: #fff; border-radius: 999px; padding: 1px 6px;
+  font-size: 8px; line-height: 1.5; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; font-style: normal;
+}
 .crew-slot { position: relative; display: inline-flex; }
 .provider-badge {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -304,7 +339,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .q-text.done { fill: #346538; }
 @keyframes q-fade { from { opacity: 0; } }
 .net-node {
-  position: absolute; transform: translate(-50%, -50%);
+  /* anchor the 52px avatar's center on the node point, so edges and arrows aim at
+     the circle instead of the mid-point of avatar + name + cards */
+  position: absolute; transform: translate(-50%, -26px);
   display: flex; flex-direction: column; align-items: center; gap: 5px;
   max-width: 170px; text-align: center;
 }
@@ -471,6 +508,29 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-star { display: inline-block; animation: cc-spin 1.4s ease-in-out infinite; }
 @keyframes cc-spin { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .cc-esc { border: none; background: none; color: #D97757; font: inherit; text-decoration: underline; padding: 0; }
+
+/* agent chat messages render through the mail formatter — remap its palette to the terminal */
+.cc-rich {
+  display: flex; align-items: flex-start; gap: 6px;
+  --message-ink: #DED9D1;
+  --message-muted: #8a867e;
+  --message-faint: #6f6b64;
+  --message-line: #4a463f;
+  --message-line-strong: #6f6b64;
+  --message-surface: #262624;
+  --message-surface-soft: #2e2c2a;
+  --message-accent: #7fb2d9;
+  --message-accent-dark: #a3c9e5;
+}
+.cc-rich-body { flex: 1; min-width: 0; }
+.cc-rich-body .mail-letter { font-size: inherit; line-height: 1.6; max-width: none; color: #DED9D1; }
+.cc-rich-body .mail-letter > * + * { margin-top: 0.6em; }
+
+/* the question the agent is working on, pinned above the composer */
+.cc-asking {
+  margin: 0 0 6px; padding: 0 2px; color: #8a867e; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .cc-promptbox {
   display: flex; align-items: flex-start; gap: 10px;
   border: 1px solid #4a463f; border-radius: 8px;
@@ -1327,6 +1387,41 @@ textarea {
 .hire-create:hover { background: #333; }
 .hire-create:disabled { opacity: 0.5; cursor: not-allowed; }
 .hire-modal-error { position: static; max-width: 240px; }
+.hire-seg { display: flex; flex-wrap: wrap; gap: 8px; }
+.hire-seg-btn {
+  flex: 1 1 auto; min-width: 0; padding: 9px 12px; font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.hire-seg-btn:hover:not(:disabled) { border-color: var(--ink-soft); }
+.hire-seg-btn.selected { background: var(--ink); color: #fff; border-color: var(--ink); }
+.hire-seg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.hire-seg-btn.muted { flex: 0 0 auto; font-weight: 500; color: var(--ink-soft); }
+.hire-seg-btn.muted.selected { color: #fff; }
+.hire-slider { display: flex; flex-direction: column; gap: 6px; padding: 2px 2px 0; }
+.hire-slider input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 4px;
+  background: var(--line); border-radius: 999px; cursor: pointer; margin: 6px 0;
+}
+.hire-slider input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--ink); border: 2px solid var(--surface); box-shadow: 0 1px 3px rgba(20, 18, 12, 0.3);
+}
+.hire-slider input[type=range]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: var(--ink);
+  border: 2px solid var(--surface); box-shadow: 0 1px 3px rgba(20, 18, 12, 0.3);
+}
+.hire-slider-ticks { display: flex; justify-content: space-between; gap: 4px; }
+.hire-slider-tick {
+  flex: 1 1 0; min-width: 0; padding: 2px 2px; font: inherit; font-size: 11px; font-weight: 500;
+  color: var(--ink-soft); background: none; border: 0; cursor: pointer; text-align: center;
+  white-space: nowrap; transition: color 0.15s var(--ease);
+}
+.hire-slider-tick:first-child { text-align: left; }
+.hire-slider-tick:last-child { text-align: right; }
+.hire-slider-tick:hover { color: var(--ink); }
+.hire-slider-tick.selected { color: var(--ink); font-weight: 700; }
 
 /* auditing state */
 .rm-idea.auditing {

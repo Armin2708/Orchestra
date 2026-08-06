@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "rebaseWhen": "conflicted",
+  "rangeStrategy": "pin",
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
+  "packageRules": [
+    {
+      "description": "Provider CLIs/SDKs ship the model catalogs the hire picker reads. Group them into one weekly PR so a bundled CLI never silently falls behind a released model (see cards #136/#138). Pins stay exact — the PR is the gate, so a bad upstream can never auto-break users.",
+      "groupName": "provider SDKs",
+      "matchPackageNames": [
+        "@anthropic-ai/claude-agent-sdk",
+        "@anthropic-ai/claude-agent-sdk-{/,}**",
+        "@anthropic-ai/sdk",
+        "@openai/**",
+        "/^codex(-|$)/",
+        "/^qwen(-|$)/",
+        "/^kimi(-|$)/"
+      ],
+      "rangeStrategy": "pin",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "providers",
+      "schedule": ["before 6am on monday"],
+      "minimumReleaseAge": "3 days",
+      "automerge": false
+    },
+    {
+      "description": "Node and npm are pinned by engines; a runtime bump is a deliberate decision, never an automatic one.",
+      "matchDepTypes": ["engines"],
+      "enabled": false
+    },
+    {
+      "description": "Dev tooling can batch — it does not affect what users run.",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "dev tooling",
+      "automerge": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null
+  }
+}

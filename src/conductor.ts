@@ -21,6 +21,7 @@ import {
   type AgentProviderCatalog,
 } from './agent-providers.js'
 import { loadSdkSessionTranscript } from './external-transcript.js'
+import { resolvePreferredClaudeExecutableV1 } from './readiness-doctor.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 import {
   issueManagedAgentLaunchBootstrap,
@@ -397,6 +398,40 @@ export class Conductor {
       updatedAt: cached?.updated_at ?? null,
       detail: cached ? undefined : 'Start a Claude agent to discover the models available to this account.',
     })]
+  }
+
+  // Best-effort catalog refresh with no live agent: spawn a short-lived SDK query
+  // against the preferred (newest) Claude CLI purely to read supportedModels(), so a
+  // freshly-upgraded CLI surfaces new models at daemon boot instead of on next hire.
+  // Never throws; a probe failure (unauthed, missing CLI, timeout) keeps the cache.
+  async refreshModelCatalog(cwd: string = process.cwd()): Promise<boolean> {
+    if ([...this.hired.values()].some((h) => typeof h.query?.supportedModels === 'function')) {
+      return false // a live agent already keeps the catalog fresh on start
+    }
+    const claudeExecutable = resolvePreferredClaudeExecutableV1()
+    const input = createInput()
+    let probe: any = null
+    try {
+      probe = query({
+        prompt: input.stream(),
+        options: {
+          cwd,
+          ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
+        } as any,
+      })
+      const raw = await supportedModelsWithTimeout(probe)
+      const models = normalizeProviderModels(raw)
+      if (models.length) {
+        writeProviderModelCache(this.db, models)
+        return true
+      }
+      return false
+    } catch {
+      return false
+    } finally {
+      try { input.end() } catch { /* stream already closed */ }
+      try { await probe?.interrupt?.() } catch { /* already stopped */ }
+    }
   }
 
   private cardRow(id: number): any {
@@ -853,10 +888,14 @@ export class Conductor {
     // auditors author tickets meant to outlive them — without ORCHESTRA_AGENT the cli
     // cannot auto-claim ownership, so their cards are born unowned
     if (opts.role === 'auditor' || opts.role === 'verifier') delete env.ORCHESTRA_AGENT
+    // prefer a newer PATH-installed Claude CLI over the SDK's bundled one, so the
+    // model catalog (supportedModels) reflects the operator's current CLI
+    const claudeExecutable = resolvePreferredClaudeExecutableV1()
     const q = query({
       prompt: input.stream(),
       options: {
         cwd: opts.cwd,
+        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
         ...(model ? { model } : {}),
         ...(opts.resumeSession ? { resume: opts.resumeSession } : {}),
         ...(effort ? { effort } : {}),

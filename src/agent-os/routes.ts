@@ -42,6 +42,19 @@ import {
   writeAgentDefaults,
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
+import {
+  checkProviderUpdate,
+  providerUpdateCommand,
+  type ProviderUpdateState,
+} from '../provider-update-check.js'
+import {
+  readProviderAuthStatus,
+  resolveExecutableOnPath,
+} from '../provider-auth-status.js'
+import { discoverClaudeProviderExecutableV1 } from '../runtime/drivers/claude-provider-adapter.js'
+import { resolvePreferredClaudeExecutableV1 } from '../readiness-doctor.js'
+import { discoverQwenProviderExecutableV1 } from '../runtime/drivers/qwen-provider-adapter.js'
+import { discoverKimiProviderExecutableV1 } from '../runtime/drivers/kimi-provider-adapter.js'
 import { agentHomePlugin } from './agent-home-routes.js'
 import { agentHomeRetentionPlugin } from './agent-home-retention-routes.js'
 import type { AgentHomeRuntimeControl } from './agent-home-lifecycle.js'
@@ -348,6 +361,60 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       detail: 'Requires the daemon Conductor before Claude models can be discovered.',
     }),
   ]) }))
+
+  // Staleness must be visible, never silently corrected: this reports installed vs
+  // upstream-latest per provider and hands back the documented update command. It
+  // NEVER applies an update and never restarts the daemon or a running agent —
+  // an in-flight agent must not die because its CLI was upgraded underneath it.
+  app.get('/providers/updates', async () => {
+    const installedVersions: Record<string, string | null> = {}
+    try { installedVersions.claude = discoverClaudeProviderExecutableV1().version } catch { /* unknown */ }
+    try { installedVersions.qwen = discoverQwenProviderExecutableV1().version } catch { /* unknown */ }
+    try { installedVersions.kimi = discoverKimiProviderExecutableV1().version } catch { /* unknown */ }
+
+    const descriptors = await asyncDescriptors(options.providers, [])
+    for (const descriptor of descriptors) {
+      if (installedVersions[descriptor.id] !== undefined) continue
+      // Codex and any future provider report through their own health envelope.
+      const version = (descriptor.health as { version?: unknown } | undefined)?.version
+      installedVersions[descriptor.id] = typeof version === 'string' ? version : null
+    }
+
+    const updates: ProviderUpdateState[] = []
+    for (const [providerId, installed] of Object.entries(installedVersions)) {
+      updates.push(await checkProviderUpdate(db, providerId, installed))
+    }
+    return { updates }
+  })
+
+  // Auth is DELEGATED: each CLI owns its own login and credential storage, so this
+  // only reads the status the CLI already publishes and returns its login command.
+  // Orchestra persists no provider credentials and never performs a login itself.
+  app.get('/providers/auth', async () => {
+    // The discovery contract deliberately REDACTS resolved_path, so probing resolves
+    // each command on PATH here. Claude reuses the #136 preferred-executable resolver
+    // (newest of PATH vs bundled) so auth is read from the CLI that actually runs.
+    const executables: Record<string, string | null> = {
+      claude: resolvePreferredClaudeExecutableV1() ?? resolveExecutableOnPath('claude'),
+      codex: resolveExecutableOnPath('codex'),
+      qwen: resolveExecutableOnPath('qwen'),
+      kimi: resolveExecutableOnPath('kimi'),
+    }
+
+    return {
+      auth: Object.entries(executables).map(([providerId, executable]) =>
+        readProviderAuthStatus(providerId, executable)),
+    }
+  })
+
+  // Returns the command only — the operator runs it. Applying a privileged global
+  // install from the daemon would upgrade a CLI out from under running agents.
+  app.get<{ Params: { id: string } }>('/providers/:id/update-command', (request, reply) => {
+    requireOperator(request)
+    const command = providerUpdateCommand(String(request.params.id))
+    if (!command) return reply.code(404).send({ error: 'no documented update command for this provider' })
+    return { provider_id: request.params.id, command, restarts_agents: false }
+  })
 
   app.get('/settings/agent-defaults', () => ({
     defaults: readAgentDefaults(db),
