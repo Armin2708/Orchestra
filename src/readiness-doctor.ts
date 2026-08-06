@@ -416,6 +416,15 @@ const computePreferredClaudeExecutable = (
 // binary (so operators who keep the CLI current get its newer model catalog — e.g. a
 // freshly released Opus — without an app release), else null to use the SDK default.
 // Memoized for the process lifetime; a CLI upgrade pairs with a daemon restart.
+/**
+ * Version banner of a resolved Claude executable, for callers that need the version
+ * of the CLI Orchestra actually launches (not the bundled one).
+ */
+export const readClaudeExecutableVersionV1 = (
+  executable: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null => readClaudeExecutableVersion(executable, env)
+
 export const resolvePreferredClaudeExecutableV1 = (
   env: NodeJS.ProcessEnv = process.env,
   options: { force?: boolean } = {},

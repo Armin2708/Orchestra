@@ -135,3 +135,18 @@ describe('version normalization', () => {
     expect(evaluateProviderUpdate('codex', 'nightly-build', '1.0.0', 't').installed).toBe('nightly-build')
   })
 })
+
+describe('installed version reflects the CLI Orchestra actually runs', () => {
+  // Regression: the panel reported the BUNDLED version while #136/#138 make the
+  // daemon launch the newest of (PATH, bundled). An operator on a self-updated
+  // 2.1.223 was told "update available -> 2.1.223" against the bundled 2.1.212.
+  it('does not flag an update when the running CLI already matches upstream', () => {
+    const state = evaluateProviderUpdate('claude', '2.1.223', '2.1.223', 't')
+    expect(state.update_available).toBe(false)
+    expect(state.installed).toBe('2.1.223')
+  })
+
+  it('still flags an update when the running CLI genuinely trails upstream', () => {
+    expect(evaluateProviderUpdate('claude', '2.1.212', '2.1.223', 't').update_available).toBe(true)
+  })
+})

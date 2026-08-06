@@ -43,6 +43,10 @@ import {
 } from '../agent-defaults.js'
 import { claudeProviderCatalog, type AgentProviderCatalog } from '../agent-providers.js'
 import {
+  readClaudeExecutableVersionV1,
+  resolvePreferredClaudeExecutableV1,
+} from '../readiness-doctor.js'
+import {
   checkProviderUpdate,
   providerUpdateCommand,
   type ProviderUpdateState,
@@ -52,7 +56,6 @@ import {
   resolveExecutableOnPath,
 } from '../provider-auth-status.js'
 import { discoverClaudeProviderExecutableV1 } from '../runtime/drivers/claude-provider-adapter.js'
-import { resolvePreferredClaudeExecutableV1 } from '../readiness-doctor.js'
 import { discoverQwenProviderExecutableV1 } from '../runtime/drivers/qwen-provider-adapter.js'
 import { discoverKimiProviderExecutableV1 } from '../runtime/drivers/kimi-provider-adapter.js'
 import { agentHomePlugin } from './agent-home-routes.js'
@@ -368,7 +371,15 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
   // an in-flight agent must not die because its CLI was upgraded underneath it.
   app.get('/providers/updates', async () => {
     const installedVersions: Record<string, string | null> = {}
-    try { installedVersions.claude = discoverClaudeProviderExecutableV1().version } catch { /* unknown */ }
+    // Report the version of the CLI Orchestra ACTUALLY LAUNCHES, which is the newest
+    // of (PATH, bundled) — not the bundled one. Reporting the bundled version here
+    // would show "update available" to an operator already running a newer CLI.
+    try {
+      const preferred = resolvePreferredClaudeExecutableV1()
+      installedVersions.claude = preferred
+        ? readClaudeExecutableVersionV1(preferred)
+        : discoverClaudeProviderExecutableV1().version
+    } catch { /* unknown */ }
     try { installedVersions.qwen = discoverQwenProviderExecutableV1().version } catch { /* unknown */ }
     try { installedVersions.kimi = discoverKimiProviderExecutableV1().version } catch { /* unknown */ }
 
