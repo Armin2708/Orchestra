@@ -2161,32 +2161,53 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return reply.code(404).send({ error: 'not a hired agent' })
     })
 
+  // The drawer polls this route once a second per open agent, and re-sending the whole
+  // 500-line history every time was the single largest source of daemon request work.
+  // Clients pass what they already hold (`since`) plus a fingerprint of their last held
+  // line (`anchor`); an anchor that still matches earns a delta, anything else — a cleared
+  // drawer, a transcript that rolled past the 500-line cap, a stale client — falls back to
+  // the full list. `from`/`total` tell the client which it got.
+  const lineAnchor = (line: unknown): string => {
+    const l = line as { at?: string; kind?: string; text?: string } | undefined
+    return l ? `${l.at ?? ''}|${l.kind ?? ''}|${(l.text ?? '').slice(0, 40)}` : ''
+  }
+  const windowed = <T extends { lines: unknown[] }>(result: T, query: unknown): T & { from: number; total: number } => {
+    const q = (query ?? {}) as { since?: string; anchor?: string }
+    const total = result.lines.length
+    const since = Number(q.since)
+    const continuous = Number.isInteger(since) && since > 0 && since <= total
+      && typeof q.anchor === 'string' && lineAnchor(result.lines[since - 1]) === q.anchor
+    return continuous
+      ? { ...result, lines: result.lines.slice(since), from: since, total }
+      : { ...result, from: 0, total }
+  }
+
   server.get<{ Params: { id: string } }>('/api/v1/agents/:id/transcript', (req, reply) => {
     if (!requireOperator(req, reply)) return
     const id = Number(req.params.id)
     const hired = maestro?.transcript(id)
     // `info` only exists for live hired sessions; anything else falls back to the
     // read-only tail of the agent's own terminal transcript (hooks-reported path)
-    if (hired && (hired as { info?: unknown }).info) return hired
+    if (hired && (hired as { info?: unknown }).info) return windowed(hired, req.query)
     const external = externalTranscripts.transcript(id)
-    if (external.lines.length > 0) return { lines: external.lines, working: null, external: true }
+    if (external.lines.length > 0) return windowed({ lines: external.lines, working: null, external: true }, req.query)
     if (!hired?.lines.length) {
       // a hired agent between daemon restart and its resume still shows its history —
       // from the daemon store, else from the SDK session file it will resume from
       try {
         const row = db.prepare('SELECT lines FROM agent_transcripts WHERE agent_id=?').get(id) as { lines: string } | undefined
         const stored = row ? JSON.parse(row.lines) as unknown[] : []
-        if (Array.isArray(stored) && stored.length) return { lines: stored, working: null, restored: true }
+        if (Array.isArray(stored) && stored.length) return windowed({ lines: stored, working: null, restored: true }, req.query)
         const agentRow = db.prepare(`SELECT a.sdk_session, b.project_path FROM agents a
           JOIN boards b ON b.id=a.board_id WHERE a.id=?`).get(id) as { sdk_session: string | null; project_path: string } | undefined
         if (agentRow?.sdk_session) {
           const sdk = loadSdkSessionTranscript(agentRow.project_path, agentRow.sdk_session)
-          if (sdk.length) return { lines: sdk, working: null, restored: true }
+          if (sdk.length) return windowed({ lines: sdk, working: null, restored: true }, req.query)
         }
       } catch { /* unreadable history never blocks the live view */ }
     }
     if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
-    return hired ?? { lines: [], working: null }
+    return windowed(hired ?? { lines: [], working: null }, req.query)
   })
 
   const inboxSql = `

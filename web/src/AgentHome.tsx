@@ -48,6 +48,7 @@ import { ProviderBadge } from './ProviderBadge'
 import { useModalFocusTrap } from './useModalFocusTrap'
 import { runRuntimeMutation } from './runtimeReadOnly'
 import './agentHome.css'
+import { visibleInterval } from './visibleInterval'
 
 const emptyProfiles = (): Loadable<AgentProfile[]> => ({
   status: 'loading',
@@ -234,8 +235,8 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
   useEffect(() => {
     if (!selectedProfileId) return
     void refreshHome(false)
-    const timer = window.setInterval(() => void refreshHome(true), 8_000)
-    return () => window.clearInterval(timer)
+    const stop = visibleInterval(() => void refreshHome(true), 8_000)
+    return stop
   }, [selectedProfileId, refreshHome])
 
   useEffect(() => {
@@ -349,8 +350,8 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
       return
     }
     void loadRuntime(false)
-    const timer = window.setInterval(() => void loadRuntime(true), 4_000)
-    return () => window.clearInterval(timer)
+    const stop = visibleInterval(() => void loadRuntime(true), 4_000)
+    return stop
   }, [selectedSession?.id, loadRuntime])
 
   useEffect(() => {
@@ -445,8 +446,8 @@ export function AgentHome({ snaps, onChange, readOnly = false }: {
         // Preserve the last durable projection during a transient poll failure.
       }
     }
-    const timer = window.setInterval(() => void poll(), 2_500)
-    return () => { alive = false; window.clearInterval(timer) }
+    const stop = visibleInterval(() => void poll(), 2_500)
+    return () => { alive = false; stop() }
   }, [requestEvents, selectedConversation?.id])
 
   useEffect(() => {
