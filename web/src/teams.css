@@ -259,7 +259,8 @@
 .teams-chat-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .teams-chat-title strong { font-size: 13px; }
 .teams-chat-title em { font-style: normal; font-size: 10.5px; color: var(--ink-soft, #999); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.teams-chat-tune, .teams-chat-x {
+.teams-chat-stop { color: #a33 !important; }
+.teams-chat-tune, .teams-chat-x, .teams-chat-stop {
   padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--ink-soft, #777); font-size: 11px; font-weight: 600; cursor: pointer;
 }

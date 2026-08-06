@@ -546,6 +546,17 @@ function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }
     try { localStorage.setItem(RUNTIME_KEY, JSON.stringify(next)) } catch { /* optional preference */ }
   }
 
+  // the mastermind is deliberately absent from the Overview board, so this is the only
+  // place it can be stopped — never remove it without giving the operator another one
+  const stop = async () => {
+    if (!agent) return
+    if (!window.confirm('Stop the mastermind? Its chat history is lost; you can start it again any time.')) return
+    setBusy(true)
+    setError(null)
+    try { await api('POST', `/agents/${agent.id}/fire`); focused.current = null; onChange() }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+
   const start = async () => {
     if (!boardId) return
     setBusy(true)
@@ -572,6 +583,10 @@ function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }
         <button className="teams-chat-tune" title="Provider, model and effort" onClick={() => setTuning((v) => !v)}>
           {runtime.model || runtime.provider || 'runtime'} ⌄
         </button>
+        {agent && (
+          <button className="teams-chat-stop" title="Stop the mastermind — the Teams tab is its only control"
+            aria-label="Stop the mastermind" disabled={busy} onClick={() => void stop()}>×</button>
+        )}
         <button className="teams-chat-x" title="Hide the mastermind" onClick={onCollapse}>›</button>
       </header>
 
