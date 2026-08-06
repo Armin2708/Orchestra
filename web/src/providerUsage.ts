@@ -144,3 +144,11 @@ export const highestSubscriptionUsage = (providers: SubscriptionUsageProvider[])
   const values = providers.flatMap((provider) => provider.windows.map((window) => window.used))
   return values.length ? Math.max(...values) : null
 }
+
+// the meter follows one plan at a time — an unknown/dropped selection falls back to the
+// first provider so the panel never sticks on a plan the operator can no longer see
+export const selectedUsageProvider = (
+  providers: SubscriptionUsageProvider[],
+  selectedId: string | null,
+): SubscriptionUsageProvider | null =>
+  providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null

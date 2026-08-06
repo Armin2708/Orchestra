@@ -7,7 +7,9 @@ import { Snapshot } from './api'
 import { BOARD_TABS, BoardTab } from './boardNavigation'
 import './boardSection.css'
 
-const WorkspaceCockpit = React.lazy(() => import('./WorkspaceCockpit').then((module) => ({ default: module.WorkspaceCockpit })))
+// the board's Workspace tab is a terminal only (#159); the full runtime cockpit
+// (diffs, evidence, deliveries, policies) lives on the Advanced surface
+const WorkspaceTerminal = React.lazy(() => import('./WorkspaceTerminal').then((module) => ({ default: module.WorkspaceTerminal })))
 const TeamsView = React.lazy(() => import('./TeamsView').then((module) => ({ default: module.TeamsView })))
 const KanbanView = React.lazy(() => import('./KanbanView').then((module) => ({ default: module.KanbanView })))
 
@@ -50,8 +52,8 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
           : tab === 'messages'
             ? <MessagesView snaps={snaps} focused={focused} onChange={onChange} />
             : tab === 'workspace'
-              ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading workspace cockpit"><span /><span /><span /></div>}>
-                  <WorkspaceCockpit snaps={snaps} onChange={onChange} />
+              ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading terminal"><span /><span /><span /></div>}>
+                  <WorkspaceTerminal snaps={snaps} />
                 </React.Suspense>
               : tab === 'timeline'
                 ? <TimelineView snaps={snaps} focused={focused} onChange={onChange} />

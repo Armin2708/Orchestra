@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalLifecycleForWorkspace } from '../web/src/CanonicalLifecycleStatus.js'
 import {
   normalizeCanonicalLifecycleRecord,
   normalizeCanonicalLifecycleResponse,
@@ -87,56 +86,6 @@ const canonicalEnvelope = () => ({
 })
 
 describe('canonical lifecycle presentation', () => {
-  it('joins job, workspace, session, contract, and dispatch only through exact durable ids', () => {
-    const view = canonicalLifecycleForWorkspace({
-      workspace: workspace(),
-      jobs: [job('wrong-job', 'workspace-2'), job('job-1', 'workspace-1')],
-      delivery: delivery(),
-      events: [
-        event('wrong-event', 'wrong-job', 'job.succeeded', '2026-07-22T10:04:00Z'),
-        event('started', 'job-1', 'job.started', '2026-07-22T10:03:00Z'),
-        event('queued', 'job-1', 'job.queued', '2026-07-22T10:02:00Z'),
-      ],
-    })
-
-    expect(view).toMatchObject({
-      lifecycle: 'canonical',
-      job: { id: 'job-1' },
-      workspace: { id: 'workspace-1' },
-      sessionId: 'session-1',
-      contractId: 'contract-1',
-      dispatchEvent: { id: 'started', kind: 'job.started' },
-      missing: [],
-    })
-  })
-
-  it('does not infer a lifecycle from workspace jobs when no scoped delivery exists', () => {
-    const view = canonicalLifecycleForWorkspace({
-      workspace: workspace(),
-      jobs: [job('job-1', 'workspace-1')],
-      delivery: delivery({ job_id: 'job-2', workspace_id: 'workspace-2', session_id: 'session-2' }),
-      events: [],
-    })
-
-    expect(view.lifecycle).toBe('ambient')
-    expect(view.job).toBeNull()
-    expect(view.sessionId).toBeNull()
-    expect(view.contractId).toBeNull()
-    expect(view.dispatchEvent).toBeNull()
-    expect(view.missing).toEqual(['job'])
-  })
-
-  it('does not choose another workspace job when a scoped delivery names a missing job', () => {
-    const view = canonicalLifecycleForWorkspace({
-      workspace: workspace(),
-      jobs: [job('job-1', 'workspace-1'), job('job-3', 'workspace-1')],
-      delivery: delivery({ job_id: 'job-2' }),
-      events: [event('wrong', 'job-1', 'job.started', '2026-07-22T10:03:00Z')],
-    })
-
-    expect(view).toMatchObject({ lifecycle: 'canonical', job: null, missing: ['job'] })
-  })
-
   it('normalizes the shared Board/API/CLI canonical envelope without dropping runtime truth', () => {
     const normalized = normalizeCanonicalLifecycleResponse(canonicalEnvelope())
 
@@ -172,18 +121,8 @@ describe('canonical lifecycle presentation', () => {
     const wrongCorrelation = structuredClone(record)
     wrongCorrelation.events[0].correlation_id = 'another-correlation'
     expect(() => normalizeCanonicalLifecycleRecord(wrongCorrelation)).toThrow(/event.correlation_id does not match/)
-    const view = canonicalLifecycleForWorkspace({
-      workspace: workspace(),
-      jobs: [job('wrong-job', 'workspace-1')],
-      delivery: delivery({ job_id: 'wrong-job' }),
-      events: [event('wrong-event', 'wrong-job', 'job.started', '2026-07-22T10:03:00Z')],
-      exact: normalized as CanonicalLifecycleRecord,
-    })
-
-    expect(view).toMatchObject({
-      lifecycle: 'canonical', job: { id: 'job-1' }, sessionId: 'session-1',
-      contractId: 'card:7:v3', dispatchEvent: { id: 'event-1' }, missing: [],
-    })
+    expect(normalized.orchestration.job_id).toBe('job-1')
+    expect(normalized.events?.[0]).toMatchObject({ id: 'event-1', kind: 'job.queued' })
   })
 
   it('rejects partial, mismatched, or compatibility envelopes instead of inventing canonical links', () => {

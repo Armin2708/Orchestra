@@ -2,7 +2,6 @@ import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentHomeHeader, AgentTerminalPanel } from '../web/src/AgentHomePanels.js'
-import { ContextPane, ProcessesPane } from '../web/src/WorkspacePanes.js'
 import { routeTerminalKeyEvent } from '../web/src/ProcessTerminal.js'
 import { runRuntimeMutation } from '../web/src/runtimeReadOnly.js'
 
@@ -16,7 +15,6 @@ const { renderToStaticMarkup } = requireFromWeb('react-dom/server') as {
 
 const appSource = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
 const agentHomeSource = readFileSync(new URL('../web/src/AgentHome.tsx', import.meta.url), 'utf8')
-const cockpitSource = readFileSync(new URL('../web/src/WorkspaceCockpit.tsx', import.meta.url), 'utf8')
 const terminalSource = readFileSync(new URL('../web/src/ProcessTerminal.tsx', import.meta.url), 'utf8')
 
 describe('offline canonical runtime composition', () => {
@@ -120,43 +118,12 @@ describe('offline canonical runtime composition', () => {
     expect(directions).toEqual(['forward', 'backward'])
   })
 
-  it('keeps saved workspace context/process content in the accessibility tree while actions are disabled', () => {
-    vi.stubGlobal('window', { location: { hostname: 'localhost' } })
-    const context = renderToStaticMarkup(createElement(ContextPane, {
-      readOnly: true,
-      context: { status: 'ready', error: null, data: [{
-        id: 'context-1', kind: 'decision', source: 'release-plan.md', content: 'Retained release decision',
-        tokens: 42, pinned: true, provenance: null,
-      }] },
-      onTogglePin: async () => undefined,
-    }))
-    expect(context).toContain('Retained release decision')
-    expect(context).toContain('disabled=""')
-    expect(context).not.toContain('aria-hidden="true"')
-    expect(context).not.toContain('inert')
-
-    const processes = renderToStaticMarkup(createElement(ProcessesPane, {
-      readOnly: true, activeId: 'process-1',
-      processes: { status: 'ready', error: null, data: [{
-        id: 'process-1', name: 'saved-test', command: 'npm test', status: 'running',
-        restartable: true, pid: 123, exit_code: null, started_at: '2026-08-02T10:00:00Z', ports: [],
-      }] },
-      onAttach: () => undefined, onSignal: async () => undefined, onRestart: async () => undefined,
-    }))
-    expect(processes).toContain('npm test')
-    expect(processes).toContain('disabled=""')
-    expect(processes).not.toContain('inert')
-    vi.unstubAllGlobals()
-  })
-
   it('propagates read only from App through both canonical runtime surfaces and guards named mutation paths', () => {
     expect(appSource).toContain("readOnly={connectionState !== 'live'}")
     expect(agentHomeSource).toContain('if (readOnly || !selectedSession) return')
     expect(agentHomeSource).toContain('const workspace = runtime.workspace')
     expect(agentHomeSource).toContain('if (readOnly || !workspace || openingShell) return')
     expect(agentHomeSource).toContain('if (readOnly || restartingProcessId) return')
-    expect(cockpitSource).toContain('if (readOnly || openingShellRef.current) return')
-    expect(cockpitSource).toContain('if (readOnly || processes.status !== \'ready\') return')
     expect(terminalSource).toContain('if (!batch?.data || readOnlyRef.current) return')
     expect(terminalSource).toContain('if (readOnlyRef.current) return')
   })

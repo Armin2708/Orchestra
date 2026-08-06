@@ -230,6 +230,9 @@
 .cc-state-unsupported { border-style: dashed; background: #f4f2ee; }
 
 .cc-canonical-surface { min-height: 100%; }
+/* the deep-linked workspace surface is a terminal now (#162) and has no intrinsic
+   height of its own — the cockpit it replaced brought its own layout */
+.cc-canonical-surface > .ws-terminal { min-height: min(640px, 70vh); }
 .cc-surface-context { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
 .cc-surface-context p,
 .cc-detail-heading > p,

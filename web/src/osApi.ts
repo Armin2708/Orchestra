@@ -1490,7 +1490,7 @@ export const osApi = {
 
   listWorkspaces: async (boardId: number) =>
     unwrapList<unknown>(await api('GET', `/os/boards/${boardId}/workspaces`), ['workspaces']).map(normalizeWorkspace),
-  createWorkspace: async (boardId: number, input: Partial<Workspace> & { name: string }) =>
+  createWorkspace: async (boardId: number, input: Partial<Workspace> & { name: string; idempotency_key?: string }) =>
     normalizeWorkspace(unwrapEntity<unknown>(await api('POST', `/os/boards/${boardId}/workspaces`, input), ['workspace'])),
   getWorkspace: async (workspaceId: OsId) =>
     normalizeWorkspace(unwrapEntity<unknown>(await api('GET', `/os/workspaces/${workspaceId}`), ['workspace'])),
@@ -1520,6 +1520,8 @@ export const osApi = {
     )),
   restartProcess: async (processId: OsId) =>
     normalizeProcess(unwrapEntity<unknown>(await api('POST', `/os/processes/${processId}/restart`), ['process'])),
+  // drops an exited process record + its captured output (409 while it is live)
+  deleteProcess: (processId: OsId) => api('DELETE', `/os/processes/${processId}`),
 
   listEvents: async (boardId: number) =>
     unwrapList<OsEvent>(await api('GET', `/os/boards/${boardId}/events`), ['events']),

@@ -261,6 +261,7 @@ POST /api/v1/os/team-conflicts/:conflictId/proposals
 POST /api/v1/os/team-conflicts/:conflictId/resolve
 POST /api/v1/os/team-plans/:planId/:command
 PUT /api/v1/os/discussions/:discussionId/subscriptions/:profileId
+DELETE /api/v1/os/processes/:id
 DELETE /api/v1/os/workspaces/:id
 GET /api/v1/os/agent-profiles/:id
 GET /api/v1/os/agent-profiles/:id/conversations
@@ -302,6 +303,9 @@ GET /api/v1/os/plugins
 GET /api/v1/os/processes/:id
 GET /api/v1/os/processes/:id/output
 GET /api/v1/os/providers
+GET /api/v1/os/providers/:id/update-command
+GET /api/v1/os/providers/auth
+GET /api/v1/os/providers/updates
 GET /api/v1/os/sessions/:id
 GET /api/v1/os/sessions/:id/events
 GET /api/v1/os/sessions/:id/export
@@ -449,6 +453,7 @@ PATCH /api/v1/cards/:id
 PATCH /api/v1/milestones/:id
 GET /api/v1/boards/:id/teams
 GET /api/v1/messages/:id/attachments/:index
+GET /api/v1/messages/:id/attachments/:index/raw
 GET /api/v1/teams/:id
 PATCH /api/v1/teams/:id
 POST /api/v1/boards/:id/hire
@@ -554,7 +559,7 @@ in `web/src/BoardSection.tsx`.
 | Board → Overview | legacy | `web/src/Board.tsx` |
 | Board → Agents / Agent Home | canonical | `web/src/AgentHome.tsx` |
 | Board → Messages | legacy | `web/src/MessagesView.tsx` |
-| Board → Workspace | canonical | `web/src/WorkspaceCockpit.tsx` |
+| Board → Workspace | canonical | `web/src/WorkspaceTerminal.tsx` |
 | Board → Timeline | legacy | `web/src/TimelineView.tsx` |
 | Board → Shipped | compatibility | `web/src/ShippedView.tsx` |
 | Open Work | canonical | `web/src/OpenWorkView.tsx` |
@@ -566,7 +571,7 @@ in `web/src/BoardSection.tsx`.
 | Card Trackbook summary/review buttons | compatibility | `web/src/CardTrackbookSummary.tsx`, `web/src/CardDrawer.tsx` |
 | Agent Home mobile panes | canonical | Conversation, Terminal, Details (`web/src/AgentHome.tsx:729`) |
 | Agent Home detail tabs | canonical | Work, Context, Tools, Usage, History (`web/src/AgentHomePanels.tsx:442`) |
-| Workspace panes | canonical except compatibility Agent conversation | Terminal, Agent, Changes, Trackbook, Processes, Context, Policy (`web/src/WorkspaceCockpit.tsx:40`) |
+| Workspace panes | canonical | Terminal only — the cockpit panes were deleted (`web/src/WorkspaceTerminal.tsx`) |
 | Phone install surface | infrastructure | responsive web UI plus `web/public/manifest.webmanifest` |
 
 There is one responsive web application, not a separate phone product. The exact UI evidence

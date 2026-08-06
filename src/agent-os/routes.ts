@@ -752,6 +752,20 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return reply.code(201).send({ process })
   })
 
+  // exited shells used to pile up forever in the terminal tab strip (#159): the
+  // record and its captured output are droppable once the process is not live
+  app.delete<{ Params: { id: string } }>('/processes/:id', (request) => {
+    requireOperator(request)
+    const current = requireProcess(db, request.params.id)
+    requireTerminalAccess('spawn', { workspaceId: current.workspace_id, processId: current.id }, request)
+    if (['running', 'starting', 'stopping'].includes(current.status)) {
+      throw new ConflictError('stop the process before deleting its record')
+    }
+    db.prepare('DELETE FROM process_output WHERE process_id=?').run(current.id)
+    db.prepare('DELETE FROM processes WHERE id=?').run(current.id)
+    return { ok: true, deleted: current.id }
+  })
+
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>('/processes/:id/output', (request) => {
     const process = requireProcess(db, request.params.id)
     requireTerminalAccess('view', {

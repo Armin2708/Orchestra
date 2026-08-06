@@ -39,7 +39,9 @@ import { OutcomeDashboard } from './OutcomeDashboard'
 import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
-import { highestSubscriptionUsage, subscriptionUsage, type SubscriptionUsageProvider } from './providerUsage'
+import {
+  highestSubscriptionUsage, selectedUsageProvider, subscriptionUsage, type SubscriptionUsageProvider,
+} from './providerUsage'
 import { osApi, type Job } from './osApi'
 import { agentHomeApi, type AgentProfile } from './agentHomeApi'
 import { OfflineStateBanner, RemoteAccessProvider } from './RemoteAccess'
@@ -700,7 +702,13 @@ const usageReset = (iso: string | null) => iso
 
 function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
   const providers = subscriptionUsage(sys)
-  const highest = highestSubscriptionUsage(providers)
+  const [selectedId, setSelectedId] = useState<string | null>(() => localStorage.getItem('orchestra-usage-provider'))
+  const active = selectedUsageProvider(providers, selectedId)
+  const highest = highestSubscriptionUsage(active ? [active] : [])
+  const select = (id: string) => {
+    setSelectedId(id)
+    localStorage.setItem('orchestra-usage-provider', id)
+  }
   const renderProvider = (provider: SubscriptionUsageProvider) => (
     <section className={`usage-provider${provider.stale ? ' is-stale' : ''}`} key={provider.id}>
       <header>
@@ -734,8 +742,8 @@ function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
   return (
     <details className="usage-menu">
       <summary className={`meter meter-usage${highest !== null && highest >= 85 ? ' low' : ''}`}
-        aria-label="AI subscription usage">
-        <span className="meter-label">usage</span>
+        aria-label="AI subscription usage" title={active ? `${active.name} subscription usage` : undefined}>
+        <span className="meter-label">{active ? active.name.toLowerCase() : 'usage'}</span>
         <span className="meter-val">{highest === null ? '—' : `${Math.round(highest)}%`}</span>
         <span className="usage-caret" aria-hidden="true">⌄</span>
       </summary>
@@ -744,7 +752,17 @@ function SubscriptionUsage({ sys }: { sys: SystemInfo }) {
           <strong>Subscription usage</strong>
           <span>Live provider limits</span>
         </div>
-        {providers.length > 0 ? providers.map(renderProvider) : (
+        {/* one tab per signed-in plan — the meter above follows whichever is selected (#152) */}
+        {providers.length > 1 && (
+          <div className="usage-tabs" role="tablist" aria-label="Plans">
+            {providers.map((provider) => (
+              <button key={provider.id} type="button" role="tab" aria-selected={provider.id === active?.id}
+                className={`usage-tab${provider.id === active?.id ? ' is-active' : ''}`}
+                onClick={() => select(provider.id)}>{provider.name}</button>
+            ))}
+          </div>
+        )}
+        {active ? renderProvider(active) : (
           <p className="usage-empty">No subscription usage is available.</p>
         )}
       </div>

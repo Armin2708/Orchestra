@@ -122,6 +122,16 @@ describe('Agent OS API', () => {
     expect((await server.inject({ method: 'GET', url: '/api/v1/os/processes/proc-1/output?after=1', headers: auth })).json())
       .toMatchObject({ next_seq: 2, output: [{ seq: 2, data: 'two' }] })
 
+    // exited shells are droppable so the terminal strip stops accumulating corpses (#159)
+    db.prepare(`INSERT INTO processes (id, workspace_id, name, command, cwd, status)
+      VALUES ('proc-live', ?, 'shell', '/bin/zsh -l', '/repo-api', 'running')`).run(workspace.id)
+    expect((await server.inject({ method: 'DELETE', url: '/api/v1/os/processes/proc-live', headers: auth })).statusCode).toBe(409)
+    expect((await server.inject({ method: 'DELETE', url: '/api/v1/os/processes/proc-1', headers: auth })).statusCode).toBe(200)
+    expect((await server.inject({ method: 'GET', url: '/api/v1/os/processes/proc-1', headers: auth })).statusCode).toBe(404)
+    expect(db.prepare("SELECT COUNT(*) AS n FROM process_output WHERE process_id='proc-1'").get())
+      .toMatchObject({ n: 0 })
+    db.prepare("DELETE FROM processes WHERE id='proc-live'").run()
+
     const contextPut = await server.inject({ method: 'PUT', url: `/api/v1/os/workspaces/${workspace.id}/context`, headers: auth,
       payload: { items: [{ kind: 'file', source: 'README.md', content: 'context', pinned: true, tokens: 12 }] } })
     expect(contextPut.statusCode).toBe(200)

@@ -4,7 +4,7 @@ import { CommandCenterStatus } from './CommandCenter'
 import { MessageThread } from './MessageThread'
 import { OsIcon } from './OsIcon'
 import { TrackbookPane } from './TrackbookPane'
-import { WorkspaceCockpit } from './WorkspaceCockpit'
+import { WorkspaceTerminal } from './WorkspaceTerminal'
 import type { Card, Snapshot, Thread } from './api'
 import type {
   CanonicalLifecycleRecord,
@@ -71,14 +71,16 @@ export function CanonicalAgentHome({ snaps, onChange, locationSearch = browserSe
 }) {
   const workspaceId = new URLSearchParams(locationSearch).get('workspace')
   if (workspaceId) {
-    localStorage.setItem('orchestra-os-workspace', workspaceId)
+    // the cockpit this used to open is deleted (#162); the deep link still lands on
+    // the addressed workspace, now as the plain terminal
+    localStorage.setItem('orchestra-terminal-workspace', workspaceId)
     return (
       <section className="cc-canonical-surface" aria-label="Canonical workspace terminal">
         <header className="cc-surface-context">
           <div><p>Canonical surface</p><h2>Workspace</h2></div>
-          <span>Exact PTY · durable process · provider session</span>
+          <span>Exact PTY · durable process</span>
         </header>
-        <WorkspaceCockpit snaps={snaps} onChange={onChange} readOnly={readOnly} />
+        <WorkspaceTerminal snaps={snaps} />
       </section>
     )
   }

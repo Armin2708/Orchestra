@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { highestSubscriptionUsage, subscriptionUsage } from '../web/src/providerUsage.js'
+import { highestSubscriptionUsage, selectedUsageProvider, subscriptionUsage } from '../web/src/providerUsage.js'
 import type { SystemInfo } from '../web/src/api.js'
 
 const system = (): SystemInfo => ({
@@ -67,5 +67,16 @@ describe('subscription usage projection', () => {
     const providers = subscriptionUsage(unavailable)
     expect(providers[0]).toMatchObject({ id: 'claude', detail: 'Usage unavailable (keychain)', windows: [] })
     expect(providers[1]).toMatchObject({ id: 'codex', stale: true })
+  })
+
+  it('switches the meter between plans and never sticks on a missing selection', () => {
+    const providers = subscriptionUsage(system())
+    expect(selectedUsageProvider(providers, 'codex')?.id).toBe('codex')
+    expect(highestSubscriptionUsage([selectedUsageProvider(providers, 'codex')!])).toBe(45)
+    expect(selectedUsageProvider(providers, 'claude')?.id).toBe('claude')
+    expect(highestSubscriptionUsage([selectedUsageProvider(providers, 'claude')!])).toBe(53)
+    expect(selectedUsageProvider(providers, 'gone')?.id).toBe('claude')
+    expect(selectedUsageProvider(providers, null)?.id).toBe('claude')
+    expect(selectedUsageProvider([], 'codex')).toBeNull()
   })
 })

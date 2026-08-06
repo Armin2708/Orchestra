@@ -5,7 +5,6 @@ import { summarizeTrackbookDelivery } from '../web/src/CardTrackbookSummary.js'
 import { normalizeDeliveriesResponse, normalizeDeliveryReport } from '../web/src/osApi.js'
 import { deliveryEvidenceText } from '../web/src/TrackbookPane.js'
 
-const cockpitSource = readFileSync(new URL('../web/src/WorkspaceCockpit.tsx', import.meta.url), 'utf8')
 const trackbookSource = readFileSync(new URL('../web/src/TrackbookPane.tsx', import.meta.url), 'utf8')
 const drawerSource = readFileSync(new URL('../web/src/CardTrackbookSummary.tsx', import.meta.url), 'utf8')
 const cardDrawerSource = readFileSync(new URL('../web/src/CardDrawer.tsx', import.meta.url), 'utf8')
@@ -250,10 +249,7 @@ describe('Trackbook interaction states', () => {
     expect(trackbookSource).toContain('acceptance_note')
   })
 
-  it('uses tab semantics and forces the Trackbook to one column below 768px', () => {
-    expect(cockpitSource).toContain("{ id: 'trackbook', label: 'Trackbook', icon: 'evidence' }")
-    expect(cockpitSource).toContain('role="tab" aria-selected=')
-    expect(cockpitSource).toContain('role="tabpanel"')
+  it('forces the Trackbook to one column below 768px', () => {
     expect(trackbookCss).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.os-trackbook-comparison[\s\S]*?grid-template-columns:\s*1fr/)
     expect(trackbookCss).toContain('.drawer-trackbook-open:focus-visible')
     expect(trackbookCss).toMatch(/@container trackbook \(max-width:\s*520px\)[\s\S]*?\.os-trackbook-hero[\s\S]*?grid-template-columns:\s*1fr/)
