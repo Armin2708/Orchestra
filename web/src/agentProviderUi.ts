@@ -102,7 +102,11 @@ export function modelDisplayLabel(model: {
   resolvedModel?: string
   displayName?: string
 }): string {
-  const source = (model.resolvedModel || model.value || '').toLowerCase()
+  const raw = (model.resolvedModel || model.value || '').toLowerCase()
+  // Model ids carry a context-window suffix (claude-opus-5[1m]). Render it as a
+  // readable badge instead of leaking the bracket syntax into the button label.
+  const contextWindow = raw.match(/\[(\d+m)\]/)?.[1]
+  const source = raw.replace(/\[[^\]]*\]/g, '')
   const tokens = source
     .replace(/^claude-/, '')
     .split('-')
@@ -112,7 +116,8 @@ export function modelDisplayLabel(model: {
     const [family, ...rest] = tokens
     const version = rest.join('.')
     if (/\d/.test(version)) {
-      return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`
+      const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`
+      return contextWindow ? `${name} · ${contextWindow.toUpperCase()}` : name
     }
   }
   return model.displayName || model.value
