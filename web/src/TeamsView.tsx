@@ -4,13 +4,16 @@ import { agentActivity, AgentActivity } from './agentActivity'
 import { AgentTerminal } from './AgentTerminal'
 import { BoardCanvas } from './Board'
 import { CanvasPoint, CanvasViewport, canvasSceneOffset, screenToCanvasLocal } from './canvasViewport'
+import { hasAgentCapability, orderEffortLevels, providerLaunchBody } from './agentProviderUi'
+import { AgentProviderCatalog, osApi } from './osApi'
 import { ProviderBadge } from './ProviderBadge'
 import './teams.css'
 
-// Teams tab: a copy of the Overview board canvas, one panel per designed team.
-// Roles are draggable graph nodes wired by reports_to edges; the mastermind agent
-// designs and refines teams conversationally; approved designs quick-hire later.
-// Spec: docs/superpowers/specs/2026-08-04-teams-tab-design.md (reworked per operator)
+// Teams tab: left rail of designed teams, centre board that is a literal copy of the
+// Overview agent board (same canvas, same header, same crew row, same nodes), right
+// pane a chat with the mastermind — the only agent allowed to design teams, and allowed
+// to do nothing else (src/mastermind-scope.ts). Every mastermind action is also doable by
+// hand on the canvas. Spec: docs/superpowers/specs/2026-08-04-teams-tab-design.md
 
 type TeamRole = {
   key: string
@@ -20,9 +23,11 @@ type TeamRole = {
   max_agents: number
 }
 
+type WorkflowStage = { stage: string; role: string; gate?: 'review' | 'none' }
+
 type TeamSpec = {
   roles: TeamRole[]
-  workflow: Array<{ stage: string; role: string; gate?: string }>
+  workflow: WorkflowStage[]
   norms?: string
 }
 
@@ -40,8 +45,11 @@ type Team = {
 type Norm = { x: number; y: number }
 type Point = { x: number; y: number }
 
-const AgentHome = React.lazy(() => import('./AgentHome').then((m) => ({ default: m.AgentHome })))
 const MASTERMIND = 'mastermind'
+const SELECTED_KEY = 'orchestra-teams-selected'
+const CHAT_KEY = 'orchestra-teams-chat-open'
+const RUNTIME_KEY = 'orchestra-mastermind-runtime'
+const RAIL_KEY = 'orchestra-teams-panel'
 
 const STATUS_LABEL: Record<Team['status'], string> = {
   draft: 'draft',
@@ -81,21 +89,50 @@ function treeLayout(roles: TeamRole[]): Record<string, Norm> {
   return out
 }
 
+// every role that would be orphaned by removing this one
+function subtree(roles: TeamRole[], key: string): Set<string> {
+  const doomed = new Set([key])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const r of roles) {
+      if (r.reports_to && doomed.has(r.reports_to) && !doomed.has(r.key)) { doomed.add(r.key); grew = true }
+    }
+  }
+  return doomed
+}
+
 function RoleEditor({ team, role, onClose, onChange }: {
   team: Team; role: TeamRole; onClose: () => void; onChange: () => void
 }) {
   const [title, setTitle] = useState(role.title)
   const [charter, setCharter] = useState(role.charter)
   const [maxAgents, setMaxAgents] = useState(role.max_agents)
+  const [reportsTo, setReportsTo] = useState(role.reports_to)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const isLead = role.reports_to === null
+  // re-parenting may not create a cycle: only roles outside this one's subtree qualify
+  const doomed = subtree(team.spec.roles, role.key)
+  const parents = team.spec.roles.filter((r) => !doomed.has(r.key))
+
   const patch = async (spec: TeamSpec) => {
     setBusy(true)
-    try { await api('PATCH', `/teams/${team.id}`, { spec }); onChange(); onClose() } finally { setBusy(false) }
+    setError(null)
+    try { await api('PATCH', `/teams/${team.id}`, { spec }); onChange(); onClose() }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
   }
   const save = () => patch({
     ...team.spec,
     roles: team.spec.roles.map((r) => r.key === role.key
-      ? { ...r, title: title.trim() || r.title, charter: charter.trim() || r.charter, max_agents: Math.max(1, maxAgents) }
+      ? {
+        ...r,
+        title: title.trim() || r.title,
+        charter: charter.trim() || r.charter,
+        max_agents: Math.max(1, maxAgents),
+        reports_to: isLead ? null : reportsTo,
+      }
       : r),
   })
   const addReport = () => {
@@ -109,42 +146,42 @@ function RoleEditor({ team, role, onClose, onChange }: {
       }],
     })
   }
-  const remove = () => {
-    const doomed = new Set([role.key])
-    let grew = true // remove the whole subtree so no role is left reporting to nothing
-    while (grew) {
-      grew = false
-      for (const r of team.spec.roles) {
-        if (r.reports_to && doomed.has(r.reports_to) && !doomed.has(r.key)) { doomed.add(r.key); grew = true }
-      }
-    }
-    patch({
-      ...team.spec,
-      roles: team.spec.roles.filter((r) => !doomed.has(r.key)),
-      workflow: team.spec.workflow.filter((w) => !doomed.has(w.role)),
-    })
-  }
+  const remove = () => patch({
+    ...team.spec,
+    roles: team.spec.roles.filter((r) => !doomed.has(r.key)),
+    workflow: team.spec.workflow.filter((w) => !doomed.has(w.role)),
+  })
+
   return (
     <div className="teams-role-editor" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
       <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus /></label>
       <label>Charter<textarea rows={3} value={charter} onChange={(e) => setCharter(e.target.value)} /></label>
+      {!isLead && (
+        <label>Reports to
+          <select value={reportsTo ?? ''} onChange={(e) => setReportsTo(e.target.value)}>
+            {parents.map((r) => <option key={r.key} value={r.key}>{r.title}</option>)}
+          </select>
+        </label>
+      )}
       <label>Max agents<input type="number" min={1} value={maxAgents}
         onChange={(e) => setMaxAgents(Number(e.target.value) || 1)} /></label>
+      {error && <em className="teams-editor-error">{error}</em>}
       <div className="teams-editor-actions">
         <button className="teams-primary" disabled={busy} onClick={save}>Save</button>
         <button disabled={busy} onClick={addReport}>+ Report</button>
-        {role.reports_to !== null && <button className="teams-danger" disabled={busy} onClick={remove}>Remove</button>}
+        {!isLead && <button className="teams-danger" disabled={busy} onClick={remove}>Remove</button>}
         <button disabled={busy} onClick={onClose}>×</button>
       </div>
     </div>
   )
 }
 
-function TeamGraph({ team, viewport, activityOf, liveByName, onOpenAgent, onChange }: {
+function TeamGraph({ team, viewport, activityOf, liveByName, editable, onOpenAgent, onChange }: {
   team: Team
   viewport: CanvasViewport
   activityOf: (member: { id: number; status: string }) => AgentActivity
   liveByName: Map<string, Agent>
+  editable: boolean
   onOpenAgent: (a: Agent) => void
   onChange: () => void
 }) {
@@ -154,6 +191,8 @@ function TeamGraph({ team, viewport, activityOf, liveByName, onOpenAgent, onChan
   const [pos, setPos] = useState<Record<string, Norm>>(() => loadPos(team.id))
   const [editing, setEditing] = useState<string | null>(null)
   const drag = useRef<{ key: string; moved: boolean; start: Point } | null>(null)
+
+  useEffect(() => { setPos(loadPos(team.id)); setEditing(null) }, [team.id])
 
   useEffect(() => {
     if (!wrap.current) return
@@ -203,11 +242,11 @@ function TeamGraph({ team, viewport, activityOf, liveByName, onOpenAgent, onChan
     drag.current = null
     setPos((p) => { localStorage.setItem(`orchestra-team-net-${team.id}`, JSON.stringify(p)); return p })
     if (wasDrag || !role) return
-    // click: staffed node opens the member console; unstaffed node opens the role editor
+    // click: a staffed node opens that agent's console, an empty one opens the role editor
     const staffed = team.members.filter((m) => m.team_role === role.key && m.status !== 'gone')
     const live = staffed.length ? liveByName.get(staffed[0].name) : undefined
     if (live) onOpenAgent(live)
-    else if (team.status !== 'hired') setEditing(role.key)
+    else if (editable) setEditing(role.key)
   }
 
   const graphOffset = canvasSceneOffset(viewport, boardOrigin)
@@ -246,7 +285,7 @@ function TeamGraph({ team, viewport, activityOf, liveByName, onOpenAgent, onChan
                 style={first ? { background: agentWash(first.name), color: agentInk(first.name) } : undefined}
                 title={first
                   ? `${display} — ${role.title}${act === 'working' ? ' · working now' : ''} — drag to move, click to open console`
-                  : `${role.title} — unstaffed (0/${role.max_agents})${team.status === 'hired' ? '' : ' — drag to move, click to edit'}`}
+                  : `${role.title} — unstaffed (0/${role.max_agents})${editable ? ' — drag to move, click to edit' : ''}`}
                 onPointerDown={startDrag(role.key)} onPointerUp={endDrag(role)}>
                 {initials(display)}
                 {first && <i className={`presence ${liveByName.get(first.name)?.status ?? first.status}`} />}
@@ -268,70 +307,330 @@ function TeamGraph({ team, viewport, activityOf, liveByName, onOpenAgent, onChan
   )
 }
 
-function TeamPanel({ team, viewport, activityOf, liveByName, onOpenAgent, onChange }: {
+// the workflow the team routes every task through — editable by hand, same data the
+// mastermind writes, same data the hired lead is briefed with
+function WorkflowStrip({ team, editable, onChange }: { team: Team; editable: boolean; onChange: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const patch = async (workflow: WorkflowStage[]) => {
+    setBusy(true)
+    try { await api('PATCH', `/teams/${team.id}`, { spec: { ...team.spec, workflow } }); onChange() }
+    finally { setBusy(false) }
+  }
+  const stages = team.spec.workflow
+  const roleTitle = (key: string) => team.spec.roles.find((r) => r.key === key)?.title ?? key
+  return (
+    <div className="teams-flow">
+      <span className="teams-flow-label">Workflow</span>
+      {stages.length === 0 && <em className="teams-flow-empty">no stages yet</em>}
+      {stages.map((stage, i) => (
+        <span key={`${stage.stage}-${i}`} className={`teams-stage ${stage.gate === 'review' ? 'gated' : ''}`}>
+          {editable ? (
+            <input className="teams-stage-name" value={stage.stage} disabled={busy}
+              onChange={(e) => patch(stages.map((s, j) => j === i ? { ...s, stage: e.target.value } : s))} />
+          ) : stage.stage}
+          {editable ? (
+            <select value={stage.role} disabled={busy}
+              onChange={(e) => patch(stages.map((s, j) => j === i ? { ...s, role: e.target.value } : s))}>
+              {team.spec.roles.map((r) => <option key={r.key} value={r.key}>{r.title}</option>)}
+            </select>
+          ) : <em>{roleTitle(stage.role)}</em>}
+          {editable && (
+            <>
+              <button className="teams-stage-gate" title="Toggle review gate" disabled={busy}
+                onClick={() => patch(stages.map((s, j) => j === i ? { ...s, gate: s.gate === 'review' ? 'none' : 'review' } : s))}>
+                {stage.gate === 'review' ? '⚑ review' : 'no gate'}
+              </button>
+              <button className="teams-stage-x" title="Remove stage" disabled={busy}
+                onClick={() => patch(stages.filter((_, j) => j !== i))}>×</button>
+            </>
+          )}
+          {!editable && stage.gate === 'review' && <b>⚑</b>}
+        </span>
+      ))}
+      {editable && team.spec.roles.length > 0 && (
+        <button className="teams-stage-add" disabled={busy}
+          onClick={() => patch([...stages, { stage: `stage ${stages.length + 1}`, role: team.spec.roles[0].key, gate: 'none' }])}>
+          + Stage
+        </button>
+      )}
+    </div>
+  )
+}
+
+// The Overview board's crew chip, rendered here from the same classes so the two rows are
+// visually identical. (Board.tsx keeps its copy module-private; when that export lands this
+// can be swapped for the shared component with no markup change.)
+function TeamCrewSlot({ a, onOpen, onChange }: { a: Agent; onOpen: () => void; onChange: () => void }) {
+  return (
+    <span className="crew-slot">
+      <span className={`avatar clickable ${a.status} hired`}
+        title={`${a.name} · ${a.status} · open console`}
+        role="button" tabIndex={0} aria-label={`Open ${a.name}'s console`}
+        style={{ background: agentWash(a.name), color: agentInk(a.name) }}
+        onClick={onOpen}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}>
+        {initials(a.name)}
+        <i className="presence" />
+      </span>
+      <ProviderBadge provider={a.provider} compact />
+      <button className="icon-x fire" title={`Fire ${a.name}`} aria-label={`Fire ${a.name}`}
+        onClick={async () => {
+          if (!window.confirm(`Fire ${a.name}? Its running session is killed.`)) return
+          await api('POST', `/agents/${a.id}/fire`); onChange()
+        }}>×</button>
+    </span>
+  )
+}
+
+// The board itself: same canvas, header, crew row, ticket rail and node graph as Overview.
+function TeamBoard({ team, snap, providers, activityOf, onChange, onOpenAgent }: {
   team: Team
-  viewport: CanvasViewport
+  snap: Snapshot | undefined
+  providers: AgentProviderCatalog[]
   activityOf: (member: { id: number; status: string }) => AgentActivity
-  liveByName: Map<string, Agent>
-  onOpenAgent: (a: Agent) => void
   onChange: () => void
+  onOpenAgent: (a: Agent) => void
 }) {
   const [busy, setBusy] = useState<string | null>(null)
-  const [refine, setRefine] = useState('')
-  const [refining, setRefining] = useState(false)
-  const act = async (label: string, method: string, path: string) => {
+  const [error, setError] = useState<string | null>(null)
+  const editable = team.status === 'draft' || team.status === 'approved'
+
+  const act = async (label: string, method: string, path: string, body?: unknown) => {
     setBusy(label)
-    try { await api(method, path); onChange() } finally { setBusy(null) }
+    setError(null)
+    try { await api(method, path, body); onChange() }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(null) }
   }
-  const sendRefine = async () => {
-    if (!refine.trim()) return
-    setRefining(true)
-    try { await api('POST', `/teams/${team.id}/refine`, { instruction: refine.trim() }); setRefine(''); onChange() }
-    finally { setRefining(false) }
+
+  const agents = snap?.agents ?? []
+  const liveByName = new Map(agents.filter((a) => a.status !== 'gone').map((a) => [a.name, a]))
+  const crew = team.members
+    .map((m) => agents.find((a) => a.id === m.id))
+    .filter((a): a is Agent => !!a && a.status !== 'gone')
+  const unstaffed = team.spec.roles.reduce(
+    (n, r) => n + Math.max(0, r.max_agents - team.members.filter((m) => m.team_role === r.key && m.status !== 'gone').length), 0)
+
+  const addRole = () => {
+    let n = 1
+    while (team.spec.roles.some((r) => r.key === `role-${n}`)) n++
+    const lead = team.spec.roles.find((r) => r.reports_to == null)
+    void act('role', 'PATCH', `/teams/${team.id}`, {
+      spec: {
+        ...team.spec,
+        roles: [...team.spec.roles, {
+          key: `role-${n}`, title: 'New Role', charter: 'Describe what this role owns.',
+          reports_to: lead ? lead.key : null, max_agents: 1,
+        }],
+      },
+    })
   }
-  const workingCount = team.members.filter((m) => m.status !== 'gone' && activityOf(m) === 'working').length
+
   return (
-    <section className={`project network-mode teams-panel teams-panel-${team.status}`}>
-      <header className="project-head teams-panel-head">
-        <div className="teams-panel-title">
-          <h2>{team.name}</h2>
-          <span className={`teams-status teams-status-${team.status}`}>{STATUS_LABEL[team.status]}</span>
-          {workingCount > 0 && (
-            <span className="teams-working-now"><span className="teams-dot teams-dot-working" />{workingCount} working</span>
-          )}
-          {team.goal && <span className="teams-goal">{team.goal}</span>}
+    <>
+      <WorkflowStrip team={team} editable={editable} onChange={onChange} />
+      <BoardCanvas focused storageKey={`teams-${team.id}`}>
+        {(viewport) => (
+          <section className="project network-mode">
+            <header className="project-head">
+              <div className="project-head-col">
+                <div className="project-head-right">
+                  <div className="teams-hire-bar">
+                    {team.status === 'draft' && (
+                      <button className="hire-btn" disabled={busy !== null}
+                        title="Lock this design so it can be hired"
+                        onClick={() => act('approve', 'POST', `/teams/${team.id}/approve`)}>
+                        {busy === 'approve' ? '…' : '✓ Approve'}
+                      </button>
+                    )}
+                    {team.status === 'approved' && (
+                      <button className="hire-btn primary" disabled={busy !== null}
+                        title="Hire the lead — it staffs the rest of the team on demand"
+                        onClick={() => act('hire', 'POST', `/teams/${team.id}/hire`)}>
+                        {busy === 'hire' ? 'Hiring…' : '+ Hire team'}
+                      </button>
+                    )}
+                    {editable && (
+                      <button className="hire-btn" disabled={busy !== null} title="Add a role to this team"
+                        onClick={addRole}>+ Role</button>
+                    )}
+                    {team.status === 'hired' && unstaffed > 0 && (
+                      <span className="teams-hire-hint" title="The lead hires these when a task needs them">
+                        {unstaffed} seat{unstaffed === 1 ? '' : 's'} the lead can staff
+                      </span>
+                    )}
+                  </div>
+                  <div className="project-crew">
+                    {crew.map((a) => (
+                      <TeamCrewSlot key={a.id} a={a} onChange={onChange} onOpen={() => onOpenAgent(a)} />
+                    ))}
+                    {crew.length === 0 && (
+                      <span className="ask-none">
+                        {team.status === 'hired' ? 'no team agents online' : 'not hired yet — approve, then hire the lead'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </header>
+
+            <div className="net-wrap">
+              <TeamGraph team={team} viewport={viewport} activityOf={activityOf} liveByName={liveByName}
+                editable={editable} onOpenAgent={onOpenAgent} onChange={onChange} />
+            </div>
+          </section>
+        )}
+      </BoardCanvas>
+      {error && <div className="teams-error">{error}</div>}
+    </>
+  )
+}
+
+type Runtime = { provider: string; model: string; effort: string }
+const loadRuntime = (): Runtime => {
+  try { return { provider: '', model: '', effort: '', ...JSON.parse(localStorage.getItem(RUNTIME_KEY) ?? '{}') } }
+  catch { return { provider: '', model: '', effort: '' } }
+}
+
+// The mastermind chat: scoped to team design by the server (src/mastermind-scope.ts).
+// The operator picks which provider/model/effort it thinks on.
+function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }: {
+  boardId: number | undefined
+  snap: Snapshot | undefined
+  team: Team | null
+  providers: AgentProviderCatalog[]
+  onChange: () => void
+  onCollapse: () => void
+}) {
+  const [runtime, setRuntime] = useState<Runtime>(loadRuntime)
+  const [tuning, setTuning] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [scope, setScope] = useState<string>('')
+  const focused = useRef<number | null>(null)
+
+  const agent = (snap?.agents ?? []).find((a) => a.name === MASTERMIND && a.status !== 'gone') ?? null
+
+  useEffect(() => {
+    if (!boardId) return
+    api('GET', `/boards/${boardId}/mastermind`).then((r) => {
+      setScope(r.scope ?? '')
+      if (r.agent) {
+        setRuntime((current) => current.provider || current.model || current.effort ? current : {
+          provider: r.agent.provider ?? '', model: r.agent.model ?? '', effort: r.agent.effort ?? '',
+        })
+      }
+    }).catch(() => {})
+  }, [boardId])
+
+  // the operator selected a team: tell the mastermind what "this team" means now, once
+  useEffect(() => {
+    if (!team || !agent) return
+    if (focused.current === team.id) return
+    focused.current = team.id
+    api('POST', `/teams/${team.id}/focus`).catch(() => {})
+  }, [team?.id, agent?.id])
+
+  const available = providers.filter((p) => p.available)
+  const selected = providers.find((p) => p.id === runtime.provider)
+  const models = (selected?.models ?? []).filter((m) => m.value.toLowerCase() !== 'default')
+  const chosenModel = models.find((m) => m.value === runtime.model)
+  const efforts = orderEffortLevels([...new Set(
+    (chosenModel ? [chosenModel] : models).flatMap((m) => m.supportedEffortLevels ?? []),
+  )])
+  const canModel = !!selected?.available && hasAgentCapability(selected.capabilities, 'model', selected.id) && models.length > 0
+  const canEffort = !!selected?.available && hasAgentCapability(selected.capabilities, 'effort', selected.id) && efforts.length > 0
+
+  const persist = (next: Runtime) => {
+    setRuntime(next)
+    try { localStorage.setItem(RUNTIME_KEY, JSON.stringify(next)) } catch { /* optional preference */ }
+  }
+
+  const start = async () => {
+    if (!boardId) return
+    setBusy(true)
+    setError(null)
+    try {
+      const body = providerLaunchBody(runtime.provider, runtime.model, runtime.effort, null)
+      await api('POST', `/boards/${boardId}/mastermind`, body)
+      focused.current = null
+      setTuning(false)
+      onChange()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <aside className="teams-chat">
+      <header className="teams-chat-head">
+        <i className="avatar mini" style={{ background: agentWash(MASTERMIND), color: agentInk(MASTERMIND) }}>
+          {initials(MASTERMIND)}
+        </i>
+        <div className="teams-chat-title">
+          <strong>Mastermind</strong>
+          <em>{team ? `designing “${team.name}”` : 'team design only'}</em>
         </div>
-        <div className="teams-panel-actions">
-          {team.status === 'draft' && (
-            <button disabled={busy !== null} onClick={() => act('approve', 'POST', `/teams/${team.id}/approve`)}>
-              {busy === 'approve' ? 'Approving…' : 'Approve'}
-            </button>
-          )}
-          {team.status === 'approved' && (
-            <button className="teams-primary" disabled={busy !== null} onClick={() => act('hire', 'POST', `/teams/${team.id}/hire`)}>
-              {busy === 'hire' ? 'Hiring lead…' : 'Hire team'}
-            </button>
-          )}
-          <button className="teams-danger" disabled={busy !== null} onClick={() => act('archive', 'DELETE', `/teams/${team.id}`)}>
-            {busy === 'archive' ? '…' : 'Archive'}
-          </button>
-        </div>
+        <button className="teams-chat-tune" title="Provider, model and effort" onClick={() => setTuning((v) => !v)}>
+          {runtime.model || runtime.provider || 'runtime'} ⌄
+        </button>
+        <button className="teams-chat-x" title="Hide the mastermind" onClick={onCollapse}>›</button>
       </header>
-      <div className="net-wrap teams-net-wrap">
-        <TeamGraph team={team} viewport={viewport} activityOf={activityOf}
-          liveByName={liveByName} onOpenAgent={onOpenAgent} onChange={onChange} />
-      </div>
-      {team.status !== 'hired' && (
-        <div className="teams-refine">
-          <input value={refine} placeholder="Tell the mastermind what to change — it updates this design"
-            onChange={(e) => setRefine(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void sendRefine() }} />
-          <button disabled={refining || !refine.trim()} onClick={() => void sendRefine()}>
-            {refining ? 'Sent…' : 'Refine'}
+
+      {tuning && (
+        <div className="teams-runtime">
+          {available.length > 0 && (
+            <div className="hire-seg" role="group" aria-label="Mastermind provider">
+              {available.map((p) => (
+                <button key={p.id} type="button"
+                  className={`hire-seg-btn${runtime.provider === p.id ? ' selected' : ''}`}
+                  aria-pressed={runtime.provider === p.id}
+                  onClick={() => persist({
+                    provider: runtime.provider === p.id ? '' : p.id, model: '', effort: '',
+                  })}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {canModel && (
+            <label>Model
+              <select value={runtime.model} onChange={(e) => persist({ ...runtime, model: e.target.value, effort: '' })}>
+                <option value="">provider default</option>
+                {models.map((m) => <option key={m.value} value={m.value}>{m.displayName || m.value}</option>)}
+              </select>
+            </label>
+          )}
+          {canEffort && (
+            <label>Effort
+              <select value={runtime.effort} onChange={(e) => persist({ ...runtime, effort: e.target.value })}>
+                <option value="">default</option>
+                {efforts.map((level) => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </label>
+          )}
+          <button className="teams-primary" disabled={busy} onClick={() => void start()}>
+            {busy ? 'Starting…' : agent ? 'Apply — restarts it' : 'Start mastermind'}
+          </button>
+          <p className="teams-scope-note">{scope || 'Scoped to team design: it cannot edit code, hire, or change itself.'}</p>
+        </div>
+      )}
+
+      {error && <div className="teams-error">{error}</div>}
+
+      {agent && snap ? (
+        <div className="teams-chat-body">
+          <AgentTerminal embedded agent={agent} boardId={snap.board.id}
+            threads={(snap.threads ?? []) as Thread[]} cards={(snap.cards ?? []) as Card[]}
+            onClose={() => {}} onChange={onChange} />
+        </div>
+      ) : (
+        <div className="teams-chat-empty">
+          <p>The mastermind designs and refines teams with you — and is allowed to do nothing else.</p>
+          <button className="teams-primary" disabled={busy} onClick={() => void start()}>
+            {busy ? 'Starting…' : 'Start mastermind'}
           </button>
         </div>
       )}
-    </section>
+    </aside>
   )
 }
 
@@ -342,13 +641,26 @@ const BLANK_SPEC: TeamSpec = {
 
 export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: () => void }) {
   const [teams, setTeams] = useState<Team[]>([])
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    const saved = Number(localStorage.getItem(SELECTED_KEY))
+    return Number.isFinite(saved) && saved > 0 ? saved : null
+  })
+  const [chatOpen, setChatOpen] = useState(() => localStorage.getItem(CHAT_KEY) !== 'closed')
+  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== 'closed')
   const [goal, setGoal] = useState('')
   const [designing, setDesigning] = useState(false)
-  const [console_, setConsole] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
   const [terminal, setTerminal] = useState<{ agent: Agent; boardId: number } | null>(null)
+  const [renaming, setRenaming] = useState(false)
 
   const boardId = snaps[0]?.board.id
+
+  useEffect(() => {
+    let live = true
+    osApi.listAgentProviders().then((catalog) => { if (live) setProviders(catalog) }).catch(() => {})
+    return () => { live = false }
+  }, [])
 
   const load = React.useCallback(async () => {
     try {
@@ -360,12 +672,39 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
 
   useEffect(() => { void load() }, [load, snaps])
 
+  const selected = teams.find((t) => t.id === selectedId) ?? teams[0] ?? null
+  useEffect(() => {
+    if (selected) localStorage.setItem(SELECTED_KEY, String(selected.id))
+  }, [selected?.id])
+
+  const select = (id: number) => { setSelectedId(id); setRenaming(false) }
+  const toggleChat = () => setChatOpen((open) => {
+    localStorage.setItem(CHAT_KEY, open ? 'closed' : 'open')
+    return !open
+  })
+  const toggleRail = () => setRailOpen((open) => {
+    localStorage.setItem(RAIL_KEY, open ? 'closed' : 'open')
+    return !open
+  })
+
+  const allAgents = snaps.flatMap((s) => s.agents)
+  const liveById = new Map(allAgents.map((a) => [a.id, a]))
+  const activityOf = (member: { id: number; status: string }) => agentActivity(liveById.get(member.id) ?? member)
+  const selectedSnap = snaps.find((s) => s.board.id === selected?.board_id) ?? snaps[0]
+
+  const refresh = () => { void load(); onChange() }
+
   const design = async () => {
     if (!goal.trim() || !boardId) return
     setDesigning(true)
     try {
-      await api('POST', `/boards/${boardId}/teams/design`, { goal: goal.trim() })
+      const runtime = loadRuntime()
+      await api('POST', `/boards/${boardId}/teams/design`, {
+        goal: goal.trim(),
+        ...providerLaunchBody(runtime.provider, runtime.model, runtime.effort, null),
+      })
       setGoal('')
+      setChatOpen(true)
       onChange()
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setDesigning(false) }
   }
@@ -375,97 +714,112 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
     let n = teams.length + 1
     while (teams.some((t) => t.name === `Team ${n}`)) n++
     try {
-      await api('POST', `/boards/${boardId}/teams`, { name: `Team ${n}`, spec: BLANK_SPEC })
+      const created = await api('POST', `/boards/${boardId}/teams`, { name: `Team ${n}`, spec: BLANK_SPEC })
       await load()
+      if (created?.team?.id) { setSelectedId(created.team.id); setRenaming(true); setRailOpen(true) }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
 
-  const allAgents = snaps.flatMap((s) => s.agents)
-  const liveByName = new Map(allAgents.filter((a) => a.status !== 'gone').map((a) => [a.name, a]))
-  const liveById = new Map(allAgents.map((a) => [a.id, a]))
-  const activityOf = (member: { id: number; status: string }) => agentActivity(liveById.get(member.id) ?? member)
-
-  const chatMastermind = async () => {
-    const mm = liveByName.get(MASTERMIND)
-    if (mm) { setTerminal({ agent: mm, boardId: mm.board_id ?? boardId }); return }
-    if (!boardId) return
-    try {
-      const r = await api('POST', `/boards/${boardId}/teams/design`, {
-        goal: 'Introduce yourself to the operator and stand by to design or refine teams as instructed in chat.',
-      })
-      setTerminal({ agent: r.agent as Agent, boardId })
-      onChange()
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  const rename = async (name: string, goalText: string) => {
+    if (!selected) return
+    setRenaming(false)
+    if (name === selected.name && goalText === selected.goal) return
+    try { await api('PATCH', `/teams/${selected.id}`, { name, goal: goalText }); refresh() }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
 
-  const teamAgentIds = new Set(teams.flatMap((t) => t.members.map((m) => m.id)))
-  const solo = allAgents.filter((a) => a.status !== 'gone' && !teamAgentIds.has(a.id) && a.name !== MASTERMIND)
-
-  const openAgent = (a: Agent) => setTerminal({ agent: a, boardId: a.board_id ?? boardId })
-
-  if (console_) {
-    return (
-      <div className="teams-view">
-        <div className="teams-toolbar">
-          <button className="teams-toggle" onClick={() => setConsole(false)}>← Back to teams</button>
-        </div>
-        <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading agent console"><span /><span /><span /></div>}>
-          <AgentHome snaps={snaps} onChange={onChange} />
-        </React.Suspense>
-      </div>
-    )
+  const archive = async () => {
+    if (!selected) return
+    try { await api('DELETE', `/teams/${selected.id}`); setSelectedId(null); refresh() }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
+
+  const openAgent = (a: Agent) => setTerminal({ agent: a, boardId: a.board_id ?? boardId ?? 0 })
 
   return (
-    <div className="teams-view teams-canvas-view">
-      <div className="teams-toolbar">
-        <div className="teams-design">
-          <input value={goal}
-            placeholder="Describe a goal — the mastermind designs a team, you fine-tune and approve"
-            onChange={(e) => setGoal(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void design() }} />
-          <button className="teams-primary" disabled={designing || !goal.trim()} onClick={() => void design()}>
-            {designing ? 'Briefing…' : 'Design team'}
-          </button>
-        </div>
-        <button className="teams-toggle" onClick={() => void chatMastermind()}>
-          <i className="avatar mini" style={{ background: agentWash(MASTERMIND), color: agentInk(MASTERMIND) }}>{initials(MASTERMIND)}</i>
-          Chat with mastermind
+    <div className={`teams-view teams-workspace ${chatOpen ? '' : 'chat-closed'}`}>
+      <div className={`teams-panel ${railOpen ? 'open' : 'closed'}`}>
+        <button type="button" className="teams-panel-toggle" aria-expanded={railOpen}
+          title={railOpen ? 'Close teams' : 'Open teams'} onClick={toggleRail}>
+          <span className="task-panel-bars" aria-hidden="true"><i /><i /><i /></span>
+          <span className="task-panel-label">Teams</span>
+          <span className="task-panel-count">{teams.length}</span>
         </button>
-        <button className="teams-toggle" onClick={() => void newBlankTeam()}>+ Blank team</button>
-        <button className="teams-toggle" onClick={() => setConsole(true)}>Agent console</button>
-      </div>
-      {error && <div className="teams-error">{error}</div>}
-
-      {teams.length === 0
-        ? <div className="teams-empty">No teams yet. Give the mastermind a goal, chat with it, or start a blank team — design as many as you like and hire them whenever.</div>
-        : (
-          <BoardCanvas focused={false} storageKey="teams-canvas">
-            {(viewport) => teams.map((t) => (
-              <TeamPanel key={t.id} team={t} viewport={viewport} activityOf={activityOf}
-                liveByName={liveByName} onOpenAgent={openAgent}
-                onChange={() => { void load(); onChange() }} />
-            ))}
-          </BoardCanvas>
-        )}
-
-      {solo.length > 0 && (
-        <section className="teams-solo">
-          <h4>Individual contributors</h4>
-          <div className="teams-solo-list">
-            {solo.map((a) => {
-              const act = agentActivity(a)
-              return (
-                <button key={a.id} className={`teams-solo-agent teams-solo-${act}`} onClick={() => openAgent(a)}>
-                  <span className={`teams-dot teams-dot-${act}`} />
-                  {a.name}
-                  {act === 'working' && <em className="teams-working-label">working</em>}
-                  <em>{a.provider ?? 'claude'}</em>
+        {railOpen && (
+          <div className="teams-panel-body">
+            <div className="teams-design">
+              <input value={goal} placeholder="Describe a goal — the mastermind drafts a team"
+                onChange={(e) => setGoal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void design() }} />
+              <div className="teams-design-actions">
+                <button className="teams-primary" disabled={designing || !goal.trim()} onClick={() => void design()}>
+                  {designing ? '…' : 'Design'}
                 </button>
-              )
-            })}
+                <button title="Design a team by hand" onClick={() => void newBlankTeam()}>+ New</button>
+              </div>
+            </div>
+            <ul className="teams-list">
+              {teams.map((t) => {
+                const live = t.members.filter((m) => m.status !== 'gone')
+                const working = live.filter((m) => activityOf(m) === 'working').length
+                return (
+                  <li key={t.id}>
+                    <button className={`teams-list-item${selected?.id === t.id ? ' selected' : ''}`} onClick={() => select(t.id)}>
+                      <span className="teams-list-name">{t.name}</span>
+                      <span className={`teams-status teams-status-${t.status}`}>{STATUS_LABEL[t.status]}</span>
+                      <span className="teams-list-meta">
+                        {t.spec.roles.length} role{t.spec.roles.length === 1 ? '' : 's'}
+                        {live.length > 0 && ` · ${live.length} hired`}
+                        {working > 0 && <em className="teams-working-label">{working} working</em>}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+              {teams.length === 0 && <li className="teams-list-empty">No teams yet — describe a goal or start one by hand.</li>}
+            </ul>
           </div>
-        </section>
+        )}
+      </div>
+
+      <div className="teams-stage-pane">
+        {selected ? (
+          <>
+            <div className="teams-stage-head">
+              {renaming ? (
+                <TeamIdentityEditor team={selected} onDone={rename} onCancel={() => setRenaming(false)} />
+              ) : (
+                <>
+                  <h2 onDoubleClick={() => setRenaming(true)} title="Double-click to rename">{selected.name}</h2>
+                  <span className={`teams-status teams-status-${selected.status}`}>{STATUS_LABEL[selected.status]}</span>
+                  {selected.goal && <span className="teams-goal">{selected.goal}</span>}
+                  <button className="teams-stage-edit" onClick={() => setRenaming(true)}>Edit</button>
+                  <button className="teams-danger teams-stage-edit" onClick={() => void archive()}>Archive</button>
+                </>
+              )}
+            </div>
+            <TeamBoard team={selected} snap={selectedSnap} providers={providers} activityOf={activityOf}
+              onChange={refresh} onOpenAgent={openAgent} />
+          </>
+        ) : (
+          <div className="teams-empty">
+            No team selected. Describe a goal on the left and the mastermind drafts one, or start a blank team
+            and build the tree yourself — add roles, wire who reports to whom, then approve and hire.
+          </div>
+        )}
+        {error && <div className="teams-error">{error}</div>}
+      </div>
+
+      {chatOpen ? (
+        <MastermindPane boardId={boardId} snap={selectedSnap} team={selected} providers={providers}
+          onChange={refresh} onCollapse={toggleChat} />
+      ) : (
+        <button className="teams-chat-pill" title="Chat with the mastermind" onClick={toggleChat}>
+          <i className="avatar mini" style={{ background: agentWash(MASTERMIND), color: agentInk(MASTERMIND) }}>
+            {initials(MASTERMIND)}
+          </i>
+          Mastermind
+        </button>
       )}
 
       {terminal && <AgentTerminal
@@ -474,6 +828,23 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
         threads={(snaps.find((s) => s.board.id === terminal.boardId)?.threads ?? []) as Thread[]}
         cards={(snaps.find((s) => s.board.id === terminal.boardId)?.cards ?? []) as Card[]}
         onClose={() => setTerminal(null)} onChange={onChange} />}
+    </div>
+  )
+}
+
+function TeamIdentityEditor({ team, onDone, onCancel }: {
+  team: Team; onDone: (name: string, goal: string) => void; onCancel: () => void
+}) {
+  const [name, setName] = useState(team.name)
+  const [goal, setGoal] = useState(team.goal)
+  return (
+    <div className="teams-identity">
+      <input autoFocus value={name} placeholder="Team name" onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') onDone(name.trim() || team.name, goal.trim()); if (e.key === 'Escape') onCancel() }} />
+      <input value={goal} placeholder="What this team is for" onChange={(e) => setGoal(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') onDone(name.trim() || team.name, goal.trim()); if (e.key === 'Escape') onCancel() }} />
+      <button className="teams-primary" onClick={() => onDone(name.trim() || team.name, goal.trim())}>Save</button>
+      <button onClick={onCancel}>×</button>
     </div>
   )
 }

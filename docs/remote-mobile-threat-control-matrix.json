@@ -1148,22 +1148,22 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 88,
+    "total_get_routes": 89,
     "by_classification": {
       "canonical": 66,
       "compatibility": 3,
-      "legacy": 13,
+      "legacy": 14,
       "infrastructure": 6
     },
     "interpretation": "The count includes authenticated and intentionally public GET routes and is not an observe grant list. Any read-surface change requires explicit data/resource classification and REM-001 review."
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 164,
+    "total_non_get_routes": 166,
     "by_classification": {
       "canonical": 102,
       "compatibility": 26,
-      "legacy": 30,
+      "legacy": 32,
       "infrastructure": 6
     },
     "interpretation": "These routes are not individually granted to future devices. The count is a drift tripwire: any mutation surface change requires REM-001 and the centralized default-deny policy to be reconsidered."

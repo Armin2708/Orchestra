@@ -252,6 +252,21 @@ export function mastermindRefineBrief(team: TeamRow, spec: TeamSpec, instruction
   ].join('\n')
 }
 
+// Sent once when the operator selects a different team in the Teams tab, so plain chat
+// ("give the reviewer a second engineer") lands on the team they are actually looking at.
+export function mastermindFocusBrief(team: TeamRow, spec: TeamSpec): string {
+  return [
+    `The operator is now looking at team #${team.id} "${team.name}" (status: ${team.status}).`,
+    team.goal ? `Its goal: ${team.goal}` : '',
+    `Its current spec:`,
+    JSON.stringify(spec, null, 2),
+    ``,
+    `Until they say otherwise, "this team" in chat means this one; apply changes with:`,
+    `printf '%s' '<full updated JSON>' | orchestra team update ${team.id} --stdin`,
+    `Do not change anything yet. Acknowledge in one short line.`,
+  ].filter(Boolean).join('\n')
+}
+
 // A member's standing orders: its charter, its reporting line, and the team norms.
 export function memberBrief(team: TeamRow, spec: TeamSpec, role: TeamRole): string {
   const manager = role.reports_to ? spec.roles.find((r) => r.key === role.reports_to) : null

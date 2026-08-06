@@ -78,12 +78,12 @@ function insertLegacyFixture(db: Database.Database): {
 }
 
 describe('DOM-017 compatibility forward migration', () => {
-  it('covers all 13 legacy surfaces with a frozen forward-only plan', () => {
+  it('covers all 15 legacy surfaces with a frozen forward-only plan', () => {
     const coverage = compatibilityForwardPlanCoverage()
 
     expect(coverage.actual).toEqual(coverage.expected)
-    expect(coverage.actual).toHaveLength(13)
-    expect(new Set(coverage.actual).size).toBe(13)
+    expect(coverage.actual).toHaveLength(15)
+    expect(new Set(coverage.actual).size).toBe(15)
     expect(AGENT_OS_COMPATIBILITY_FORWARD_PLAN).toMatchObject({
       schema_version: 1,
       backlog_item: 'DOM-017',

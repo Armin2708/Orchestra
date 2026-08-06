@@ -940,6 +940,22 @@ describe('durable Agent Home domain', () => {
         CHECK((parent_report_id IS NULL AND sequence=1)
           OR (parent_report_id IS NOT NULL AND sequence>1))
       );
+      CREATE TABLE agent_transcripts (
+        agent_id INTEGER PRIMARY KEY,
+        lines TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE teams (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        name TEXT NOT NULL,
+        goal TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'draft',
+        lead_agent TEXT,
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE os_schema_migrations (
         id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now'))
       );

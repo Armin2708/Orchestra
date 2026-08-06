@@ -9,6 +9,7 @@ import { generateName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { conductorRules, outputDiscipline } from './rules.js'
+import { isMastermindName, mastermindRules, mastermindToolDecision } from './mastermind-scope.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
 import { isUsageLimitError } from './limits.js'
 import { evaluatePolicy, type PolicyOperation } from './agent-os/policy-engine.js'
@@ -651,13 +652,18 @@ export class Conductor {
     const requestedEffort = opts.effort ?? profile?.effort ?? undefined
     const effort: EffortLevel | null = EFFORT_LEVELS.includes(requestedEffort as EffortLevel)
       ? requestedEffort as EffortLevel : null
-    const permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
+    let permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
       ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
     let name = opts.name
     if (!name) {
       do { name = generateName() } while (
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))
     }
+    // The mastermind designs teams and nothing else (#154). bypassPermissions skips
+    // canUseTool entirely, so its scope guard only binds in an asking mode — the guard
+    // then answers every request itself, so this costs the operator no approval prompts.
+    const teamsScoped = isMastermindName(name)
+    if (teamsScoped && permissionMode === 'bypassPermissions') permissionMode = 'default'
     const bootstrap = issueManagedAgentLaunchBootstrap()
     this.db.prepare(`
       INSERT INTO agents (
@@ -740,6 +746,14 @@ export class Conductor {
     // pending request the board resolves via approve/deny buttons in the terminal
     const canUseTool = (toolName: string, toolInput: Record<string, unknown>, o: any): Promise<any> => {
       const id = String(o?.toolUseID ?? o?.requestId ?? `${Date.now()}-${pending.size}`)
+      // teams-only scope: decided here so it cannot be waived by policy or by the operator
+      const scope = teamsScoped ? mastermindToolDecision(toolName, toolInput) : null
+      if (scope) {
+        log('status', scope.allow ? `scope allowed: ${toolSummary(toolName, toolInput)}` : `scope denied: ${scope.message}`)
+        return Promise.resolve(scope.allow
+          ? { behavior: 'allow', updatedInput: toolInput }
+          : { behavior: 'deny', message: scope.message })
+      }
       const questions = toolName === 'AskUserQuestion' ? askUserQuestions(toolInput) : null
       const summary = questions
         ? questions.map((question) => question.question).join(' · ')
@@ -903,7 +917,7 @@ export class Conductor {
         canUseTool,
         ...(opts.maxBudgetUsd !== undefined ? { maxBudgetUsd: opts.maxBudgetUsd } : {}),
         ...(opts.taskBudgetTokens !== undefined ? { taskBudget: { total: opts.taskBudgetTokens } } : {}),
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: (opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : opts.role === 'verifier' ? verifierRules : rules)(name) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: (teamsScoped ? mastermindRules : opts.role === 'strategist' ? strategistRules : opts.role === 'auditor' ? auditorRules : opts.role === 'verifier' ? verifierRules : rules)(name) },
         env,
       } as any,
     })

@@ -1648,6 +1648,22 @@ describe('Agent OS migrations', () => {
         budget_cents INTEGER, priority INTEGER NOT NULL DEFAULT 0, policy_id TEXT,
         workspace_id TEXT, updated_at TEXT NOT NULL
       );
+      CREATE TABLE agent_transcripts (
+        agent_id INTEGER PRIMARY KEY,
+        lines TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE teams (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        name TEXT NOT NULL,
+        goal TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'draft',
+        lead_agent TEXT,
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE os_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
       INSERT INTO os_schema_migrations (id) VALUES
         ('001-agent-os-kernel'), ('002-runtime-hardening'), ('003-provider-session-ownership');
@@ -1760,6 +1776,22 @@ describe('Agent OS migrations', () => {
         base_ref TEXT, verify_commands TEXT NOT NULL DEFAULT '[]', budget_tokens INTEGER,
         budget_cents INTEGER, priority INTEGER NOT NULL DEFAULT 0, policy_id TEXT,
         workspace_id TEXT, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE agent_transcripts (
+        agent_id INTEGER PRIMARY KEY,
+        lines TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE teams (
+        id INTEGER PRIMARY KEY,
+        board_id INTEGER NOT NULL REFERENCES boards(id),
+        name TEXT NOT NULL,
+        goal TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'draft',
+        lead_agent TEXT,
+        spec_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE TABLE os_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
       INSERT INTO os_schema_migrations (id) VALUES

@@ -55,7 +55,7 @@ describe('Agent OS compatibility projection documentation', () => {
     const contract = read('docs/agent-os-compatibility-projections.md')
 
     expect(contract).toContain(CODE_HEAD)
-    expect(contract).toContain('all **13 / 13** such tables')
+    expect(contract).toContain('all **15 / 15** such tables')
     for (const entry of AGENT_OS_LEGACY_PROJECTION_CONTRACT.tables) {
       expect(contract, entry.table).toContain(`| \`${entry.table}\` |`)
     }

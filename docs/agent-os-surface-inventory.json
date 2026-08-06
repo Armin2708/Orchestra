@@ -85,7 +85,7 @@
     "source": "src/agent-os/compatibility-projection-contract.ts",
     "migration_owner": "DOM-017",
     "telemetry_owner": "DOM-019",
-    "table_count": 13,
+    "table_count": 15,
     "authority_modes": [
       "shared_scope",
       "compatibility_authority",
@@ -109,7 +109,7 @@
     "source": "src/agent-os/compatibility-forward-migration.ts",
     "migration_id": "022-legacy-projection-forward-plan",
     "prior_schema": "021-command-idempotency-coverage",
-    "plan_entry_count": 13,
+    "plan_entry_count": 15,
     "validation_categories": [
       "count",
       "key",
@@ -665,6 +665,9 @@
       "POST /api/v1/teams/:id/hire-member",
       "POST /api/v1/cards/:id/assign-team",
       "POST /api/v1/teams/:id/refine",
+      "GET /api/v1/boards/:id/mastermind",
+      "POST /api/v1/boards/:id/mastermind",
+      "POST /api/v1/teams/:id/focus",
       "POST /api/v1/agents/:id/rename"
     ],
     "infrastructure": [

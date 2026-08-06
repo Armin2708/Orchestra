@@ -60,7 +60,7 @@ describe('Agent OS compatibility forward-migration documentation', () => {
       automatic_down_migration: false,
     })
     expect(coverage.actual).toEqual(coverage.expected)
-    expect(coverage.actual).toHaveLength(13)
+    expect(coverage.actual).toHaveLength(15)
     expect(inventory.table_sources)
       .toContain(inventory.compatibility_forward_migration.source)
     expect(inventory.database_tables.infrastructure)
@@ -71,7 +71,7 @@ describe('Agent OS compatibility forward-migration documentation', () => {
     const contract = read('docs/agent-os-forward-migrations.md')
 
     expect(contract).toContain(CODE_HEAD)
-    expect(contract).toContain('all **13 / 13** compatibility and legacy')
+    expect(contract).toContain('all **15 / 15** compatibility and legacy')
     expect(AGENT_OS_COMPATIBILITY_VALIDATION_QUERIES.map((query) => query.id))
       .toEqual([
         'count.coverage',

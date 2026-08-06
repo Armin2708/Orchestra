@@ -12,8 +12,10 @@ import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { claimNext, isReady, rankBetween } from './backlog.js'
 import {
   approveTeam, archiveTeam, createTeam, getTeam, hireTeam, hireTeamMember, listTeams,
-  mastermindBrief, mastermindRefineBrief, teamMembers, updateTeam, MASTERMIND_NAME, TeamSpecError, type TeamSpec,
+  mastermindBrief, mastermindFocusBrief, mastermindRefineBrief, teamMembers, updateTeam,
+  MASTERMIND_NAME, TeamSpecError, type TeamSpec,
 } from './teams.js'
+import { isMastermindName, MASTERMIND_SCOPE_HINT } from './mastermind-scope.js'
 import { diffStat, hasOpenReviewRequest, recordDecision, listCardDecisions, listBoardDecisions } from './review.js'
 import { tokenEquals } from './token.js'
 import { LocalOwnerAuthError, type LocalOwnerPasswordAuth } from './local-owner-auth.js'
@@ -1832,17 +1834,69 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { card: updated, team }
     })
 
-  const ensureMastermind = (board: any) => {
-    const existing = db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=? AND kind='hired' AND status != 'gone'`)
-      .get(board.id, MASTERMIND_NAME) as any
-    return existing && maestro!.isHired(existing.id)
-      ? existing
-      : maestro!.hire({ boardId: board.id, cwd: board.project_path, name: MASTERMIND_NAME })
+  // The mastermind runs on whatever provider/model/effort the operator picks. Changing any
+  // of them restarts it on the requested runtime; everything else reuses the live session.
+  type MastermindSettings = { provider?: string; model?: string; effort?: string }
+  const mastermindRow = (boardId: number) =>
+    db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=? AND kind='hired' AND status != 'gone'`)
+      .get(boardId, MASTERMIND_NAME) as any
+
+  const mastermindDrift = (row: any, want?: MastermindSettings) => !!want && (
+    (!!want.provider && want.provider !== (row.provider ?? 'claude'))
+    || (!!want.model && want.model !== (row.model ?? null))
+    || (!!want.effort && want.effort !== (row.effort ?? null)))
+
+  const ensureMastermind = async (board: any, want?: MastermindSettings) => {
+    const existing = mastermindRow(board.id)
+    const live = !!existing && maestro!.isHired(existing.id)
+    if (live && !mastermindDrift(existing, want)) return existing
+    if (live) await maestro!.fire(Number(existing.id))
+    return maestro!.hire({
+      boardId: board.id,
+      cwd: board.project_path,
+      name: MASTERMIND_NAME,
+      provider: want?.provider ?? existing?.provider ?? undefined,
+      model: want?.model ?? existing?.model ?? undefined,
+      effort: want?.effort ?? existing?.effort ?? undefined,
+      // the hard scope lives in the tool guard (#154); read_only also sandboxes non-Claude CLIs
+      accessProfile: 'read_only',
+      permissionMode: 'default',
+    })
   }
 
+  server.get<{ Params: { id: string } }>('/api/v1/boards/:id/mastermind', (req, reply) => {
+    const board = db.prepare(`SELECT id FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+    if (!board) return reply.code(404).send({ error: 'not found' })
+    const agent = mastermindRow(board.id)
+    return {
+      agent: agent ?? null,
+      live: !!agent && !!maestro?.isHired(agent.id),
+      scope: MASTERMIND_SCOPE_HINT,
+    }
+  })
+
+  // start or re-run the mastermind on the operator's chosen provider/model/effort
+  server.post<{ Params: { id: string }; Body: MastermindSettings | null }>(
+    '/api/v1/boards/:id/mastermind', async (req, reply) => {
+      if (!requireOperator(req, reply)) return
+      if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      if (req.body?.effort !== undefined && !/^[a-zA-Z0-9_-]{1,40}$/.test(req.body.effort))
+        return reply.code(400).send({ error: 'effort must be a provider effort identifier' })
+      try {
+        const agent = await ensureMastermind(board, req.body ?? undefined)
+        emit(board.id, 'agent', agent)
+        return { agent, live: true, scope: MASTERMIND_SCOPE_HINT }
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) return reply.code(503).send({ error: error.message, provider: error.provider })
+        throw error
+      }
+    })
+
   // hand a goal to the mastermind (reused if already live); it submits a draft team for approval
-  server.post<{ Params: { id: string }; Body: { goal?: string } }>(
-    '/api/v1/boards/:id/teams/design', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { goal?: string } & MastermindSettings }>(
+    '/api/v1/boards/:id/teams/design', async (req, reply) => {
       if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
@@ -1850,7 +1904,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       const goal = req.body?.goal?.trim()
       if (!goal) return reply.code(400).send({ error: 'goal is required' })
       try {
-        const agent = ensureMastermind(board)
+        const agent = await ensureMastermind(board, req.body ?? undefined)
         maestro.task(Number(agent.id), mastermindBrief(goal))
         emit(board.id, 'agent', agent)
         return { agent, designing: true }
@@ -1861,8 +1915,8 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     })
 
   // conversational fine-tuning: the mastermind updates a draft/approved team in place
-  server.post<{ Params: { id: string }; Body: { instruction?: string } }>(
-    '/api/v1/teams/:id/refine', (req, reply) => {
+  server.post<{ Params: { id: string }; Body: { instruction?: string } & MastermindSettings }>(
+    '/api/v1/teams/:id/refine', async (req, reply) => {
       if (!requireOperator(req, reply)) return
       if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
       const team = getTeam(db, Number(req.params.id))
@@ -1873,7 +1927,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (!instruction) return reply.code(400).send({ error: 'instruction is required' })
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(team.board_id) as any
       try {
-        const agent = ensureMastermind(board)
+        const agent = await ensureMastermind(board, req.body ?? undefined)
         maestro.task(Number(agent.id), mastermindRefineBrief(team, JSON.parse(team.spec_json), instruction))
         emit(team.board_id, 'agent', agent)
         return { agent, refining: true, team }
@@ -1882,6 +1936,22 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         throw error
       }
     })
+
+  // the operator selected a team in the Teams tab: tell the mastermind what "this team" means
+  // now, once per switch, so free-form chat lands on the right design without a prefix ritual
+  const mastermindFocus = new Map<number, number>()
+  server.post<{ Params: { id: string } }>('/api/v1/teams/:id/focus', (req, reply) => {
+    if (!requireOperator(req, reply)) return
+    if (!maestro) return reply.code(501).send({ error: 'conductor not available (daemon-only feature)' })
+    const team = getTeam(db, Number(req.params.id))
+    if (!team) return reply.code(404).send({ error: 'not found' })
+    const agent = mastermindRow(team.board_id)
+    if (!agent || !maestro.isHired(agent.id)) return { focused: false, reason: 'mastermind is not live' }
+    if (mastermindFocus.get(team.board_id) === team.id) return { focused: true, repeated: true }
+    mastermindFocus.set(team.board_id, team.id)
+    maestro.task(Number(agent.id), mastermindFocusBrief(team, JSON.parse(team.spec_json)))
+    return { focused: true, team_id: team.id }
+  })
 
   server.post<{ Params: { id: string }; Body: { text: string } }>(
     '/api/v1/agents/:id/task', (req, reply) => {
@@ -1971,6 +2041,11 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       if (!maestro) return reply.code(501).send({ error: 'conductor not available' })
       const mode = req.body?.mode ?? ''
       if (!PERMISSION_MODES.includes(mode)) return reply.code(400).send({ error: `mode must be one of: ${PERMISSION_MODES.join(', ')}` })
+      // bypassPermissions skips canUseTool, which is where the mastermind's teams-only
+      // scope is enforced (#154) — the one agent whose mode is not the operator's to widen
+      if (mode === 'bypassPermissions' && isMastermindName(
+        (db.prepare(`SELECT name FROM agents WHERE id=?`).get(Number(req.params.id)) as { name?: string } | undefined)?.name,
+      )) return reply.code(409).send({ error: 'the mastermind is scoped to team design and cannot run in bypassPermissions' })
       const ok = (await maestro.setPermissionMode?.(Number(req.params.id), mode)) ?? false
       return ok ? { ok: true, mode } : reply.code(404).send({ error: 'not a hired agent' })
     })

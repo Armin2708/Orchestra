@@ -4,7 +4,7 @@ Status: **DOM-017 delivered** at exact code head
 `74d632f46bfeaaead1c7a52ced8a317915baacbf`.
 
 Migration `022-legacy-projection-forward-plan` turns the DOM-016 logical authority catalog into an
-idempotent, fail-closed physical migration. It covers all **13 / 13** compatibility and legacy
+idempotent, fail-closed physical migration. It covers all **15 / 15** compatibility and legacy
 tables without treating similarly named legacy concepts as canonical domains.
 
 ## TL;DR
@@ -24,7 +24,7 @@ The executable source of truth is
 `src/agent-os/compatibility-forward-migration.ts`. The exact migration wrapper is
 `src/agent-os/migrations.ts`.
 
-## Frozen 13-table plan
+## Frozen 15-table plan
 
 | Source | State | Forward action | Ambiguous or non-canonical behavior |
 |---|---|---|---|
@@ -166,7 +166,7 @@ post-checkpoint writes is acceptable.
 
 `test/compatibility-forward-migration.test.ts` proves:
 
-- complete and immutable 13-table plan coverage;
+- complete and immutable 15-table plan coverage;
 - deterministic links/backfills/event import plus all five clean validators;
 - quarantine for malformed, orphaned, cross-scope, and identity-collision rows;
 - restart and marker-loss replay without duplicate links, profiles, conversations, or events;

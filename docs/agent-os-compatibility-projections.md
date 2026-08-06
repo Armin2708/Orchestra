@@ -7,7 +7,7 @@ Status: **DOM-016 delivered** at exact code head
 
 Every table currently classified as compatibility or legacy now has one explicit authority mode,
 read/write boundary, canonical relationship, target disposition, and cutover gate. The executable
-catalog covers all **13 / 13** such tables:
+catalog covers all **15 / 15** such tables:
 
 | Current mode | Count | Meaning |
 |---|---:|---|
@@ -16,7 +16,7 @@ catalog covers all **13 / 13** such tables:
 | `scope_partitioned_bridge` | 3 | Legacy and canonical authority are disjoint by field or lineage |
 | `projection_sink` | 1 | Legacy-shaped aggregates cannot recreate canonical events |
 | `legacy_event_ingress` | 1 | Legacy events import once into the canonical ledger |
-| `isolated_legacy_domain` | 6 | No canonical replacement exists, so no false mapping is claimed |
+| `isolated_legacy_domain` | 8 | No canonical replacement exists, so no false mapping is claimed |
 
 These are logical projection/compatibility-view rules. DOM-016 does **not** create SQLite views,
 run a migration, backfill data, change a route, or disable a legacy writer. DOM-017 owns those
@@ -58,6 +58,8 @@ The machine-readable source is
 | `ideas` | `isolated_legacy_domain` | no canonical roadmap/planning domain yet | `retire_after_replacement` |
 | `review_decisions` | `scope_partitioned_bridge` | managed review in `delivery_reports` / `os_events` | `read_only_projection` |
 | `token_telemetry` | `isolated_legacy_domain` | injected-context estimate; not provider usage | `retain_distinct_semantics` |
+| `agent_transcripts` | `isolated_legacy_domain` | stored chat lines for UI continuity; not conversation history | `retain_distinct_semantics` |
+| `teams` | `isolated_legacy_domain` | operator-approved team designs; no canonical org domain yet | `retain_distinct_semantics` |
 
 ## Critical split boundaries
 

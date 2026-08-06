@@ -362,6 +362,40 @@ export const AGENT_OS_COMPATIBILITY_FORWARD_PLAN = Object.freeze({
       fail_closed:
         'Estimated hook tokens cannot answer provider billing or accepted-outcome questions.',
     }),
+    planEntry({
+      source_table: 'agent_transcripts',
+      action: 'retain_distinct_semantics',
+      state: 'no_data_move',
+      prerequisites: ['agent_transcripts.agent_id'],
+      backfill:
+        'Retain stored chat lines as UI continuity state for their agent.',
+      ambiguous_rows:
+        'Rows are not converted into canonical conversation history.',
+      validation_categories: ['key', 'scope'],
+      command_order:
+        'Canonical conversation events remain the independent record of what was said.',
+      compatibility_range:
+        'Legacy-only for as long as the hired-agent drawer restores its own transcript.',
+      fail_closed:
+        'A restored transcript line cannot stand in for a conversation event or a delivery.',
+    }),
+    planEntry({
+      source_table: 'teams',
+      action: 'retain_distinct_semantics',
+      state: 'no_data_move',
+      prerequisites: ['teams.board_id'],
+      backfill:
+        'Deferred until a canonical organization or staffing domain exists.',
+      ambiguous_rows:
+        'All rows remain operator-approved team designs scoped to their board.',
+      validation_categories: ['key', 'scope'],
+      command_order:
+        'A future organization command must exist before any import.',
+      compatibility_range:
+        'Legacy-only until the owning phase ships.',
+      fail_closed:
+        'An approved team spec cannot create assignments, profiles, or accepted work by inference.',
+    }),
   ]),
 })
 
@@ -380,6 +414,10 @@ const COVERED_SOURCE_KEYS_SQL = `
   SELECT 'card_events', CAST(id AS TEXT) FROM card_events
   UNION ALL
   SELECT 'review_decisions', CAST(id AS TEXT) FROM review_decisions
+  UNION ALL
+  SELECT 'agent_transcripts', CAST(agent_id AS TEXT) FROM agent_transcripts
+  UNION ALL
+  SELECT 'teams', CAST(id AS TEXT) FROM teams
 `
 
 export const AGENT_OS_COMPATIBILITY_VALIDATION_QUERIES =
@@ -747,6 +785,8 @@ const VALIDATION_REQUIRED_TABLES: Readonly<Record<string, readonly string[]>> =
       'cards',
       'card_events',
       'review_decisions',
+      'agent_transcripts',
+      'teams',
     ],
     'key.exclusive_disposition': [
       'os_compatibility_projection_links',

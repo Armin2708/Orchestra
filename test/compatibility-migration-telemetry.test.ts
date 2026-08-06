@@ -198,6 +198,7 @@ function insertAllLegacyRows(db: Database.Database): {
   milestoneId: number
   ideaId: number
   reviewId: number
+  teamId: number
 } {
   const boardId = Number(db.prepare(`
     INSERT INTO boards (project_path, name)
@@ -259,6 +260,13 @@ function insertAllLegacyRows(db: Database.Database): {
       board_id, agent_id, hook_event, day, chars, tokens, count
     ) VALUES (?, ?, 'session_start', '2025-04-01', 1, 1, 1)
   `).run(boardId, agentId)
+  db.prepare(`
+    INSERT INTO agent_transcripts (agent_id, lines) VALUES (?, '[]')
+  `).run(agentId)
+  const teamId = Number(db.prepare(`
+    INSERT INTO teams (board_id, name, goal, spec_json)
+    VALUES (?, 'DOM-019 team', 'bounded fixture', '{"roles":[],"workflow":[]}')
+  `).run(boardId).lastInsertRowid)
   return {
     boardId,
     agentId,
@@ -268,6 +276,7 @@ function insertAllLegacyRows(db: Database.Database): {
     milestoneId,
     ideaId,
     reviewId,
+    teamId,
   }
 }
 
@@ -304,12 +313,17 @@ function updateAllLegacyRows(
     WHERE board_id=? AND agent_id=? AND hook_event='session_start'
       AND day='2025-04-01'
   `).run(fixture.boardId, fixture.agentId)
+  db.prepare('UPDATE agent_transcripts SET lines=lines WHERE agent_id=?')
+    .run(fixture.agentId)
+  db.prepare('UPDATE teams SET name=name WHERE id=?').run(fixture.teamId)
 }
 
 function deleteAllLegacyRows(
   db: Database.Database,
   fixture: ReturnType<typeof insertAllLegacyRows>,
 ): void {
+  db.prepare('DELETE FROM teams WHERE id=?').run(fixture.teamId)
+  db.prepare('DELETE FROM agent_transcripts WHERE agent_id=?').run(fixture.agentId)
   db.prepare('DELETE FROM task_contracts WHERE card_id=?').run(fixture.cardId)
   db.prepare(`
     DELETE FROM agent_usage
@@ -337,7 +351,7 @@ function deleteAllLegacyRows(
 }
 
 describe('DOM-019 compatibility migration telemetry schema and store', () => {
-  it('pins the exact 13 tables, eight operations, six cohorts, and bounded diagnostics', () => {
+  it('pins the exact 15 tables, eight operations, six cohorts, and bounded diagnostics', () => {
     expect(AGENT_OS_LEGACY_COMPATIBILITY_TABLES).toEqual([
       'boards',
       'task_contracts',
@@ -352,6 +366,8 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       'ideas',
       'review_decisions',
       'token_telemetry',
+      'agent_transcripts',
+      'teams',
     ])
     expect(AGENT_OS_COMPATIBILITY_TELEMETRY_OPERATIONS).toEqual([
       'legacy_read',
@@ -416,6 +432,8 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
         'migration_quarantined',
       ],
       token_telemetry: ['legacy_only'],
+      agent_transcripts: ['legacy_only'],
+      teams: ['legacy_only'],
     })
     expect(Object.isFrozen(
       AGENT_OS_COMPATIBILITY_TELEMETRY_TABLE_COHORTS,
@@ -505,7 +523,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     stable.close()
   })
 
-  it('applies idempotently after 022 and creates one exact 39-trigger set', () => {
+  it('applies idempotently after 022 and creates one exact 45-trigger set', () => {
     const db = openDb(':memory:')
     expect(db.prepare(`
       SELECT id FROM os_schema_migrations WHERE id=?
@@ -520,9 +538,9 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     expect(schemaObjectCount(db))
       .toBe(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_SCHEMA_OBJECT_NAMES.length)
     expect(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES)
-      .toHaveLength(13 * 3)
+      .toHaveLength(15 * 3)
     expect(new Set(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES).size)
-      .toBe(13 * 3)
+      .toBe(15 * 3)
     expect(
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_INTEGRITY_TRIGGER_NAMES,
     ).toHaveLength(14)
@@ -735,7 +753,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       partial.prepare('INSERT INTO os_schema_migrations (id) VALUES (?)')
         .run(AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_ID)
     })
-    expect(() => migrate()).toThrow(/incompatible .*telemetry_daily schema/)
+    expect(() => migrate()).toThrow(/incompatible .*telemetry_daily schema|schema upgrade refused: .*telemetry_daily/)
     expect(schemaObjectCount(partial)).toBe(1)
     expect(partial.prepare(`
       SELECT COUNT(*) AS count FROM os_schema_migrations WHERE id=?
@@ -743,13 +761,18 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toEqual({ count: 0 })
     partial.close()
 
+    // A DROPPED owned object is benign drift: since the boot-time enum upgrade (#123) the
+    // migration repairs it in place instead of refusing to boot. Semantic drift — a table
+    // whose column shape differs — is still refused, as the daily-table case above proves.
     const altered = openDb(':memory:')
     installTelemetry(altered)
     const trigger =
       AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES[0]
     altered.exec(`DROP TRIGGER ${trigger}`)
-    expect(() => applyCompatibilityMigrationTelemetryMigration(altered))
-      .toThrow(new RegExp(`incompatible ${trigger} schema`))
+    expect(() => applyCompatibilityMigrationTelemetryMigration(altered)).not.toThrow()
+    expect(altered.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master WHERE type='trigger' AND name=?
+    `).get(trigger)).toEqual({ count: 1 })
     altered.close()
   })
 
@@ -833,7 +856,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     expect(db.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
       WHERE day='2025-02-03'
-    `).get()).toEqual({ count: 13 })
+    `).get()).toEqual({ count: 15 })
     db.close()
   })
 
@@ -1206,7 +1229,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       )
     `).get(
       ...AGENT_OS_COMPATIBILITY_MIGRATION_TELEMETRY_TRIGGER_NAMES,
-    )).toEqual({ count: 39 })
+    )).toEqual({ count: 45 })
     db.prepare('UPDATE boards SET name=name WHERE id=?').run(boardId)
     expect(db.prepare(`
       SELECT count FROM ${DAILY_TABLE}
@@ -1252,7 +1275,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     db.close()
   })
 
-  it('counts INSERT, UPDATE, and DELETE on every one of the 13 legacy tables', () => {
+  it('counts INSERT, UPDATE, and DELETE on every one of the 15 legacy tables', () => {
     const db = openDb(':memory:')
     installTelemetry(db)
     const fixture = insertAllLegacyRows(db)
@@ -2407,7 +2430,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     }
     expect(first.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
-    `).get()).toEqual({ count: 13 * 30 })
+    `).get()).toEqual({ count: 15 * 30 })
 
     rollupCompatibilityMigrationTelemetry(first, {
       now: new Date('2025-07-01T12:00:00.000Z'),
@@ -2419,7 +2442,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     `).get()).toEqual({ count: 0 })
     expect(first.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
-    `).get()).toEqual({ count: 13 * 30 })
+    `).get()).toEqual({ count: 15 * 30 })
     first.close()
 
     const reopened = new Database(file)
@@ -2463,7 +2486,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
       .toBe(true)
     expect(reopened.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
-    `).get()).toEqual({ count: 13 * 30 })
+    `).get()).toEqual({ count: 15 * 30 })
     reopened.close()
   })
 
@@ -2794,7 +2817,7 @@ describe('DOM-019 compatibility migration telemetry schema and store', () => {
     expect(first.prepare(`
       SELECT COUNT(*) AS count FROM ${COVERAGE_TABLE}
       WHERE day='2025-01-02'
-    `).get()).toEqual({ count: 13 })
+    `).get()).toEqual({ count: 15 })
 
     failPartialSeal = true
     const outer = first.transaction(() => {

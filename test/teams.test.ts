@@ -57,9 +57,12 @@ function stubConductor(db: any): ConductorLike & { tasks: Array<{ id: number; te
   const tasks: Array<{ id: number; text: string }> = []
   return {
     tasks,
-    isHired: (id) => Boolean(db.prepare(`SELECT 1 FROM agents WHERE id=? AND kind='hired'`).get(id)),
-    hire: ({ boardId, name }) => {
-      db.prepare(`INSERT INTO agents (board_id, name, kind) VALUES (?, ?, 'hired')`).run(boardId, name ?? 'stub-lead')
+    isHired: (id) => Boolean(db.prepare(`SELECT 1 FROM agents WHERE id=? AND kind='hired' AND status != 'gone'`).get(id)),
+    hire: ({ boardId, name, provider, model, effort }: any) => {
+      db.prepare(`INSERT INTO agents (board_id, name, kind, provider, model, effort) VALUES (?, ?, 'hired', ?, ?, ?)
+        ON CONFLICT(board_id, name) DO UPDATE SET kind='hired', status='idle',
+          provider=excluded.provider, model=excluded.model, effort=excluded.effort`)
+        .run(boardId, name ?? 'stub-lead', provider ?? 'claude', model ?? null, effort ?? null)
       return db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(boardId, name ?? 'stub-lead')
     },
     deliver: () => true,
@@ -67,7 +70,10 @@ function stubConductor(db: any): ConductorLike & { tasks: Array<{ id: number; te
     transcript: () => ({ lines: [], working: null }),
     subagents: () => [],
     interruptAgent: async () => true,
-    fire: async () => true,
+    fire: async (id: number) => {
+      db.prepare(`UPDATE agents SET status='gone' WHERE id=?`).run(id)
+      return true
+    },
     launch: () => ({ queued: false }),
     isLaunched: () => false,
   }
@@ -273,4 +279,87 @@ it('team hire returns 501 without a conductor', async () => {
   } })).json().team
   await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/approve` })
   expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/hire` })).statusCode).toBe(501)
+})
+
+it('mastermind runs on the operator-chosen provider/model/effort and restarts only on change', async () => {
+  const { db, server } = await boot()
+
+  const empty = (await server.inject({ url: '/api/v1/boards/1/mastermind' })).json()
+  expect(empty.agent).toBeNull()
+  expect(empty.live).toBe(false)
+  expect(empty.scope).toContain('team design')
+
+  const started = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/mastermind', payload: {
+    provider: 'claude', model: 'claude-opus-5', effort: 'high',
+  } })).json()
+  expect(started.agent.name).toBe('mastermind')
+  expect(started.agent.model).toBe('claude-opus-5')
+  expect(started.agent.effort).toBe('high')
+
+  // same settings reuse the live session
+  const reused = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/mastermind', payload: {
+    provider: 'claude', model: 'claude-opus-5', effort: 'high',
+  } })).json()
+  expect(reused.agent.id).toBe(started.agent.id)
+
+  // a different model re-runs it on the requested runtime
+  const switched = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/mastermind', payload: {
+    model: 'claude-sonnet-5', effort: 'medium',
+  } })).json()
+  expect(switched.agent.model).toBe('claude-sonnet-5')
+  expect(switched.agent.effort).toBe('medium')
+  expect(db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE name='mastermind'`).get()).toEqual({ c: 1 })
+
+  expect((await server.inject({ method: 'POST', url: '/api/v1/boards/1/mastermind', payload: {
+    effort: 'not a level!',
+  } })).statusCode).toBe(400)
+  expect((await server.inject({ method: 'POST', url: '/api/v1/boards/999/mastermind', payload: {} })).statusCode).toBe(404)
+
+  const state = (await server.inject({ url: '/api/v1/boards/1/mastermind' })).json()
+  expect(state.live).toBe(true)
+  expect(state.agent.model).toBe('claude-sonnet-5')
+})
+
+it('design and refine honour the requested mastermind runtime', async () => {
+  const { server } = await boot()
+  const designed = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams/design', payload: {
+    goal: 'Ship search', model: 'claude-sonnet-5',
+  } })).json()
+  expect(designed.agent.model).toBe('claude-sonnet-5')
+
+  const team = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Search', spec: spec(),
+  } })).json().team
+  const refined = (await server.inject({ method: 'POST', url: `/api/v1/teams/${team.id}/refine`, payload: {
+    instruction: 'add QA', model: 'claude-opus-5',
+  } })).json()
+  expect(refined.agent.model).toBe('claude-opus-5')
+})
+
+it('focus tells a live mastermind which team the chat is about, once per switch', async () => {
+  const { server, stub } = await boot()
+  const first = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Alpha', goal: 'A', spec: spec(),
+  } })).json().team
+  const second = (await server.inject({ method: 'POST', url: '/api/v1/boards/1/teams', payload: {
+    name: 'Beta', goal: 'B', spec: spec(),
+  } })).json().team
+
+  // no mastermind yet: focus is a no-op, never an error and never a spawn
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${first.id}/focus` })).json())
+    .toEqual({ focused: false, reason: 'mastermind is not live' })
+
+  await server.inject({ method: 'POST', url: '/api/v1/boards/1/mastermind', payload: {} })
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${first.id}/focus` })).json().focused).toBe(true)
+  const brief = stub().tasks.at(-1)!.text
+  expect(brief).toContain('"Alpha"')
+  expect(brief).toContain(`orchestra team update ${first.id} --stdin`)
+
+  const before = stub().tasks.length
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${first.id}/focus` })).json().repeated).toBe(true)
+  expect(stub().tasks).toHaveLength(before)
+
+  expect((await server.inject({ method: 'POST', url: `/api/v1/teams/${second.id}/focus` })).json().team_id).toBe(second.id)
+  expect(stub().tasks.at(-1)!.text).toContain('"Beta"')
+  expect((await server.inject({ method: 'POST', url: '/api/v1/teams/999/focus' })).statusCode).toBe(404)
 })

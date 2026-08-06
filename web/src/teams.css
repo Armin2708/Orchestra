@@ -113,34 +113,110 @@
 .teams-solo-working { border-color: rgba(45, 164, 78, 0.5); }
 .teams-solo-idle, .teams-solo-gone { opacity: 0.72; }
 
-/* ---- Overview-style canvas rework: team panels are project sections on a BoardCanvas ---- */
-.teams-canvas-view { padding: 12px 0 0; gap: 12px; }
-.teams-canvas-view .teams-toolbar, .teams-canvas-view .teams-error { padding: 0 24px; }
-.teams-canvas-view .teams-solo { padding: 0 24px 16px; }
-.teams-canvas-view .board-canvas { flex: 1; min-height: 0; }
-.teams-toggle .avatar.mini { margin-right: 6px; }
+/* ---- Workspace: full-bleed board, floating Teams panel, collapsible mastermind ---- */
+.teams-workspace {
+  flex: 1; min-width: 0; min-height: 0; padding: 0; gap: 0; overflow: hidden;
+  display: flex; position: relative;
+}
+.teams-stage-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.teams-workspace:not(.chat-closed) .teams-stage-pane { margin-right: 400px; }
 
-.teams-panel { min-width: 640px; }
-.teams-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.teams-panel-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.teams-panel-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
-.teams-panel-title .teams-goal { margin: 0; }
-.teams-panel-actions { display: flex; gap: 8px; }
-.teams-panel-actions button {
-  padding: 6px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+/* floating teams list — same language as the board Tasks panel, height follows content */
+.teams-panel {
+  position: absolute; left: 14px; top: 104px; z-index: 6;
+  display: flex; flex-direction: column; width: 118px; overflow: hidden;
+  max-height: calc(100% - 128px); pointer-events: none;
+  transition: width 0.28s var(--ease), background 0.2s, box-shadow 0.2s;
+}
+.teams-panel.open {
+  width: 268px; pointer-events: auto;
+  background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(18px);
+  border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 10px 34px rgba(40, 36, 30, 0.09);
+}
+.teams-panel-toggle {
+  position: relative; pointer-events: auto; display: flex; align-items: center; gap: 10px;
+  width: 118px; height: 44px; padding: 0 12px; cursor: pointer;
+  color: var(--ink); background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(16px);
+  border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow-hover);
+  transition: width 0.28s var(--ease), border-radius 0.2s, background 0.2s;
+}
+.teams-panel.open .teams-panel-toggle {
+  width: 100%; flex-shrink: 0; background: transparent; box-shadow: none;
+  border: none; border-bottom: 1px solid var(--line); border-radius: 0;
+}
+.teams-panel.open .task-panel-bars i:nth-child(1) { transform: translateY(6.25px) rotate(45deg); }
+.teams-panel.open .task-panel-bars i:nth-child(2) { opacity: 0; }
+.teams-panel.open .task-panel-bars i:nth-child(3) { transform: translateY(-6.25px) rotate(-45deg); }
+.teams-panel-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow: auto; min-height: 0; }
+
+.teams-panel .teams-design { flex-direction: column; gap: 6px; min-width: 0; }
+.teams-panel .teams-design input { width: 100%; box-sizing: border-box; flex: 0 0 auto; }
+.teams-design-actions { display: flex; gap: 6px; }
+.teams-design-actions button {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; cursor: pointer;
 }
-.teams-panel-actions button:disabled { opacity: 0.55; cursor: default; }
-.teams-net-wrap, .teams-net-wrap .network { min-height: 380px; }
-.teams-panel-hired .teams-net-wrap { outline: 1px solid #2da44e33; border-radius: 12px; }
+
+.teams-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.teams-list-empty { font-size: 11.5px; color: var(--ink-soft, #999); padding: 6px 2px; line-height: 1.5; }
+.teams-list-item {
+  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--ink); cursor: pointer;
+}
+.teams-list-item:hover { background: rgba(0, 0, 0, 0.035); }
+.teams-list-item.selected { border-color: var(--line); background: rgba(31, 111, 235, 0.07); }
+.teams-list-name { font-size: 13px; font-weight: 700; }
+.teams-list-item .teams-status { align-self: flex-start; }
+.teams-list-meta { font-size: 10.5px; color: var(--ink-soft, #999); display: flex; align-items: center; gap: 6px; }
+
+.teams-stage-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 18px 10px 148px; border-bottom: 1px solid var(--line);
+}
+.teams-stage-head h2 { margin: 0; font-size: 15px; font-weight: 700; cursor: text; }
+.teams-stage-head .teams-goal { margin: 0; }
+.teams-stage-edit {
+  margin-left: auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.teams-stage-head .teams-danger { margin-left: 0; }
+.teams-identity { display: flex; align-items: center; gap: 6px; flex: 1; flex-wrap: wrap; }
+.teams-identity input {
+  padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 12.5px;
+}
+.teams-identity input:first-child { font-weight: 700; }
+.teams-identity input:nth-child(2) { flex: 1; min-width: 160px; }
+.teams-identity button { padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.teams-stage-pane .board-canvas { flex: 1; min-height: 0; }
+.teams-stage-pane .teams-error { padding: 6px 18px; }
+.teams-view .teams-empty { margin: 24px; }
+
+/* the hire bar sits exactly where + Hire sits on the Overview board */
+.teams-hire-bar { display: flex; align-items: center; gap: 8px; }
+.teams-hire-bar .hire-btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.teams-hire-hint { font-size: 11px; color: var(--ink-soft, #999); }
+
+.teams-flow {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 7px 18px; border-bottom: 1px solid var(--line); background: var(--surface); flex: 0 0 auto;
+}
+.teams-flow-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-soft, #999); }
+.teams-flow-empty { font-size: 11px; color: var(--ink-soft, #999); font-style: italic; }
+.teams-flow .teams-stage { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; }
+.teams-stage-name { width: 92px; border: none; background: transparent; color: var(--ink); font-size: 11px; font-family: inherit; padding: 0; }
+.teams-flow select { border: none; background: transparent; color: var(--ink-soft, #777); font-size: 11px; font-family: inherit; }
+.teams-stage-gate, .teams-stage-x, .teams-stage-add {
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--ink-soft, #777); font-size: 10px; font-weight: 600; padding: 1px 7px; cursor: pointer;
+}
+.teams-stage.gated .teams-stage-gate { color: #8a6116; border-color: #8a6116; }
 
 .teams-edge { stroke: #b8b4ab; stroke-width: 1.5; }
-
 /* unstaffed role: dashed ghost of the overview agent avatar */
-.net-avatar.teams-ghost {
-  background: transparent; color: var(--ink-soft, #777);
-  border: 1.5px dashed #b8b4ab;
-}
+.net-avatar.teams-ghost { background: transparent; color: var(--ink-soft, #777); border: 1.5px dashed #b8b4ab; }
 .teams-node-role {
   display: block; text-align: center; font-size: 10px; color: var(--ink-soft, #999); margin-top: 1px;
   max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -154,23 +230,56 @@
   display: flex; flex-direction: column; gap: 7px; cursor: default;
 }
 .teams-role-editor label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 600; color: var(--ink-soft, #777); }
-.teams-role-editor input, .teams-role-editor textarea {
+.teams-role-editor input, .teams-role-editor textarea, .teams-role-editor select {
   padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--ink); font-size: 12px; font-family: inherit; resize: vertical;
 }
+.teams-editor-error { font-style: normal; font-size: 11px; color: #a33; }
 .teams-editor-actions { display: flex; gap: 6px; }
 .teams-editor-actions button {
   padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600; cursor: pointer;
 }
 
-.teams-refine { display: flex; gap: 8px; padding: 0 4px 4px; }
-.teams-refine input {
-  flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--ink); font-size: 12.5px;
+/* ---- mastermind chat pane ---- */
+.teams-chat {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 400px; z-index: 7;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  border-left: 1px solid var(--line); background: var(--surface);
 }
-.teams-refine button {
-  padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; cursor: pointer;
+.teams-chat-pill {
+  /* above the canvas zoom controls, clear of the board header that pans with the scene */
+  position: absolute; right: 14px; bottom: 78px; z-index: 7;
+  display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 11px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-hover); color: var(--ink); font-size: 12.5px; font-weight: 700;
 }
-.teams-refine button:disabled { opacity: 0.55; cursor: default; }
+.teams-chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.teams-chat-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.teams-chat-title strong { font-size: 13px; }
+.teams-chat-title em { font-style: normal; font-size: 10.5px; color: var(--ink-soft, #999); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.teams-chat-tune, .teams-chat-x {
+  padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink-soft, #777); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.teams-runtime {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line);
+}
+.teams-runtime label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 600; color: var(--ink-soft, #777); }
+.teams-runtime select {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 12px; font-family: inherit;
+}
+.teams-runtime button { padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); font-size: 12px; font-weight: 600; cursor: pointer; }
+.teams-scope-note { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--ink-soft, #999); }
+.teams-chat-body { flex: 1; min-height: 0; display: flex; }
+.teams-chat-body .terminal.embedded { flex: 1; min-width: 0; min-height: 0; }
+.teams-chat-empty { padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+.teams-chat-empty p { margin: 0; font-size: 12px; line-height: 1.55; color: var(--ink-soft, #777); }
+.teams-chat-empty button { padding: 7px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); font-size: 12px; font-weight: 600; cursor: pointer; }
+
+@media (max-width: 900px) {
+  .teams-workspace:not(.chat-closed) .teams-stage-pane { margin-right: 0; }
+  .teams-chat { width: min(92vw, 400px); box-shadow: -10px 0 30px rgba(0, 0, 0, 0.16); }
+}
