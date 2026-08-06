@@ -451,6 +451,25 @@ export type AgentProviderModel = {
   supportsAutoMode?: boolean
 }
 
+export type ProviderUpdateState = {
+  provider_id: string
+  installed: string | null
+  latest: string | null
+  update_available: boolean
+  update_command: string | null
+  checked_at: string | null
+  unknown_reason?: string
+}
+
+export type ProviderAuthStatus = {
+  provider_id: string
+  status: 'authenticated' | 'signed_out' | 'unknown'
+  account: string | null
+  method: string | null
+  login_command: string | null
+  detail?: string
+}
+
 export type AgentProviderCatalog = {
   id: string
   name: string
@@ -1559,6 +1578,10 @@ export const osApi = {
     unwrapList<WorkspaceConflict>(await api('GET', `/os/boards/${boardId}/conflicts`), ['conflicts']),
   listDrivers: async () => unwrapList<DriverCapability>(await api('GET', '/os/drivers'), ['drivers']),
   listAgentProviders: async () => unwrapList<AgentProviderCatalog>(await api('GET', '/os/providers'), ['providers']),
+  listProviderUpdates: async () =>
+    unwrapList<ProviderUpdateState>(await api('GET', '/os/providers/updates'), ['updates']),
+  listProviderAuth: async () =>
+    unwrapList<ProviderAuthStatus>(await api('GET', '/os/providers/auth'), ['auth']),
   listPlugins: async () => unwrapList<PluginDescriptor>(await api('GET', '/os/plugins'), ['plugins']),
   getAgentDefaults: async () =>
     unwrapEntity<AgentDefaults>(await api('GET', '/os/settings/agent-defaults'), ['defaults']),

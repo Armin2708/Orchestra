@@ -12,6 +12,7 @@ import {
   join,
 } from 'node:path'
 import { redactSensitiveText } from '../../agent-os/structured-redaction.js'
+import { pickNewestExecutable } from '../../provider-executable-version.js'
 import {
   PROVIDER_CAPABILITY_IDS,
   defineProviderExecutableDiscoveryV1,
@@ -117,17 +118,23 @@ const resolveExecutable = (
   command: string,
   environment: NodeJS.ProcessEnv,
 ): string | null => {
+  const resolved: string[] = []
   for (const candidate of executableCandidates(command, environment)) {
     try {
       accessSync(candidate, constants.X_OK)
       const resolvedPath = realpathSync(candidate)
       if (!statSync(resolvedPath).isFile()) continue
-      return resolvedPath
+      if (!resolved.includes(resolvedPath)) resolved.push(resolvedPath)
     } catch {
       // Continue through the explicit PATH candidates.
     }
   }
-  return null
+  // PATH order is arbitrary, so the first hit can be an older CLI than one further
+  // down. Prefer the newest so a self-updated provider CLI is what actually runs.
+  return pickNewestExecutable(
+    resolved,
+    (resolvedPath) => readVersion(resolvedPath, environment),
+  )
 }
 
 const minimalVersionEnvironment = (

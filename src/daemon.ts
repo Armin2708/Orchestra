@@ -935,6 +935,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   if (autowakeEnabled()) void autowake.reschedule()
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
   reapTimer = setInterval(() => { reap(db); reconcileActiveWork() }, 60_000)
+  // best-effort: surface a freshly-upgraded Claude CLI's model catalog (e.g. a newly
+  // released Opus) at boot, without waiting for the first agent to start
+  void maestro?.refreshModelCatalog().catch(() => undefined)
   schedulerTimer = setInterval(() => { void scheduler.tick().catch(() => undefined) }, 2_000)
   void scheduler.tick().catch(() => undefined)
 

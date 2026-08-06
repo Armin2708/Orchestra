@@ -122,6 +122,13 @@ jobs:
         continue-on-error: true
         run: node scripts/exact-commit-evidence.mjs run e2e -- ./scripts/e2e.sh
 
+      # Deliberately NOT an exact-commit evidence gate: required_gates is SHA-bound
+      # into the release contract, so adding an id there would invalidate retained
+      # artifacts. This fails the job directly instead — a build whose bundled CLI
+      # cannot enumerate models ships an empty hire picker (how Opus 5 stayed hidden).
+      - name: Verify the bundled provider CLI reports a non-empty model catalog
+        run: npm run check:provider-catalog
+
       - name: Run fail-closed credential-free compatibility doctor
         continue-on-error: true
         run: >-

@@ -24,6 +24,7 @@ import type {
   ProviderUsageWindowV1,
 } from '../../provider-contract.js'
 import { classifyCodexCliVersion } from '../../environment-compatibility.js'
+import { pickNewestExecutable } from '../../provider-executable-version.js'
 import type {
   CodexAccountResponse,
   CodexModel,
@@ -132,15 +133,22 @@ const resolveExecutable = (
   command: string,
   environment: NodeJS.ProcessEnv,
 ): string | null => {
+  const resolved: string[] = []
   for (const candidate of executableCandidates(command, environment)) {
     try {
       accessSync(candidate, constants.X_OK)
-      return realpathSync(candidate)
+      const resolvedPath = realpathSync(candidate)
+      if (!resolved.includes(resolvedPath)) resolved.push(resolvedPath)
     } catch {
       // Continue through the explicit PATH candidates.
     }
   }
-  return null
+  // PATH order is arbitrary, so the first hit can be an older CLI than one further
+  // down. Prefer the newest so a self-updated provider CLI is what actually runs.
+  return pickNewestExecutable(
+    resolved,
+    (resolvedPath) => readVersion(resolvedPath, minimalVersionEnvironment(environment)),
+  )
 }
 
 const minimalVersionEnvironment = (

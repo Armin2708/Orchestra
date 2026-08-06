@@ -10,6 +10,11 @@ import {
   resolve,
 } from 'node:path'
 import {
+  compareExecutableSemver,
+  parseExecutableSemver,
+  pickNewestExecutable,
+} from './provider-executable-version.js'
+import {
   ENVIRONMENT_COMPATIBILITY_CONTRACT,
   runEnvironmentDoctor,
   type CompatibilityCheck,
@@ -337,6 +342,90 @@ export const resolveClaudeBundledCliCommand = (): string | null => {
   } catch {
     return null
   }
+}
+
+const CLAUDE_VERSION_PROBE_TIMEOUT_MS = 3_000
+const CLAUDE_VERSION_PROBE_BUFFER = 1 << 16
+
+const readClaudeExecutableVersion = (
+  executable: string,
+  env: NodeJS.ProcessEnv,
+): string | null => {
+  const outcome = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    env,
+    timeout: CLAUDE_VERSION_PROBE_TIMEOUT_MS,
+    windowsHide: true,
+    maxBuffer: CLAUDE_VERSION_PROBE_BUFFER,
+  })
+  if (outcome.status !== 0 || typeof outcome.stdout !== 'string') return null
+  return outcome.stdout.trim() || null
+}
+
+// PATH order is arbitrary and frequently front-loaded with stale shims (npx
+// prepends node_modules/.bin, which can hold a years-old CLI). Taking the FIRST
+// hit would pin that stale binary — the very failure this resolver exists to
+// prevent — so every candidate is collected and the newest one wins.
+const locateClaudeOnPath = (env: NodeJS.ProcessEnv): string | null => {
+  const rawPath = env.PATH ?? env.Path ?? ''
+  if (!rawPath) return null
+  const names = process.platform === 'win32'
+    ? ['claude.exe', 'claude.cmd', 'claude.bat', 'claude']
+    : ['claude']
+  const candidates: string[] = []
+  for (const dir of rawPath.split(delimiter)) {
+    if (!dir) continue
+    for (const name of names) {
+      const candidate = isAbsolute(dir) ? join(dir, name) : resolve(dir, name)
+      try {
+        accessSync(candidate, constants.X_OK)
+        if (!candidates.includes(candidate)) candidates.push(candidate)
+      } catch { /* keep scanning PATH */ }
+    }
+  }
+  return pickNewestExecutable(
+    candidates,
+    (candidate) => readClaudeExecutableVersion(candidate, env),
+  )
+}
+
+let preferredClaudeExecutableCache: { value: string | null } | null = null
+
+const computePreferredClaudeExecutable = (
+  env: NodeJS.ProcessEnv,
+): string | null => {
+  const pathClaude = locateClaudeOnPath(env)
+  if (!pathClaude) return null
+  const pathVersion = parseExecutableSemver(readClaudeExecutableVersion(pathClaude, env))
+  if (!pathVersion) return null
+  const bundled = resolveClaudeBundledCliCommand()
+  // No bundled binary at all (unsupported platform / pruned install): the PATH CLI
+  // is the only option, so take it.
+  if (!bundled) return pathClaude
+  const bundledVersion = parseExecutableSemver(readClaudeExecutableVersion(bundled, env))
+  // Bundled exists but would not report a version: we cannot PROVE the PATH CLI is
+  // newer, so keep the vetted bundled binary rather than gambling on an unknown.
+  if (!bundledVersion) return null
+  // Hand the SDK the PATH-installed CLI only when it is STRICTLY newer than the
+  // bundled one — otherwise fall back to the vetted bundled binary (return null).
+  return compareExecutableSemver(pathVersion.tuple, bundledVersion.tuple) > 0 ? pathClaude : null
+}
+
+// The SDK spawns its own bundled Claude CLI unless `pathToClaudeCodeExecutable`
+// overrides it. Returns a PATH-installed `claude` when it is newer than the bundled
+// binary (so operators who keep the CLI current get its newer model catalog — e.g. a
+// freshly released Opus — without an app release), else null to use the SDK default.
+// Memoized for the process lifetime; a CLI upgrade pairs with a daemon restart.
+export const resolvePreferredClaudeExecutableV1 = (
+  env: NodeJS.ProcessEnv = process.env,
+  options: { force?: boolean } = {},
+): string | null => {
+  if (preferredClaudeExecutableCache && !options.force) {
+    return preferredClaudeExecutableCache.value
+  }
+  const value = computePreferredClaudeExecutable(env)
+  preferredClaudeExecutableCache = { value }
+  return value
 }
 
 const gitFailureDetail = (

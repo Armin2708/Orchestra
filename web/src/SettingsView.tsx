@@ -6,6 +6,8 @@ import {
   AgentEffort,
   AgentProviderCatalog,
   AgentProviderModel,
+  ProviderUpdateState,
+  ProviderAuthStatus,
   osApi,
 } from './osApi'
 import { RemoteAccessCenter } from './RemoteAccessCenter'
@@ -199,10 +201,90 @@ function SettingsSkeleton() {
   )
 }
 
+// A stale provider CLI silently pins a stale model catalog, so staleness is shown,
+// never silently fixed: Orchestra hands over the documented command and the operator
+// decides when to run it. Upgrading a CLI under a running agent would kill its work.
+function ProviderUpdatesPanel({ updates, auth }: {
+  updates: ProviderUpdateState[]
+  auth: ProviderAuthStatus[]
+}) {
+  const [copied, setCopied] = useState<string | null>(null)
+  // Only CLIs actually present on this machine — a provider you never installed is
+  // not "unknown", it is simply not yours (same rule as the hire picker).
+  const installed = updates.filter((update) => update.installed)
+  if (!installed.length) return null
+  const stale = installed.filter((update) => update.update_available)
+  const authFor = (providerId: string) => auth.find((entry) => entry.provider_id === providerId)
+  const copy = (key: string, text: string) => {
+    void navigator.clipboard?.writeText(text)
+    setCopied(key)
+    setTimeout(() => setCopied(null), 2000)
+  }
+
+  return (
+    <section className="provider-updates">
+      <header>
+        <h2>Provider CLIs</h2>
+        <small>
+          {stale.length
+            ? 'Agents run the newest CLI found, so updating one immediately surfaces its new models.'
+            : 'Orchestra runs the newest CLI it finds on this machine.'}
+        </small>
+      </header>
+      <ul>
+        {installed.map((update) => {
+          const signIn = authFor(update.provider_id)
+          const signedOut = signIn?.status === 'signed_out'
+          return (
+            <li key={update.provider_id} className={update.update_available || signedOut ? 'stale' : ''}>
+              <span className="provider-updates-name">{update.provider_id}</span>
+              <span className="provider-updates-version">v{update.installed}</span>
+              {/* Auth belongs to the CLI: show what it reports, never a credential. */}
+              {signIn?.status === 'authenticated' && (
+                <span className="provider-updates-auth" title={signIn.method ?? undefined}>
+                  signed in{signIn.account ? ` · ${signIn.account}` : ''}
+                </span>
+              )}
+              {signedOut && <span className="provider-updates-chip signedout">signed out</span>}
+              {update.update_available ? (
+                <span className="provider-updates-chip">update available → v{update.latest}</span>
+              ) : update.unknown_reason ? (
+                <span className="provider-updates-chip unknown" title={update.unknown_reason}>unknown</span>
+              ) : (
+                <span className="provider-updates-chip current">up to date</span>
+              )}
+              {signedOut && signIn?.login_command && (
+                <button type="button" className="provider-updates-action"
+                  onClick={() => copy(`login:${update.provider_id}`, signIn.login_command!)}>
+                  {copied === `login:${update.provider_id}` ? 'Copied' : `Sign in: ${signIn.login_command}`}
+                </button>
+              )}
+              {update.update_available && update.update_command && (
+                <button type="button" className="provider-updates-action"
+                  onClick={() => copy(update.provider_id, update.update_command!)}>
+                  {copied === update.provider_id ? 'Copied' : `Copy: ${update.update_command}`}
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {stale.length > 0 && (
+        <small className="provider-updates-note">
+          Run the command in a terminal, then restart the daemon when no agent is mid-task —
+          Orchestra never upgrades or restarts anything on its own.
+        </small>
+      )}
+    </section>
+  )
+}
+
 export function SettingsView() {
   const [draft, setDraft] = useState<AgentDefaults | null>(null)
   const [persisted, setPersisted] = useState<AgentDefaults | null>(null)
   const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
+  const [providerUpdates, setProviderUpdates] = useState<ProviderUpdateState[]>([])
+  const [providerAuth, setProviderAuth] = useState<ProviderAuthStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -220,6 +302,9 @@ export function SettingsView() {
       setDraft(copyDefaults(defaults))
       setPersisted(copyDefaults(defaults))
       setProviders(availableProviders)
+      // update state is advisory — a registry outage must never block Settings
+      osApi.listProviderUpdates().then(setProviderUpdates).catch(() => {})
+      osApi.listProviderAuth().then(setProviderAuth).catch(() => {})
     } catch (loadError) {
       setError(errorMessage(loadError))
     } finally {
@@ -298,6 +383,7 @@ export function SettingsView() {
           </section>
         ) : (
           <div className="agent-default-list">
+            <ProviderUpdatesPanel updates={providerUpdates} auth={providerAuth} />
             <AgentProfileEditor type="worker" profile={draft.worker} providers={providers}
               disabled={saving} refreshing={refreshing} onRefresh={() => void refreshProviders()}
               onChange={(profile) => updateProfile('worker', profile)} />

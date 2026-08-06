@@ -82,6 +82,42 @@ export function hasAgentCapability(
   return capabilityAliases[capability].some((alias) => published.has(canonical(alias)))
 }
 
+// Canonical low→high ordering so the effort slider is monotonic regardless of the
+// order the provider catalog happens to list levels in.
+const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+export function orderEffortLevels(levels: readonly string[]): string[] {
+  const rank = (level: string) => {
+    const idx = EFFORT_ORDER.indexOf(level.toLowerCase())
+    return idx === -1 ? EFFORT_ORDER.length : idx
+  }
+  return [...levels].sort((a, b) => rank(a) - rank(b))
+}
+
+// The SDK's model catalog reports bare families ("Opus", "Fable"). Derive the
+// versioned label ("Opus 4.8", "Fable 5") from the resolved model id when we can,
+// so the picker names the exact model — falling back to the SDK displayName.
+export function modelDisplayLabel(model: {
+  value: string
+  resolvedModel?: string
+  displayName?: string
+}): string {
+  const source = (model.resolvedModel || model.value || '').toLowerCase()
+  const tokens = source
+    .replace(/^claude-/, '')
+    .split('-')
+    .filter(Boolean)
+    .filter((token) => !/^\d{6,}$/.test(token)) // drop trailing date stamps (e.g. 20251001)
+  if (tokens.length >= 2) {
+    const [family, ...rest] = tokens
+    const version = rest.join('.')
+    if (/\d/.test(version)) {
+      return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`
+    }
+  }
+  return model.displayName || model.value
+}
+
 export function providerLaunchBody(
   provider?: string | null,
   model?: string | null,
