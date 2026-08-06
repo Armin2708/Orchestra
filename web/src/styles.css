@@ -508,6 +508,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-star { display: inline-block; animation: cc-spin 1.4s ease-in-out infinite; }
 @keyframes cc-spin { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .cc-esc { border: none; background: none; color: #D97757; font: inherit; text-decoration: underline; padding: 0; }
+/* compaction runs silently for the whole turn — the star cycles frames in JS, so the
+   generic opacity pulse is replaced by a slow breathe on the label itself */
+.cc-compacting .cc-star { animation: none; }
+.cc-compacting { animation: cc-compact-breathe 2s ease-in-out infinite; }
+@keyframes cc-compact-breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+/* the boundary the SDK reports once the summary has replaced the context */
+.cc-compact-boundary {
+  color: #D97757; border-top: 1px solid #4a463f; margin-top: 6px; padding-top: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-compacting, .cc-star { animation: none; }
+}
 
 /* agent chat messages render through the mail formatter — remap its palette to the terminal */
 .cc-rich {

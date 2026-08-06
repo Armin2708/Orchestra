@@ -31,6 +31,10 @@ import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 // messageId marks a line backed by a board-message row — deletable, unlike transcript lines
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string; messageId?: number }
 
+// the CLI's compaction spinner, frame for frame
+const COMPACT_STAR_FRAMES = ['✻', '✽', '✳', '✢', '·', '✢', '✳', '✽']
+// must match the status line the conductor logs on a system/compact_boundary message
+const COMPACT_BOUNDARY_PREFIX = '✻ Context compacted'
 const fmtTokens = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
 const fmtSecs = (s: number) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
@@ -290,7 +294,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
   const [external, setExternal] = useState(false)
-  const [turn, setTurn] = useState<{ secs: number; tokens: number } | null>(null)
+  const [turn, setTurn] = useState<{ secs: number; tokens: number; kind?: 'work' | 'compact' } | null>(null)
+  const [starFrame, setStarFrame] = useState(0)
   const [info, setInfo] = useState<TranscriptInfo | null>(null)
   const [perms, setPerms] = useState<PendingPermission[]>([])
   // board-command echo lives only in this client — the daemon transcript never sees it (zero tokens)
@@ -432,6 +437,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     info?.permissionMode,
   )
   const working = hired && turn !== null
+  // /compact (and auto-compaction) spends the whole turn summarizing and emits no assistant
+  // text — animate it like the CLI does instead of leaving a silent "Working…"
+  const compacting = working && turn?.kind === 'compact'
+  useEffect(() => {
+    if (!compacting) { setStarFrame(0); return }
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const t = setInterval(() => setStarFrame((f) => (f + 1) % COMPACT_STAR_FRAMES.length), 120)
+    return () => clearInterval(t)
+  }, [compacting])
 
   // on open: jump straight to the latest messages; afterwards follow the stream while the
   // user's recorded intent says so. Depends on the last line's text too — at the 500-line
@@ -774,7 +788,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       case 'thinking':
         return <p key={i} className={`cc-thinking${transcriptExpanded ? '' : ' is-collapsed'}`}>✻ {l.text}</p>
       case 'status':
-        return <p key={i} className="cc-status">{l.text}</p>
+        // the conductor's compact_boundary line reads as a divider, not as bookkeeping
+        return <p key={i} className={`cc-status${l.text.startsWith(COMPACT_BOUNDARY_PREFIX) ? ' cc-compact-boundary' : ''}`}>{l.text}</p>
       case 'error':
         return <p key={i} className="cc-error">✗ {l.text}</p>
       default:
@@ -996,8 +1011,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                   </div>
                 ))}
                 {working && turn && (
-                  <p className="cc-spinner" role="status">
-                    <span className="cc-star cc-star-frame" aria-hidden="true">•</span> Working… ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
+                  <p className={`cc-spinner${compacting ? ' cc-compacting' : ''}`} role="status">
+                    <span className="cc-star cc-star-frame" aria-hidden="true">
+                      {compacting ? COMPACT_STAR_FRAMES[starFrame] : '•'}
+                    </span> {compacting ? 'Compacting conversation…' : 'Working…'} ({canInterrupt && <><button className="cc-esc" onClick={interrupt}>esc</button> to interrupt · </>}{fmtSecs(turn.secs)}
                     {turn.tokens > 0 && <> · ↓ {fmtTokens(turn.tokens)} tokens</>})
                   </p>
                 )}

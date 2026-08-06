@@ -172,6 +172,14 @@ export function loadStoredTranscript(db: Database.Database, agentId: number): Tr
   } catch { return [] }
 }
 
+/** Kind of work the live turn is doing — drives which indicator the chat animates. */
+export type TurnKind = 'work' | 'compact'
+
+/** `/compact` (with or without custom instructions) is the SDK's context-compaction command. */
+export function compactCommandPrompt(text: string): boolean {
+  return /^\s*\/compact(?:\s|$)/i.test(text)
+}
+
 type Hired = {
   agentId: number
   boardId: number
@@ -191,6 +199,9 @@ type Hired = {
   // 3s flusher only writes agent_transcripts rows that actually changed
   persistedSig: string
   turnStart: number | null
+  // what the running turn is doing, when it is not ordinary work — /compact spends the
+  // whole turn summarizing, so the terminal shows a compaction indicator instead of "Working…"
+  turnKind: TurnKind
   turnTokens: number
   sessionTokens: number
   // true token split from the API's own usage reports — turn accrues live from assistant
@@ -934,6 +945,9 @@ export class Conductor {
         })
         log('user', payload)
         if (hired.turnStart === null) { hired.turnStart = Date.now(); hired.turnTokens = 0 }
+        // a compaction turn produces no assistant text — without this the drawer would just
+        // sit on "Working…" for the whole summarization
+        if (compactCommandPrompt(payload)) hired.turnKind = 'compact'
         input.push(payload)
         if (notifications.length) this.markNotifications(agent.id, notifications.map((m) => m.id))
       },
@@ -945,7 +959,7 @@ export class Conductor {
       commands: [],
       transcript,
       persistedSig: transcriptSig(transcript),
-      turnStart: null, turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(), sessionCostUsd: 0,
+      turnStart: null, turnKind: 'work', turnTokens: 0, sessionTokens: 0, turnUsage: emptyUsage(), sessionUsage: emptyUsage(), sessionCostUsd: 0,
       model: model ?? null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: cachedModels, role: opts.role, handoff: false, limitHit: false,
       cardId: opts.cardId ?? null, branch: null, outcome: null, reason: '', summary: '',
@@ -997,6 +1011,16 @@ export class Conductor {
           } else if (m.type === 'system' && m.subtype === 'commands_changed') {
             // mid-session push (e.g. skills discovered while working) — REPLACE the cached list
             hired.commands = (m.commands ?? []).map((c: any) => ({ name: c.name, description: c.description ?? '' }))
+          } else if (m.type === 'system' && m.subtype === 'compact_boundary') {
+            // the SDK reports the boundary once the summary has replaced the context — this is
+            // the only visible trace a compaction leaves, for /compact and for auto-compaction
+            const meta = m.compact_metadata ?? {}
+            const pre = Number(meta.pre_tokens)
+            const detail = Number.isFinite(pre) && pre > 0
+              ? ` · ${pre >= 1000 ? `${(pre / 1000).toFixed(1)}k` : pre} tokens summarized`
+              : ''
+            log('status', `✻ Context compacted (${meta.trigger === 'auto' ? 'automatic' : 'manual'})${detail}`)
+            hired.turnKind = 'work'
           } else if (m.type === 'assistant') {
             if (hired.turnStart === null) hired.turnStart = Date.now()
             hired.turnTokens += m.message?.usage?.output_tokens ?? 0
@@ -1034,6 +1058,7 @@ export class Conductor {
             }
             hired.turnUsage = emptyUsage()
             hired.turnStart = null
+            hired.turnKind = 'work'
             hired.turnTokens = 0
             hired.subs.clear()
             this.touch(agent.id, 'idle')
@@ -1204,12 +1229,14 @@ export class Conductor {
     return true
   }
 
-  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[]; costUsd: number; usage: { turn: UsageSplit; session: UsageSplit } }; permissions?: Omit<PendingPermission, 'finish'>[] } {
+  transcript(agentId: number): { lines: TranscriptLine[]; working: { secs: number; tokens: number; kind: TurnKind } | null; info?: { model: string | null; cwd: string; tokens: number; permissionMode: string; commands: { name: string; description: string }[]; effort: string | null; models: any[]; costUsd: number; usage: { turn: UsageSplit; session: UsageSplit } }; permissions?: Omit<PendingPermission, 'finish'>[] } {
     const h = this.hired.get(agentId)
     if (!h) return { lines: [], working: null }
     return {
       lines: h.transcript,
-      working: h.turnStart ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens } : null,
+      working: h.turnStart
+        ? { secs: Math.round((Date.now() - h.turnStart) / 1000), tokens: h.turnTokens, kind: h.turnKind }
+        : null,
       info: { model: h.model, cwd: h.cwd, tokens: h.sessionTokens, permissionMode: h.permissionMode, commands: h.commands, effort: h.effort, models: h.models,
         costUsd: h.sessionCostUsd, usage: { turn: h.turnUsage, session: h.sessionUsage } },
       permissions: [...h.pending.values()].map(({ finish: _f, ...p }) => p),
