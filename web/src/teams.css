@@ -150,13 +150,12 @@
 .teams-panel.open .task-panel-bars i:nth-child(3) { transform: translateY(-6.25px) rotate(-45deg); }
 .teams-panel-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow: auto; min-height: 0; }
 
-.teams-panel .teams-design { flex-direction: column; gap: 6px; min-width: 0; }
-.teams-panel .teams-design input { width: 100%; box-sizing: border-box; flex: 0 0 auto; }
-.teams-design-actions { display: flex; gap: 6px; }
-.teams-design-actions button {
-  flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; cursor: pointer;
+.teams-panel-new {
+  position: absolute; right: 10px; top: 9px; z-index: 1;
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600; cursor: pointer;
 }
+.teams-panel-new:hover { border-color: #8f8b83; }
 
 .teams-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .teams-list-empty { font-size: 11.5px; color: var(--ink-soft, #999); padding: 6px 2px; line-height: 1.5; }

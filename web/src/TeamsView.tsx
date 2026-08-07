@@ -662,8 +662,6 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
   })
   const [chatOpen, setChatOpen] = useState(() => localStorage.getItem(CHAT_KEY) !== 'closed')
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== 'closed')
-  const [goal, setGoal] = useState('')
-  const [designing, setDesigning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
   const [terminal, setTerminal] = useState<{ agent: Agent; boardId: number } | null>(null)
@@ -709,21 +707,6 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
 
   const refresh = () => { void load(); onChange() }
 
-  const design = async () => {
-    if (!goal.trim() || !boardId) return
-    setDesigning(true)
-    try {
-      const runtime = loadRuntime()
-      await api('POST', `/boards/${boardId}/teams/design`, {
-        goal: goal.trim(),
-        ...providerLaunchBody(runtime.provider, runtime.model, runtime.effort, null),
-      })
-      setGoal('')
-      setChatOpen(true)
-      onChange()
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setDesigning(false) }
-  }
-
   const newBlankTeam = async () => {
     if (!boardId) return
     let n = teams.length + 1
@@ -761,18 +744,11 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
           <span className="task-panel-count">{teams.length}</span>
         </button>
         {railOpen && (
+          <button type="button" className="teams-panel-new" title="Create a team"
+            onClick={() => void newBlankTeam()}>+ New</button>
+        )}
+        {railOpen && (
           <div className="teams-panel-body">
-            <div className="teams-design">
-              <input value={goal} placeholder="Describe a goal — the mastermind drafts a team"
-                onChange={(e) => setGoal(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void design() }} />
-              <div className="teams-design-actions">
-                <button className="teams-primary" disabled={designing || !goal.trim()} onClick={() => void design()}>
-                  {designing ? '…' : 'Design'}
-                </button>
-                <button title="Design a team by hand" onClick={() => void newBlankTeam()}>+ New</button>
-              </div>
-            </div>
             <ul className="teams-list">
               {teams.map((t) => {
                 const live = t.members.filter((m) => m.status !== 'gone')
@@ -791,7 +767,7 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
                   </li>
                 )
               })}
-              {teams.length === 0 && <li className="teams-list-empty">No teams yet — describe a goal or start one by hand.</li>}
+              {teams.length === 0 && <li className="teams-list-empty">No teams yet — hit + New, or ask the mastermind for one.</li>}
             </ul>
           </div>
         )}
@@ -818,8 +794,8 @@ export function TeamsView({ snaps, onChange }: { snaps: Snapshot[]; onChange: ()
           </>
         ) : (
           <div className="teams-empty">
-            No team selected. Describe a goal on the left and the mastermind drafts one, or start a blank team
-            and build the tree yourself — add roles, wire who reports to whom, then approve and hire.
+            No team selected. Hit + New in the Teams panel and build the tree yourself — add roles, wire who
+            reports to whom, then approve and hire — or ask the mastermind on the right to draft one for you.
           </div>
         )}
         {error && <div className="teams-error">{error}</div>}

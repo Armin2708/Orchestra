@@ -26,10 +26,43 @@ function ensureAgentsProviderSessionIndex(db: Database.Database): void {
   db.exec(`${AGENTS_PROVIDER_SESSION_INDEX_SQL};`)
 }
 
+// Every hot route re-`prepare()`s its SQL text. Profiling the live daemon showed sqlite
+// spending as much time *compiling* statements as running them (~520 samples across
+// sqlite3RunParser/LockAndPrepare/JS_prepare vs 223 in VdbeExec), because the ~150
+// `db.prepare(...)` call sites all sit inside per-request handlers. Statements are
+// reusable on a single connection and nothing here mutates one (no .pluck/.raw/
+// .iterate/.expand/.safeIntegers anywhere in src), so one memo per connection makes
+// every call site cheap without touching them.
+const PREPARE_CACHE_MAX = 512
+
+function memoizePrepare(db: Database.Database): void {
+  const cache = new Map<string, Database.Statement>()
+  const compile = db.prepare.bind(db) as Database.Database['prepare']
+  db.prepare = ((sql: string) => {
+    const hit = cache.get(sql)
+    if (hit) return hit
+    const stmt = compile(sql)
+    // SQL built by interpolation (variable-length IN lists) would otherwise grow this
+    // without bound; the working set is small, so a flush beats tracking recency
+    if (cache.size >= PREPARE_CACHE_MAX) cache.clear()
+    cache.set(sql, stmt)
+    return stmt
+  }) as Database.Database['prepare']
+}
+
 export function openDb(file: string): Database.Database {
   const db = new Database(file)
   db.pragma('journal_mode = WAL')
+  // WAL + NORMAL fsyncs at checkpoint instead of on every commit: a process crash still
+  // cannot lose or corrupt a committed transaction, only an OS/power failure can drop
+  // the last few. The compatibility sidecar has run this way since the #94/#96 fix; the
+  // main board db never got it and was paying a full fsync per write.
+  db.pragma('synchronous = NORMAL')
+  // the WAL had grown to 5MB unbounded on a live daemon — checkpoint every ~4MB
+  db.pragma('wal_autocheckpoint = 1000')
+  db.pragma('cache_size = -16000') // 16MB page cache, up from the 2MB default
   db.pragma('foreign_keys = ON')
+  memoizePrepare(db)
   db.exec(`
   CREATE TABLE IF NOT EXISTS boards (
     id INTEGER PRIMARY KEY,
