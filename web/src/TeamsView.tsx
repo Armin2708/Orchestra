@@ -583,9 +583,12 @@ function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }
         <button className="teams-chat-tune" title="Provider, model and effort" onClick={() => setTuning((v) => !v)}>
           {runtime.model || runtime.provider || 'runtime'} ⌄
         </button>
-        {agent && (
+        {agent ? (
           <button className="teams-chat-stop" title="Stop the mastermind — the Teams tab is its only control"
             aria-label="Stop the mastermind" disabled={busy} onClick={() => void stop()}>×</button>
+        ) : (
+          <button className="teams-chat-start" title="Start the mastermind on the selected runtime"
+            disabled={busy} onClick={() => void start()}>{busy ? '…' : 'Start'}</button>
         )}
         <button className="teams-chat-x" title="Hide the mastermind" onClick={onCollapse}>›</button>
       </header>
@@ -623,7 +626,7 @@ function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }
             </label>
           )}
           <button className="teams-primary" disabled={busy} onClick={() => void start()}>
-            {busy ? 'Starting…' : agent ? 'Apply — restarts it' : 'Start mastermind'}
+            {busy ? '…' : agent ? 'Apply — restarts it' : 'Start'}
           </button>
           <p className="teams-scope-note">{scope || 'Scoped to team design: it cannot edit code, hire, or change itself.'}</p>
         </div>
@@ -637,14 +640,7 @@ function MastermindPane({ boardId, snap, team, providers, onChange, onCollapse }
             threads={(snap.threads ?? []) as Thread[]} cards={(snap.cards ?? []) as Card[]}
             onClose={() => {}} onChange={onChange} />
         </div>
-      ) : (
-        <div className="teams-chat-empty">
-          <p>The mastermind designs and refines teams with you — and is allowed to do nothing else.</p>
-          <button className="teams-primary" disabled={busy} onClick={() => void start()}>
-            {busy ? 'Starting…' : 'Start mastermind'}
-          </button>
-        </div>
-      )}
+      ) : null}
     </aside>
   )
 }
