@@ -247,8 +247,8 @@
   border-left: 1px solid var(--line); background: var(--surface);
 }
 .teams-chat-pill {
-  /* above the canvas zoom controls, clear of the board header that pans with the scene */
-  position: absolute; right: 14px; bottom: 78px; z-index: 7;
+  /* top-right of the canvas, mirroring the Teams panel toggle on the left */
+  position: absolute; right: 14px; top: 104px; z-index: 8;
   display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px;
   border: 1px solid var(--line); border-radius: 11px; cursor: pointer;
   background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(16px);
