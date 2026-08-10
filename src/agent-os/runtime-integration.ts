@@ -87,6 +87,7 @@ import {
 } from './provider-runtime-policy.js'
 import { OutcomeAnalyticsRuntimeBridge } from './outcome-analytics-runtime.js'
 import { provisionManagedAgentSessionCredential } from '../agent-session-credential.js'
+import { notifyProcessOutput } from './process-output-signal.js'
 
 type BusRef = { current?: EventEmitter }
 
@@ -313,6 +314,8 @@ export class SqliteRuntimePersistence implements RuntimePersistence {
       data: chunk.data,
       created_at: chunk.createdAt,
     })
+    // release any terminal parked on this process before its next read
+    notifyProcessOutput(chunk.processId)
   }
 
   readOutput(processId: string, afterSeq: number, limit: number): ProcessOutputChunk[] {

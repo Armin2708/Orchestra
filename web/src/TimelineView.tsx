@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Snapshot, TimelineItem, agentInk, agentWash, fetchTimeline, initials, timeAgo } from './api'
+import { visibleInterval } from './visibleInterval'
 
 const TYPE_FILTERS = ['created', 'moved', 'shipped', 'launched', 'review', 'message', 'milestone']
 const itemKey = (boardId: number, i: TimelineItem) => `${boardId}:${i.source}:${i.id}`
@@ -49,8 +50,8 @@ export function TimelineView({ snaps }: { snaps: Snapshot[]; focused?: boolean; 
 
   // Proof-bound device credentials never enter EventSource URLs; refresh via authenticated fetch.
   useEffect(() => {
-    const poll = window.setInterval(() => { void loadHead() }, 5_000)
-    return () => window.clearInterval(poll)
+    const stop = visibleInterval(() => { void loadHead() }, 5_000)
+    return stop
   }, [loadHead])
 
   const loadMore = useCallback(async () => {

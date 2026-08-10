@@ -3,6 +3,7 @@ import { ApiError } from './api'
 import { AttentionItem, osApi, type OsId } from './osApi'
 import { OsIcon } from './OsIcon'
 import { useModalFocusTrap } from './useModalFocusTrap'
+import { visibleInterval } from './visibleInterval'
 
 type BoardRef = { id: number; name: string }
 
@@ -68,8 +69,8 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
 
   useEffect(() => {
     load()
-    const timer = window.setInterval(() => load(true), 12_000)
-    return () => window.clearInterval(timer)
+    const stop = visibleInterval(() => load(true), 12_000)
+    return stop
   }, [boardKey, load])
 
   useEffect(() => {
