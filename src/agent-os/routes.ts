@@ -102,6 +102,10 @@ import {
   type TerminalResource,
 } from './terminal-access-policy.js'
 import { TerminalSessionStateService } from './terminal-session-state.js'
+import { waitForProcessOutput } from './process-output-signal.js'
+
+// a process in any of these can still produce output, so a reader may park on it
+const LIVE_PROCESS_STATUSES = new Set(['running', 'starting', 'stopping'])
 
 export interface ProcessRecord {
   id: string
@@ -766,7 +770,7 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { ok: true, deleted: current.id }
   })
 
-  app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>('/processes/:id/output', (request) => {
+  app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string; wait?: string } }>('/processes/:id/output', async (request) => {
     const process = requireProcess(db, request.params.id)
     requireTerminalAccess('view', {
       workspaceId: process.workspace_id,
@@ -774,8 +778,17 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     }, request)
     const after = Math.max(0, Number(request.query.after) || 0)
     const limit = Math.min(2000, Math.max(1, Number(request.query.limit) || 500))
-    const output = db.prepare(`SELECT seq, stream, data, created_at FROM process_output
+    const read = () => db.prepare(`SELECT seq, stream, data, created_at FROM process_output
       WHERE process_id=? AND seq>? ORDER BY seq ASC LIMIT ?`).all(request.params.id, after, limit) as any[]
+    let output = read()
+    // Long-poll, opt-in so every existing caller keeps returning immediately. A live process
+    // with nothing new parks the request until the pty writes instead of making the terminal
+    // wait out a fixed interval — that interval was the keystroke echo latency.
+    const waitMs = Math.max(0, Number(request.query.wait) || 0)
+    if (waitMs > 0 && output.length === 0 && LIVE_PROCESS_STATUSES.has(process.status)) {
+      await waitForProcessOutput(process.id, waitMs)
+      output = read()
+    }
     return { output, next_seq: output.length ? output[output.length - 1].seq : after }
   })
 
