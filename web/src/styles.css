@@ -263,6 +263,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .provider-badge[data-provider='claude'] { border-color: #e2c5b7; background: #fbf1eb; color: #9b5139; }
 .provider-badge[data-provider='codex'] { border-color: #bad7cb; background: #ecf6f2; color: #236b58; }
+.provider-badge[data-provider='qwen'] { border-color: #cfc3e3; background: #f3effa; color: #6b4fa0; }
 .provider-badge.compact { padding: 0 5px; font-size: 7.5px; line-height: 1.5; }
 .crew-slot > .provider-badge { position: absolute; left: 50%; bottom: -8px; z-index: 2; transform: translateX(-50%); }
 .provider-launch { position: relative; display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -393,14 +394,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .net-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .net-idle { font-size: 10.5px; color: #b8b4ac; font-style: italic; }
 .net-empty { position: absolute; left: 50%; top: 50%; z-index: 3; transform: translate(-50%, -50%); }
-.net-legend {
-  position: absolute; left: 8px; bottom: 4px; z-index: 3; display: flex; gap: 14px;
-  font-size: 11px; color: var(--ink-soft); align-items: center;
-  pointer-events: none;
-}
-.net-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.leg-line { display: inline-block; width: 18px; height: 0; border-top: 2px solid #ddd9d0; }
-.leg-line.open { border-top: 2px dashed #d9a13b; }
 
 /* network prompt + thread popovers */
 .net-prompt, .net-thread {
@@ -482,6 +475,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .cc-head .provider-badge { border-color: #4c4841; background: #302e29; color: #bdb7ac; }
 .cc-head .provider-badge[data-provider='claude'] { border-color: #754f40; color: #e19a78; }
 .cc-head .provider-badge[data-provider='codex'] { border-color: #376b5d; color: #74c7aa; }
+.cc-head .provider-badge[data-provider='qwen'] { border-color: #5d4a7d; color: #b39ddb; }
 .cc-close {
   margin-left: auto; border: none; background: none; color: #6f6b64; font: inherit; font-size: 12px;
 }
@@ -926,18 +920,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 
 /* ── Ask dock ────────────────────────────────────── */
+/* auto width so the dock hugs however many agents are online, growing sideways until it
+   hits the cap — only then do the chips wrap onto another line */
 .ask-dock {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-  z-index: 20; width: min(640px, calc(100vw - 48px));
+  z-index: 20; width: auto; max-width: min(1440px, calc(100vw - 48px));
 }
 
 .ask-row {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
   background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(16px);
   border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
   padding: 10px 16px;
 }
+
+/* composing a message is a single line of controls, and it always wants the full cap */
+.ask-row.open {
+  flex-direction: row; align-items: center; gap: 8px;
+  width: min(1440px, calc(100vw - 48px));
+}
+
+.ask-chips { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 
 .ask-label { font-size: 11px; font-weight: 600; color: var(--ink-soft); letter-spacing: 0.05em; text-transform: uppercase; }
 
@@ -1124,16 +1128,6 @@ textarea {
 
 /* ── View tabs + Roadmap page ────────────────────── */
 .view-tabs { display: flex; gap: 6px; margin-left: 8px; }
-.view-more { position: relative; }
-.view-more > summary { list-style: none; cursor: pointer; }
-.view-more > summary::-webkit-details-marker { display: none; }
-.view-more-menu {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 70;
-  min-width: 168px; padding: 6px; display: grid; gap: 2px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
-}
-.view-more-menu .tab { width: 100%; justify-content: flex-start; border-radius: 6px; }
 .roadmap {
   flex: 1; min-height: 0; overflow-y: auto;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 20px;
@@ -1253,7 +1247,7 @@ textarea {
 .task-panel {
   position: absolute; left: 0; top: 0; bottom: 0; z-index: 5;
   display: flex; flex-direction: column;
-  width: 44px; max-width: calc(100% - 8px); overflow: hidden;
+  width: 118px; max-width: calc(100% - 8px); overflow: hidden;
   pointer-events: none; transition: width 0.28s var(--ease), background 0.2s, box-shadow 0.2s;
 }
 .task-panel.open {
@@ -1264,7 +1258,7 @@ textarea {
 }
 .task-panel-toggle {
   position: relative; pointer-events: auto; display: flex; align-items: center; gap: 10px;
-  width: 44px; height: 44px; padding: 0 12px; overflow: visible;
+  width: 118px; height: 44px; padding: 0 12px; overflow: visible;
   color: var(--ink); background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(16px);
   border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow-hover);
   transition: width 0.28s var(--ease), border-radius 0.2s, background 0.2s;
@@ -1288,16 +1282,17 @@ textarea {
   color: var(--ink-soft); background: rgba(17, 17, 17, 0.06);
   border-radius: 9999px; font: 10px/1 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
 }
-.task-panel.closed .task-panel-label { display: none; }
-.task-panel.closed .task-panel-count {
-  position: absolute; right: -5px; top: -6px; min-width: 18px; height: 18px; padding: 0 4px;
-  color: var(--surface); background: #5f5b54; border: 2px solid var(--surface); font-size: 8px;
-}
+/* the closed tab stays labelled — a bare hamburger + number read as a menu, not
+   as the board's ticket list (#158) */
+.task-panel.open .task-panel-label { font-size: 13px; }
+.task-panel.open .task-panel-count { font-size: 9.5px; letter-spacing: 0.04em; }
 .ticket-rail {
   width: 100%; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   display: flex; flex-direction: column; gap: 10px; padding: 12px 10px 16px;
 }
 .rail-head { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); display: flex; gap: 8px; align-items: center; }
+.rail-hint { font-size: 11.5px; line-height: 1.45; color: var(--ink-soft); padding: 0 2px 2px; }
+.rail-group { display: flex; flex-direction: column; gap: 8px; }
 .rail-empty { font-size: 12.5px; color: #b8b4ac; padding: 12px 4px; }
 .t-card {
   position: relative; background: rgba(255, 255, 255, 0.94); border: 1px solid #e7e3db;
@@ -1315,7 +1310,9 @@ textarea {
 .t-desc { font-size: 11.5px; color: var(--ink-soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .t-card footer { display: flex; align-items: center; justify-content: space-between; padding-top: 6px; border-top: 1px solid rgba(17, 17, 17, 0.055); }
 .t-card time { font-size: 10px; color: #b8b4ac; }
-.t-top { display: flex; align-items: center; gap: 6px; }
+.t-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 6px; }
+.t-id { font: 10px/1 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; color: #b8b4ac; }
+.t-top > .provider-launch button { white-space: nowrap; }
 .t-top .thread-reply { margin-left: auto; }
 .net-avatar.droptarget { transform: scale(1.18); box-shadow: 0 0 0 3px #D97757 !important; }
 
@@ -1529,10 +1526,6 @@ textarea {
   .ticket-rail .t-card, .rail-mile { min-width: 0; }
   .rail-mile-steps { flex-direction: column; overflow: visible; }
   .network { min-height: 340px; }
-  .net-legend { right: 120px; gap: 10px; font-size: 10px; }
-  .net-legend > span:nth-child(2) { font-size: 0; }
-  .net-legend > span:nth-child(2)::after { content: 'answered'; font-size: 10px; }
-  .net-legend > span:last-child { display: none; }
 
   /* roadmap: single column; brainstorm workspace stacks under the plan */
   .roadmap, .roadmap.focused { grid-template-columns: 1fr; padding: 4px 16px calc(90px + env(safe-area-inset-bottom)); }
@@ -1569,8 +1562,10 @@ textarea {
   .cc-welcome { min-width: 0; }
   .cc-head { flex-wrap: wrap; }
 
-  .ask-dock { width: calc(100vw - 24px); bottom: calc(12px + env(safe-area-inset-bottom)); }
-  .ask-row { flex-wrap: nowrap; overflow-x: auto; }
+  .ask-dock { max-width: calc(100vw - 24px); bottom: calc(12px + env(safe-area-inset-bottom)); }
+  /* no room to wrap on a phone — once the chips fill the width they scroll sideways instead */
+  .ask-chips { flex-wrap: nowrap; overflow-x: auto; }
+  .ask-row.open { width: calc(100vw - 24px); }
   .ask-row .agent-chip { flex-shrink: 0; }
   .idea-modal { width: calc(100vw - 24px); max-height: 82dvh; }
   .hire-modal { width: calc(100vw - 24px); max-height: 82dvh; }
@@ -1710,6 +1705,13 @@ textarea {
 .usage-popover-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .usage-popover-head strong { font-size: 13px; }
 .usage-popover-head span { color: var(--ink-soft); font-size: 10px; }
+.usage-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-radius: 9px; background: #F1EFEA; padding: 3px; }
+.usage-tab {
+  flex: 1; border: 0; border-radius: 7px; background: transparent; padding: 5px 8px;
+  color: var(--ink-soft); font: inherit; font-size: 11px; cursor: pointer;
+}
+.usage-tab:hover { color: var(--ink); }
+.usage-tab.is-active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(44, 40, 34, 0.12); }
 .usage-provider + .usage-provider { margin-top: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
 .usage-provider > header { display: flex; align-items: baseline; gap: 7px; margin-bottom: 8px; }
 .usage-provider > header strong { font-size: 12px; }

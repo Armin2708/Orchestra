@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '../web/src/api.js'
 import type { AgentProfile } from '../web/src/agentHomeApi.js'
 import {
-  buildCommandCenterGraph,
   commandCenterDeepLink,
   commandCenterProjectProjection,
   commandCenterSearchRecords,
@@ -99,9 +98,9 @@ describe('command center navigation and presentation contracts', () => {
 
   it('redirects duplicate legacy routes to one project-level command center section', () => {
     expect(legacyCommandCenterRedirect('agents')).toEqual({ section: 'agents', legacy: 'agents' })
-    expect(legacyCommandCenterRedirect('messages')).toEqual({ section: 'discussions', legacy: 'messages' })
-    expect(legacyCommandCenterRedirect('timeline')).toEqual({ section: 'activity', legacy: 'timeline' })
-    expect(legacyCommandCenterRedirect('shipped')).toEqual({ section: 'activity', legacy: 'shipped' })
+    expect(legacyCommandCenterRedirect('messages')).toEqual({ section: 'work', legacy: 'messages' })
+    expect(legacyCommandCenterRedirect('timeline')).toEqual({ section: 'work', legacy: 'timeline' })
+    expect(legacyCommandCenterRedirect('shipped')).toEqual({ section: 'work', legacy: 'shipped' })
     expect(legacyCommandCenterRedirect('workspaces')).toEqual({ section: 'work', legacy: 'workspaces' })
     expect(legacyCommandCenterRedirect('review')).toEqual({ section: 'work', legacy: 'review' })
     expect(legacyCommandCenterRedirect('card-drawer')).toEqual({ section: 'work', legacy: 'card-drawer' })
@@ -186,18 +185,10 @@ describe('command center global search and dependency truth', () => {
     })
   })
 
-  it('searches agents, work, discussions, knowledge, and deliveries without enabling unavailable records', () => {
+  it('searches agents, work, and deliveries without enabling unavailable records', () => {
     const records = commandCenterSearchRecords({
       snapshots,
       agentProfiles,
-      discussions: [{
-        id: 'discussion-1', boardId: 7, title: 'Restart plan', summary: 'Review daemon recovery.',
-        status: 'open', type: 'plan', author: 'runtime-operator', updatedAt: '2026-08-02T10:00:00Z',
-      }],
-      knowledge: [{
-        id: 'knowledge-1', boardId: 7, title: 'PTY restart invariant', summary: 'Raw bytes remain authoritative.',
-        source: 'docs/agent-home.md', freshness: null, status: 'unavailable',
-      }],
       deliveries: [{
         id: 'delivery-1', lineage_id: null, card_id: 41, contract_id: 'contract-1', job_id: 'job-1',
         session_id: 'session-1', workspace_id: 'workspace-1', status: 'accepted',
@@ -210,7 +201,7 @@ describe('command center global search and dependency truth', () => {
         verified_at: null, reviewed_at: null, accepted_at: null, rejected_at: null, shipped_at: null,
       }],
     })
-    expect(new Set(records.map((record) => record.kind))).toEqual(new Set(['agent', 'work', 'discussion', 'knowledge', 'delivery']))
+    expect(new Set(records.map((record) => record.kind))).toEqual(new Set(['agent', 'work', 'delivery']))
     expect(records.find((record) => record.kind === 'agent')).toMatchObject({
       id: 'agent:7:managed-codex-profile:opaque-7f',
       href: '/?section=agents&board=7&agent=managed-codex-profile%3Aopaque-7f',
@@ -219,27 +210,7 @@ describe('command center global search and dependency truth', () => {
       new URL(records.find((record) => record.kind === 'agent')!.href, 'http://orchestra.local').search,
     ).agentId).toBe('managed-codex-profile:opaque-7f')
     expect(searchCommandCenter(records, 'runtime operator').map((record) => record.kind)).toContain('agent')
-    expect(searchCommandCenter(records, 'raw bytes')).toMatchObject([{ kind: 'knowledge', unavailableReason: expect.stringContaining('unavailable') }])
     expect(searchCommandCenter(records, 'browser continuation')).toMatchObject([{ kind: 'delivery', status: 'Verified' }])
     expect(searchCommandCenter(records, 'no such record')).toEqual([])
-  })
-
-  it('projects only observed dependencies, assignments, discussions, and conflicts', () => {
-    const graph = buildCommandCenterGraph({
-      graph: {
-        nodes: [
-          { card_id: 41, board_id: 7, title: 'Restart acceptance', state: 'open', readiness: 'blocked', blocking_reasons: ['Provider session must be running.'] },
-          { card_id: 40, board_id: 7, title: 'Durable reattach', state: 'accepted', readiness: 'ready', blocking_reasons: [] },
-        ],
-        edges: [{ from_card_id: 41, to_card_id: 40, blocking_reason: 'Provider session must be running.', completion_condition: 'card_done', readiness: 'blocked' }],
-      },
-      assignments: [{ cardId: 41, agentId: 'profile-7', agentName: 'runtime-operator', status: 'active' }],
-      discussions: [{ id: 'discussion-1', cardId: 41, title: 'Restart plan', status: 'open' }],
-      conflicts: [{ id: 'conflict-1', cardId: 41, otherCardId: 40, title: 'Shared port ownership', severity: 'high' }],
-    })
-    expect(graph.nodes.map((node) => node.kind)).toEqual(expect.arrayContaining(['work', 'agent', 'discussion', 'conflict']))
-    expect(graph.edges.map((edge) => edge.kind)).toEqual(expect.arrayContaining(['depends_on', 'assigned_to', 'discussed_in', 'conflicts_with']))
-    expect(graph.edges.find((edge) => edge.kind === 'depends_on')).toMatchObject({ blocked: true, label: 'Provider session must be running.' })
-    expect(graph.nodes.find((node) => node.id === 'work:41')?.href).toBe('/?section=work&board=7&card=41')
   })
 })
