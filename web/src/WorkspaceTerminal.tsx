@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, Snapshot } from './api'
-import { osApi, Workspace, WorkspaceProcess } from './osApi'
+import { osApi, Workspace, WorkspaceGit, WorkspaceProcess } from './osApi'
 import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
 import { OsIcon } from './OsIcon'
 
@@ -153,6 +153,23 @@ export function WorkspaceTerminal({ snaps }: { snaps: Snapshot[] }) {
 
   const cwd = useMemo(() => selected?.worktree_path ?? selected?.root_path ?? '', [selected])
 
+  // the git rail beside the terminal (#179): worktrees + branches, polled gently
+  const [git, setGit] = useState<WorkspaceGit | null>(null)
+  const loadGit = useCallback(async (workspaceId: string) => {
+    try {
+      const surface = await osApi.readWorkspaceGit(workspaceId)
+      if (selectedRef.current === workspaceId) setGit(surface)
+    } catch { /* a pre-#179 daemon has no git surface: the rail just stays empty */ }
+  }, [])
+  useEffect(() => {
+    setGit(null)
+    if (!selected) return
+    const workspaceId = String(selected.id)
+    void loadGit(workspaceId)
+    const poll = window.setInterval(() => void loadGit(workspaceId), 20_000)
+    return () => window.clearInterval(poll)
+  }, [selected?.id, loadGit])
+
   return (
     <div className="ws-terminal">
       <header className="ws-terminal-bar">
@@ -190,7 +207,62 @@ export function WorkspaceTerminal({ snaps }: { snaps: Snapshot[] }) {
       {error && <div className="os-inline-error" role="alert">{error}</div>}
       {ready && !selected
         ? <p className="ws-terminal-empty">No project is available for a terminal yet.</p>
-        : <ProcessTerminal ref={terminalRef} process={active} />}
+        : (
+          <div className="ws-terminal-body">
+            <ProcessTerminal ref={terminalRef} process={active} />
+            <GitRail git={git} onRefresh={() => selected && void loadGit(String(selected.id))} />
+          </div>
+        )}
     </div>
+  )
+}
+
+const basename = (value: string) => value.split('/').filter(Boolean).pop() ?? value
+
+function GitRail({ git, onRefresh }: { git: WorkspaceGit | null; onRefresh: () => void }) {
+  return (
+    <aside className="ws-git-rail" aria-label="Worktrees and branches">
+      <header className="ws-git-rail-head">
+        <strong>Repository</strong>
+        <button type="button" onClick={onRefresh} title="Refresh worktrees and branches">
+          <OsIcon name="refresh" size={12} />
+        </button>
+      </header>
+      {git === null ? (
+        <p className="ws-git-rail-empty">Reading the repository…</p>
+      ) : !git.is_repository ? (
+        <p className="ws-git-rail-empty">This workspace is not a git repository.</p>
+      ) : (
+        <>
+          <section className="ws-git-section">
+            <h4>Worktrees <span>{git.worktrees.length}</span></h4>
+            <ul>
+              {git.worktrees.map((worktree) => (
+                <li key={worktree.path} className={worktree.is_current ? 'current' : ''} title={worktree.path}>
+                  <span className="ws-git-name">{basename(worktree.path)}</span>
+                  <span className="ws-git-meta">
+                    {worktree.branch ?? (worktree.head ? `detached @ ${worktree.head}` : 'detached')}
+                    {worktree.locked ? ' · locked' : ''}
+                    {worktree.prunable ? ' · prunable' : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section className="ws-git-section">
+            <h4>Branches <span>{git.branches.length}</span></h4>
+            <ul>
+              {git.branches.map((branch) => (
+                <li key={branch.name} className={branch.is_current ? 'current' : ''}
+                  title={branch.worktree_path ? `checked out at ${branch.worktree_path}` : branch.name}>
+                  <span className="ws-git-name">{branch.name}</span>
+                  <span className="ws-git-meta">{branch.head}{branch.worktree_path && !branch.is_current ? ' •' : ''}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
+    </aside>
   )
 }

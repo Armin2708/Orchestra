@@ -19,6 +19,30 @@ export type Workspace = {
   updated_at: string
 }
 
+export type WorkspaceGitWorktree = {
+  path: string
+  head: string | null
+  branch: string | null
+  is_current: boolean
+  locked: boolean
+  prunable: boolean
+}
+
+export type WorkspaceGitBranch = {
+  name: string
+  head: string
+  is_current: boolean
+  worktree_path: string | null
+}
+
+export type WorkspaceGit = {
+  root: string
+  is_repository: boolean
+  current_branch: string | null
+  worktrees: WorkspaceGitWorktree[]
+  branches: WorkspaceGitBranch[]
+}
+
 export type AgentSession = {
   id: OsId
   workspace_id: OsId
@@ -1497,6 +1521,9 @@ export const osApi = {
   updateWorkspace: async (workspaceId: OsId, input: Partial<Workspace>) =>
     normalizeWorkspace(unwrapEntity<unknown>(await api('PATCH', `/os/workspaces/${workspaceId}`, input), ['workspace'])),
   archiveWorkspace: (workspaceId: OsId) => api('DELETE', `/os/workspaces/${workspaceId}`),
+
+  readWorkspaceGit: async (workspaceId: OsId) =>
+    unwrapEntity<WorkspaceGit>(await api('GET', `/os/workspaces/${workspaceId}/git`), ['git']),
 
   listProcesses: async (workspaceId: OsId) =>
     unwrapList<unknown>(await api('GET', `/os/workspaces/${workspaceId}/processes`), ['processes']).map(normalizeProcess),
