@@ -44,7 +44,7 @@ import {
 } from './providerUsage'
 import { osApi, type Job } from './osApi'
 import { agentHomeApi, type AgentProfile } from './agentHomeApi'
-import { OfflineStateBanner, RemoteAccessProvider } from './RemoteAccess'
+import { DaemonDownOverlay, OfflineStateBanner, RemoteAccessProvider } from './RemoteAccess'
 import { PhoneRemoteDock } from './PhoneRemoteDock'
 import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
 import type { BrowserAuthorityMode } from './deviceAuth'
@@ -397,6 +397,7 @@ function LocalOwnerApp() {
     <RemoteAccessProvider>
     <div className="app">
       <OfflineStateBanner />
+      <DaemonDownOverlay />
       <header className="topbar">
         <div className="brand">
           <Mark />
