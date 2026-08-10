@@ -44,6 +44,9 @@ function toolSummary(name: string, input: any): string {
   return `${name}(${s.length > 90 ? s.slice(0, 90) + '…' : s})`
 }
 
+// tools whose use counts as "real file work" for auto-card resolution (#143)
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
 function resultSummary(content: unknown): string {
   const text = typeof content === 'string' ? content
     : Array.isArray(content) ? content.map((c: any) => c?.text ?? '').join('\n') : ''
@@ -212,6 +215,12 @@ type Hired = {
   subs: Map<string, string>
   // launched-on-ticket agents carry their card through to review/blocked on exit
   cardId: number | null
+  // card auto-created from the operator's ask (#143) — resolved at turn end: kept
+  // when the turn did file work or the agent touched the card, deleted otherwise
+  autoCardId: number | null
+  // file-editing tool uses this turn, counted from the stream (canUseTool is
+  // bypassed under bypassPermissions, so the transcript is the reliable signal)
+  turnEdits: number
   // the card worktree's branch, when autoship launched this agent isolated (#59)
   branch: string | null
   outcome: 'success' | 'error' | null
@@ -963,6 +972,7 @@ export class Conductor {
       model: model ?? null, ephemeral: opts.ephemeral ?? false, subs: new Map(),
       effort, models: cachedModels, role: opts.role, handoff: false, limitHit: false,
       cardId: opts.cardId ?? null, branch: null, outcome: null, reason: '', summary: '',
+      autoCardId: null, turnEdits: 0,
     }
     this.hired.set(agent.id, hired)
     // every (re-)registration — fresh hire, effort-restart handoff, daemon resurrection, wake —
@@ -1027,6 +1037,7 @@ export class Conductor {
                   this.emit(opts.boardId, 'agent', { id: agent.id, subs: true })
                 }
                 log('tool', toolSummary(b.name, b.input))
+                if (EDIT_TOOLS.has(b.name)) hired.turnEdits++
               }
             }
             this.touch(agent.id, 'active')
@@ -1051,6 +1062,10 @@ export class Conductor {
             hired.turnTokens = 0
             hired.subs.clear()
             this.touch(agent.id, 'idle')
+            // a clean turn resolves the ask's auto-card; an errored/limit-hit turn
+            // keeps it — the work was interrupted, not answered
+            this.resolveAutoCard(hired, m.subtype === 'success')
+            hired.turnEdits = 0
             // a spent usage window ends the turn with limit text — flag it so the exit
             // path parks the session (paused_limit) instead of pruning it, and stop
             // sessions that would otherwise idle forever against a dead window
@@ -1189,6 +1204,55 @@ export class Conductor {
     this.db.transaction(() => messageIds.forEach((id) => { mark.run(id, agentId); stamp.run(id) }))()
   }
 
+  // an operator ask auto-creates a card so the board shows what the agent is on (#143).
+  // Skipped for slash commands, launched/ephemeral/role agents, and agents that already
+  // own an in_progress card (follow-ups refine current work, they don't fork trackers).
+  private maybeAutoCard(h: Hired, body: string): number | null {
+    if (h.cardId !== null || h.ephemeral || h.role) return null
+    if (h.autoCardId !== null || /^\s*\//.test(body)) return null
+    const condensed = body.replace(/\s+/g, ' ').trim()
+    if (!condensed) return null
+    const active = this.db.prepare(
+      `SELECT id FROM cards WHERE owner_agent_id=? AND column_name='in_progress' LIMIT 1`).get(h.agentId)
+    if (active) return null
+    const title = condensed.length > 80 ? `${condensed.slice(0, 79)}…` : condensed
+    const { lastInsertRowid } = this.db.prepare(`
+      INSERT INTO cards (board_id, title, description, column_name, owner_agent_id, paths)
+      VALUES (?, ?, ?, 'in_progress', ?, '[]')`)
+      .run(h.boardId, title, `Auto-created from an operator ask:\n\n${body}`, h.agentId)
+    const cardId = Number(lastInsertRowid)
+    this.db.prepare(`INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, 'created', ?)`)
+      .run(cardId, h.agentId, JSON.stringify({ title, auto: true }))
+    const card = this.db.prepare(
+      `SELECT c.*, a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`)
+      .get(cardId) as any
+    if (card) this.emit(h.boardId, 'card', { ...card, column: card.column_name, paths: JSON.parse(card.paths) })
+    h.autoCardId = cardId
+    return cardId
+  }
+
+  // turn end: keep the auto-card when the turn did file work or the agent engaged with
+  // the card (moved it, set paths — anything beyond the 'created' event); otherwise the
+  // ask was just a question, so the tracker is deleted outright — it never enters review
+  private resolveAutoCard(h: Hired, cleanTurn: boolean): void {
+    const cardId = h.autoCardId
+    if (cardId === null) return
+    h.autoCardId = null
+    if (!cleanTurn || h.turnEdits > 0) return
+    const card = this.db.prepare(`SELECT * FROM cards WHERE id=?`).get(cardId) as any
+    if (!card || card.column_name !== 'in_progress' || card.owner_agent_id !== h.agentId) return
+    const events = this.db.prepare(`SELECT COUNT(*) AS c FROM card_events WHERE card_id=?`).get(cardId) as any
+    if (Number(events?.c ?? 0) > 1) return
+    this.db.prepare(`DELETE FROM card_events WHERE card_id=?`).run(cardId)
+    this.db.prepare(`UPDATE messages SET card_id=NULL WHERE card_id=?`).run(cardId)
+    this.db.prepare(`DELETE FROM cards WHERE id=?`).run(cardId)
+    this.emit(h.boardId, 'card', { deleted: cardId })
+  }
+
+  private autoCardNote(cardId: number, name: string): string {
+    return `[board] card #${cardId} was auto-created to track this ask — keep it current (orchestra card update ${cardId} … --agent ${name}) and move it to review when the work ships; it is removed automatically if this turn ends with no file changes.`
+  }
+
   // instant delivery — no hooks, straight into the agent's conversation
   deliver(agentId: number, msg: { id: number; body: string; kind?: string; from_name?: string | null; reply_to?: number | null }): boolean {
     const h = this.hired.get(agentId)
@@ -1205,6 +1269,11 @@ export class Conductor {
     } else {
       text = `direct orchestra ask from ${msg.from_name ?? 'human'}: "${msg.body}" — reply required with: orchestra reply ${msg.id} '<answer>' --from ${h.name}; no acknowledgment-only reply.`
     }
+    // operator-sent asks/tasks (from_name null) get a tracking card by default (#143)
+    if (!msg.from_name && !msg.reply_to && (msg.kind === 'ask' || msg.kind === 'task' || !msg.kind)) {
+      const cardId = this.maybeAutoCard(h, msg.body)
+      if (cardId !== null) text = `${text}\n\n${this.autoCardNote(cardId, h.name)}`
+    }
     h.push(text, msg.id)
     this.touch(agentId, 'active')
     return true
@@ -1213,7 +1282,8 @@ export class Conductor {
   task(agentId: number, text: string): boolean {
     const h = this.hired.get(agentId)
     if (!h) return false
-    h.push(text)
+    const cardId = this.maybeAutoCard(h, text)
+    h.push(cardId !== null ? `${text}\n\n${this.autoCardNote(cardId, h.name)}` : text)
     this.touch(agentId, 'active')
     return true
   }
