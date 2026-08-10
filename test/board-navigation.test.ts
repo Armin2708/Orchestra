@@ -1,17 +1,20 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { BOARD_TABS, resolveLocationNavigation, resolveStoredNavigation } from '../web/src/boardNavigation.js'
+import {
+  BACKLOG_PANES, BOARD_TABS, GIT_PANES, resolveBacklogPane, resolveGitPane,
+  resolveLocationNavigation, resolveStoredNavigation,
+} from '../web/src/boardNavigation.js'
 
 describe('board-local navigation', () => {
   it('keeps operational and history views together under Board', () => {
     expect(BOARD_TABS).toEqual([
       { id: 'overview', label: 'Overview' },
-      { id: 'kanban', label: 'Kanban' },
+      { id: 'messages', label: 'Inbox' },
       { id: 'agents', label: 'Teams' },
-      { id: 'messages', label: 'Messages' },
+      { id: 'kanban', label: 'Backlog' },
+      { id: 'wiki', label: 'Wiki' },
       { id: 'workspace', label: 'Workspace' },
-      { id: 'timeline', label: 'Timeline' },
-      { id: 'shipped', label: 'Shipped' },
+      { id: 'git', label: 'Git' },
     ])
   })
 
@@ -19,17 +22,43 @@ describe('board-local navigation', () => {
     expect(resolveStoredNavigation('agents', null)).toEqual({ view: 'board', boardTab: 'agents' })
     expect(resolveStoredNavigation('messages', null)).toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveStoredNavigation('workspaces', null)).toEqual({ view: 'board', boardTab: 'workspace' })
-    expect(resolveStoredNavigation('timeline', null)).toEqual({ view: 'board', boardTab: 'timeline' })
-    expect(resolveStoredNavigation('shipped', null)).toEqual({ view: 'board', boardTab: 'shipped' })
+    // Timeline and Shipped merged into the Git tab (#181): old views and old saved tabs both land there
+    expect(resolveStoredNavigation('timeline', null)).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('shipped', null)).toEqual({ view: 'board', boardTab: 'git' })
     expect(resolveStoredNavigation('board', 'messages')).toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveStoredNavigation('board', 'agents')).toEqual({ view: 'board', boardTab: 'agents' })
-    expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'timeline' })
-    expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'shipped' })
-    expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'roadmap', boardTab: 'workspace' })
+    expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('board', 'git')).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'board', boardTab: 'kanban' })
     expect(resolveStoredNavigation('open-work', 'overview')).toEqual({ view: 'open-work', boardTab: 'overview' })
-    expect(resolveStoredNavigation('organization', 'overview')).toEqual({ view: 'organization', boardTab: 'overview' })
     expect(resolveStoredNavigation('settings', 'overview')).toEqual({ view: 'settings', boardTab: 'overview' })
+    // Collaborate/Organization were removed from the More menu; the routes just fall back to board now
+    expect(resolveStoredNavigation('organization', 'overview')).toEqual({ view: 'board', boardTab: 'overview' })
+    expect(resolveStoredNavigation('collaboration', 'overview')).toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveStoredNavigation('unknown', 'unknown')).toEqual({ view: 'board', boardTab: 'overview' })
+  })
+
+  it('keeps the kanban and the roadmap builder together in the Backlog tab', () => {
+    expect(BACKLOG_PANES).toEqual([
+      { id: 'kanban', label: 'Kanban' },
+      { id: 'roadmap', label: 'Roadmap' },
+      { id: 'funnel', label: 'Funnel' },
+    ])
+    expect(resolveBacklogPane(null, '')).toBe('kanban')
+    expect(resolveBacklogPane('roadmap', '')).toBe('roadmap')
+    expect(resolveBacklogPane('nonsense', '')).toBe('kanban')
+    // the retired global route opens the pane it used to be
+    expect(resolveBacklogPane(null, '?view=roadmap')).toBe('roadmap')
+    expect(resolveLocationNavigation('board', 'overview', '?view=roadmap'))
+      .toEqual({ view: 'board', boardTab: 'kanban' })
+
+    const app = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
+    const boardSection = readFileSync(new URL('../web/src/BoardSection.tsx', import.meta.url), 'utf8')
+    expect(app).not.toContain("pickView('roadmap')")
+    expect(boardSection).toContain('<RoadmapView')
+    expect(boardSection).toContain('<KanbanView')
+    expect(boardSection).toContain('<FunnelView')
   })
 
   it('opens the simple graph board by default and reserves Advanced for canonical deep links', () => {
@@ -56,10 +85,26 @@ describe('board-local navigation', () => {
     expect(globalTabs).not.toContain("pickView('workspaces')")
     expect(globalTabs).not.toContain("pickView('timeline')")
     expect(globalTabs).not.toContain("pickView('shipped')")
-    expect(app).toContain('<CanonicalActivity')
-    expect(boardSection).toContain('<TimelineView')
+    expect(app).not.toContain('CanonicalActivity')
+    // the activity TimelineView is retired; both Git panes render the annotated ship log
+    expect(boardSection).not.toContain('TimelineView')
     expect(boardSection).toContain('<ShippedView')
+    expect(boardSection).toContain('<GitPanel')
     expect(boardSection).toContain('<TeamsView')
+  })
+
+  it('keeps commits and pushes together in the Git tab', () => {
+    expect(GIT_PANES).toEqual([
+      { id: 'commits', label: 'Commits' },
+      { id: 'pushes', label: 'Pushes' },
+    ])
+    expect(resolveGitPane(null)).toBe('commits')
+    expect(resolveGitPane('pushes')).toBe('pushes')
+    expect(resolveGitPane('nonsense')).toBe('commits')
+    // one-shot migration: a browser that last sat on the retired Shipped tab lands on Pushes
+    expect(resolveGitPane(null, 'shipped')).toBe('pushes')
+    expect(resolveGitPane(null, 'timeline')).toBe('commits')
+    expect(resolveGitPane('commits', 'shipped')).toBe('commits')
   })
 
   it('keeps the spatial agent graph reachable while preserving the canonical system under Advanced', () => {

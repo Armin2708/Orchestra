@@ -16,11 +16,8 @@ import { BoardTab, PrimaryView, resolveLocationNavigation } from './boardNavigat
 import { CommandCenter } from './CommandCenter'
 import {
   CanonicalAgentHome,
-  CanonicalActivity,
-  CanonicalDiscussionDetail,
   CanonicalJobRoute,
   CommandCenterState,
-  KnowledgeBrowse,
 } from './CommandCenterSurfaces'
 import {
   commandCenterDeepLink,
@@ -33,9 +30,7 @@ import {
   type SavedCommandCenterView,
 } from './commandCenterModel'
 import { loadReadMap, needsAttention, READ_MAP_EVENT } from './messageUi'
-import { RoadmapView } from './RoadmapView'
 import { NeedsYou } from './NeedsYou'
-import { OutcomeDashboard } from './OutcomeDashboard'
 import { OsIcon } from './OsIcon'
 import { pushSupported, isSubscribed, subscribe, unsubscribe } from './push'
 import { wakeMeter } from './wake'
@@ -61,8 +56,6 @@ import './agentOs.css'
 
 const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
 const OpenWorkView = React.lazy(() => import('./OpenWorkView').then((module) => ({ default: module.OpenWorkView })))
-const CollaborationCenter = React.lazy(() => import('./CollaborationCenter').then((module) => ({ default: module.CollaborationCenter })))
-const OrganizationCenter = React.lazy(() => import('./OrganizationCenter').then((module) => ({ default: module.OrganizationCenter })))
 export const Mark = () => (
   <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
     <rect width="32" height="32" rx="8" fill="#111"/>
@@ -167,8 +160,6 @@ function LocalOwnerApp() {
           conversationId: null,
           sessionId: null,
           jobId: null,
-          discussionId: null,
-          knowledgeId: null,
           deliveryId: null,
           workspaceId: null,
           processId: null,
@@ -373,8 +364,6 @@ function LocalOwnerApp() {
     work: shown.reduce((sum, snapshot) => sum + snapshot.cards.length, 0),
     agents: agentProfiles.filter((profile) => profile.status === 'active'
       && shown.some((snapshot) => snapshot.board.id === profile.board_id)).length,
-    activity: shown.reduce((sum, snapshot) => sum
-      + snapshot.cards.length + snapshot.threads.length + snapshot.milestones.length, 0),
   }
 
   const openCommandHref = (href: string) => {
@@ -429,24 +418,6 @@ function LocalOwnerApp() {
             <button className={view === 'board' ? 'tab active' : 'tab'} onClick={() => pickView('board')}>Board</button>
             <button className={commandCenterActive ? 'tab active' : 'tab'} onClick={() => pickCommandSection(commandSection)}>Advanced</button>
             <button className={view === 'settings' ? 'tab active' : 'tab'} onClick={() => pickView('settings')}>Settings</button>
-            <details className="view-more">
-              <summary className={view === 'collaboration' || view === 'organization' || view === 'roadmap'
-                ? 'tab active' : 'tab'}>More</summary>
-              <div className="view-more-menu">
-                <button className={view === 'collaboration' ? 'tab active' : 'tab'} onClick={(event) => {
-                  event.currentTarget.closest('details')?.removeAttribute('open')
-                  pickView('collaboration')
-                }}>Collaborate</button>
-                <button className={view === 'organization' ? 'tab active' : 'tab'} onClick={(event) => {
-                  event.currentTarget.closest('details')?.removeAttribute('open')
-                  pickView('organization')
-                }}>Organization</button>
-                <button className={view === 'roadmap' ? 'tab active' : 'tab'} onClick={(event) => {
-                  event.currentTarget.closest('details')?.removeAttribute('open')
-                  pickView('roadmap')
-                }}>Roadmap</button>
-              </div>
-            </details>
             <PushBell />
           </nav>
         </div>
@@ -521,35 +492,12 @@ function LocalOwnerApp() {
                          onCollectionStateChange={handleCollectionStateChange}
                          readOnly={connectionState !== 'live'} />
                      </React.Suspense>
-                 : commandSection === 'agents'
-                   ? <CanonicalAgentHome key={locationSearch} snaps={shown} onChange={refresh}
-                      locationSearch={locationSearch} readOnly={connectionState !== 'live'} />
-                  : commandSection === 'discussions'
-                    ? <CanonicalDiscussionDetail discussion={null} posts={[]} backendAvailable={false} />
-                  : commandSection === 'knowledge'
-                      ? <KnowledgeBrowse records={[]} available={false} />
-                    : commandSection === 'outcomes'
-                      ? focus === 'all'
-                        ? <CommandCenterState kind="empty" title="Choose one project"
-                            detail="Outcome evidence is scoped to one canonical project. Select a project to inspect quality-aware efficiency." />
-                        : <OutcomeDashboard boardId={focus} />
-                       : <CanonicalActivity snaps={shown} />}
+                 : <CanonicalAgentHome key={locationSearch} snaps={shown} onChange={refresh}
+                     locationSearch={locationSearch} readOnly={connectionState !== 'live'} />}
             </CommandCenter>
-        : view === 'organization'
-          ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading organization"><span /><span /><span /></div>}>
-              <OrganizationCenter boards={shown.map((snapshot) => snapshot.board)} />
-            </React.Suspense>
-        : view === 'collaboration'
-          ? shown[0]
-            ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading collaboration"><span /><span /><span /></div>}>
-                <CollaborationCenter boardId={shown[0].board.id} />
-              </React.Suspense>
-            : <GettingStarted onSettings={() => pickView('settings')} />
-        : view === 'roadmap'
-          ? <RoadmapView snaps={shown} focused={focus !== 'all' && visible.length === 1} onChange={refresh} />
-          : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
-              <SettingsView />
-            </React.Suspense>}
+        : <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading settings"><span /><span /><span /></div>}>
+            <SettingsView />
+          </React.Suspense>}
       <PhoneRemoteDock active={view === 'board' ? boardTab : 'overview'} onTab={(tab) => {
         pickBoardTab(tab)
       }} onAttention={() => window.dispatchEvent(new Event('orchestra:open-attention'))} />

@@ -6,11 +6,7 @@ import {
   CommandCenterWalkthrough,
   TerminalTouchControls,
 } from '../web/src/CommandCenter.js'
-import {
-  CanonicalDiscussionDetail,
-  CommandCenterState,
-  DependencyVisualization,
-} from '../web/src/CommandCenterSurfaces.js'
+import { CommandCenterState } from '../web/src/CommandCenterSurfaces.js'
 import { commandCenterStatus } from '../web/src/commandCenterModel.js'
 import { resolveAttentionItem } from '../web/src/NeedsYou.js'
 
@@ -32,15 +28,16 @@ describe('unified command center component contract', () => {
       projectName: 'Orchestra',
       projectId: 7,
       section: 'work',
-      counts: { work: 4, agents: 2, knowledge: 0, activity: 11 },
+      counts: { work: 4, agents: 2 },
       searchRecords: [],
       connectionState: 'offline',
       onNavigate: () => undefined,
       children: createElement('p', {}, 'Canonical work'),
     }))
-    for (const label of ['Work', 'Agents', 'Discussions', 'Knowledge', 'Outcomes', 'Activity']) {
+    for (const label of ['Work', 'Agents']) {
       expect(markup).toContain(`>${label}<`)
     }
+    expect(markup).not.toMatch(/>Discussions<|>Knowledge<|>Outcomes<|>Activity</)
     expect(markup).toContain('Project command center')
     expect(markup).toContain('Search the project command center')
     expect(markup).toContain('Save current')
@@ -54,7 +51,6 @@ describe('unified command center component contract', () => {
     expect(markup).toContain('data-read-only="true"')
     expect(markup).toContain('aria-describedby="cc-offline-notice"')
     expect(markup).not.toContain('inert')
-    expect(markup).not.toMatch(/>Discussions<b>/)
     expect(shellSource).toContain('savedViewsStorageKey(projectId)')
   })
 
@@ -82,57 +78,6 @@ describe('unified command center component contract', () => {
     expect(appSource).toContain('boardId={focus === \'all\' ? null')
     expect(appSource).toContain('resolveCommandCenterProjectFocus(snaps, focus)')
     expect(appSource).not.toContain('visible.length > 0 ? visible : snaps')
-  })
-
-  it('keeps canonical Discussions explicitly unavailable instead of relabeling Messages', () => {
-    const markup = renderToStaticMarkup(createElement(CanonicalDiscussionDetail, {
-      discussion: null,
-      posts: [],
-      backendAvailable: false,
-    }))
-    expect(markup).toContain('Canonical Discussions are not available')
-    expect(markup).toContain('they are not being relabeled as durable Discussion records')
-    expect(markup).toContain('fail')
-    expect(surfacesSource).toContain('Compatibility transport')
-    expect(surfacesSource).toContain('It is not a canonical Discussion')
-  })
-
-  it('renders accepted answers with actor, provider, session, time, and safe text', () => {
-    const markup = renderToStaticMarkup(createElement(CanonicalDiscussionDetail, {
-      backendAvailable: true,
-      discussion: {
-        id: 'discussion-7', boardId: 7, title: 'Restart <script>plan</script>',
-        summary: 'Choose a durable continuation path.', status: 'answered', type: 'question',
-        author: 'runtime-operator', updatedAt: '2026-08-02T10:00:00Z',
-      },
-      posts: [{
-        id: 'post-1', author: 'provider-reviewer', actorType: 'agent', provider: 'codex',
-        sessionId: 'session-7', body: 'Reattach using exact provider evidence.',
-        createdAt: '2026-08-02T10:00:00Z', accepted: true,
-      }],
-    }))
-    expect(markup).toContain('Restart &lt;script&gt;plan&lt;/script&gt;')
-    expect(markup).not.toContain('<script>')
-    expect(markup).toContain('provider-reviewer')
-    expect(markup).toContain('agent · codex')
-    expect(markup).toContain('Provider session')
-    expect(markup).toContain('Accepted answer')
-  })
-
-  it('renders real graph records plus a complete screen-reader relationship list', () => {
-    const graph = {
-      nodes: [
-        { id: 'work:1', kind: 'work' as const, label: 'Runtime UX', detail: 'Canonical job', status: commandCenterStatus('job', 'running'), href: '/?job=1', lane: 1 },
-        { id: 'agent:a', kind: 'agent' as const, label: 'runtime-operator', detail: 'Durable assignee', status: commandCenterStatus('agent', 'active'), href: '/?agent=a', lane: 2 },
-      ],
-      edges: [{ id: 'assigned:1:a', from: 'work:1', to: 'agent:a', kind: 'assigned_to' as const, label: 'Assigned to', blocked: false }],
-    }
-    const markup = renderToStaticMarkup(createElement(DependencyVisualization, { graph }))
-    expect(markup).toContain('Observed relationships')
-    expect(markup).toContain('Runtime UX')
-    expect(markup).toContain('runtime-operator')
-    expect(markup).toContain('Assigned to')
-    expect(markup).toContain('aria-label="Dependency relationships"')
   })
 
   it('makes terminal controls touch-safe and fails closed in view-only mode', () => {
@@ -183,15 +128,14 @@ describe('unified command center component contract', () => {
     expect(surfacesSource).not.toContain('dangerouslySetInnerHTML')
   })
 
-  it('mounts the command center behind Advanced with canonical fail-closed surfaces', () => {
+  it('mounts the command center behind Advanced with only Work and Agents surfaces', () => {
     expect(appSource).toContain('<CommandCenter')
-    expect(appSource).toContain("commandSection === 'agents'")
+    expect(appSource).toContain("commandSection === 'work'")
     expect(appSource).toContain('<CanonicalAgentHome')
-    expect(appSource).toContain('<CanonicalDiscussionDetail discussion={null} posts={[]} backendAvailable={false}')
-    expect(appSource).toContain('<KnowledgeBrowse records={[]} available={false}')
-    expect(appSource).toContain("commandSection === 'outcomes'")
-    expect(appSource).toContain('<OutcomeDashboard boardId={focus} />')
-    expect(appSource).toContain('Outcome evidence is scoped to one canonical project.')
+    expect(appSource).not.toContain('CanonicalDiscussionDetail')
+    expect(appSource).not.toContain('KnowledgeBrowse')
+    expect(appSource).not.toContain('OutcomeDashboard')
+    expect(appSource).not.toContain('CanonicalActivity')
     expect(appSource).toContain("window.addEventListener('popstate', restoreDeepLink)")
     expect(appSource).toContain('>Board</button>')
     expect(appSource).toContain('>Advanced</button>')

@@ -14,13 +14,7 @@ import type {
   TaskContract,
 } from './osApi'
 import { osApi } from './osApi'
-import {
-  commandCenterDeepLink,
-  commandCenterStatus,
-  type CommandCenterDiscussionRecord,
-  type CommandCenterGraph,
-  type CommandCenterKnowledgeRecord,
-} from './commandCenterModel'
+import { commandCenterStatus } from './commandCenterModel'
 
 type Resource<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error'
@@ -149,34 +143,6 @@ export function CanonicalJobRoute({ jobId, snaps, stale = false, onOpenAgent, on
     onOpenTerminal={lifecycle && onOpenTerminal ? () => onOpenTerminal(lifecycle) : undefined} />
 }
 
-export function CanonicalActivity({ snaps }: { snaps: Snapshot[] }) {
-  const records = snaps.flatMap((snapshot) => [
-    ...snapshot.cards.map((card) => ({
-      id: `card-${snapshot.board.id}-${card.id}`,
-      title: card.title,
-      detail: `Work is ${card.column.replace(/_/g, ' ')}`,
-      project: snapshot.board.name,
-    })),
-    ...snapshot.milestones.map((milestone) => ({
-      id: `milestone-${snapshot.board.id}-${milestone.id}`,
-      title: milestone.title,
-      detail: 'Project milestone',
-      project: snapshot.board.name,
-    })),
-  ])
-  if (records.length === 0) {
-    return <CommandCenterState kind="empty" detail="No causal work or milestone activity is recorded for this project yet." />
-  }
-  return (
-    <section className="cc-canonical-surface" aria-label="Canonical project activity">
-      <header className="cc-surface-context"><div><p>Canonical surface</p><h2>Activity</h2></div><span>Work state · milestones</span></header>
-      <ol className="cc-activity-list">
-        {records.map((record) => <li key={record.id}><strong>{record.title}</strong><span>{record.detail} · {record.project}</span></li>)}
-      </ol>
-    </section>
-  )
-}
-
 export function CanonicalJobDetail({
   lifecycle,
   deliveries,
@@ -242,75 +208,6 @@ export function CanonicalJobDetail({
   )
 }
 
-export type CommandCenterDiscussionPost = {
-  id: string
-  author: string
-  actorType: 'agent' | 'operator' | 'system'
-  provider: string | null
-  sessionId: string | null
-  body: string
-  createdAt: string
-  accepted: boolean
-}
-
-export function CanonicalDiscussionDetail({
-  discussion,
-  posts,
-  backendAvailable,
-  onReply,
-  onAccept,
-}: {
-  discussion: CommandCenterDiscussionRecord | null
-  posts: readonly CommandCenterDiscussionPost[]
-  backendAvailable: boolean
-  onReply?: () => void
-  onAccept?: (postId: string) => void
-}) {
-  if (!backendAvailable) {
-    return <CommandCenterState kind="unsupported" title="Canonical Discussions are not available"
-      detail="Low-level Messages remain intentional delivery/wake transport, but they are not being relabeled as durable Discussion records. This capability fails closed until the Discussion service and routes are registered; Q&A, plan, decision, conflict, and knowledge-promotion support are not claimed." />
-  }
-  if (!discussion) {
-    return <CommandCenterState kind="empty" detail="Select a durable Discussion record, or create one from a supported question, plan, decision, announcement, or conflict flow." />
-  }
-  const status = commandCenterStatus('discussion', discussion.status)
-  return (
-    <article className="cc-discussion-detail" aria-labelledby="cc-discussion-title">
-      <header className="cc-detail-header">
-        <div className="cc-detail-heading">
-          <p>{discussion.type} · {discussion.author}</p>
-          <h2 id="cc-discussion-title">{discussion.title}</h2>
-          <span>{discussion.summary}</span>
-        </div>
-        <CommandCenterStatus value={status} />
-        <nav aria-label="Discussion actions">
-          <button type="button" disabled={!onReply || status.terminal} onClick={onReply}>Reply</button>
-        </nav>
-      </header>
-      <ol className="cc-discussion-posts" aria-label="Discussion posts">
-        {posts.map((post) => (
-          <li key={post.id} data-accepted={post.accepted}>
-            <header><strong>{post.author}</strong><span>{post.actorType}{post.provider ? ` · ${post.provider}` : ''}</span>
-              <time dateTime={post.createdAt}>{new Date(post.createdAt).toLocaleString()}</time></header>
-            <p>{post.body}</p>
-            <footer>
-              {post.sessionId && <a href={commandCenterDeepLink(browserSearch(), {
-                section: 'agents', boardId: discussion.boardId, sessionId: post.sessionId,
-              })}>Provider session</a>}
-              {post.accepted
-                ? <span><OsIcon name="check" /> Accepted answer</span>
-                : discussion.type === 'question' && onAccept
-                  ? <button type="button" onClick={() => onAccept(post.id)}>Accept answer</button>
-                  : null}
-            </footer>
-          </li>
-        ))}
-      </ol>
-      {posts.length === 0 && <CommandCenterState kind="empty" detail="This discussion has no posts yet." />}
-    </article>
-  )
-}
-
 export function CompatibilityMessageDetail({
   thread,
   onChange,
@@ -324,79 +221,6 @@ export function CompatibilityMessageDetail({
         <CommandCenterStatus value={commandCenterStatus('discussion', 'unavailable')} /></header>
       <p className="cc-compatibility-note">This intentional message can wake a recipient. It is not a canonical Discussion and has no accepted-answer, nested-resolution, or knowledge-promotion authority.</p>
       <MessageThread thread={thread} onChange={onChange} />
-    </section>
-  )
-}
-
-export function KnowledgeBrowse({
-  records,
-  available,
-  stale,
-}: {
-  records: readonly CommandCenterKnowledgeRecord[]
-  available: boolean
-  stale?: boolean
-}) {
-  if (!available) {
-    return <CommandCenterState kind="unsupported" title="Knowledge browse is unavailable"
-      detail="Repository ingestion and retrieval foundations exist, but this project has no registered Knowledge browse adapter. No context item is being promoted or fabricated by the UI." />
-  }
-  if (records.length === 0) {
-    return <CommandCenterState kind="empty" detail="No cited Knowledge records matched this project view." />
-  }
-  return (
-    <section className="cc-knowledge" aria-labelledby="cc-knowledge-title">
-      <header><div><p>Canonical sources</p><h2 id="cc-knowledge-title">Knowledge</h2></div>
-        {stale && <span className="cc-stale-label"><OsIcon name="refresh" /> Freshness check pending</span>}</header>
-      <ol>{records.map((record) => (
-        <li key={record.id}>
-          <a href={commandCenterDeepLink(browserSearch(), {
-            section: 'knowledge', boardId: record.boardId, knowledgeId: record.id,
-          })}>
-            <div><strong>{record.title}</strong><p>{record.summary}</p></div>
-            <dl><div><dt>Source</dt><dd>{record.source}</dd></div>
-              <div><dt>Freshness</dt><dd>{record.freshness ?? 'Not reported'}</dd></div></dl>
-          </a>
-        </li>
-      ))}</ol>
-    </section>
-  )
-}
-
-export function DependencyVisualization({ graph }: { graph: CommandCenterGraph }) {
-  if (graph.nodes.length === 0) {
-    return <CommandCenterState kind="empty" detail="No canonical dependencies, assignments, discussions, or conflicts are recorded for this view." />
-  }
-  const lanes = [0, 1, 2].map((lane) => graph.nodes.filter((node) => node.lane === lane))
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
-  return (
-    <section className="cc-dependency-map" aria-labelledby="cc-dependency-title">
-      <header><div><p>Observed relationships</p><h2 id="cc-dependency-title">Dependency map</h2></div>
-        <span>{graph.nodes.length} records · {graph.edges.length} relationships</span></header>
-      <div className="cc-dependency-lanes" aria-describedby="cc-dependency-description">
-        {lanes.map((nodes, lane) => (
-          <section key={lane} aria-label={lane === 0 ? 'Dependencies' : lane === 1 ? 'Work' : 'People and coordination'}>
-            <h3>{lane === 0 ? 'Prerequisites' : lane === 1 ? 'Active work' : 'Assignments and coordination'}</h3>
-            {nodes.map((node) => {
-              const content = <><span className={`cc-node-kind cc-node-${node.kind}`}>{node.kind}</span>
-                <strong>{node.label}</strong><small>{node.detail}</small><CommandCenterStatus value={node.status} compact /></>
-              return node.href
-                ? <a key={node.id} href={node.href} className="cc-graph-node">{content}</a>
-                : <div key={node.id} className="cc-graph-node">{content}</div>
-            })}
-          </section>
-        ))}
-      </div>
-      <p id="cc-dependency-description" className="sr-only">The visual lanes are followed by a complete text relationship list.</p>
-      <ol className="cc-edge-list" aria-label="Dependency relationships">
-        {graph.edges.map((edge) => (
-          <li key={edge.id} data-blocked={edge.blocked}>
-            <span>{nodeById.get(edge.from)?.label ?? edge.from}</span>
-            <b>{edge.label || edge.kind.replace(/_/g, ' ')}</b>
-            <span>{nodeById.get(edge.to)?.label ?? edge.to}</span>
-          </li>
-        ))}
-      </ol>
     </section>
   )
 }

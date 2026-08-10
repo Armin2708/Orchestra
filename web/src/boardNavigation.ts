@@ -1,15 +1,59 @@
 export const BOARD_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'kanban', label: 'Kanban' },
+  { id: 'messages', label: 'Inbox' },
   { id: 'agents', label: 'Teams' },
-  { id: 'messages', label: 'Messages' },
+  // tab id stays 'kanban' so saved navigation and deep links survive the rename
+  { id: 'kanban', label: 'Backlog' },
+  // promoted out of the old Advanced/Knowledge section (#172)
+  { id: 'wiki', label: 'Wiki' },
   { id: 'workspace', label: 'Workspace' },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'shipped', label: 'Shipped' },
+  // Timeline + Shipped merged into one git-history tab (#181)
+  { id: 'git', label: 'Git' },
 ] as const
 
 export type BoardTab = typeof BOARD_TABS[number]['id']
-export type PrimaryView = 'board' | 'open-work' | 'collaboration' | 'organization' | 'roadmap' | 'settings'
+
+// the Backlog tab holds two panes: the kanban board and the roadmap builder that
+// used to be a global view of its own under More
+export const BACKLOG_PANES = [
+  { id: 'kanban', label: 'Kanban' },
+  { id: 'roadmap', label: 'Roadmap' },
+  // the decomposition funnel: epic -> feature spec -> tech spec -> task (#178)
+  { id: 'funnel', label: 'Funnel' },
+] as const
+
+export type BacklogPane = typeof BACKLOG_PANES[number]['id']
+export const BACKLOG_PANE_KEY = 'orchestra-backlog-pane'
+
+const backlogPanes = new Set<BacklogPane>(BACKLOG_PANES.map((pane) => pane.id))
+
+// the Git tab holds two panes over the same annotated log: every commit on the
+// working branch, and only what was pushed to the remote (#181)
+export const GIT_PANES = [
+  { id: 'commits', label: 'Commits' },
+  { id: 'pushes', label: 'Pushes' },
+] as const
+
+export type GitPane = typeof GIT_PANES[number]['id']
+export const GIT_PANE_KEY = 'orchestra-git-pane'
+
+const gitPanes = new Set<GitPane>(GIT_PANES.map((pane) => pane.id))
+
+// legacyTab is the pre-merge saved board tab ('timeline' | 'shipped'): a browser
+// that last sat on Shipped lands on the Pushes pane, everything else on Commits
+export function resolveGitPane(savedPane: string | null, legacyTab: string | null = null): GitPane {
+  if (gitPanes.has(savedPane as GitPane)) return savedPane as GitPane
+  return legacyTab === 'shipped' ? 'pushes' : 'commits'
+}
+
+// ?view=roadmap used to open the standalone roadmap; it now lands on the Backlog
+// tab with the roadmap pane already selected
+export function resolveBacklogPane(savedPane: string | null, search = ''): BacklogPane {
+  if (new URLSearchParams(search).get('view') === 'roadmap') return 'roadmap'
+  return backlogPanes.has(savedPane as BacklogPane) ? savedPane as BacklogPane : 'kanban'
+}
+
+export type PrimaryView = 'board' | 'open-work' | 'settings'
 
 export type StoredNavigation = {
   view: PrimaryView
@@ -17,7 +61,7 @@ export type StoredNavigation = {
 }
 
 const primaryViews = new Set<PrimaryView>([
-  'board', 'open-work', 'collaboration', 'organization', 'roadmap', 'settings',
+  'board', 'open-work', 'settings',
 ])
 const boardTabs = new Set<BoardTab>(BOARD_TABS.map((tab) => tab.id))
 const canonicalRouteKeys = [
@@ -29,8 +73,16 @@ export function resolveStoredNavigation(savedView: string | null, savedBoardTab:
   if (savedView === 'agents') return { view: 'board', boardTab: 'agents' }
   if (savedView === 'messages') return { view: 'board', boardTab: 'messages' }
   if (savedView === 'workspaces') return { view: 'board', boardTab: 'workspace' }
-  if (savedView === 'timeline') return { view: 'board', boardTab: 'timeline' }
-  if (savedView === 'shipped') return { view: 'board', boardTab: 'shipped' }
+  // Timeline and Shipped are Git-tab panes now, not tabs (or, before that, views)
+  if (savedView === 'timeline' || savedView === 'shipped') return { view: 'board', boardTab: 'git' }
+  if (savedBoardTab === 'timeline' || savedBoardTab === 'shipped') {
+    return {
+      view: primaryViews.has(savedView as PrimaryView) ? savedView as PrimaryView : 'board',
+      boardTab: 'git',
+    }
+  }
+  // the roadmap is a Backlog pane now, not a view
+  if (savedView === 'roadmap') return { view: 'board', boardTab: 'kanban' }
 
   return {
     view: primaryViews.has(savedView as PrimaryView) ? savedView as PrimaryView : 'board',
@@ -47,8 +99,8 @@ export function resolveLocationNavigation(
   const params = new URLSearchParams(search)
   const requestedView = params.get('view')
 
-  if (requestedView === 'collaboration' || requestedView === 'organization'
-    || requestedView === 'roadmap' || requestedView === 'settings') {
+  if (requestedView === 'roadmap') return { view: 'board', boardTab: 'kanban' }
+  if (requestedView === 'settings') {
     return { ...stored, view: requestedView }
   }
   if (params.has('section') || canonicalRouteKeys.some((key) => params.has(key))) {
