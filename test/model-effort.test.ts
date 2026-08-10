@@ -228,7 +228,10 @@ it('setEffort restarts with resume, carrying permission mode, model, and transcr
   expect(t.queryArgs[1].options.model).toBe('claude-fable-5')
 
   const lines = t.conductor.transcript(a.id).lines
-  expect(lines.some((l) => l.kind === 'user' && l.text === 'hello there')).toBe(true) // history carried
+  // history carried. Matched by prefix, not equality: an operator ask that auto-creates a
+  // tracking card (#143) appends the card note to the recorded line, so exact equality here
+  // would assert the absence of that feature rather than the carry-through this test is for.
+  expect(lines.some((l) => l.kind === 'user' && l.text.startsWith('hello there'))).toBe(true)
   expect(lines.some((l) => l.kind === 'status' && l.text.includes('effort → xhigh'))).toBe(true)
   expect(t.conductor.transcript(a.id).info?.effort).toBe('xhigh')
   expect((t.db.prepare(`SELECT effort FROM agents WHERE id=?`).get(a.id) as any).effort).toBe('xhigh')
