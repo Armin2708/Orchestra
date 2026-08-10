@@ -314,6 +314,7 @@ GET /api/v1/os/settings/agent-defaults
 GET /api/v1/os/workspaces/:id
 GET /api/v1/os/workspaces/:id/checkpoints
 GET /api/v1/os/workspaces/:id/context
+GET /api/v1/os/workspaces/:id/git
 GET /api/v1/os/workspaces/:id/processes
 GET /api/v1/os/workspaces/:id/terminal-history
 GET /api/v1/os/workspaces/:id/terminal-selection

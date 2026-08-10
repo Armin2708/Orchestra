@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, Snapshot } from './api'
-import { osApi, Workspace, WorkspaceProcess } from './osApi'
+import { osApi, Workspace, WorkspaceGit, WorkspaceProcess } from './osApi'
 import { ProcessTerminal, ProcessTerminalHandle } from './ProcessTerminal'
 import { OsIcon } from './OsIcon'
 
@@ -153,6 +153,23 @@ export function WorkspaceTerminal({ snaps }: { snaps: Snapshot[] }) {
 
   const cwd = useMemo(() => selected?.worktree_path ?? selected?.root_path ?? '', [selected])
 
+  // the git rail beside the terminal (#179): worktrees + branches, polled gently
+  const [git, setGit] = useState<WorkspaceGit | null>(null)
+  const loadGit = useCallback(async (workspaceId: string) => {
+    try {
+      const surface = await osApi.readWorkspaceGit(workspaceId)
+      if (selectedRef.current === workspaceId) setGit(surface)
+    } catch { /* a pre-#179 daemon has no git surface: the rail just stays empty */ }
+  }, [])
+  useEffect(() => {
+    setGit(null)
+    if (!selected) return
+    const workspaceId = String(selected.id)
+    void loadGit(workspaceId)
+    const poll = window.setInterval(() => void loadGit(workspaceId), 20_000)
+    return () => window.clearInterval(poll)
+  }, [selected?.id, loadGit])
+
   return (
     <div className="ws-terminal">
       <header className="ws-terminal-bar">
@@ -190,7 +207,99 @@ export function WorkspaceTerminal({ snaps }: { snaps: Snapshot[] }) {
       {error && <div className="os-inline-error" role="alert">{error}</div>}
       {ready && !selected
         ? <p className="ws-terminal-empty">No project is available for a terminal yet.</p>
-        : <ProcessTerminal ref={terminalRef} process={active} />}
+        : (
+          <div className="ws-terminal-body">
+            <WorktreeRail git={git} />
+            <ProcessTerminal ref={terminalRef} process={active} />
+            <BranchRail git={git} onRefresh={() => selected && void loadGit(String(selected.id))} />
+          </div>
+        )}
     </div>
+  )
+}
+
+const basename = (value: string) => value.split('/').filter(Boolean).pop() ?? value
+
+// every branch gets a stable lane hue from its name, so a worktree and the
+// branch it has checked out wear the same colour on both sides of the terminal
+const laneHue = (name: string | null): number | null => {
+  if (!name) return null
+  let hue = 0
+  for (let index = 0; index < name.length; index++) hue = (hue * 31 + name.charCodeAt(index)) % 360
+  return hue
+}
+
+const laneStyle = (name: string | null) => {
+  const hue = laneHue(name)
+  return hue === null ? undefined : { '--lane': hue } as React.CSSProperties
+}
+
+function WorktreeRail({ git }: { git: WorkspaceGit | null }) {
+  return (
+    <aside className="ws-git-rail worktrees" aria-label="Worktrees">
+      <header className="ws-git-rail-head">
+        <strong>Worktrees</strong>
+        {git?.is_repository && <span className="ws-git-count">{git.worktrees.length}</span>}
+      </header>
+      {git === null ? (
+        <p className="ws-git-rail-empty">Reading the repository…</p>
+      ) : !git.is_repository ? (
+        <p className="ws-git-rail-empty">This workspace is not a git repository.</p>
+      ) : (
+        <ul className="ws-git-list">
+          {git.worktrees.map((worktree) => (
+            <li key={worktree.path} style={laneStyle(worktree.branch)}
+              className={[worktree.branch ? 'laned' : 'detached', worktree.is_current ? 'current' : '']
+                .filter(Boolean).join(' ')}
+              title={worktree.path}>
+              <span className="ws-git-dot" aria-hidden="true" />
+              <span className="ws-git-text">
+                <span className="ws-git-name">{basename(worktree.path)}</span>
+                <span className="ws-git-meta">
+                  {worktree.branch ?? (worktree.head ? `detached @ ${worktree.head}` : 'detached')}
+                  {worktree.locked ? ' · locked' : ''}
+                  {worktree.prunable ? ' · prunable' : ''}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
+  )
+}
+
+function BranchRail({ git, onRefresh }: { git: WorkspaceGit | null; onRefresh: () => void }) {
+  return (
+    <aside className="ws-git-rail branches" aria-label="Branches">
+      <header className="ws-git-rail-head">
+        <strong>Branches</strong>
+        {git?.is_repository && <span className="ws-git-count">{git.branches.length}</span>}
+        <button type="button" onClick={onRefresh} title="Refresh worktrees and branches">
+          <OsIcon name="refresh" size={12} />
+        </button>
+      </header>
+      {git === null ? (
+        <p className="ws-git-rail-empty">Reading the repository…</p>
+      ) : !git.is_repository ? (
+        <p className="ws-git-rail-empty">This workspace is not a git repository.</p>
+      ) : (
+        <ul className="ws-git-list">
+          {git.branches.map((branch) => (
+            <li key={branch.name} style={laneStyle(branch.name)}
+              className={['laned', branch.is_current ? 'current' : ''].filter(Boolean).join(' ')}
+              title={branch.worktree_path ? `checked out at ${branch.worktree_path}` : branch.name}>
+              <span className="ws-git-dot" aria-hidden="true" />
+              <span className="ws-git-text">
+                <span className="ws-git-name">{branch.name}</span>
+                <span className="ws-git-meta">
+                  {branch.head}{branch.worktree_path && !branch.is_current ? ' · checked out' : ''}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
   )
 }

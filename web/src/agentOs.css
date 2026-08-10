@@ -156,6 +156,67 @@
   display: inline-flex; align-items: center; gap: 4px; border: 1px solid #4a4640; border-radius: 5px;
   background: transparent; color: #bcb6ac; padding: 3px 7px; font-size: 9px;
 }
+/* git rails flank the terminal — worktrees left, branches right (#179).
+   Each branch owns a stable lane hue (--lane, set inline from its name), so a
+   worktree and its checked-out branch wear the same colour on both sides. */
+.ws-terminal-body {
+  min-height: 0; min-width: 0;
+  display: grid; grid-template-columns: 192px minmax(0, 1fr) 212px;
+}
+.ws-git-rail {
+  min-height: 0; overflow-y: auto; background: #242320;
+  display: flex; flex-direction: column; gap: 7px; padding: 8px 9px 12px;
+}
+.ws-git-rail.worktrees { border-right: 1px solid #3c3934; }
+.ws-git-rail.branches { border-left: 1px solid #3c3934; }
+.ws-git-rail-head { display: flex; align-items: center; gap: 6px; }
+.ws-git-rail-head strong { font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: #aaa49b; }
+.ws-git-count {
+  font: 9px 'SF Mono', ui-monospace, monospace; color: #8d877d;
+  border: 1px solid #3c3934; border-radius: 999px; padding: 1px 6px; background: #201f1c;
+}
+.ws-git-rail-head button {
+  margin-left: auto; display: inline-flex; align-items: center; border: 1px solid transparent; border-radius: 5px;
+  background: transparent; color: #857f76; padding: 3px;
+}
+.ws-git-rail-head button:hover { border-color: #4a4640; color: #e3ded5; }
+.ws-git-rail-empty { margin: 0; font-size: 10px; color: #777168; }
+.ws-git-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.ws-git-list li {
+  display: flex; align-items: flex-start; gap: 7px; padding: 4px 7px;
+  border-radius: 6px; border: 1px solid transparent;
+}
+.ws-git-dot {
+  flex: none; width: 7px; height: 7px; margin-top: 3px; border-radius: 999px;
+  background: #5a554d; box-shadow: 0 0 0 2px #242320;
+}
+.ws-git-list li.laned .ws-git-dot { background: hsl(var(--lane) 58% 58%); }
+.ws-git-list li.current .ws-git-dot { box-shadow: 0 0 0 2px #242320, 0 0 6px hsl(var(--lane) 70% 55% / 0.7); }
+.ws-git-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ws-git-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 10px 'SF Mono', ui-monospace, monospace; color: #d8d3c9;
+}
+.ws-git-list li.laned .ws-git-name { color: hsl(var(--lane) 32% 76%); }
+.ws-git-meta {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 9px 'SF Mono', ui-monospace, monospace; color: #777168;
+}
+.ws-git-list li.current {
+  border-color: hsl(var(--lane) 45% 55% / 0.4);
+  background: hsl(var(--lane) 40% 55% / 0.12);
+}
+.ws-git-list li.current .ws-git-name { color: hsl(var(--lane) 45% 84%); }
+.ws-git-list li.current .ws-git-meta { color: hsl(var(--lane) 22% 62%); }
+.ws-git-list li.detached.current { border-color: #4a4640; background: #2d2b27; }
+@media (max-width: 1080px) {
+  .ws-terminal-body { grid-template-columns: minmax(0, 1fr) 212px; }
+  .ws-git-rail.worktrees { display: none; }
+}
+@media (max-width: 880px) {
+  .ws-terminal-body { grid-template-columns: minmax(0, 1fr); }
+  .ws-git-rail { display: none; }
+}
 .ws-terminal-actions button:hover:not(:disabled) { border-color: #777168; color: #eee9df; }
 .ws-terminal-actions button:disabled { opacity: 0.5; }
 .ws-terminal-empty { padding: 24px; color: #777168; font-size: 12px; }

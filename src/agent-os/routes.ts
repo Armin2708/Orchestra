@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions, FastifyRequest } from 'fastify'
 import {
@@ -696,6 +697,14 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     const byProcess = new Map<string, number[]>()
     for (const entry of ports) byProcess.set(entry.processId, [...(byProcess.get(entry.processId) ?? []), entry.port])
     return { processes: processes.map((process) => ({ ...process, ports: byProcess.get(process.id) ?? [] })) }
+  })
+
+  // Read surface for the Workspace tab's git sidebar (#179): worktree paths,
+  // branch names, and short heads only — never diffs, messages, or file contents.
+  app.get<{ Params: { id: string } }>('/workspaces/:id/git', (request) => {
+    const workspace = requireWorkspace(workspaces, request.params.id)
+    requireTerminalAccess('view', { workspaceId: request.params.id }, request)
+    return { git: workspaceGitSurface(workspace) }
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/workspaces/:id/processes', async (request, reply) => {
@@ -1615,4 +1624,75 @@ function gitHead(workspace: Workspace): string {
   } catch {
     throw new ValidationError('git head could not be captured from the workspace; provide git_head or enable the runtime capture hook')
   }
+}
+
+type WorkspaceGitWorktree = {
+  path: string
+  head: string | null
+  branch: string | null
+  is_current: boolean
+  locked: boolean
+  prunable: boolean
+}
+
+type WorkspaceGitBranch = {
+  name: string
+  head: string
+  is_current: boolean
+  worktree_path: string | null
+}
+
+type WorkspaceGitSurface = {
+  root: string
+  is_repository: boolean
+  current_branch: string | null
+  worktrees: WorkspaceGitWorktree[]
+  branches: WorkspaceGitBranch[]
+}
+
+function workspaceGitSurface(workspace: Workspace): WorkspaceGitSurface {
+  const root = workspace.worktree_path ?? workspace.root_path
+  const run = (args: string[]) => execFileSync('git', args, {
+    cwd: root, encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  let porcelain: string
+  let toplevel: string
+  try {
+    // git prints symlink-resolved worktree paths, so the "current" comparison
+    // has to come from git too, not from the stored workspace root
+    toplevel = run(['rev-parse', '--show-toplevel']).trim()
+    porcelain = run(['worktree', 'list', '--porcelain'])
+  } catch {
+    return { root, is_repository: false, current_branch: null, worktrees: [], branches: [] }
+  }
+  const worktrees: WorkspaceGitWorktree[] = []
+  for (const block of porcelain.split('\n\n')) {
+    const lines = block.split('\n').filter(Boolean)
+    const pathLine = lines.find((line) => line.startsWith('worktree '))
+    if (!pathLine) continue
+    const worktreePath = pathLine.slice('worktree '.length)
+    const ref = lines.find((line) => line.startsWith('branch '))?.slice('branch '.length) ?? null
+    worktrees.push({
+      path: worktreePath,
+      head: lines.find((line) => line.startsWith('HEAD '))?.slice(5, 12) ?? null,
+      branch: ref === null ? null : ref.replace(/^refs\/heads\//, ''),
+      is_current: path.resolve(worktreePath) === toplevel,
+      locked: lines.some((line) => line === 'locked' || line.startsWith('locked ')),
+      prunable: lines.some((line) => line === 'prunable' || line.startsWith('prunable ')),
+    })
+  }
+  const currentBranch = worktrees.find((worktree) => worktree.is_current)?.branch ?? null
+  let branches: WorkspaceGitBranch[] = []
+  try {
+    const checkedOut = new Map(worktrees.flatMap((worktree) =>
+      worktree.branch === null ? [] : [[worktree.branch, worktree.path] as const]))
+    branches = run(['for-each-ref', 'refs/heads', '--sort=-committerdate',
+      '--format=%(refname:short)%09%(objectname:short)'])
+      .split('\n').filter(Boolean).slice(0, 200)
+      .map((line) => {
+        const [name, head] = line.split('\t')
+        return { name, head, is_current: name === currentBranch, worktree_path: checkedOut.get(name) ?? null }
+      })
+  } catch { /* an unborn HEAD has worktrees but no refs; the panel still renders those */ }
+  return { root, is_repository: true, current_branch: currentBranch, worktrees, branches }
 }
