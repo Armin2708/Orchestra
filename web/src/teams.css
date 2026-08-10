@@ -213,11 +213,15 @@
 }
 .teams-stage.gated .teams-stage-gate { color: #8a6116; border-color: #8a6116; }
 
-.teams-edge { stroke: #b8b4ab; stroke-width: 1.5; }
+/* no stroke colour here on purpose: CSS beats the SVG presentation attribute, and the
+   per-role hue is set inline in TeamsView */
+.teams-edge { stroke-width: 2; stroke-linecap: round; opacity: 0.95; }
+/* the lead wears its own ring so the root of the tree is findable at a glance */
+.net-avatar.teams-lead { box-shadow: 0 0 0 2px #d9a441, var(--shadow-hover); }
 /* unstaffed role: dashed ghost of the overview agent avatar */
 .net-avatar.teams-ghost { background: transparent; color: var(--ink-soft, #777); border: 1.5px dashed #b8b4ab; }
 .teams-node-role {
-  display: block; text-align: center; font-size: 10px; color: var(--ink-soft, #999); margin-top: 1px;
+  display: block; font-weight: 600; text-align: center; font-size: 10px; color: var(--ink-soft, #999); margin-top: 1px;
   max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, Agent, Card, Snapshot, Thread, agentInk, agentWash, initials } from './api'
+import { api, Agent, Card, Snapshot, Thread, agentHue, agentInk, agentWash, initials } from './api'
 import { agentActivity, AgentActivity } from './agentActivity'
 import { AgentTerminal } from './AgentTerminal'
 import { BoardCanvas } from './Board'
@@ -59,6 +59,17 @@ const STATUS_LABEL: Record<Team['status'], string> = {
 }
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
+
+// Roles borrow the product's identity palette (agentHue) so a role and the agent that
+// eventually fills it live in the same colour language. Edges and arrowheads take the
+// REPORT's hue: you read the tree by following a colour down to the node that owns it.
+const roleHue = (key: string) => agentHue(key)
+const roleLine = (key: string) => `hsl(${roleHue(key)} 55% 55%)`
+const roleTint = (key: string) => `hsl(${roleHue(key)} 62% 90%)`
+const roleEdgeInk = (key: string) => `hsl(${roleHue(key)} 48% 34%)`
+// half the 52px node plus a little air, so an edge stops at the rim instead of under it
+const NODE_R = 30
+const ARROW_GAP = 9
 
 function loadPos(teamId: number): Record<string, Norm> {
   try { return JSON.parse(localStorage.getItem(`orchestra-team-net-${teamId}`) ?? '{}') } catch { return {} }
@@ -259,11 +270,26 @@ function TeamGraph({ team, viewport, activityOf, liveByName, editable, onOpenAge
     <div className="network teams-network" ref={wrap} onPointerMove={onMove} onPointerUp={endDrag()} onPointerCancel={endDrag()}>
       <div className="network-scene" style={graphStyle}>
         <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
+          <defs>
+            {[...new Set(team.spec.roles.filter((r) => r.reports_to != null).map((r) => roleHue(r.key)))].map((hue) => (
+              <marker key={hue} id={`teams-arrow-${team.id}-${hue}`} viewBox="0 0 10 10"
+                refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill={`hsl(${hue} 55% 52%)`} />
+              </marker>
+            ))}
+          </defs>
           {team.spec.roles.filter((r) => r.reports_to != null).map((r) => {
             const a = P(r.reports_to!), b = P(r.key)
+            const ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H
+            const len = Math.hypot(bx - ax, by - ay) || 1
+            const ux = (bx - ax) / len, uy = (by - ay) / len
+            // trimmed along the true vector so diagonal edges meet the circle, not the label
             return (
               <line key={r.key} className="teams-edge"
-                x1={a.x * W} y1={a.y * H + 18} x2={b.x * W} y2={b.y * H - 18}
+                x1={ax + ux * NODE_R} y1={ay + uy * NODE_R}
+                x2={bx - ux * (NODE_R + ARROW_GAP)} y2={by - uy * (NODE_R + ARROW_GAP)}
+                stroke={roleLine(r.key)}
+                markerEnd={`url(#teams-arrow-${team.id}-${roleHue(r.key)})`}
                 vectorEffect="non-scaling-stroke" />
             )
           })}
@@ -280,9 +306,19 @@ function TeamGraph({ team, viewport, activityOf, liveByName, editable, onOpenAge
             <div key={role.key} className="net-node" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
               <span
                 className={first
-                  ? `net-avatar round hired ${act === 'working' ? 'working' : ''}`
-                  : 'net-avatar round teams-ghost'}
-                style={first ? { background: agentWash(first.name), color: agentInk(first.name) } : undefined}
+                  ? `net-avatar round hired ${act === 'working' ? 'working' : ''}${isLead ? ' teams-lead' : ''}`
+                  : `net-avatar round teams-ghost${isLead ? ' teams-lead' : ''}`}
+                style={first
+                  ? {
+                    background: agentWash(first.name),
+                    color: agentInk(first.name),
+                    borderColor: roleLine(role.key),
+                  }
+                  : {
+                    background: roleTint(role.key),
+                    color: roleEdgeInk(role.key),
+                    borderColor: roleLine(role.key),
+                  }}
                 title={first
                   ? `${display} — ${role.title}${act === 'working' ? ' · working now' : ''} — drag to move, click to open console`
                   : `${role.title} — unstaffed (0/${role.max_agents})${editable ? ' — drag to move, click to edit' : ''}`}
@@ -295,7 +331,9 @@ function TeamGraph({ team, viewport, activityOf, liveByName, editable, onOpenAge
                 {first ? first.name : role.title}
                 {first && <ProviderBadge provider={first.provider} compact />}
               </span>
-              <span className="teams-node-role">{isLead ? '★ ' : ''}{first ? role.title : `0/${role.max_agents} staffed`}</span>
+              <span className="teams-node-role" style={{ color: roleEdgeInk(role.key) }}>
+                {isLead ? '★ ' : ''}{first ? role.title : `0/${role.max_agents} staffed`}
+              </span>
               {editing === role.key && (
                 <RoleEditor team={team} role={role} onClose={() => setEditing(null)} onChange={onChange} />
               )}
