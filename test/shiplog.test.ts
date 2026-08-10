@@ -145,6 +145,63 @@ it('a non-repo project path degrades to an empty listing with an error note', as
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+it("ref: 'remote' logs the upstream ref — only work that actually reached the remote", async () => {
+  // a repo with an origin: two commits pushed, a third only local
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'shiplog-work-'))
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'shiplog-origin-'))
+  try {
+    execFileSync('git', ['init', '-q', '--bare'], { cwd: origin })
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: work })
+    execFileSync('git', ['config', 'user.email', 'test@test'], { cwd: work })
+    execFileSync('git', ['config', 'user.name', 'tester'], { cwd: work })
+    const mk = (msg: string, file: string): string => {
+      fs.writeFileSync(path.join(work, file), msg)
+      execFileSync('git', ['add', '.'], { cwd: work })
+      execFileSync('git', ['commit', '-q', '-m', msg], { cwd: work })
+      return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work }).toString().trim()
+    }
+    mk('first', 'a.txt')
+    const pushed = mk('second', 'b.txt')
+    execFileSync('git', ['remote', 'add', 'origin', origin], { cwd: work })
+    execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: work })
+    const local = mk('third, not pushed', 'c.txt')
+
+    const db = openDb(':memory:')
+    db.prepare(`INSERT INTO boards (project_path, name) VALUES (?, 'p')`).run(work)
+    const b = (db.prepare(`SELECT id FROM boards`).get() as any).id
+
+    const commits = await shiplog(db, { id: b, project_path: work }, {})
+    expect(commits.head).toBe(local)
+    expect(commits.commits.map((c) => c.subject)).toEqual(['third, not pushed', 'second', 'first'])
+
+    const pushes = await shiplog(db, { id: b, project_path: work }, { ref: 'remote' })
+    expect(pushes.head).toBe(pushed)
+    expect(pushes.commits.map((c) => c.subject)).toEqual(['second', 'first'])
+    expect(pushes.error).toBeUndefined()
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true })
+    fs.rmSync(origin, { recursive: true, force: true })
+  }
+})
+
+it("ref: 'remote' without any remote degrades to an empty listing with an error note", async () => {
+  const { db, boardId } = makeDb() // the shared fixture repo has no origin
+  const log = await shiplog(db, { id: boardId, project_path: repo }, { ref: 'remote' })
+  expect(log.head).toBeNull()
+  expect(log.commits).toEqual([])
+  expect(log.error).toMatch(/remote/)
+})
+
+it('GET /api/v1/boards/:id/shipped?ref=remote is wired through to the remote log', async () => {
+  const { db, boardId } = makeDb()
+  const s = buildServer(db); await s.ready()
+  const res = await s.inject({ method: 'GET', url: `/api/v1/boards/${boardId}/shipped?ref=remote` })
+  expect(res.statusCode).toBe(200)
+  // the fixture repo has no origin — proof the param reached shiplog is the remote error note
+  expect(res.json().error).toMatch(/remote/)
+  await s.close()
+})
+
 it('GET /api/v1/boards/:id/shipped serves the annotated log; unknown board 404s', async () => {
   const { db, boardId } = makeDb()
   const s = buildServer(db); await s.ready()

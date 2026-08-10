@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { BOARD_TABS, resolveLocationNavigation, resolveStoredNavigation } from '../web/src/boardNavigation.js'
+import {
+  BOARD_TABS, GIT_PANES, resolveGitPane, resolveLocationNavigation, resolveStoredNavigation,
+} from '../web/src/boardNavigation.js'
 
 describe('board-local navigation', () => {
   it('keeps operational and history views together under Board', () => {
@@ -10,21 +12,36 @@ describe('board-local navigation', () => {
       { id: 'agents', label: 'Teams' },
       { id: 'messages', label: 'Messages' },
       { id: 'workspace', label: 'Workspace' },
-      { id: 'timeline', label: 'Timeline' },
-      { id: 'shipped', label: 'Shipped' },
+      { id: 'git', label: 'Git' },
     ])
+  })
+
+  it('keeps commits and pushes together in the Git tab', () => {
+    expect(GIT_PANES).toEqual([
+      { id: 'commits', label: 'Commits' },
+      { id: 'pushes', label: 'Pushes' },
+    ])
+    expect(resolveGitPane(null)).toBe('commits')
+    expect(resolveGitPane('pushes')).toBe('pushes')
+    expect(resolveGitPane('nonsense')).toBe('commits')
+    // one-shot migration: a browser that last sat on the retired Shipped tab lands on Pushes
+    expect(resolveGitPane(null, 'shipped')).toBe('pushes')
+    expect(resolveGitPane(null, 'timeline')).toBe('commits')
+    expect(resolveGitPane('commits', 'shipped')).toBe('commits')
   })
 
   it('migrates the old global routes into their Board tabs', () => {
     expect(resolveStoredNavigation('agents', null)).toEqual({ view: 'board', boardTab: 'agents' })
     expect(resolveStoredNavigation('messages', null)).toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveStoredNavigation('workspaces', null)).toEqual({ view: 'board', boardTab: 'workspace' })
-    expect(resolveStoredNavigation('timeline', null)).toEqual({ view: 'board', boardTab: 'timeline' })
-    expect(resolveStoredNavigation('shipped', null)).toEqual({ view: 'board', boardTab: 'shipped' })
+    // Timeline and Shipped merged into the Git tab (#181): old views and old saved tabs both land there
+    expect(resolveStoredNavigation('timeline', null)).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('shipped', null)).toEqual({ view: 'board', boardTab: 'git' })
     expect(resolveStoredNavigation('board', 'messages')).toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveStoredNavigation('board', 'agents')).toEqual({ view: 'board', boardTab: 'agents' })
-    expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'timeline' })
-    expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'shipped' })
+    expect(resolveStoredNavigation('board', 'timeline')).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'git' })
+    expect(resolveStoredNavigation('board', 'git')).toEqual({ view: 'board', boardTab: 'git' })
     expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'roadmap', boardTab: 'workspace' })
     expect(resolveStoredNavigation('open-work', 'overview')).toEqual({ view: 'open-work', boardTab: 'overview' })
     expect(resolveStoredNavigation('organization', 'overview')).toEqual({ view: 'organization', boardTab: 'overview' })
@@ -57,8 +74,10 @@ describe('board-local navigation', () => {
     expect(globalTabs).not.toContain("pickView('timeline')")
     expect(globalTabs).not.toContain("pickView('shipped')")
     expect(app).toContain('<CanonicalActivity')
-    expect(boardSection).toContain('<TimelineView')
+    // the activity TimelineView is retired; both Git panes render the annotated ship log
+    expect(boardSection).not.toContain('TimelineView')
     expect(boardSection).toContain('<ShippedView')
+    expect(boardSection).toContain('<GitPanel')
     expect(boardSection).toContain('<TeamsView')
   })
 

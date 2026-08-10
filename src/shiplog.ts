@@ -96,31 +96,48 @@ export function refCardIds(subject: string, body: string): number[] {
   return [...ids]
 }
 
-// parsed git output cached per (cwd, head, offset, limit) — polling only pays a rev-parse
+// parsed git output cached per (cwd, ref, head, offset, limit) — polling only pays a rev-parse
 const logCache = new Map<string, ShipCommit[]>()
 const CACHE_MAX = 64
+
+// The Pushes pane logs what actually reached the remote: the branch's push target
+// when one is configured, its upstream otherwise, origin's default branch as the
+// last resort (detached HEAD, or a branch that has never been pushed).
+async function remoteRef(cwd: string): Promise<string | null> {
+  for (const ref of ['@{push}', '@{upstream}', 'origin/HEAD']) {
+    const name = await git(cwd, ['rev-parse', '--abbrev-ref', ref]).then((s) => s.trim(), () => null)
+    if (name) return name
+  }
+  return null
+}
 
 export async function shiplog(
   db: Database.Database,
   board: { id: number; project_path: string },
-  opts: { offset?: number; limit?: number } = {},
+  opts: { offset?: number; limit?: number; ref?: 'head' | 'remote' } = {},
 ): Promise<ShipLog> {
   const offset = Math.max(0, Math.floor(opts.offset ?? 0))
   const limit = Math.min(200, Math.max(1, Math.floor(opts.limit ?? 50)))
+  let target = 'HEAD'
+  if (opts.ref === 'remote') {
+    const remote = await remoteRef(board.project_path)
+    if (!remote) return { head: null, commits: [], offset, limit, has_more: false, error: 'no remote-tracking branch (nothing pushed yet)' }
+    target = remote
+  }
   let head: string
   try {
-    head = (await git(board.project_path, ['rev-parse', 'HEAD'])).trim()
+    head = (await git(board.project_path, ['rev-parse', target])).trim()
   } catch (e: any) {
     return { head: null, commits: [], offset, limit, has_more: false, error: 'not a git repository (or no commits yet)' }
   }
 
-  const key = `${board.project_path}\n${head}\n${offset}\n${limit}`
+  const key = `${board.project_path}\n${target}\n${head}\n${offset}\n${limit}`
   let commits = logCache.get(key)
   if (!commits) {
     // limit+1 tells us whether another page exists without a second git call
     const raw = await git(board.project_path, [
       'log', '--first-parent', '--numstat', `--max-count=${limit + 1}`, `--skip=${offset}`,
-      `--pretty=format:${FORMAT}`,
+      `--pretty=format:${FORMAT}`, target,
     ]).catch(() => '')
     commits = parseGitLog(raw)
     if (logCache.size >= CACHE_MAX) logCache.delete(logCache.keys().next().value as string)

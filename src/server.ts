@@ -439,12 +439,17 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       return { items, next_cursor, has_more }
     })
 
-  // annotated commit history: git log joined with the cards/agents that shipped each commit
-  server.get<{ Params: { id: string }; Querystring: { offset?: string; limit?: string } }>(
+  // annotated commit history: git log joined with the cards/agents that shipped each
+  // commit; ?ref=remote logs the push/upstream ref instead of HEAD (the Pushes pane)
+  server.get<{ Params: { id: string }; Querystring: { offset?: string; limit?: string; ref?: string } }>(
     '/api/v1/boards/:id/shipped', async (req, reply) => {
       const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(Number(req.params.id)) as any
       if (!board) return reply.code(404).send({ error: 'not found' })
-      return shiplog(db, board, { offset: Number(req.query.offset ?? 0) || 0, limit: Number(req.query.limit ?? 50) || 50 })
+      return shiplog(db, board, {
+        offset: Number(req.query.offset ?? 0) || 0,
+        limit: Number(req.query.limit ?? 50) || 50,
+        ref: req.query.ref === 'remote' ? 'remote' : 'head',
+      })
     })
 
   // terminal sessions report their live subagents via hook pings; entries expire quickly

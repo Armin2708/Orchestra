@@ -1049,16 +1049,10 @@
       "evidence": "{ id: 'workspace', label: 'Workspace' }"
     },
     {
-      "id": "board.timeline",
-      "classification": "legacy",
+      "id": "board.git",
+      "classification": "canonical",
       "file": "web/src/boardNavigation.ts",
-      "evidence": "{ id: 'timeline', label: 'Timeline' }"
-    },
-    {
-      "id": "board.shipped",
-      "classification": "compatibility",
-      "file": "web/src/boardNavigation.ts",
-      "evidence": "{ id: 'shipped', label: 'Shipped' }"
+      "evidence": "{ id: 'git', label: 'Git' }"
     },
     {
       "id": "agent-home.mobile.conversation",

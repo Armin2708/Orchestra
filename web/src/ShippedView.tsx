@@ -2,9 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { api, Card, ShipCommit, ShipLog, Snapshot, agentInk, agentWash, initials } from './api'
 import { CardDrawer } from './CardDrawer'
 
-// Shipped tab: the project's commit history, each entry explained by the
+// Git tab panes: the project's commit history, each entry explained by the
 // card/agent that produced it — matched commits carry the story, unmatched
-// commits are listed plainly and muted.
+// commits are listed plainly and muted. Commits logs HEAD; Pushes logs the
+// push/upstream ref, i.e. only the work that actually reached the remote.
+
+export type GitLogSource = 'commits' | 'pushes'
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -60,7 +63,7 @@ function ShipEntry({ commit, cards, onOpenCard }:
   )
 }
 
-function ProjectShiplog({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
+function ProjectShiplog({ snap, source, onChange }: { snap: Snapshot; source: GitLogSource; onChange: () => void }) {
   const [log, setLog] = useState<ShipLog | null>(null)
   const [commits, setCommits] = useState<ShipCommit[]>([])
   const [loading, setLoading] = useState(false)
@@ -69,19 +72,22 @@ function ProjectShiplog({ snap, onChange }: { snap: Snapshot; onChange: () => vo
   const load = async (offset: number) => {
     setLoading(true)
     try {
-      const page: ShipLog = await api('GET', `/boards/${snap.board.id}/shipped?offset=${offset}&limit=50`)
+      const ref = source === 'pushes' ? '&ref=remote' : ''
+      const page: ShipLog = await api('GET', `/boards/${snap.board.id}/shipped?offset=${offset}&limit=50${ref}`)
       setLog(page)
       setCommits((prev) => offset === 0 ? page.commits : [...prev, ...page.commits])
     } catch { /* daemon without the route — leave empty */ }
     finally { setLoading(false) }
   }
 
-  // initial load + a slow poll; the daemon caches per HEAD so polling is cheap
+  // initial load + a slow poll; the daemon caches per ref head so polling is cheap
   useEffect(() => {
+    setCommits([])
+    setLog(null)
     load(0)
     const t = setInterval(() => load(0), 60_000)
     return () => clearInterval(t)
-  }, [snap.board.id])
+  }, [snap.board.id, source])
 
   return (
     <section className="shiplog-project">
@@ -93,7 +99,8 @@ function ProjectShiplog({ snap, onChange }: { snap: Snapshot; onChange: () => vo
           <ShipEntry key={c.hash} commit={c} cards={snap.cards} onOpenCard={setOpenCard} />
         ))}
       </div>
-      {log && !log.error && commits.length === 0 && <p className="col-empty">No commits yet.</p>}
+      {log && !log.error && commits.length === 0 &&
+        <p className="col-empty">{source === 'pushes' ? 'Nothing pushed yet.' : 'No commits yet.'}</p>}
       {log?.has_more && (
         <button className="btn ghost shiplog-more" disabled={loading}
           onClick={() => load(commits.length)}>
@@ -108,11 +115,11 @@ function ProjectShiplog({ snap, onChange }: { snap: Snapshot; onChange: () => vo
   )
 }
 
-export function ShippedView({ snaps, focused = false, onChange }:
-  { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
+export function ShippedView({ snaps, focused = false, source = 'commits', onChange }:
+  { snaps: Snapshot[]; focused?: boolean; source?: GitLogSource; onChange: () => void }) {
   return (
     <main className={focused ? 'shiplog focused' : 'shiplog'}>
-      {snaps.map((s) => <ProjectShiplog key={s.board.id} snap={s} onChange={onChange} />)}
+      {snaps.map((s) => <ProjectShiplog key={s.board.id} snap={s} source={source} onChange={onChange} />)}
     </main>
   )
 }

@@ -561,8 +561,7 @@ in `web/src/BoardSection.tsx`.
 | Board → Agents / Agent Home | canonical | `web/src/AgentHome.tsx` |
 | Board → Messages | legacy | `web/src/MessagesView.tsx` |
 | Board → Workspace | canonical | `web/src/WorkspaceTerminal.tsx` |
-| Board → Timeline | legacy | `web/src/TimelineView.tsx` |
-| Board → Shipped | compatibility | `web/src/ShippedView.tsx` |
+| Board → Git (Commits / Pushes) | canonical | `web/src/ShippedView.tsx` |
 | Open Work | canonical | `web/src/OpenWorkView.tsx` |
 | Organization control center | canonical | `web/src/OrganizationCenter.tsx` |
 | Collaborate → Discussions / Knowledge / Teams | canonical | `web/src/CollaborationCenter.tsx` |

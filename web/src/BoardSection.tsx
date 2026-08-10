@@ -2,9 +2,8 @@ import React from 'react'
 import { ProjectGrid } from './Board'
 import { MessagesView } from './MessagesView'
 import { ShippedView } from './ShippedView'
-import { TimelineView } from './TimelineView'
 import { Snapshot } from './api'
-import { BOARD_TABS, BoardTab } from './boardNavigation'
+import { BOARD_TABS, BoardTab, GIT_PANES, GIT_PANE_KEY, GitPane, resolveGitPane } from './boardNavigation'
 import './boardSection.css'
 
 // the board's Workspace tab is a terminal only (#159); the full runtime cockpit
@@ -12,6 +11,37 @@ import './boardSection.css'
 const WorkspaceTerminal = React.lazy(() => import('./WorkspaceTerminal').then((module) => ({ default: module.WorkspaceTerminal })))
 const TeamsView = React.lazy(() => import('./TeamsView').then((module) => ({ default: module.TeamsView })))
 const KanbanView = React.lazy(() => import('./KanbanView').then((module) => ({ default: module.KanbanView })))
+
+// Git = the project's history in two panes over the same annotated log: Commits
+// (every commit on the working branch) and Pushes (only what reached the remote).
+// The pane is remembered per browser; a browser that last sat on the retired
+// Shipped tab lands on Pushes (#181).
+function GitPanel({ snaps, focused, onChange }: { snaps: Snapshot[]; focused: boolean; onChange: () => void }) {
+  const [pane, setPane] = React.useState<GitPane>(() => {
+    try { return resolveGitPane(localStorage.getItem(GIT_PANE_KEY), localStorage.getItem('orchestra-board-tab')) } catch { return 'commits' }
+  })
+  const pick = (next: GitPane) => {
+    setPane(next)
+    try { localStorage.setItem(GIT_PANE_KEY, next) } catch { /* private mode */ }
+  }
+
+  return (
+    <div className="git-panel">
+      <nav className="git-panes" aria-label="Git views" role="tablist">
+        {GIT_PANES.map((item) => (
+          <button key={item.id} id={`git-pane-${item.id}`} type="button" role="tab"
+            className={pane === item.id ? 'git-pane-tab active' : 'git-pane-tab'}
+            aria-selected={pane === item.id} aria-controls="git-pane-panel"
+            onClick={() => pick(item.id)}>{item.label}</button>
+        ))}
+      </nav>
+      <div className="git-pane-body" id="git-pane-panel" role="tabpanel"
+        aria-labelledby={`git-pane-${pane}`}>
+        <ShippedView snaps={snaps} focused={focused} source={pane} onChange={onChange} />
+      </div>
+    </div>
+  )
+}
 
 type Props = {
   tab: BoardTab
@@ -55,9 +85,7 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
               ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading terminal"><span /><span /><span /></div>}>
                   <WorkspaceTerminal snaps={snaps} />
                 </React.Suspense>
-              : tab === 'timeline'
-                ? <TimelineView snaps={snaps} focused={focused} onChange={onChange} />
-                : <ShippedView snaps={snaps} focused={focused} onChange={onChange} />}
+              : <GitPanel snaps={snaps} focused={focused} onChange={onChange} />}
       </div>
     </section>
   )
