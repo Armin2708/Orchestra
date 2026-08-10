@@ -78,15 +78,15 @@ function GitPanel({ snaps, focused, onChange }: { snaps: Snapshot[]; focused: bo
 
   return (
     <div className="git-panel">
-      <nav className="backlog-panes" aria-label="Git views" role="tablist">
+      <nav className="git-panes" aria-label="Git views" role="tablist">
         {GIT_PANES.map((item) => (
           <button key={item.id} id={`git-pane-${item.id}`} type="button" role="tab"
-            className={pane === item.id ? 'backlog-pane-tab active' : 'backlog-pane-tab'}
+            className={pane === item.id ? 'git-pane-tab active' : 'git-pane-tab'}
             aria-selected={pane === item.id} aria-controls="git-pane-panel"
             onClick={() => pick(item.id)}>{item.label}</button>
         ))}
       </nav>
-      <div className="backlog-pane-body" id="git-pane-panel" role="tabpanel"
+      <div className="git-pane-body" id="git-pane-panel" role="tabpanel"
         aria-labelledby={`git-pane-${pane}`}>
         <ShippedView snaps={snaps} focused={focused} source={pane} onChange={onChange} />
       </div>

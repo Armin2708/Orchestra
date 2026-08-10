@@ -97,7 +97,7 @@ export type VerificationCriterion = { text: string; met: boolean | 'unverifiable
 // latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict
 // queued = waiting for the single verifier slot (#150); only one verifier runs board-wide
 export type Verification = { running: boolean; queued?: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
-export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean }
+export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean; kind?: string; parent_card_id?: number | null; funnel_ready?: boolean; funnel_role?: string }
 export type Agent = {
   id: number
   name: string
@@ -162,26 +162,6 @@ export function timeAgo(sqlUtc: string): string {
   return `${Math.floor(s / 86400)}d ago`
 }
 
-// GET /boards/:id/timeline — merged activity feed, cursor-paged
-export type TimelineItem = {
-  ts: string; source: 'card' | 'review' | 'message' | 'milestone'; id: number; type: string
-  agent: string | null; card_id: number | null; card_title: string | null; summary: string
-}
-export type TimelinePage = { items: TimelineItem[]; next_cursor: string | null; has_more: boolean }
-export const fetchTimeline = (
-  boardId: number,
-  opts: { cursor?: string; limit?: number; agent?: string; card?: number; type?: string } = {},
-): Promise<TimelinePage> => {
-  const q = new URLSearchParams()
-  if (opts.cursor) q.set('cursor', opts.cursor)
-  if (opts.limit) q.set('limit', String(opts.limit))
-  if (opts.agent) q.set('agent', opts.agent)
-  if (opts.card) q.set('card', String(opts.card))
-  if (opts.type) q.set('type', opts.type)
-  const qs = q.toString()
-  return api('GET', `/boards/${boardId}/timeline${qs ? `?${qs}` : ''}`)
-}
-
 export type SystemProviderInfo = {
   id: string
   name: string
@@ -211,7 +191,8 @@ export type SystemInfo = {
 
 export type UsageSplit = { input_tokens: number; cache_read: number; cache_creation: number; output_tokens: number }
 
-// GET /boards/:id/shipped — annotated commit history joined with cards
+// GET /boards/:id/shipped — annotated commit history joined with cards;
+// ?ref=remote logs the push/upstream ref (the Git tab's Pushes pane)
 export type ShipFile = { path: string; insertions: number; deletions: number }
 export type ShipCard = { id: number; title: string; agent: string | null; summary: string | null; decision: 'approve' | 'send_back' | null; matched_by: 'shipped' | 'ref' }
 export type ShipCommit = { hash: string; short: string; date: string; author: string; subject: string; body: string; files: ShipFile[]; insertions: number; deletions: number; cards: ShipCard[] }

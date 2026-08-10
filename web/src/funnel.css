@@ -1,0 +1,124 @@
+/* Backlog funnel — epic → feature spec → tech spec → task, one column per altitude.
+   Namespaced .fnl-*; .status-chip and .avatar are shared and are not restyled here. */
+
+.fnl-wrap { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
+.fnl { display: flex; flex-direction: column; gap: 14px; padding: 16px 24px 28px; }
+
+.fnl-head { display: flex; flex-direction: column; gap: 6px; }
+.fnl-epics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fnl-head-label {
+  font: 9.5px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin-right: 4px;
+}
+.fnl-epic {
+  height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--ink-soft); font-size: 12px; font-weight: 600;
+}
+.fnl-epic:hover { color: var(--ink); background: rgba(17, 17, 17, 0.04); }
+.fnl-epic.active { color: var(--ink); background: var(--surface); border-color: var(--ink); }
+.fnl-head-hint { margin: 0; max-width: 880px; font-size: 11.5px; line-height: 1.5; color: var(--ink-soft); }
+.fnl-error {
+  margin: 0; padding: 8px 12px; border-radius: 9px;
+  background: #FDEBEC; color: #9F2F2D; font-size: 12px;
+}
+
+/* ── the three columns ──────────────────────────────────────────────── */
+.fnl-cols { display: flex; align-items: stretch; gap: 0; }
+.fnl-arrow {
+  flex: none; width: 34px; align-self: center; text-align: center;
+  color: rgba(17, 17, 17, 0.25); font-size: 20px;
+}
+
+.fnl-col {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 14px 12px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface);
+}
+.fnl-col-head { display: flex; flex-direction: column; gap: 3px; }
+.fnl-col-title { display: flex; align-items: baseline; gap: 8px; }
+.fnl-col-title h4 { margin: 0; font-size: 13.5px; font-weight: 650; }
+.fnl-role {
+  padding: 1px 7px; border-radius: 999px; background: #f1f0ec; color: #6c6a64;
+  font: 9.5px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; letter-spacing: 0.05em;
+}
+.fnl-col-blurb { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--ink-soft); }
+.fnl-col-stat {
+  font: 10px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; color: var(--ink-soft);
+}
+.fnl-col-body { display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
+.fnl-col-foot {
+  margin: 0; padding-top: 8px; border-top: 1px dashed var(--line);
+  font-size: 10.5px; line-height: 1.45; color: #a3a09a;
+}
+
+/* ── a node ─────────────────────────────────────────────────────────── */
+.fnl-node {
+  display: flex; align-items: stretch; gap: 2px;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--surface);
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.fnl-node:hover { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06); }
+.fnl-node.selected { border-color: var(--ink); }
+.fnl-node.is-draft { border-style: dashed; }
+.fnl-node-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;
+  padding: 8px 10px; border: 0; border-radius: 11px; background: transparent; text-align: left;
+}
+.fnl-node-title {
+  font-size: 12.5px; line-height: 1.35; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.fnl-node-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fnl-state {
+  padding: 1px 6px; border-radius: 999px;
+  font: 9.5px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  background: #f1f0ec; color: #6c6a64;
+}
+.fnl-node.is-ready .fnl-state { background: #EDF3EC; color: #346538; }
+.fnl-blocked {
+  padding: 1px 6px; border-radius: 999px; background: #FDEBEC; color: #9F2F2D;
+  font: 9.5px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+}
+.fnl-node-tools { display: flex; flex-direction: column; justify-content: center; padding-right: 5px; }
+.fnl-icon {
+  min-width: 24px; height: 22px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--ink-soft); font-size: 13px; line-height: 1;
+}
+.fnl-icon:hover { background: rgba(17, 17, 17, 0.06); color: var(--ink); }
+
+.fnl-col-add input {
+  width: 100%; height: 30px; padding: 0 10px;
+  border: 1px dashed var(--line); border-radius: 9px; background: transparent;
+  font-size: 12px; color: var(--ink);
+}
+.fnl-col-add input:focus { border-style: solid; border-color: var(--ink); outline: none; }
+.fnl-empty { margin: 0; font-size: 11.5px; color: var(--ink-soft); }
+
+/* ── the pile the funnel drains ─────────────────────────────────────── */
+.fnl-loose {
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.fnl-loose-h {
+  display: flex; align-items: baseline; gap: 8px; margin: 0 0 9px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-soft);
+}
+.fnl-loose-h small { font-size: 10.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: #a3a09a; }
+.fnl-count { font: 10px 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; color: var(--ink-soft); }
+.fnl-loose-body { display: flex; flex-wrap: wrap; gap: 6px; }
+.fnl-loose-card {
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--ink); font-size: 12px;
+}
+.fnl-loose-card:hover:not(:disabled) { border-color: var(--ink); }
+.fnl-loose-card:disabled { opacity: 0.5; }
+
+@media (max-width: 1000px) {
+  .fnl-cols { flex-direction: column; }
+  .fnl-arrow { width: auto; transform: rotate(90deg); padding: 4px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fnl-node { transition: none; }
+}

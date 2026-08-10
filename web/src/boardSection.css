@@ -37,15 +37,76 @@
   flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
 }
 
-.board-section-shipped .shiplog {
+/* Backlog tab: kanban + roadmap + funnel as sibling panes (#167/#178); same
+   segmented-control treatment as the Git panes below. */
+.backlog-panel {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+
+.backlog-panes {
+  flex: none; display: flex; align-items: center; gap: 3px;
+  margin: 12px 32px 0; padding: 3px; align-self: flex-start;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 17, 17, 0.03);
+}
+
+.backlog-pane-tab {
+  flex: none; min-height: 28px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ink-soft);
+  font-size: 12px; font-weight: 600;
+  transition: color 160ms var(--ease), background 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.backlog-pane-tab:hover { color: var(--ink); }
+.backlog-pane-tab.active {
+  color: var(--ink); background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.backlog-pane-body {
+  flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
+}
+/* the roadmap used to be a full page — inside the tab it scrolls in its own pane */
+.backlog-pane-body .roadmap { padding-bottom: 32px; }
+.backlog-pane-body .rm-split { padding-top: 10px; }
+
+/* Git tab: commits + pushes as sibling panes over the same log (#181). The pane
+   switcher reads as a segmented control so it never competes with the tabs above. */
+.git-panel {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+
+.git-panes {
+  flex: none; display: flex; align-items: center; gap: 3px;
+  margin: 12px 32px 0; padding: 3px; align-self: flex-start;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 17, 17, 0.03);
+}
+
+.git-pane-tab {
+  flex: none; min-height: 28px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ink-soft);
+  font-size: 12px; font-weight: 600;
+  transition: color 160ms var(--ease), background 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.git-pane-tab:hover { color: var(--ink); }
+.git-pane-tab.active {
+  color: var(--ink); background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.git-pane-body {
+  flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden;
+}
+
+.board-section-git .shiplog {
   flex: 1; min-height: 0; overflow-y: auto;
 }
 
 @media (max-width: 768px) {
   .board-section-tabs { min-height: 45px; padding: 0 12px; }
   .board-section-tab { min-height: 44px; padding: 0 12px; }
+  .backlog-panes, .git-panes { margin: 10px 16px 0; }
+  .backlog-pane-tab, .git-pane-tab { min-height: 34px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .board-section-tab, .board-section-tab::after { transition: none; }
+  .board-section-tab, .board-section-tab::after, .backlog-pane-tab, .git-pane-tab { transition: none; }
 }
