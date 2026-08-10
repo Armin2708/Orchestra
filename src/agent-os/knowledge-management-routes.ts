@@ -4,6 +4,7 @@ import { AgentOsError, ForbiddenError, ValidationError } from './errors.js'
 import { resolveIdempotencyKey } from './idempotency.js'
 import { objectBody, positiveId } from './json.js'
 import { KnowledgeBenchmarkStore, type KnowledgeBenchmarkEvidence } from './knowledge-benchmark.js'
+import { ingestGraphifyKnowledge } from './knowledge-graphify-ingest.js'
 import {
   KnowledgeManagementService,
   type CreatePromotionInput,
@@ -53,6 +54,18 @@ async (app, options) => {
         positiveId(request.params.boardId, 'board id'),
         optionalText(body.observed_at),
       ) })
+    },
+  )
+
+  app.post<{ Params: { boardId: string }; Body: unknown }>(
+    '/boards/:boardId/knowledge/ingest/graphify',
+    (request, reply) => {
+      requireOperator(request, isOperator)
+      const body = objectBody(request.body)
+      return reply.code(201).send({ result: ingestGraphifyKnowledge(options.db, {
+        board_id: positiveId(request.params.boardId, 'board id'),
+        observed_at: optionalText(body.observed_at),
+      }) })
     },
   )
 

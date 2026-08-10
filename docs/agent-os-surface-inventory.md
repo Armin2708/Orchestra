@@ -237,6 +237,7 @@ PATCH /api/v1/os/discussions/:discussionId/posts/:postId
 POST /api/v1/os/boards/:boardId/discussion-permissions
 POST /api/v1/os/boards/:boardId/discussions
 POST /api/v1/os/boards/:boardId/knowledge/benchmarks
+POST /api/v1/os/boards/:boardId/knowledge/ingest/graphify
 POST /api/v1/os/boards/:boardId/knowledge/promotions
 POST /api/v1/os/boards/:boardId/knowledge/promotions/:promotionId/review
 POST /api/v1/os/boards/:boardId/knowledge/refresh
@@ -474,6 +475,9 @@ POST /api/v1/cards
 POST /api/v1/cards/:id/assign
 POST /api/v1/cards/:id/assign-team
 POST /api/v1/cards/:id/rank
+PATCH /api/v1/cards/:id/milestone
+PATCH /api/v1/cards/:id/funnel
+POST /api/v1/cards/:id/breakdown
 POST /api/v1/teams/:id/hire-member
 POST /api/v1/ideas
 POST /api/v1/ideas/:id/promote

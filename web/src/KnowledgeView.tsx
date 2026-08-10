@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   knowledgeApi,
   type KnowledgeAction,
+  type KnowledgeGraphifySync,
   type KnowledgeItem,
   type KnowledgeManifestEntry,
   type KnowledgePromotion,
@@ -23,6 +24,7 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
   const [reason, setReason] = useState('')
   const [replacement, setReplacement] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [syncOutcome, setSyncOutcome] = useState<string | null>(null)
 
   const load = async () => {
     setItems((current) => ({ ...current, loading: true, error: null }))
@@ -70,6 +72,22 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
     } finally { setBusy(null) }
   }
 
+  const syncGraph = async () => {
+    setBusy('graphify')
+    setSyncOutcome(null)
+    try {
+      const sync: KnowledgeGraphifySync | null = await knowledgeApi.syncGraphify(boardId)
+      setSyncOutcome(sync === null
+        ? 'Graph sync finished without a result.'
+        : sync.hint
+          ?? `Graph synced: ${sync.created_sources} new, ${sync.unchanged_sources} unchanged, `
+          + `${sync.superseded_sources} superseded source(s), ${sync.created_chunks} chunk(s).`)
+      await load()
+    } catch (error) {
+      setSyncOutcome(message(error))
+    } finally { setBusy(null) }
+  }
+
   const decidePromotion = async (promotion: KnowledgePromotion, decision: 'promote' | 'reject') => {
     if (!reason.trim()) return
     setBusy(`${promotion.id}:${decision}`)
@@ -85,9 +103,14 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
       <header className="knowledge-hero">
         <div><p>Repository intelligence</p><h2>Knowledge</h2>
           <span>Cited sources, explicit freshness, reviewable human control.</span></div>
-        <button onClick={async () => { setBusy('refresh'); try { await knowledgeApi.refresh(boardId); await load() } finally { setBusy(null) } }}
-          disabled={busy === 'refresh'}>{busy === 'refresh' ? 'Checking…' : 'Check repository freshness'}</button>
+        <div className="knowledge-hero-actions">
+          <button onClick={() => void syncGraph()} disabled={busy === 'graphify'}>
+            {busy === 'graphify' ? 'Syncing…' : 'Sync project graph'}</button>
+          <button onClick={async () => { setBusy('refresh'); try { await knowledgeApi.refresh(boardId); await load() } finally { setBusy(null) } }}
+            disabled={busy === 'refresh'}>{busy === 'refresh' ? 'Checking…' : 'Check repository freshness'}</button>
+        </div>
       </header>
+      {syncOutcome && <p className="knowledge-empty knowledge-sync-outcome">{syncOutcome}</p>}
 
       <form className="knowledge-search" onSubmit={(event) => { event.preventDefault(); void load() }}>
         <label><span>Search knowledge</span><input value={query} onChange={(event) => setQuery(event.target.value)}
@@ -101,7 +124,10 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
         <div className="knowledge-results" aria-busy={items.loading}>
           <header><h3>Browse</h3><span>{items.data.length} cited chunks</span></header>
           {items.error && <p className="knowledge-error">{items.error}</p>}
-          {!items.loading && items.data.length === 0 && <p className="knowledge-empty">No fresh knowledge matches this view.</p>}
+          {!items.loading && items.data.length === 0 && <div className="knowledge-empty">
+            <p>No fresh knowledge matches this view.</p>
+            <p>To populate the wiki from your project knowledge graph, run <code>/graphify .</code> (or <code>npx graphify analyze .</code>) in the repository, commit <code>graphify-out/</code>, then press “Sync project graph” above. Verified deliveries and promoted decisions also land here automatically.</p>
+          </div>}
           {items.data.map((item) => <KnowledgeCard key={item.citation.chunk_id} item={item}
             active={selected?.citation.chunk_id === item.citation.chunk_id} onSelect={() => setSelected(item)} />)}
         </div>

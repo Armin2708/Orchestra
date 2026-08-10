@@ -52,6 +52,18 @@ export type KnowledgePromotion = {
   promoted_source_count: number
 }
 
+export type KnowledgeGraphifySync = {
+  board_id: number
+  repository_head_sha: string
+  graph_found: boolean
+  report_found: boolean
+  created_sources: number
+  unchanged_sources: number
+  superseded_sources: number
+  created_chunks: number
+  hint: string | null
+}
+
 export type KnowledgeManifestEntry = {
   source_id: string
   chunk_id: string
@@ -88,6 +100,12 @@ export const knowledgeApi = {
     list<KnowledgePromotion>(await api('GET', `/os/boards/${boardId}/knowledge/promotions`), 'promotions'),
   refresh: async (boardId: number): Promise<void> => {
     await api('POST', `/os/boards/${boardId}/knowledge/refresh`, {})
+  },
+  syncGraphify: async (boardId: number): Promise<KnowledgeGraphifySync | null> => {
+    const raw = await api('POST', `/os/boards/${boardId}/knowledge/ingest/graphify`, {})
+    const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+    return record.result && typeof record.result === 'object'
+      ? record.result as KnowledgeGraphifySync : null
   },
   control: async (boardId: number, sourceId: string, input: {
     action: KnowledgeAction
