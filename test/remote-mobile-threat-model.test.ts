@@ -359,7 +359,10 @@ describe('REM-001 remote/mobile threat model', () => {
       "if ((kind === 'ask' || kind === 'reply' || kind === 'task') && toId && maestro?.isHired(toId)) targets.add(toId)",
     )
     expect(read('src/conductor.ts')).toContain('h.push(text, msg.id)')
-    expect(read('src/agent-os/routes.ts')).toContain("'/processes/:id/output', (request) => {")
+    // async since the reader long-polls: the handler parks until the pty writes rather
+    // than answering immediately. The control this pins is the read path itself, not its
+    // synchrony, so the marker tracks the signature instead of forbidding the change.
+    expect(read('src/agent-os/routes.ts')).toContain("'/processes/:id/output', async (request) => {")
     expect(read('src/remote-request-security.ts').toLowerCase())
       .toMatch(/frame-ancestors.*none[\s\S]*x-frame-options/)
     expect(read('src/runtime/drivers/codex.ts')).toContain(

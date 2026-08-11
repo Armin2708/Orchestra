@@ -347,7 +347,11 @@ export class Conductor {
     private readonly agentToken?: string,
     private readonly options: ConductorOptions = {},
   ) {
-    this.transcriptFlushTimer = setInterval(() => this.flushTranscripts(), 3_000)
+    // 8s, not 3s: each pass rewrites the whole 500-line blob for every agent whose
+    // transcript moved, which during an active turn is every pass. Graceful shutdown
+    // and handoff both flush explicitly, so only a SIGKILL loses the tail — and that
+    // path already recovers from the provider's own session file.
+    this.transcriptFlushTimer = setInterval(() => this.flushTranscripts(), 8_000)
     this.transcriptFlushTimer.unref()
   }
 

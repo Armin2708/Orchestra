@@ -27,6 +27,12 @@ import {
   type AgentControlPanelName,
 } from './agentTerminalControls'
 import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
+import { visibleInterval } from './visibleInterval'
+
+// mirrors the daemon's transcript cursor fingerprint (server.ts `lineAnchor`) — both
+// sides must agree or every poll silently degrades to a full-history fetch
+const lineAnchor = (line: { at?: string; kind?: string; text?: string }): string =>
+  `${line.at ?? ''}|${line.kind ?? ''}|${(line.text ?? '').slice(0, 40)}`
 
 // messageId marks a line backed by a board-message row — deletable, unlike transcript lines
 type Line = { at?: string; kind: 'text' | 'status' | 'error' | 'user' | 'tool' | 'tool_result' | 'thinking'; text: string; messageId?: number }
@@ -293,6 +299,10 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   const remoteAccess = useRemoteAccess()
   const hired = agent.kind === 'hired'
   const [lines, setLines] = useState<Line[]>([])
+  // the poller reads the held history to build its delta cursor without re-arming on
+  // every streamed line — a ref keeps that read current without re-running the effect
+  const linesRef = useRef<Line[]>([])
+  linesRef.current = lines
   const [external, setExternal] = useState(false)
   const [turn, setTurn] = useState<{ secs: number; tokens: number; kind?: 'work' | 'compact' } | null>(null)
   const [starFrame, setStarFrame] = useState(0)
@@ -353,10 +363,21 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // tail of their local session transcript (hooks-reported), else the board conversation
   useEffect(() => {
     let alive = true
-    const load = () => api('GET', `/agents/${agent.id}/transcript`).then((r) => {
+    const load = () => {
+      // ask only for what we don't have; the anchor lets the daemon prove the tail we
+      // hold is still its tail, so a rolled-over or cleared transcript resends in full
+      const held = linesRef.current
+      const last = held[held.length - 1]
+      const cursor = last
+        ? `?since=${held.length}&anchor=${encodeURIComponent(lineAnchor(last))}`
+        : ''
+      return api('GET', `/agents/${agent.id}/transcript${cursor}`).then((r) => {
       if (!alive) return
       setExternal(Boolean(r.external))
-      const next: Line[] = r.lines ?? r
+      const served: Line[] = r.lines ?? r
+      const next: Line[] = typeof r.from === 'number' && r.from > 0
+        ? [...held.slice(0, r.from), ...served]
+        : served
       // avoid re-rendering the whole history when nothing changed — keeps scrolling smooth
       setLines((prev) => (prev.length === next.length && prev.every((line, index) =>
         line.kind === next[index]?.kind && line.text === next[index]?.text && line.at === next[index]?.at)) ? prev : [...next])
@@ -386,11 +407,14 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         const next: PendingPermission[] = r.permissions ?? []
         return (prev.length === next.length && prev.every((p, idx) => p.id === next[idx]?.id)) ? prev : next
       })
-    }).catch(() => {})
+      }).catch(() => {})
+    }
     load()
-    // external tails only change as fast as the agent works — poll them gently
-    const t = setInterval(load, hired ? 1000 : 2000)
-    return () => { alive = false; clearInterval(t) }
+    // 2s, not 1s: a delta poll is cheap but the daemon still pays fastify routing and a
+    // board query per request, once per open drawer. External tails only change as fast
+    // as the agent works — poll those gently.
+    const stop = visibleInterval(load, hired ? 2000 : 4000)
+    return () => { alive = false; stop() }
   }, [agent.id, agent.provider, hired])
 
   // interleave local command echo with the streamed transcript by timestamp
