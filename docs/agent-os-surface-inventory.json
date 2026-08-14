@@ -859,7 +859,8 @@
       "serve",
       "stop",
       "token",
-      "uninstall"
+      "uninstall",
+      "deploy"
     ]
   },
   "event_vocabularies": {

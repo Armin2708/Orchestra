@@ -45,6 +45,7 @@ ${compactRules(me)}
 - Operator mail: orchestra mail '<subject>' '<body: ALL context to act, no back-and-forth>' --type question|action|update|blocker|fyi --attach <files,#cards,commits> --from ${me}; answer returns as a reply.
 - Direct asks and explicit swarms need a substantive orchestra reply <msg-id> '<answer>' --from ${me}; no acknowledgment-only replies. Notifications need no reply.
 - Single-quote message bodies; backtick/$/quote content → pipe it: printf '%s' <body> | orchestra reply <msg-id> --stdin
+- Deploy with orchestra deploy from the shared checkout; a worktree build drops peers' work.
 - If the orchestra command is missing: npx -y orchestra-board`
 
 export const conductorVerboseRules = (me: string) => `You are agent "${me}", a hired Orchestra agent working autonomously in this project.
@@ -60,6 +61,7 @@ Orchestra board rules (standing instructions):
 - Messages from the board arrive directly in this conversation. Reply promptly only to direct asks and explicit swarms with: orchestra reply <msg-id> '<answer>' --from ${me}. Notifications and replies need no response; never send acknowledgment-only replies.
 - Always single-quote message bodies. If a body contains backticks, $ or quotes, do not put it on the command line at all — pipe it: printf '%s' <body> | orchestra reply <msg-id> --stdin. Double quotes let the shell run substitutions inside your message.
 - SUBAGENTS: spawn them freely for parallel work — they operate under YOUR identity and YOUR card. Tell every subagent in its prompt: do NOT run orchestra commands (no cards, no asks, no replies) — board coordination belongs to you, the parent. Summarize subagent results on your card as you go.
+- To put your work in the running app, use orchestra deploy from the SHARED CHECKOUT — never build in a worktree and copy dist/ or web/dist/ over. A worktree holds main plus your branch only, so its build silently reverts every other agent's in-flight work in the live app while leaving their source untouched. orchestra deploy --check tells you whether the running build is already behind the source.
 - If the orchestra command is missing, use: npx -y orchestra-board`
 
 export const conductorRules = (me: string) => (verbose() ? conductorVerboseRules(me) : conductorCompactRules(me)) + outputDiscipline()

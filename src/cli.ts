@@ -22,6 +22,7 @@ import {
   createCentralFirstRunDemoLaunchGate,
 } from './first-run-central-integration.js'
 import qrcode from 'qrcode-terminal'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -42,6 +43,9 @@ import {
   type ProtectedCredentialReference,
 } from './operations/credentials.js'
 import { registerSupportCaseCommand } from './support-case-cli.js'
+import {
+  assertDeployable, DEPLOY_TARGETS, deployStatus, describeDeployStatus, repoRoot,
+} from './deploy.js'
 
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
@@ -109,6 +113,48 @@ program.command('restart').description('gracefully restart the daemon — defers
       : 'daemon failed to restart — nothing is listening; run `orchestra serve` and read the error')
     if (!started) process.exitCode = 1
   })
+// Building the deploy anywhere but the shared checkout drops every peer's in-flight work
+// from the running app — see src/deploy.ts for the incident this prevents.
+program.command('deploy').description('build the server and web bundles from this checkout and restart the daemon')
+  .option('--check', 'report whether the running build is older than the source, and change nothing')
+  .option('--no-restart', 'build and verify, but leave the running daemon alone')
+  .action(async (o) => {
+    let root: string
+    try { root = repoRoot() } catch { console.error('deploy must run inside the Orchestra checkout'); process.exit(1) }
+    const before = deployStatus(root)
+    if (o.check) {
+      console.log(describeDeployStatus(before))
+      if (before.linkedWorktree) console.log('this is a linked worktree — deploy from the shared checkout instead')
+      process.exitCode = before.stale ? 1 : 0
+      return
+    }
+    try { assertDeployable(before) } catch (error) {
+      console.error((error as Error).message)
+      process.exit(1)
+    }
+    for (const target of DEPLOY_TARGETS) {
+      process.stdout.write(`building ${target.label}… `)
+      try {
+        execFileSync('npm', target.build, { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] })
+      } catch (error) {
+        console.error(`failed\n${String((error as { stderr?: Buffer }).stderr ?? error).trim()}`)
+        process.exit(1)
+      }
+      console.log('ok')
+    }
+    const after = deployStatus(root)
+    if (after.stale) {
+      console.error(`build finished but the artifacts are still behind the source:\n${describeDeployStatus(after)}`)
+      process.exit(1)
+    }
+    if (o.restart === false) { console.log('built; daemon left running on the previous build'); return }
+    stopDaemon()
+    if (!(await waitForDaemonExit(3_000))) console.log('waiting for the daemon to drain its agents…')
+    const started = await ensureDaemon()
+    console.log(started ? `deployed and restarted on ${baseUrl()}` : 'deployed, but the daemon failed to restart — run `orchestra serve`')
+    if (!started) process.exitCode = 1
+  })
+
 program.command('token').description('print the internal operator transport credential (not used for browser login)')
   .action(() => {
     const scoped = process.env.ORCHESTRA_AGENT_TOKEN?.trim()
