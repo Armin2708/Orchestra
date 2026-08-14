@@ -1,3 +1,5 @@
+import type { Snapshot } from './api'
+
 export const BOARD_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'messages', label: 'Inbox' },
@@ -53,7 +55,7 @@ export function resolveBacklogPane(savedPane: string | null, search = ''): Backl
   return backlogPanes.has(savedPane as BacklogPane) ? savedPane as BacklogPane : 'kanban'
 }
 
-export type PrimaryView = 'board' | 'open-work' | 'settings'
+export type PrimaryView = 'board' | 'settings'
 
 export type StoredNavigation = {
   view: PrimaryView
@@ -61,13 +63,9 @@ export type StoredNavigation = {
 }
 
 const primaryViews = new Set<PrimaryView>([
-  'board', 'open-work', 'settings',
+  'board', 'settings',
 ])
 const boardTabs = new Set<BoardTab>(BOARD_TABS.map((tab) => tab.id))
-const canonicalRouteKeys = [
-  'card', 'agent', 'conversation', 'session', 'job', 'discussion', 'knowledge', 'delivery',
-  'workspace', 'process', 'event', 'review', 'attention', 'approval', 'question', 'conflict',
-] as const
 
 export function resolveStoredNavigation(savedView: string | null, savedBoardTab: string | null): StoredNavigation {
   if (savedView === 'agents') return { view: 'board', boardTab: 'agents' }
@@ -75,6 +73,8 @@ export function resolveStoredNavigation(savedView: string | null, savedBoardTab:
   if (savedView === 'workspaces') return { view: 'board', boardTab: 'workspace' }
   // Timeline and Shipped are Git-tab panes now, not tabs (or, before that, views)
   if (savedView === 'timeline' || savedView === 'shipped') return { view: 'board', boardTab: 'git' }
+  // Advanced/open-work is retired (#210); everything it showed lives on Board tabs now
+  if (savedView === 'open-work') return { view: 'board', boardTab: 'overview' }
   if (savedBoardTab === 'timeline' || savedBoardTab === 'shipped') {
     return {
       view: primaryViews.has(savedView as PrimaryView) ? savedView as PrimaryView : 'board',
@@ -103,11 +103,30 @@ export function resolveLocationNavigation(
   if (requestedView === 'settings') {
     return { ...stored, view: requestedView }
   }
-  if (params.has('section') || canonicalRouteKeys.some((key) => params.has(key))) {
-    return { ...stored, view: 'open-work' }
-  }
   if (requestedView && primaryViews.has(requestedView as PrimaryView)) {
     return { ...stored, view: requestedView as PrimaryView }
   }
   return stored
+}
+
+export type ProjectFocus =
+  | { kind: 'all'; snapshots: readonly Snapshot[]; projectId: null }
+  | { kind: 'project'; snapshots: readonly Snapshot[]; projectId: number }
+  | { kind: 'missing'; snapshots: readonly Snapshot[]; projectId: number }
+
+export function normalizeProjectFocus(raw: string | null): number | 'all' {
+  if (!raw || raw === 'all') return 'all'
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 'all'
+}
+
+export function resolveProjectFocus(
+  snapshots: readonly Snapshot[],
+  focus: number | 'all',
+): ProjectFocus {
+  if (focus === 'all') return { kind: 'all', snapshots, projectId: null }
+  const snapshot = snapshots.find((candidate) => candidate.board.id === focus)
+  return snapshot
+    ? { kind: 'project', snapshots: [snapshot], projectId: focus }
+    : { kind: 'missing', snapshots: [], projectId: focus }
 }

@@ -566,9 +566,6 @@ in `web/src/BoardSection.tsx`.
 | Board → Messages | legacy | `web/src/MessagesView.tsx` |
 | Board → Workspace | canonical | `web/src/WorkspaceTerminal.tsx` |
 | Board → Git (Commits / Pushes) | canonical | `web/src/ShippedView.tsx` |
-| Open Work | canonical | `web/src/OpenWorkView.tsx` |
-| Organization control center | canonical | `web/src/OrganizationCenter.tsx` |
-| Collaborate → Discussions / Knowledge / Teams | canonical | `web/src/CollaborationCenter.tsx` |
 | Roadmap | legacy | `web/src/RoadmapView.tsx` |
 | Settings | infrastructure | `web/src/SettingsView.tsx` |
 | Needs You | canonical | `web/src/NeedsYou.tsx` |

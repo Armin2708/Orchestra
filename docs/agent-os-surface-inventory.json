@@ -983,22 +983,10 @@
       "evidence": "<BoardSection tab={boardTab}"
     },
     {
-      "id": "primary.command-center",
-      "classification": "canonical",
-      "file": "web/src/App.tsx",
-      "evidence": ">Advanced</button>"
-    },
-    {
       "id": "primary.roadmap",
       "classification": "legacy",
       "file": "web/src/BoardSection.tsx",
       "evidence": "<RoadmapView"
-    },
-    {
-      "id": "primary.open-work",
-      "classification": "canonical",
-      "file": "web/src/App.tsx",
-      "evidence": "<OpenWorkView"
     },
     {
       "id": "primary.settings",

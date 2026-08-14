@@ -1,6 +1,6 @@
 import React from 'react'
 import { ProjectGrid } from './Board'
-import { CommandCenterState } from './CommandCenterSurfaces'
+import { StateMessage } from './StateMessage'
 import { MessagesView } from './MessagesView'
 import { ShippedView } from './ShippedView'
 import { Snapshot } from './api'
@@ -129,7 +129,7 @@ export function BoardSection({ tab, snaps, focused, openMessages, onTabChange, o
               ? <React.Suspense fallback={paneLoader('Loading wiki')}>
                   <KnowledgeView boardId={snaps[0].board.id} />
                 </React.Suspense>
-              : <CommandCenterState kind="empty" title="Choose one project" detail="The wiki is scoped to one project. Select a project to browse its knowledge." />
+              : <StateMessage kind="empty" title="Choose one project" detail="The wiki is scoped to one project. Select a project to browse its knowledge." />
           : tab === 'agents'
             ? <React.Suspense fallback={<div className="os-view-loading" aria-label="Loading Teams"><span /><span /><span /></div>}>
                 <TeamsView snaps={snaps} onChange={onChange} />

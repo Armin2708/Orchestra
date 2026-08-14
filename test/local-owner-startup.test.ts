@@ -73,7 +73,7 @@ describe('local-owner first connection', () => {
     expect(connectingReturn).toBeGreaterThan(-1)
     expect(offlineReturn).toBeGreaterThan(connectingReturn)
     for (const heavyMount of [
-      '<RemoteAccessProvider>', '<SystemMeter', '<CommandCenter key=', '<OpenWorkView', '<PhoneRemoteDock',
+      '<RemoteAccessProvider>', '<SystemMeter', '<BoardSection', '<PhoneRemoteDock',
     ]) {
       expect(connectingReturn).toBeLessThan(appSource.indexOf(heavyMount))
       expect(offlineReturn).toBeLessThan(appSource.indexOf(heavyMount))

@@ -1,0 +1,23 @@
+.state-message {
+  display: grid;
+  min-height: 150px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: clamp(18px, 4vw, 42px);
+}
+.state-message-icon { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink-soft); }
+.state-message h2 { font-size: 17px; letter-spacing: -0.02em; }
+.state-message p { max-width: 68ch; color: var(--ink-soft); }
+.state-message > button { border: 1px solid var(--ink); border-radius: 7px; background: var(--ink); color: var(--surface); padding: 7px 11px; }
+.state-message-error,
+.state-message-offline { border-color: #e1b9b4; }
+.state-message-unsupported { border-style: dashed; background: #f4f2ee; }
+
+@media (max-width: 700px) {
+  .state-message { min-height: 190px; grid-template-columns: 1fr; align-content: center; text-align: left; }
+  .state-message > button { min-height: 44px; width: fit-content; }
+}

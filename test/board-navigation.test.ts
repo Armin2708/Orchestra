@@ -31,7 +31,8 @@ describe('board-local navigation', () => {
     expect(resolveStoredNavigation('board', 'shipped')).toEqual({ view: 'board', boardTab: 'git' })
     expect(resolveStoredNavigation('board', 'git')).toEqual({ view: 'board', boardTab: 'git' })
     expect(resolveStoredNavigation('roadmap', 'workspace')).toEqual({ view: 'board', boardTab: 'kanban' })
-    expect(resolveStoredNavigation('open-work', 'overview')).toEqual({ view: 'open-work', boardTab: 'overview' })
+    // Advanced/open-work is retired (#210); everything it showed lives on Board tabs now
+    expect(resolveStoredNavigation('open-work', 'overview')).toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveStoredNavigation('settings', 'overview')).toEqual({ view: 'settings', boardTab: 'overview' })
     // Collaborate/Organization were removed from the More menu; the routes just fall back to board now
     expect(resolveStoredNavigation('organization', 'overview')).toEqual({ view: 'board', boardTab: 'overview' })
@@ -61,18 +62,19 @@ describe('board-local navigation', () => {
     expect(boardSection).toContain('<FunnelView')
   })
 
-  it('opens the simple graph board by default and reserves Advanced for canonical deep links', () => {
+  it('opens the simple graph board by default; Advanced/open-work is retired (#210), canonical deep links resolve on Board tabs', () => {
     expect(resolveLocationNavigation(null, null, '')).toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveLocationNavigation('board', 'messages', '?view=board&board=12'))
       .toEqual({ view: 'board', boardTab: 'messages' })
     expect(resolveLocationNavigation('board', 'overview', '?section=agents&agent=profile-4'))
-      .toEqual({ view: 'open-work', boardTab: 'overview' })
+      .toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveLocationNavigation('board', 'overview', '?card=44'))
-      .toEqual({ view: 'open-work', boardTab: 'overview' })
+      .toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveLocationNavigation('board', 'overview', '?attention=approval-2'))
-      .toEqual({ view: 'open-work', boardTab: 'overview' })
+      .toEqual({ view: 'board', boardTab: 'overview' })
+    // 'open-work' is no longer a valid primary view; the stale param is ignored
     expect(resolveLocationNavigation('board', 'overview', '?view=open-work'))
-      .toEqual({ view: 'open-work', boardTab: 'overview' })
+      .toEqual({ view: 'board', boardTab: 'overview' })
     expect(resolveLocationNavigation('board', 'overview', '?view=settings&card=44'))
       .toEqual({ view: 'settings', boardTab: 'overview' })
   })
@@ -107,16 +109,17 @@ describe('board-local navigation', () => {
     expect(resolveGitPane('commits', 'shipped')).toBe('commits')
   })
 
-  it('keeps the spatial agent graph reachable while preserving the canonical system under Advanced', () => {
+  it('keeps the spatial agent graph reachable now that Advanced/open-work is fully retired (#210)', () => {
     const app = readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8')
     const board = readFileSync(new URL('../web/src/Board.tsx', import.meta.url), 'utf8')
     expect(app).toContain("import { BoardSection } from './BoardSection'")
     expect(app).toContain('<BoardSection')
-    expect(app).toContain("const commandCenterActive = view === 'open-work'")
+    expect(app).not.toContain('commandCenterActive')
+    expect(app).not.toContain("'open-work'")
     expect(app).toContain("focusScope.kind === 'project'")
     expect(app).not.toContain("focusScope.kind === 'focused'")
     expect(app).toContain('>Board</button>')
-    expect(app).toContain('>Advanced</button>')
+    expect(app).not.toContain('>Advanced</button>')
     expect(board).toContain('<NetworkView')
   })
 
