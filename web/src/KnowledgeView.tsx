@@ -55,11 +55,44 @@ function articleText(content: string, subject: string): string {
     const heading = /^#{1,6}\s+(.*)$/.exec(lines[firstIndex].trim())
     if (heading && heading[1].replace(/[*_`]/g, '').trim() === subject) lines.splice(firstIndex, 1)
   }
-  return lines.join('\n')
+  const resolved = lines.join('\n')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, target: string) =>
       /^https?:\/\//.test(target) ? `${label} (${target})` : label)
+  return unwrapParagraphs(resolved)
+}
+
+/**
+ * Docs hard-wrap prose at ~100 columns; joined here so paragraphs flow instead
+ * of breaking mid-sentence. Headings, lists, quotes, tables, and fenced code
+ * keep their own lines.
+ */
+function unwrapParagraphs(text: string): string {
+  const special = (line: string): boolean => {
+    const trimmed = line.trim()
+    return trimmed === ''
+      || /^#{1,6}\s/.test(trimmed)
+      || /^\s*[-*•]\s/.test(line)
+      || /^\s*\d+[.)]\s/.test(line)
+      || trimmed.startsWith('|')
+      || trimmed.startsWith('>')
+      || /^\s*```/.test(line)
+  }
+  const out: string[] = []
+  let inFence = false
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) { inFence = !inFence; out.push(line); continue }
+    if (inFence) { out.push(line); continue }
+    const previous = out[out.length - 1]
+    if (previous !== undefined && !special(line) && !special(previous)) {
+      out[out.length - 1] = `${previous.trimEnd()} ${line.trim()}`
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
 }
 
 export function KnowledgeView({ boardId }: { boardId: number }) {
@@ -172,30 +205,22 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
 
   return (
     <main className="knowledge-view">
-      <header className="knowledge-hero">
-        <div><p>Project wiki</p><h2>Wiki</h2>
-          <span>Cited sources, explicit freshness, reviewable human control.</span></div>
-        <div className="knowledge-hero-actions">
+      <nav className="knowledge-sidebar" aria-label="Wiki subjects">
+        <form className="knowledge-search" onSubmit={(event) => { event.preventDefault(); void load() }}>
+          <input value={query} onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search the wiki…" aria-label="Search the wiki" />
+        </form>
+        <div className="knowledge-tools">
           <button onClick={() => void syncGraph()} disabled={busy === 'graphify'}>
             {busy === 'graphify' ? 'Syncing…' : 'Sync project graph'}</button>
           <button onClick={async () => { setBusy('refresh'); try { await knowledgeApi.refresh(boardId); await load() } finally { setBusy(null) } }}
-            disabled={busy === 'refresh'}>{busy === 'refresh' ? 'Checking…' : 'Check repository freshness'}</button>
+            disabled={busy === 'refresh'}>{busy === 'refresh' ? 'Checking…' : 'Check freshness'}</button>
+          <label className="knowledge-check"><input type="checkbox" checked={includeStale}
+            onChange={(event) => setIncludeStale(event.target.checked)} />Include stale and contradicted</label>
         </div>
-      </header>
-      {syncOutcome && <p className="knowledge-empty knowledge-sync-outcome">{syncOutcome}</p>}
-
-      <form className="knowledge-search" onSubmit={(event) => { event.preventDefault(); void load() }}>
-        <label><span>Search the wiki</span><input value={query} onChange={(event) => setQuery(event.target.value)}
-          placeholder="Architecture, decisions, files, delivery evidence…" /></label>
-        <button>Search</button>
-        <label className="knowledge-check"><input type="checkbox" checked={includeStale}
-          onChange={(event) => setIncludeStale(event.target.checked)} />Include stale and contradicted</label>
-      </form>
-
-      <section className="knowledge-wiki">
-        <nav className="knowledge-index" aria-busy={items.loading} aria-label="Wiki subjects">
-          <header><h3>Subjects</h3><span>{entries.length}</span></header>
-          {items.error && <p className="knowledge-error">{items.error}</p>}
+        {syncOutcome && <p className="knowledge-empty knowledge-sync-outcome">{syncOutcome}</p>}
+        {items.error && <p className="knowledge-error">{items.error}</p>}
+        <div className="knowledge-index" aria-busy={items.loading}>
           {groups.map((group) => {
             const holdsSelection = group.entries.some(
               (entry) => entry.item.citation.chunk_id === selected?.item.citation.chunk_id)
@@ -208,9 +233,10 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
             </details>
           })}
           {!items.loading && entries.length === 0 && <p className="knowledge-empty">No subjects yet.</p>}
-        </nav>
+        </div>
+      </nav>
 
-        <div className="knowledge-reader">
+      <div className="knowledge-reader">
           {pendingReviews.map((review) => <article className="knowledge-queue" key={review.id}>
             <b>{review.kind}</b><strong>{review.title}</strong><code>{review.normalized_locator}</code>
             <span>{review.freshness_reason.replace(/_/g, ' ')}</span>
@@ -255,8 +281,7 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
             <p>To populate it from your project knowledge graph, run <code>/graphify .</code> (or <code>npx graphify analyze .</code>) in the repository, commit <code>graphify-out/</code>, then press “Sync project graph” above. Verified deliveries and promoted decisions also land here automatically.</p>
             <p>Agents can query this wiki over the API: <code>GET /api/v1/os/boards/{boardId}/knowledge?q=…</code></p>
           </div>}
-        </div>
-      </section>
+      </div>
     </main>
   )
 }
