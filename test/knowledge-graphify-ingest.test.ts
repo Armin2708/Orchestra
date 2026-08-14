@@ -83,19 +83,25 @@ function seededRepository(): { root: string; head: string } {
 }
 
 describe('graphify knowledge ingestion', () => {
-  it('reports a bootstrap hint when the repository has no graphify output', () => {
+  it('hints at graphify bootstrap when the graph is missing, still ingesting the README', () => {
     const root = repository()
-    commitFile(root, 'README.md', 'hello')
+    commitFile(root, 'README.md', 'hello project')
     const db = addBoard(root)
     const result = ingestGraphifyKnowledge(db, { board_id: 1, observed_at: AT })
     expect(result).toMatchObject({
       graph_found: false,
       report_found: false,
-      created_sources: 0,
-      created_chunks: 0,
+      docs_found: 1,
+      created_sources: 1,
       hint: GRAPHIFY_BOOTSTRAP_HINT,
     })
-    expect(new KnowledgeManagementService(db).browse({ board_id: 1 })).toEqual([])
+    expect(new KnowledgeManagementService(db).browse({ board_id: 1 }).length).toBe(1)
+
+    const bare = repository()
+    commitFile(bare, '.gitkeep', '')
+    const bareDb = addBoard(bare)
+    const bareResult = ingestGraphifyKnowledge(bareDb, { board_id: 1, observed_at: AT })
+    expect(bareResult).toMatchObject({ created_sources: 0, created_chunks: 0, hint: GRAPHIFY_BOOTSTRAP_HINT })
   })
 
   it('ingests the report and graph into browsable, searchable knowledge', () => {
@@ -127,6 +133,28 @@ describe('graphify knowledge ingestion', () => {
 
     const sections = service.browse({ board_id: 1, query: 'Community Hubs' })
     expect(sections.some((item) => item.citation.start_line !== null)).toBe(true)
+  })
+
+  it('ingests README and docs/*.md as readable documentation articles', () => {
+    const { root } = seededRepository()
+    commitFile(root, 'README.md', '# Orchestra\n\nA live kanban board agents share.\n\n## How it works\n- agents register\n- cards claim paths')
+    commitFile(root, 'docs/getting-started.md', '# Getting started\n\n## Install\nRun npm install.\n\n## First board\nOpen the web UI.')
+    const db = addBoard(root)
+    const result = ingestGraphifyKnowledge(db, { board_id: 1, observed_at: AT })
+    expect(result.docs_found).toBe(2)
+    expect(result.created_sources).toBe(4)
+
+    const items = new KnowledgeManagementService(db).browse({ board_id: 1, limit: 100 })
+    const readme = items.filter((item) => item.citation.source_kind === 'readme')
+    const docs = items.filter((item) => item.citation.source_kind === 'documentation')
+    expect(readme.length).toBeGreaterThanOrEqual(2)
+    expect(docs.length).toBeGreaterThanOrEqual(3)
+    expect(readme[0].citation.title).toBe('Orchestra')
+    expect(docs[0].citation.title).toBe('Getting started')
+    expect(docs.every((item) => item.citation.locator === 'docs/getting-started.md')).toBe(true)
+    expect(items.some((item) => item.content.includes('agents register'))).toBe(true)
+    const searched = new KnowledgeManagementService(db).browse({ board_id: 1, query: 'kanban board' })
+    expect(searched.length).toBeGreaterThanOrEqual(1)
   })
 
   it('is idempotent for unchanged output and supersedes changed output', () => {

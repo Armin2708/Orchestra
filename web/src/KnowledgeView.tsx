@@ -16,8 +16,6 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 
 type WikiEntry = { item: KnowledgeItem; subject: string; group: string }
 
-const GROUP_ORDER = ['Architecture report', 'Decisions & rationale']
-
 function subjectOf(item: KnowledgeItem): string {
   const first = (item.content.split('\n').find((line) => line.trim().length > 0) ?? '').trim()
   if (/^#{1,6}\s/.test(first)) return first.replace(/^#{1,6}\s+/, '')
@@ -28,10 +26,19 @@ function subjectOf(item: KnowledgeItem): string {
 }
 
 function groupOf(item: KnowledgeItem): string {
-  const locator = item.citation.locator
+  const { locator, source_kind, title } = item.citation
   if (locator.endsWith('GRAPH_REPORT.md')) return 'Architecture report'
   if (locator.endsWith('graph.json')) return 'Decisions & rationale'
-  return item.citation.source_kind.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+  if (source_kind === 'readme' || source_kind === 'documentation') return title
+  return source_kind.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+}
+
+/** README first, then docs alphabetically, graph-derived groups at the end. */
+function groupWeight(name: string, entries: WikiEntry[]): number {
+  if (entries[0]?.item.citation.source_kind === 'readme') return 0
+  if (name === 'Architecture report') return 2
+  if (name === 'Decisions & rationale') return 3
+  return 1
 }
 
 /** Tiny markdown-ish renderer: headings, bullet lists, paragraphs, [[wikilinks]]. */
@@ -74,7 +81,7 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
   const load = async () => {
     setItems((current) => ({ ...current, loading: true, error: null }))
     const [knowledge, pending, promotionQueue] = await Promise.allSettled([
-      knowledgeApi.browse(boardId, { query, includeStale, limit: 50 }),
+      knowledgeApi.browse(boardId, { query, includeStale, limit: 400 }),
       knowledgeApi.reviews(boardId),
       knowledgeApi.promotions(boardId),
     ])
@@ -97,11 +104,11 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
   )
   const groups = useMemo(() => {
     const names = [...new Set(entries.map((entry) => entry.group))]
-    names.sort((left, right) => {
-      const l = GROUP_ORDER.indexOf(left); const r = GROUP_ORDER.indexOf(right)
-      return (l === -1 ? GROUP_ORDER.length : l) - (r === -1 ? GROUP_ORDER.length : r) || left.localeCompare(right)
-    })
-    return names.map((name) => ({ name, entries: entries.filter((entry) => entry.group === name) }))
+    const byName = new Map(names.map((name) => [name, entries.filter((entry) => entry.group === name)]))
+    names.sort((left, right) =>
+      groupWeight(left, byName.get(left) ?? []) - groupWeight(right, byName.get(right) ?? [])
+      || left.localeCompare(right))
+    return names.map((name) => ({ name, entries: byName.get(name) ?? [] }))
   }, [entries])
   const selected = useMemo(
     () => entries.find((entry) => entry.item.citation.chunk_id === selectedId) ?? entries[0] ?? null,
@@ -191,12 +198,17 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
         <nav className="knowledge-index" aria-busy={items.loading} aria-label="Wiki subjects">
           <header><h3>Subjects</h3><span>{entries.length}</span></header>
           {items.error && <p className="knowledge-error">{items.error}</p>}
-          {groups.map((group) => <div className="knowledge-index-group" key={group.name}>
-            <p>{group.name}</p>
-            {group.entries.map((entry) => <button type="button" key={entry.item.citation.chunk_id}
-              className={selected?.item.citation.chunk_id === entry.item.citation.chunk_id ? 'active' : ''}
-              onClick={() => setSelectedId(entry.item.citation.chunk_id)}>{entry.subject}</button>)}
-          </div>)}
+          {groups.map((group) => {
+            const holdsSelection = group.entries.some(
+              (entry) => entry.item.citation.chunk_id === selected?.item.citation.chunk_id)
+            return <details className="knowledge-index-group" key={group.name}
+              open={holdsSelection || groups.length <= 4}>
+              <summary>{group.name}<span>{group.entries.length}</span></summary>
+              {group.entries.map((entry) => <button type="button" key={entry.item.citation.chunk_id}
+                className={selected?.item.citation.chunk_id === entry.item.citation.chunk_id ? 'active' : ''}
+                onClick={() => setSelectedId(entry.item.citation.chunk_id)}>{entry.subject}</button>)}
+            </details>
+          })}
           {!items.loading && entries.length === 0 && <p className="knowledge-empty">No subjects yet.</p>}
         </nav>
 

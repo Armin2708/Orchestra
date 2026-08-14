@@ -12,7 +12,7 @@ import type { KnowledgeFreshnessState, KnowledgeSourceKind } from './knowledge-t
 const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 const SOURCE_ID = /^ks_[a-f0-9]{64}$/u
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
-const MAX_SEARCH_RESULTS = 50
+const MAX_SEARCH_RESULTS = 400
 
 export type KnowledgeControlAction =
   | 'accept' | 'edit' | 'pin' | 'reject' | 'supersede' | 'forget'

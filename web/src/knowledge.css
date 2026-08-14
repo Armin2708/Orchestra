@@ -21,7 +21,11 @@
 .knowledge-index>header h3 { margin:0; font-family:Georgia,serif; font-weight:500; }
 .knowledge-index>header span { color:var(--k-muted); font-size:12px; }
 .knowledge-index-group { display:grid; gap:2px; }
-.knowledge-index-group>p { margin:12px 0 4px; }
+.knowledge-index-group>summary { cursor:pointer; margin:10px 0 4px; color:#8b6257; text-transform:uppercase; letter-spacing:.12em; font-size:11px; font-weight:700; list-style:none; display:flex; align-items:baseline; gap:8px; }
+.knowledge-index-group>summary::-webkit-details-marker { display:none; }
+.knowledge-index-group>summary::before { content:'▸'; font-size:9px; }
+.knowledge-index-group[open]>summary::before { content:'▾'; }
+.knowledge-index-group>summary span { color:var(--k-muted); font-weight:400; letter-spacing:0; }
 .knowledge-index-group button { border:1px solid transparent; background:none; text-align:left; padding:6px 10px; border-radius:6px; font-size:13.5px; line-height:1.35; }
 .knowledge-index-group button:hover { background:#fff; }
 .knowledge-index-group button.active { background:#fff; border-color:var(--k-line); box-shadow:0 0 0 2px #8b62571a; color:#8b6257; font-weight:600; }

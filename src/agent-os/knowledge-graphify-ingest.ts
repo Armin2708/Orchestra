@@ -33,6 +33,8 @@ export const GRAPHIFY_BOOTSTRAP_HINT =
 
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
 const COMMIT_40 = /^[a-f0-9]{40}$/u
+const MAX_DOC_FILES = 60
+const MAX_DOC_BYTES = 400_000
 const MAX_REPORT_BYTES = 4_000_000
 const MAX_GRAPH_BYTES = 64_000_000
 const MAX_SECTION_CHUNKS = 60
@@ -50,6 +52,7 @@ export interface GraphifyIngestResult {
   repository_head_sha: string
   graph_found: boolean
   report_found: boolean
+  docs_found: number
   created_sources: number
   unchanged_sources: number
   superseded_sources: number
@@ -77,6 +80,7 @@ interface PlannedChunk {
 }
 
 interface PlannedSource {
+  source_kind: 'graphify' | 'readme' | 'documentation'
   title: string
   locator: string
   content_sha256: string
@@ -252,12 +256,52 @@ function graphChunks(graph: GraphDocument): PlannedChunk[] {
   return chunks
 }
 
+function documentTitle(relative: string, content: string): string {
+  const heading = content.split('\n').find((line) => /^#\s+/.test(line))
+  if (heading) {
+    const text = heading.replace(/^#\s+/, '').replace(/[*_`]/g, '').trim()
+    if (text.length > 0 && text.length <= 120) return text
+  }
+  return path.posix.basename(relative)
+}
+
+/** README + docs/*.md become readable wiki articles, one chunk per section. */
+function repositoryDocumentPlans(root: string): PlannedSource[] {
+  const candidates: string[] = ['README.md']
+  try {
+    const entries = fs.readdirSync(path.join(root, 'docs'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => `docs/${entry.name}`)
+      .sort()
+    candidates.push(...entries)
+  } catch {
+    // repositories without a docs directory still get the README
+  }
+  const plans: PlannedSource[] = []
+  for (const relative of candidates.slice(0, MAX_DOC_FILES)) {
+    const raw = readOutputFile(root, relative, MAX_DOC_BYTES)
+    if (raw === null) continue
+    const text = raw.toString('utf8')
+    const chunks = reportChunks(text)
+    if (chunks.length === 0) continue
+    plans.push({
+      source_kind: relative === 'README.md' ? 'readme' : 'documentation',
+      title: documentTitle(relative, text),
+      locator: relative,
+      content_sha256: sha256hex(raw),
+      chunks,
+    })
+  }
+  return plans
+}
+
 /**
- * Ingests the on-disk graphify output (graph.json + GRAPH_REPORT.md) of a
- * board's repository into the durable knowledge store, so the Wiki has real
- * project knowledge without waiting for discussion or delivery promotions.
- * Re-running is idempotent for unchanged content; changed content creates a
- * new source and marks the previous one superseded.
+ * Ingests the on-disk graphify output (graph.json + GRAPH_REPORT.md) and the
+ * repository's own documentation (README.md, docs/*.md) into the durable
+ * knowledge store, so the Wiki has real project knowledge without waiting for
+ * discussion or delivery promotions. Re-running is idempotent for unchanged
+ * content; changed content creates a new source and marks the previous one
+ * superseded.
  */
 export function ingestGraphifyKnowledge(
   db: Database.Database,
@@ -276,11 +320,13 @@ export function ingestGraphifyKnowledge(
   const graphRaw = readOutputFile(root, GRAPHIFY_GRAPH_LOCATOR, MAX_GRAPH_BYTES)
   const graph = graphRaw === null ? null : parseGraph(graphRaw)
 
-  const planned: PlannedSource[] = []
+  const documents = repositoryDocumentPlans(root)
+  const planned: PlannedSource[] = [...documents]
   if (reportRaw !== null) {
     const chunks = reportChunks(reportRaw.toString('utf8'))
     if (chunks.length > 0) {
       planned.push({
+        source_kind: 'graphify',
         title: 'Graphify: architecture report',
         locator: GRAPHIFY_REPORT_LOCATOR,
         content_sha256: sha256hex(reportRaw),
@@ -290,6 +336,7 @@ export function ingestGraphifyKnowledge(
   }
   if (graphRaw !== null && graph !== null) {
     planned.push({
+      source_kind: 'graphify',
       title: 'Graphify: project graph, decisions and rationale',
       locator: GRAPHIFY_GRAPH_LOCATOR,
       content_sha256: sha256hex(graphRaw),
@@ -302,23 +349,22 @@ export function ingestGraphifyKnowledge(
     repository_head_sha: head,
     graph_found: graphRaw !== null && graph !== null,
     report_found: reportRaw !== null,
+    docs_found: documents.length,
     created_sources: 0,
     unchanged_sources: 0,
     superseded_sources: 0,
     created_chunks: 0,
     hint: null,
   }
-  if (planned.length === 0) {
-    result.hint = GRAPHIFY_BOOTSTRAP_HINT
-    return result
-  }
+  if (!result.graph_found) result.hint = GRAPHIFY_BOOTSTRAP_HINT
+  if (planned.length === 0) return result
 
   const repositoryKey = path.basename(root)
   for (const plan of planned) {
     const normalizedLocator = normalizeKnowledgeLocator(plan.locator)
     const sourceId = knowledgeSourceId({
       repository_key: repositoryKey,
-      source_kind: 'graphify',
+      source_kind: plan.source_kind,
       normalized_locator: normalizedLocator,
       source_revision: head,
       content_sha256: plan.content_sha256,
@@ -329,7 +375,7 @@ export function ingestGraphifyKnowledge(
     }
     const source: KnowledgeSource = {
       id: sourceId,
-      source_kind: 'graphify',
+      source_kind: plan.source_kind,
       trust_class: 'reference',
       title: plan.title,
       locator: plan.locator,
@@ -392,7 +438,7 @@ export function ingestGraphifyKnowledge(
       result.created_chunks += 1
     })
     const previous = db.prepare(`SELECT source.id FROM knowledge_sources source
-      WHERE source.board_id=? AND source.source_kind='graphify'
+      WHERE source.board_id=? AND source.source_kind IN ('graphify', 'readme', 'documentation')
         AND source.normalized_locator=? AND source.id!=? AND source.ingest_state='active'
         AND coalesce((SELECT action FROM knowledge_control_actions action
           WHERE action.board_id=source.board_id AND action.source_id=source.id
