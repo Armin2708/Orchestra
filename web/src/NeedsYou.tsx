@@ -20,18 +20,28 @@ const relativeTime = (value: string) => {
 }
 
 // permission.request stores its detail as a JSON payload {request_id, tool, summary}
-// for the resolver pipeline to parse (src/agent-os/session-tools.ts) - render the
-// human-readable pieces instead of the raw stringified object
+// for the resolver pipeline to parse (src/agent-os/session-tools.ts). The summary is
+// already folded into the title (attentionTitle below), so the detail line only adds
+// the tool name as a short tag instead of repeating it - never the raw stringified object.
 const attentionDetail = (item: AttentionItem): string | null => {
   if (item.kind !== 'permission.request' || !item.detail) return item.detail
   try {
-    const parsed = JSON.parse(item.detail) as { tool?: unknown; summary?: unknown }
-    const tool = typeof parsed.tool === 'string' ? parsed.tool : null
-    const summary = typeof parsed.summary === 'string' ? parsed.summary : null
-    return tool && summary ? `${tool} · ${summary}` : summary ?? tool ?? item.detail
+    const tool = (JSON.parse(item.detail) as { tool?: unknown }).tool
+    return typeof tool === 'string' ? tool : item.detail
   } catch {
     return item.detail
   }
+}
+
+// title has the same raw-dump problem as detail when the server-side summary
+// falls back to `Tool({...})` - collapse it to a plain "Permission needed: Tool"
+const attentionTitle = (item: AttentionItem): string => {
+  if (item.kind !== 'permission.request' || !item.detail) return item.title
+  try {
+    const tool = (JSON.parse(item.detail) as { tool?: unknown }).tool
+    if (typeof tool === 'string' && item.title.includes(`${tool}({`)) return `Permission needed: ${tool}`
+  } catch { /* fall through to the raw title */ }
+  return item.title
 }
 
 export const resolveAttentionItem = async (
@@ -180,7 +190,7 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
                       <span className="os-attention-kind">{item.kind.split('_').join(' ')}</span>
                       <time>{relativeTime(item.created_at)}</time>
                     </div>
-                    <h3>{item.title}</h3>
+                    <h3>{attentionTitle(item)}</h3>
                     {detail && <p>{detail}</p>}
                     <footer>
                       <span>{boardNames.get(item.board_id) ?? `Project ${item.board_id}`}</span>
