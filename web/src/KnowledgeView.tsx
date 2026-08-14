@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { MailLetter } from './MailLetter'
 import {
   knowledgeApi,
   type KnowledgeAction,
@@ -17,7 +18,8 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 type WikiEntry = { item: KnowledgeItem; subject: string; group: string }
 
 function subjectOf(item: KnowledgeItem): string {
-  const first = (item.content.split('\n').find((line) => line.trim().length > 0) ?? '').trim()
+  const plain = (value: string) => value.replace(/[*_`]/g, '').trim()
+  const first = plain(item.content.split('\n').find((line) => line.trim().length > 0) ?? '')
   if (/^#{1,6}\s/.test(first)) return first.replace(/^#{1,6}\s+/, '')
   const dash = first.indexOf(' — ')
   if (dash > 0 && dash < 80) return first.slice(0, dash)
@@ -41,29 +43,23 @@ function groupWeight(name: string, entries: WikiEntry[]): number {
   return 1
 }
 
-/** Tiny markdown-ish renderer: headings, bullet lists, paragraphs, [[wikilinks]]. */
-function renderArticle(content: string): ReactNode[] {
-  const plain = (line: string) => line
+/**
+ * Prepares chunk markdown for the shared MailLetter renderer: resolves
+ * [[wikilinks]] and [text](url) links to plain text (URLs auto-link), and
+ * drops the leading heading when it duplicates the article title above it.
+ */
+function articleText(content: string, subject: string): string {
+  const lines = content.split('\n')
+  const firstIndex = lines.findIndex((line) => line.trim().length > 0)
+  if (firstIndex >= 0) {
+    const heading = /^#{1,6}\s+(.*)$/.exec(lines[firstIndex].trim())
+    if (heading && heading[1].replace(/[*_`]/g, '').trim() === subject) lines.splice(firstIndex, 1)
+  }
+  return lines.join('\n')
     .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
-  const nodes: ReactNode[] = []
-  let list: string[] = []
-  let paragraph: string[] = []
-  const flush = () => {
-    if (list.length) { nodes.push(<ul key={nodes.length}>{list.map((li, i) => <li key={i}>{li}</li>)}</ul>); list = [] }
-    if (paragraph.length) { nodes.push(<p key={nodes.length}>{paragraph.join(' ')}</p>); paragraph = [] }
-  }
-  for (const raw of content.split('\n')) {
-    const line = raw.trimEnd()
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (heading) { flush(); nodes.push(<h4 key={nodes.length}>{plain(heading[2])}</h4>); continue }
-    if (/^[-*]\s+/.test(line.trim())) { if (paragraph.length) flush(); list.push(plain(line.trim().replace(/^[-*]\s+/, ''))); continue }
-    if (line.trim() === '') { flush(); continue }
-    if (list.length) flush()
-    paragraph.push(plain(line.trim()))
-  }
-  flush()
-  return nodes
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, target: string) =>
+      /^https?:\/\//.test(target) ? `${label} (${target})` : label)
 }
 
 export function KnowledgeView({ boardId }: { boardId: number }) {
@@ -238,7 +234,8 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
                 <span>{citation.estimated_tokens.toLocaleString()} tok</span>
               </div>
             </header>
-            <div className="knowledge-article-body">{renderArticle(selected.item.content)}</div>
+            <MailLetter className="knowledge-article-body"
+              text={articleText(selected.item.content, selected.subject)} />
             <footer>
               <small>revision {citation.source_revision.slice(0, 12)} · source {citation.source_content_sha256.slice(0, 12)} · {citation.title}</small>
               <details className="knowledge-curate">
