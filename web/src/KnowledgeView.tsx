@@ -111,8 +111,10 @@ export function KnowledgeView({ boardId }: { boardId: number }) {
     return names.map((name) => ({ name, entries: byName.get(name) ?? [] }))
   }, [entries])
   const selected = useMemo(
-    () => entries.find((entry) => entry.item.citation.chunk_id === selectedId) ?? entries[0] ?? null,
-    [entries, selectedId],
+    () => entries.find((entry) => entry.item.citation.chunk_id === selectedId)
+      ?? groups[0]?.entries[0]
+      ?? null,
+    [entries, groups, selectedId],
   )
 
   const pendingReviews = useMemo(
