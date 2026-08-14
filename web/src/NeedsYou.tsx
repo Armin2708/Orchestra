@@ -19,6 +19,21 @@ const relativeTime = (value: string) => {
   return `${Math.floor(seconds / 86400)}d`
 }
 
+// permission.request stores its detail as a JSON payload {request_id, tool, summary}
+// for the resolver pipeline to parse (src/agent-os/session-tools.ts) - render the
+// human-readable pieces instead of the raw stringified object
+const attentionDetail = (item: AttentionItem): string | null => {
+  if (item.kind !== 'permission.request' || !item.detail) return item.detail
+  try {
+    const parsed = JSON.parse(item.detail) as { tool?: unknown; summary?: unknown }
+    const tool = typeof parsed.tool === 'string' ? parsed.tool : null
+    const summary = typeof parsed.summary === 'string' ? parsed.summary : null
+    return tool && summary ? `${tool} · ${summary}` : summary ?? tool ?? item.detail
+  } catch {
+    return item.detail
+  }
+}
+
 export const resolveAttentionItem = async (
   itemId: OsId,
   readOnly: boolean,
@@ -157,6 +172,7 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
               )}
               {items.map((item) => {
                 const busy = resolving.has(String(item.id))
+                const detail = attentionDetail(item)
                 return (
                   <article className="os-attention-item" key={`${item.board_id}-${item.id}`}>
                     <div className="os-attention-line">
@@ -165,7 +181,7 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
                       <time>{relativeTime(item.created_at)}</time>
                     </div>
                     <h3>{item.title}</h3>
-                    {item.detail && <p>{item.detail}</p>}
+                    {detail && <p>{detail}</p>}
                     <footer>
                       <span>{boardNames.get(item.board_id) ?? `Project ${item.board_id}`}</span>
                       <div>
