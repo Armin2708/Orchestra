@@ -646,6 +646,8 @@
       "GET /api/v1/cards/:id/ledger",
       "GET /api/v1/cards/:id/reviews",
       "PATCH /api/v1/cards/:id",
+      "PATCH /api/v1/cards/:id/milestone",
+      "PATCH /api/v1/cards/:id/funnel",
       "PATCH /api/v1/milestones/:id",
       "POST /api/v1/boards/:id/hire",
       "POST /api/v1/boards/:id/next",
@@ -653,6 +655,7 @@
       "POST /api/v1/boards/resolve",
       "POST /api/v1/cards",
       "POST /api/v1/cards/:id/assign",
+      "POST /api/v1/cards/:id/breakdown",
       "POST /api/v1/cards/:id/rank",
       "POST /api/v1/ideas",
       "POST /api/v1/ideas/:id/promote",
@@ -829,7 +832,9 @@
       "team design",
       "team hire-member",
       "team assign",
-      "team update"
+      "team update",
+      "breakdown",
+      "funnel"
     ],
     "infrastructure": [
       "hook",

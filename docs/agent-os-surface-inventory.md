@@ -475,6 +475,9 @@ POST /api/v1/cards
 POST /api/v1/cards/:id/assign
 POST /api/v1/cards/:id/assign-team
 POST /api/v1/cards/:id/rank
+PATCH /api/v1/cards/:id/milestone
+PATCH /api/v1/cards/:id/funnel
+POST /api/v1/cards/:id/breakdown
 POST /api/v1/teams/:id/hire-member
 POST /api/v1/ideas
 POST /api/v1/ideas/:id/promote
