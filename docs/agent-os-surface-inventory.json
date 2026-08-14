@@ -989,34 +989,16 @@
       "evidence": ">Advanced</button>"
     },
     {
-      "id": "command-center.outcomes",
-      "classification": "canonical",
-      "file": "web/src/App.tsx",
-      "evidence": "<OutcomeDashboard boardId={focus} />"
-    },
-    {
       "id": "primary.roadmap",
       "classification": "legacy",
-      "file": "web/src/App.tsx",
-      "evidence": ">Roadmap</button>"
+      "file": "web/src/BoardSection.tsx",
+      "evidence": "<RoadmapView"
     },
     {
       "id": "primary.open-work",
       "classification": "canonical",
       "file": "web/src/App.tsx",
       "evidence": "<OpenWorkView"
-    },
-    {
-      "id": "primary.organization",
-      "classification": "canonical",
-      "file": "web/src/App.tsx",
-      "evidence": ">Organization</button>"
-    },
-    {
-      "id": "primary.collaboration",
-      "classification": "canonical",
-      "file": "web/src/App.tsx",
-      "evidence": ">Collaborate</button>"
     },
     {
       "id": "primary.settings",
@@ -1127,22 +1109,16 @@
       "evidence": "Open full Trackbook"
     },
     {
-      "id": "collaboration.discussions",
-      "classification": "canonical",
-      "file": "web/src/CollaborationCenter.tsx",
-      "evidence": "<ProjectDiscussionCenter"
-    },
-    {
       "id": "collaboration.knowledge",
       "classification": "canonical",
-      "file": "web/src/CollaborationCenter.tsx",
+      "file": "web/src/BoardSection.tsx",
       "evidence": "<KnowledgeView"
     },
     {
       "id": "collaboration.teams",
       "classification": "canonical",
-      "file": "web/src/CollaborationCenter.tsx",
-      "evidence": "<TeamPlanningVisualization"
+      "file": "web/src/BoardSection.tsx",
+      "evidence": "<TeamsView"
     },
     {
       "id": "phone.pwa",
