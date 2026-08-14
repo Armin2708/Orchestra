@@ -57,6 +57,7 @@ function articleText(content: string, subject: string): string {
   }
   const resolved = lines.join('\n')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[\s*\]\([^)]*\)/g, '')
     .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, target: string) =>
