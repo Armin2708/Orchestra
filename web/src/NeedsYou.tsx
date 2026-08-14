@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ApiError } from './api'
 import { AttentionItem, osApi, type OsId } from './osApi'
 import { OsIcon } from './OsIcon'
@@ -121,7 +122,7 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
         {items.length > 0 && <span className="os-attention-count">{items.length}</span>}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div className="os-attention-layer">
           <button className="os-attention-scrim" onClick={close} aria-label="Close Needs You" />
           <aside ref={drawerRef} className="os-attention-drawer" role="dialog" aria-modal="true" aria-labelledby="needs-you-title" tabIndex={-1}>
@@ -184,7 +185,8 @@ export function NeedsYou({ boards, onOpen, readOnly = false }: {
               })}
             </div>
           </aside>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )
