@@ -1,237 +1,14 @@
 import React, { useState } from 'react'
-import { api, Agent, Card, Idea, Milestone, Snapshot, Thread, agentInk, agentWash, initials, timeAgo } from './api'
+import { api, Agent, Card, Idea, Snapshot, Thread, timeAgo } from './api'
 import { AgentTerminal } from './AgentTerminal'
-import { STATUS } from './Board'
+import { BoardCanvas } from './Board'
+import { CardDrawer } from './CardDrawer'
+import { RoadmapBoard } from './RoadmapCanvas'
+import './roadmap.css'
 
-const ORDER = ['backlog', 'in_progress', 'blocked', 'review', 'done']
-
-function MilestoneQuest({ m, cards, agents, onChange }:
-  { m: Milestone; cards: Card[]; agents: { id: number; name: string }[]; onChange: () => void }) {
-  const [stepTitle, setStepTitle] = useState('')
-  const steps = cards.filter((c) => c.milestone_id === m.id)
-    .sort((a, b) => (a.step_order ?? 0) - (b.step_order ?? 0))
-  const done = steps.filter((s) => s.column === 'done').length
-  const pct = steps.length ? Math.round((done / steps.length) * 100) : 0
-  const complete = steps.length > 0 && done === steps.length
-
-  const addStep = async () => {
-    if (!stepTitle.trim()) return
-    await api('POST', `/milestones/${m.id}/steps`, { title: stepTitle.trim() })
-    setStepTitle(''); onChange()
-  }
-  const assign = async (cardId: number, agent: string) => {
-    if (!agent) return
-    try { await api('POST', `/cards/${cardId}/assign`, { agent }) } catch { /* locked */ }
-    onChange()
-  }
-  const approve = async (cardId: number) => {
-    try { await api('POST', `/cards/${cardId}/approve`, {}) } catch { /* raced */ }
-    onChange()
-  }
-  const sendBack = async (cardId: number) => {
-    const note = window.prompt('Send back with a note for the agent:')
-    if (!note?.trim()) return
-    try { await api('POST', `/cards/${cardId}/send-back`, { note: note.trim() }) } catch { /* raced */ }
-    onChange()
-  }
-
-  let blocked = false
-  return (
-    <div className={complete ? 'quest complete' : 'quest'}>
-      <div className="quest-head">
-        <span className="quest-flag">{complete ? '🏆' : '⛳'}</span>
-        <div className="quest-title">
-          <h4>{m.title}</h4>
-          {m.description && <p>{m.description}</p>}
-        </div>
-        {complete && <span className="quest-badge">Complete!</span>}
-        <button className="icon-x" title="Delete milestone (steps become normal tickets)"
-          onClick={async () => { await api('DELETE', `/milestones/${m.id}`); onChange() }}>×</button>
-      </div>
-      <div className="quest-progress">
-        <div className="quest-track"><div className="quest-fill" style={{ width: `${pct}%` }} /></div>
-        <span className="quest-pct">{done}/{steps.length}</span>
-      </div>
-      <ol className="quest-steps">
-        {steps.map((s) => {
-          const locked = blocked
-          if (s.column !== 'done') blocked = true
-          const state = s.column === 'done' ? 'done' : s.column === 'review' ? 'review' : locked ? 'chained' : s.column === 'in_progress' ? 'active' : 'open'
-          return (
-            <li key={s.id} className={`quest-step ${state}`}>
-              <span className="step-mark">
-                {state === 'done' ? '✓' : state === 'review' ? '👀' : state === 'chained' ? '🔗' : state === 'active' ? '●' : '○'}
-              </span>
-              <span className="step-title">{s.title}</span>
-              {s.owner && <span className="owner"><i className="avatar mini" style={{ background: agentWash(s.owner), color: agentInk(s.owner) }}>{initials(s.owner)}</i>{s.owner}</span>}
-              {state === 'review' && (
-                <span className="review-actions">
-                  <button className="btn primary review-approve" onClick={() => approve(s.id)}>Approve</button>
-                  <button className="btn ghost review-sendback" onClick={() => sendBack(s.id)}>Send back</button>
-                </span>
-              )}
-              {state !== 'done' && state !== 'review' && agents.length > 0 && (
-                <select className="assign-select" defaultValue=""
-                  onChange={(e) => { assign(s.id, e.target.value); e.target.value = '' }}>
-                  <option value="" disabled>assign…</option>
-                  {agents.filter((a) => a.name !== s.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
-                </select>
-              )}
-              {locked && steps.some((p) => (p.step_order ?? 0) < (s.step_order ?? 0) && p.column === 'review')
-                ? <span className="step-lockhint">unlocks after review approval</span>
-                : locked && !s.owner && <span className="step-lockhint">coordinates with earlier steps</span>}
-            </li>
-          )
-        })}
-      </ol>
-      <div className="quest-add">
-        <input value={stepTitle} placeholder="+ add a step (unlocks in order)"
-          onChange={(e) => setStepTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') addStep() }} />
-      </div>
-    </div>
-  )
-}
-
-function ProjectRoadmap({ snap, onChange, onOpenAgent, hideBrainstorm = false }: { snap: Snapshot; onChange: () => void; onOpenAgent: (a: Agent) => void; hideBrainstorm?: boolean }) {
-  const [text, setText] = useState('')
-  const [openIdea, setOpenIdea] = useState<Idea | null>(null)
-  const [brainstorm, setBrainstorm] = useState('')
-  const [briefing, setBriefing] = useState(false)
-  const allLive = snap.agents.filter((a) => a.status !== 'gone')
-  const strategist = allLive.find((a) => a.name === 'strategist')
-  const agents = allLive.filter((a) => a.name !== 'strategist' && !a.name.startsWith('auditor-')) // the strategist writes tickets, it doesn't take them
-
-  const askStrategist = async () => {
-    if (!brainstorm.trim() || briefing) return
-    setBriefing(true)
-    try {
-      let agent = strategist
-      if (!agent) agent = await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
-      await api('POST', `/agents/${agent!.id}/task`, {
-        text: `Brainstorm request from the roadmap: "${brainstorm.trim()}". Research the repo as needed, think with me, and add your ideas to the roadmap with orchestra idea (or tickets in your prompt format when they're well-defined). Finish with a one-line summary.`,
-      })
-      setBrainstorm('')
-      onOpenAgent(agent!) // watch the whole conversation in its console
-    } finally { setBriefing(false); onChange() }
-  }
-
-  const add = async () => {
-    if (!text.trim()) return
-    await api('POST', '/ideas', { board_id: snap.board.id, text: text.trim() })
-    setText(''); onChange()
-  }
-  const assign = async (cardId: number, agent: string) => {
-    if (!agent) return
-    await api('POST', `/cards/${cardId}/assign`, { agent })
-    onChange()
-  }
-
-  const tickets = snap.cards.filter((c) => !c.milestone_id).sort((a, b) => ORDER.indexOf(a.column) - ORDER.indexOf(b.column))
-
-  return (
-    <section className="rm-project">
-      <h2>{snap.board.name}</h2>
-
-      {!hideBrainstorm && <div className="rm-brainstorm">
-        <span className="rm-spark">✻</span>
-        <input value={brainstorm} aria-label={`Brainstorm for ${snap.board.name}`}
-          placeholder={strategist ? `Ask ${'strategist'} to brainstorm — it researches the repo and adds ideas below` : 'Ask Claude to brainstorm — hires a strategist agent for this project'}
-          onChange={(e) => setBrainstorm(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') askStrategist() }} />
-        {strategist && (
-          <button className="agent-chip" title="Open the strategist's console"
-            onClick={() => onOpenAgent(strategist)}>
-            <i className="avatar mini" style={{ background: agentWash(strategist.name), color: agentInk(strategist.name) }}>{initials(strategist.name)}</i>
-            console
-          </button>
-        )}
-        <button className="btn primary" disabled={briefing} onClick={askStrategist}>
-          {briefing ? 'Briefing…' : strategist?.status === 'active' ? 'Working…' : 'Brainstorm'}
-        </button>
-      </div>}
-
-      <div className="rm-composer">
-        <textarea value={text} rows={2} aria-label={`Add an idea to ${snap.board.name}`}
-          placeholder={'Or jot an idea yourself — first line becomes the ticket title, the rest its scope.\nEnter to save, Shift+Enter for a new line.'}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add() } }} />
-      </div>
-
-      <h3 className="rm-h">Milestones <span className="rm-count">{(snap.milestones ?? []).length}</span></h3>
-      <NewMilestone boardId={snap.board.id} onChange={onChange} />
-      <div className="quests">
-        {(snap.milestones ?? []).map((m) => (
-          <MilestoneQuest key={m.id} m={m} cards={snap.cards} agents={agents} onChange={onChange} />
-        ))}
-      </div>
-
-      <h3 className="rm-h">Ideas <span className="rm-count">{(snap.ideas ?? []).length}</span></h3>
-      <div className="rm-ideas">
-        {(snap.ideas ?? []).map((i) => {
-          const auditor = snap.agents.find((a) => a.name === `auditor-${i.id}` && a.status !== 'gone')
-          return (
-          <button key={i.id} className={auditor ? 'rm-idea auditing' : 'rm-idea'} onClick={() => setOpenIdea(i)}>
-            <p className="rm-idea-title">{i.text.split('\n')[0]}</p>
-            {i.text.includes('\n') && <p className="rm-idea-desc">{i.text.split('\n').slice(1).join(' ')}</p>}
-            {auditor
-              ? <span className="rm-idea-auditing"><span className="rm-idea-star">✳</span> auditing…</span>
-              : <span className="rm-idea-open">open ›</span>}
-          </button>
-          )
-        })}
-        {(snap.ideas ?? []).length === 0 && <p className="col-empty">No ideas yet — brainstorm above.</p>}
-      </div>
-      {openIdea && <IdeaModal idea={(snap.ideas ?? []).find((x) => x.id === openIdea.id) ?? openIdea}
-        boardId={snap.board.id}
-        auditor={snap.agents.find((a) => a.name === `auditor-${openIdea.id}` && a.status !== 'gone')}
-        onWatch={onOpenAgent}
-        onClose={() => setOpenIdea(null)} onChange={onChange} />}
-
-      <h3 className="rm-h">Tickets <span className="rm-count">{tickets.length}</span></h3>
-      <div className="rm-tickets">
-        {tickets.map((c) => {
-          const st = STATUS[c.column] ?? STATUS.backlog
-          return (
-            <div key={c.id} className={`rm-ticket ${c.column === 'done' ? 'is-done' : ''}`}>
-              <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{st.label}</span>
-              <span className="rm-ticket-title" title={c.description || c.title}>{c.title}</span>
-              {c.owner
-                ? <span className="owner"><i className="avatar mini" style={{ background: agentWash(c.owner), color: agentInk(c.owner) }}>{initials(c.owner)}</i>{c.owner}</span>
-                : <span className="owner unowned">unassigned</span>}
-              <time>{timeAgo(c.updated_at)}</time>
-              {agents.length > 0 && (
-                <select className="assign-select" defaultValue="" aria-label={`Assign ${c.title}`}
-                  onChange={(e) => { assign(c.id, e.target.value); e.target.value = '' }}>
-                  <option value="" disabled>assign…</option>
-                  {agents.filter((a) => a.name !== c.owner).map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
-                </select>
-              )}
-            </div>
-          )
-        })}
-        {tickets.length === 0 && <p className="col-empty">No tickets yet — promote an idea.</p>}
-      </div>
-    </section>
-  )
-}
-
-function NewMilestone({ boardId, onChange }: { boardId: number; onChange: () => void }) {
-  const [title, setTitle] = useState('')
-  const add = async () => {
-    if (!title.trim()) return
-    await api('POST', '/milestones', { board_id: boardId, title: title.trim() })
-    setTitle(''); onChange()
-  }
-  return (
-    <div className="quest-new">
-      <input value={title} aria-label="Create a new milestone"
-        placeholder="🎯 New milestone — a major goal made of ordered steps"
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') add() }} />
-    </div>
-  )
-}
+// The roadmap: milestones as stations on one left-to-right line, drawn on the same canvas
+// as the Overview board. The strategist dock on the right is where a plan gets written;
+// the canvas on the left is where it gets ordered.
 
 function IdeaModal({ idea, boardId, auditor, onWatch, onClose, onChange }:
   { idea: Idea; boardId: number; auditor?: Agent; onWatch?: (a: Agent) => void; onClose: () => void; onChange: () => void }) {
@@ -289,78 +66,127 @@ const MODES: { key: string; label: string; prompt: string }[] = [
   { key: 'refine', label: '✎ Refine', prompt: 'MODE: Refine. Ask me which ticket to refine (id or title), read the board, then rewrite it with orchestra card update in your prompt format and summarize the changes.' },
 ]
 
-function BrainstormWorkspace({ snap, onChange }: { snap: Snapshot; onChange: () => void }) {
+function BrainstormDock({ snap, onChange, onCollapse }: {
+  snap: Snapshot; onChange: () => void; onCollapse: () => void
+}) {
   const [busy, setBusy] = useState(false)
+  const [idea, setIdea] = useState('')
   const strategist = snap.agents.find((a) => a.name === 'strategist' && a.status !== 'gone')
 
-  const ensureStrategist = async (): Promise<Agent> => {
-    if (strategist) return strategist
-    return api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
-  }
   const startMode = async (prompt: string) => {
     if (busy) return
     setBusy(true)
     try {
-      const agent = await ensureStrategist()
+      const agent = strategist
+        ?? await api('POST', `/boards/${snap.board.id}/hire`, { name: 'strategist', role: 'strategist' })
       await api('POST', `/agents/${agent.id}/task`, { text: prompt })
     } finally { setBusy(false); onChange() }
   }
+  const jot = async () => {
+    if (!idea.trim()) return
+    await api('POST', '/ideas', { board_id: snap.board.id, text: idea.trim() })
+    setIdea(''); onChange()
+  }
 
   return (
-    <div className="rm-right">
-      <div className="rm-modes">
+    <aside className="rmap-dock">
+      <header className="rmap-dock-head">
+        <span className="rmap-dock-title">✻ Plan with the strategist</span>
+        <button className="rmap-icon" title="Hide the strategist" onClick={onCollapse}>›</button>
+      </header>
+      <div className="rmap-modes">
         {MODES.map((m) => (
           <button key={m.key} className="mode-chip" disabled={busy} onClick={() => startMode(m.prompt)}>{m.label}</button>
         ))}
+      </div>
+      <div className="rmap-jot">
+        <textarea value={idea} rows={2} aria-label="Jot an idea"
+          placeholder={'Jot an idea — first line is the title, the rest its scope.\nEnter to save.'}
+          onChange={(e) => setIdea(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); jot() } }} />
       </div>
       {strategist ? (
         <AgentTerminal embedded agent={strategist} boardId={snap.board.id}
           threads={snap.threads as Thread[]} cards={snap.cards}
           onClose={() => {}} onChange={onChange} />
       ) : (
-        <div className="rm-placeholder">
-          <p><span className="rm-spark">✻</span> Pick a mode above to wake the strategist.</p>
-          <p className="rm-placeholder-sub">It researches this repo, brainstorms with you, and builds the roadmap on the left as you talk.</p>
+        <div className="rmap-dock-empty">
+          <p><span className="rm-spark">✻</span> Pick a mode to wake the strategist.</p>
+          <p className="rmap-dock-sub">It researches this repo, plans with you, and builds the roadmap on the left as you talk.</p>
         </div>
       )}
-    </div>
+    </aside>
   )
 }
 
-export function RoadmapView({ snaps, focused = false, onChange }: { snaps: Snapshot[]; focused?: boolean; onChange: () => void }) {
+export function RoadmapView({ snaps, focused = false, onChange }: {
+  snaps: Snapshot[]; focused?: boolean; onChange: () => void
+}) {
+  const [openCard, setOpenCard] = useState<{ card: Card; boardId: number } | null>(null)
+  const [openIdea, setOpenIdea] = useState<{ idea: Idea; boardId: number } | null>(null)
   const [term, setTerm] = useState<{ agent: Agent; boardId: number } | null>(null)
+  const [dockOpen, setDockOpen] = useState(() => {
+    try { return localStorage.getItem('orchestra-roadmap-dock') !== 'closed' } catch { return true }
+  })
+  const setDock = (open: boolean) => {
+    setDockOpen(open)
+    try { localStorage.setItem('orchestra-roadmap-dock', open ? 'open' : 'closed') } catch { /* private mode */ }
+  }
+
+  const single = snaps.length === 1 ? snaps[0] : null
+  const canvasKey = single ? `roadmap-${single.board.id}` : 'roadmap-all'
+  // the drawer and the terminal follow the live snapshot, so a refresh doesn't stale them
+  const liveCard = openCard
+    ? snaps.find((s) => s.board.id === openCard.boardId)?.cards.find((c) => c.id === openCard.card.id) ?? openCard.card
+    : null
   const liveAgent = term
     ? snaps.find((s) => s.board.id === term.boardId)?.agents.find((a) => a.id === term.agent.id) ?? term.agent
     : null
 
-  if (focused && snaps.length === 1) {
-    const s = snaps[0]
-    return (
-      <main className="rm-split">
-        <div className="rm-left">
-          <ProjectRoadmap snap={s} onChange={onChange} hideBrainstorm
-            onOpenAgent={(a) => setTerm({ agent: a, boardId: s.board.id })} />
-        </div>
-        <BrainstormWorkspace snap={s} onChange={onChange} />
-        {term && liveAgent && <AgentTerminal
-          agent={liveAgent} boardId={term.boardId}
-          threads={(snaps.find((x) => x.board.id === term.boardId)?.threads ?? []) as Thread[]}
-          cards={snaps.find((x) => x.board.id === term.boardId)?.cards ?? []}
-          onClose={() => setTerm(null)} onChange={onChange} />}
-      </main>
-    )
-  }
-
   return (
-    <main className={focused ? 'roadmap focused' : 'roadmap'}>
-      {snaps.map((s) => <ProjectRoadmap key={s.board.id} snap={s} onChange={onChange}
-        onOpenAgent={(a) => setTerm({ agent: a, boardId: s.board.id })} />)}
-      {term && liveAgent && <AgentTerminal
-        agent={liveAgent}
-        boardId={term.boardId}
-        threads={(snaps.find((s) => s.board.id === term.boardId)?.threads ?? []) as Thread[]}
-        cards={snaps.find((s) => s.board.id === term.boardId)?.cards ?? []}
-        onClose={() => setTerm(null)} onChange={onChange} />}
-    </main>
+    <div className={`rmap-wrap ${dockOpen && single ? 'with-dock' : ''}`}>
+      <div className="rmap-canvas">
+        <BoardCanvas focused={focused || snaps.length === 1} storageKey={canvasKey}>
+          {(viewport) => snaps.map((s) => (
+            <RoadmapBoard key={s.board.id} snap={s} viewport={viewport}
+              onOpenCard={(c) => setOpenCard({ card: c, boardId: s.board.id })}
+              onOpenIdea={(i) => setOpenIdea({ idea: i, boardId: s.board.id })}
+              onChange={onChange} />
+          ))}
+        </BoardCanvas>
+        {single && !dockOpen && (
+          <button className="rmap-dock-pill" title="Plan with the strategist" onClick={() => setDock(true)}>
+            ✻ Strategist
+          </button>
+        )}
+      </div>
+
+      {single && dockOpen && (
+        <BrainstormDock snap={single} onChange={onChange} onCollapse={() => setDock(false)} />
+      )}
+
+      {openCard && liveCard && (
+        <CardDrawer card={liveCard} boardId={openCard.boardId}
+          agents={(snaps.find((s) => s.board.id === openCard.boardId)?.agents ?? [])
+            .filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-'))}
+          onClose={() => setOpenCard(null)} onChange={onChange} />
+      )}
+      {openIdea && (
+        <IdeaModal
+          idea={(snaps.find((s) => s.board.id === openIdea.boardId)?.ideas ?? [])
+            .find((x) => x.id === openIdea.idea.id) ?? openIdea.idea}
+          boardId={openIdea.boardId}
+          auditor={snaps.find((s) => s.board.id === openIdea.boardId)?.agents
+            .find((a) => a.name === `auditor-${openIdea.idea.id}` && a.status !== 'gone')}
+          onWatch={(a) => setTerm({ agent: a, boardId: openIdea.boardId })}
+          onClose={() => setOpenIdea(null)} onChange={onChange} />
+      )}
+      {term && liveAgent && (
+        <AgentTerminal agent={liveAgent} boardId={term.boardId}
+          threads={(snaps.find((s) => s.board.id === term.boardId)?.threads ?? []) as Thread[]}
+          cards={snaps.find((s) => s.board.id === term.boardId)?.cards ?? []}
+          onClose={() => setTerm(null)} onChange={onChange} />
+      )}
+    </div>
   )
 }

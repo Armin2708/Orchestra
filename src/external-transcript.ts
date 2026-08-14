@@ -79,15 +79,11 @@ export function parseTranscriptEntry(entry: unknown): ExternalTranscriptLine[] {
   return []
 }
 
-/**
- * A hired session's own transcript file — Claude Code stores it under
- * ~/.claude/projects/<cwd with [/.] replaced by '-'>/<session>.jsonl. This is
- * the ground truth the SDK resumes from, so it recovers drawer history that
- * predates the daemon's agent_transcripts store.
- */
-export function loadSdkSessionTranscript(cwd: string, sessionId: string, limit = MAX_LINES): ExternalTranscriptLine[] {
-  if (!/^[0-9a-f-]{36}$/i.test(sessionId) || !path.isAbsolute(cwd)) return []
-  const file = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[/.]/g, '-'), `${sessionId}.jsonl`)
+function readTranscriptTail(
+  file: string,
+  parse: (entry: unknown) => ExternalTranscriptLine[],
+  limit: number,
+): ExternalTranscriptLine[] {
   const real = validTranscriptPath(file)
   if (!real) return []
   try {
@@ -106,10 +102,68 @@ export function loadSdkSessionTranscript(cwd: string, sessionId: string, limit =
     for (const row of rows) {
       const trimmed = row.trim()
       if (!trimmed) continue
-      try { lines.push(...parseTranscriptEntry(JSON.parse(trimmed))) } catch { /* partial write */ }
+      try { lines.push(...parse(JSON.parse(trimmed))) } catch { /* partial write */ }
     }
     return lines.slice(-limit)
   } catch { return [] }
+}
+
+/**
+ * A hired session's own transcript file — Claude Code stores it under
+ * ~/.claude/projects/<cwd with [/.] replaced by '-'>/<session>.jsonl. This is
+ * the ground truth the SDK resumes from, so it recovers drawer history that
+ * predates the daemon's agent_transcripts store.
+ */
+export function loadSdkSessionTranscript(cwd: string, sessionId: string, limit = MAX_LINES): ExternalTranscriptLine[] {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId) || !path.isAbsolute(cwd)) return []
+  const file = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[/.]/g, '-'), `${sessionId}.jsonl`)
+  return readTranscriptTail(file, parseTranscriptEntry, limit)
+}
+
+// Qwen Code chat recordings use gemini-cli style `message.parts` entries rather
+// than Claude content blocks; telemetry/system entries carry no conversation.
+export function parseQwenTranscriptEntry(entry: unknown): ExternalTranscriptLine[] {
+  if (!entry || typeof entry !== 'object') return []
+  const e = entry as Record<string, any>
+  const at = typeof e.timestamp === 'string' ? e.timestamp : new Date().toISOString()
+  const parts = Array.isArray(e.message?.parts) ? e.message.parts : []
+  const out: ExternalTranscriptLine[] = []
+  if (e.type === 'user') {
+    for (const part of parts) {
+      if (typeof part?.text === 'string' && part.text.trim()) out.push({ at, kind: 'user', text: part.text })
+    }
+    return out
+  }
+  if (e.type === 'assistant') {
+    for (const part of parts) {
+      if (typeof part?.text === 'string' && part.text.trim())
+        out.push({ at, kind: part.thought ? 'thinking' : 'text', text: part.text })
+      else if (part?.functionCall)
+        out.push({ at, kind: 'tool', text: toolSummary(part.functionCall.name, part.functionCall.args) })
+    }
+    return out
+  }
+  if (e.type === 'tool_result') {
+    for (const part of parts) {
+      const response = part?.functionResponse?.response
+      if (response !== undefined)
+        out.push({ at, kind: 'tool_result', text: resultSummary(typeof response === 'string' ? response : response?.output) })
+    }
+    return out
+  }
+  return []
+}
+
+/**
+ * Qwen Code records resumed sessions under
+ * ~/.qwen/projects/<realpath cwd with [/.] replaced by '-'>/chats/<session>.jsonl.
+ */
+export function loadQwenSessionTranscript(cwd: string, sessionId: string, limit = MAX_LINES): ExternalTranscriptLine[] {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId) || !path.isAbsolute(cwd)) return []
+  let resolved: string
+  try { resolved = fs.realpathSync(cwd) } catch { return [] }
+  const file = path.join(os.homedir(), '.qwen', 'projects', resolved.replace(/[/.]/g, '-'), 'chats', `${sessionId}.jsonl`)
+  return readTranscriptTail(file, parseQwenTranscriptEntry, limit)
 }
 
 // hook-supplied paths are authenticated but still external input — only ever read

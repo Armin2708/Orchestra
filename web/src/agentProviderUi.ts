@@ -61,6 +61,7 @@ export function providerLabel(provider?: string | null): string {
   const id = normalizeProvider(provider)
   if (id === 'claude') return 'Claude'
   if (id === 'codex') return 'Codex'
+  if (id === 'qwen') return 'Qwen Code'
   return id.split(/[-_]/).filter(Boolean).map((part) => part[0]?.toUpperCase() + part.slice(1)).join(' ')
 }
 
@@ -178,12 +179,12 @@ export function providerTokenSummary(
     output += itemOutput
     reasoningOutput += usageValue(usage, 'reasoning_output_tokens', 'reasoningOutputTokens')
     const explicitTotal = usageValue(usage, 'total_tokens', 'totalTokens')
-    total += explicitTotal || (id === 'codex' ? itemInput : itemInput + itemCached + itemCacheWrite) + itemOutput
+    total += explicitTotal || (id === 'codex' || id === 'qwen' ? itemInput : itemInput + itemCached + itemCacheWrite) + itemOutput
   }
 
-  // Codex reports cached input as a subset of input. Claude's existing result
+  // Codex and Qwen report cached input as a subset of input. Claude's existing result
   // envelope reports cache read/write alongside uncached input, so they remain additive.
-  const inputTotal = id === 'codex' ? input : input + cached + cacheWrite
+  const inputTotal = id === 'codex' || id === 'qwen' ? input : input + cached + cacheWrite
   return {
     input,
     inputTotal,

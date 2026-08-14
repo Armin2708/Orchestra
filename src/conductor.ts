@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { query } from '@anthropic-ai/claude-agent-sdk'
-import { generateName } from './names.js'
+import { generateName, testerName } from './names.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
 import { emptyUsage, fromSdkUsage, addUsage, turnUsage, recordUsage, hasUsage, UsageSplit } from './usage.js'
 import { conductorRules, outputDiscipline } from './rules.js'
@@ -459,6 +459,19 @@ export class Conductor {
     }
   }
 
+  // a resurrected session has its memory back but no reason to speak — put the
+  // interrupted ticket back in front of it so work runs to completion instead of
+  // idling until the next unrelated message arrives
+  resumeInterrupted(agentId: number): void {
+    const h = this.hired.get(agentId)
+    if (!h) return
+    const card = h.cardId !== null ? { id: h.cardId }
+      : this.db.prepare(`SELECT id FROM cards WHERE owner_agent_id=? AND column_name='in_progress'`)
+        .get(agentId) as { id: number } | undefined
+    if (!card) return
+    h.push(`The daemon restarted mid-task; your session resumed with memory intact. Continue card #${card.id} and finish it — re-verify any step that was in flight before trusting it completed. If you were blocked waiting on another agent's reply, keep waiting; queued mail is delivered on registration.`)
+  }
+
   private cardRow(id: number): any {
     const c = this.db.prepare(`SELECT c.*, a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(id) as any
     return c && { ...c, column: c.column_name, paths: JSON.parse(c.paths) }
@@ -679,6 +692,11 @@ export class Conductor {
     let permissionMode: HiredPermissionMode = PERMISSION_MODES.includes(opts.permissionMode as HiredPermissionMode)
       ? opts.permissionMode as HiredPermissionMode : 'bypassPermissions'
     let name = opts.name
+    if (!name && opts.role === 'verifier') {
+      // a test-pass agent is named for its job; a retired tester's row is reused, not dodged
+      name = testerName((candidate) => !!this.db.prepare(
+        `SELECT 1 FROM agents WHERE board_id=? AND name=? AND status<>'gone'`).get(opts.boardId, candidate))
+    }
     if (!name) {
       do { name = generateName() } while (
         this.db.prepare(`SELECT 1 FROM agents WHERE board_id=? AND name=?`).get(opts.boardId, name))

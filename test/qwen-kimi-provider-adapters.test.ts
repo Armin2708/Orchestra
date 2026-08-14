@@ -99,7 +99,10 @@ type CountingDriver = AgentDriver & {
   }
 }
 
-const countingDriver = (id: 'qwen' | 'kimi'): CountingDriver => {
+const countingDriver = (
+  id: 'qwen' | 'kimi',
+  capabilities?: Partial<ReturnType<CountingDriver['capabilities']>>,
+): CountingDriver => {
   const calls = {
     attach: 0,
     events: 0,
@@ -108,19 +111,21 @@ const countingDriver = (id: 'qwen' | 'kimi'): CountingDriver => {
     send: 0,
     stop: 0,
   }
+  const resolved = {
+    attach: false,
+    streaming: false,
+    interrupt: false,
+    stop: false,
+    rawTerminal: true,
+    resume: false,
+    tokenBudget: false,
+    costBudget: false,
+    ...capabilities,
+  }
   return {
     id,
     calls,
-    capabilities: () => ({
-      attach: false,
-      streaming: false,
-      interrupt: false,
-      stop: false,
-      rawTerminal: true,
-      resume: false,
-      tokenBudget: false,
-      costBudget: false,
-    }),
+    capabilities: () => ({ ...resolved }),
     async launch(_request: DriverLaunchRequest): Promise<DriverSession> {
       calls.launch += 1
       throw new Error('raw launch must remain unreachable')
@@ -280,14 +285,18 @@ describe('Qwen Code and Kimi Code executable discovery candidates', () => {
 })
 
 describe('Qwen Code and Kimi Code candidate policy evidence', () => {
-  it('keeps Qwen subscription mode interactive-only and every unverified managed capability explicit', () => {
+  it('records owner-authorized Qwen coding-plan automation and every unverified managed capability explicitly', () => {
     expect(QWEN_CODING_PLAN_POLICY_EVIDENCE_V1).toEqual({
       billing_mode: 'personal_subscription',
       credential_kind: 'subscription_scoped_key',
-      permitted_execution_scopes: ['interactive'],
-      prohibited_execution_scopes: ['managed_foreground', 'managed_background'],
-      reason_code: 'coding_plan_noninteractive_use_prohibited',
-      provider_confirmation_required_for_managed_use: true,
+      permitted_execution_scopes: [
+        'interactive',
+        'managed_foreground',
+        'managed_background',
+      ],
+      prohibited_execution_scopes: [],
+      reason_code: 'owner_authorized_personal_coding_plan_automation',
+      provider_confirmation_required_for_managed_use: false,
       support_claim: false,
     })
     const evidence = inspectQwenProviderCandidateV1({
@@ -311,18 +320,17 @@ describe('Qwen Code and Kimi Code candidate policy evidence', () => {
       credential_kind: 'subscription_scoped_key',
     })
     expect(evidence.auth_status).toBe('unknown')
-    expect(evidence.automation_policy).toBe('interactive_only')
+    expect(evidence.automation_policy).toBe('allowed')
     expect(evidence.overage_status).toBe('not_applicable')
     expect(evidence.launch_ready).toBe(false)
     expect(evidence.blockers).toEqual(expect.arrayContaining([
       'authentication_unknown',
-      'capability_unsupported',
       'environment_audit_incomplete',
-      'interactive_only',
       'missing_executable',
       'unsupported_mode',
-      'unsupported_provider',
     ]))
+    expect(evidence.blockers).not.toContain('interactive_only')
+    expect(evidence.blockers).not.toContain('unsupported_provider')
     expect(evidence.capabilities).toHaveLength(24)
     expect(capabilities.raw_terminal_coexistence).toEqual({
       capability: 'raw_terminal_coexistence',
@@ -331,25 +339,39 @@ describe('Qwen Code and Kimi Code candidate policy evidence', () => {
     })
     for (const capability of [
       'launch',
+      'follow_up',
+      'interrupt',
+      'cancel',
+      'stop',
       'model_discovery',
       'model_selection',
+      'structured_events',
+    ]) {
+      expect(capabilities[capability]).toEqual({
+        capability,
+        state: 'supported',
+        reason_code: null,
+      })
+    }
+    for (const capability of [
       'effort',
       'approvals',
       'access_profile',
-      'structured_events',
       'usage',
-      'cancel',
-      'mcp',
-      'plugins',
-      'skills',
+      'rate_limits',
+      'fork',
+      'hooks',
     ]) {
-      expect(capabilities[capability]).toMatchObject({
-        state: 'unknown',
-        reason_code: 'managed_adapter_not_implemented',
-      })
+      expect(capabilities[capability]).toMatchObject({ state: 'unsupported' })
     }
     for (const capability of ['attach', 'resume', 'restart_recovery']) {
       expect(capabilities[capability]).toMatchObject({ state: 'unsupported' })
+    }
+    for (const capability of ['mcp', 'plugins', 'skills']) {
+      expect(capabilities[capability]).toMatchObject({
+        state: 'unknown',
+        reason_code: 'qwen_capability_not_verified',
+      })
     }
     expect(JSON.stringify(evidence)).not.toContain('sk-secret-must-not-appear')
 
@@ -542,16 +564,22 @@ describe('Qwen Code and Kimi Code fail-closed bridge adapters', () => {
       create: createQwenProviderAdapterV1,
       manifest: QWEN_PROVIDER_MANIFEST_V1,
       provider: 'qwen' as const,
+      driverCapabilities: { streaming: true, interrupt: true, stop: true },
+      // Contract-lane model discovery stays gated until subscription support
+      // is validated, same as Codex; the operational lane owns model catalogs.
+      modelDiscovery: 'unsupported' as const,
     },
     {
       create: createKimiProviderAdapterV1,
       manifest: KIMI_PROVIDER_MANIFEST_V1,
       provider: 'kimi' as const,
+      driverCapabilities: {},
+      modelDiscovery: 'unsupported' as const,
     },
   ])(
     'blocks $provider before any raw driver launch, lifecycle, event, approval, or usage call',
-    async ({ create, manifest, provider }) => {
-      const driver = countingDriver(provider)
+    async ({ create, manifest, provider, driverCapabilities, modelDiscovery }) => {
+      const driver = countingDriver(provider, driverCapabilities)
       const adapter = create({
         driver,
         environment: { PATH: '' },
@@ -564,7 +592,15 @@ describe('Qwen Code and Kimi Code fail-closed bridge adapters', () => {
         PATH: '',
         API_KEY: 'sk-secret-must-never-reach-driver',
       })).toThrow('environment_audit_incomplete')
-      await expect(adapter.listModels(intent)).rejects.toThrow('capability_unsupported')
+      if (modelDiscovery === 'supported') {
+        const models = await adapter.listModels(intent)
+        expect(models.length).toBeGreaterThan(0)
+        for (const model of models) {
+          expect(model).toMatchObject({ supports_effort: false, effort_levels: [] })
+        }
+      } else {
+        await expect(adapter.listModels(intent)).rejects.toThrow('capability_unsupported')
+      }
       await expect(adapter.launch({
         authorization: {} as never,
       })).rejects.toThrow()

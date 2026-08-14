@@ -185,12 +185,15 @@ describe('BASE-010 declared-provider compatibility contract', () => {
       },
     })
     expect(byId.qwen).toMatchObject({
-      release_state: 'unsupported',
-      executable: { exact_versions: [], exact_platforms: [] },
+      release_state: 'candidate',
+      executable: {
+        exact_versions: ['0.21.6'],
+        exact_platforms: ['darwin-arm64'],
+      },
       native_subscription: {
         credential_kind: 'subscription_scoped_key',
-        automation_policy: 'interactive_only',
-        safe_readiness_probe: null,
+        automation_policy: 'allowed',
+        safe_readiness_probe: ['--version'],
       },
     })
     expect(byId.kimi).toMatchObject({
@@ -316,13 +319,24 @@ describe('BASE-010 declared-provider compatibility contract', () => {
     ]))
   })
 
-  it('keeps Qwen background automation and Kimi unknown overage fail-closed', () => {
+  it('clears owner-authorized Qwen automation of policy blockers and keeps Kimi unknown overage fail-closed', () => {
     const qwen = assessDeclaredProviderCompatibilityV1(evidence('qwen'))
     expect(qwen.ready).toBe(false)
     expect(qwen.blockers).toEqual(expect.arrayContaining([
-      'automation_not_allowed',
-      'executable_version_not_validated',
-      'platform_not_validated',
+      'manifest_not_validated',
+      'mode_not_supported',
+    ]))
+    expect(qwen.blockers).not.toContain('automation_not_allowed')
+    expect(qwen.blockers).not.toContain('executable_version_not_validated')
+    expect(qwen.blockers).not.toContain('platform_not_validated')
+
+    const qwenWithoutMatrix = assessDeclaredProviderCompatibilityV1(evidence('qwen', {
+      acceptance_matrix: null,
+    }))
+    expect(qwenWithoutMatrix.ready).toBe(false)
+    expect(qwenWithoutMatrix.blockers).toEqual(expect.arrayContaining([
+      'acceptance_matrix_missing',
+      'billing_not_verified',
     ]))
 
     const kimiEvidence = evidence('kimi')

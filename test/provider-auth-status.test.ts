@@ -1,7 +1,27 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { providerLoginCommand, readProviderAuthStatus } from '../src/provider-auth-status.js'
 
 const withOutput = (output: string | null) => ({ run: () => output })
+
+const withQwenHome = (settings: Record<string, unknown> | null, fn: () => void): void => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-qwen-home-'))
+  if (settings) {
+    fs.mkdirSync(path.join(home, '.qwen'))
+    fs.writeFileSync(path.join(home, '.qwen', 'settings.json'), JSON.stringify(settings))
+  }
+  const previous = process.env.HOME
+  process.env.HOME = home
+  try {
+    fn()
+  } finally {
+    if (previous === undefined) delete process.env.HOME
+    else process.env.HOME = previous
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+}
 
 describe('provider auth status', () => {
   it('reads Claude authenticated state and its non-secret account label', () => {
@@ -52,6 +72,29 @@ describe('provider auth status', () => {
   it('exposes the native login command per provider', () => {
     expect(providerLoginCommand('claude')).toBe('claude /login')
     expect(providerLoginCommand('codex')).toBe('codex login')
+    expect(providerLoginCommand('qwen')).toBe('qwen')
     expect(providerLoginCommand('nope')).toBeNull()
+  })
+
+  it('reads Qwen auth from the CLI-selected provider profile without touching keys', () => {
+    withQwenHome({
+      security: { auth: { selectedType: 'openai', apiKey: { envKey: 'DASHSCOPE_API_KEY', value: 'sk-secret' } } },
+    }, () => {
+      const state = readProviderAuthStatus('qwen', '/bin/qwen', withOutput('qwen 0.21.6'))
+      expect(state.status).toBe('authenticated')
+      expect(state.method).toBe('qwen_settings:openai')
+      expect(JSON.stringify(state)).not.toContain('sk-secret')
+    })
+  })
+
+  it('treats a Qwen CLI without a selected profile as signed out', () => {
+    withQwenHome({ security: { auth: {} } }, () => {
+      const state = readProviderAuthStatus('qwen', '/bin/qwen', withOutput('qwen 0.21.6'))
+      expect(state.status).toBe('signed_out')
+    })
+    withQwenHome(null, () => {
+      const state = readProviderAuthStatus('qwen', '/bin/qwen', withOutput('qwen 0.21.6'))
+      expect(state.status).toBe('signed_out')
+    })
   })
 })

@@ -167,7 +167,9 @@ export function evaluateRemoteRequestContext(
 
 /** Apply to authenticated and bootstrap responses; step-up remains the primary privileged defense. */
 export const REMOTE_BROWSER_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
-  'content-security-policy': "default-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+  // img-src additionally allows blob: (image attachments are fetched with auth headers
+  // and handed to <img> as object URLs) and data: (inline favicon). Scripts stay 'self'.
+  'content-security-policy': "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
   'x-frame-options': 'DENY',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',

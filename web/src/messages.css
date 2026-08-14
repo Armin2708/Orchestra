@@ -1487,34 +1487,66 @@
 .inbox-reading-head {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 18px 24px 14px;
+  gap: 13px;
+  padding: 20px 26px 16px;
   border-bottom: 1px solid var(--message-line);
   background: var(--message-surface);
+}
+
+.inbox-reading-head .inbox-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 14px;
+  margin-top: 1px;
 }
 
 .inbox-reading-title { min-width: 0; flex: 1; }
 
 .inbox-reading-title h2 {
-  margin: 0 0 6px;
-  font-size: 17px;
-  letter-spacing: -0.01em;
+  margin: 0 0 7px;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.28;
+  letter-spacing: -0.015em;
+  color: var(--message-ink);
   overflow-wrap: anywhere;
 }
 
 .inbox-reading-meta {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   flex-wrap: wrap;
-  gap: 8px;
-  font-size: 12px;
+  gap: 4px 8px;
+  font-size: 12.5px;
   color: var(--message-muted);
 }
 
-.inbox-reading-route { font-weight: 600; }
+.inbox-reading-route {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.inbox-reading-route b { color: var(--message-ink); font-weight: 650; }
+.inbox-reading-to { color: var(--message-faint); font-weight: 500; }
+
+.inbox-reading-meta time::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--message-line-strong);
+}
+
+.inbox-reading-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 9px;
+}
 
 .inbox-reading-board {
   color: var(--message-faint);
+  font-size: 12px;
 }
 
 .inbox-back {
@@ -1694,7 +1726,7 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 18px 24px 24px;
+  padding: 22px 30px 32px;
 }
 
 .mail-attachments {
@@ -1702,7 +1734,7 @@
   flex-wrap: wrap;
   gap: 8px;
   padding: 12px 14px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   border: 1px solid var(--message-line);
   border-radius: 12px;
   background: var(--message-surface-soft);
@@ -1744,6 +1776,50 @@
 
 .mail-attachment-file { display: contents; }
 
+/* image evidence renders as a real thumbnail, click to expand to full width */
+.mail-image {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mail-image-frame {
+  appearance: none;
+  padding: 0;
+  border: 1px solid var(--message-line);
+  border-radius: 10px;
+  background: var(--message-surface);
+  overflow: hidden;
+  cursor: zoom-in;
+  line-height: 0;
+  max-width: 340px;
+  transition: border-color 160ms var(--ease);
+}
+
+.mail-image.zoomed .mail-image-frame { max-width: 100%; cursor: zoom-out; }
+.mail-image-frame:hover { border-color: var(--message-accent); }
+
+.mail-image-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mail-image-loading {
+  width: 220px;
+  height: 120px;
+  border: 1px solid var(--message-line);
+  border-radius: 10px;
+  background: var(--message-surface-soft);
+}
+
+.mail-image figcaption {
+  font-size: 11.5px;
+  color: var(--message-faint);
+}
+
 .mail-attachment-preview {
   flex-basis: 100%;
   border: 1px solid var(--message-line);
@@ -1777,37 +1853,110 @@
   color: var(--message-muted);
 }
 
-.mail-body-block { max-width: 720px; }
+.mail-body-block { max-width: none; }
 
 .mail-letter {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 13.5px;
-  line-height: 1.62;
+  font-size: 14.5px;
+  line-height: 1.72;
+  letter-spacing: 0.002em;
   color: var(--message-ink);
+  max-width: none;
 }
+
+/* block rhythm: even vertical spacing between paragraphs and lists */
+.mail-letter > * { margin: 0; }
+.mail-letter > * + * { margin-top: 0.85em; }
+
+/* the primary letter reads like a real email — roomy and unboxed */
+.mail-body-block .mail-letter { font-size: 15px; }
+
+.mail-letter ol,
+.mail-letter ul {
+  padding-left: 1.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+}
+
+.mail-letter li { padding-left: 0.2em; }
+.mail-letter li::marker { color: var(--message-faint); font-weight: 650; }
+.mail-letter ul li::marker { color: var(--message-line-strong); }
+
+.mail-letter .mail-code {
+  font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.86em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--message-surface-soft);
+  border: 1px solid var(--message-line);
+  color: var(--message-accent-dark);
+  overflow-wrap: anywhere;
+}
+
+.mail-letter .mail-link {
+  color: var(--message-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(47, 111, 159, 0.4);
+}
+
+.mail-letter .mail-link:hover { color: var(--message-accent-dark); text-decoration-color: currentColor; }
+.mail-letter strong { font-weight: 650; color: var(--message-ink); }
+
+.mail-letter .mail-pre {
+  font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.86em;
+  line-height: 1.55;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--message-surface-soft);
+  border: 1px solid var(--message-line);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.mail-letter .mail-h { font-weight: 700; color: var(--message-ink); }
+.mail-letter .mail-h1 { font-size: 1.15em; }
+.mail-letter .mail-h2 { font-size: 1.08em; }
+.mail-letter .mail-h3, .mail-letter .mail-h4 { font-size: 1em; }
 
 .mail-replies {
   list-style: none;
-  margin: 22px 0 0;
-  padding: 18px 0 0;
+  margin: 26px 0 0;
+  padding: 22px 0 0;
   border-top: 1px solid var(--message-line);
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 720px;
+  gap: 14px;
 }
 
 .mail-replies > li {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
+  gap: 11px;
+  align-items: start;
 }
 
-.mail-replies > li.from-you .mail-letter {
+/* every reply sits in a soft card so the thread reads as a clean conversation */
+.mail-replies .inbox-message {
+  border: 1px solid var(--message-line);
+  border-radius: 13px;
+  background: var(--message-surface);
+  padding: 11px 15px 12px;
+  box-shadow: 0 1px 2px rgba(23, 33, 43, 0.03);
+}
+
+.mail-replies > li.from-you .inbox-message {
   background: var(--message-accent-soft);
-  border-radius: 12px;
-  padding: 10px 14px;
+  border-color: rgba(47, 111, 159, 0.22);
+}
+
+.mail-replies .inbox-message .mail-letter {
+  font-size: 14px;
+  line-height: 1.68;
+  background: none;
+  padding: 0;
 }
 
 .inbox-row-attachments {

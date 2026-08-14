@@ -9,7 +9,10 @@ import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
 import { isSimilar, isShippedMatch } from './similar.js'
 import { removeAgentCards, bounceDeadLetters } from './reaper.js'
-import { claimNext, isReady, rankBetween } from './backlog.js'
+import { claimNext, isReady, milestoneRankBetween, rankBetween } from './backlog.js'
+import {
+  breakdownChild, FUNNEL_LEVELS, FunnelError, funnelGate, funnelLevel, funnelReady, placeInFunnel,
+} from './funnel.js'
 import {
   approveTeam, archiveTeam, createTeam, getTeam, hireTeam, hireTeamMember, listTeams,
   mastermindBrief, mastermindFocusBrief, mastermindRefineBrief, teamMembers, updateTeam,
@@ -35,7 +38,7 @@ import {
 } from './agent-os/delivery-trackbook.js'
 import { requireIdempotencyKey } from './agent-os/idempotency.js'
 import { orchestrationIdentity } from './agent-os/orchestration-envelope.js'
-import { CODEX_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, QWEN_PROVIDER_ID, type AgentProviderCatalog } from './agent-providers.js'
 import {
   ACCESS_PROFILES,
   ProviderUnavailableError,
@@ -65,6 +68,17 @@ import type { VapidKeys } from './push.js'
 import { formatInjectedMessage, injectTerminalMessage, recordTerminalEndpoint } from './terminal-inject.js'
 
 export type Bus = EventEmitter
+
+// image evidence the reading pane may render inline. SVG is deliberately absent —
+// it can carry script, and these bytes are served from the project tree.
+const IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+}
 
 // minimal surface the server needs from the conductor (injected by the daemon)
 export interface ConductorLike extends AgentSessionControlHost {
@@ -121,6 +135,8 @@ export interface ServerOptions {
   vapidKeys?: VapidKeys
   stopRemoteTunnel?: () => unknown
   admitMutation?: () => void
+  /** reports whether this daemon has begun shutting down; surfaced on /health */
+  isDraining?: () => boolean
   reconcileActiveWork?: () => void
   registerActiveWork?: (registration: ActiveWorkRegistration) => () => void
 }
@@ -317,7 +333,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   server.get('/health', async () => {
     const status = await operations.publicReadiness()
-    return { ok: status.ready, ...status }
+    // `draining` is what separates a daemon on its way out from one still coming up —
+    // both report live:true, ready:false, and only this tells a restart which it is
+    return { ok: status.ready, ...status, draining: opts.isDraining?.() ?? false }
   })
 
   const ownerAuthFailure = (error: unknown, reply: any) => {
@@ -603,7 +621,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         ship_status: ships.get(id)?.status(c.id) ?? null,
       })),
       ideas: db.prepare(`SELECT * FROM ideas WHERE board_id=? ORDER BY id`).all(id),
-      milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=? ORDER BY id`).all(id),
+      // roadmap order: ranked milestones first, then anything that predates ranking
+      milestones: db.prepare(`SELECT * FROM milestones WHERE board_id=?
+        ORDER BY rank IS NULL, rank, id`).all(id),
       open_questions: db.prepare(`
         SELECT m.*, fa.name AS from_name, ta.name AS to_name FROM messages m
         LEFT JOIN agents fa ON fa.id = m.from_agent_id
@@ -629,7 +649,14 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     name ? (db.prepare(`SELECT * FROM agents WHERE board_id=? AND name=?`).get(board_id, name) as any) : undefined
   const getCard = (id: number) => {
     const c = db.prepare(`SELECT c.*, a.name AS owner FROM cards c LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(id) as any
-    return c && { ...c, column: c.column_name, paths: JSON.parse(c.paths) }
+    return c && {
+      ...c,
+      column: c.column_name,
+      paths: JSON.parse(c.paths),
+      // funnel altitude travels with the card everywhere the API returns one (#178)
+      funnel_role: funnelLevel(c.kind).role,
+      funnel_ready: funnelReady(db, c.id),
+    }
   }
   const overlapsFor = (card: any) =>
     listCards(db, card.board_id).filter((o) =>
@@ -811,6 +838,62 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       logEvent(card.id, actor?.id ?? null, 'ranked', { rank })
       const updated = getCard(card.id)
       emit(card.board_id, 'card', updated)
+      return { card: updated }
+    })
+
+  // ── roadmap planning: put a card on a milestone, or take it off ──
+  // milestone_id null detaches (and clears step_order, so a re-attach can't resurrect a
+  // stale position); after_step_id inserts right behind that step instead of appending.
+  server.patch<{ Params: { id: string }; Body: { milestone_id: number | null; after_step_id?: number | null; agent?: string } }>(
+    '/api/v1/cards/:id/milestone', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      const { milestone_id = null, after_step_id = null, agent } = req.body ?? ({} as any)
+      if (milestone_id !== null && !Number.isFinite(Number(milestone_id))) {
+        return reply.code(400).send({ error: 'milestone_id must be a milestone id or null' })
+      }
+      const milestone = milestone_id === null ? null
+        : db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(milestone_id)) as any
+      if (milestone_id !== null && !milestone) return reply.code(404).send({ error: 'milestone not found' })
+      if (milestone && milestone.board_id !== card.board_id) {
+        return reply.code(400).send({ error: 'milestone belongs to another board' })
+      }
+
+      // one transaction: a half-applied insert would leave two steps sharing an order
+      const place = db.transaction(() => {
+        if (!milestone) {
+          db.prepare(`UPDATE cards SET milestone_id=NULL, step_order=NULL, updated_at=datetime('now')
+            WHERE id=?`).run(card.id)
+          return
+        }
+        const steps = db.prepare(`SELECT id FROM cards WHERE milestone_id=? AND id != ?
+          ORDER BY step_order, id`).all(milestone.id, card.id) as { id: number }[]
+        let index = steps.length
+        if (after_step_id != null) {
+          const at = steps.findIndex((s) => s.id === Number(after_step_id))
+          if (at < 0) throw new Error(`card ${after_step_id} is not a step of this milestone`)
+          index = at + 1
+        }
+        const order = [...steps.slice(0, index), { id: card.id }, ...steps.slice(index)]
+        const renumber = db.prepare(`UPDATE cards SET milestone_id=?, step_order=?, updated_at=datetime('now')
+          WHERE id=?`)
+        order.forEach((row, i) => renumber.run(milestone.id, i + 1, row.id))
+      })
+      try { place.immediate() } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message })
+      }
+
+      const actor = agentByName(card.board_id, agent)
+      const updated = getCard(card.id)
+      logEvent(card.id, actor?.id ?? null, 'updated', {
+        milestone: milestone ? milestone.title : null, step: updated.step_order ?? null,
+      })
+      emit(card.board_id, 'card', updated)
+      // the steps that shifted up are part of the same plan change
+      if (milestone) {
+        for (const s of db.prepare(`SELECT id FROM cards WHERE milestone_id=? AND id != ?`)
+          .all(milestone.id, card.id) as { id: number }[]) emit(card.board_id, 'card', getCard(s.id))
+      }
       return { card: updated }
     })
 
@@ -1161,6 +1244,9 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         blocking: blocking.map((b) => ({ id: b.id, title: b.title, column: b.column_name })),
       })
     }
+    // funnel handoff (#178): nothing starts under a spec that isn't finished
+    const gate = funnelGate(db, card.id)
+    if (!gate.allowed) return reply.code(409).send({ error: `spec not ready — ${gate.reason}` })
   })
 
   const reviewEvent = (card: any, status: string, extra: Record<string, unknown> = {}) =>
@@ -1301,11 +1387,25 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
 
   // milestones act as epics: open → shipped (all steps done) | dropped (detaches open steps).
   // Reopening a shipped/dropped epic is allowed — humans un-ship premature calls.
-  server.patch<{ Params: { id: string }; Body: { status?: string; outcome?: string; title?: string; description?: string } }>(
+  server.patch<{
+    Params: { id: string }
+    Body: {
+      status?: string; outcome?: string; title?: string; description?: string
+      // roadmap order, same fractional ranking the backlog uses for cards
+      before?: number; after?: number; top?: boolean; bottom?: boolean
+    }
+  }>(
     '/api/v1/milestones/:id', (req, reply) => {
       const m = db.prepare(`SELECT * FROM milestones WHERE id=?`).get(Number(req.params.id)) as any
       if (!m) return reply.code(404).send({ error: 'not found' })
-      const { status, outcome, title, description } = req.body ?? {}
+      const { status, outcome, title, description, before, after, top, bottom } = req.body ?? {}
+      if (before != null || after != null || top || bottom) {
+        try {
+          milestoneRankBetween(db, m.id, { before, after, top, bottom })
+        } catch (error) {
+          return reply.code(400).send({ error: (error as Error).message })
+        }
+      }
       if (status !== undefined && !['open', 'shipped', 'dropped'].includes(status)) {
         return reply.code(400).send({ error: 'status must be open, shipped, or dropped' })
       }
@@ -1436,8 +1536,59 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const agentRow = agentByName(card.board_id, req.body.agent)
     if (!agentRow) return reply.code(400).send({ error: `no agent named "${req.body.agent}"` })
     if (agentRow.name === 'strategist' || agentRow.name.startsWith('auditor-')) return reply.code(400).send({ error: 'planner agents write tickets — they do not take them' })
+    const gate = funnelGate(db, card.id)
+    if (!gate.allowed) return reply.code(409).send({ error: `spec not ready — ${gate.reason}` })
     return { card: notifyAssignment(card, agentRow) }
   })
+
+  // ── the backlog funnel: epic -> feature spec -> tech spec -> task (#178) ──
+  server.patch<{ Params: { id: string }; Body: { kind?: string; parent_card_id?: number | null; agent?: string } }>(
+    '/api/v1/cards/:id/funnel', (req, reply) => {
+      const card = getCard(Number(req.params.id))
+      if (!card) return reply.code(404).send({ error: 'not found' })
+      try {
+        placeInFunnel(db, card.id, {
+          kind: req.body?.kind,
+          parent_card_id: req.body?.parent_card_id,
+        })
+      } catch (error) {
+        const status = error instanceof FunnelError ? error.status : 400
+        return reply.code(status).send({ error: (error as Error).message })
+      }
+      const actor = agentByName(card.board_id, req.body?.agent)
+      const updated = getCard(card.id)
+      logEvent(card.id, actor?.id ?? null, 'updated', {
+        funnel: funnelLevel(updated.kind).label, parent: updated.parent_card_id ?? null,
+      })
+      emit(card.board_id, 'card', updated)
+      return { card: updated }
+    })
+
+  // break a card down into the next level below it, pre-linked and pre-scoped
+  server.post<{ Params: { id: string }; Body: { title: string; description?: string; paths?: string[]; agent?: string } }>(
+    '/api/v1/cards/:id/breakdown', (req, reply) => {
+      const parent = getCard(Number(req.params.id))
+      if (!parent) return reply.code(404).send({ error: 'not found' })
+      let childId: number
+      try {
+        childId = breakdownChild(db, parent.id, {
+          title: req.body?.title,
+          description: req.body?.description,
+          paths: req.body?.paths,
+        })
+      } catch (error) {
+        const status = error instanceof FunnelError ? error.status : 400
+        return reply.code(status).send({ error: (error as Error).message })
+      }
+      const actor = agentByName(parent.board_id, req.body?.agent)
+      const child = getCard(childId)
+      logEvent(child.id, actor?.id ?? null, 'created', {
+        funnel: funnelLevel(child.kind).label, parent: parent.id,
+      })
+      emit(parent.board_id, 'card', child)
+      emit(parent.board_id, 'card', getCard(parent.id))
+      return { card: child }
+    })
 
   // launch a fresh autonomous agent directly on a ticket; queued past the concurrency cap
   server.post<{ Params: { id: string }; Body: {
@@ -1471,7 +1622,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
         const orchestration = opts.agentOs?.orchestration
         if (!orchestration) throw new UnsupportedError('canonical orchestration service is not available')
         const provider = (req.body?.provider ?? defaultsForRole(db).provider).trim().toLowerCase()
-        if (provider !== 'claude' && provider !== CODEX_PROVIDER_ID) {
+        if (provider !== 'claude' && provider !== CODEX_PROVIDER_ID && provider !== QWEN_PROVIDER_ID) {
           throw new ProviderUnavailableError(provider, 'no registered Agent OS agent provider driver')
         }
         const jobExecutor = opts.agentOs?.jobExecutor
@@ -2256,6 +2407,39 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return { ref: attachment.ref, size: stat.size, content: content.toString('utf8') }
   })
 
+  // raw bytes for image evidence — screenshots are the natural proof for UI work,
+  // so they render in the reading pane instead of being a dead "open it locally" chip.
+  // Strict extension->type allowlist + nosniff; SVG is excluded on purpose (script vector).
+  server.get<{ Params: { id: string; index: string } }>(
+    '/api/v1/messages/:id/attachments/:index/raw', (req, reply) => {
+      const msg = db.prepare(`SELECT * FROM messages WHERE id=?`).get(Number(req.params.id)) as any
+      if (!msg?.attachments) return reply.code(404).send({ error: 'not found' })
+      let list: { type: string; ref: string }[]
+      try { list = JSON.parse(msg.attachments) } catch { return reply.code(404).send({ error: 'not found' }) }
+      const attachment = list[Number(req.params.index)]
+      if (!attachment) return reply.code(404).send({ error: 'not found' })
+      if (attachment.type !== 'file') return reply.code(400).send({ error: 'only file attachments have bytes' })
+      const mime = IMAGE_MIME[path.extname(attachment.ref).toLowerCase()]
+      if (!mime) return reply.code(415).send({ error: 'not a viewable image — open it locally' })
+      const board = db.prepare(`SELECT * FROM boards WHERE id=?`).get(msg.board_id) as any
+      if (!board) return reply.code(404).send({ error: 'not found' })
+      let root: string, resolved: string
+      try {
+        root = fs.realpathSync(board.project_path)
+        resolved = fs.realpathSync(path.resolve(root, attachment.ref))
+      } catch { return reply.code(404).send({ error: 'attachment file not found' }) }
+      if (resolved !== root && !resolved.startsWith(root + path.sep))
+        return reply.code(403).send({ error: 'attachment path is outside the project' })
+      const stat = fs.statSync(resolved)
+      if (!stat.isFile()) return reply.code(400).send({ error: 'attachment is not a regular file' })
+      if (stat.size > 10 * 1024 * 1024) return reply.code(413).send({ error: 'image too large to preview (10MB cap)' })
+      return reply
+        .header('content-type', mime)
+        .header('x-content-type-options', 'nosniff')
+        .header('content-disposition', 'inline')
+        .header('cache-control', 'private, max-age=300')
+        .send(fs.readFileSync(resolved))
+    })
 
   server.delete<{ Params: { id: string } }>('/api/v1/messages/:id', (req, reply) => {
     const id = Number(req.params.id)
@@ -2479,13 +2663,19 @@ export function listCards(db: Database.Database, boardId: number) {
     LEFT JOIN agents a ON a.id = c.owner_agent_id
     LEFT JOIN task_contracts t ON t.card_id = c.id
     WHERE c.board_id=? ORDER BY c.updated_at DESC`).all(boardId) as any[])
-    .map((c) => ({
-      ...c,
-      column: c.column_name,
-      paths: JSON.parse(c.paths),
-      ready: !!c.ready,
-      stale: thresholds[c.column_name] != null
-        && now - new Date(`${String(c.updated_at).replace(' ', 'T')}Z`).getTime()
-          > thresholds[c.column_name] * 86_400_000,
-    }))
+    .map((c) => {
+      const paths = JSON.parse(c.paths) as string[]
+      return {
+        ...c,
+        column: c.column_name,
+        paths,
+        ready: !!c.ready,
+        // funnel Ready is level-aware: the two engineering levels also need their surface
+        funnel_ready: !!c.ready && (c.kind === 'feature' || paths.length > 0),
+        funnel_role: funnelLevel(c.kind).role,
+        stale: thresholds[c.column_name] != null
+          && now - new Date(`${String(c.updated_at).replace(' ', 'T')}Z`).getTime()
+            > thresholds[c.column_name] * 86_400_000,
+      }
+    })
 }

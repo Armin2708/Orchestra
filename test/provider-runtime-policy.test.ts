@@ -108,7 +108,7 @@ describe('provider runtime operation policy', () => {
         provider: 'qwen',
         mode: 'native_subscription',
         state: 'unsupported',
-        reason: 'managed_adapter_not_implemented',
+        reason: 'subscription_guard_not_integrated',
       },
       {
         provider: 'kimi',

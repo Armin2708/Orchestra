@@ -90,6 +90,27 @@ export const api = async (method: string, p: string, body?: unknown, extraHeader
   return res.json()
 }
 
+/**
+ * Binary GET returning an object URL. <img src="/api/v1/…"> cannot carry the
+ * Bearer/Device proof headers api() attaches, so image evidence is fetched here
+ * and handed to the DOM as a blob URL. Callers must revokeObjectURL on unmount.
+ */
+export const apiObjectUrl = async (p: string): Promise<string> => {
+  const headers: Record<string, string> = isLoopbackBrowser() ? {} : await deviceRequestHeaders('GET', p)
+  const token = getToken()
+  if (token) headers.authorization = `Bearer ${token}`
+  const res = await fetch(`/api/v1${p}`, {
+    method: 'GET',
+    headers: Object.keys(headers).length ? headers : undefined,
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+  })
+  if (!res.ok) throw new ApiError(res.status, await res.text())
+  return URL.createObjectURL(await res.blob())
+}
+
 /** EventSource cannot carry proof headers; clients use authenticated polling instead. */
 export const streamUrl = () => '/api/v1/events'
 
@@ -104,6 +125,7 @@ export type Agent = {
   status: string
   last_seen: string
   kind?: string
+  created_at?: string
   board_id?: number
   provider?: string
   capabilities?: string[]

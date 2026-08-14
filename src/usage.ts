@@ -91,10 +91,12 @@ export function recordProviderUsage(
   if (usage.total_tokens <= 0 && usage.cost_cents == null) return
   const observedAt = new Date()
   const day = observedAt.toISOString().slice(0, 10)
-  // Claude reports cache reads as a separate additive bucket. Codex reports cached
-  // input as a subset of input_tokens, so mirroring it into the legacy additive
-  // cache_read column would inflate usageTotal()/boardUsage() rollups.
-  const legacyCacheRead = usage.provider === 'codex' ? 0 : usage.cached_input_tokens
+  // Claude reports cache reads as a separate additive bucket. Codex and Qwen
+  // report cached input as a subset of input_tokens, so mirroring it into the
+  // legacy additive cache_read column would inflate usageTotal()/boardUsage() rollups.
+  const legacyCacheRead = usage.provider === 'codex' || usage.provider === 'qwen'
+    ? 0
+    : usage.cached_input_tokens
   runBoundCompatibilityMigrationOperation(
     db,
     {

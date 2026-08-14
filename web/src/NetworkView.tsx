@@ -13,12 +13,28 @@ function loadPos(boardId: number): Record<string, Norm> {
   try { return JSON.parse(localStorage.getItem(`orchestra-net-${boardId}`) ?? '{}') } catch { return {} }
 }
 
+// positions are keyed by agent name, so a rename would orphan the old entry and
+// drop the node back onto the default ring. Move the stored position across.
+export function migrateAgentPosition(boardId: number, from: string, to: string) {
+  if (from === to) return
+  try {
+    const key = `orchestra-net-${boardId}`
+    const pos = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, Norm>
+    if (!pos[from]) return
+    pos[to] = pos[from]
+    delete pos[from]
+    localStorage.setItem(key, JSON.stringify(pos))
+  } catch { /* private mode — position simply isn't persisted */ }
+}
+
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
 
 const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T') + 'Z').getTime()
 
-export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange }:
-  { snap: Snapshot; viewport: CanvasViewport; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void }) {
+export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange, posSeed }:
+  { snap: Snapshot; viewport: CanvasViewport; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void;
+    // where a just-activated agent was dropped — it lands there instead of the default ring
+    posSeed?: { name: string; x: number; y: number } | null }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [killing, setKilling] = useState<Agent | null>(null)
   const [dying, setDying] = useState<number | null>(null)
@@ -87,9 +103,38 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
 
   useEffect(() => setPos(loadPos(boardId)), [boardId])
 
+  // after a rename the migrated position lands in localStorage under the new name;
+  // adopt it for any present agent whose position isn't in live state yet.
+  const agentNames = agents.map((a) => a.name).join(',')
+  useEffect(() => {
+    const stored = loadPos(boardId)
+    setPos((p) => {
+      let next = p
+      for (const a of agents) {
+        if (!next[a.name] && stored[a.name]) {
+          if (next === p) next = { ...p }
+          next[a.name] = stored[a.name]
+        }
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentNames, boardId])
+
+  // a freshly dropped agent keeps its drop point: persist the seed into the layout
+  useEffect(() => {
+    if (!posSeed) return
+    setPos((p) => {
+      const next = { ...p, [posSeed.name]: { x: posSeed.x, y: posSeed.y } }
+      localStorage.setItem(`orchestra-net-${boardId}`, JSON.stringify(next))
+      return next
+    })
+  }, [posSeed, boardId])
+
   // default layout: you center, agents ringed
   const place = (name: string, i: number, n: number): Norm => {
     if (pos[name]) return pos[name]
+    if (posSeed && posSeed.name === name) return { x: posSeed.x, y: posSeed.y }
     if (name === 'you') return { x: 0.5, y: 0.5 }
     const angle = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2
     return { x: 0.5 + Math.cos(angle) * 0.34, y: 0.5 + Math.sin(angle) * 0.36 }
@@ -116,9 +161,11 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
       boardOrigin,
     )
     drag.current.moved = true
+    // the playground is the whole pannable canvas, not just the seed rectangle —
+    // wide bounds keep a node recoverable instead of infinitely far away
     const next = {
-      x: Math.min(0.96, Math.max(0.04, local.x / W)),
-      y: Math.min(0.92, Math.max(0.06, local.y / H)),
+      x: Math.min(4, Math.max(-3, local.x / W)),
+      y: Math.min(4, Math.max(-3, local.y / H)),
     }
     setPos((p) => ({ ...p, [drag.current!.name]: next }))
   }
@@ -335,11 +382,6 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange 
         }}
         onCancel={() => setConfirmDelete(null)} />
 
-      <div className="net-legend">
-        <span><i className="leg-line open" /> open question</span>
-        <span><i className="leg-line done" /> answered (fades after 3 min)</span>
-        <span>drag empty board · wheel or pinch to zoom · drag circles to move</span>
-      </div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { Command, InvalidArgumentError } from 'commander'
-import { ensureDaemon, serve, stopDaemon, baseUrl } from './daemon.js'
+import { ensureDaemon, serve, stopDaemon, waitForDaemonExit, baseUrl } from './daemon.js'
 import { api, projectPath } from './client.js'
 import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
@@ -97,9 +97,17 @@ program.command('restart').description('gracefully restart the daemon — defers
         process.exit(1)
       }
       stopDaemon()
-      for (let i = 0; i < 50 && (await alive()); i++) await new Promise((r) => setTimeout(r, 100))
+      // Draining hired agents takes far longer than the 5s this used to allow, and the
+      // replacement was then refused by the lease the outgoing daemon still held — which
+      // killed the daemon without replacing it. ensureDaemon now waits for the lease to
+      // clear itself, so the only thing left to do here is say so when it is slow.
+      if (!(await waitForDaemonExit(3_000))) console.log('waiting for the daemon to drain its agents…')
     }
-    console.log((await ensureDaemon()) ? `daemon restarted on ${baseUrl()}` : 'daemon failed to restart')
+    const started = await ensureDaemon()
+    console.log(started
+      ? `daemon restarted on ${baseUrl()}`
+      : 'daemon failed to restart — nothing is listening; run `orchestra serve` and read the error')
+    if (!started) process.exitCode = 1
   })
 program.command('token').description('print the internal operator transport credential (not used for browser login)')
   .action(() => {
@@ -695,6 +703,30 @@ program.command('step <milestoneId> <title>').description('append an ordered ste
     await up()
     const r = await api('POST', `/milestones/${milestoneId}/steps`, { title, description: o.desc })
     console.log(`step #${r.card.id} added (order ${r.card.step_order})`)
+  })
+
+// the backlog funnel (#178): feature spec -> tech spec -> task, one level per step
+program.command('breakdown <cardId> <title>')
+  .description('create the next level down from a card (feature spec -> tech spec -> task)')
+  .option('--desc <d>').option('--paths <p>', 'comma-separated files the child touches')
+  .action(async (cardId, title, o) => {
+    await up()
+    const r = await api('POST', `/cards/${cardId}/breakdown`, {
+      title, description: o.desc, paths: o.paths ? String(o.paths).split(',').map((p: string) => p.trim()) : undefined,
+      agent: process.env.ORCHESTRA_AGENT,
+    })
+    console.log(`#${r.card.id} "${r.card.title}" created as the ${r.card.funnel_role}'s ${r.card.kind} under #${cardId}`)
+  })
+program.command('funnel <cardId> <kind>')
+  .description('set a card\'s funnel level (feature|tech_spec|task), optionally under a parent card')
+  .option('--parent <id>', 'the card one level up; omit --parent to detach')
+  .action(async (cardId, kind, o) => {
+    await up()
+    const r = await api('PATCH', `/cards/${cardId}/funnel`, {
+      kind, parent_card_id: o.parent ? Number(o.parent) : null, agent: process.env.ORCHESTRA_AGENT,
+    })
+    console.log(`#${r.card.id} is now a ${r.card.kind}${r.card.parent_card_id ? ` under #${r.card.parent_card_id}` : ''}`
+      + ` — owner role: ${r.card.funnel_role}`)
   })
 
 program.command('hire').description('spawn an ambient autonomous agent (not attached to a card contract)')

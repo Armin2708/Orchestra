@@ -87,12 +87,29 @@ const CODEX_NATIVE_CAPABILITIES = capabilityMatrix({
   hooks: unknown('hook_projection_not_verified'),
 }, 'codex_capability_not_verified')
 
-const QWEN_UNMANAGED_CAPABILITIES = capabilityMatrix({
+const QWEN_NATIVE_CAPABILITIES = capabilityMatrix({
+  launch: supported(),
+  follow_up: supported(),
   attach: unsupported('authorized_attach_not_implemented_v1'),
   resume: unsupported('durable_resume_not_implemented_v1'),
   restart_recovery: unsupported('durable_resume_not_implemented_v1'),
+  fork: unsupported('qwen_cli_fork_not_available'),
+  interrupt: supported(),
+  cancel: supported(),
+  stop: supported(),
+  model_discovery: supported(),
+  model_selection: supported(),
+  effort: unsupported('qwen_cli_does_not_expose_effort_flag'),
+  approvals: unsupported('noninteractive_auto_mode_no_approval_surface'),
+  access_profile: unsupported('qwen_sandbox_mapping_not_verified_v1'),
+  structured_events: supported(),
+  usage: unsupported('qwen_coding_plan_usage_meter_not_available_v1'),
+  rate_limits: unsupported('qwen_coding_plan_rate_limits_not_exposed_v1'),
   raw_terminal_coexistence: supported(),
-}, 'managed_adapter_not_implemented')
+  token_budget: unsupported('provider_does_not_expose_token_budget'),
+  cost_budget: unsupported('provider_does_not_expose_cost_budget'),
+  hooks: unsupported('orchestra_hook_integration_not_implemented_v1'),
+}, 'qwen_capability_not_verified')
 
 const KIMI_UNMANAGED_CAPABILITIES = capabilityMatrix({
   attach: unsupported('authorized_attach_not_implemented_v1'),
@@ -255,13 +272,13 @@ export const QWEN_PROVIDER_MANIFEST_V1 = defineProviderManifestV1({
   display_name: 'Qwen Code',
   adapter_id: 'qwen-code-cli',
   adapter_version: '1.0.0',
-  release_state: 'unsupported',
+  release_state: 'candidate',
   protocol: 'native_cli',
   executable: {
     command: 'qwen',
     source: 'path',
-    validated_versions: [],
-    supported_platforms: [],
+    validated_versions: ['0.21.6'],
+    supported_platforms: ['darwin-arm64'],
   },
   environment: {
     audit_state: 'incomplete',
@@ -277,15 +294,15 @@ export const QWEN_PROVIDER_MANIFEST_V1 = defineProviderManifestV1({
       priority: 'primary',
       support: {
         state: 'unknown',
-        reason_code: 'managed_adapter_not_implemented',
+        reason_code: 'subscription_guard_not_integrated',
       },
-      automation_policy: 'interactive_only',
+      automation_policy: 'allowed',
       usage_priced_api_consent_required: false,
       overage: {
         behavior: 'none',
         explicit_consent_required: false,
       },
-      capabilities: QWEN_UNMANAGED_CAPABILITIES,
+      capabilities: QWEN_NATIVE_CAPABILITIES,
     },
     {
       id: 'native_api_key',

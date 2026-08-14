@@ -5,13 +5,15 @@ import type Database from 'better-sqlite3'
 import { defaultsForRole, type SpecialistRole } from './agent-defaults.js'
 import {
   CODEX_PROVIDER_ID,
+  QWEN_PROVIDER_ID,
   codexProviderCatalog,
+  qwenProviderCatalog,
   readProviderModelCache,
   type AgentProviderCapabilities,
   type AgentProviderCatalog,
   type AgentProviderService,
 } from './agent-providers.js'
-import { generateName } from './names.js'
+import { generateName, testerName } from './names.js'
 import { bounceDeadLetters, removeAgentCards } from './reaper.js'
 import type { ConductorLike } from './server.js'
 import { autoshipEnabled, cardWorktree } from './shipqueue.js'
@@ -22,6 +24,8 @@ import { KnowledgeRuntimeIntegration } from './agent-os/knowledge-runtime-integr
 import { WorkspaceStore } from './agent-os/workspace-store.js'
 import { AgentProfileService } from './agent-os/agent-profiles.js'
 import { provisionManagedAgentSessionCredential } from './agent-session-credential.js'
+import { loadQwenSessionTranscript } from './external-transcript.js'
+import { QWEN_PROVIDER_MODEL_CATALOG_V1 } from './runtime/drivers/qwen-provider-adapter.js'
 
 export const ACCESS_PROFILES = ['read_only', 'workspace_write', 'full_access'] as const
 export type AccessProfile = (typeof ACCESS_PROFILES)[number]
@@ -56,6 +60,23 @@ export const CLAUDE_CAPABILITIES: AgentProviderCapabilities = {
   ambient_hooks: true,
   session_end_hooks: true,
   access_profile: true,
+  interrupt: true,
+  stop: true,
+}
+
+export const QWEN_CAPABILITIES: AgentProviderCapabilities = {
+  steering: false,
+  approvals: false,
+  model: true,
+  effort: false,
+  rate_limits: false,
+  usage: true,
+  diffs: false,
+  plans: false,
+  subagents: false,
+  ambient_hooks: false,
+  session_end_hooks: false,
+  access_profile: false,
   interrupt: true,
   stop: true,
 }
@@ -245,6 +266,11 @@ export class CodexManagedAgentRuntime {
     if (existingLive) return this.agent(existingLive.agentId)
 
     let name = options.name
+    if (!name && options.role === 'verifier') {
+      // same rule as the Claude path: test-pass agents are named for the job (see names.ts)
+      name = testerName((candidate) => !!this.db.prepare(
+        "SELECT 1 FROM agents WHERE board_id=? AND name=? AND status<>'gone'").get(options.boardId, candidate))
+    }
     if (!name) {
       do { name = generateName() } while (
         this.db.prepare('SELECT 1 FROM agents WHERE board_id=? AND name=?').get(options.boardId, name))
@@ -946,6 +972,729 @@ export class CodexManagedAgentRuntime {
   }
 }
 
+type QwenState = {
+  agentId: number
+  boardId: number
+  name: string
+  cwd: string
+  role?: SpecialistRole
+  ephemeral: boolean
+  model: string | null
+  effort: string | null
+  accessProfile: AccessProfile
+  session: DriverSession | null
+  queue: string[]
+  transcript: TranscriptLine[]
+  usageTotal: ProviderUsageSplit
+  turnActive: boolean
+  idleWaiters: Array<() => void>
+  cardId: number | null
+  branch: string | null
+  cardFinalized: boolean
+  ended: boolean
+  stopping: boolean
+  detaching: boolean
+  sending: Promise<void>
+  lastEventSeq: number
+  rateLimitPause: { at: string } | null
+  credentialSessionId: string | null
+}
+
+const emptyQwenUsage = (): ProviderUsageSplit => ({
+  provider: QWEN_PROVIDER_ID,
+  total_tokens: 0,
+  input_tokens: 0,
+  cached_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  output_tokens: 0,
+  reasoning_output_tokens: 0,
+  cost_cents: null,
+})
+
+const qwenUsageNumber = (value: unknown): number =>
+  Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0
+
+// qwen's stream-json `usage` reports cached input as a subset of input_tokens
+// (same accounting as Codex); the same converter revives persisted totals.
+const fromQwenStreamUsage = (raw: Record<string, unknown>): ProviderUsageSplit => {
+  const input = qwenUsageNumber(raw.input_tokens)
+  const cached = Math.min(qwenUsageNumber(raw.cache_read_input_tokens ?? raw.cached_input_tokens), input)
+  const output = qwenUsageNumber(raw.output_tokens)
+  return {
+    provider: QWEN_PROVIDER_ID,
+    total_tokens: qwenUsageNumber(raw.total_tokens) || input + output,
+    input_tokens: input,
+    cached_input_tokens: cached,
+    cache_creation_input_tokens: 0,
+    output_tokens: output,
+    reasoning_output_tokens: 0,
+    cost_cents: null,
+  }
+}
+
+/** Board-facing lifecycle for Qwen Code sessions, one CLI process per turn. */
+export class QwenManagedAgentRuntime {
+  private readonly states = new Map<number, QwenState>()
+
+  constructor(
+    private readonly db: Database.Database,
+    private readonly bus: EventEmitter,
+    private readonly driver: AgentDriver,
+  ) {
+    if (driver.id !== QWEN_PROVIDER_ID) throw new Error(`expected qwen driver, got ${driver.id}`)
+  }
+
+  isHired(agentId: number): boolean {
+    const state = this.states.get(agentId)
+    return !!state && !state.ended
+  }
+
+  hire(options: ProviderHireOptions): any {
+    const existingLive = options.name
+      ? [...this.states.values()].find((state) => !state.ended && state.boardId === options.boardId && state.name === options.name)
+      : undefined
+    if (existingLive) return this.agent(existingLive.agentId)
+
+    let name = options.name
+    if (!name && options.role === 'verifier') {
+      name = testerName((candidate) => !!this.db.prepare(
+        "SELECT 1 FROM agents WHERE board_id=? AND name=? AND status<>'gone'").get(options.boardId, candidate))
+    }
+    if (!name) {
+      do { name = generateName() } while (
+        this.db.prepare('SELECT 1 FROM agents WHERE board_id=? AND name=?').get(options.boardId, name))
+    }
+    const existing = this.db.prepare('SELECT id, provider, status, provider_state_json FROM agents WHERE board_id=? AND name=?')
+      .get(options.boardId, name) as { id: number; provider: string; status: string; provider_state_json: string } | undefined
+    if (existing && existing.provider !== QWEN_PROVIDER_ID && existing.status !== 'gone')
+      throw new Error(`agent ${name} already belongs to provider ${existing.provider}`)
+
+    const resumeSession = options.resumeSession?.trim() || undefined
+    if (resumeSession) this.assertResumeOwnership(resumeSession, existing?.id)
+    const prior = resumeSession ? parseObject(existing?.provider_state_json) : {}
+    const accessProfile = options.accessProfile ?? (options.role ? 'read_only' : 'full_access')
+    const stateJson = JSON.stringify({
+      ...prior,
+      cwd: options.cwd,
+      card_id: options.cardId ?? null,
+      lifecycle: 'starting',
+    })
+    this.db.prepare(`
+      INSERT INTO agents (
+        board_id, name, session_id, kind, role, status, provider, external_session_id,
+        provider_state_json, access_profile, model, effort
+      ) VALUES (?, ?, ?, 'hired', ?, 'starting', 'qwen', ?, ?, ?, ?, ?)
+      ON CONFLICT(board_id, name) DO UPDATE SET
+        session_id=excluded.session_id, kind='hired', role=excluded.role, status='starting',
+        provider='qwen', external_session_id=excluded.external_session_id,
+        sdk_session=NULL, hook_token_hash=NULL,
+        provider_state_json=excluded.provider_state_json, access_profile=excluded.access_profile,
+        model=excluded.model, effort=excluded.effort, last_seen=datetime('now')
+    `).run(
+      options.boardId,
+      name,
+      `hired:qwen:${Date.now()}`,
+      options.role ?? null,
+      resumeSession ?? null,
+      stateJson,
+      accessProfile,
+      options.model ?? null,
+      options.effort ?? null,
+    )
+    const row = this.db.prepare('SELECT * FROM agents WHERE board_id=? AND name=?').get(options.boardId, name) as any
+    const persistedUsage = prior.usage_total && typeof prior.usage_total === 'object'
+      ? fromQwenStreamUsage(prior.usage_total as Record<string, unknown>)
+      : emptyQwenUsage()
+    const state: QwenState = {
+      agentId: Number(row.id),
+      boardId: options.boardId,
+      name,
+      cwd: options.cwd,
+      role: options.role,
+      ephemeral: options.ephemeral ?? false,
+      model: options.model ?? null,
+      effort: options.effort ?? null,
+      accessProfile,
+      session: null,
+      queue: [],
+      transcript: [],
+      usageTotal: persistedUsage,
+      turnActive: false,
+      idleWaiters: [],
+      cardId: options.cardId ?? null,
+      branch: null,
+      cardFinalized: false,
+      ended: false,
+      stopping: false,
+      detaching: false,
+      sending: Promise.resolve(),
+      lastEventSeq: 0,
+      rateLimitPause: prior.rate_limit_pause && typeof prior.rate_limit_pause === 'object'
+        ? prior.rate_limit_pause as { at: string }
+        : null,
+      credentialSessionId: null,
+    }
+    this.states.set(state.agentId, state)
+    this.log(state, 'status', resumeSession ? `resumed in ${options.cwd} (previous session continues)` : `hired in ${options.cwd}`)
+    this.emitAgent(state)
+    void this.start(state, resumeSession).catch((error) => this.failStart(state, error))
+    return row
+  }
+
+  launch(request: ProviderLaunchRequest): any {
+    let cwd = request.cwd
+    let branch: string | null = null
+    if (autoshipEnabled()) {
+      const branchName = `card-${request.cardId}`
+      const worktree = cardWorktree(request.cwd, request.cardId)
+      try {
+        if (!existsSync(worktree)) {
+          try { execFileSync('git', ['worktree', 'add', worktree, '-b', branchName], { cwd: request.cwd, timeout: 30_000 }) }
+          catch { execFileSync('git', ['worktree', 'add', worktree, branchName], { cwd: request.cwd, timeout: 30_000 }) }
+        }
+        cwd = worktree
+        branch = branchName
+      } catch { /* shared checkout remains usable when worktree creation is unavailable */ }
+    }
+    const agent = this.hire({
+      boardId: request.boardId,
+      cwd,
+      provider: QWEN_PROVIDER_ID,
+      model: request.model,
+      effort: request.effort,
+      accessProfile: request.accessProfile,
+      cardId: request.cardId,
+    })
+    const state = this.required(agent.id)
+    state.branch = branch
+    this.db.prepare(`UPDATE cards SET owner_agent_id=?, column_name='in_progress', branch=?, updated_at=datetime('now') WHERE id=?`)
+      .run(agent.id, branch, request.cardId)
+    this.cardEvent(request.cardId, agent.id, 'launched', { agent: agent.name, provider: QWEN_PROVIDER_ID })
+    this.bus.emit('event', { board_id: request.boardId, type: 'card', data: this.card(request.cardId) })
+    this.bus.emit('event', {
+      board_id: request.boardId,
+      type: 'launch',
+      data: { card_id: request.cardId, agent_id: agent.id, agent_name: agent.name, provider: QWEN_PROVIDER_ID, status: 'started' },
+    })
+    this.task(agent.id, request.brief)
+    return { agent: this.agent(agent.id), card: this.card(request.cardId) }
+  }
+
+  isLaunched(cardId: number): boolean {
+    return [...this.states.values()].some((state) => !state.ended && state.cardId === cardId)
+  }
+
+  adoptLaunch(agentId: number): void {
+    const state = this.states.get(agentId)
+    if (!state || state.cardId !== null) return
+    const card = this.db.prepare(`SELECT c.id, c.branch FROM cards c
+      JOIN card_events e ON e.card_id=c.id AND e.type='launched' AND e.agent_id=?
+      WHERE c.owner_agent_id=? AND c.column_name='in_progress' ORDER BY e.id DESC LIMIT 1`)
+      .get(agentId, agentId) as { id: number; branch: string | null } | undefined
+    if (card) { state.cardId = card.id; state.branch = card.branch }
+  }
+
+  task(agentId: number, text: string): boolean {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !text) return false
+    this.log(state, 'user', text)
+    state.queue.push(text)
+    this.flush(state)
+    return true
+  }
+
+  deliver(agentId: number, message: any): boolean {
+    const from = message?.from_name ? ` from ${message.from_name}` : ''
+    const prefix = message?.kind === 'notify' ? 'notification' : message?.kind === 'task' ? 'task' : 'message'
+    return this.task(agentId, `orchestra ${prefix}${from}: ${String(message?.body ?? '')}`)
+  }
+
+  transcript(agentId: number): any {
+    const state = this.states.get(agentId)
+    if (!state) return { lines: [], working: null }
+    const resolvedModel = typeof state.session?.metadata.effectiveModel === 'string'
+      ? state.session.metadata.effectiveModel
+      : state.model
+    return {
+      lines: state.transcript,
+      working: state.turnActive ? { secs: 0, tokens: 0 } : null,
+      info: {
+        provider: QWEN_PROVIDER_ID,
+        capabilities: enabledCapabilities(QWEN_CAPABILITIES),
+        accessProfile: state.accessProfile,
+        model: state.model,
+        requestedModel: state.model,
+        resolvedModel,
+        effort: null,
+        resolvedEffort: null,
+        cwd: state.cwd,
+        tokens: state.usageTotal.total_tokens,
+        usage: { session: state.usageTotal },
+        models: readProviderModelCache(this.db, QWEN_PROVIDER_ID)?.models ?? [],
+        permissionMode: permissionModeForAccess(state.accessProfile),
+      },
+      permissions: [],
+    }
+  }
+
+  subagents(): { key: string; label: string }[] {
+    return []
+  }
+
+  async interruptAgent(agentId: number): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !state.session) return false
+    await this.driver.interrupt(state.session.id)
+    if (!state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(agentId)
+    this.log(state, 'status', 'interrupted by user')
+    this.persist(state)
+    return true
+  }
+
+  async fire(agentId: number): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) return false
+    state.stopping = true
+    if (state.session) await this.driver.stop(state.session.id).catch(() => undefined)
+    this.finish(state, state.cardId !== null && !state.cardFinalized ? 'error' : 'success', 'stopped by user')
+    return true
+  }
+
+  async setModel(agentId: number, model: string): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !model.trim()) return false
+    state.model = model.trim()
+    this.db.prepare('UPDATE agents SET model=? WHERE id=?').run(state.model, agentId)
+    this.log(state, 'status', `model → ${state.model} (takes effect next turn)`)
+    this.persist(state)
+    return true
+  }
+
+  async setEffort(agentId: number, _level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) return 'not-found'
+    // qwen CLI exposes no effort control
+    return 'bad-level'
+  }
+
+  async setAccessProfile(agentId: number, profile: AccessProfile): Promise<boolean> {
+    const state = this.states.get(agentId)
+    if (!state || state.ended || !isAccessProfile(profile)) return false
+    state.accessProfile = profile
+    this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
+    this.log(state, 'status', `access profile → ${profile} (recorded; qwen non-interactive runs stay in auto mode)`)
+    this.persist(state)
+    return true
+  }
+
+  async resolvePermission(): Promise<boolean> {
+    return false
+  }
+
+  async resolveApproval(): Promise<boolean> {
+    return false
+  }
+
+  async shutdown(): Promise<void> {
+    await Promise.allSettled([...this.states.values()].filter((state) => !state.ended).map(async (state) => {
+      state.detaching = true
+      this.persist(state)
+    }))
+  }
+
+  private async start(state: QwenState, externalId?: string): Promise<void> {
+    const session = await this.driver.launch({
+      workspaceId: `legacy-agent:${state.agentId}`,
+      boardId: state.boardId,
+      cwd: state.cwd,
+      name: state.name,
+      ...(externalId ? { externalId } : {}),
+      ...(state.model ? { model: state.model } : {}),
+      accessProfile: state.accessProfile,
+      metadata: {
+        agentId: state.agentId,
+        cardId: state.cardId,
+        role: state.role ?? null,
+        effort: state.effort,
+      },
+    })
+    if (state.ended || state.detaching) {
+      state.session = session
+      this.db.prepare(`UPDATE agents SET external_session_id=?, last_seen=datetime('now') WHERE id=?`)
+        .run(session.externalId || null, state.agentId)
+      await this.driver.stop(session.id).catch(() => undefined)
+      this.persist(state)
+      return
+    }
+    state.session = session
+    // '' would collide with the UNIQUE(provider, external_session_id) index —
+    // qwen reports its session id only in the first stream init event
+    this.db.prepare(`UPDATE agents SET status='idle', external_session_id=?,
+      last_seen=datetime('now') WHERE id=?`).run(session.externalId || null, state.agentId)
+    if (externalId) {
+      const restored = loadQwenSessionTranscript(state.cwd, externalId)
+      if (restored.length) {
+        state.transcript.push(...restored.map((line) => ({ ...line })))
+        this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+      }
+    }
+    this.ensureLegacyCollaborationSession(state, session)
+    this.ensureCredential(state)
+    this.log(state, 'status', `session started${state.model ? ` · ${state.model}` : ''} · ${state.cwd}`)
+    this.persist(state)
+    this.emitAgent(state)
+    void this.watch(state, session)
+    this.flush(state)
+  }
+
+  private flush(state: QwenState): void {
+    if (!state.session || state.ended || state.detaching) return
+    if (state.queue.length && !state.rateLimitPause)
+      this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'")
+        .run(state.agentId)
+    state.sending = state.sending.then(async () => {
+      while (state.session && state.queue.length && !state.ended && !state.detaching) {
+        await this.awaitIdle(state)
+        if (!state.session || state.ended || state.detaching || !state.queue.length) return
+        const text = state.queue.shift()!
+        await this.driver.send(state.session.id, text)
+        state.turnActive = true
+      }
+      this.persist(state)
+    }).catch((error) => {
+      this.log(state, 'error', error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  private awaitIdle(state: QwenState): Promise<void> {
+    if (!state.turnActive) return Promise.resolve()
+    return new Promise<void>((resolve) => { state.idleWaiters.push(resolve) })
+  }
+
+  private notifyIdle(state: QwenState): void {
+    if (state.turnActive) {
+      state.turnActive = false
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='idle', last_seen=datetime('now') WHERE id=? AND status='active'").run(state.agentId)
+    }
+    for (const waiter of state.idleWaiters.splice(0)) waiter()
+  }
+
+  private async watch(state: QwenState, session: DriverSession): Promise<void> {
+    let sawExit = false
+    try {
+      for await (const event of this.driver.events(session.id)) {
+        if (state.ended || state.detaching || state.session?.id !== session.id) return
+        state.lastEventSeq = Math.max(state.lastEventSeq, event.seq)
+        this.applyEvent(state, event)
+        if (event.type === 'exit') { sawExit = true; break }
+        if (state.cardId !== null && this.isTurnCompleted(event)) {
+          const failed = event.metadata?.phase === 'result_error'
+          this.finalizeCard(state, failed ? 'error' : 'success', event.data || (failed ? 'turn failed' : 'finished'))
+          state.stopping = true
+          await this.driver.stop(session.id).catch(() => undefined)
+          sawExit = true
+          break
+        }
+      }
+    } catch (error) {
+      this.log(state, 'error', error instanceof Error ? error.message : String(error))
+      sawExit = true
+    } finally {
+      if (state.detaching) {
+        this.persist(state)
+        return
+      }
+      if (sawExit && !state.ended) this.finish(
+        state,
+        state.cardFinalized ? 'success' : 'error',
+        state.stopping ? 'stopped' : 'Qwen session ended',
+      )
+    }
+  }
+
+  private applyEvent(state: QwenState, event: DriverEvent): void {
+    const metadata = event.metadata ?? {}
+    const phase = typeof metadata.phase === 'string' ? metadata.phase : null
+    const rateLimited = event.type === 'error'
+      && /rate.?limit|too many requests|quota|\b429\b/i.test(event.data)
+    if (rateLimited) {
+      state.rateLimitPause = { at: event.at }
+      this.db.prepare("UPDATE agents SET status='paused_provider', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    } else if (state.rateLimitPause && (event.type === 'output' || phase === 'turn_started')) {
+      state.rateLimitPause = null
+      this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    }
+    if (phase === 'turn_started') {
+      state.turnActive = true
+      if (!state.rateLimitPause)
+        this.db.prepare("UPDATE agents SET status='active', last_seen=datetime('now') WHERE id=? AND status='idle'").run(state.agentId)
+    }
+    if (phase && [
+      'turn_completed',
+      'turn_interrupted',
+      'turn_failed',
+      'result',
+      'result_error',
+      'spawn_error',
+    ].includes(phase)) {
+      this.notifyIdle(state)
+    }
+    const providerSessionId = typeof metadata.providerSessionId === 'string'
+      ? metadata.providerSessionId
+      : null
+    if (providerSessionId && state.session && state.session.externalId !== providerSessionId) {
+      state.session.externalId = providerSessionId
+      this.db.prepare('UPDATE agents SET external_session_id=?, last_seen=datetime(\'now\') WHERE id=?')
+        .run(providerSessionId, state.agentId)
+      this.db.prepare(`UPDATE agent_sessions SET external_id=?, updated_at=datetime('now')
+        WHERE agent_id=? AND provider=? AND status IN ('running','idle')`)
+        .run(providerSessionId, state.agentId, QWEN_PROVIDER_ID)
+      this.ensureCredential(state)
+    }
+    const usage = metadata.usage && typeof metadata.usage === 'object'
+      ? metadata.usage as Record<string, unknown>
+      : null
+    if (usage && phase === 'result') this.recordUsageDelta(state, usage)
+
+    if (appendDriverTranscript(state.transcript, event)) {
+      this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+    }
+    this.persist(state)
+  }
+
+  private recordUsageDelta(state: QwenState, raw: Record<string, unknown>): void {
+    const total = fromQwenStreamUsage(raw)
+    const previous = state.usageTotal
+    const delta: ProviderUsageSplit = {
+      provider: QWEN_PROVIDER_ID,
+      total_tokens: Math.max(0, total.total_tokens - previous.total_tokens),
+      input_tokens: Math.max(0, total.input_tokens - previous.input_tokens),
+      cached_input_tokens: Math.max(0, total.cached_input_tokens - previous.cached_input_tokens),
+      cache_creation_input_tokens: 0,
+      output_tokens: Math.max(0, total.output_tokens - previous.output_tokens),
+      reasoning_output_tokens: 0,
+      cost_cents: null,
+    }
+    if (delta.total_tokens > 0) recordProviderUsage(this.db, state.boardId, state.agentId, delta)
+    state.usageTotal = total
+  }
+
+  private isTurnCompleted(event: DriverEvent): boolean {
+    return event.metadata?.phase === 'result' || event.metadata?.phase === 'result_error'
+  }
+
+  private failStart(state: QwenState, error: unknown): void {
+    if (state.ended || state.detaching) return
+    const detail = error instanceof Error ? error.message : String(error)
+    this.log(state, 'error', `Qwen failed to start: ${detail}`)
+    this.finish(state, 'error', detail)
+  }
+
+  private finish(state: QwenState, outcome: 'success' | 'error', reason: string): void {
+    if (state.ended) return
+    state.ended = true
+    this.notifyIdle(state)
+    if (state.cardId !== null && !state.cardFinalized) this.finalizeCard(state, outcome, reason)
+    removeAgentCards(this.db, state.agentId)
+    this.db.prepare("UPDATE agents SET status='gone', last_seen=datetime('now') WHERE id=?").run(state.agentId)
+    bounceDeadLetters(this.db, state.agentId)
+    this.log(state, 'status', reason)
+    this.persist(state)
+    this.emitAgent(state)
+  }
+
+  private finalizeCard(state: QwenState, outcome: 'success' | 'error', reason: string): void {
+    if (state.cardId === null || state.cardFinalized) return
+    state.cardFinalized = true
+    const card = this.card(state.cardId)
+    if (!card) return
+    const column = card.column === 'done' ? 'done' : outcome === 'success' ? 'review' : 'blocked'
+    this.db.prepare(`UPDATE cards SET owner_agent_id=NULL, column_name=?, updated_at=datetime('now') WHERE id=?`)
+      .run(column, state.cardId)
+    this.cardEvent(state.cardId, state.agentId, 'agent_exit', {
+      outcome,
+      reason,
+      to: column,
+      agent: state.name,
+      provider: QWEN_PROVIDER_ID,
+    })
+    this.bus.emit('event', { board_id: state.boardId, type: 'card', data: this.card(state.cardId) })
+    this.bus.emit('event', {
+      board_id: state.boardId,
+      type: 'launch',
+      data: {
+        card_id: state.cardId,
+        agent_id: state.agentId,
+        agent_name: state.name,
+        provider: QWEN_PROVIDER_ID,
+        status: 'finished',
+        outcome,
+        reason,
+        to_column: column,
+        summary: this.finalAssistantOutput(state),
+      },
+    })
+  }
+
+  private finalAssistantOutput(state: QwenState): string | undefined {
+    for (let index = state.transcript.length - 1; index >= 0; index -= 1) {
+      const line = state.transcript[index]
+      if (line.kind !== 'text') continue
+      const output = line.text.trim()
+      if (output) return output
+    }
+    return undefined
+  }
+
+  private persist(state: QwenState): void {
+    const providerState = {
+      driver_session_id: state.session?.id ?? null,
+      provider_session_id: state.session?.externalId ?? null,
+      last_event_seq: state.lastEventSeq,
+      cwd: state.cwd,
+      card_id: state.cardId,
+      branch: state.branch,
+      lifecycle: state.ended ? 'stopped' : state.detaching ? 'detached' : state.session ? 'active' : 'starting',
+      usage_total: state.usageTotal,
+      rate_limit_pause: state.rateLimitPause,
+    }
+    this.db.prepare(`UPDATE agents SET provider_state_json=?, access_profile=?, model=?, effort=?, last_seen=datetime('now') WHERE id=?`)
+      .run(JSON.stringify(providerState), state.accessProfile, state.model, state.effort, state.agentId)
+  }
+
+  private log(state: QwenState, kind: TranscriptLine['kind'], text: string, metadata?: Record<string, unknown>): void {
+    state.transcript.push({ at: new Date().toISOString(), kind, text, ...(metadata ? { metadata } : {}) })
+    if (state.transcript.length > 500) state.transcript.shift()
+    this.bus.emit('event', { board_id: state.boardId, type: 'transcript', data: { agent_id: state.agentId } })
+  }
+
+  private emitAgent(state: QwenState): void {
+    this.bus.emit('event', { board_id: state.boardId, type: 'agent', data: this.agent(state.agentId) })
+  }
+
+  private cardEvent(cardId: number, agentId: number | null, type: string, payload: unknown): void {
+    this.db.prepare('INSERT INTO card_events (card_id, agent_id, type, payload) VALUES (?, ?, ?, ?)')
+      .run(cardId, agentId, type, JSON.stringify(payload))
+  }
+
+  private agent(agentId: number): any {
+    return this.db.prepare('SELECT * FROM agents WHERE id=?').get(agentId)
+  }
+
+  private card(cardId: number): any {
+    const card = this.db.prepare(`SELECT c.*, a.name AS owner FROM cards c
+      LEFT JOIN agents a ON a.id=c.owner_agent_id WHERE c.id=?`).get(cardId) as any
+    return card && { ...card, column: card.column_name, paths: JSON.parse(card.paths) }
+  }
+
+  private ambientWorkspace(state: QwenState) {
+    const existing = new WorkspaceStore(this.db).listBoard(state.boardId)
+      .find((workspace) => workspace.card_id === null
+        && workspace.status === 'active'
+        && (workspace.worktree_path ?? workspace.root_path) === state.cwd)
+    if (existing) return existing
+    return new WorkspaceStore(this.db).create({
+      boardId: state.boardId,
+      name: `Ambient ${state.name}`,
+      kind: 'shared',
+      rootPath: state.cwd,
+      status: 'active',
+    })
+  }
+
+  private ensureLegacyCollaborationSession(
+    state: QwenState,
+    session: DriverSession,
+  ): { workspaceId: string; sessionId: string } {
+    const workspace = this.ambientWorkspace(state)
+    const profile = new AgentProfileService(this.db).create({
+      boardId: state.boardId,
+      name: `Managed Qwen ${state.agentId}`,
+      defaultProvider: QWEN_PROVIDER_ID,
+      defaultModel: state.model,
+      defaultEffort: state.effort,
+      defaultAccessProfile: state.accessProfile,
+      actor: { type: 'system', id: 'qwen-managed-runtime' },
+      idempotencyKey: `qwen-managed-agent:${state.agentId}:profile`,
+      correlationId: `qwen-managed-agent:${state.agentId}`,
+    })
+    const conversation = this.db.prepare(`SELECT id FROM agent_conversations
+      WHERE board_id=? AND profile_id=? AND status='active' AND is_default=1`)
+      .get(state.boardId, profile.id) as { id: string }
+    const sessionId = `legacy-qwen:${state.agentId}`
+    this.db.prepare(`INSERT INTO agent_sessions (
+        id, workspace_id, agent_id, provider, external_id, model, status,
+        profile_id, conversation_id, context_json, mode, driver_id, access_profile,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, 'qwen', ?, ?, 'running', ?, ?, ?, 'managed', 'qwen', ?,
+        datetime('now'), datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        workspace_id=excluded.workspace_id, agent_id=excluded.agent_id,
+        external_id=excluded.external_id, model=excluded.model, status='running',
+        profile_id=excluded.profile_id, conversation_id=excluded.conversation_id,
+        context_json=excluded.context_json, access_profile=excluded.access_profile,
+        updated_at=datetime('now')
+      WHERE agent_sessions.job_id IS NULL`).run(
+      sessionId,
+      workspace.id,
+      state.agentId,
+      // NULL until the first init event binds the real id — '' would collide
+      // with the partial UNIQUE(provider, external_id) index
+      session.externalId || null,
+      state.model,
+      profile.id,
+      conversation.id,
+      JSON.stringify({ classification: 'legacy_managed', provider_session_id: session.externalId }),
+      state.accessProfile,
+    )
+    return { workspaceId: workspace.id, sessionId }
+  }
+
+  // qwen only reports its provider session id in the first stream init event;
+  // the credential is minted once that canonical id is bound (immediately for
+  // resume hires). Failures are logged, not fatal: the turn still runs.
+  private ensureCredential(state: QwenState): void {
+    const externalId = state.session?.externalId?.trim()
+    if (!externalId || state.ended || state.detaching) return
+    if (state.credentialSessionId === externalId) return
+    try {
+      provisionManagedAgentSessionCredential(this.db, {
+        agentId: state.agentId,
+        boardId: state.boardId,
+        agentName: state.name,
+        provider: QWEN_PROVIDER_ID,
+        externalSessionId: externalId,
+        cwd: state.cwd,
+      })
+      state.credentialSessionId = externalId
+    } catch (error) {
+      this.log(state, 'error', `session credential not provisioned: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private required(agentId: number): QwenState {
+    const state = this.states.get(agentId)
+    if (!state || state.ended) throw new Error(`Qwen agent is not live: ${agentId}`)
+    return state
+  }
+
+  private assertResumeOwnership(externalId: string, existingAgentId?: number): void {
+    const owner = this.db.prepare(`SELECT id, name FROM agents
+      WHERE provider=? AND external_session_id=? LIMIT 1`).get(QWEN_PROVIDER_ID, externalId) as
+      { id: number; name: string } | undefined
+    if (owner && owner.id !== existingAgentId)
+      throw new Error(`Qwen session ${externalId} already belongs to agent ${owner.name}`)
+    const durable = this.db.prepare(`SELECT agent_id FROM agent_sessions
+      WHERE provider=? AND external_id=? AND status='running'
+      ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(QWEN_PROVIDER_ID, externalId) as
+      { agent_id: number | null } | undefined
+    if (durable)
+      throw new Error(`Qwen session ${externalId} is already attached to an active Agent OS job`)
+  }
+}
+
 type QueuedLaunch = ProviderLaunchRequest & { provider: string }
 
 /** One server-facing conductor surface that routes every operation by persisted provider. */
@@ -960,6 +1709,7 @@ export class ProviderAgentManager implements ConductorLike {
     private readonly codex?: CodexManagedAgentRuntime,
     private readonly codexService?: AgentProviderService & { isRuntimeAvailable?(): boolean },
     private readonly agentOs?: AgentOsAgentControl,
+    private readonly qwen?: QwenManagedAgentRuntime,
   ) {
     bus.on('event', (event: any) => {
       if (event?.type === 'launch' && event?.data?.status === 'finished') void this.drainQueue()
@@ -967,16 +1717,20 @@ export class ProviderAgentManager implements ConductorLike {
   }
 
   isHired(agentId: number): boolean {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.isHiredAgent(agentId)
         : this.codex?.isHired(agentId) ?? false
-      : this.claude.isHired(agentId)
+    }
+    if (provider === QWEN_PROVIDER_ID) return this.qwen?.isHired(agentId) ?? false
+    return this.claude.isHired(agentId)
   }
 
   hire(options: ProviderHireOptions): any {
     const resolved = this.resolveHire(options)
     if (resolved.provider === CODEX_PROVIDER_ID) return this.requireCodex().hire(resolved)
+    if (resolved.provider === QWEN_PROVIDER_ID) return this.requireQwen().hire(resolved)
     if (resolved.provider !== 'claude') throw new ProviderUnavailableError(resolved.provider, 'no registered agent provider')
     const agent = this.claude.hire({
       ...resolved,
@@ -1008,29 +1762,40 @@ export class ProviderAgentManager implements ConductorLike {
     return this.launchQueue.some((request) => request.cardId === cardId)
       || this.claude.isLaunched(cardId)
       || (this.codex?.isLaunched(cardId) ?? false)
+      || (this.qwen?.isLaunched(cardId) ?? false)
       || (this.agentOs?.isLaunchedCard(cardId) ?? false)
   }
 
   deliver(agentId: number, message: any): boolean {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.deliverAgent(agentId, message)
         : this.codex?.deliver(agentId, message) ?? false
-      : this.claude.deliver(agentId, message)
+    }
+    if (provider === QWEN_PROVIDER_ID) return this.qwen?.deliver(agentId, message) ?? false
+    return this.claude.deliver(agentId, message)
   }
 
   task(agentId: number, text: string): boolean {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.taskAgent(agentId, text)
         : this.codex?.task(agentId, text) ?? false
-      : this.claude.task(agentId, text)
+    }
+    if (provider === QWEN_PROVIDER_ID) return this.qwen?.task(agentId, text) ?? false
+    return this.claude.task(agentId, text)
   }
 
   transcript(agentId: number): any {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
       if (this.usesAgentOs(agentId)) return this.agentOs!.transcriptAgent(agentId)
       return this.codex?.transcript(agentId) ?? { lines: [], working: null }
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.transcript(agentId) ?? { lines: [], working: null }
     }
     const transcript = this.claude.transcript(agentId)
     const row = this.agentRow(agentId)
@@ -1048,27 +1813,40 @@ export class ProviderAgentManager implements ConductorLike {
   }
 
   subagents(agentId: number): { key: string; label: string }[] {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.subagentsForAgent(agentId)
         : this.codex?.subagents(agentId) ?? []
-      : this.claude.subagents(agentId)
+    }
+    if (provider === QWEN_PROVIDER_ID) return this.qwen?.subagents() ?? []
+    return this.claude.subagents(agentId)
   }
 
   interruptAgent(agentId: number): Promise<boolean> {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.interruptManagedAgent(agentId)
         : this.codex?.interruptAgent(agentId) ?? Promise.resolve(false)
-      : this.claude.interruptAgent(agentId)
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.interruptAgent(agentId) ?? Promise.resolve(false)
+    }
+    return this.claude.interruptAgent(agentId)
   }
 
   fire(agentId: number): Promise<boolean> {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.fireManagedAgent(agentId)
         : this.codex?.fire(agentId) ?? Promise.resolve(false)
-      : this.claude.fire(agentId)
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.fire(agentId) ?? Promise.resolve(false)
+    }
+    return this.claude.fire(agentId)
   }
 
   wake(boardId: number): { woke: string[]; queued: string[]; skipped: string[] } {
@@ -1083,9 +1861,13 @@ export class ProviderAgentManager implements ConductorLike {
 
   async setAccessProfile(agentId: number, profile: AccessProfile): Promise<boolean> {
     if (!isAccessProfile(profile)) return false
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
       if (this.usesAgentOs(agentId)) return this.agentOs!.setManagedAgentAccess(agentId, profile)
       return this.codex?.setAccessProfile(agentId, profile) ?? false
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.setAccessProfile(agentId, profile) ?? false
     }
     const ok = (await this.claude.setPermissionMode?.(agentId, permissionModeForAccess(profile))) ?? false
     if (ok) this.db.prepare('UPDATE agents SET access_profile=? WHERE id=?').run(profile, agentId)
@@ -1093,10 +1875,12 @@ export class ProviderAgentManager implements ConductorLike {
   }
 
   async resolvePermission(agentId: number, requestId: string, behavior: 'allow' | 'deny', message?: string, answers?: Record<string, string[]>): Promise<boolean> {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) {
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
       if (this.usesAgentOs(agentId)) return this.agentOs!.resolveManagedApproval(agentId, requestId, behavior, message)
       return this.codex?.resolvePermission(agentId, requestId, behavior, message) ?? false
     }
+    if (provider === QWEN_PROVIDER_ID) return false
     return this.claude.resolvePermission?.(agentId, requestId, behavior, message, answers) ?? false
   }
 
@@ -1107,20 +1891,27 @@ export class ProviderAgentManager implements ConductorLike {
     message?: string,
     answers?: Record<string, string[]>,
   ): Promise<boolean> {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID)
       return this.usesAgentOs(agentId)
         ? this.agentOs!.resolveManagedApproval(agentId, requestId, decision, message, answers)
         : this.codex?.resolveApproval(agentId, requestId, decision, message, answers) ?? false
+    if (provider === QWEN_PROVIDER_ID) return false
     if (decision !== 'allow' && decision !== 'deny') return false
     return this.claude.resolvePermission?.(agentId, requestId, decision, message, answers) ?? false
   }
 
   setModel(agentId: number, model: string): Promise<boolean> {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.setManagedAgentModel(agentId, model)
         : this.codex?.setModel(agentId, model) ?? Promise.resolve(false)
-      : this.claude.setModel?.(agentId, model) ?? Promise.resolve(false)
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.setModel(agentId, model) ?? Promise.resolve(false)
+    }
+    return this.claude.setModel?.(agentId, model) ?? Promise.resolve(false)
   }
 
   renameAgent(agentId: number, name: string): void {
@@ -1128,15 +1919,23 @@ export class ProviderAgentManager implements ConductorLike {
   }
 
   setEffort(agentId: number, level: string): Promise<'ok' | 'busy' | 'not-found' | 'bad-level' | 'no-session'> {
-    return this.providerForAgent(agentId) === CODEX_PROVIDER_ID
-      ? this.usesAgentOs(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) {
+      return this.usesAgentOs(agentId)
         ? this.agentOs!.setManagedAgentEffort(agentId, level)
         : this.codex?.setEffort(agentId, level) ?? Promise.resolve('not-found')
-      : this.claude.setEffort?.(agentId, level) ?? Promise.resolve('not-found')
+    }
+    if (provider === QWEN_PROVIDER_ID) {
+      return this.qwen?.setEffort(agentId, level) ?? Promise.resolve('not-found')
+    }
+    return this.claude.setEffort?.(agentId, level) ?? Promise.resolve('not-found')
   }
 
   capabilities(agentId: number): string[] {
-    return enabledCapabilities(this.providerForAgent(agentId) === CODEX_PROVIDER_ID ? CODEX_CAPABILITIES : CLAUDE_CAPABILITIES)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) return enabledCapabilities(CODEX_CAPABILITIES)
+    if (provider === QWEN_PROVIDER_ID) return enabledCapabilities(QWEN_CAPABILITIES)
+    return enabledCapabilities(CLAUDE_CAPABILITIES)
   }
 
   mcpStatus(agentId: number): Promise<unknown | null> {
@@ -1187,12 +1986,48 @@ export class ProviderAgentManager implements ConductorLike {
         detail: this.codex ? 'Codex model discovery is still initializing.' : 'Install and authenticate the Codex CLI to enable this provider.',
       })
     }
-    return [...claude.map((catalog) => ({ ...catalog, capabilities: catalog.capabilities ?? CLAUDE_CAPABILITIES })), codex]
+    return [
+      ...claude.map((catalog) => ({ ...catalog, capabilities: catalog.capabilities ?? CLAUDE_CAPABILITIES })),
+      codex,
+      this.qwenCatalog(),
+    ]
+  }
+
+  private qwenCatalog(): AgentProviderCatalog {
+    const available = !!this.qwen
+    const cached = readProviderModelCache(this.db, QWEN_PROVIDER_ID)
+    const models = cached?.models?.length
+      ? cached.models
+      : QWEN_PROVIDER_MODEL_CATALOG_V1.map((model) => ({
+          value: model.id,
+          displayName: model.displayName,
+          description: model.description,
+          isDefault: model.isDefault,
+        }))
+    return qwenProviderCatalog({
+      available,
+      models,
+      source: cached ? 'cache' : 'live',
+      updatedAt: cached?.updated_at ?? null,
+      capabilities: QWEN_CAPABILITIES,
+      detail: available
+        ? 'Qwen Code runs non-interactive turns on the operator-selected Coding Plan profile.'
+        : 'Install and authenticate the Qwen Code CLI to enable this provider.',
+    })
   }
 
   adoptLaunch(agentId: number): void {
-    if (this.providerForAgent(agentId) === CODEX_PROVIDER_ID) this.codex?.adoptLaunch(agentId)
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) this.codex?.adoptLaunch(agentId)
+    else if (provider === QWEN_PROVIDER_ID) this.qwen?.adoptLaunch(agentId)
     else (this.claude as ConductorLike & { adoptLaunch?(id: number): void }).adoptLaunch?.(agentId)
+  }
+
+  resumeInterrupted(agentId: number): void {
+    const provider = this.providerForAgent(agentId)
+    if (provider === CODEX_PROVIDER_ID) return // Codex jobs reattach via the job executor
+    if (provider === QWEN_PROVIDER_ID) return // Qwen sessions resume via the hire modal
+    ;(this.claude as ConductorLike & { resumeInterrupted?(id: number): void }).resumeInterrupted?.(agentId)
   }
 
   async shutdown(): Promise<void> {
@@ -1202,6 +2037,7 @@ export class ProviderAgentManager implements ConductorLike {
         ? detachClaude.call(this.claude)
         : (this.claude as ConductorLike & { shutdown?(): Promise<void> }).shutdown?.() ?? Promise.resolve(),
       this.codex?.shutdown() ?? Promise.resolve(),
+      this.qwen?.shutdown() ?? Promise.resolve(),
     ])
   }
 
@@ -1242,6 +2078,7 @@ export class ProviderAgentManager implements ConductorLike {
 
   private startLaunch(request: QueuedLaunch): any {
     if (request.provider === CODEX_PROVIDER_ID) return this.requireCodex().launch(request)
+    if (request.provider === QWEN_PROVIDER_ID) return this.requireQwen().launch(request)
     if (request.provider !== 'claude') throw new ProviderUnavailableError(request.provider, 'no registered agent provider')
     return this.claude.launch({
       ...request,
@@ -1283,6 +2120,7 @@ export class ProviderAgentManager implements ConductorLike {
   private assertProviderAvailable(provider: string): void {
     if (provider === 'claude') return
     if (provider === CODEX_PROVIDER_ID && this.codex && this.codexService?.isRuntimeAvailable?.() !== false) return
+    if (provider === QWEN_PROVIDER_ID && this.qwen) return
     throw new ProviderUnavailableError(provider, 'no registered agent provider')
   }
 
@@ -1291,6 +2129,12 @@ export class ProviderAgentManager implements ConductorLike {
     if (this.codexService?.isRuntimeAvailable?.() === false)
       throw new ProviderUnavailableError(CODEX_PROVIDER_ID, 'Codex app-server is reconnecting or no longer authenticated')
     return this.codex
+  }
+
+  private requireQwen(): QwenManagedAgentRuntime {
+    if (!this.qwen)
+      throw new ProviderUnavailableError(QWEN_PROVIDER_ID, 'Qwen Code CLI is not ready')
+    return this.qwen
   }
 
   private providerForAgent(agentId: number): string {

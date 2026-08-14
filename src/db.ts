@@ -266,6 +266,12 @@ export function openDb(file: string): Database.Database {
   try { db.exec(`ALTER TABLE milestones ADD COLUMN status TEXT NOT NULL DEFAULT 'open'`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE milestones ADD COLUMN outcome TEXT NOT NULL DEFAULT ''`) } catch { /* exists */ }
   try { db.exec(`ALTER TABLE milestones ADD COLUMN rank REAL`) } catch { /* exists */ }
+  // backlog funnel (#178): a card sits at one altitude of the decomposition —
+  // feature spec -> tech spec -> task — under an epic (its milestone). Existing cards
+  // stay 'task' with no parent, so nothing that predates the funnel becomes gated.
+  try { db.exec(`ALTER TABLE cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE cards ADD COLUMN parent_card_id INTEGER REFERENCES cards(id)`) } catch { /* exists */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS cards_parent_idx ON cards(parent_card_id)`) } catch { /* exists */ }
   // Existing targeted mail retains ask semantics. Old targetless rows become inert for
   // agents because only explicit, snapshotted swarms enter the fan-out inbox path.
   try { db.exec(`ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'ask'`) } catch { /* exists */ }

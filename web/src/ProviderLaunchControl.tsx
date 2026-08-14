@@ -64,9 +64,6 @@ export function ProviderLaunchControl({
       ...providerLaunchBody(provider, model, effort, accessProfile || null),
       idempotency_key: window.crypto.randomUUID(),
     }
-    if (body.access_profile === 'full_access' && !window.confirm(
-      `Launch ${selectedProvider?.name ?? 'this agent'} with full access? It can read and modify files outside the workspace and run unsandboxed commands.`,
-    )) return
     setLaunching(true)
     setError(null)
     try {

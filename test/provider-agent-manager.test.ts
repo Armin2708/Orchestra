@@ -378,6 +378,7 @@ it('uses specialist provider defaults for verifier agents', async () => {
 
   const verifier = t.manager.hire({ boardId: 1, cwd: '/project', role: 'verifier', ephemeral: true })
   expect(verifier.provider).toBe('codex')
+  expect(verifier.name).toBe('tester-agent')
   await until(() => t.driver.launches.length === 1)
   expect(t.driver.launches[0]).toMatchObject({ model: 'gpt-5.4', accessProfile: 'read_only' })
   expect(t.driver.launches[0].metadata).toMatchObject({

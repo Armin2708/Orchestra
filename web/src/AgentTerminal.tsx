@@ -1,9 +1,11 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, Agent, Card, Thread, timeAgo } from './api'
 import { BOARD_COMMANDS, isBoardCommand, runBoardCommand } from './boardCommands'
 import { CardDrawer } from './CardDrawer'
 import { ConfirmDialog } from './ConfirmDialog'
+import { agentActivity } from './agentActivity'
 import { followIntent } from './follow'
+import { MailLetter } from './MailLetter'
 import { ProviderBadge } from './ProviderBadge'
 import {
   ACCESS_PROFILES,
@@ -28,6 +30,7 @@ import {
 } from './agentTerminalControls'
 import { RemoteControlGate, useRemoteAccess } from './RemoteAccess'
 import { visibleInterval } from './visibleInterval'
+import { migrateAgentPosition } from './NetworkView'
 
 // mirrors the daemon's transcript cursor fingerprint (server.ts `lineAnchor`) — both
 // sides must agree or every poll silently degrades to a full-history fetch
@@ -241,8 +244,6 @@ function PermissionModeHint({ agentId, profile, onChange, onError }: {
   const choose = async (next: AccessProfile) => {
     setOpen(false)
     if (next === profile) return
-    if (next === 'full_access'
-      && !window.confirm('Bypass permissions removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
     try {
       await api('POST', `/agents/${agentId}/access-profile`, { profile: next })
       onChange()
@@ -410,36 +411,45 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       }).catch(() => {})
     }
     load()
-    // 2s, not 1s: a delta poll is cheap but the daemon still pays fastify routing and a
-    // board query per request, once per open drawer. External tails only change as fast
-    // as the agent works — poll those gently.
+    // 2s, not 1s: even a delta poll costs fastify routing plus a board query per open
+    // drawer, and each tick lands four state updates. External tails only change as fast
+    // as the agent works — poll those gently. Hidden tabs stop polling entirely.
     const stop = visibleInterval(load, hired ? 2000 : 4000)
     return () => { alive = false; stop() }
   }, [agent.id, agent.provider, hired])
 
-  // interleave local command echo with the streamed transcript by timestamp
-  const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
-  const streamed = hired || visibleLines.length > 0
-  // board messages involving this agent, as chat lines with sortable ISO timestamps
-  // (created_at is SQL 'YYYY-MM-DD HH:MM:SS' UTC)
-  const messageLine = (m: { id: number; from_name: string | null; to_name: string | null; body: string; created_at: string }): Line => ({
-    at: `${m.created_at.replace(' ', 'T')}Z`,
-    kind: m.from_name === agent.name ? 'text' : 'user',
-    text: m.from_name === agent.name
-      ? (m.to_name ? `→ ${m.to_name}: ${m.body}` : m.body)
-      : (m.from_name ? `${m.from_name}: ${m.body}` : m.body),
-    messageId: m.id,
-  })
-  const threadLines: Line[] = [...threads]
-    .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
-    .filter((t) => (t.from_name === agent.name || t.to_name === agent.name) && !deletedMsgIds.has(t.id))
-    .flatMap((t) => [messageLine(t), ...t.replies.filter((r) => !deletedMsgIds.has(r.id)).map(messageLine)])
-  // a terminal session's chat runs over board messages — merge them into the streamed
-  // transcript so the drawer reads as one conversation (hired agents get messages
-  // pushed into their real transcript already)
-  const mergedLines = hired ? visibleLines : [...visibleLines, ...threadLines]
-  const convo: Line[] = streamed ? ([...mergedLines, ...localLines]
-    .sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)) : threadLines
+  // interleave local command echo with the streamed transcript by timestamp.
+  // Memoized as one block: this rebuilt three arrays and re-sorted the conversation on
+  // every render, and the composer is controlled, so it ran on every keystroke. Holding
+  // the identity steady is also what lets the rendered line list below memoize at all.
+  const { convo, streamed } = useMemo(() => {
+    const visibleLines = clearedAt ? lines.filter((line) => !line.at || line.at > clearedAt) : lines
+    const isStreamed = hired || visibleLines.length > 0
+    // board messages involving this agent, as chat lines with sortable ISO timestamps
+    // (created_at is SQL 'YYYY-MM-DD HH:MM:SS' UTC)
+    const messageLine = (m: { id: number; from_name: string | null; to_name: string | null; body: string; created_at: string }): Line => ({
+      at: `${m.created_at.replace(' ', 'T')}Z`,
+      kind: m.from_name === agent.name ? 'text' : 'user',
+      text: m.from_name === agent.name
+        ? (m.to_name ? `→ ${m.to_name}: ${m.body}` : m.body)
+        : (m.from_name ? `${m.from_name}: ${m.body}` : m.body),
+      messageId: m.id,
+    })
+    const threadLines: Line[] = [...threads]
+      .sort((a, b) => a.id - b.id) // server serves newest-first; a terminal reads top to bottom
+      .filter((t) => (t.from_name === agent.name || t.to_name === agent.name) && !deletedMsgIds.has(t.id))
+      .flatMap((t) => [messageLine(t), ...t.replies.filter((r) => !deletedMsgIds.has(r.id)).map(messageLine)])
+    // a terminal session's chat runs over board messages — merge them into the streamed
+    // transcript so the drawer reads as one conversation (hired agents get messages
+    // pushed into their real transcript already)
+    const mergedLines = hired ? visibleLines : [...visibleLines, ...threadLines]
+    return {
+      streamed: isStreamed,
+      convo: isStreamed
+        ? [...mergedLines, ...localLines].sort((a, b) => (a.at ?? '') < (b.at ?? '') ? -1 : 1)
+        : threadLines,
+    }
+  }, [lines, clearedAt, hired, threads, deletedMsgIds, localLines, agent.name])
 
   const provider = normalizeProvider(info?.provider ?? agent.provider)
   const capabilities = info?.capabilities ?? agent.capabilities
@@ -532,8 +542,6 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (!hired || !canAccessProfile) return
     const current = ACCESS_PROFILES.findIndex((profile) => profile.value === accessProfile)
     const next = ACCESS_PROFILES[(current + 1 + ACCESS_PROFILES.length) % ACCESS_PROFILES.length]
-    if (next.value === 'full_access'
-      && !window.confirm('Full access removes provider sandbox restrictions for this agent. Continue only if you trust the workspace and task.')) return
     try {
       await api('POST', `/agents/${agent.id}/access-profile`, { profile: next.value })
       setControlError(null)
@@ -817,9 +825,33 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       case 'error':
         return <p key={i} className="cc-error">✗ {l.text}</p>
       default:
-        return <p key={i} className="cc-text"><span className="cc-dot">⏺</span> {l.text}{msgDelete(l)}</p>
+        // agent messages arrive as markdown-ish plain text — render it styled
+        return (
+          <div key={i} className="cc-text cc-rich">
+            <span className="cc-dot">⏺</span>
+            <div className="cc-rich-body"><MailLetter text={l.text} /></div>
+            {msgDelete(l)}
+          </div>
+        )
     }
   }
+
+  // The composer is controlled, so every keystroke re-renders this component — and each
+  // poll tick lands four more state updates. Without this memo all of that re-ran
+  // renderLine over the full 500-line transcript, re-parsing markdown through MailLetter
+  // for every rich line, which is what made typing feel laggy. Holding the element array
+  // steady lets React skip the whole list unless the conversation itself changed.
+  const renderedConvo = useMemo(
+    () => convo.map(renderLine),
+    // renderLine reads exactly these; `convo` already folds in lines, messages and deletions
+    [convo, transcriptExpanded, canPromptAgent],
+  )
+
+  // the question the agent is currently working on, condensed to one line —
+  // read-only terminal seats never report a turn, so fall back to board activity
+  const lastAsk = turn !== null || agentActivity(agent) === 'working'
+    ? [...convo].reverse().find((l) => l.kind === 'user')?.text.replace(/\s+/g, ' ').trim() ?? null
+    : null
 
   const ownedCards = cards.filter((c) => c.owner === agent.name)
   const assignable = cards.filter((c) => c.column !== 'done' && c.owner !== agent.name)
@@ -922,14 +954,19 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             {renaming !== null ? (
               <input className="cc-name-input" autoFocus value={renaming} maxLength={32}
                 aria-label="Rename agent"
-                onChange={(e) => setRenaming(e.target.value)}
+                // normalise live so what you see is what's saved: lowercase, spaces/junk -> dashes,
+                // no leading dash; maxLength caps the length as you type (not at submit)
+                onChange={(e) => setRenaming(
+                  e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+/, ''))}
                 onKeyDown={async (e) => {
                   if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); return }
                   if (e.key !== 'Enter') return
-                  const next = renaming.trim().toLowerCase()
+                  // only a trailing dash can't be prevented mid-type — strip it on submit
+                  const next = renaming.replace(/-+$/, '')
                   if (!next || next === agent.name) { setRenaming(null); return }
                   try {
                     await api('POST', `/agents/${agent.id}/rename`, { name: next })
+                    migrateAgentPosition(boardId, agent.name, next)
                     setRenaming(null)
                     onChange()
                   } catch (cause) { setControlError(controlErrorText(cause)) }
@@ -998,7 +1035,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
                     <p className="cc-welcome-sub">{agent.name} · {agent.status} · always review the work of autonomous agents</p>
                   </div>
                 )}
-                {convo.map(renderLine)}
+                {renderedConvo}
                 {!working && convo.length === 0 && (
                   <p className="cc-status">
                     {hired ? 'No activity yet — type a prompt below.' : 'No board conversation with this agent yet.'}
@@ -1048,6 +1085,11 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
           </div>
 
           <div className="cc-prompt-wrap">
+            {lastAsk && (
+              <p className="cc-asking" title={lastAsk}>
+                Asking: {lastAsk.length > 140 ? `${lastAsk.slice(0, 140)}…` : lastAsk}
+              </p>
+            )}
             {canPromptAgent && controlPanel && <AgentControlPanel agentId={agent.id} panel={controlPanel}
               models={info?.models ?? []} legacyModel={info?.model ?? null}
               requestedModel={info && 'requestedModel' in info ? info.requestedModel : undefined}

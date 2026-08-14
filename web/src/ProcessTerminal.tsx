@@ -241,12 +241,19 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       if (alive) timer = window.setTimeout(read, delay)
     }
 
+    // A live process is read with a long poll: the daemon holds the request until the pty
+    // writes, so output (including the echo of what you just typed) comes back at network
+    // latency rather than on a fixed interval, and an idle terminal costs one parked
+    // request instead of six a second. Re-issue immediately — the wait is server-side.
+    const live = ['running', 'starting', 'stopping'].includes(process.status)
+    const waitMs = live ? 20_000 : 0
+
     const read = async () => {
       if (!alive || pending) return
       pending = true
-      let nextDelay = ['running', 'starting', 'stopping'].includes(process.status) ? 160 : 1_500
+      let nextDelay = live ? 0 : 1_500
       try {
-        const { items, nextSeq } = await osApi.readProcessOutput(process.id, sequenceRef.current)
+        const { items, nextSeq } = await osApi.readProcessOutput(process.id, sequenceRef.current, waitMs)
         if (!alive) return
         for (const item of items.sort((a, b) => a.seq - b.seq)) {
           terminalRef.current?.write(item.data)
@@ -263,6 +270,8 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
         }
       } catch (error) {
         if (alive) setStreamError(error instanceof Error ? error.message : 'Terminal output is unavailable.')
+        // a failing request must not spin: re-issuing at zero delay would hammer the daemon
+        nextDelay = 1_000
       } finally {
         pending = false
         schedule(nextDelay)

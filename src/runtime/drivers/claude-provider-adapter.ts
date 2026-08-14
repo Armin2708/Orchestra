@@ -207,6 +207,11 @@ const credentialFreeEnvironment = (
     'TMPDIR',
     'TEMP',
     'TMP',
+    // Without USER the CLI cannot reach its stored credentials and reports a FALSE
+    // signed-out, which would make a signed-in provider look unauthenticated here
+    // too. Usernames are not secrets. (Bisected while building the #142 auth probe.)
+    'USER',
+    'LOGNAME',
   ]) {
     if (typeof source[variable] === 'string') {
       environment[variable] = source[variable]

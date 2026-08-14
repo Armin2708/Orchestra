@@ -6,6 +6,8 @@ import { NetworkView } from './NetworkView'
 import { ProviderBadge } from './ProviderBadge'
 import { ProviderLaunchControl } from './ProviderLaunchControl'
 import { HireControl } from './HireModal'
+// the mastermind lives in the Teams tab only — it never renders as Overview crew
+import { isMastermind } from './mastermind'
 import { AgentProviderCatalog, osApi } from './osApi'
 import { boardIdFromSearch, cardDrawerDeepLink, cardIdFromSearch } from './boardDeepLink'
 import {
@@ -16,6 +18,7 @@ import {
   clampCanvasZoom,
   defaultCanvasViewport,
   panCanvasBy,
+  screenToCanvasLocal,
   zoomCanvasAt,
 } from './canvasViewport'
 
@@ -26,6 +29,181 @@ export const STATUS: Record<string, { label: string; bg: string; ink: string }> 
   review: { label: 'Review', bg: '#E1F3FE', ink: '#1F6C9F' },
   done: { label: 'Done', bg: '#EDF3EC', ink: '#346538' },
 }
+
+// every hired agent spawns in the spawn pool under the + Hire bar: its "new" tag
+// clears the first time the operator opens it, and it only leaves the pool when
+// dragged out (activation) — both persist per browser in localStorage
+const SEEN_HIRES_KEY = 'orchestra-seen-hired-agents'
+const ACTIVATED_HIRES_KEY = 'orchestra-activated-hires'
+// agents older than this at seed time are pre-existing crew, not unseen new hires
+const SEED_GRACE_MS = 10 * 60 * 1000
+
+function loadIdSet(key: string): Set<number> | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return null
+    return new Set((JSON.parse(raw) as number[]).filter((id) => Number.isFinite(id)))
+  } catch { return null }
+}
+
+function saveIdSet(key: string, ids: Set<number>) {
+  try { localStorage.setItem(key, JSON.stringify([...ids])) } catch { /* private mode */ }
+}
+
+function hiredAgo(a: Agent): number {
+  return a.created_at ? Date.now() - new Date(a.created_at.replace(' ', 'T') + 'Z').getTime() : Infinity
+}
+
+// a pooled agent looks like a regular network node — round avatar + name — with a
+// "new" tag until first opened. It drags like canvas agents (the node follows the
+// pointer); releasing it outside the pool activates it, a plain tap opens it.
+// The release point is handed to the graph so the agent lands where it was dropped.
+function PoolNode({ a, isNew, viewport, onOpen, onActivate }: {
+  a: Agent
+  isNew?: boolean
+  viewport: CanvasViewport
+  onOpen: () => void
+  onActivate: (dropAt: { x: number; y: number } | null) => void
+}) {
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
+  const origin = useRef<{ x: number; y: number } | null>(null)
+  const moved = useRef(false)
+  const node = useRef<HTMLDivElement>(null)
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    try { (e.target as Element).setPointerCapture?.(e.pointerId) } catch { /* synthetic pointer */ }
+    origin.current = { x: e.clientX, y: e.clientY }
+    moved.current = false
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!origin.current) return
+    const dx = e.clientX - origin.current.x
+    const dy = e.clientY - origin.current.y
+    if (!moved.current && Math.hypot(dx, dy) < 4) return
+    moved.current = true
+    setDrag({ dx, dy })
+  }
+  const finishDrag = (e: React.PointerEvent, cancelled: boolean) => {
+    if (!origin.current) return
+    const wasDrag = moved.current
+    origin.current = null
+    moved.current = false
+    setDrag(null)
+    if (cancelled) return
+    if (!wasDrag) { onOpen(); return }
+    const pool = node.current?.closest('.hire-pool')?.getBoundingClientRect()
+    const outside = !pool || e.clientX < pool.left || e.clientX > pool.right
+      || e.clientY < pool.top || e.clientY > pool.bottom
+    if (outside) onActivate(dropNorm(e))
+  }
+
+  // release point → the graph's normalized coords (same math as NetworkView.onMove)
+  const dropNorm = (e: React.PointerEvent): { x: number; y: number } | null => {
+    const project = node.current?.closest('.project')
+    const network = project?.querySelector('.network')
+    const board = project?.closest('.board-canvas')
+    if (!network || !board) return null
+    const nRect = network.getBoundingClientRect()
+    const bRect = board.getBoundingClientRect()
+    if (nRect.width <= 0 || nRect.height <= 0) return null
+    const local = screenToCanvasLocal(
+      viewport,
+      { x: e.clientX - bRect.left, y: e.clientY - bRect.top },
+      { x: nRect.left - bRect.left, y: nRect.top - bRect.top },
+    )
+    return {
+      x: Math.min(4, Math.max(-3, local.x / nRect.width)),
+      y: Math.min(4, Math.max(-3, local.y / nRect.height)),
+    }
+  }
+
+  return (
+    <div ref={node} className={`pool-node ${drag ? 'dragging' : ''}`}
+      style={drag ? { transform: `translate(${drag.dx}px, ${drag.dy}px)` } : undefined}>
+      {isNew && <i className="new-tag">new</i>}
+      <span className={`net-avatar round ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
+        title={`${a.name} · click to open, drag out of the pool to activate`}
+        role="button" tabIndex={0} aria-label={`Open ${a.name}'s console`}
+        style={{ background: agentWash(a.name), color: agentInk(a.name) }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={(e) => finishDrag(e, false)}
+        onPointerCancel={(e) => finishDrag(e, true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}>
+        {initials(a.name)}
+        <i className={`presence ${a.status}`} />
+      </span>
+      <span className="net-name">{a.name} <ProviderBadge provider={a.provider} compact /></span>
+    </div>
+  )
+}
+
+// the pool collapses away (shrinks to nothing) once its last agent is dragged out
+function SpawnPool({ pooled, isNewHire, viewport, onOpen, onActivate }: {
+  pooled: Agent[]
+  isNewHire: (a: Agent) => boolean
+  viewport: CanvasViewport
+  onOpen: (a: Agent) => void
+  onActivate: (a: Agent, dropAt: { x: number; y: number } | null) => void
+}) {
+  const [ghost, setGhost] = useState(false)
+  const hadAgents = useRef(pooled.length > 0)
+  useEffect(() => {
+    if (pooled.length === 0 && hadAgents.current) {
+      setGhost(true)
+      const t = setTimeout(() => setGhost(false), 340)
+      hadAgents.current = false
+      return () => clearTimeout(t)
+    }
+    hadAgents.current = pooled.length > 0
+  }, [pooled.length])
+
+  if (pooled.length === 0 && !ghost) return null
+  return (
+    <div className={`hire-pool ${pooled.length === 0 ? 'collapsing' : ''}`}
+      aria-label="Spawn pool — drag an agent out to activate it">
+      {pooled.map((a) => (
+        <PoolNode key={a.id} a={a} isNew={isNewHire(a)} viewport={viewport}
+          onOpen={() => onOpen(a)} onActivate={(dropAt) => onActivate(a, dropAt)} />
+      ))}
+      <i className="pool-hint">drag out to activate</i>
+    </div>
+  )
+}
+
+function CrewSlot({ a, isNew, onOpen, onChange }: {
+  a: Agent
+  isNew?: boolean
+  onOpen: () => void
+  onChange: () => void
+}) {
+  return (
+    <span className="crew-slot">
+      {isNew && <i className="new-tag">new</i>}
+      <span className={`avatar clickable ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
+        title={`${a.name} · ${a.status} · open console`}
+        role="button" tabIndex={0} aria-label={`Open ${a.name}'s console`}
+        style={{ background: agentWash(a.name), color: agentInk(a.name) }}
+        onClick={onOpen}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}>
+        {initials(a.name)}
+        <i className="presence" />
+      </span>
+      <ProviderBadge provider={a.provider} compact />
+      {a.kind === 'hired' && (
+        <button className="icon-x fire" title={`Fire ${a.name}`} aria-label={`Fire ${a.name}`}
+          onClick={async () => {
+            if (!window.confirm(`Fire ${a.name}? Its running session is killed.`)) return
+            await api('POST', `/agents/${a.id}/fire`); onChange()
+          }}>×</button>
+      )}
+    </span>
+  )
+}
+
+// the rail lists open tickets in the order an operator triages them
+const RAIL_GROUP_ORDER = ['in_progress', 'review', 'blocked', 'backlog']
 
 function RailCard({ c, isLocked, providers, onOpen, onChange }: {
   c: Card
@@ -45,6 +223,7 @@ function RailCard({ c, isLocked, providers, onOpen, onChange }: {
       style={{ ['--st' as any]: st.ink }}
       title={isLocked ? 'Has open prerequisite steps — the assignee will coordinate with their owners' : 'Drag onto an agent to assign'}>
       <div className="t-top">
+        <span className="t-id">#{c.id}</span>
         <span className="status-chip" style={{ background: st.bg, color: st.ink }}>{isLocked ? '⛓ ' : ''}{st.label}</span>
         {c.column === 'review' && c.verification && (
           <span className={`verify-badge vb-${c.verification.running ? 'running' : c.verification.verdict}`}
@@ -91,6 +270,17 @@ function TicketRail({ snap, providers, onOpen, onChange }: {
   const locked = (c: Card) => Boolean(c.milestone_id && snap.cards.some((o) =>
     o.milestone_id === c.milestone_id && (o.step_order ?? 0) < (c.step_order ?? 0) && o.column !== 'done'))
   const loose = snap.cards.filter((c) => c.column !== 'done' && !c.milestone_id)
+  // loose tickets read as one undifferentiated wall unless they are grouped by what
+  // is actually happening to them — working first, queued last (#158)
+  const groups = [...RAIL_GROUP_ORDER.map((column) => ({
+    key: column,
+    label: (STATUS[column] ?? STATUS.backlog).label,
+    cards: loose.filter((c) => c.column === column),
+  })), {
+    key: 'other',
+    label: 'Other',
+    cards: loose.filter((c) => !RAIL_GROUP_ORDER.includes(c.column)),
+  }].filter((g) => g.cards.length > 0)
   const milestones = (snap.milestones ?? []).map((m) => {
     const steps = snap.cards.filter((c) => c.milestone_id === m.id)
       .sort((a, b) => (a.step_order ?? 0) - (b.step_order ?? 0))
@@ -108,16 +298,20 @@ function TicketRail({ snap, providers, onOpen, onChange }: {
     <div className={`task-panel ${panelOpen ? 'open' : 'closed'}`}>
       <button type="button" className="task-panel-toggle" aria-expanded={panelOpen}
         aria-controls={panelId} aria-label={panelOpen ? 'Close tasks panel' : `Open tasks panel, ${openCount} open tasks`}
-        title={panelOpen ? 'Close tasks' : 'Open tasks'} onClick={togglePanel}>
+        title={panelOpen ? 'Close tasks' : `Open tasks — ${openCount} open on this board`} onClick={togglePanel}>
         <span className="task-panel-bars" aria-hidden="true"><i /><i /><i /></span>
         <span className="task-panel-label">Tasks</span>
-        <span className="task-panel-count">{openCount}</span>
+        <span className="task-panel-count">{panelOpen ? `${openCount} open` : openCount}</span>
       </button>
       {panelOpen && (
         <aside id={panelId} className="ticket-rail" aria-label={`${snap.board.name} tasks`}>
+          {/* the rail is also rendered by the Teams tab with a filtered snapshot (#156),
+              so this copy stays scope-neutral */}
+          <p className="rail-hint">Open tickets. Drag one onto an agent to assign it, or click it to open the ticket.</p>
           {loose.length === 0 && milestones.length === 0 && (
-            <p className="rail-empty">No open tickets — add some on the Roadmap.</p>
+            <p className="rail-empty">No open tickets yet — add some on the Roadmap, or ask an agent to file one.</p>
           )}
+          {milestones.length > 0 && <p className="rail-head">Milestones <span className="rm-count">{milestones.length}</span></p>}
           {milestones.map(({ m, steps, open: openSteps, done }) => (
             <div key={m.id} className="rail-mile">
               <button className="rail-mile-head" onClick={() => toggle(m.id)}>
@@ -135,8 +329,14 @@ function TicketRail({ snap, providers, onOpen, onChange }: {
               )}
             </div>
           ))}
-          {loose.length > 0 && <p className="rail-head">Tickets <span className="rm-count">{loose.length}</span></p>}
-          {loose.map((c) => <RailCard key={c.id} c={c} isLocked={false} providers={providers} onOpen={onOpen} onChange={onChange} />)}
+          {groups.map((group) => (
+            <div key={group.key} className="rail-group">
+              <p className="rail-head">{group.label} <span className="rm-count">{group.cards.length}</span></p>
+              {group.cards.map((c) => (
+                <RailCard key={c.id} c={c} isLocked={false} providers={providers} onOpen={onOpen} onChange={onChange} />
+              ))}
+            </div>
+          ))}
           {done.length > 0 && (
             <div className="rail-mile">
               <button className="rail-mile-head" onClick={() => setShowDone((v) => !v)}>
@@ -185,7 +385,7 @@ function loadBoardViewport(storageKey: string, compact: boolean): CanvasViewport
 const BOARD_PAN_EXCLUDE = [
   'button', 'input', 'textarea', 'select', 'a', '[role="button"]', '[draggable="true"]',
   '.q-edge', '.project-head-right', '.task-panel', '.ticket-rail', '.project-cards', '.threads', '.ideas',
-  '.add-form', '.net-prompt', '.net-thread', '.net-legend',
+  '.add-form', '.net-prompt', '.net-thread',
 ].join(', ')
 const BOARD_NATIVE_SCROLL = '.ticket-rail, .project-cards, .threads, .net-thread'
 
@@ -465,12 +665,49 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   const [providers, setProviders] = useState<AgentProviderCatalog[]>([])
   const [askTo, setAskTo] = useState<{ name: string; boardId: number } | null>(null)
   const [askBody, setAskBody] = useState('')
+  const [seenHires, setSeenHires] = useState<Set<number> | null>(() => loadIdSet(SEEN_HIRES_KEY))
+  const [activatedHires, setActivatedHires] = useState<Set<number> | null>(() => loadIdSet(ACTIVATED_HIRES_KEY))
 
   useEffect(() => {
     let current = true
     osApi.listAgentProviders().then((catalog) => { if (current) setProviders(catalog) }).catch(() => {})
     return () => { current = false }
   }, [])
+
+  // first visit on this browser: everyone already on the boards counts as seen and
+  // activated, except agents hired moments ago — those still start in the pool
+  useEffect(() => {
+    if ((seenHires !== null && activatedHires !== null) || snaps.length === 0) return
+    const seeded = new Set(snaps.flatMap((s) => s.agents)
+      .filter((a) => hiredAgo(a) >= SEED_GRACE_MS).map((a) => a.id))
+    if (seenHires === null) { saveIdSet(SEEN_HIRES_KEY, seeded); setSeenHires(seeded) }
+    if (activatedHires === null) { saveIdSet(ACTIVATED_HIRES_KEY, seeded); setActivatedHires(seeded) }
+  }, [seenHires, activatedHires, snaps])
+
+  // "new" tag: never opened. Pool: hired but not yet dragged out.
+  const isNewHire = (a: Agent) =>
+    a.kind === 'hired' && seenHires !== null && !seenHires.has(a.id)
+  const inSpawnPool = (a: Agent) =>
+    a.kind === 'hired' && activatedHires !== null && !activatedHires.has(a.id)
+
+  const openTerminal = (a: Agent, boardId: number) => {
+    if (isNewHire(a)) {
+      const next = new Set(seenHires).add(a.id)
+      saveIdSet(SEEN_HIRES_KEY, next)
+      setSeenHires(next)
+    }
+    setTerminal({ agent: a, boardId })
+  }
+
+  // where the last activated agent was dropped — NetworkView seeds its node there
+  const [netSeed, setNetSeed] = useState<{ boardId: number; name: string; x: number; y: number } | null>(null)
+
+  const activateHire = (a: Agent, boardId: number, dropAt: { x: number; y: number } | null) => {
+    const next = new Set(activatedHires).add(a.id)
+    saveIdSet(ACTIVATED_HIRES_KEY, next)
+    setActivatedHires(next)
+    if (dropAt) setNetSeed({ boardId, name: a.name, x: dropAt.x, y: dropAt.y })
+  }
 
   const ask = async () => {
     if (!askTo || !askBody.trim()) return
@@ -479,7 +716,8 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
   }
 
   const askable = snaps.flatMap((s) =>
-    s.agents.filter((a) => a.status !== 'gone').map((a) => ({ ...a, boardId: s.board.id, project: s.board.name })))
+    s.agents.filter((a) => a.status !== 'gone' && !isMastermind(a))
+      .map((a) => ({ ...a, boardId: s.board.id, project: s.board.name })))
 
   const syncCardUrl = (boardId: number, cardId: number | null) => {
     const next = cardDrawerDeepLink(location.search, { boardId, cardId }, {
@@ -528,43 +766,35 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
     <>
       <BoardCanvas focused={focused} storageKey={canvasStorageKey}>
         {(viewport) => snaps.map((s) => {
-          const agents = s.agents.filter((a) => a.status !== 'gone')
+          const online = s.agents.filter((a) => a.status !== 'gone')
+          const agents = online.filter((a) => !isMastermind(a))
+          const pooled = agents.filter(inSpawnPool)
+          const crew = agents.filter((a) => !inSpawnPool(a))
           return (
             <section key={s.board.id} className="project network-mode">
               <header className="project-head">
-                <div className="project-head-right">
-                  <HireControl providers={providers} boardId={s.board.id}
-                    takenNames={agents.map((a) => a.name)} onHired={onChange} />
-                  <div className="project-crew">
-                    {agents.map((a) => (
-                      <span key={a.id} className="crew-slot">
-                        <span className={`avatar clickable ${a.status} ${a.kind === 'hired' ? 'hired' : ''}`}
-                          title={`${a.name} · ${a.status} · open console`}
-                          role="button" tabIndex={0} aria-label={`Open ${a.name}'s console`}
-                          style={{ background: agentWash(a.name), color: agentInk(a.name) }}
-                          onClick={() => setTerminal({ agent: a, boardId: s.board.id })}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTerminal({ agent: a, boardId: s.board.id }) } }}>
-                          {initials(a.name)}
-                          <i className="presence" />
-                        </span>
-                        <ProviderBadge provider={a.provider} compact />
-                        {a.kind === 'hired' && (
-                          <button className="icon-x fire" title={`Fire ${a.name}`} aria-label={`Fire ${a.name}`}
-                            onClick={async () => {
-                              if (!window.confirm(`Fire ${a.name}? Its running session is killed.`)) return
-                              await api('POST', `/agents/${a.id}/fire`); onChange()
-                            }}>×</button>
-                        )}
-                      </span>
-                    ))}
-                    {agents.length === 0 && <span className="ask-none">no agents online</span>}
+                <div className="project-head-col">
+                  <div className="project-head-right">
+                    <HireControl providers={providers} boardId={s.board.id}
+                      takenNames={online.map((a) => a.name)} onHired={onChange} />
+                    <div className="project-crew">
+                      {crew.map((a) => (
+                        <CrewSlot key={a.id} a={a} isNew={isNewHire(a)} onChange={onChange}
+                          onOpen={() => openTerminal(a, s.board.id)} />
+                      ))}
+                      {agents.length === 0 && <span className="ask-none">no agents online</span>}
+                    </div>
                   </div>
+                  <SpawnPool pooled={pooled} isNewHire={isNewHire} viewport={viewport}
+                    onOpen={(a) => openTerminal(a, s.board.id)}
+                    onActivate={(a, dropAt) => activateHire(a, s.board.id, dropAt)} />
                 </div>
               </header>
 
               <div className="net-wrap">
                 <TicketRail snap={s} providers={providers} onOpen={(c) => openCardDrawer(c, s.board.id)} onChange={onChange} />
-                <NetworkView snap={s} viewport={viewport}
+                <NetworkView snap={{ ...s, agents: crew }} viewport={viewport}
+                  posSeed={netSeed && netSeed.boardId === s.board.id ? netSeed : null}
                   onOpenCard={(c) => openCardDrawer(c, s.board.id)}
                   onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}
                   onChange={onChange} />
@@ -578,14 +808,17 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
         {askTo === null ? (
           <div className="ask-row">
             <span className="ask-label">Ask an agent</span>
-            {askable.length === 0 && <span className="ask-none">no one online</span>}
-            {askable.map((a) => (
-              <button key={`${a.boardId}-${a.id}`} className="agent-chip" onClick={() => setAskTo({ name: a.name, boardId: a.boardId })}>
-                <i className="avatar mini" style={{ background: agentWash(a.name), color: agentInk(a.name) }}>{initials(a.name)}</i>
-                {a.name}
-                {snaps.length > 1 && <small className="chip-project">{a.project}</small>}
-              </button>
-            ))}
+            {/* chips own their own wrapping row so the label stays on a line of its own above them */}
+            <div className="ask-chips">
+              {askable.length === 0 && <span className="ask-none">no one online</span>}
+              {askable.map((a) => (
+                <button key={`${a.boardId}-${a.id}`} className="agent-chip" onClick={() => setAskTo({ name: a.name, boardId: a.boardId })}>
+                  <i className="avatar mini" style={{ background: agentWash(a.name), color: agentInk(a.name) }}>{initials(a.name)}</i>
+                  {a.name}
+                  {snaps.length > 1 && <small className="chip-project">{a.project}</small>}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           <div className="ask-row open">
@@ -601,7 +834,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
 
       {open && openCard && <CardDrawer card={openCard} boardId={open.boardId}
         providers={providers}
-        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-'))}
+        agents={(snaps.find((s) => s.board.id === open.boardId)?.agents ?? []).filter((a) => a.status !== 'gone' && a.name !== 'strategist' && !a.name.startsWith('auditor-') && !isMastermind(a))}
         onClose={closeCardDrawer} onChange={onChange} />}
       {terminal && <AgentTerminal
         agent={snaps.find((s) => s.board.id === terminal.boardId)?.agents.find((a) => a.id === terminal.agent.id) ?? terminal.agent}

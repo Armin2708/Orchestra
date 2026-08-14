@@ -137,6 +137,7 @@ it('a real (non-limit) error still goes gone via the normal exit path', async ()
 it('a limit-killed ephemeral verifier stays dead — never paused, never wakeable', async () => {
   const t = setup()
   const agent = t.conductor.hire({ boardId: 1, cwd: '/p', role: 'verifier', ephemeral: true })
+  expect(agent.name).toBe('tester-agent') // test-pass agents are named for the job
   const s = t.sessions[0]
   s.emit({ type: 'system', subtype: 'init', session_id: 'v1' })
   s.emit({ type: 'result', subtype: 'error_during_execution', result: '429 rate limit' })

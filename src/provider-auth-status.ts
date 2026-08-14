@@ -6,7 +6,7 @@
 // That is what makes "I already logged into claude, so Orchestra just works" true.
 
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, readFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 
 export type ProviderAuthStatus = {
@@ -53,10 +53,38 @@ const parseCodex = (output: string): Pick<ProviderAuthStatus, 'status' | 'accoun
   return { status: 'unknown', account: null, method: null }
 }
 
+// `qwen auth` was removed from the CLI; the only published auth state is the
+// selected provider profile in ~/.qwen/settings.json. Only the selection label
+// is read — never the keys it references.
+const qwenSettingsAuthSelection = (env: NodeJS.ProcessEnv = process.env): string | null => {
+  const home = env.HOME ?? env.USERPROFILE
+  if (!home) return null
+  try {
+    const raw = readFileSync(join(home, '.qwen', 'settings.json'), 'utf8')
+    const row = JSON.parse(raw) as Record<string, unknown>
+    const security = row.security
+    const auth = security && typeof security === 'object'
+      ? (security as Record<string, unknown>).auth
+      : undefined
+    const selected = auth && typeof auth === 'object'
+      ? (auth as Record<string, unknown>).selectedType
+      : undefined
+    return typeof selected === 'string' && selected.trim() ? selected.trim() : null
+  } catch {
+    return null
+  }
+}
+
+const parseQwen = (_output: string): Pick<ProviderAuthStatus, 'status' | 'account' | 'method'> => {
+  const selectedType = qwenSettingsAuthSelection()
+  if (!selectedType) return { status: 'signed_out', account: null, method: null }
+  return { status: 'authenticated', account: null, method: `qwen_settings:${selectedType}` }
+}
+
 const PROBES: Readonly<Record<string, AuthProbe>> = {
   claude: { args: ['auth', 'status', '--json'], login: 'claude /login', parse: parseClaude },
   codex: { args: ['login', 'status'], login: 'codex login', parse: parseCodex },
-  qwen: { args: ['--version'], login: 'qwen', parse: () => ({ status: 'unknown', account: null, method: null }) },
+  qwen: { args: ['--version'], login: 'qwen', parse: parseQwen },
   kimi: { args: ['--version'], login: 'kimi', parse: () => ({ status: 'unknown', account: null, method: null }) },
 }
 

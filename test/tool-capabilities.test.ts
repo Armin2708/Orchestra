@@ -78,7 +78,12 @@ describe('provider-neutral tool capabilities', () => {
     })
     expect(matrix.filter((row) => ['qwen', 'kimi'].includes(row.provider_id)))
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ provider_id: 'qwen', managed_support: 'unsupported' }),
+        expect.objectContaining({
+          provider_id: 'qwen',
+          release_state: 'candidate',
+          managed_support: 'candidate',
+          automation_policy: 'allowed',
+        }),
         expect.objectContaining({ provider_id: 'kimi', managed_support: 'unsupported' }),
       ]))
     expect(matrix.every((row) => row.blockers.includes('acceptance_evidence_missing'))).toBe(true)

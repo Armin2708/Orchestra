@@ -372,7 +372,7 @@ describe('terminal-agent provider contract V1', () => {
       .toEqual(['claude', 'codex', 'qwen', 'kimi'])
     expect(CLAUDE_PROVIDER_MANIFEST_V1.release_state).toBe('unsupported')
     expect(CODEX_PROVIDER_MANIFEST_V1.release_state).toBe('candidate')
-    expect(QWEN_PROVIDER_MANIFEST_V1.release_state).toBe('unsupported')
+    expect(QWEN_PROVIDER_MANIFEST_V1.release_state).toBe('candidate')
     expect(KIMI_PROVIDER_MANIFEST_V1.release_state).toBe('unsupported')
     expect(CLAUDE_PROVIDER_MANIFEST_V1.modes[0]?.support).toEqual({
       state: 'policy_blocked',

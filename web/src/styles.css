@@ -922,9 +922,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* ── Ask dock ────────────────────────────────────── */
 /* auto width so the dock hugs however many agents are online, growing sideways until it
    hits the cap — only then do the chips wrap onto another line */
+/* Centred by auto margins rather than left:50% + translateX. A fixed element with `left`
+   set and `right:auto` shrink-wraps against (containing block − left), so left:50% capped
+   the dock at 50vw and the chips wrapped into a stack long before the max-width below
+   could apply. Anchoring both edges gives the row the full viewport to lay out in, and
+   fit-content keeps it hugging however many agents are online. */
 .ask-dock {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-  z-index: 20; width: auto; max-width: min(1440px, calc(100vw - 48px));
+  position: fixed; left: 0; right: 0; bottom: 24px; margin-inline: auto;
+  z-index: 20; width: fit-content; max-width: min(1440px, calc(100vw - 48px));
 }
 
 .ask-row {

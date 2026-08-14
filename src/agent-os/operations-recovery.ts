@@ -763,6 +763,16 @@ export class SafeShutdownCoordinator {
     if (this.state !== 'accepting') throw new Error('daemon is draining; new mutations are disabled')
   }
 
+  /**
+   * True once this daemon has started going away. Readers need it because a daemon that
+   * is shutting down still answers /health as live-but-not-ready — indistinguishable from
+   * one still booting — and anything that starts a replacement on top of a draining
+   * daemon gets refused by the data-directory lease it has not released yet.
+   */
+  get draining(): boolean {
+    return this.state !== 'accepting'
+  }
+
   register(input: ActiveWorkRegistration): () => void {
     this.admitMutation()
     const id = bounded(input.id, 'active work id', 512)

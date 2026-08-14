@@ -718,7 +718,7 @@ const RESERVED_FIRST_RELEASE_MANIFESTS: ReadonlyMap<string, {
   }],
   ['qwen', {
     adapter_id: 'qwen-code-cli',
-    fingerprint: 'ae03bbcc398cdbf6f5d73ecc158394afecd4bfe1b17fab6b4dd7671162a9f4bc',
+    fingerprint: '9c23f938bc41f4ad6e33497c49d1bd44518d1c8542c2c9cb8481dca406464053',
   }],
   ['kimi', {
     adapter_id: 'kimi-code-acp',

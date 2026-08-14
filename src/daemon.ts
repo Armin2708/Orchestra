@@ -3,7 +3,7 @@ import type { FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
@@ -29,7 +29,7 @@ import {
 import { AgentHomeCodexNativeEventSink } from './agent-os/codex-native-events.js'
 import { CodexAgentHomeThreadBinder } from './agent-os/codex-session-binding.js'
 import { AgentHomeClaudeNativeEventSink } from './agent-os/claude-native-events.js'
-import { CODEX_PROVIDER_ID } from './agent-providers.js'
+import { CODEX_PROVIDER_ID, QWEN_PROVIDER_ID, writeProviderModelCache } from './agent-providers.js'
 import {
   assertManagedEnvironmentCompatibility,
   runEnvironmentDoctor,
@@ -51,7 +51,12 @@ import {
   createCodexProviderAdapterV1,
 } from './runtime/drivers/codex-provider-adapter.js'
 import { discoverClaudeProviderExecutableV1 } from './runtime/drivers/claude-provider-adapter.js'
-import { discoverQwenProviderExecutableV1 } from './runtime/drivers/qwen-provider-adapter.js'
+import {
+  createQwenProviderAdapterV1,
+  discoverQwenProviderExecutableV1,
+  QWEN_PROVIDER_MODEL_CATALOG_V1,
+} from './runtime/drivers/qwen-provider-adapter.js'
+import { QwenAgentDriver } from './runtime/drivers/qwen.js'
 import { discoverKimiProviderExecutableV1 } from './runtime/drivers/kimi-provider-adapter.js'
 import {
   ProviderContractAgentDriverV1,
@@ -63,8 +68,10 @@ import {
   CodexManagedAgentRuntime,
   ProviderAgentManager,
   ProviderUnavailableError,
+  QwenManagedAgentRuntime,
   type AccessProfile,
 } from './provider-agent-manager.js'
+import { resolveExecutableOnPath } from './provider-auth-status.js'
 import { prepareManagedSubscriptionEnvironmentV1 } from './provider-runtime-environment.js'
 import { createDeclaredProviderToolRegistry } from './tool-capabilities.js'
 import type { ToolIntegrationCheck } from './tool-capabilities.js'
@@ -392,6 +399,39 @@ export const sanitizedCodexEnvironment = (source: NodeJS.ProcessEnv = process.en
     && (CODEX_ENV_ALLOWLIST.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_') || requested.has(key))))
 }
 
+const QWEN_ENV_ALLOWLIST = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM',
+  'LANG', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+  'QWEN_CONFIG_DIR',
+  'DASHSCOPE_API_KEY', 'BAILIAN_CODING_PLAN_API_KEY',
+  'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE',
+  'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+])
+
+const qwenEnvironmentDenied = (key: string): boolean => {
+  const normalized = key.toUpperCase()
+  return normalized === 'ORCHESTRA_TOKEN'
+    || normalized === 'ORCHESTRA_QWEN_FORWARD_ENV'
+    || normalized === 'CLAUDECODE'
+    || normalized.startsWith('ANTHROPIC_')
+    || normalized.startsWith('CLAUDE_')
+    || normalized.startsWith('OPENAI_')
+    || normalized.startsWith('CODEX_')
+}
+
+export const sanitizedQwenEnvironment = (source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const requested = new Set((source.ORCHESTRA_QWEN_FORWARD_ENV ?? '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))
+  return Object.fromEntries(Object.entries(source).filter(([key, value]) =>
+    value !== undefined
+    && !qwenEnvironmentDenied(key)
+    && (QWEN_ENV_ALLOWLIST.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_') || requested.has(key))))
+}
+
 export async function serve(opts: ServeOptions = {}): Promise<void> {
   assertManagedEnvironmentCompatibility(runEnvironmentDoctor('claude'))
   const contractRouting = codexProviderContractRouting()
@@ -520,6 +560,39 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     resolveRecoveryTarget: resolveCodexWorkspaceTarget,
   })
   agentOs.registerProviderAdapter(codexAdapter)
+  const qwenCommand = process.env.ORCHESTRA_QWEN_COMMAND?.trim() || 'qwen'
+  const qwenEnvironment = sanitizedQwenEnvironment()
+  const qwenExecutablePath = resolveExecutableOnPath(qwenCommand)
+  const qwenReady = Boolean(qwenExecutablePath)
+  let qwenDriver: QwenAgentDriver | undefined
+  if (qwenReady) {
+    qwenDriver = new QwenAgentDriver({
+      command: qwenExecutablePath!,
+      environment: qwenEnvironment,
+      defaultModel: 'qwen3-coder-plus',
+    })
+    agentOs.registerProviderAdapter(createQwenProviderAdapterV1({
+      driver: qwenDriver,
+      command: qwenCommand,
+      environment: qwenEnvironment,
+      resolveExecutable: () => qwenExecutablePath,
+      probeVersion: () => {
+        const result = spawnSync(qwenCommand, ['--version'], {
+          encoding: 'utf8',
+          env: qwenEnvironment,
+          timeout: 10_000,
+        })
+        return (result.stdout || '').trim() || null
+      },
+    }))
+    agentOs.registerDriver(qwenDriver)
+    writeProviderModelCache(db, QWEN_PROVIDER_MODEL_CATALOG_V1.map((model) => ({
+      value: model.id,
+      displayName: model.displayName,
+      description: model.description,
+      isDefault: model.isDefault,
+    })), QWEN_PROVIDER_ID)
+  }
   const codexContractDriver = contractRouting.enabled
     ? new ProviderContractAgentDriverV1({
         registry: agentOs.providerAdapters,
@@ -542,6 +615,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
     try { codexDriver.dispose() } catch (error) { failures.push(error) }
     try { codexProvider.dispose() } catch (error) { failures.push(error) }
     try { await codexSupervisor.stop() } catch (error) { failures.push(error) }
+    try { qwenDriver?.dispose() } catch (error) { failures.push(error) }
     try { unbindCompatibilityFailureJournal?.() } catch (error) { failures.push(error) }
     unbindCompatibilityFailureJournal = undefined
     try { compatibilityFailureJournal?.close() } catch (error) { failures.push(error) }
@@ -629,7 +703,8 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       maestro = new Conductor(db, bus, agentToken, { nativeEventSink: claudeNativeEventSink })
       agentOs.registerClaude(maestro)
       const codex = codexReady ? new CodexManagedAgentRuntime(db, bus, codexDriver, codexProvider) : undefined
-      manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor)
+      const qwen = qwenDriver ? new QwenManagedAgentRuntime(db, bus, qwenDriver) : undefined
+      manager = new ProviderAgentManager(db, bus, maestro, codex, codexProvider, agentOs.jobExecutor, qwen)
       return manager
     }, {
       token,
@@ -641,6 +716,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       operations: operationsRuntime,
       vapidKeys,
       admitMutation: () => safeShutdown.admitMutation(),
+      isDraining: () => safeShutdown.draining,
       reconcileActiveWork,
       registerActiveWork: (registration) => safeShutdown.register(registration),
       agentOs: {
@@ -752,6 +828,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
           maxBudgetUsd: remainingCents === undefined ? undefined : remainingCents / 100,
           taskBudgetTokens: remainingTokens })
         manager!.adoptLaunch(s.id)
+        manager!.resumeInterrupted(s.id)
       } catch (error) {
         if (error instanceof ProviderUnavailableError) {
           db.prepare(`UPDATE agents SET status='paused_provider', last_seen=datetime('now') WHERE id=?`).run(s.id)
@@ -953,13 +1030,91 @@ async function healthy(timeoutMs = 300): Promise<boolean> {
   } catch { return false }
 }
 
+// A daemon with hired agents drains every live session before it exits, which measured
+// ~33s in practice, and only then releases the data-directory lease. The old budgets here
+// were 5s to die and ~3s to boot, so a restart reliably started a replacement on top of a
+// daemon that was still shutting down: the child hit the held lease, exited immediately,
+// and the outgoing daemon then finished leaving. The result was no daemon at all, with no
+// error anywhere — a clean SIGTERM shutdown prints no stack.
+const DAEMON_EXIT_TIMEOUT_MS = 90_000
+const DAEMON_BOOT_TIMEOUT_MS = 30_000
+
+function daemonPid(): number | undefined {
+  try {
+    const pid = Number(fs.readFileSync(path.join(dataDir(), 'daemon.pid'), 'utf8').trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  } catch { return undefined }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+/**
+ * Resolves once no daemon holds the data directory: the recorded pid is gone *and* the
+ * port stops answering. Both checks matter — the pidfile can outlive the process, and a
+ * daemon mid-drain still serves /health.
+ */
+export async function waitForDaemonExit(timeoutMs = DAEMON_EXIT_TIMEOUT_MS): Promise<boolean> {
+  const pid = daemonPid()
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (!(pid !== undefined && processAlive(pid)) && !(await healthy(200))) return true
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, 200))
+  }
+}
+
+/**
+ * A daemon that answers and is not on its way out. Deliberately not keyed on `ready`:
+ * readiness folds in probes (usage meters, observability) that legitimately fail on a
+ * working machine, so a serving daemon can sit at ready:false indefinitely. `draining`
+ * is the only field that distinguishes coming up from going down.
+ */
+async function daemonServing(timeoutMs = 300): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    const status = await res.json() as { live?: unknown; ok?: unknown; draining?: unknown }
+    if (status.draining === true) return false
+    return status.live === true || status.ok === true
+  } catch { return false }
+}
+
+/** True once nothing owns the data directory: the recorded pid is gone and the port is quiet. */
+async function daemonGone(): Promise<boolean> {
+  const pid = daemonPid()
+  if (pid !== undefined && processAlive(pid)) return false
+  return !(await healthy(200))
+}
+
 export async function ensureDaemon(): Promise<boolean> {
-  if (await healthy()) return true
   const cli = fileURLToPath(new URL('./cli.js', import.meta.url))
-  spawn(process.execPath, [cli, 'serve'], { detached: true, stdio: 'ignore', env: process.env }).unref()
-  for (let i = 0; i < 30; i++) {
-    if (await healthy(200)) return true
-    await new Promise((r) => setTimeout(r, 100))
+  // Three attempts: a child refused by a lease we failed to wait out is worth retrying,
+  // and retrying always beats reporting failure with nothing left running.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // A daemon that is live but not ready is either booting or draining, and /health
+    // cannot tell those apart — both read live:true, ready:false. So settle the question
+    // by outcome: either it becomes ready (someone else's boot won, nothing to do), or
+    // its process goes away and releases the lease.
+    const settleBy = Date.now() + DAEMON_EXIT_TIMEOUT_MS
+    for (;;) {
+      if (await daemonServing()) return true
+      if (await daemonGone()) break
+      if (Date.now() >= settleBy) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
+
+    let childExited = false
+    const child = spawn(process.execPath, [cli, 'serve'], { detached: true, stdio: 'ignore', env: process.env })
+    child.once('exit', () => { childExited = true })
+    child.unref()
+    const bootBy = Date.now() + DAEMON_BOOT_TIMEOUT_MS
+    while (Date.now() < bootBy) {
+      if (await daemonServing()) return true
+      // the child gave up (almost always the lease) — go round and wait properly
+      if (childExited) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
   }
   return false
 }

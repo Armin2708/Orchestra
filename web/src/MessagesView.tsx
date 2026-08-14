@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, ApiError, agentInk, agentWash, initials, BoardMessage, Snapshot, Thread, timeAgo } from './api'
+import { api, apiObjectUrl, ApiError, agentInk, agentWash, initials, BoardMessage, Snapshot, Thread, timeAgo } from './api'
 import { ConfirmDialog } from './ConfirmDialog'
+import { MailLetter } from './MailLetter'
 import { MessageBody } from './MessageBody'
 import { MessageComposer } from './MessageComposer'
 import {
@@ -67,6 +68,56 @@ function TypeChip({ message }: { message: Pick<BoardMessage, 'mail_type' | 'kind
   return <span className={`mail-type-chip type-${type} tone-${meta.tone}`}>{meta.label}</span>
 }
 
+// kept in step with the server's IMAGE_MIME allowlist (src/server.ts) — SVG excluded
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)$/i
+
+// screenshots are the natural proof for UI work, so they render as real evidence
+// rather than a chip. Bytes come through apiObjectUrl because <img src> cannot
+// carry the auth headers a remote device needs.
+function ImageAttachment({ attachment, messageId, index }: {
+  attachment: MailAttachment
+  messageId: number
+  index: number
+}) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [zoom, setZoom] = useState(false)
+  const name = attachment.ref.split('/').pop()
+
+  useEffect(() => {
+    let url: string | null = null
+    let alive = true
+    apiObjectUrl(`/messages/${messageId}/attachments/${index}/raw`)
+      .then((objectUrl) => {
+        url = objectUrl
+        if (alive) setSrc(objectUrl)
+        else URL.revokeObjectURL(objectUrl)
+      })
+      .catch((cause) => { if (alive) setError(readableError(cause)) })
+    return () => { alive = false; if (url) URL.revokeObjectURL(url) }
+  }, [messageId, index])
+
+  if (error) {
+    return (
+      <span className="mail-attachment" title={`${attachment.ref} — ${error}`}>
+        <span className="mail-attachment-kind">image</span>{name}
+      </span>
+    )
+  }
+
+  return (
+    <figure className={`mail-image${zoom ? ' zoomed' : ''}`}>
+      {src
+        ? <button type="button" className="mail-image-frame" onClick={() => setZoom((z) => !z)}
+            title={zoom ? 'Shrink' : 'Expand'} aria-label={`${zoom ? 'Shrink' : 'Expand'} ${name}`}>
+            <img src={src} alt={name} loading="lazy" />
+          </button>
+        : <div className="mail-image-loading" aria-label={`Loading ${name}`} />}
+      <figcaption>{name}</figcaption>
+    </figure>
+  )
+}
+
 function AttachmentChip({ attachment, boardId, messageId, index }: {
   attachment: MailAttachment
   boardId: number
@@ -97,6 +148,10 @@ function AttachmentChip({ attachment, boardId, messageId, index }: {
         <span className="mail-attachment-kind">commit</span><code>{attachment.ref.slice(0, 10)}</code>
       </span>
     )
+  }
+
+  if (IMAGE_EXT.test(attachment.ref)) {
+    return <ImageAttachment attachment={attachment} messageId={messageId} index={index} />
   }
 
   const toggle = async () => {
@@ -136,9 +191,9 @@ function MailBody({ message, boardId, cardTitles }: {
   boardId: number
   cardTitles: ReadonlyMap<number, string>
 }) {
-  // structured mail renders as a plain letter — full text, paragraphs kept;
+  // structured mail renders as a formatted letter — paragraphs, lists, code, links;
   // legacy protocol messages keep the annotated view with the raw escape hatch
-  if (message.subject) return <div className="mail-letter">{message.body}</div>
+  if (message.subject) return <MailLetter text={message.body} />
   return <MessageBody message={message} boardId={boardId} cardTitles={cardTitles} />
 }
 
@@ -192,14 +247,18 @@ function ReadingPane({ row, onChange, onBack, requestDelete }: {
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" /></svg>
           <span>Inbox</span>
         </button>
+        <Avatar name={sender} />
         <div className="inbox-reading-title">
           <h2>{subject}</h2>
           <div className="inbox-reading-meta">
-            <TypeChip message={thread} />
             <span className="inbox-reading-route">
-              <b>{sender}</b> to {thread.from_name ? 'You' : thread.to_name ?? 'agents'}
+              <b>{sender}</b>
+              <span className="inbox-reading-to">to {thread.from_name ? 'you' : thread.to_name ?? 'agents'}</span>
             </span>
             <time dateTime={thread.created_at} title={thread.created_at}>{mailDate(thread.created_at)}</time>
+          </div>
+          <div className="inbox-reading-tags">
+            <TypeChip message={thread} />
             <span className="inbox-reading-board">{row.boardName}</span>
             {thread.card_id && (
               <a className="message-card-label" href={`/?board=${thread.board_id}&card=${thread.card_id}`}>
@@ -242,7 +301,7 @@ function ReadingPane({ row, onChange, onBack, requestDelete }: {
                       <b>{author}</b>
                       <time dateTime={message.created_at}>{timeAgo(message.created_at)}</time>
                     </div>
-                    <div className="mail-letter">{message.body}</div>
+                    <MailLetter text={message.body} />
                   </div>
                 </li>
               )
