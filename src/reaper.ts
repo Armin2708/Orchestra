@@ -31,6 +31,22 @@ export function bounceDeadLetters(db: Database.Database, agentId: number): any[]
   })
 }
 
+// Needs You is a pure notification projection — resolving an item here never touches
+// the live in-memory permission gate (conductor.ts's per-process `pending` map), so it's
+// always safe to auto-clear. Two policies: the requesting agent is gone (nothing is
+// waiting on the decision), or the item just sat open too long — hired agents stay
+// 'active' between tasks indefinitely, so agent-liveness alone won't catch a request
+// from a turn that ended days ago.
+const ATTENTION_STALE_AFTER = '-24 hours'
+
+export function reapAttention(db: Database.Database): void {
+  db.prepare(`UPDATE attention_items SET status='resolved', resolved_at=datetime('now')
+    WHERE status='open' AND agent_id IS NOT NULL
+      AND agent_id IN (SELECT id FROM agents WHERE status='gone')`).run()
+  db.prepare(`UPDATE attention_items SET status='resolved', resolved_at=datetime('now')
+    WHERE status='open' AND created_at < datetime('now', ?)`).run(ATTENTION_STALE_AFTER)
+}
+
 export function reap(db: Database.Database): void {
   // hired agents live inside the daemon and only quiet down between tasks — they leave
   // when fired (or when resurrection fails), never by staleness
@@ -42,6 +58,7 @@ export function reap(db: Database.Database): void {
   db.prepare(`UPDATE agents SET status='idle'
     WHERE status = 'active' AND last_seen < datetime('now', '-5 minutes')`).run()
   syncAgentProfiles(db)
+  reapAttention(db)
 }
 
 // Agent Home lists agent_profiles, but terminal agents live and die in the legacy agents

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
-import { reap, removeAgentCards } from '../src/reaper.js'
+import { reap, reapAttention, removeAgentCards } from '../src/reaper.js'
 
 it('marks stale agents idle then gone; only their in_progress cards leave with them', () => {
   const db = openDb(':memory:')
@@ -54,4 +54,28 @@ it('removeAgentCards releases backlog/review/blocked cards unowned with history 
     expect(db.prepare(`SELECT COUNT(*) n FROM card_events WHERE card_id=?`).get(id)).toMatchObject({ n: 1 })
   }
   expect(db.prepare(`SELECT COUNT(*) n FROM card_events WHERE card_id=?`).get(wip)).toMatchObject({ n: 0 })
+})
+
+it('reapAttention auto-resolves items whose agent is gone, or that just sat open too long', () => {
+  const db = openDb(':memory:')
+  db.prepare(`INSERT INTO boards (project_path, name) VALUES ('/p','p')`).run()
+  db.prepare(`INSERT INTO agents (board_id, name, status) VALUES (1, 'gone-otter', 'gone')`).run()
+  db.prepare(`INSERT INTO agents (board_id, name, kind, status, last_seen)
+    VALUES (1, 'hired-otter', 'hired', 'active', datetime('now'))`).run()
+  const goneAgent = (db.prepare(`SELECT id FROM agents WHERE name='gone-otter'`).get() as any).id
+  const hiredAgent = (db.prepare(`SELECT id FROM agents WHERE name='hired-otter'`).get() as any).id
+
+  db.prepare(`INSERT INTO attention_items (id, board_id, agent_id, kind, title, status, created_at)
+    VALUES ('from-gone-agent', 1, ?, 'permission.request', 'agent left mid-request', 'open', datetime('now'))`).run(goneAgent)
+  db.prepare(`INSERT INTO attention_items (id, board_id, agent_id, kind, title, status, created_at)
+    VALUES ('old-from-hired-agent', 1, ?, 'permission.request', 'stale but agent still active', 'open', datetime('now', '-3 days'))`).run(hiredAgent)
+  db.prepare(`INSERT INTO attention_items (id, board_id, agent_id, kind, title, status, created_at)
+    VALUES ('fresh-from-hired-agent', 1, ?, 'permission.request', 'genuinely pending', 'open', datetime('now'))`).run(hiredAgent)
+
+  reapAttention(db)
+
+  const status = (id: string) => (db.prepare(`SELECT status FROM attention_items WHERE id=?`).get(id) as any).status
+  expect(status('from-gone-agent')).toBe('resolved') // requester is gone, nothing waits on this
+  expect(status('old-from-hired-agent')).toBe('resolved') // 3 days open — the turn that raised it is long over
+  expect(status('fresh-from-hired-agent')).toBe('open') // recent and the agent is still around — leave it
 })
