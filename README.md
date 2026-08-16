@@ -38,9 +38,18 @@ current/target matrix, billing semantics, known provider-policy limits, and rele
 
 ## Installation status
 
-**Public installation is not available yet.** The npm package, public plugin installation, and
-stable channel are not release claims. The bundled plugin hook manifests still invoke the pinned
-package version through npm, so they are not the installation path for an unpublished build.
+**Orchestra is being prepared for public npm release.** Until the first
+published version lands, the npm package and public plugin installation are
+not release claims — the bundled plugin hook manifests invoke the pinned
+package version through npm, so they are not the installation path for an
+unpublished build.
+
+Once published, installation is one command on a clean machine:
+
+```bash
+npm i -g orchestra-board
+orchestra init   # checks your environment, starts the daemon, installs hooks, opens the board
+```
 
 A named trusted tester can instead install one retained tarball after independently matching the
 SHA-256 supplied by the release owner. That path uses the tarball's installed `orchestra` binary,
@@ -300,4 +309,15 @@ Web Push endpoints, or `ntfy`.
 
 ## License
 
-MIT
+Orchestra is licensed under the [Functional Source License, Version 1.1,
+ALv2 Future License](LICENSE) (FSL-1.1-ALv2):
+
+- **Free for you and your company** — use, modify, and self-host it for any
+  internal purpose, personal or commercial.
+- **What you can't do** — offer a competing commercial product or service
+  built on it.
+- **It becomes Apache-2.0** — each release automatically converts to the
+  Apache License 2.0 two years after publication.
+
+Versions released before the FSL switch (through commit `fd4cd58`) were
+published under the MIT license and remain MIT.
