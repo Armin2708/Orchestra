@@ -838,6 +838,7 @@
     ],
     "infrastructure": [
       "hook",
+      "init",
       "install",
       "ops",
       "ops backup",

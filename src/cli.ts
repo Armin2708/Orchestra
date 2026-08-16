@@ -17,6 +17,7 @@ import {
 import { messageBody } from './msgsafe.js'
 import { registerAgentOsCommands } from './agent-os-cli.js'
 import { registerDoctorCommand } from './doctor-cli.js'
+import { buildInitAction, initProviderOption } from './init-cli.js'
 import { registerFirstRunCommands } from './first-run-cli.js'
 import {
   createCentralFirstRunDemoLaunchGate,
@@ -864,6 +865,12 @@ program.command('uninstall')
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 registerDoctorCommand(program)
+program.command('init')
+  .description('one-command setup: check the environment, start the daemon, install hooks, open the board')
+  .option('--provider <provider>', 'provider hooks to install (claude|codex|both)', initProviderOption, 'both')
+  .option('--project', 'install hooks into the current project instead of the user config')
+  .option('--no-open', 'do not open the board in a browser')
+  .action(buildInitAction())
 registerFirstRunCommands(program, {
   api,
   demoLaunchGate: createCentralFirstRunDemoLaunchGate(),
