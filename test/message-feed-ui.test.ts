@@ -51,7 +51,11 @@ describe('email-style inbox UI', () => {
   it('renders mail like email: type chip, explicit subject, letter body, attachments', () => {
     expect(view).toContain('mail-type-chip')
     expect(view).toContain('subjectOf')
-    expect(view).toContain('className="mail-letter"')
+    // the letter body renders through the shared MailLetter component, whose
+    // default className is "mail-letter" (#134/#137 — one renderer for Inbox + chat)
+    expect(view).toContain('<MailLetter text=')
+    expect(readFileSync(new URL('../web/src/MailLetter.tsx', import.meta.url), 'utf8'))
+      .toContain("className = 'mail-letter'")
     expect(view).toContain('parseAttachments')
     expect(view).toContain('/attachments/')
     expect(css).toContain('.mail-type-chip.type-blocker')

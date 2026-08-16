@@ -121,22 +121,28 @@ it('namespaces ambient registrations by provider and refuses provider identity c
     payload: { board_id: board.id, provider: 'codex', session_id: 'different-id', name: 'ambient-owl' },
   })
   expect(takeover.statusCode).toBe(409)
+  // re-registering the same provider identity under a different env name is NOT a
+  // collision: the stored identity name wins over the session's stale env name (#129),
+  // so the agent keeps its operator-assigned name instead of stranding its hooks
   const duplicateIdentity = await server.inject({
     method: 'POST',
     url: '/api/v1/agents/register',
     payload: { board_id: board.id, provider: 'codex', session_id: 'shared-looking-id', name: 'other-owl' },
   })
-  expect(duplicateIdentity.statusCode).toBe(409)
+  expect(duplicateIdentity.statusCode).toBe(200)
+  expect(duplicateIdentity.json()).toMatchObject({ id: codex.json().id, name: 'ambient-owl' })
+  // re-registration rotated the session credential — heartbeats must use the new token
+  const currentToken = duplicateIdentity.json().session_token
   expect((await server.inject({
     method: 'POST',
     url: `/api/v1/agents/${codex.json().id}/heartbeat`,
-    payload: { provider: 'claude', session_id: 'shared-looking-id', session_token: codex.json().session_token },
+    payload: { provider: 'claude', session_id: 'shared-looking-id', session_token: currentToken },
   })).statusCode).toBe(403)
   expect((await server.inject({
     method: 'POST',
     url: `/api/v1/agents/${codex.json().id}/heartbeat`,
     payload: {
-      provider: 'codex', session_id: 'shared-looking-id', session_token: codex.json().session_token,
+      provider: 'codex', session_id: 'shared-looking-id', session_token: currentToken,
     },
   })).statusCode).toBe(200)
 
