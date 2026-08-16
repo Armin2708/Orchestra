@@ -3,6 +3,23 @@
 Status: private retained-tarball and source-checkout technical-beta contract. Public npm/plugin
 installation, managed-provider support, and stable promotion are not claimed here.
 
+## Quickstart (published install)
+
+Once the package is published to npm, installation is one command on a clean machine:
+
+```sh
+npm i -g orchestra-board
+orchestra init
+```
+
+`init` checks your environment (Node 22, provider CLIs), starts the daemon,
+installs Claude + Codex hooks, and opens the board. Every step is also
+available individually: `orchestra doctor`, `orchestra serve`,
+`orchestra install --provider both`.
+
+Until that first published version lands, the runbook below remains the only
+supported path: trusted-tester tarball installs of unpublished builds.
+
 ## What a tester must receive
 
 The release owner must send all of the following through a trusted channel:
