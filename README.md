@@ -51,6 +51,20 @@ npm i -g orchestra-board
 orchestra init   # checks your environment, starts the daemon, installs hooks, opens the board
 ```
 
+### The full package
+
+`orchestra init` sets up the complete working system, not just the board:
+
+- **Agent discipline** — every hooked session gets the card/review/mail rules automatically.
+- **Memory** — `orchestra remember '<note>'` and `orchestra handoff '<note>'` persist across
+  sessions and providers; both are injected at session start (Claude and Codex).
+- **Workflow commands** — a generalized plan → build-in-worktree → review → ship command pack
+  is installed into `.claude/commands` (opt out with `orchestra init --no-workflows`; add it to
+  an existing setup with `orchestra install --workflows`).
+- **Knowledge integrations** — `orchestra integrations` shows what the project has (graphify
+  knowledge graph, Obsidian vault, GitNexus index) and how to enable what's missing. These are
+  detected, never bundled.
+
 A named trusted tester can instead install one retained tarball after independently matching the
 SHA-256 supplied by the release owner. That path uses the tarball's installed `orchestra` binary,
 keeps managed provider launch fail-closed, and provides reversible project hooks, the local UI,

@@ -13,9 +13,16 @@ orchestra init
 ```
 
 `init` checks your environment (Node 22, provider CLIs), starts the daemon,
-installs Claude + Codex hooks, and opens the board. Every step is also
-available individually: `orchestra doctor`, `orchestra serve`,
-`orchestra install --provider both`.
+installs Claude + Codex hooks, installs the workflow command pack into
+`.claude/commands`, and opens the board. Every step is also available
+individually: `orchestra doctor`, `orchestra serve`,
+`orchestra install --provider both --workflows`.
+
+From then on, `orchestra remember '<note>'` keeps a note for future sessions on
+this board and `orchestra handoff '<note>'` leaves a one-shot briefing for the
+next one; both are injected at session start for Claude and Codex alike. Skip the
+command pack with `orchestra init --no-workflows`, and run `orchestra integrations`
+to see which knowledge integrations the project already has.
 
 Until that first published version lands, the runbook below remains the only
 supported path: trusted-tester tarball installs of unpublished builds.
