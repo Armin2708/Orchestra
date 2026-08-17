@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
 export type HookProvider = 'claude' | 'codex'
 export type InstallProvider = HookProvider | 'both'
@@ -515,6 +516,41 @@ export function installHooks(
     const current = transaction.ownedCurrent.get(target.settingsPath)!
     writeTransactionValue(transaction, target, settingsWithProviderHooks(current, target.provider))
   }
+}
+
+// The workflow pack ships at the package root, next to dist/. Bundled (dist/cli.js) and
+// source (src/install.ts) execution both sit one level under it, so ../workflows resolves
+// in either case; ../../workflows covers a nested build layout. Probing beats hardcoding
+// because the same file is imported from both places.
+function workflowPackDir(): string {
+  const candidates = ['../workflows', '../../workflows']
+    .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
+  const found = candidates.find((dir) => fs.existsSync(dir))
+  if (!found) throw new Error(`orchestra workflow pack not found (looked in: ${candidates.join(', ')})`)
+  return found
+}
+
+/**
+ * Copy the shipped workflow command pack into `<target>/.claude/commands/`.
+ * Global scope resolves the user's own home at runtime; project scope uses the cwd
+ * unless a target root is passed. Returns the paths actually written — files whose
+ * content already matches are left alone, and nothing is ever deleted.
+ */
+export function installWorkflows(scope: HookScope, targetRoot?: string): string[] {
+  const root = targetRoot ?? (scope === 'global' ? os.homedir() : process.cwd())
+  const packDir = workflowPackDir()
+  const commandsDir = path.join(root, '.claude', 'commands')
+  fs.mkdirSync(commandsDir, { recursive: true })
+  const written: string[] = []
+  for (const name of fs.readdirSync(packDir).filter((f) => f.endsWith('.md')).sort()) {
+    const source = fs.readFileSync(path.join(packDir, name), 'utf8')
+    const destination = path.join(commandsDir, name)
+    const current = fs.existsSync(destination) ? fs.readFileSync(destination, 'utf8') : null
+    if (current === source) continue
+    fs.writeFileSync(destination, source)
+    written.push(destination)
+  }
+  return written
 }
 
 export function uninstallHooks(scope: HookScope, value?: string | HookInstallOptions): void {
