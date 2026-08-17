@@ -32,8 +32,10 @@ describe('compact rules', () => {
     for (const d of DIRECTIVES) expect(text).toContain(d)
   })
 
-  it('fits in 150 tokens (ceil(chars/4), the token_telemetry estimate)', () => {
-    expect(Math.ceil(compactRules('teal-ibex').length / 4)).toBeLessThanOrEqual(150)
+  // 150 until the worktree + memory directives landed; the budget rises only when a
+  // standing directive is added, never to absorb wordier phrasing of an existing one.
+  it('fits in 170 tokens (ceil(chars/4), the token_telemetry estimate)', () => {
+    expect(Math.ceil(compactRules('teal-ibex').length / 4)).toBeLessThanOrEqual(170)
   })
 
   it('conductor variant keeps its extra directives on top of the core rules', () => {

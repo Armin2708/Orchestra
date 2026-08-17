@@ -12,6 +12,8 @@ export const compactRules = (me: string) => `orchestra rules:
 - Before edit: orchestra card create '<title>' --desc '<goal/deliverables/done>' --paths <p> --column in_progress --agent ${me}; ⚠/≈ ask.
 - Card current; done when finished = human-accepted only. Delivered/Evidence/Remaining; move review, never done.
 - Finished? orchestra mail '<subject>' '<shipped; how to verify>' --type action --from ${me}.
+- Multi-file work → git worktree; never branch in a shared checkout.
+- Worth carrying forward? orchestra remember '<note>'.
 - Subagents: no orchestra commands.
 - Full: orchestra snapshot --full`
 
@@ -24,6 +26,8 @@ export const verboseRules = (me: string) => `orchestra rules (coordination board
 - Keep your card updated as work progresses: orchestra card update <id> --desc '<current delta>' --agent ${me}; move it to blocked when blocked. When implementation finishes, report Delivered / Evidence / Remaining and move to review. Never self-move to done; done means human-accepted delivery.
 - When you finish, also mail the operator a completion report they can act on alone: orchestra mail '<subject>' '<what shipped; how to verify or test; open questions>' --type action --attach <files,#cards,commits> --from ${me}. Their answer returns to you as a reply.
 - Do NOT touch paths claimed by another active card without asking first. Replies arrive automatically.
+- Isolate multi-file work in its own git worktree; never create or switch branches in a shared checkout — other agents are working in it.
+- Anything a later session on this board would need to know: orchestra remember '<note>'. It is injected at the start of every future session here.
 - Always single-quote message bodies. If a body contains backticks, $ or quotes, do not put it on the command line at all — pipe it: printf '%s' <body> | orchestra ask <agent> --stdin (also on reply and note). Double quotes let the shell run substitutions inside your message.
 - SUBAGENTS: spawn them freely — they work under YOUR identity and card. Instruct each one: do NOT run orchestra commands; board coordination belongs to you, the parent.`
 
@@ -56,6 +60,8 @@ Orchestra board rules (standing instructions):
   If the response shows "⚠ overlap" or "≈ similar work", ask that agent before proceeding.
 - Keep the card updated as you progress (orchestra card update/move --agent ${me}). When implementation finishes, report Delivered / Evidence / Remaining and move to review. Never self-move to done; done means human-accepted delivery. Then mail the operator a completion report (see the mail rule below) with what shipped, how to verify or test it, and any open questions — --type action.
 - Do NOT touch paths claimed by another active card without asking first.
+- Isolate multi-file work in its own git worktree; never create or switch branches in a shared checkout — other agents are working in it.
+- Anything a later session on this board would need to know: orchestra remember '<note>'. It is injected at the start of every future session here.
 - If your assignment mentions open prerequisite steps, message their owners FIRST (orchestra ask) to agree boundaries and interfaces — then build in parallel against the agreed contract instead of waiting.
 - To reach the human operator, send real mail: orchestra mail '<subject>' '<body>' --type question|action|update|blocker|fyi --attach <files,#cards,commits> --from ${me}. Write the body like an email the operator can act on without asking you anything: full context, the decision needed, and every relevant doc attached. It lands in the operator's inbox; the answer comes back to you as a reply.
 - Messages from the board arrive directly in this conversation. Reply promptly only to direct asks and explicit swarms with: orchestra reply <msg-id> '<answer>' --from ${me}. Notifications and replies need no response; never send acknowledgment-only replies.
