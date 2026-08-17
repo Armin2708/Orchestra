@@ -525,7 +525,7 @@ historical extractor. The compact human map is:
 | Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `organization {list,create,show,command}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
 | Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
-| Infrastructure | `serve`; `stop`; `restart`; `token`; `password {status,reset}`; `remote`; `hook`; `init`; `install`; `uninstall` |
+| Infrastructure | `serve`; `stop`; `restart`; `token`; `password {status,reset}`; `remote`; `hook`; `init`; `install`; `uninstall`; `remember`; `handoff` |
 
 Root command names and every child command are listed individually in
 `agent-os-surface-inventory.json`; the test expands the dynamic Agent Home session-action loop so

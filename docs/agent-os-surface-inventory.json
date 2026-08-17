@@ -837,6 +837,7 @@
       "funnel"
     ],
     "infrastructure": [
+      "handoff",
       "hook",
       "init",
       "install",
@@ -855,6 +856,7 @@
       "password",
       "password reset",
       "password status",
+      "remember",
       "remote",
       "restart",
       "serve",

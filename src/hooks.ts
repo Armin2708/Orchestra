@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { api } from './client.js'
-import { ensureDaemon } from './daemon.js'
+import { dataDir, ensureDaemon } from './daemon.js'
+import { consumeHandoff, readMemoryInjection } from './memory.js'
 import { hookRules, verbose } from './rules.js'
 import {
   MANAGED_AGENT_BOOTSTRAP_ENV,
@@ -208,6 +209,16 @@ export function renderSessionStart(agent: { id: number; name: string }, board: a
   return lines.join('\n')
 }
 
+// the one-shot handoff plus what was remembered on this board; empty when nothing was ever saved
+export function renderMemorySection(boardId: number, root = path.join(dataDir(), 'memory')): string {
+  const handoff = consumeHandoff(root, boardId)
+  const memory = readMemoryInjection(root, boardId)
+  const parts: string[] = []
+  if (handoff) parts.push(`=== HANDOFF ===\n${handoff.trim()}`)
+  if (memory) parts.push(memory)
+  return parts.join('\n\n')
+}
+
 async function sessionStart(input: any, provider: HookProvider): Promise<void> {
   if (isThrowawayCwd(input.cwd ?? process.cwd())) return
   const session = await registerSession(input, provider)
@@ -219,11 +230,13 @@ async function sessionStart(input: any, provider: HookProvider): Promise<void> {
     snap,
     input.cwd ?? process.cwd(),
   )
-  spool(provider, input.session_id, 'session_start', text)
+  const memory = renderMemorySection(session.board_id)
+  const context = memory ? `${text}\n\n${memory}` : text
+  spool(provider, input.session_id, 'session_start', context)
   if (provider === 'codex') {
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }))
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } }))
   } else {
-    console.log(text)
+    console.log(context)
   }
 }
 

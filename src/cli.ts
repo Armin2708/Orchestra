@@ -15,6 +15,7 @@ import {
   stopRemote,
 } from './remote.js'
 import { messageBody } from './msgsafe.js'
+import { appendMemory, writeHandoff } from './memory.js'
 import { registerAgentOsCommands } from './agent-os-cli.js'
 import { registerDoctorCommand } from './doctor-cli.js'
 import { buildInitAction, initProviderOption } from './init-cli.js'
@@ -51,6 +52,7 @@ import {
 const program = new Command().name('orchestra').version(VERSION)
 const csv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean)
 const envAgent = () => process.env.ORCHESTRA_AGENT
+const memoryRoot = () => path.join(dataDir(), 'memory')
 const resolveOperationsStateDirectory = async (
   stateRoot: string,
   requestedRoot: string,
@@ -712,6 +714,24 @@ program.command('note [text]').description('post a note to the board (visible to
     await up(); const b = await board()
     const m = await api('POST', '/messages', { board_id: b.id, from: await inferAgent(b.id, o.from), kind: 'announce', body })
     console.log(`note posted (msg #${m.id})`)
+  })
+
+program.command('remember <text>').description('save a session memory note (injected into future sessions on this board)')
+  .option('--agent <a>')
+  .action(async (text, o) => {
+    await up(); const b = await board()
+    const agent = (await inferAgent(b.id, o.agent)) ?? 'operator'
+    appendMemory(memoryRoot(), b.id, agent, text)
+    console.log(`remembered on board #${b.id} as ${agent}`)
+  })
+
+program.command('handoff <text>').description('leave a handoff note for the next session on this board (shown once)')
+  .option('--agent <a>')
+  .action(async (text, o) => {
+    await up(); const b = await board()
+    const agent = (await inferAgent(b.id, o.agent)) ?? 'operator'
+    writeHandoff(memoryRoot(), b.id, agent, text)
+    console.log(`handoff saved on board #${b.id} — the next session here sees it once`)
   })
 
 program.command('announce [text]').description('post a board-only announcement; wakes no agents')
