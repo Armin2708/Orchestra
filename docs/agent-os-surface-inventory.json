@@ -841,6 +841,7 @@
       "hook",
       "init",
       "install",
+      "integrations",
       "ops",
       "ops backup",
       "ops check-credential",

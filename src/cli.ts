@@ -3,7 +3,8 @@ import { ensureDaemon, serve, stopDaemon, waitForDaemonExit, baseUrl } from './d
 import { api, projectPath } from './client.js'
 import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
-import { installHooks, uninstallHooks } from './install.js'
+import { installHooks, installWorkflows, uninstallHooks } from './install.js'
+import { detectIntegrations } from './integrations.js'
 import { ensureToken } from './token.js'
 import { localOwnerPasswordPath, resetLocalOwnerPassword } from './local-owner-auth.js'
 import {
@@ -877,11 +878,26 @@ program.command('hook <event>')
 program.command('install')
   .option('--project', 'install into the current project instead of the user config')
   .option('--provider <provider>', 'hooks to install (claude|codex|both)', providerOption(true), 'claude')
-  .action((o) => installHooks(o.project ? 'project' : 'global', { provider: o.provider }))
+  .option('--workflows', 'also install the workflow command pack into .claude/commands')
+  .action((o) => {
+    const scope = o.project ? 'project' : 'global'
+    installHooks(scope, { provider: o.provider })
+    if (!o.workflows) return
+    const written = installWorkflows(scope)
+    for (const file of written) console.log(`workflow installed ${file}`)
+    if (written.length === 0) console.log('workflow command pack already up to date')
+  })
 program.command('uninstall')
   .option('--project', 'remove hooks from the current project instead of the user config')
   .option('--provider <provider>', 'hooks to remove (claude|codex|both)', providerOption(true), 'claude')
   .action((o) => uninstallHooks(o.project ? 'project' : 'global', { provider: o.provider }))
+program.command('integrations')
+  .description('show which knowledge integrations this project has (graphify, obsidian vault, gitnexus)')
+  .action(() => {
+    for (const i of detectIntegrations(process.cwd())) {
+      console.log(`${i.present ? '●' : '○'} ${i.id} — ${i.present ? i.detail : `${i.detail}; ${i.enable_hint}`}`)
+    }
+  })
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 registerDoctorCommand(program)
@@ -890,6 +906,7 @@ program.command('init')
   .option('--provider <provider>', 'provider hooks to install (claude|codex|both)', initProviderOption, 'both')
   .option('--project', 'install hooks into the current project instead of the user config')
   .option('--no-open', 'do not open the board in a browser')
+  .option('--no-workflows', 'do not install the workflow command pack into .claude/commands')
   .action(buildInitAction())
 registerFirstRunCommands(program, {
   api,

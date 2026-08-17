@@ -17,6 +17,7 @@ const harness = (overrides: Partial<InitCliDeps> = {}) => {
     formatReport: () => 'DOCTOR REPORT',
     startDaemon: async () => { calls.push('daemon'); return true },
     installProviderHooks: (scope, options) => { calls.push(`hooks:${scope}:${options.provider}`) },
+    installWorkflowPack: (scope) => { calls.push(`workflows:${scope}`); return ['build.md'] },
     openBrowser: (url) => { calls.push(`open:${url}`) },
     boardUrl: () => 'http://127.0.0.1:4820',
     output: (line) => { lines.push(line) },
@@ -28,17 +29,18 @@ const harness = (overrides: Partial<InitCliDeps> = {}) => {
     .option('--provider <provider>', 'claude|codex|both', initProviderOption, 'both')
     .option('--project')
     .option('--no-open')
+    .option('--no-workflows')
     .action(buildInitAction(deps))
   const run = (argv: string[]) => program.parseAsync(['node', 'orchestra', ...argv])
   return { calls, lines, run }
 }
 
 describe('orchestra init', () => {
-  it('runs doctor, starts the daemon, installs both-provider hooks, opens the board — in that order', async () => {
+  it('runs doctor, starts the daemon, installs hooks then workflows, opens the board — in that order', async () => {
     const { calls, lines, run } = await Promise.resolve(harness())
     await run(['init'])
     expect(calls).toEqual([
-      'doctor:both', 'daemon', 'hooks:global:both', 'open:http://127.0.0.1:4820',
+      'doctor:both', 'daemon', 'hooks:global:both', 'workflows:global', 'open:http://127.0.0.1:4820',
     ])
     expect(lines.join('\n')).toContain('DOCTOR REPORT')
     expect(lines.join('\n')).toContain('http://127.0.0.1:4820')
@@ -48,7 +50,14 @@ describe('orchestra init', () => {
   it('honors --provider, --project, and --no-open', async () => {
     const { calls, run } = harness()
     await run(['init', '--provider', 'claude', '--project', '--no-open'])
-    expect(calls).toEqual(['doctor:claude', 'daemon', 'hooks:project:claude'])
+    expect(calls).toEqual(['doctor:claude', 'daemon', 'hooks:project:claude', 'workflows:project'])
+  })
+
+  it('skips the workflow pack under --no-workflows', async () => {
+    const { calls, lines, run } = harness()
+    await run(['init', '--no-workflows', '--no-open'])
+    expect(calls).toEqual(['doctor:both', 'daemon', 'hooks:global:both'])
+    expect(lines.join('\n')).not.toContain('Workflow commands installed')
   })
 
   it('continues past a NOT READY doctor report but surfaces it as a warning', async () => {
