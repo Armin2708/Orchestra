@@ -1159,9 +1159,9 @@
   },
   "observed_mutation_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_non_get_routes": 171,
+    "total_non_get_routes": 172,
     "by_classification": {
-      "canonical": 104,
+      "canonical": 105,
       "compatibility": 26,
       "legacy": 35,
       "infrastructure": 6

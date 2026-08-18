@@ -1455,6 +1455,8 @@ export const osApi = {
     return { items, nextSeq: Number.isFinite(explicit) ? explicit : items.reduce((max, item) => Math.max(max, item.seq), after) }
   },
   writeProcessInput: (processId: OsId, data: string) => api('POST', `/os/processes/${processId}/input`, { data }),
+  pasteProcessImage: (processId: OsId, mediaType: string, data: string): Promise<{ path: string; bytes: number }> =>
+    api('POST', `/os/processes/${processId}/paste-image`, { media_type: mediaType, data }),
   resizeProcess: (processId: OsId, cols: number, rows: number) => api('POST', `/os/processes/${processId}/resize`, { cols, rows }),
   signalProcess: (processId: OsId, signal: string) => api('POST', `/os/processes/${processId}/signal`, { signal }),
   stopProcess: async (processId: OsId) =>

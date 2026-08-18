@@ -721,6 +721,7 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
       registerActiveWork: (registration) => safeShutdown.register(registration),
       agentOs: {
         runtime: agentOs.adapter,
+        pasteImageRoot: path.join(orchestraDataDir, 'pasted'),
         jobExecutor: agentOs.jobExecutor,
         scheduler,
         orchestration,

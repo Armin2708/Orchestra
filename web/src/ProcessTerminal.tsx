@@ -175,6 +175,35 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
     }
     flushInputRef.current = flushInput
 
+    // pasting an image can't ride the PTY byte stream the way text does: upload it,
+    // then type the saved file's path into the prompt — Claude/Codex CLIs attach
+    // image paths from the prompt exactly like their native terminal paste.
+    const PASTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+    const onPasteImage = (event: ClipboardEvent) => {
+      const item = [...(event.clipboardData?.items ?? [])]
+        .find((entry) => PASTED_IMAGE_TYPES.includes(entry.type))
+      if (!item) return // plain text paste — xterm's own handler owns it
+      event.preventDefault()
+      event.stopPropagation()
+      if (readOnlyRef.current) return
+      const active = processRef.current
+      if (!writableRef.current || !active || !['running', 'starting', 'stopping'].includes(active.status)) return
+      const file = item.getAsFile()
+      if (!file) return
+      const processId = active.id
+      void file.arrayBuffer().then((buffer) => {
+        let binary = ''
+        const bytes = new Uint8Array(buffer)
+        for (let i = 0; i < bytes.length; i += 0x8000)
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+        return runRuntimeMutation(readOnlyRef.current, async () => {
+          const saved = await osApi.pasteProcessImage(processId, item.type, btoa(binary))
+          await osApi.writeProcessInput(processId, `${saved.path} `)
+        })
+      }).catch(() => setStreamError('Pasted image could not reach the process.'))
+    }
+    host.addEventListener('paste', onPasteImage, true)
+
     const input = terminal.onData((data) => {
       if (readOnlyRef.current) return
       const active = processRef.current
@@ -194,6 +223,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       flushInput()
       flushInputRef.current = null
       observer.disconnect()
+      host.removeEventListener('paste', onPasteImage, true)
       input.dispose()
       terminal.dispose()
       terminalRef.current = null

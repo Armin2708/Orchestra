@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { openDb } from '../src/db.js'
@@ -10,7 +13,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
 })
 
-const fixture = async (remote = false, omitResolver = false) => {
+const fixture = async (remote = false, omitResolver = false, pasteImageRoot?: string) => {
   const db = openDb(':memory:')
   const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
     VALUES ('/terminal-routes', 'terminal routes')`).run().lastInsertRowid)
@@ -34,6 +37,7 @@ const fixture = async (remote = false, omitResolver = false) => {
         signalProcess: async () => undefined,
       },
       terminalSessionState,
+      ...(pasteImageRoot ? { pasteImageRoot } : {}),
       ...(!omitResolver ? {
         resolveTerminalAccessContext: () => remote
           ? {
@@ -125,5 +129,73 @@ describe('durable terminal route policy', () => {
       payload: { command: 'printf remote' },
     })).statusCode).toBe(401)
     expect(writes).toEqual(['printf local\n'])
+  })
+})
+
+describe('terminal image paste', () => {
+  // 1x1 transparent PNG
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  const pasteRoots: string[] = []
+  const pasteRoot = (): string => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-paste-'))
+    pasteRoots.push(root)
+    return root
+  }
+  afterEach(() => { for (const root of pasteRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
+
+  it('saves a pasted PNG under the paste root and returns its absolute path', async () => {
+    const root = pasteRoot()
+    const { server } = await fixture(false, false, root)
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/process-1/paste-image',
+      payload: { media_type: 'image/png', data: PNG.toString('base64') },
+    })
+    expect(response.statusCode).toBe(201)
+    const saved = response.json()
+    expect(saved.path.startsWith(root)).toBe(true)
+    expect(saved.path.endsWith('.png')).toBe(true)
+    expect(saved.bytes).toBe(PNG.length)
+    expect(fs.readFileSync(saved.path)).toEqual(PNG)
+  })
+
+  it('rejects unsupported media types and content that fails the magic-byte check', async () => {
+    const { server } = await fixture(false, false, pasteRoot())
+    expect((await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/process-1/paste-image',
+      payload: { media_type: 'image/svg+xml', data: PNG.toString('base64') },
+    })).statusCode).toBe(400)
+    expect((await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/process-1/paste-image',
+      payload: { media_type: 'image/png', data: Buffer.from('not a png at all').toString('base64') },
+    })).statusCode).toBe(400)
+  })
+
+  it('rejects images over the 10 MiB decoded cap', async () => {
+    const { server } = await fixture(false, false, pasteRoot())
+    const oversized = Buffer.concat([PNG, Buffer.alloc(10 * 1024 * 1024, 7)])
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/process-1/paste-image',
+      payload: { media_type: 'image/png', data: oversized.toString('base64') },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error).toContain('10 MiB')
+  })
+
+  it('keeps remote clients without a terminal-write grant out, like process input', async () => {
+    const root = pasteRoot()
+    const { server } = await fixture(true, false, root)
+    expect((await server.inject({
+      method: 'POST',
+      url: '/api/v1/os/processes/process-1/paste-image',
+      payload: { media_type: 'image/png', data: PNG.toString('base64') },
+    })).statusCode).toBe(403)
+    expect(fs.readdirSync(root)).toEqual([])
   })
 })

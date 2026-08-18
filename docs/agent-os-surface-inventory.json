@@ -568,7 +568,7 @@
       "POST /api/v1/os/outcomes/operations/:operationId/consume",
       "POST /api/v1/os/policies/:id/evaluate",
       "POST /api/v1/os/processes/:id/commands",
-      "POST /api/v1/os/processes/:id/input",
+      "POST /api/v1/os/processes/:id/input", "POST /api/v1/os/processes/:id/paste-image",
       "POST /api/v1/os/processes/:id/resize",
       "POST /api/v1/os/processes/:id/restart",
       "POST /api/v1/os/processes/:id/signal",
