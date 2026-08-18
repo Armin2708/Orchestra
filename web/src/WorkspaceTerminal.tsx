@@ -45,7 +45,9 @@ export function WorkspaceTerminal({ snaps }: { snaps: Snapshot[] }) {
   const loadWorkspaces = useCallback(async () => {
     try {
       const groups = await Promise.all(snaps.map((snapshot) => osApi.listWorkspaces(snapshot.board.id)))
-      let list = groups.flat().filter((workspace) => workspace.status !== 'archived')
+      // 'missing' = the worktree behind it is gone; every shell spawn there 500s, so
+      // auto-selection must never land on one (it did — and pinned itself via localStorage)
+      let list = groups.flat().filter((workspace) => !['archived', 'missing'].includes(workspace.status))
         .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
       if (list.length === 0 && snaps[0]) {
         const board = snaps[0].board
