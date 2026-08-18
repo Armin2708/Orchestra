@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { buildServer } from './server.js'
 import { reap, bounceDeadLetters } from './reaper.js'
+import { createGraphifyAutoSync } from './agent-os/knowledge-graphify-autosync.js'
 import { cardWorktree } from './shipqueue.js'
 import { Conductor } from './conductor.js'
 import { ensureAgentToken, ensureToken } from './token.js'
@@ -1012,7 +1013,9 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
   autowake = new Autowake(db, server.bus, (boardId) => manager!.wake(boardId))
   if (autowakeEnabled()) void autowake.reschedule()
   fs.writeFileSync(path.join(dataDir(), 'daemon.pid'), String(process.pid))
-  reapTimer = setInterval(() => { reap(db); reconcileActiveWork() }, 60_000)
+  const graphifySync = createGraphifyAutoSync(db)
+  graphifySync.tick() // boards with a knowledge graph get a fresh Wiki at boot
+  reapTimer = setInterval(() => { reap(db); reconcileActiveWork(); graphifySync.tick() }, 60_000)
   // best-effort: surface a freshly-upgraded Claude CLI's model catalog (e.g. a newly
   // released Opus) at boot, without waiting for the first agent to start
   void maestro?.refreshModelCatalog().catch(() => undefined)
