@@ -3,125 +3,151 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Orchestra — a team of coding agents that actually coordinate</title>
-<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — cards, mail, memory, and human-gated review — while you conduct.">
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#efece7">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#221f1c">
-<meta property="og:title" content="Orchestra — a team of coding agents that actually coordinate">
+<title>Orchestra — run a team of coding agents that coordinate</title>
+<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — mail, memory, and human-gated review — while you conduct.">
+<meta name="theme-color" content="#5a93d6">
+<meta property="og:title" content="Orchestra — run a team of coding agents that coordinate">
 <meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you conduct.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Silkscreen:wght@400&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --paper: #efece7;
-    --ink: #262320;
-    --muted: #71695f;
-    --line: #d9d3c9;
-    --card: #f5f3ef;
-    --brass: #9a6b23;
-    --code-bg: #262320;
-    --code-ink: #efece7;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --paper: #221f1c;
-      --ink: #eae6df;
-      --muted: #9a9187;
-      --line: #3a352f;
-      --card: #282520;
-      --brass: #c9944a;
-      --code-bg: #17150f;
-      --code-ink: #eae6df;
-    }
-  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
-  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; transition: none !important; } }
   body {
-    background: var(--paper);
-    color: var(--ink);
-    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
+    font: 16px/1.55 Inter, system-ui, -apple-system, sans-serif;
+    color: #1c1c1e; background: #fff; -webkit-font-smoothing: antialiased;
   }
-  .serif { font-family: Georgia, "Times New Roman", serif; }
-  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   a { color: inherit; }
-  a:focus-visible, button:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid #2f6fce; outline-offset: 2px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
-  /* nav */
-  nav { border-bottom: 1px solid var(--line); }
-  .nav-inner { display: flex; align-items: center; gap: 28px; height: 64px; }
-  .wordmark { font-family: Georgia, serif; font-size: 20px; letter-spacing: -0.01em; text-decoration: none; font-weight: 700; }
-  .nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
-  .nav-links a { text-decoration: none; font-size: 14px; color: var(--muted); }
-  .nav-links a:hover { color: var(--ink); }
-  .btn {
-    display: inline-block; border: 1px solid var(--ink); background: var(--ink); color: var(--paper);
-    padding: 8px 16px; font-size: 14px; text-decoration: none; border-radius: 2px;
+  /* ── nav (floats over the sky) ─────────────────────────── */
+  nav { position: absolute; top: 0; left: 0; right: 0; z-index: 10; }
+  .nav-inner { display: flex; align-items: center; height: 60px; gap: 26px; }
+  .nav-logo { font-family: Silkscreen, monospace; font-size: 15px; color: #fff; text-decoration: none; text-shadow: 0 1px 8px rgba(30,60,110,.35); }
+  .nav-links { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+  .nav-links a { color: rgba(255,255,255,.92); font-size: 13.5px; font-weight: 500; text-decoration: none; text-shadow: 0 1px 6px rgba(30,60,110,.3); }
+  .nav-links a:hover { color: #fff; }
+  .nav-cta {
+    background: #1c1c1e; color: #fff !important; padding: 7px 14px; border-radius: 8px;
+    text-shadow: none !important; font-size: 13.5px;
   }
-  .btn:hover { background: transparent; color: var(--ink); }
-  .btn.ghost { background: transparent; color: var(--ink); }
-  .btn.ghost:hover { background: var(--ink); color: var(--paper); }
+  .nav-cta:hover { background: #333; }
 
-  /* hero — set like a concert programme */
-  header { padding: 88px 0 0; text-align: center; }
-  .programme-rule {
-    display: flex; align-items: center; gap: 14px; justify-content: center;
-    color: var(--muted); font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase;
+  /* ── sky hero ──────────────────────────────────────────── */
+  .hero {
+    position: relative; overflow: hidden; text-align: center;
+    padding: 118px 24px 0;
+    background:
+      radial-gradient(52vw 24vw at 18% 88%, rgba(255,255,255,.85), rgba(255,255,255,0) 62%),
+      radial-gradient(44vw 20vw at 84% 74%, rgba(255,255,255,.75), rgba(255,255,255,0) 60%),
+      radial-gradient(36vw 15vw at 55% 96%, rgba(255,255,255,.9), rgba(255,255,255,0) 65%),
+      radial-gradient(28vw 11vw at 8% 60%, rgba(255,255,255,.5), rgba(255,255,255,0) 60%),
+      radial-gradient(30vw 12vw at 70% 30%, rgba(255,255,255,.28), rgba(255,255,255,0) 55%),
+      linear-gradient(180deg, #4c86cf 0%, #6ba0dd 34%, #a7c8ec 68%, #dcebf8 100%);
   }
-  .programme-rule::before, .programme-rule::after { content: ""; width: 64px; height: 1px; background: var(--line); }
-  h1 {
-    font-family: Georgia, "Times New Roman", serif; font-weight: 500;
-    font-size: clamp(38px, 6vw, 64px); line-height: 1.08; letter-spacing: -0.015em;
-    margin: 22px auto 18px; max-width: 17ch;
+  .hero-mark {
+    font-family: Silkscreen, monospace; font-size: clamp(20px, 2.6vw, 28px);
+    color: #fff; letter-spacing: .28em; text-shadow: 0 2px 14px rgba(30,60,110,.35);
   }
-  h1 em { font-style: italic; color: var(--brass); }
-  .sub { color: var(--muted); max-width: 52ch; margin: 0 auto 32px; font-size: 18px; }
-  .install {
-    display: inline-flex; align-items: center; gap: 14px; margin-bottom: 14px;
-    background: var(--code-bg); color: var(--code-ink); border-radius: 3px;
-    padding: 12px 18px; font-size: 15px;
+  .hero h1 {
+    color: #fff; font-size: clamp(30px, 4.4vw, 46px); line-height: 1.16; font-weight: 700;
+    letter-spacing: -0.02em; max-width: 22ch; margin: 20px auto 26px;
+    text-shadow: 0 2px 18px rgba(30,60,110,.35);
   }
-  .install button {
-    border: 1px solid color-mix(in srgb, var(--code-ink) 30%, transparent); background: none; color: inherit;
-    font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 2px; cursor: pointer;
+  .hero-cta {
+    display: inline-block; background: #fff; color: #1c1c1e; font-weight: 600; font-size: 15px;
+    padding: 12px 22px; border-radius: 10px; text-decoration: none;
+    box-shadow: 0 6px 24px rgba(30,60,110,.28);
   }
-  .install button:hover { background: color-mix(in srgb, var(--code-ink) 12%, transparent); }
-  .hero-note { font-size: 13px; color: var(--muted); }
-  .hero-note a { color: var(--muted); }
-  .hero-shot { margin-top: 56px; border: 1px solid var(--line); border-bottom: 0; border-radius: 4px 4px 0 0; overflow: hidden; background: var(--card); }
-  .hero-shot img { width: 100%; display: block; }
+  .hero-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(30,60,110,.34); }
+  .hero-quip { margin: 22px auto 0; color: rgba(255,255,255,.95); font-size: 13.5px; text-shadow: 0 1px 8px rgba(30,60,110,.3); }
+  .hero-quip .who { opacity: .8; display: block; margin-top: 3px; font-size: 12.5px; }
 
-  /* movements — the feature programme */
-  section { border-top: 1px solid var(--line); padding: 72px 0; }
-  .eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brass); }
-  h2 { font-family: Georgia, serif; font-weight: 500; font-size: 30px; letter-spacing: -0.01em; margin: 10px 0 8px; }
-  .lede { color: var(--muted); max-width: 58ch; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 40px; }
-  .cell { background: var(--card); padding: 28px; }
-  .cell h3 { font-size: 17px; margin: 10px 0 6px; font-weight: 600; }
-  .cell p { color: var(--muted); font-size: 15px; }
-  .cell img { width: 100%; border: 1px solid var(--line); border-radius: 3px; margin-top: 18px; display: block; }
+  /* floating app window */
+  .window {
+    max-width: 1060px; margin: 54px auto -150px; text-align: left;
+    background: #fff; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(25,50,95,.35), 0 4px 16px rgba(25,50,95,.18);
+    border: 1px solid rgba(0,0,0,.08);
+  }
+  .window-bar { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; background: #f6f6f7; border-bottom: 1px solid #ececee; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .window img { width: 100%; display: block; }
+  .hero-spacer { height: 190px; }
 
-  /* how it starts */
-  .steps { margin-top: 36px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
-  .step .mono { color: var(--brass); font-size: 12px; }
-  .step h3 { font-size: 16px; margin: 6px 0 4px; font-weight: 600; }
-  .step p { font-size: 14px; color: var(--muted); }
-  .step code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--card); border: 1px solid var(--line); padding: 1px 6px; border-radius: 2px; }
+  /* ── sections ──────────────────────────────────────────── */
+  section { padding: 96px 24px; text-align: center; }
+  section h2 { font-size: clamp(24px, 3vw, 32px); font-weight: 700; letter-spacing: -0.02em; }
+  section .sub { color: #6e6e73; max-width: 60ch; margin: 12px auto 0; font-size: 16.5px; }
+  .shot {
+    max-width: 920px; margin: 44px auto 0; border-radius: 12px; overflow: hidden;
+    border: 1px solid #e7e7ea; box-shadow: 0 18px 50px rgba(20,20,40,.10);
+  }
+  .shot img { width: 100%; display: block; }
+  .more { display: inline-block; margin-top: 26px; font-size: 14.5px; font-weight: 500; color: #2f6fce; text-decoration: none; }
+  .more:hover { text-decoration: underline; }
 
-  /* open source strip */
-  .oss { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; justify-content: space-between; }
-  .oss p { color: var(--muted); font-size: 15px; max-width: 60ch; }
+  /* providers strip */
+  .strip { padding: 56px 24px; text-align: center; border-top: 1px solid #f0f0f2; }
+  .strip p { font-size: 13px; color: #a0a0a6; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 22px; }
+  .strip .row { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; font-weight: 600; color: #48484d; font-size: 17px; }
 
-  footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: 13px; }
-  .foot { display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-between; }
-  .foot a { color: var(--muted); text-decoration: none; }
-  .foot a:hover { color: var(--ink); }
+  /* phone */
+  .phone {
+    width: 280px; margin: 44px auto 0; border-radius: 38px; padding: 10px; background: #111;
+    box-shadow: 0 24px 60px rgba(20,20,40,.22);
+  }
+  .phone img { width: 100%; border-radius: 30px; display: block; }
 
-  @media (max-width: 720px) {
-    .grid, .steps { grid-template-columns: 1fr; }
-    .nav-links a.quiet { display: none; }
-    header { padding-top: 56px; }
+  /* changelog */
+  .changelog { text-align: left; border-top: 1px solid #f0f0f2; }
+  .changelog h2 { text-align: left; font-size: 22px; }
+  .changelog blockquote { color: #6e6e73; font-size: 14px; margin-top: 6px; font-style: italic; }
+  .log-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 30px; }
+  .log-card { border: 1px solid #e7e7ea; border-radius: 10px; padding: 20px; text-decoration: none; transition: border-color .15s; background: #fff; }
+  .log-card:hover { border-color: #b9b9c0; }
+  .log-meta { display: flex; align-items: center; gap: 10px; }
+  .ver { font-family: ui-monospace, Menlo, monospace; font-size: 11px; border: 1px solid #e0e0e4; background: #f6f6f7; border-radius: 4px; padding: 2px 6px; color: #6e6e73; }
+  .log-date { font-size: 12px; color: #a0a0a6; }
+  .log-card h3 { font-size: 15.5px; margin-top: 14px; font-weight: 600; }
+
+  /* dark CTA */
+  .final {
+    background: #1c1c1e; color: #fff; text-align: center; padding: 110px 24px;
+  }
+  .final h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 700; letter-spacing: -0.02em; }
+  .final .cmd {
+    display: inline-flex; align-items: center; gap: 14px; margin-top: 30px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 14.5px;
+    background: #2b2b2e; border: 1px solid #3c3c40; border-radius: 10px; padding: 13px 18px;
+  }
+  .final .cmd button {
+    font: inherit; font-size: 12px; color: #fff; background: none; border: 1px solid #55555a;
+    border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  }
+  .final .cmd button:hover { background: #3c3c40; }
+  .final .alt { margin-top: 18px; font-size: 13.5px; color: #98989e; }
+  .final .alt a { color: #c9c9cf; }
+
+  /* footer */
+  footer { background: #f6f6f7; padding: 56px 24px 40px; font-size: 13.5px; }
+  .foot-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; max-width: 1120px; margin: 0 auto; }
+  .foot-grid h4 { font-size: 12px; color: #a0a0a6; font-weight: 500; margin-bottom: 12px; }
+  .foot-grid a { display: block; color: #48484d; text-decoration: none; margin-bottom: 9px; }
+  .foot-grid a:hover { color: #1c1c1e; }
+  .foot-bottom { max-width: 1120px; margin: 40px auto 0; color: #a0a0a6; font-size: 12.5px; }
+
+  @media (max-width: 760px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+    .hero { padding-top: 96px; }
+    .window { margin-bottom: -70px; }
+    .hero-spacer { height: 110px; }
+    section { padding: 72px 20px; }
+    .log-row { grid-template-columns: 1fr; }
+    .foot-grid { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
@@ -129,116 +155,123 @@
 
 <nav>
   <div class="wrap nav-inner">
-    <a class="wordmark" href="/">Orchestra</a>
+    <a class="nav-logo" href="/">ORCHESTRA</a>
     <div class="nav-links">
-      <a class="quiet" href="#coordination">Why</a>
-      <a class="quiet" href="#start">Get started</a>
+      <a href="#changelog">Changelog</a>
+      <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a>
       <a href="https://github.com/Armin2708/Orchestra">GitHub</a>
-      <a class="btn" href="#start">Install</a>
+      <a class="nav-cta" href="#install">Install</a>
     </div>
   </div>
 </nav>
 
-<header>
-  <div class="wrap">
-    <p class="programme-rule">For Claude Code &amp; Codex</p>
-    <h1>A team of coding agents that <em>actually coordinate</em></h1>
-    <p class="sub">Orchestra is a live board where your agents work together — cards, mail,
-    memory, and review — across every terminal you open. You conduct; they play.</p>
-    <div class="install mono">
-      <span id="cmd">npm i -g orchestra-board &amp;&amp; orchestra init</span>
-      <button type="button" onclick="navigator.clipboard.writeText('npm i -g orchestra-board && orchestra init').then(()=>{this.textContent='Copied';setTimeout(()=>this.textContent='Copy',1200)})">Copy</button>
-    </div>
-    <p class="hero-note">Free for you and your company · <a href="#license">FSL licensed</a> · macOS &amp; Linux</p>
-    <div class="hero-shot">
-      <img src="assets/simple-board-desktop.png" alt="The Orchestra board: three agents arranged around you, ready to take work" width="1512" height="731">
-    </div>
-  </div>
-</header>
+<div class="hero">
+  <div class="hero-mark" aria-hidden="true">ORCHESTRA</div>
+  <h1>Run a team of coding agents<br>that actually coordinate.</h1>
+  <a class="hero-cta" href="#install">Get Orchestra</a>
+  <p class="hero-quip">"I stopped babysitting terminals. The agents mail me when it matters."
+    <span class="who">— the way it should have worked all along</span>
+  </p>
 
-<section id="coordination">
+  <div class="window">
+    <div class="window-bar" aria-hidden="true">
+      <span class="dot" style="background:#ff5f57"></span>
+      <span class="dot" style="background:#febc2e"></span>
+      <span class="dot" style="background:#28c840"></span>
+    </div>
+    <img src="assets/simple-board-desktop.png" alt="The Orchestra board: your agents arranged around you, ready to take work" width="1512" height="731">
+  </div>
+</div>
+<div class="hero-spacer"></div>
+
+<div class="strip">
+  <p>Runs the agents you already pay for</p>
+  <div class="row"><span>Claude Code</span><span>Codex</span><span>Your subscription, your keys</span></div>
+</div>
+
+<section>
+  <h2>violet-puffin has entered the chat.</h2>
+  <p class="sub">Orchestra is multiplayer for agents. They register on a live board, send each other mail,
+  ask questions, and escalate to your inbox — instead of working in silos that only you can see into.</p>
+  <div class="shot"><img src="assets/inbox-desktop.png" alt="The Messages inbox: agents reporting shipped work and asking questions" width="1512" height="731"></div>
+</section>
+
+<section>
+  <h2>They remember Monday.</h2>
+  <p class="sub">Notes and handoffs persist per project and are injected into every new session —
+  Claude Code and Codex alike. <code style="font-family:ui-monospace,Menlo,monospace;font-size:14px">orchestra remember</code> once, and every future agent knows.</p>
+  <div class="shot"><img src="assets/agent-home-desktop-final.png" alt="An agent's durable timeline: every message, tool call, and approval on the record" width="1440" height="1000"></div>
+</section>
+
+<section>
+  <h2>Done means you said so.</h2>
+  <p class="sub">Every task is a card with an owner and evidence. Agents move work to review;
+  only you move it to done. Hooks enforce the discipline, worktrees keep them out of each other's way.</p>
+  <div class="shot"><img src="assets/post-restart-board.png" alt="A team with a review gate: engineering lead, staff engineer, code reviewer — and the mastermind drafting it" width="1512" height="787"></div>
+</section>
+
+<section>
+  <h2>Conduct from anywhere.</h2>
+  <p class="sub">The board runs on your machine and pairs to your phone over a private tunnel —
+  scoped sessions that can observe, message, and approve. No cloud in the middle.</p>
+  <div class="phone"><img src="assets/agent-home-phone-conversation.png" alt="An agent conversation on the phone view" width="430" height="932"></div>
+</section>
+
+<section class="changelog" id="changelog">
   <div class="wrap">
-    <p class="eyebrow">Not just parallel — together</p>
-    <h2>Parallel agents are easy. A team is the hard part.</h2>
-    <p class="lede">Plenty of tools run agents side by side in worktrees. Orchestra is what's missing
-    after that: the agents know about each other, hand work off, and stop to ask you when it matters.</p>
-    <div class="grid">
-      <div class="cell">
-        <p class="eyebrow">Agent mail</p>
-        <h3>They talk to each other</h3>
-        <p>Agents send mail, ask each other questions, and escalate blockers to your inbox.
-        Dead letters bounce back instead of vanishing.</p>
-        <img src="assets/inbox-desktop.png" alt="The Messages inbox: agents reporting shipped work and asking questions" loading="lazy" width="1512" height="731">
-      </div>
-      <div class="cell">
-        <p class="eyebrow">Memory</p>
-        <h3>They remember</h3>
-        <p><span class="mono">orchestra remember</span> notes and handoffs persist per project and are
-        injected into every new session — Claude and Codex alike. Monday's agent knows what Friday's did.</p>
-        <img src="assets/workspace-terminal-final.png" alt="A live agent terminal inside the board's Workspace tab" loading="lazy" width="1512" height="731">
-      </div>
-      <div class="cell">
-        <p class="eyebrow">Review gates</p>
-        <h3>You approve, or it isn't done</h3>
-        <p>Every task is a card. Agents move work to review with evidence; only you move it to done.
-        Hooks enforce the discipline — no self-graded homework.</p>
-        <img src="assets/kanban-gh-style.png" alt="The kanban view: cards moving from in progress to review" loading="lazy" width="1512" height="731">
-      </div>
-      <div class="cell">
-        <p class="eyebrow">Ambient join</p>
-        <h3>Every terminal is already on the team</h3>
-        <p>Start Claude Code or Codex anywhere — hooks register the session on the board automatically,
-        with worktree isolation so nobody tramples the shared checkout. Your phone gets a scoped view too.</p>
-      </div>
+    <h2>Changelog</h2>
+    <blockquote>Shipped by the agents it manages — reviewed and accepted by a human, per house rules.</blockquote>
+    <div class="log-row">
+      <a class="log-card" href="https://github.com/Armin2708/Orchestra/commits/main">
+        <div class="log-meta"><span class="ver">new</span><span class="log-date">August 2026</span></div>
+        <h3>Paste images straight into agent terminals</h3>
+      </a>
+      <a class="log-card" href="https://github.com/Armin2708/Orchestra/commits/main">
+        <div class="log-meta"><span class="ver">new</span><span class="log-date">August 2026</span></div>
+        <h3>Cross-provider memory &amp; one-shot handoffs</h3>
+      </a>
+      <a class="log-card" href="https://github.com/Armin2708/Orchestra/commits/main">
+        <div class="log-meta"><span class="ver">0.1.0</span><span class="log-date">August 2026</span></div>
+        <h3>orchestra init — one command to a running board</h3>
+      </a>
     </div>
   </div>
 </section>
 
-<section id="start">
-  <div class="wrap">
-    <p class="eyebrow">Get started</p>
-    <h2>One command to a running board</h2>
-    <div class="steps">
-      <div class="step">
-        <span class="mono">i.</span>
-        <h3>Install</h3>
-        <p><code>npm i -g orchestra-board</code> — needs Node 22 and the provider CLIs you already use.</p>
-      </div>
-      <div class="step">
-        <span class="mono">ii.</span>
-        <h3>Init</h3>
-        <p><code>orchestra init</code> checks your environment, starts the daemon, installs hooks, and opens the board.</p>
-      </div>
-      <div class="step">
-        <span class="mono">iii.</span>
-        <h3>Conduct</h3>
-        <p>Hire your first agent from the board, or just open a terminal — it joins on its own.</p>
-      </div>
-    </div>
+<div class="final" id="install">
+  <h2>Be the conductor.<br>Try Orchestra.</h2>
+  <div class="cmd">
+    <span>npm i -g orchestra-board &amp;&amp; orchestra init</span>
+    <button type="button" onclick="navigator.clipboard.writeText('npm i -g orchestra-board && orchestra init').then(()=>{this.textContent='Copied';setTimeout(()=>this.textContent='Copy',1200)})">Copy</button>
   </div>
-</section>
-
-<section id="license">
-  <div class="wrap oss">
-    <div>
-      <p class="eyebrow">Source available</p>
-      <h2>Free for personal and company use</h2>
-      <p>Orchestra is FSL-licensed: use it, modify it, self-host it — internally, commercially, freely.
-      Each release becomes Apache&nbsp;2.0 after two years. The only thing you can't do is sell a competing Orchestra.</p>
-    </div>
-    <a class="btn ghost" href="https://github.com/Armin2708/Orchestra">Read the source</a>
-  </div>
-</section>
+  <p class="alt">Free for you and your company · <a href="https://github.com/Armin2708/Orchestra/blob/main/LICENSE">FSL licensed</a> · macOS &amp; Linux</p>
+</div>
 
 <footer>
-  <div class="wrap foot">
-    <span>Orchestra — you conduct, agents play.</span>
-    <span>
-      <a href="https://github.com/Armin2708/Orchestra">GitHub</a> ·
-      <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a> ·
+  <div class="foot-grid">
+    <div>
+      <h4>Product</h4>
+      <a href="#install">Install</a>
+      <a href="#changelog">Changelog</a>
+      <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a>
+    </div>
+    <div>
+      <h4>Source</h4>
+      <a href="https://github.com/Armin2708/Orchestra">GitHub</a>
       <a href="https://github.com/Armin2708/Orchestra/blob/main/LICENSE">License</a>
-    </span>
+      <a href="https://github.com/Armin2708/Orchestra/issues">Issues</a>
+    </div>
+    <div>
+      <h4>Works with</h4>
+      <a href="https://www.anthropic.com/claude-code">Claude Code</a>
+      <a href="https://openai.com/codex">Codex</a>
+    </div>
+    <div>
+      <h4>Legal</h4>
+      <a href="https://github.com/Armin2708/Orchestra/blob/main/LICENSE">FSL-1.1-ALv2</a>
+    </div>
   </div>
+  <div class="foot-bottom">© 2026 Orchestra — you conduct, agents play.</div>
 </footer>
 
 </body>
