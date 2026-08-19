@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestra — a team of coding agents that actually coordinate</title>
+<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — cards, mail, memory, and human-gated review — while you conduct.">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#efece7">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#221f1c">
+<meta property="og:title" content="Orchestra — a team of coding agents that actually coordinate">
+<meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you conduct.">
+<style>
+  :root {
+    --paper: #efece7;
+    --ink: #262320;
+    --muted: #71695f;
+    --line: #d9d3c9;
+    --card: #f5f3ef;
+    --brass: #9a6b23;
+    --code-bg: #262320;
+    --code-ink: #efece7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #221f1c;
+      --ink: #eae6df;
+      --muted: #9a9187;
+      --line: #3a352f;
+      --card: #282520;
+      --brass: #c9944a;
+      --code-bg: #17150f;
+      --code-ink: #eae6df;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .serif { font-family: Georgia, "Times New Roman", serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  a { color: inherit; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* nav */
+  nav { border-bottom: 1px solid var(--line); }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .wordmark { font-family: Georgia, serif; font-size: 20px; letter-spacing: -0.01em; text-decoration: none; font-weight: 700; }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
+  .nav-links a { text-decoration: none; font-size: 14px; color: var(--muted); }
+  .nav-links a:hover { color: var(--ink); }
+  .btn {
+    display: inline-block; border: 1px solid var(--ink); background: var(--ink); color: var(--paper);
+    padding: 8px 16px; font-size: 14px; text-decoration: none; border-radius: 2px;
+  }
+  .btn:hover { background: transparent; color: var(--ink); }
+  .btn.ghost { background: transparent; color: var(--ink); }
+  .btn.ghost:hover { background: var(--ink); color: var(--paper); }
+
+  /* hero — set like a concert programme */
+  header { padding: 88px 0 0; text-align: center; }
+  .programme-rule {
+    display: flex; align-items: center; gap: 14px; justify-content: center;
+    color: var(--muted); font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase;
+  }
+  .programme-rule::before, .programme-rule::after { content: ""; width: 64px; height: 1px; background: var(--line); }
+  h1 {
+    font-family: Georgia, "Times New Roman", serif; font-weight: 500;
+    font-size: clamp(38px, 6vw, 64px); line-height: 1.08; letter-spacing: -0.015em;
+    margin: 22px auto 18px; max-width: 17ch;
+  }
+  h1 em { font-style: italic; color: var(--brass); }
+  .sub { color: var(--muted); max-width: 52ch; margin: 0 auto 32px; font-size: 18px; }
+  .install {
+    display: inline-flex; align-items: center; gap: 14px; margin-bottom: 14px;
+    background: var(--code-bg); color: var(--code-ink); border-radius: 3px;
+    padding: 12px 18px; font-size: 15px;
+  }
+  .install button {
+    border: 1px solid color-mix(in srgb, var(--code-ink) 30%, transparent); background: none; color: inherit;
+    font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 2px; cursor: pointer;
+  }
+  .install button:hover { background: color-mix(in srgb, var(--code-ink) 12%, transparent); }
+  .hero-note { font-size: 13px; color: var(--muted); }
+  .hero-note a { color: var(--muted); }
+  .hero-shot { margin-top: 56px; border: 1px solid var(--line); border-bottom: 0; border-radius: 4px 4px 0 0; overflow: hidden; background: var(--card); }
+  .hero-shot img { width: 100%; display: block; }
+
+  /* movements — the feature programme */
+  section { border-top: 1px solid var(--line); padding: 72px 0; }
+  .eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brass); }
+  h2 { font-family: Georgia, serif; font-weight: 500; font-size: 30px; letter-spacing: -0.01em; margin: 10px 0 8px; }
+  .lede { color: var(--muted); max-width: 58ch; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 40px; }
+  .cell { background: var(--card); padding: 28px; }
+  .cell h3 { font-size: 17px; margin: 10px 0 6px; font-weight: 600; }
+  .cell p { color: var(--muted); font-size: 15px; }
+  .cell img { width: 100%; border: 1px solid var(--line); border-radius: 3px; margin-top: 18px; display: block; }
+
+  /* how it starts */
+  .steps { margin-top: 36px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+  .step .mono { color: var(--brass); font-size: 12px; }
+  .step h3 { font-size: 16px; margin: 6px 0 4px; font-weight: 600; }
+  .step p { font-size: 14px; color: var(--muted); }
+  .step code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: var(--card); border: 1px solid var(--line); padding: 1px 6px; border-radius: 2px; }
+
+  /* open source strip */
+  .oss { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; justify-content: space-between; }
+  .oss p { color: var(--muted); font-size: 15px; max-width: 60ch; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: 13px; }
+  .foot { display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-between; }
+  .foot a { color: var(--muted); text-decoration: none; }
+  .foot a:hover { color: var(--ink); }
+
+  @media (max-width: 720px) {
+    .grid, .steps { grid-template-columns: 1fr; }
+    .nav-links a.quiet { display: none; }
+    header { padding-top: 56px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="wordmark" href="/">Orchestra</a>
+    <div class="nav-links">
+      <a class="quiet" href="#coordination">Why</a>
+      <a class="quiet" href="#start">Get started</a>
+      <a href="https://github.com/Armin2708/Orchestra">GitHub</a>
+      <a class="btn" href="#start">Install</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <p class="programme-rule">For Claude Code &amp; Codex</p>
+    <h1>A team of coding agents that <em>actually coordinate</em></h1>
+    <p class="sub">Orchestra is a live board where your agents work together — cards, mail,
+    memory, and review — across every terminal you open. You conduct; they play.</p>
+    <div class="install mono">
+      <span id="cmd">npm i -g orchestra-board &amp;&amp; orchestra init</span>
+      <button type="button" onclick="navigator.clipboard.writeText('npm i -g orchestra-board && orchestra init').then(()=>{this.textContent='Copied';setTimeout(()=>this.textContent='Copy',1200)})">Copy</button>
+    </div>
+    <p class="hero-note">Free for you and your company · <a href="#license">FSL licensed</a> · macOS &amp; Linux</p>
+    <div class="hero-shot">
+      <img src="assets/simple-board-desktop.png" alt="The Orchestra board: three agents arranged around you, ready to take work" width="1512" height="731">
+    </div>
+  </div>
+</header>
+
+<section id="coordination">
+  <div class="wrap">
+    <p class="eyebrow">Not just parallel — together</p>
+    <h2>Parallel agents are easy. A team is the hard part.</h2>
+    <p class="lede">Plenty of tools run agents side by side in worktrees. Orchestra is what's missing
+    after that: the agents know about each other, hand work off, and stop to ask you when it matters.</p>
+    <div class="grid">
+      <div class="cell">
+        <p class="eyebrow">Agent mail</p>
+        <h3>They talk to each other</h3>
+        <p>Agents send mail, ask each other questions, and escalate blockers to your inbox.
+        Dead letters bounce back instead of vanishing.</p>
+        <img src="assets/inbox-desktop.png" alt="The Messages inbox: agents reporting shipped work and asking questions" loading="lazy" width="1512" height="731">
+      </div>
+      <div class="cell">
+        <p class="eyebrow">Memory</p>
+        <h3>They remember</h3>
+        <p><span class="mono">orchestra remember</span> notes and handoffs persist per project and are
+        injected into every new session — Claude and Codex alike. Monday's agent knows what Friday's did.</p>
+        <img src="assets/workspace-terminal-final.png" alt="A live agent terminal inside the board's Workspace tab" loading="lazy" width="1512" height="731">
+      </div>
+      <div class="cell">
+        <p class="eyebrow">Review gates</p>
+        <h3>You approve, or it isn't done</h3>
+        <p>Every task is a card. Agents move work to review with evidence; only you move it to done.
+        Hooks enforce the discipline — no self-graded homework.</p>
+        <img src="assets/kanban-gh-style.png" alt="The kanban view: cards moving from in progress to review" loading="lazy" width="1512" height="731">
+      </div>
+      <div class="cell">
+        <p class="eyebrow">Ambient join</p>
+        <h3>Every terminal is already on the team</h3>
+        <p>Start Claude Code or Codex anywhere — hooks register the session on the board automatically,
+        with worktree isolation so nobody tramples the shared checkout. Your phone gets a scoped view too.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <p class="eyebrow">Get started</p>
+    <h2>One command to a running board</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="mono">i.</span>
+        <h3>Install</h3>
+        <p><code>npm i -g orchestra-board</code> — needs Node 22 and the provider CLIs you already use.</p>
+      </div>
+      <div class="step">
+        <span class="mono">ii.</span>
+        <h3>Init</h3>
+        <p><code>orchestra init</code> checks your environment, starts the daemon, installs hooks, and opens the board.</p>
+      </div>
+      <div class="step">
+        <span class="mono">iii.</span>
+        <h3>Conduct</h3>
+        <p>Hire your first agent from the board, or just open a terminal — it joins on its own.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="license">
+  <div class="wrap oss">
+    <div>
+      <p class="eyebrow">Source available</p>
+      <h2>Free for personal and company use</h2>
+      <p>Orchestra is FSL-licensed: use it, modify it, self-host it — internally, commercially, freely.
+      Each release becomes Apache&nbsp;2.0 after two years. The only thing you can't do is sell a competing Orchestra.</p>
+    </div>
+    <a class="btn ghost" href="https://github.com/Armin2708/Orchestra">Read the source</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <span>Orchestra — you conduct, agents play.</span>
+    <span>
+      <a href="https://github.com/Armin2708/Orchestra">GitHub</a> ·
+      <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a> ·
+      <a href="https://github.com/Armin2708/Orchestra/blob/main/LICENSE">License</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>
