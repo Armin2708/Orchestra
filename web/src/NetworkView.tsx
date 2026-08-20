@@ -31,10 +31,13 @@ const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
 
 const ageMs = (sqlUtc: string) => Date.now() - new Date(sqlUtc.replace(' ', 'T') + 'Z').getTime()
 
-export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange, posSeed }:
+export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange, posSeed, multi = false }:
   { snap: Snapshot; viewport: CanvasViewport; onOpenCard: (c: Card) => void; onOpenAgent: (a: Agent) => void; onChange?: () => void;
     // where a just-activated agent was dropped — it lands there instead of the default ring
-    posSeed?: { name: string; x: number; y: number } | null }) {
+    posSeed?: { name: string; x: number; y: number } | null
+    // merged all-projects board: agents/cards/threads carry their home board_id, and
+    // node keys are board-qualified so same-named agents from two projects don't collide
+    multi?: boolean }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [killing, setKilling] = useState<Agent | null>(null)
   const [dying, setDying] = useState<number | null>(null)
@@ -55,6 +58,9 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
     onChange?.()
   }
   const boardId = snap.board.id
+  // merged mode qualifies node keys by home board so duplicate names stay distinct
+  const keyFor = (name: string, homeBoard?: number | null) =>
+    multi && homeBoard != null ? `${homeBoard}:${name}` : name
   const agents = snap.agents.filter((a) => a.status !== 'gone').filter((a) => !dead.has(a.id))
   const wrap = useRef<HTMLDivElement>(null)
   // real pixel size of the canvas — svg renders 1:1, so text and arrows never distort
@@ -111,9 +117,10 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
     setPos((p) => {
       let next = p
       for (const a of agents) {
-        if (!next[a.name] && stored[a.name]) {
+        const key = keyFor(a.name, a.board_id)
+        if (!next[key] && stored[key]) {
           if (next === p) next = { ...p }
-          next[a.name] = stored[a.name]
+          next[key] = stored[key]
         }
       }
       return next
@@ -141,7 +148,7 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
   }
   const nodes = new Map<string, Norm>()
   nodes.set('you', place('you', 0, 1))
-  agents.forEach((a, i) => nodes.set(a.name, place(a.name, i, agents.length)))
+  agents.forEach((a, i) => nodes.set(keyFor(a.name, a.board_id), place(keyFor(a.name, a.board_id), i, agents.length)))
 
   const startDrag = (name: string) => (e: React.PointerEvent) => {
     e.preventDefault()
@@ -177,11 +184,17 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
     if (!wasDrag && a) onOpenAgent(a) // click (no movement) opens the console
   }
 
+  // a thread's endpoints live on its own board in merged mode
+  const edgeEnds = (t: Thread): [string, string] => [
+    t.from_name ? keyFor(t.from_name, t.board_id) : 'you',
+    t.to_name ? keyFor(t.to_name, t.board_id) : 'you',
+  ]
+
   // one edge per question; answered ones linger green for 3 minutes, then vanish.
   // deletedIds hides a bubble the instant its delete is confirmed.
   const edges = (snap.threads as Thread[]).filter((t) => {
     if (deletedIds.has(t.id)) return false
-    const src = t.from_name ?? 'you', dst = t.to_name ?? 'you'
+    const [src, dst] = edgeEnds(t)
     if (src === dst || !nodes.has(src) || !nodes.has(dst)) return false
     if (!t.answered) return true
     const last = t.replies[t.replies.length - 1]
@@ -190,17 +203,18 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
 
   const sendPrompt = async () => {
     if (!promptFor || !prompt.trim()) return
-    await api('POST', '/messages', { board_id: boardId, to: promptFor.name, body: prompt.trim() })
+    await api('POST', '/messages', { board_id: promptFor.board_id ?? boardId, to: promptFor.name, body: prompt.trim() })
     setPrompt(''); setPromptFor(null)
   }
   const sendReply = async () => {
     if (!openThread || !reply.trim()) return
-    await api('POST', '/messages', { board_id: boardId, body: reply.trim(), reply_to: openThread.id })
+    await api('POST', '/messages', { board_id: openThread.board_id ?? boardId, body: reply.trim(), reply_to: openThread.id })
     setReply(''); setOpenThread(null)
   }
 
-  const cardsFor = (name: string) =>
-    snap.cards.filter((c) => c.owner === name && c.column !== 'done').slice(0, 3)
+  const cardsFor = (a: Agent) =>
+    snap.cards.filter((c) => c.owner === a.name && c.column !== 'done'
+      && (!multi || c.board_id === a.board_id)).slice(0, 3)
 
   const P = (name: string) => nodes.get(name)!
   const graphOffset = canvasSceneOffset(viewport, boardOrigin)
@@ -229,7 +243,7 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
           // spread multiple questions between the same pair onto parallel curves
           const byPair = new Map<string, number>()
           return edges.map((t) => {
-            const src = t.from_name ?? 'you', dst = t.to_name ?? 'you'
+            const [src, dst] = edgeEnds(t)
             const key = [src, dst].sort().join('→')
             const idx = byPair.get(key) ?? 0
             byPair.set(key, idx + 1)
@@ -266,9 +280,11 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
       </div>
 
       {agents.map((a) => {
-        const p = P(a.name)
-        const mine = cardsFor(a.name)
-        const asking = (snap.threads as Thread[]).some((t) => !t.answered && t.from_name === a.name)
+        const nodeKey = keyFor(a.name, a.board_id)
+        const p = P(nodeKey)
+        const mine = cardsFor(a)
+        const asking = (snap.threads as Thread[]).some((t) => !t.answered && t.from_name === a.name
+          && (!multi || t.board_id === a.board_id))
         const free = a.status !== 'active' && mine.length === 0
         const subs = a.subagents ?? []
         return (
@@ -288,17 +304,20 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
                 </div>
               </div>
             )}
-            <span className={`net-avatar round ${a.status} ${agentActivity(a) === 'working' ? 'working' : ''} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === a.name ? 'droptarget' : ''}`}
+            <span className={`net-avatar round ${a.status} ${agentActivity(a) === 'working' ? 'working' : ''} ${a.kind === 'hired' ? 'hired' : ''} ${asking ? 'asking' : ''} ${dropTarget === nodeKey ? 'droptarget' : ''}`}
               style={{ background: agentWash(a.name), color: agentInk(a.name) }}
               title={`${a.name}${agentActivity(a) === 'working' ? ' — working now' : ''} — drag to move, click to open console, drop a ticket to assign`}
-              onPointerDown={startDrag(a.name)} onPointerUp={endDrag(a)}
-              onDragOver={(e) => { if (a.name === 'strategist' || a.name.startsWith('auditor-')) return; e.preventDefault(); setDropTarget(a.name) }}
+              onPointerDown={startDrag(nodeKey)} onPointerUp={endDrag(a)}
+              onDragOver={(e) => { if (a.name === 'strategist' || a.name.startsWith('auditor-')) return; e.preventDefault(); setDropTarget(nodeKey) }}
               onDragLeave={() => setDropTarget(null)}
               onDrop={async (e) => {
                 e.preventDefault(); setDropTarget(null)
                 if (a.name === 'strategist' || a.name.startsWith('auditor-')) return
                 const id = Number(e.dataTransfer.getData('text/ticket-id'))
                 if (!id) return
+                // merged board: a ticket only assigns to an agent on its own project
+                const dropped = snap.cards.find((c) => c.id === id)
+                if (multi && dropped && dropped.board_id !== a.board_id) return
                 try { await api('POST', `/cards/${id}/assign`, { agent: a.name }) } catch { /* locked */ }
                 onChange?.()
               }}>
@@ -311,7 +330,9 @@ export function NetworkView({ snap, viewport, onOpenCard, onOpenAgent, onChange,
               ))}
               {subs.length > 3 && <i className="net-sub more" title={`${subs.length} subagents`}>{subs.length}</i>}
             </span>
-            <span className="net-name">{a.name}{subs.length > 0 ? ` +${subs.length}` : ''} <ProviderBadge provider={a.provider} compact /></span>
+            <span className="net-name">{a.name}{subs.length > 0 ? ` +${subs.length}` : ''} <ProviderBadge provider={a.provider} compact />
+              {multi && a.project && <small className="net-project">{a.project}</small>}
+            </span>
             <div className="net-cards">
               {mine.map((c) => {
                 const st = STATUS[c.column] ?? STATUS.backlog

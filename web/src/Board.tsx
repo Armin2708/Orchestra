@@ -762,10 +762,25 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
     : null
   const canvasStorageKey = focused && snaps.length === 1 ? `project-${snaps[0].board.id}` : 'all-projects'
 
+  // all-projects is ONE board: every project's agents merged onto a single canvas.
+  // Each agent/card keeps its home board_id so prompts, drawers, and consoles still
+  // route to the right project; board id 0 is a client-only sentinel (positions key).
+  const merged: Snapshot | null = !focused && snaps.length > 1 ? {
+    board: { id: 0, name: 'All projects' },
+    agents: snaps.flatMap((s) => s.agents.map((a) => ({ ...a, board_id: s.board.id, project: s.board.name }))),
+    cards: snaps.flatMap((s) => s.cards.map((c) => ({ ...c, board_id: s.board.id }))),
+    open_questions: snaps.flatMap((s) => s.open_questions),
+    threads: snaps.flatMap((s) => s.threads),
+    ideas: snaps.flatMap((s) => s.ideas),
+    milestones: snaps.flatMap((s) => s.milestones),
+  } : null
+  const scenes = merged ? [merged] : snaps
+  const layoutFocused = focused || merged !== null
+
   return (
     <>
-      <BoardCanvas focused={focused} storageKey={canvasStorageKey}>
-        {(viewport) => snaps.map((s) => {
+      <BoardCanvas focused={layoutFocused} storageKey={canvasStorageKey}>
+        {(viewport) => scenes.map((s) => {
           const online = s.agents.filter((a) => a.status !== 'gone')
           const agents = online.filter((a) => !isMastermind(a))
           const pooled = agents.filter(inSpawnPool)
@@ -773,31 +788,33 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
           return (
             <section key={s.board.id} className="project network-mode">
               <header className="project-head">
-                {!focused && <h2 className="project-title">{s.board.name}</h2>}
+                {!layoutFocused && <h2 className="project-title">{s.board.name}</h2>}
                 <div className="project-head-col">
                   <div className="project-head-right">
-                    <HireControl providers={providers} boardId={s.board.id}
-                      takenNames={online.map((a) => a.name)} onHired={onChange} />
+                    {!merged && <HireControl providers={providers} boardId={s.board.id}
+                      takenNames={online.map((a) => a.name)} onHired={onChange} />}
                     <div className="project-crew">
                       {crew.map((a) => (
                         <CrewSlot key={a.id} a={a} isNew={isNewHire(a)} onChange={onChange}
-                          onOpen={() => openTerminal(a, s.board.id)} />
+                          onOpen={() => openTerminal(a, a.board_id ?? s.board.id)} />
                       ))}
                       {agents.length === 0 && <span className="ask-none">no agents online</span>}
                     </div>
                   </div>
                   <SpawnPool pooled={pooled} isNewHire={isNewHire} viewport={viewport}
-                    onOpen={(a) => openTerminal(a, s.board.id)}
-                    onActivate={(a, dropAt) => activateHire(a, s.board.id, dropAt)} />
+                    onOpen={(a) => openTerminal(a, a.board_id ?? s.board.id)}
+                    onActivate={(a, dropAt) => activateHire(a, a.board_id ?? s.board.id, dropAt)} />
                 </div>
               </header>
 
               <div className="net-wrap">
-                <TicketRail snap={s} providers={providers} onOpen={(c) => openCardDrawer(c, s.board.id)} onChange={onChange} />
-                <NetworkView snap={{ ...s, agents: crew }} viewport={viewport}
-                  posSeed={netSeed && netSeed.boardId === s.board.id ? netSeed : null}
-                  onOpenCard={(c) => openCardDrawer(c, s.board.id)}
-                  onOpenAgent={(a) => setTerminal({ agent: a, boardId: s.board.id })}
+                <TicketRail snap={s} providers={providers} onOpen={(c) => openCardDrawer(c, c.board_id ?? s.board.id)} onChange={onChange} />
+                <NetworkView snap={{ ...s, agents: crew }} viewport={viewport} multi={merged !== null}
+                  posSeed={netSeed && (merged !== null || netSeed.boardId === s.board.id)
+                    ? (merged !== null ? { ...netSeed, name: `${netSeed.boardId}:${netSeed.name}` } : netSeed)
+                    : null}
+                  onOpenCard={(c) => openCardDrawer(c, c.board_id ?? s.board.id)}
+                  onOpenAgent={(a) => setTerminal({ agent: a, boardId: a.board_id ?? s.board.id })}
                   onChange={onChange} />
               </div>
             </section>

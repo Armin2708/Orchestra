@@ -393,7 +393,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (prefers-reduced-motion: reduce) {
   .net-avatar.working::before { animation: none; border-color: rgba(45, 164, 78, 0.55); }
 }
-.net-name { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+.net-name { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; flex-wrap: wrap; justify-content: center; }
+/* merged all-projects board: each node names its home project under the agent name */
+.net-project { flex-basis: 100%; font-size: 10px; font-weight: 500; color: var(--ink-soft); text-align: center; }
 .net-cards { display: flex; flex-direction: column; gap: 3px; align-items: center; }
 .net-card {
   display: inline-flex; align-items: center; gap: 6px;

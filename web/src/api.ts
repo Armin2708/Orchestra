@@ -118,7 +118,8 @@ export type VerificationCriterion = { text: string; met: boolean | 'unverifiable
 // latest verifier verdict for a review card (#52); running = a verify was requested after the last verdict
 // queued = waiting for the single verifier slot (#150); only one verifier runs board-wide
 export type Verification = { running: boolean; queued?: boolean; verdict: 'pass' | 'gaps' | 'fail' | null; tested?: boolean; criteria?: VerificationCriterion[]; at?: string; by?: string | null }
-export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean; kind?: string; parent_card_id?: number | null; funnel_ready?: boolean; funnel_role?: string }
+// board_id is a client-side annotation set only by the merged all-projects view
+export type Card = { id: number; title: string; description: string; column: string; owner: string | null; paths: string[]; updated_at: string; milestone_id?: number | null; step_order?: number | null; verification?: Verification; rank?: number | null; ready?: boolean; stale?: boolean; kind?: string; parent_card_id?: number | null; funnel_ready?: boolean; funnel_role?: string; board_id?: number }
 export type Agent = {
   id: number
   name: string
@@ -136,6 +137,8 @@ export type Agent = {
   // rank by real recorded tokens on the board (#109); null until usage exists
   effort_rank?: number | null
   effort_tokens?: number
+  // client-side annotation: home project name, set only by the merged all-projects view
+  project?: string
 }
 export type Milestone = { id: number; board_id: number; title: string; description: string; created_at: string; status?: 'open' | 'shipped' | 'dropped'; outcome?: string; rank?: number | null }
 export type Idea = { id: number; board_id: number; text: string; created_at: string }
