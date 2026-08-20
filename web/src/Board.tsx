@@ -773,6 +773,7 @@ export function ProjectGrid({ snaps, focused = false, onChange }: { snaps: Snaps
           return (
             <section key={s.board.id} className="project network-mode">
               <header className="project-head">
+                {!focused && <h2 className="project-title">{s.board.name}</h2>}
                 <div className="project-head-col">
                   <div className="project-head-right">
                     <HireControl providers={providers} boardId={s.board.id}

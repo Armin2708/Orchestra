@@ -159,7 +159,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .project.network-mode { overflow: visible; }
 .projects.focused .project { height: 100%; min-height: 0; max-height: none; }
-.projects:not(.focused) .project.network-mode { min-height: 500px; }
+.projects:not(.focused) .project.network-mode {
+  min-height: 500px;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.project-title {
+  pointer-events: auto; margin-right: auto; align-self: flex-start;
+  font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
+  background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(16px);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
+  padding: 6px 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .projects:not(.focused) .net-wrap,
 .projects:not(.focused) .net-wrap .network { min-height: 440px; }
 .project-head {
@@ -1117,6 +1128,7 @@ textarea {
   position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; min-width: 240px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08); padding: 6px; display: grid; gap: 2px;
+  max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain;
 }
 .brand-item {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1248,6 +1260,8 @@ textarea {
 
 /* ── Collapsible task panel (network view) ───────── */
 .net-wrap { position: relative; display: flex; flex: 1; min-height: 0; }
+/* all-projects tiles show the project name in the top-left corner — keep the Tasks rail clear of it */
+.projects:not(.focused) .net-wrap .task-panel { top: 40px; bottom: -40px; }
 .net-wrap .network { flex: 1; width: 100%; min-height: 0; }
 .task-panel {
   position: absolute; left: 0; top: 0; bottom: 0; z-index: 5;
