@@ -50,7 +50,11 @@
 
   /* ── hero: mesh + grid + lottie constellation ────────────── */
   .hero { position: relative; overflow: hidden; }
-  .grid, .noise { position: absolute; inset: 0; pointer-events: none; }
+  .grid, .noise, .scan { position: absolute; inset: 0; pointer-events: none; }
+  .scan {
+    background-image: linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px);
+    background-size: 100% 3px;
+  }
   .grid {
     background-image:
       linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
@@ -288,6 +292,7 @@
 
 <div class="hero">
   <div class="grid" aria-hidden="true"></div>
+  <div class="scan" aria-hidden="true"></div>
   <div class="noise" aria-hidden="true"></div>
   <canvas class="digits" id="digits-hero" aria-hidden="true"></canvas>
   <div class="lottie-net net-l" id="lottie-left" aria-hidden="true"></div>
@@ -444,6 +449,7 @@
 </section>
 
 <div class="final" id="install">
+  <canvas class="digits" id="digits-final" aria-hidden="true"></canvas>
   <div class="noise" aria-hidden="true"></div>
   <div class="final-inner">
     <p class="final-mark">ORCHESTRA</p>
@@ -504,55 +510,92 @@
     } catch (error) { console.warn('lottie: serve the site over http to load network.json', error); }
   });
 
-  // digit field: static clouds drawn out of numbers
-  (() => {
-    const canvas = document.getElementById('digits-hero');
+  // digit field: static, layered sky drawn out of numbers — three depths + specks + dot floor
+  const paintDigitSky = (canvas, options) => {
     if (!canvas) return;
     const context = canvas.getContext('2d');
-    const CELL = 16;
-    // deterministic PRNG so the sky is identical on every visit
-    let seed = 42;
+    let seed = options.seed;
     const rand = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
     const build = () => {
-      seed = 42;
+      seed = options.seed;
       const box = canvas.parentElement.getBoundingClientRect();
       canvas.width = box.width; canvas.height = box.height;
-      const cols = Math.ceil(box.width / CELL), rows = Math.ceil(box.height / CELL);
-      // clouds in cell space: wide flat-bottomed puffs (w ≈ 2.6×h), kept off the copy column
-      const clouds = [
-        { x: .12, y: .22 }, { x: .86, y: .16 }, { x: .93, y: .52 },
-        { x: .06, y: .62 }, { x: .80, y: .86 },
-      ].map((cloud) => ({ cx: cloud.x * cols, cy: cloud.y * rows, h: rows * .052 }));
-      const inCloud = (x, y) => {
-        for (const { cx, cy, h } of clouds) {
-          const w = h * 2.6;
-          const lobes = [
-            [cx, cy + h * .45, w, h * .75],            // wide base
-            [cx - w * .38, cy - h * .15, w * .48, h * .8],  // left puff
-            [cx + w * .3, cy - h * .35, w * .55, h * .95],  // top-right puff
-          ];
-          for (const [lx, ly, lw, lh] of lobes) {
-            const dx = (x - lx) / lw, dy = (y - ly) / lh;
-            if (dx * dx + dy * dy < 1) return true;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+
+      // far → near: smaller dim digits behind, larger brighter in front
+      const layers = [
+        { cell: 11, font: 7,  alpha: [0.07, 0.14], ambient: 0.020, clouds: options.far },
+        { cell: 16, font: 10, alpha: [0.16, 0.34], ambient: 0.030, clouds: options.mid },
+        { cell: 22, font: 14, alpha: [0.34, 0.62], ambient: 0.012, clouds: options.near },
+      ];
+      for (const layer of layers) {
+        const cols = Math.ceil(box.width / layer.cell), rows = Math.ceil(box.height / layer.cell);
+        const clouds = layer.clouds.map((cloud) => ({ cx: cloud[0] * cols, cy: cloud[1] * rows, h: rows * cloud[2] }));
+        const inCloud = (x, y) => {
+          for (const { cx, cy, h } of clouds) {
+            const w = h * 2.6;
+            const lobes = [
+              [cx, cy + h * .45, w, h * .75],
+              [cx - w * .38, cy - h * .15, w * .48, h * .8],
+              [cx + w * .3, cy - h * .35, w * .55, h * .95],
+            ];
+            for (const [lx, ly, lw, lh] of lobes) {
+              const dx = (x - lx) / lw, dy = (y - ly) / lh;
+              if (dx * dx + dy * dy < 1) return true;
+            }
+          }
+          return false;
+        };
+        context.font = `${layer.font}px "Geist Mono", monospace`;
+        for (let x = 0; x < cols; x++) for (let y = 0; y < rows; y++) {
+          const lit = inCloud(x, y);
+          const roll = rand(), digit = String(Math.floor(rand() * 10));
+          if (!lit && roll > layer.ambient) continue;
+          const [lo, hi] = layer.alpha;
+          context.fillStyle = lit
+            ? `rgba(69,224,127,${lo + rand() * (hi - lo)})`
+            : `rgba(233,235,242,${0.04 + rand() * 0.05})`;
+          context.fillText(digit, x * layer.cell, y * layer.cell + layer.font);
+        }
+      }
+
+      // star specks: single bright pixels, flat
+      for (let i = 0; i < Math.round(box.width / 9); i++) {
+        const sx = rand() * box.width, sy = rand() * box.height;
+        context.fillStyle = rand() > 0.75 ? 'rgba(69,224,127,.8)' : 'rgba(233,235,242,.55)';
+        context.fillRect(sx, sy, rand() > 0.85 ? 2 : 1, 1);
+      }
+
+      // perspective dot floor rising to a horizon behind the window
+      if (options.floor) {
+        const horizon = box.height * 0.66;
+        for (let row = 0; row < 14; row++) {
+          const t = row / 14; // 0 = horizon, 1 = bottom
+          const y = horizon + t * t * (box.height - horizon);
+          const spacing = 14 + t * 34;
+          const alpha = 0.05 + t * 0.16;
+          for (let x = (row % 2) * spacing / 2; x < box.width; x += spacing) {
+            context.fillStyle = `rgba(69,224,127,${alpha})`;
+            context.fillRect(x, y, t > 0.6 ? 2 : 1, t > 0.6 ? 2 : 1);
           }
         }
-        return false;
-      };
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.font = '10px "Geist Mono", monospace';
-      for (let x = 0; x < cols; x++) for (let y = 0; y < rows; y++) {
-        const lit = inCloud(x, y);
-        const roll = rand(), digit = String(Math.floor(rand() * 10));
-        if (!lit && roll > 0.05) continue; // sparse ambient digits between clouds
-        context.fillStyle = lit
-          ? `rgba(69,224,127,${0.2 + rand() * 0.4})`
-          : `rgba(233,235,242,${0.05 + rand() * 0.05})`;
-        context.fillText(digit, x * CELL, y * CELL + 10);
       }
     };
     build();
     window.addEventListener('resize', build);
-  })();
+  };
+  paintDigitSky(document.getElementById('digits-hero'), {
+    seed: 42, floor: true,
+    far:  [[.30, .10, .045], [.62, .30, .04], [.20, .44, .05], [.72, .60, .045], [.48, .74, .04]],
+    mid:  [[.12, .22, .052], [.86, .16, .052], [.93, .52, .052], [.06, .62, .052], [.80, .86, .052]],
+    near: [[.04, .12, .06], [.96, .34, .055], [.10, .88, .05]],
+  });
+  paintDigitSky(document.getElementById('digits-final'), {
+    seed: 7, floor: false,
+    far:  [[.25, .3, .05], [.75, .6, .05]],
+    mid:  [[.12, .55, .055], [.88, .25, .055]],
+    near: [[.94, .8, .05]],
+  });
 </script>
 
 </body>
