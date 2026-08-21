@@ -137,6 +137,10 @@
     box-shadow: 0 24px 60px rgba(0,0,0,.45);
   }
   .frame img { width: 100%; display: block; }
+  .frame.demo { background: #0d1016; }
+  .frame.demo.playing img { display: none; }
+  .frame.demo .anim { aspect-ratio: 16 / 9; width: 100%; }
+  .frame.demo .anim svg { display: block; }
 
   .pile { display: flex; align-items: center; margin-top: 24px; }
   .pile .av {
@@ -358,7 +362,9 @@
         <span class="lbl">28 projects · 219 cards · one board</span>
       </div>
     </div>
-    <div class="frame"><img src="assets/inbox@2x.png" alt="The Inbox: agents reporting shipped work and asking questions, with unread counts" width="1440" height="860"></div>
+    <div class="frame demo" data-demo="assets/demo-mail.json">
+      <img src="assets/inbox@2x.png" alt="The Inbox: agents reporting shipped work and asking questions, with unread counts" width="1440" height="860">
+    </div>
   </div>
 </section>
 
@@ -399,7 +405,9 @@
       to review; only a human moves it to done. Hooks enforce the discipline — worktrees keep agents out of
       each other's way.</p>
     </div>
-    <div class="frame"><img src="assets/teams@2x.png" alt="A team with a review gate: engineering lead, staff engineer, code reviewer — the mastermind ready to design it" width="1440" height="860"></div>
+    <div class="frame demo" data-demo="assets/demo-review.json">
+      <img src="assets/teams@2x.png" alt="A team with a review gate: engineering lead, staff engineer, code reviewer — the mastermind ready to design it" width="1440" height="860">
+    </div>
   </div>
 </section>
 
@@ -496,7 +504,7 @@
   document.querySelectorAll('.reveal').forEach((el) => observer.observe(el));
   setTimeout(() => document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in')), 1200);
 
-  // lottie network animation — fetch JSON ourselves so file:// failures are visible in console
+  // lottie: hero network + product demos (screenshots remain the reduced-motion/no-http fallback)
   window.addEventListener('load', async () => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !window.lottie) return;
     try {
@@ -508,6 +516,16 @@
         });
       }
     } catch (error) { console.warn('lottie: serve the site over http to load network.json', error); }
+    for (const frame of document.querySelectorAll('.frame.demo')) {
+      try {
+        const data = await (await fetch(frame.dataset.demo)).json();
+        const anim = document.createElement('div');
+        anim.className = 'anim'; anim.setAttribute('aria-hidden', 'true');
+        frame.append(anim);
+        lottie.loadAnimation({ container: anim, renderer: 'svg', loop: true, autoplay: true, animationData: data });
+        frame.classList.add('playing');
+      } catch (error) { console.warn('lottie demo failed, keeping screenshot', error); }
+    }
   });
 
   // digit field: static, layered sky drawn out of numbers — three depths + specks + dot floor
