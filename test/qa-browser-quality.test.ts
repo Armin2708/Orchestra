@@ -6,7 +6,7 @@ import observation3 from '../docs/qa-evidence/browser-quality/observation-3.json
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   ACCESSIBILITY_GATES,
   AUTHENTICATED_DATA_READY_EXPRESSION,
@@ -1111,7 +1111,10 @@ describe('QA-013–QA-015 browser quality evidence contract', () => {
       cwd: process.cwd(), encoding: 'utf8',
     })
     expect(commonDir.status).toBe(0)
-    expect(canonicalRepositoryName(commonDir.stdout.trim())).toBe('agentboard')
+    // CI checks the repo out under its GitHub name, not 'agentboard' — derive the
+    // expectation from the real checkout instead of hardcoding the folder name
+    const gitDir = commonDir.stdout.trim()
+    expect(canonicalRepositoryName(gitDir)).toBe(basename(gitDir) === '.git' ? basename(dirname(gitDir)) : basename(gitDir))
   })
 
   it('confines retained observations to real non-symlink files in the approved directory', () => {

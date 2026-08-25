@@ -323,7 +323,8 @@ Web Push endpoints, or `ntfy`.
 
 ## License
 
-Orchestra is licensed under the [Functional Source License, Version 1.1,
+Orchestra is **source-available** ([Fair Source](https://fair.io/), not
+OSI-certified open source) under the [Functional Source License, Version 1.1,
 ALv2 Future License](LICENSE) (FSL-1.1-ALv2):
 
 - **Free for you and your company** — use, modify, and self-host it for any

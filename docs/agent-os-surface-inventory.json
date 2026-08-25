@@ -840,6 +840,8 @@
       "funnel"
     ],
     "infrastructure": [
+      "demo",
+      "deploy",
       "handoff",
       "hook",
       "init",
@@ -866,8 +868,7 @@
       "serve",
       "stop",
       "token",
-      "uninstall",
-      "deploy"
+      "uninstall"
     ]
   },
   "event_vocabularies": {

@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander'
 import { ensureDaemon, serve, stopDaemon, waitForDaemonExit, baseUrl } from './daemon.js'
 import { api, projectPath } from './client.js'
+import { buildDemoAction } from './demo-cli.js'
 import { VERSION } from './version.js'
 import { runHook } from './hooks.js'
 import { installHooks, installWorkflows, uninstallHooks } from './install.js'
@@ -910,6 +911,10 @@ program.command('integrations')
 
 registerAgentOsCommands(program, { api, ensureReady: up, resolveBoard: board })
 registerDoctorCommand(program)
+program.command('demo')
+  .description('seed a sample board (agents, overlap warning, Q&A, review card) to explore without live sessions')
+  .action(buildDemoAction({ api, ensureReady: up, boardUrl: baseUrl }))
+
 program.command('init')
   .description('one-command setup: check the environment, start the daemon, install hooks, open the board')
   .option('--provider <provider>', 'provider hooks to install (claude|codex|both)', initProviderOption, 'both')

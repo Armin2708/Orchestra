@@ -104,11 +104,16 @@ describe('OPS checksummed SQLite backup and restore', () => {
 
 describe('OPS repository and path safety', () => {
   it('accepts only the registered worktree/branch/cwd tuple and rejects escape paths', async () => {
-    const repositoryRoot = process.cwd()
-    const currentBranch = String((await import('node:child_process')).execFileSync(
-      'git', ['branch', '--show-current'], { cwd: repositoryRoot },
-    )).trim()
-    expect(currentBranch).toBeTruthy()
+    // hermetic scratch repo — the project checkout may be a detached HEAD (CI) or a
+    // linked worktree, neither of which this contract is about
+    const repositoryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-exec-target-')))
+    roots.push(repositoryRoot)
+    const { execFileSync } = await import('node:child_process')
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repositoryRoot })
+    execFileSync('git', ['-c', 'user.email=ci@test', '-c', 'user.name=ci',
+      'commit', '--allow-empty', '-q', '-m', 'seed'], { cwd: repositoryRoot })
+    fs.mkdirSync(path.join(repositoryRoot, 'src'))
+    const currentBranch = 'main'
     await expect(assertRepositoryExecutionTarget({
       repositoryRoot,
       workspaceRoot: repositoryRoot,

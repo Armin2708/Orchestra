@@ -126,7 +126,8 @@ describe('board-local navigation', () => {
   it('gives focused and multi-project graphs a real canvas height', () => {
     const css = readFileSync(new URL('../web/src/styles.css', import.meta.url), 'utf8')
     expect(css).toMatch(/\.projects\.focused \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\)/)
-    expect(css).toContain('.projects:not(.focused) .project.network-mode { min-height: 500px; }')
+    // formatting-tolerant: the rule was reformatted to multi-line in 7ed4f58
+    expect(css).toMatch(/\.projects:not\(\.focused\) \.project\.network-mode \{[\s\S]*?min-height: 500px;/)
     expect(css).toContain('.projects:not(.focused) .net-wrap .network { min-height: 440px; }')
   })
 
