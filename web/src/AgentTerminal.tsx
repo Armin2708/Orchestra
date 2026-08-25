@@ -342,6 +342,8 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+    // the chip mirror behind the textarea must track its scroll offset too
+    if (mirrorRef.current) mirrorRef.current.scrollTop = el.scrollTop
   }, [input])
   useEffect(() => {
     firstScroll.current = true
@@ -647,10 +649,51 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // joins the text at send time, because the provider CLI needs a readable path
   // while a human needs a readable draft. Deleting a chip drops that image.
   const pastedImagesRef = useRef(new Map<string, string>())
+  const IMAGE_CHIP = /\[Image #\d+\]/g
   const substitutePastedImages = (text: string) => {
     let out = text
     for (const [placeholder, path] of pastedImagesRef.current) out = out.split(placeholder).join(path)
     return out
+  }
+  // The textarea renders its text transparent; this mirror sits behind it with the
+  // same metrics and paints the text, tinting live `[Image #N]` chips so they read
+  // as attachments, not typed words. Only chips backed by a real upload get tinted.
+  const mirrorRef = useRef<HTMLDivElement>(null)
+  const mirrorNodes = useMemo(() => {
+    const parts: React.ReactNode[] = []
+    let last = 0
+    for (const m of input.matchAll(IMAGE_CHIP)) {
+      if (!pastedImagesRef.current.has(m[0])) continue
+      if (m.index > last) parts.push(input.slice(last, m.index))
+      parts.push(<span key={`${m.index}`} className="cc-image-chip">{m[0]}</span>)
+      last = m.index + m[0].length
+    }
+    parts.push(input.slice(last))
+    if (input.endsWith('\n')) parts.push('​') // keep the trailing empty line visible
+    return parts
+  }, [input])
+  const syncMirrorScroll = () => {
+    if (mirrorRef.current && inputRef.current) mirrorRef.current.scrollTop = inputRef.current.scrollTop
+  }
+  // A chip deletes as one unit: backspace or delete anywhere on it removes the
+  // whole token and forgets the upload, so half-eaten placeholders can't linger.
+  const deleteChipAt = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    const el = e.currentTarget
+    if (el.selectionStart !== el.selectionEnd) return false
+    const pos = el.selectionStart
+    for (const m of input.matchAll(IMAGE_CHIP)) {
+      if (!pastedImagesRef.current.has(m[0])) continue
+      const start = m.index, end = m.index + m[0].length
+      const hit = e.key === 'Backspace' ? pos > start && pos <= end : pos >= start && pos < end
+      if (!hit) continue
+      e.preventDefault()
+      pastedImagesRef.current.delete(m[0])
+      const trimmed = input.slice(0, start) + input.slice(end)
+      setInput(trimmed)
+      requestAnimationFrame(() => inputRef.current?.setSelectionRange(start, start))
+      return true
+    }
+    return false
   }
   const onPasteImage = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const item = [...(event.clipboardData?.items ?? [])].find((entry) => PASTED_IMAGE_TYPES.includes(entry.type))
@@ -669,7 +712,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       for (let i = 0; i < bytes.length; i += 0x8000)
         binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       const saved = await api('POST', `/agents/${agent.id}/paste-image`, { media_type: mediaType, data: btoa(binary) })
-      const placeholder = `[Image #${pastedImagesRef.current.size + 1}]`
+      // number past the highest live chip, so deleting #1 can't mint a second #2
+      const next = Math.max(0, ...[...pastedImagesRef.current.keys()].map((k) => Number(k.match(/\d+/)?.[0] ?? 0))) + 1
+      const placeholder = `[Image #${next}]`
       pastedImagesRef.current.set(placeholder, saved.path)
       setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${placeholder} `)
       inputRef.current?.focus()
@@ -779,6 +824,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       }
       return
     }
+    if ((e.key === 'Backspace' || e.key === 'Delete') && deleteChipAt(e)) return
     if (menuOpen) {
       if (e.key === 'ArrowDown' || (e.ctrlKey && key === 'n')) { e.preventDefault(); setMenuIdx((i) => (i + 1) % visibleCommands.length); return }
       if (e.key === 'ArrowUp' || (e.ctrlKey && key === 'p')) { e.preventDefault(); setMenuIdx((i) => (i - 1 + visibleCommands.length) % visibleCommands.length); return }
@@ -843,9 +889,23 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   }
   // Sent messages persist with the real pasted-image path (the provider contract) —
   // the transcript view rewrites those paths back to `[Image #N]`, numbered per message.
+  const PASTED_PATH = /\S*orchestra-pasted[\\/]paste-[\w.-]+\.(?:png|jpe?g|gif|webp)/g
   const displayPastedImages = (text: string) => {
     let n = 0
-    return text.replace(/\S*orchestra-pasted[\\/]paste-[\w.-]+\.(?:png|jpe?g|gif|webp)/g, () => `[Image #${++n}]`)
+    return text.replace(PASTED_PATH, () => `[Image #${++n}]`)
+  }
+  // same rewrite, but as nodes so transcript chips carry the attachment tint
+  const displayPastedImageNodes = (text: string) => {
+    const parts: React.ReactNode[] = []
+    let last = 0, n = 0
+    for (const m of text.matchAll(PASTED_PATH)) {
+      if (m.index > last) parts.push(text.slice(last, m.index))
+      parts.push(<span key={`${m.index}`} className="cc-image-chip">[Image #{++n}]</span>)
+      last = m.index + m[0].length
+    }
+    if (parts.length === 0) return text
+    parts.push(text.slice(last))
+    return parts
   }
 
   // only board-message-backed lines can be removed; transcript lines are history
@@ -858,7 +918,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (l.kind === 'status' && isLifecycleStatus(l.text)) return null
     switch (l.kind) {
       case 'user':
-        return <p key={i} className="cc-user">&gt; {displayPastedImages(l.text)}{msgDelete(l)}</p>
+        return <p key={i} className="cc-user">&gt; {displayPastedImageNodes(l.text)}{msgDelete(l)}</p>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
@@ -1173,11 +1233,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             )}
             {canPromptAgent ? <div className="cc-promptbox">
               <span className="cc-prompt-caret" aria-hidden="true">&gt;</span>
-              <textarea ref={inputRef} autoFocus value={input} rows={1}
-                placeholder={pastingImage ? 'uploading pasted image…' : ''}
-                onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
-                onPaste={onPasteImage}
-                onKeyDown={promptKeys} />
+              <div className="cc-input-stack">
+                <div className="cc-input-mirror" aria-hidden="true" ref={mirrorRef}>{mirrorNodes}</div>
+                <textarea ref={inputRef} autoFocus value={input} rows={1}
+                  placeholder={pastingImage ? 'uploading pasted image…' : ''}
+                  onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
+                  onPaste={onPasteImage}
+                  onScroll={syncMirrorScroll}
+                  onKeyDown={promptKeys} />
+              </div>
             </div> : hired ? <RemoteControlGate scope="agent-control" resourceType="agent" resourceId={agentResourceId}
               label="Agent prompts and lifecycle changes require an explicit agent-control step-up." />
               : <div className="remote-control-gate" role="note"><span><strong>View-only</strong>Messaging is unavailable while offline or outside this device scope.</span></div>}

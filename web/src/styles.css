@@ -557,12 +557,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .cc-promptbox:focus-within { border-color: #6f6b64; }
 .cc-prompt-caret { color: #999489; padding-top: 1px; }
+/* The textarea types transparent glyphs over a mirror div that paints the same
+   text — that's what lets pasted-image chips carry a tint inside a textarea.
+   Both layers must keep identical font metrics or the caret drifts off the text. */
+.cc-input-stack { position: relative; flex: 1; min-width: 0; }
 .cc-promptbox textarea {
-  flex: 1; border: none; background: none; color: #DED9D1; resize: none;
+  display: block; width: 100%; border: none; background: none; resize: none;
+  color: transparent; caret-color: #DED9D1;
   font: inherit; line-height: 1.6; min-height: 22px; max-height: 180px; padding: 0;
   overflow-y: auto;
 }
+.cc-promptbox textarea::placeholder { color: #8a867e; }
 .cc-promptbox textarea:focus-visible { outline: none; }
+.cc-input-mirror {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  color: #DED9D1; font: inherit; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+.cc-image-chip {
+  color: var(--message-accent, #7fb2d9);
+  background: rgba(127, 178, 217, 0.13);
+  border-radius: 4px;
+}
 
 /* slash-command autocomplete — floats above the promptbox, claude-code style */
 .cc-prompt-wrap { position: relative; }
