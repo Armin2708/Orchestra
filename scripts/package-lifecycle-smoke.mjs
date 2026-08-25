@@ -795,6 +795,11 @@ export async function runPackageLifecycle({
       projectDirectory,
       isolatedEnvironment,
       (runtimeEnvironment) => {
+        // projects are operator-curated: register the scratch project before agents join
+        run(executable, ['project', 'add'], {
+          cwd: projectDirectory,
+          env: runtimeEnvironment,
+        })
         run(executable, ['join', '--force', '--name', expected.agentName], {
           cwd: projectDirectory,
           env: runtimeEnvironment,

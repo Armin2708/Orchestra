@@ -2,7 +2,9 @@ import { expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
-it('deletes messages, cards, agents, and boards', async () => {
+// 30s: buildServer runs the full agent-os migration chain on :memory: — well under a
+// second alone, but the CI parallel suite runs many of these at once and 5s flakes
+it('deletes messages, cards, agents, and boards', { timeout: 30_000 }, async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
   const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
@@ -29,7 +31,7 @@ it('deletes messages, cards, agents, and boards', async () => {
   expect((await s.inject({ method: 'DELETE', url: '/api/v1/cards/999' })).statusCode).toBe(404)
 })
 
-it('board delete cascades every board-linked table and spares other boards', async () => {
+it('board delete cascades every board-linked table and spares other boards', { timeout: 30_000 }, async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
   const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/doomed' , create: true } })).json()
