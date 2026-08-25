@@ -585,7 +585,11 @@ describe('durable autoship recovery', () => {
     expect(setup.trackbook.reconcilePendingAutoshipIntents({ actor })).toEqual([
       expect.objectContaining({
         status: 'pending',
-        reason: expect.stringMatching(/card worktree cleanup is incomplete/),
+        // which pending reason fires depends on whether the filesystem recycled the
+        // recorded admin-dir inode (ext4 does, APFS doesn't); both keep the intent
+        // pending while the candidate path is occupied, which is the contract here
+        reason: expect.stringMatching(
+          /card worktree cleanup is incomplete|durable candidate worktree remains registered/),
       }),
     ])
     git(setup.repository, 'worktree', 'remove', setup.candidateWorktree)
