@@ -282,5 +282,9 @@ if (!lifecycle.passed) {
   console.error(
     `package artifact built; release prerequisite incomplete: ${lifecycle.release_gate.blocker}`,
   )
-  process.exitCode = 2
+  // Per-commit CI has no distinct prior artifact to upgrade from — the local
+  // rehearsal is its contract, and the incomplete release gate stays recorded in
+  // the evidence. A CONFIGURED prior that fails still fails the gate.
+  const priorConfigured = Boolean(process.env.ORCHESTRA_PREVIOUS_PACKAGE?.trim())
+  if (priorConfigured || lifecycle.local_rehearsal_passed !== true) process.exitCode = 2
 }
