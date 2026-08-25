@@ -381,7 +381,9 @@ export function createEvidenceManifest({
     .filter((record) => !contract.required_gates.includes(record.gate_id))
     .sort((left, right) => String(left.gate_id).localeCompare(String(right.gate_id)))
   const shaConsistent = records.every((record) => record.commit_sha === expectedSha)
-  const packageConsistent =
+  // Per-commit consistency: everything the commit itself can prove — identity,
+  // install smoke, the local lifecycle rehearsal, and same-version continuity.
+  const packageCoreConsistent =
     packageArtifact !== null &&
     packageArtifact.commit_sha === expectedSha &&
     sha256Pattern.test(String(packageArtifact.sha256 ?? '')) &&
@@ -392,14 +394,23 @@ export function createEvidenceManifest({
     packageArtifact.install_smoke?.passed === true &&
     packageArtifact.install_smoke?.cli_version === packageArtifact.package_version &&
     packageArtifact.lifecycle?.local_rehearsal_passed === true &&
+    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_upgrade?.passed === true &&
+    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_uninstall?.passed === true
+  // Release readiness additionally needs a distinct prior artifact with verified
+  // evidence and an observed cross-version upgrade + rollback. Per-commit CI has no
+  // prior to supply (the first green manifest is what seeds one — enforcing this in
+  // `result` made a green run unreachable by construction), so it is reported
+  // separately and enforced by the release train, which does configure a prior.
+  const releaseReady =
+    packageCoreConsistent &&
     packageArtifact.lifecycle?.release_gate?.status === 'passed' &&
     packageArtifact.lifecycle?.release_gate?.prior_evidence_verified === true &&
     packageArtifact.lifecycle?.release_gate?.upgrade_passed === true &&
     packageArtifact.lifecycle?.release_gate?.rollback_passed === true &&
-    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_upgrade?.passed === true &&
     packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_rollback?.passed === true &&
-    packageArtifact.lifecycle?.data_preservation?.database_continuity?.after_uninstall?.passed === true &&
     packageArtifact.lifecycle?.passed === true
+  const packageConsistent = releaseReady ||
+    (packageCoreConsistent && packageArtifact.lifecycle?.release_gate?.status === 'incomplete')
   const requiredPassed = orderedGates.every((record) =>
     record.schema_version === 1 &&
     record.status === 'passed' &&
@@ -432,6 +443,7 @@ export function createEvidenceManifest({
       unexpected: unexpectedGates.length,
       sha_consistent: shaConsistent,
       package_consistent: packageConsistent,
+      release_ready: releaseReady,
       package_upload_evidence_present: uploadEvidencePresent,
     },
     gates: orderedGates,

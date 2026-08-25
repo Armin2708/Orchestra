@@ -408,9 +408,13 @@ describe('QA-019 exact-commit CI contract', () => {
       generatedAt: '2026-07-25T00:00:02.000Z',
       workflowRun: { run_id: '1', run_attempt: '1' },
     })
+    // per-commit CI has no distinct prior artifact to supply — a passing local
+    // rehearsal is consistent, and the missing prior is reported as release_ready:
+    // false for the release train to enforce (requiring it here made a green run
+    // unreachable: the first prior evidence bundle IS a green per-commit manifest)
     expect(noPriorManifest).toMatchObject({
-      result: 'failed',
-      summary: { package_consistent: false },
+      result: 'passed',
+      summary: { package_consistent: true, release_ready: false },
       package_artifact: {
         lifecycle: {
           local_rehearsal_passed: true,
@@ -418,6 +422,21 @@ describe('QA-019 exact-commit CI contract', () => {
           passed: false,
         },
       },
+    })
+
+    const failedGate = structuredClone(packageArtifact)
+    failedGate.lifecycle.release_gate.status = 'failed'
+    failedGate.lifecycle.passed = false
+    expect(createEvidenceManifest({
+      contract,
+      expectedSha: commitSha,
+      records,
+      packageArtifact: failedGate,
+      generatedAt: '2026-07-25T00:00:02.000Z',
+      workflowRun: { run_id: '1', run_attempt: '1' },
+    })).toMatchObject({
+      result: 'failed',
+      summary: { package_consistent: false, release_ready: false },
     })
   })
 
