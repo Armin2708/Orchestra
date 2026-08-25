@@ -638,6 +638,31 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     echoLocal('status', `Session usage: ${fmtTokens(usage.inputTotal)} input · ${fmtTokens(usage.output)} output${cost}`)
   }
 
+  // Chat image paste — same contract as the workspace terminal: the clipboard
+  // image becomes a file on the daemon's disk and its path joins the draft, so
+  // the provider CLI attaches it like a native terminal image paste.
+  const PASTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+  const [pastingImage, setPastingImage] = useState(false)
+  const onPasteImage = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const item = [...(event.clipboardData?.items ?? [])].find((entry) => PASTED_IMAGE_TYPES.includes(entry.type))
+    if (!item) return // plain text paste — the textarea's default handler owns it
+    event.preventDefault()
+    const file = item.getAsFile()
+    if (!file || pastingImage) return
+    setPastingImage(true)
+    setSubmitError(null)
+    void file.arrayBuffer().then(async (buffer) => {
+      let binary = ''
+      const bytes = new Uint8Array(buffer)
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      const saved = await api('POST', `/agents/${agent.id}/paste-image`, { media_type: item.type, data: btoa(binary) })
+      setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${saved.path} `)
+      inputRef.current?.focus()
+    }).catch((cause) => setSubmitError(readableError(cause)))
+      .finally(() => setPastingImage(false))
+  }
+
   const send = async () => {
     const text = input.trim()
     if (!text || sending || !canPromptAgent) return
@@ -1124,8 +1149,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
             {canPromptAgent ? <div className="cc-promptbox">
               <span className="cc-prompt-caret" aria-hidden="true">&gt;</span>
               <textarea ref={inputRef} autoFocus value={input} rows={1}
-                placeholder=""
+                placeholder={pastingImage ? 'uploading pasted image…' : ''}
                 onChange={(e) => { setInput(e.target.value); setHistoryIdx(null); setSubmitError(null) }}
+                onPaste={onPasteImage}
                 onKeyDown={promptKeys} />
             </div> : hired ? <RemoteControlGate scope="agent-control" resourceType="agent" resourceId={agentResourceId}
               label="Agent prompts and lifecycle changes require an explicit agent-control step-up." />

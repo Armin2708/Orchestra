@@ -65,6 +65,9 @@ import type { ActiveWorkRegistration } from './agent-os/operations-recovery.js'
 import { OperationsRateLimiter } from './operations/capacity.js'
 import { classifyOperationalFailure, OPERATIONS_FAILURE_POLICIES } from './operations/failure-policy.js'
 import { deleteBoardCascade } from './board-delete.js'
+import {
+  DEFAULT_PASTE_IMAGE_ROOT, PASTE_IMAGE_BODY_LIMIT, savePastedImage, validatePastedImage,
+} from './pasted-image.js'
 import type { VapidKeys } from './push.js'
 import { formatInjectedMessage, injectTerminalMessage, recordTerminalEndpoint } from './terminal-inject.js'
 
@@ -2472,6 +2475,21 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     emit(a.board_id, 'agent', { deleted: a.id })
     return { ok: true }
   })
+
+  // Chat image paste: the composer uploads the clipboard image here, then puts the
+  // returned path into the draft — the sent message reaches the session's terminal,
+  // where the provider CLI attaches the file just like its native image paste.
+  server.post<{ Params: { id: string }; Body: { media_type?: unknown; data?: unknown } | null }>(
+    '/api/v1/agents/:id/paste-image', { bodyLimit: PASTE_IMAGE_BODY_LIMIT }, (req, reply) => {
+      if (!db.prepare(`SELECT 1 FROM agents WHERE id=?`).get(Number(req.params.id)))
+        return reply.code(404).send({ error: 'not found' })
+      const checked = validatePastedImage(req.body?.media_type, req.body?.data)
+      if ('error' in checked) return reply.code(400).send({ error: checked.error })
+      const root = opts.agentOs?.pasteImageRoot ?? DEFAULT_PASTE_IMAGE_ROOT()
+      const file = savePastedImage(root, checked.image, checked.extension)
+      reply.code(201)
+      return { path: file, bytes: checked.image.byteLength }
+    })
 
   server.delete<{ Params: { id: string } }>('/api/v1/boards/:id', (req, reply) => {
     const id = Number(req.params.id)

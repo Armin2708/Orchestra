@@ -6,6 +6,9 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { FastifyInstance, FastifyPluginAsync, FastifyPluginOptions, FastifyRequest } from 'fastify'
 import {
+  DEFAULT_PASTE_IMAGE_ROOT, PASTE_IMAGE_BODY_LIMIT, savePastedImage, validatePastedImage,
+} from '../pasted-image.js'
+import {
   AgentOsError,
   ConflictError,
   ForbiddenError,
@@ -822,21 +825,10 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
     return { ok: true }
   })
 
-  // a pasted image can't travel through the PTY byte stream — it lands as a file the
-  // provider CLI can read, and the web client types the returned path into the prompt.
-  // Same authority as /input (terminal-write), plus content validation: declared type
-  // must be a raster format AND the bytes must carry its magic number.
-  const PASTED_IMAGE_TYPES: Record<string, { extension: string; magic: (bytes: Buffer) => boolean }> = {
-    'image/png': { extension: 'png', magic: (b) => b.length > 8 && b.readUInt32BE(0) === 0x89504e47 },
-    'image/jpeg': { extension: 'jpg', magic: (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-    'image/gif': { extension: 'gif', magic: (b) => ['GIF87a', 'GIF89a'].includes(b.subarray(0, 6).toString('latin1')) },
-    'image/webp': { extension: 'webp', magic: (b) => b.length > 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP' },
-  }
-  const PASTED_IMAGE_CAP = 10 * 1024 * 1024
-
+  // Same authority as /input (terminal-write); validation and file layout live in
+  // src/pasted-image.ts, shared with the agent-chat paste route on the board API.
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/paste-image', {
-    // base64 inflates ~4/3 over the 10 MiB decoded cap; fastify's default 1 MiB body limit is too small
-    bodyLimit: 15 * 1024 * 1024,
+    bodyLimit: PASTE_IMAGE_BODY_LIMIT,
   }, async (request, reply) => {
     requireOperator(request)
     const process = requireProcess(db, request.params.id)
@@ -845,23 +837,12 @@ export const agentOsPlugin: FastifyPluginAsync<AgentOsRouteOptions> = async (app
       processId: process.id,
     }, request)
     const body = objectBody(request.body)
-    const mediaType = body.media_type
-    if (typeof mediaType !== 'string' || !(mediaType in PASTED_IMAGE_TYPES))
-      throw new ValidationError(`media_type must be one of: ${Object.keys(PASTED_IMAGE_TYPES).join(', ')}`)
-    if (typeof body.data !== 'string' || body.data.length === 0)
-      throw new ValidationError('data must be a base64 string')
-    const image = Buffer.from(body.data, 'base64')
-    if (image.byteLength > PASTED_IMAGE_CAP)
-      throw new ValidationError('pasted image exceeds the 10 MiB limit')
-    const type = PASTED_IMAGE_TYPES[mediaType]
-    if (!type.magic(image))
-      throw new ValidationError(`image bytes do not match the declared ${mediaType} format`)
-    const root = options.pasteImageRoot ?? path.join(os.tmpdir(), 'orchestra-pasted')
-    fs.mkdirSync(root, { recursive: true })
-    const file = path.join(root, `paste-${Date.now()}-${randomBytes(4).toString('hex')}.${type.extension}`)
-    fs.writeFileSync(file, image, { mode: 0o600 })
+    const checked = validatePastedImage(body.media_type, body.data)
+    if ('error' in checked) throw new ValidationError(checked.error)
+    const root = options.pasteImageRoot ?? DEFAULT_PASTE_IMAGE_ROOT()
+    const file = savePastedImage(root, checked.image, checked.extension)
     reply.code(201)
-    return { path: file, bytes: image.byteLength }
+    return { path: file, bytes: checked.image.byteLength }
   })
 
   app.post<{ Params: { id: string }; Body: unknown }>('/processes/:id/resize', async (request) => {

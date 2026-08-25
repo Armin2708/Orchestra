@@ -613,6 +613,7 @@
       "POST /api/v1/agents/:id/mcp/:name/reconnect",
       "POST /api/v1/agents/:id/mcp/:name/toggle",
       "POST /api/v1/agents/:id/model",
+      "POST /api/v1/agents/:id/paste-image",
       "POST /api/v1/agents/:id/permission-mode",
       "POST /api/v1/agents/:id/permissions/:requestId",
       "POST /api/v1/agents/:id/plugins/reload",
