@@ -647,6 +647,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     const item = [...(event.clipboardData?.items ?? [])].find((entry) => PASTED_IMAGE_TYPES.includes(entry.type))
     if (!item) return // plain text paste — the textarea's default handler owns it
     event.preventDefault()
+    // read type + file NOW: the browser neuters DataTransferItems once the handler
+    // returns, so an async `item.type` read comes back '' and the upload 400s
+    const mediaType = item.type
     const file = item.getAsFile()
     if (!file || pastingImage) return
     setPastingImage(true)
@@ -656,7 +659,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       const bytes = new Uint8Array(buffer)
       for (let i = 0; i < bytes.length; i += 0x8000)
         binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-      const saved = await api('POST', `/agents/${agent.id}/paste-image`, { media_type: item.type, data: btoa(binary) })
+      const saved = await api('POST', `/agents/${agent.id}/paste-image`, { media_type: mediaType, data: btoa(binary) })
       setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${saved.path} `)
       inputRef.current?.focus()
     }).catch((cause) => setSubmitError(readableError(cause)))

@@ -57,8 +57,25 @@ export function reap(db: Database.Database): void {
     WHERE status != 'gone' AND kind != 'hired' AND last_seen < datetime('now', '-30 minutes')`).run()
   db.prepare(`UPDATE agents SET status='idle'
     WHERE status = 'active' AND last_seen < datetime('now', '-5 minutes')`).run()
+  reapZombieSessions(db)
   syncAgentProfiles(db)
   reapAttention(db)
+}
+
+// Provider managers stop their sessions in-memory on graceful end; a daemon restart
+// loses that path, leaving legacy managed sessions 'running' after the agent is gone.
+// Those zombies permanently occupy launch-capacity slots and block profile archival,
+// so liveness lives here with the rest of the reaper's authority. Runs before
+// syncAgentProfiles: its archive query skips profiles that still show a live session.
+export function reapZombieSessions(db: Database.Database): void {
+  const hasSessions = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_sessions'`).get()
+  if (!hasSessions) return
+  db.prepare(`UPDATE agent_sessions SET status='stopped', control_state='stopped',
+    ended_at=coalesce(ended_at, datetime('now')), updated_at=datetime('now')
+    WHERE status IN ('starting','running','idle','stopping')
+      AND control_state IN ('active','paused')
+      AND agent_id IN (SELECT id FROM agents WHERE status='gone')`).run()
 }
 
 // Agent Home lists agent_profiles, but terminal agents live and die in the legacy agents

@@ -135,7 +135,7 @@ describe('offline canonical runtime composition', () => {
     // image-only interception: plain text paste stays with xterm
     expect(terminalSource).toContain("// plain text paste — xterm's own handler owns it")
     // read-only and writability guards mirror the onData path, then upload → type path
-    expect(terminalSource).toContain('osApi.pasteProcessImage(processId, item.type, btoa(binary))')
+    expect(terminalSource).toContain('osApi.pasteProcessImage(processId, mediaType, btoa(binary))')
     expect(terminalSource).toContain('await osApi.writeProcessInput(processId, `${saved.path} `)')
     const pasteBlock = terminalSource.slice(terminalSource.indexOf('const onPasteImage'))
     expect(pasteBlock).toContain('if (readOnlyRef.current) return')

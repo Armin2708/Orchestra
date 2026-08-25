@@ -188,6 +188,9 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
       if (readOnlyRef.current) return
       const active = processRef.current
       if (!writableRef.current || !active || !['running', 'starting', 'stopping'].includes(active.status)) return
+      // read type + file NOW: the browser neuters DataTransferItems once the handler
+      // returns, so an async `item.type` read comes back '' and the upload 400s
+      const mediaType = item.type
       const file = item.getAsFile()
       if (!file) return
       const processId = active.id
@@ -197,7 +200,7 @@ export const ProcessTerminal = forwardRef<ProcessTerminalHandle, {
         for (let i = 0; i < bytes.length; i += 0x8000)
           binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
         return runRuntimeMutation(readOnlyRef.current, async () => {
-          const saved = await osApi.pasteProcessImage(processId, item.type, btoa(binary))
+          const saved = await osApi.pasteProcessImage(processId, mediaType, btoa(binary))
           await osApi.writeProcessInput(processId, `${saved.path} `)
         })
       }).catch(() => setStreamError('Pasted image could not reach the process.'))
