@@ -2,9 +2,16 @@
 set -euo pipefail
 export ORCHESTRA_HOME=$(mktemp -d) ORCHESTRA_PORT=4788
 CLI="npx tsx src/cli.ts"
-$CLI serve & DPID=$!; sleep 1
+$CLI serve & DPID=$!
 trap "kill $DPID 2>/dev/null" EXIT
+# CI runners can take several seconds to boot the daemon — poll, don't sleep
+for i in $(seq 1 30); do
+  curl -sf "http://127.0.0.1:$ORCHESTRA_PORT/health" >/dev/null 2>&1 && break
+  sleep 1
+done
 
+# projects are operator-curated now; register this checkout before agents join
+$CLI project add | grep -q "project #1"
 $CLI join --force --name amber-fox | grep -q AGENT_NAME=amber-fox
 $CLI join --force --name jade-lynx | grep -q "agent amber-fox"
 $CLI card create "Auth refactor" --paths 'src/auth/**' --column in_progress --agent amber-fox | grep -q "card #1"

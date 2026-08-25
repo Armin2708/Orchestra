@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest'
 const EXPECTED_FINGERPRINTS = [
   '479e67a01b60f39976f41363521a706bb76e39d2:test/organization-coordination.test.ts:generic-api-key:144',
   '085b180b8f696eb0c0e5352fd0b696ba2563d147:test/command-idempotency-coverage.test.ts:generic-api-key:217',
+  // same reviewed fixture lines re-attributed to merge commits by --full-history -m
+  'd955aa6c21a33e04c44b844aeca05d7f7135b9e6:test/organization-coordination.test.ts:generic-api-key:144',
+  'f7dd01cb638a7917ca67c87f8d849cae98623117:test/command-idempotency-coverage.test.ts:generic-api-key:217',
+  'f7dd01cb638a7917ca67c87f8d849cae98623117:test/organization-coordination.test.ts:generic-api-key:144',
   '6fbf6171f06111604151b1ee23f1b09461cf2560:test/agent-home-domain.test.ts:private-key:418',
   '6fbf6171f06111604151b1ee23f1b09461cf2560:test/agent-os-migrations.test.ts:private-key:154',
   '6d8235922a88200c4856ee424e5ee00820de02b1:test/agent-home-domain.test.ts:private-key:418',

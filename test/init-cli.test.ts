@@ -16,6 +16,7 @@ const harness = (overrides: Partial<InitCliDeps> = {}) => {
     },
     formatReport: () => 'DOCTOR REPORT',
     startDaemon: async () => { calls.push('daemon'); return true },
+    registerBoard: async () => { calls.push('board') },
     installProviderHooks: (scope, options) => { calls.push(`hooks:${scope}:${options.provider}`) },
     installWorkflowPack: (scope) => { calls.push(`workflows:${scope}`); return ['build.md'] },
     openBrowser: (url) => { calls.push(`open:${url}`) },
@@ -40,7 +41,7 @@ describe('orchestra init', () => {
     const { calls, lines, run } = await Promise.resolve(harness())
     await run(['init'])
     expect(calls).toEqual([
-      'doctor:both', 'daemon', 'hooks:global:both', 'workflows:global', 'open:http://127.0.0.1:4820',
+      'doctor:both', 'daemon', 'board', 'hooks:global:both', 'workflows:global', 'open:http://127.0.0.1:4820',
     ])
     expect(lines.join('\n')).toContain('DOCTOR REPORT')
     expect(lines.join('\n')).toContain('http://127.0.0.1:4820')
@@ -50,13 +51,13 @@ describe('orchestra init', () => {
   it('honors --provider, --project, and --no-open', async () => {
     const { calls, run } = harness()
     await run(['init', '--provider', 'claude', '--project', '--no-open'])
-    expect(calls).toEqual(['doctor:claude', 'daemon', 'hooks:project:claude', 'workflows:project'])
+    expect(calls).toEqual(['doctor:claude', 'daemon', 'board', 'hooks:project:claude', 'workflows:project'])
   })
 
   it('skips the workflow pack under --no-workflows', async () => {
     const { calls, lines, run } = harness()
     await run(['init', '--no-workflows', '--no-open'])
-    expect(calls).toEqual(['doctor:both', 'daemon', 'hooks:global:both'])
+    expect(calls).toEqual(['doctor:both', 'daemon', 'board', 'hooks:global:both'])
     expect(lines.join('\n')).not.toContain('Workflow commands installed')
   })
 

@@ -69,7 +69,8 @@ const artifactPackageManifest = (artifactPath) => {
   const manifest = JSON.parse(extracted.stdout)
   invariant(manifest.name === packageName, 'package artifact has an unexpected package name')
   invariant(
-    manifest.bin?.orchestra === './dist/cli.js' || manifest.bin?.orchestra === './cli.js',
+    // npm publish normalizes bin paths by stripping the leading './'
+    ['./dist/cli.js', 'dist/cli.js', './cli.js', 'cli.js'].includes(manifest.bin?.orchestra),
     'package artifact has no orchestra executable',
   )
   invariant(

@@ -862,6 +862,8 @@
       "password",
       "password reset",
       "password status",
+      "project",
+      "project add",
       "remember",
       "remote",
       "restart",

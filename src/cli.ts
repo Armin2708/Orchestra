@@ -915,6 +915,17 @@ program.command('demo')
   .description('seed a sample board (agents, overlap warning, Q&A, review card) to explore without live sessions')
   .action(buildDemoAction({ api, ensureReady: up, boardUrl: baseUrl }))
 
+// projects are operator-curated: sessions in unregistered folders run untracked,
+// so the operator needs a CLI door as well as the board UI's folder picker
+const project = program.command('project').description('manage the project list (operator)')
+project.command('add [path]')
+  .description('register a folder as a project (defaults to the current git root)')
+  .action(async (target?: string) => {
+    await up()
+    const board = await api('POST', '/boards/resolve', { project_path: projectPath(target), create: true })
+    console.log(`project #${board.id} ${board.name} → ${board.project_path}`)
+  })
+
 program.command('init')
   .description('one-command setup: check the environment, start the daemon, install hooks, open the board')
   .option('--provider <provider>', 'provider hooks to install (claude|codex|both)', initProviderOption, 'both')
