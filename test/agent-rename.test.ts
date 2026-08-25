@@ -12,7 +12,7 @@ const fixture = async () => {
   servers.push(server)
   await server.ready()
   const operator = { host: 'localhost', authorization: 'Bearer owner-secret' }
-  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', headers: operator, payload: { project_path: '/p' } })).json()
+  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', headers: operator, payload: { project_path: '/p' , create: true } })).json()
   const agent = (await server.inject({ method: 'POST', url: '/api/v1/agents/register', headers: operator, payload: { board_id: board.id, name: 'amber-fox' } })).json()
   return { server, db, board, agent, operator }
 }

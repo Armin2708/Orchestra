@@ -188,7 +188,7 @@ it('POST /cards/:id/launch wires the route to the conductor with a review-parkin
   const db = openDb(':memory:')
   const s = buildServer(db, () => stub)
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/proj' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/proj' , create: true } })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: {
     board_id: b.id, title: 'Trivial ticket', description: 'OBJECTIVE: do a small thing.' } })).json()
 
@@ -216,13 +216,13 @@ it('POST /cards/:id/launch rejects double launches and works without a conductor
   const db = openDb(':memory:')
   const s = buildServer(db, () => stub)
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'x' } })).json()
   expect((await s.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/launch` })).statusCode).toBe(409)
 
   const bare = buildServer(openDb(':memory:'))
   await bare.ready()
-  await bare.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await bare.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   const { card: c2 } = (await bare.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: 1, title: 'y' } })).json()
   expect((await bare.inject({ method: 'POST', url: `/api/v1/cards/${c2.id}/launch` })).statusCode).toBe(501)
 })

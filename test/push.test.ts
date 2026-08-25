@@ -30,7 +30,7 @@ function harness(opts: { failWith?: Record<string, number>; now?: () => number }
 const flush = () => new Promise((r) => setImmediate(r))
 
 async function seedBoard(server: any) {
-  const b = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/p' } })).json()
+  const b = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/p' , create: true } })).json()
   const a = (await server.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'test-fox' } })).json()
   const { card } = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'Ship the thing', agent: 'test-fox', column: 'in_progress' } })).json()
   return { b, a, card }

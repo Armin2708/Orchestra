@@ -37,7 +37,7 @@ it('POST /boards/:id/wake wakes limit-paused agents and reports woke/queued', as
   let stub!: ReturnType<typeof stubConductor>
   const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   db.prepare(`INSERT INTO agents (board_id, name, kind, status) VALUES (?, 'sleepy-otter', 'hired', 'paused_limit')`).run(b.id)
 
   const res = await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/wake` })
@@ -51,7 +51,7 @@ it('POST /boards/:id/wake wakes limit-paused agents and reports woke/queued', as
 it('wake returns 501 without a conductor (non-daemon contexts)', async () => {
   const s = buildServer(openDb(':memory:'))
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   expect((await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/wake` })).statusCode).toBe(501)
 })
 
@@ -60,7 +60,7 @@ it('/system exposes the paused count, the scheduled auto-wake time, and the opt-
   const at = '2026-07-19T21:40:00.000Z'
   const s = buildServer(db, undefined, { autowakeAt: () => at })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   db.prepare(`INSERT INTO agents (board_id, name, kind, status) VALUES (?, 'sleepy-otter', 'hired', 'paused_limit')`).run(b.id)
   db.prepare(`INSERT INTO agents (board_id, name, kind, status) VALUES (?, 'busy-otter', 'hired', 'active')`).run(b.id)
 
@@ -76,7 +76,7 @@ it('ORCHESTRA_AUTOWAKE=0 reports auto-wake off while the manual endpoint still w
   let stub!: ReturnType<typeof stubConductor>
   const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub }, { autowakeAt: () => null })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   db.prepare(`INSERT INTO agents (board_id, name, kind, status) VALUES (?, 'sleepy-otter', 'hired', 'paused_limit')`).run(b.id)
 
   const sys = (await s.inject({ method: 'GET', url: '/api/v1/system' })).json()

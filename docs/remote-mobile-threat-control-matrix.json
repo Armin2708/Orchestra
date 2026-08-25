@@ -1148,10 +1148,10 @@
   },
   "observed_read_surface": {
     "inventory_file": "docs/agent-os-surface-inventory.json",
-    "total_get_routes": 94,
+    "total_get_routes": 95,
     "by_classification": {
       "canonical": 70,
-      "compatibility": 4,
+      "compatibility": 5,
       "legacy": 14,
       "infrastructure": 6
     },

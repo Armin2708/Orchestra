@@ -79,6 +79,7 @@ describe.sequential('Agent Home real-daemon restart acceptance', () => {
 
     const board = await api(port, token, 'POST', '/api/v1/boards/resolve', {
       project_path: project,
+      create: true,
     })
     const card = (await api(port, token, 'POST', '/api/v1/cards', {
       board_id: board.id,

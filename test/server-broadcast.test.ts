@@ -7,17 +7,17 @@ it('emits one board-created event so clients do not need discovery polling', asy
   const emitted: Array<{ board_id: number; type: string; data: unknown }> = []
   s.bus.on('event', (event) => emitted.push(event))
   const first = (await s.inject({
-    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' },
+    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' , create: true },
   })).json()
   await s.inject({
-    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' },
+    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/new-board' , create: true },
   })
   expect(emitted).toEqual([{ board_id: first.id, type: 'board', data: first }])
 })
 
 it('announcements wake nobody; confirmed swarms reach only their snapshotted recipients', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a1 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const a2 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })).json()
   const a3 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'onyx-crane' } })).json()
@@ -74,7 +74,7 @@ it('announcements wake nobody; confirmed swarms reach only their snapshotted rec
 
 it('an explicit no-target ask is for the human, not every agent', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const asker = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const peer = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })).json()
   const q = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
@@ -89,7 +89,7 @@ it('an explicit no-target ask is for the human, not every agent', async () => {
 
 it('rejects contradictory message intent instead of guessing', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })
 
   const invalid = await s.inject({ method: 'POST', url: '/api/v1/messages', payload: { board_id: b.id, kind: 'explode', body: 'x' } })

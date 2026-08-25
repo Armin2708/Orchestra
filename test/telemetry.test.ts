@@ -39,7 +39,7 @@ it('aggregates per board/agent/event/day and skips junk entries', () => {
 async function boot() {
   const server = buildServer(openDb(':memory:'))
   await server.ready()
-  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/tel' } })).json()
+  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/tel' , create: true } })).json()
   const agent = (await server.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: board.id, session_id: 'tel1' } })).json()
   return { server, board, agent }
 }

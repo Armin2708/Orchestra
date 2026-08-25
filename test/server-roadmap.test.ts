@@ -16,7 +16,7 @@ it('ideas promote to tickets and assignment briefs the agent', async () => {
     fire: async () => true,
   })
   const s = buildServer(db, stub); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   db.prepare(`INSERT INTO agents (board_id, name, kind) VALUES (?, 'amber-fox', 'hired')`).run(b.id)
   const hiredId = (db.prepare(`SELECT id FROM agents WHERE name='amber-fox'`).get() as any).id
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })

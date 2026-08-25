@@ -82,9 +82,18 @@ async function registerSession(input: any, provider: HookProvider): Promise<Sess
   const managed = process.env.ORCHESTRA_MANAGED_AGENT === '1'
   const managedBoardId = managed
     ? positiveEnvironmentInteger(process.env.ORCHESTRA_BOARD_ID) : null
-  const board = managedBoardId
-    ? { id: managedBoardId }
-    : await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
+  // lookup only — sessions never create boards. A session in a folder the operator
+  // hasn't added as a project simply runs untracked (no board, no registration).
+  let board: { id: number }
+  if (managedBoardId) board = { id: managedBoardId }
+  else {
+    try {
+      board = await api('POST', '/boards/resolve', { project_path: input.cwd ?? process.cwd() })
+    } catch (cause) {
+      if (cause instanceof Error && cause.message.includes('404')) return undefined
+      throw cause
+    }
+  }
   const managedAgentId = managed
     ? positiveEnvironmentInteger(process.env.ORCHESTRA_AGENT_ID) : null
   const bootstrapNonce = managed

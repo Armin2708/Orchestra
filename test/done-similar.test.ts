@@ -5,7 +5,7 @@ import { buildServer } from '../src/server.js'
 it('warns when new work matches a recently-done card', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
 
   const shipped = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: {
     board_id: b.id, title: 'Mobile-first installable PWA shell', description: 'manifest, icons, service worker' } })).json()
@@ -23,7 +23,7 @@ it('warns when new work matches a recently-done card', async () => {
 it('applies the shipped check when an idea is promoted', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
 
   const shipped = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: {
     board_id: b.id, title: 'Mobile-first installable PWA shell', description: 'manifest, icons, service worker' } })).json()
@@ -38,7 +38,7 @@ it('applies the shipped check when an idea is promoted', async () => {
 it('ignores done cards older than 30 days', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
 
   const shipped = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: {
     board_id: b.id, title: 'Mobile-first installable PWA shell', description: 'manifest, icons, service worker' } })).json()

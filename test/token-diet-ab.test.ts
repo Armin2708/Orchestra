@@ -110,7 +110,7 @@ async function runScenario(mode: 'verbose' | 'compact'): Promise<ArmResult> {
 
   // 0. seed a representative board (agents, cards, an open question) so the
   // session-start dump reflects a mid-project board, not an empty one
-  const board = await http('POST', '/boards/resolve', { project_path: projectRoot })
+  const board = await http('POST', '/boards/resolve', { project_path: projectRoot , create: true })
   // fixed names everywhere — random name lengths would skew the char counts between arms
   const seedAgents = await Promise.all(['seed-alpha', 'seed-bravo', 'seed-charlie'].map((name, i) =>
     http('POST', '/agents/register', { board_id: board.id, session_id: `ab-${mode}-seed-${i}`, name })))

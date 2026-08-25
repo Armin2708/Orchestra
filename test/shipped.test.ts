@@ -17,7 +17,7 @@ afterAll(() => fs.rmSync(repo, { recursive: true, force: true }))
 async function boardWithCard() {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo , create: true } })).json()
   const card = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'Widget' } })).json().card
   return { db, s, b, card }
 }

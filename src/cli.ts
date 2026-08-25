@@ -78,7 +78,16 @@ const providerOption = (allowBoth: boolean) => (value: string) => {
 }
 
 async function up() { if (!(await ensureDaemon())) { console.error('daemon unreachable'); process.exit(1) } }
-async function board() { return api('POST', '/boards/resolve', { project_path: projectPath() }) }
+async function board() {
+  try {
+    return await api('POST', '/boards/resolve', { project_path: projectPath() })
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes('404')) {
+      throw new Error(`this folder is not an Orchestra project — the operator adds it from the board UI (+ Add project) or by running \`orchestra init\` here`)
+    }
+    throw cause
+  }
+}
 // explicit flag > env > sole active agent on the board
 async function inferAgent(boardId: number, explicit?: string): Promise<string | undefined> {
   if (explicit ?? envAgent()) return explicit ?? envAgent()

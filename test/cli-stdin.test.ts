@@ -61,6 +61,9 @@ beforeAll(async () => {
   server = buildServer(openDb(':memory:'))
   await server.listen({ host: '127.0.0.1', port: 0 })
   port = server.server.address().port
+  // sessions/CLI no longer auto-create boards — register the temp project up front
+  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: fs.realpathSync(proj), create: true } })
 })
 afterAll(async () => { await server.close() })
 
@@ -97,7 +100,7 @@ it('note/reply --stdin deliver byte-identical bodies end to end', async () => {
 
 it('agent notifications queue without replies and swarms require confirmation', async () => {
   const b = await (await fetch(`http://127.0.0.1:${port}/api/v1/boards/resolve`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project_path: fs.realpathSync(proj) }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project_path: fs.realpathSync(proj) , create: true }),
   })).json() as any
   await fetch(`http://127.0.0.1:${port}/api/v1/agents/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

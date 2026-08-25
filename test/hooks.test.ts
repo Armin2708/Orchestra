@@ -20,6 +20,9 @@ beforeAll(async () => {
   await server.listen({ host: '127.0.0.1', port: 0 })
   port = server.server.address().port
   process.env.ORCHESTRA_PORT = String(port)
+  // sessions no longer auto-create boards — the operator registered this project
+  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: projectRoot, create: true } })
 })
 afterEach(() => { vi.restoreAllMocks() })
 afterAll(async () => {

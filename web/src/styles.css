@@ -1153,12 +1153,27 @@ textarea {
 .brand-item-del:hover { background: rgba(200, 40, 40, 0.12); color: #c22; }
 .brand-item.active .brand-item-del { color: rgba(255, 255, 255, 0.7); }
 .brand-item.active .brand-item-del:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
-.brand-add { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px 8px; }
-.brand-add input {
-  flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+.brand-add-picker { display: grid; gap: 6px; padding: 6px 8px 8px; min-width: 260px; }
+.brand-add-path {
+  font-family: 'SF Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;
 }
-.brand-add-error { flex-basis: 100%; margin: 0; font-size: 11.5px; color: #c22; }
+.brand-add-list {
+  display: grid; gap: 1px; max-height: 220px; overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line); border-radius: 8px; padding: 3px;
+}
+.brand-dir {
+  border: none; background: none; border-radius: 6px; padding: 5px 8px;
+  font: inherit; font-size: 12.5px; text-align: left; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.brand-dir::before { content: '📁 '; }
+.brand-dir-up::before { content: ''; }
+.brand-dir:hover { background: rgba(0, 0, 0, 0.05); }
+.brand-dir-up { color: var(--ink-soft); }
+.brand-add-empty { margin: 0; padding: 6px 8px; font-size: 12px; color: var(--ink-soft); }
+.brand-add-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.brand-add-error { margin: 0; font-size: 11.5px; color: #c22; }
 .brand-add-toggle { color: var(--ink-soft); }
 
 /* ── View tabs + Roadmap page ────────────────────── */

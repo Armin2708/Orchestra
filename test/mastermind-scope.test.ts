@@ -94,7 +94,7 @@ describe('mastermind permission mode is not the operator\'s to widen', () => {
       setPermissionMode: async () => true,
     }) as any)
     await server.ready()
-    await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+    await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
     db.prepare(`INSERT INTO agents (board_id, name, kind) VALUES (1, 'mastermind', 'hired'), (1, 'ordinary', 'hired')`).run()
     const idOf = (name: string) => (db.prepare(`SELECT id FROM agents WHERE name=?`).get(name) as { id: number }).id
 

@@ -39,7 +39,7 @@ it('resolves data dir and port from env', () => {
 
 it('serves SSE with correct content type', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   const res = await s.inject({ method: 'GET', url: '/api/v1/boards/1/events',
     payloadAsStream: true })
   expect(res.headers['content-type']).toContain('text/event-stream')

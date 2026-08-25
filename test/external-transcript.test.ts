@@ -113,7 +113,7 @@ it('pulse-reported transcript paths serve the read-only transcript endpoint fall
   const { buildServer } = await import('../src/server.js')
   const server = buildServer(openDb(':memory:'))
   await server.ready()
-  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/ext' } })).json()
+  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/ext' , create: true } })).json()
   const agent = (await server.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: board.id, session_id: 'ext1' } })).json()
   const identity = { provider: agent.provider, session_id: agent.external_session_id, session_token: agent.session_token }
 

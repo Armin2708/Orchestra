@@ -219,7 +219,7 @@ async function serverSetup() {
   let stub!: ReturnType<typeof stubConductor>
   const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const agent = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'stub-otter' } })).json()
   return { s, db, stub, agent }
 }

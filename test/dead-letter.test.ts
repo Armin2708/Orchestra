@@ -5,7 +5,7 @@ import { buildServer } from '../src/server.js'
 
 it('rejects a message to a gone agent at send time', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })
   const a2 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })).json()
   await s.inject({ method: 'POST', url: `/api/v1/agents/${a2.id}/leave` })
@@ -19,7 +19,7 @@ it('rejects a message to a gone agent at send time', async () => {
 
 it('bounces undelivered messages into the thread when the recipient leaves', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a1 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const a2 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })).json()
   const q = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {

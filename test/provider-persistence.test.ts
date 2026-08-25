@@ -101,7 +101,7 @@ it('namespaces ambient registrations by provider and refuses provider identity c
   const server = buildServer(db)
   await server.ready()
   const board = (await server.inject({
-    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/ambient' },
+    method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/ambient' , create: true },
   })).json()
 
   const codex = await server.inject({
