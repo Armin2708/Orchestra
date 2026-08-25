@@ -643,6 +643,15 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // the provider CLI attaches it like a native terminal image paste.
   const PASTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
   const [pastingImage, setPastingImage] = useState(false)
+  // The draft shows `[Image #N]` chips, not daemon file paths — the real path only
+  // joins the text at send time, because the provider CLI needs a readable path
+  // while a human needs a readable draft. Deleting a chip drops that image.
+  const pastedImagesRef = useRef(new Map<string, string>())
+  const substitutePastedImages = (text: string) => {
+    let out = text
+    for (const [placeholder, path] of pastedImagesRef.current) out = out.split(placeholder).join(path)
+    return out
+  }
   const onPasteImage = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const item = [...(event.clipboardData?.items ?? [])].find((entry) => PASTED_IMAGE_TYPES.includes(entry.type))
     if (!item) return // plain text paste — the textarea's default handler owns it
@@ -660,7 +669,9 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       for (let i = 0; i < bytes.length; i += 0x8000)
         binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       const saved = await api('POST', `/agents/${agent.id}/paste-image`, { media_type: mediaType, data: btoa(binary) })
-      setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${saved.path} `)
+      const placeholder = `[Image #${pastedImagesRef.current.size + 1}]`
+      pastedImagesRef.current.set(placeholder, saved.path)
+      setInput((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${placeholder} `)
       inputRef.current?.focus()
     }).catch((cause) => setSubmitError(readableError(cause)))
       .finally(() => setPastingImage(false))
@@ -716,12 +727,16 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
         return
       }
 
-      if (hired) await api('POST', `/agents/${agent.id}/task`, { text })
+      // placeholders resolve to real paths only in the outbound payload — history,
+      // slash detection and the echoed draft all keep the readable `[Image #N]` form
+      const outbound = substitutePastedImages(text)
+      if (hired) await api('POST', `/agents/${agent.id}/task`, { text: outbound })
       else {
         // the sent message itself lands in the merged board-message thread on refresh
-        await api('POST', '/messages', { board_id: boardId, to: agent.name, body: text })
+        await api('POST', '/messages', { board_id: boardId, to: agent.name, body: outbound })
         echoLocal('status', `queued as a board message — ${agent.name} receives it on its next turn in that terminal`)
       }
+      pastedImagesRef.current.clear()
       setInput('')
       onChange()
     } catch (cause) {
@@ -826,6 +841,13 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
       })
       .finally(() => onChange())
   }
+  // Sent messages persist with the real pasted-image path (the provider contract) —
+  // the transcript view rewrites those paths back to `[Image #N]`, numbered per message.
+  const displayPastedImages = (text: string) => {
+    let n = 0
+    return text.replace(/\S*orchestra-pasted[\\/]paste-[\w.-]+\.(?:png|jpe?g|gif|webp)/g, () => `[Image #${++n}]`)
+  }
+
   // only board-message-backed lines can be removed; transcript lines are history
   const msgDelete = (l: Line) => l.messageId !== undefined && canPromptAgent
     ? <button type="button" className="cc-msg-delete" title="Delete this board message"
@@ -836,7 +858,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
     if (l.kind === 'status' && isLifecycleStatus(l.text)) return null
     switch (l.kind) {
       case 'user':
-        return <p key={i} className="cc-user">&gt; {l.text}{msgDelete(l)}</p>
+        return <p key={i} className="cc-user">&gt; {displayPastedImages(l.text)}{msgDelete(l)}</p>
       case 'tool': {
         const paren = l.text.indexOf('(')
         const name = paren === -1 ? l.text : l.text.slice(0, paren)
@@ -878,7 +900,7 @@ export function AgentTerminal({ agent, boardId, threads, cards = [], embedded = 
   // the question the agent is currently working on, condensed to one line —
   // read-only terminal seats never report a turn, so fall back to board activity
   const lastAsk = turn !== null || agentActivity(agent) === 'working'
-    ? [...convo].reverse().find((l) => l.kind === 'user')?.text.replace(/\s+/g, ' ').trim() ?? null
+    ? displayPastedImages([...convo].reverse().find((l) => l.kind === 'user')?.text.replace(/\s+/g, ' ').trim() ?? '') || null
     : null
 
   const ownedCards = cards.filter((c) => c.owner === agent.name)
