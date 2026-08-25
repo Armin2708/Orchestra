@@ -83,8 +83,10 @@ function LocalOwnerApp() {
   })
   const [menuOpen, setMenuOpen] = useState(false)
   const [addingProject, setAddingProject] = useState(false)
-  const [newProjectPath, setNewProjectPath] = useState('')
   const [addProjectError, setAddProjectError] = useState('')
+  // server-side folder browser behind “+ Add project” — the browser can't hand us a
+  // real filesystem path, so the daemon lists directories and the user walks to one
+  const [picker, setPicker] = useState<{ path: string; parent: string | null; dirs: { name: string; path: string }[] } | null>(null)
   const [confirmDeleteBoard, setConfirmDeleteBoard] = useState<{ id: number; name: string } | null>(null)
   const [navigation, setNavigation] = useState(() => resolveLocationNavigation(
     localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab'), location.search))
@@ -129,17 +131,24 @@ function LocalOwnerApp() {
     setLocationSearch(new URL(href, location.origin).search)
   }
 
-  const addProject = async () => {
-    const project_path = newProjectPath.trim()
-    if (!project_path) return
-    if (!project_path.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(project_path)) {
-      setAddProjectError('Use an absolute path to the project folder')
-      return
-    }
+  const browseDirs = async (target?: string) => {
+    setAddProjectError('')
     try {
-      const board = await api('POST', '/boards/resolve', { project_path })
+      const listing = await api('GET', `/fs/dirs${target ? `?path=${encodeURIComponent(target)}` : ''}`)
+      setPicker(listing)
+    } catch (e) {
+      setAddProjectError(e instanceof ApiError ? e.message : 'Could not read that folder')
+    }
+  }
+  const openAddProject = () => {
+    setAddingProject(true)
+    void browseDirs()
+  }
+  const addProject = async (project_path: string) => {
+    try {
+      const board = await api('POST', '/boards/resolve', { project_path, create: true })
       setAddingProject(false)
-      setNewProjectPath('')
+      setPicker(null)
       setAddProjectError('')
       refresh()
       pick(board.id)
@@ -343,15 +352,29 @@ function LocalOwnerApp() {
                   </button>
                 ))}
                 {addingProject ? (
-                  <form className="brand-add" onSubmit={(e) => { e.preventDefault(); void addProject() }}>
-                    <input autoFocus placeholder="/absolute/path/to/project" value={newProjectPath}
-                      onChange={(e) => { setNewProjectPath(e.target.value); setAddProjectError('') }}
-                      onKeyDown={(e) => { if (e.key === 'Escape') { setAddingProject(false); setAddProjectError('') } }} />
-                    <button type="submit" className="btn">Add</button>
+                  <div className="brand-add-picker">
+                    <div className="brand-add-path" title={picker?.path ?? ''}>{picker?.path ?? 'Loading…'}</div>
+                    <div className="brand-add-list">
+                      {picker?.parent && (
+                        <button type="button" className="brand-dir brand-dir-up"
+                          onClick={() => browseDirs(picker.parent!)}>↑ ..</button>
+                      )}
+                      {picker?.dirs.map((dir) => (
+                        <button key={dir.path} type="button" className="brand-dir"
+                          onClick={() => browseDirs(dir.path)}>{dir.name}</button>
+                      ))}
+                      {picker && picker.dirs.length === 0 && <p className="brand-add-empty">No subfolders</p>}
+                    </div>
                     {addProjectError && <p className="brand-add-error">{addProjectError}</p>}
-                  </form>
+                    <div className="brand-add-actions">
+                      <button type="button" className="btn ghost"
+                        onClick={() => { setAddingProject(false); setPicker(null); setAddProjectError('') }}>Cancel</button>
+                      <button type="button" className="btn" disabled={!picker}
+                        onClick={() => { if (picker) void addProject(picker.path) }}>Add this folder</button>
+                    </div>
+                  </div>
                 ) : (
-                  <button className="brand-item brand-add-toggle" onClick={() => setAddingProject(true)}>+ Add project…</button>
+                  <button className="brand-item brand-add-toggle" onClick={openAddProject}>+ Add project…</button>
                 )}
               </div>
             )}

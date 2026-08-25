@@ -140,7 +140,7 @@ it('POST /boards/:id/hire forwards resumeSession and permissionMode', async () =
   }
   const s = buildServer(db, (_bus: Bus) => stub)
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const res = await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`,
     payload: { name: 'revived-otter', resumeSession: 'sess-xyz', permissionMode: 'plan' } })
   expect(res.statusCode).toBe(200)

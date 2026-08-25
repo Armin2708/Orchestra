@@ -33,7 +33,7 @@ async function boot() {
   let stub!: ReturnType<typeof stubConductor>
   const server = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
   await server.ready()
-  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/verif' } })).json()
+  const board = (await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/verif' , create: true } })).json()
   const card = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
     board_id: board.id, title: 'Build the parser', column: 'review',
     description: 'OBJECTIVE: parse. REQUIREMENTS: fast. DONE WHEN: tests pass; handles unicode.',

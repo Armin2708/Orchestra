@@ -43,7 +43,7 @@ it('rejects a wrong token', async () => {
 it('accepts a valid bearer token on GET and POST', async () => {
   const s = srv(); await s.ready()
   const post = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
-    headers: bearer(TOKEN), payload: { project_path: '/p' } })
+    headers: bearer(TOKEN), payload: { project_path: '/p' , create: true } })
   expect(post.statusCode).toBe(200)
   const get = await s.inject({ method: 'GET', url: '/api/v1/boards', headers: bearer(TOKEN) })
   expect(get.statusCode).toBe(200)
@@ -52,7 +52,7 @@ it('accepts a valid bearer token on GET and POST', async () => {
 
 it('rejects unauthenticated writes too', async () => {
   const s = srv(); await s.ready()
-  const res = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  const res = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   expect(res.statusCode).toBe(401)
 })
 
@@ -79,7 +79,7 @@ it('SSE rejects the master token in query parameters', async () => {
 it('board SSE rejects query credentials and accepts loopback operator headers', async () => {
   const s = srv(); await s.ready()
   await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
-    headers: bearer(TOKEN), payload: { project_path: '/p' } })
+    headers: bearer(TOKEN), payload: { project_path: '/p' , create: true } })
   expect((await s.inject({ method: 'GET', url: '/api/v1/boards/1/events' })).statusCode).toBe(401)
   expect((await s.inject({ method: 'GET',
     url: `/api/v1/boards/1/events?token=${TOKEN}` })).statusCode).toBe(401)

@@ -10,8 +10,8 @@ async function boot() {
 
 it('resolves boards idempotently and registers agents', async () => {
   const s = await boot()
-  const b1 = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/proj' } })).json()
-  const b2 = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/proj' } })).json()
+  const b1 = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/proj' , create: true } })).json()
+  const b2 = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/tmp/proj' , create: true } })).json()
   expect(b1.id).toBe(b2.id)
   expect(b1.name).toBe('proj')
 

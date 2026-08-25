@@ -4,7 +4,7 @@ import { buildServer } from '../src/server.js'
 
 it('ask, pulse-deliver, reply round-trip', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a1 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const a2 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'jade-lynx' } })).json()
 
@@ -25,7 +25,7 @@ it('ask, pulse-deliver, reply round-trip', async () => {
 
 it('ask human lands in the operator inbox instead of failing recipient lookup', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })
 
   const m = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
@@ -50,7 +50,7 @@ it('operator mail carries subject, type, and attachments; file preview stays ins
   fs.writeFileSync(path.join(root, 'notes.md'), '# release notes')
 
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: root } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: root , create: true } })).json()
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })
 
   const m = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {
@@ -84,7 +84,7 @@ it('operator mail carries subject, type, and attachments; file preview stays ins
 
 it('operator reply on a human-rooted thread reaches the latest agent participant', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a1 = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
 
   const root = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: {

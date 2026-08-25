@@ -2,6 +2,7 @@ import Fastify, { FastifyInstance, FastifyRequest } from 'fastify'
 import type Database from 'better-sqlite3'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -498,17 +499,57 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     return tokenEquals(hookTokenHash(token), String(agent.hook_token_hash ?? '')) ? agent : null
   }
 
-  server.post<{ Body: { project_path: string } }>('/api/v1/boards/resolve', (req) => {
+  // Lookup by default; creation is an explicit operator act (`create: true` from the
+  // board UI or `orchestra init`). Sessions and CLI calls in unregistered folders get
+  // 404 instead of silently adding a project — only the operator curates the board list.
+  server.post<{ Body: { project_path: string; create?: boolean } }>('/api/v1/boards/resolve', (req, reply) => {
     const p = req.body.project_path
-    const inserted = db.prepare(`INSERT OR IGNORE INTO boards (project_path, name) VALUES (?, ?)`)
-      .run(p, path.basename(p))
+    const existing = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p) as
+      (Record<string, unknown> & { id: number }) | undefined
+    if (existing) return existing
+    if (req.body.create !== true)
+      return reply.code(404).send({ error: 'unknown project — the operator adds projects from the board UI (or orchestra init)' })
+    if (!requireOperator(req, reply)) return
+    db.prepare(`INSERT INTO boards (project_path, name) VALUES (?, ?)`).run(p, path.basename(p))
     const board = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p) as
       Record<string, unknown> & { id: number }
-    if (inserted.changes === 1) emit(board.id, 'board', board)
+    emit(board.id, 'board', board)
     return board
   })
 
   server.get('/api/v1/boards', () => db.prepare(`SELECT * FROM boards ORDER BY id`).all())
+
+  // Folder browser behind the Add-project picker. Operator-only: lists directory names,
+  // never file contents; hidden entries are skipped.
+  server.get<{ Querystring: { path?: string } }>('/api/v1/fs/dirs', (req, reply) => {
+    if (!requireOperator(req, reply)) return
+    const home = os.homedir()
+    const requested = req.query.path?.trim() || home
+    let root: string
+    try {
+      root = fs.realpathSync(path.resolve(requested))
+      if (!fs.statSync(root).isDirectory()) return reply.code(400).send({ error: 'not a directory' })
+    } catch {
+      return reply.code(404).send({ error: 'directory not found' })
+    }
+    let names: string[] = []
+    try {
+      names = fs.readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b))
+        .slice(0, 1000)
+    } catch {
+      return reply.code(403).send({ error: 'directory is not readable' })
+    }
+    const parent = path.dirname(root)
+    return {
+      path: root,
+      parent: parent === root ? null : parent,
+      home,
+      dirs: names.map((name) => ({ name, path: path.join(root, name) })),
+    }
+  })
 
   server.post<{ Body: { board_id: number; session_id?: string; external_session_id?: string; name?: string; provider?: string; agent_id?: number; bootstrap_nonce?: string; agent_home_session_id?: string; terminal?: unknown } }>(
     '/api/v1/agents/register', (req, reply) => {

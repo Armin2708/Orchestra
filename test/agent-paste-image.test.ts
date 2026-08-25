@@ -11,7 +11,7 @@ it('saves a chat-pasted image to a file the agent can read', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-paste-test-'))
   const s = buildServer(openDb(':memory:'), undefined, { agentOs: { pasteImageRoot: root } })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
 
   const res = await s.inject({ method: 'POST', url: `/api/v1/agents/${a.id}/paste-image`,

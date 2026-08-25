@@ -6,7 +6,7 @@ const boot = async () => {
   const db = openDb(':memory:')
   const server = buildServer(db)
   await server.ready()
-  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   return { db, server }
 }
 

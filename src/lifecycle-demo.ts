@@ -292,7 +292,7 @@ export const runLifecycleDemo = async (
     `${scope.projectRoot}\n${provider}\n${prefix}`,
   )
   try {
-  const board = await api('POST', '/boards/resolve', { project_path: scope.projectRoot })
+  const board = await api('POST', '/boards/resolve', { project_path: scope.projectRoot, create: true })
   const boardId = Number(objectId(board?.id ?? board?.board?.id, 'board id'))
   const snapshot = await api('GET', `/boards/${boardId}/snapshot`)
   const existing = Array.isArray(snapshot?.cards)

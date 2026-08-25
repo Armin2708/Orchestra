@@ -6,7 +6,7 @@ it('assembles the delivery ledger from existing records only', async () => {
   const db = openDb(':memory:')
   const server = buildServer(db)
   await server.ready()
-  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   db.prepare(`INSERT INTO agents (board_id, name) VALUES (1, 'builder-otter')`).run()
   const epicId = Number(db.prepare(`INSERT INTO milestones (board_id, title) VALUES (1, 'Big effort')`).run().lastInsertRowid)
 
@@ -40,7 +40,7 @@ it('404s for unknown cards and returns null sections when sparse', async () => {
   const db = openDb(':memory:')
   const server = buildServer(db)
   await server.ready()
-  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await server.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   expect((await server.inject({ url: '/api/v1/cards/999/ledger' })).statusCode).toBe(404)
 
   const bare = (await server.inject({

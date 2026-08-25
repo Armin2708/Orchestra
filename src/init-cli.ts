@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { InvalidArgumentError } from 'commander'
+import { api, projectPath } from './client.js'
 import { baseUrl, ensureDaemon } from './daemon.js'
 import { formatDoctorReport } from './doctor-cli.js'
 import { type DoctorProvider } from './environment-compatibility.js'
@@ -15,6 +16,7 @@ export type InitCliDeps = {
   startDaemon?: () => Promise<boolean>
   installProviderHooks?: (scope: HookScope, options: { provider: InstallProvider }) => void
   installWorkflowPack?: (scope: HookScope) => string[]
+  registerBoard?: () => Promise<unknown>
   openBrowser?: (url: string) => void
   boardUrl?: () => string
   output?: (line: string) => void
@@ -45,6 +47,8 @@ export const buildInitAction = (deps: InitCliDeps = {}) => {
   const openBrowser = deps.openBrowser ?? defaultOpenBrowser
   const boardUrl = deps.boardUrl ?? baseUrl
   const output = deps.output ?? console.log
+  const registerBoard = deps.registerBoard
+    ?? (() => api('POST', '/boards/resolve', { project_path: projectPath(), create: true }))
 
   return async (options: {
     provider: DoctorProvider
@@ -60,6 +64,9 @@ export const buildInitAction = (deps: InitCliDeps = {}) => {
     if (!await startDaemon()) {
       throw new Error('daemon failed to start — run `orchestra serve` in the foreground and read the error')
     }
+    // init is the operator acting — it registers this folder as a project explicitly
+    // (sessions can no longer auto-create boards)
+    await registerBoard()
     const url = boardUrl()
     const scope: HookScope = options.project ? 'project' : 'global'
     installProviderHooks(scope, { provider: options.provider })

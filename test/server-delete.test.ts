@@ -4,7 +4,7 @@ import { buildServer } from '../src/server.js'
 
 it('deletes messages, cards, agents, and boards', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const card = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'X', agent: 'amber-fox' } })).json().card
   const q = (await s.inject({ method: 'POST', url: '/api/v1/messages', payload: { board_id: b.id, to: 'amber-fox', body: 'q?' } })).json()
@@ -32,8 +32,8 @@ it('deletes messages, cards, agents, and boards', async () => {
 it('board delete cascades every board-linked table and spares other boards', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/doomed' } })).json()
-  const keep = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/kept' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/doomed' , create: true } })).json()
+  const keep = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/kept' , create: true } })).json()
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'amber-fox' } })).json()
   const card = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'X', agent: 'amber-fox' } })).json().card
   await s.inject({ method: 'POST', url: '/api/v1/milestones', payload: { board_id: b.id, title: 'M' } })

@@ -126,7 +126,7 @@ async function reviewCard(
   const b = (await s.inject({
     method: 'POST',
     url: '/api/v1/boards/resolve',
-    payload: { project_path: projectPath },
+    payload: { project_path: projectPath , create: true },
   })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'ship me' } })).json()
   db.prepare(`UPDATE cards SET column_name='review', branch=? WHERE id=?`).run(branch, card.id)
@@ -198,7 +198,7 @@ it('e2e: launched work auto-ships — merge on main, shipped event, worktree gon
     sessions.push(f)
     return f.query
   })
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo , create: true } })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'add feature' } })).json()
 
   const launch = await s.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/launch` })
@@ -246,7 +246,7 @@ it('e2e: a red suite blocks the card with the failure note, main untouched', asy
     sessions.push(f)
     return f.query
   })
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: repo , create: true } })).json()
   const { card } = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'doomed' } })).json()
   await s.inject({ method: 'POST', url: `/api/v1/cards/${card.id}/launch` })
   const wt = path.join(repo, '..', `${path.basename(repo)}-card-${card.id}`)

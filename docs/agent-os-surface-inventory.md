@@ -401,6 +401,7 @@ DELETE /api/v1/agents/:id
 GET /api/v1/agents/:id/inbox
 GET /api/v1/agents/:id/mcp
 GET /api/v1/agents/:id/transcript
+GET /api/v1/fs/dirs
 POST /api/v1/agents/:id/access-profile
 POST /api/v1/agents/:id/approvals/:requestId
 POST /api/v1/agents/:id/effort

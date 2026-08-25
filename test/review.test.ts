@@ -24,7 +24,7 @@ it('a two-step milestone requires approval between steps', async () => {
   const reviews: any[] = []
   s.bus.on('event', (e: any) => { if (e.type === 'review') reviews.push(e.data) })
 
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/nowhere' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/nowhere' , create: true } })).json()
   db.prepare(`INSERT INTO agents (board_id, name, kind) VALUES (?, 'amber-fox', 'hired')`).run(b.id)
   const agentId = (db.prepare(`SELECT id FROM agents WHERE name='amber-fox'`).get() as any).id
 
@@ -82,7 +82,7 @@ it('a conductor launch-finished event enriches the parked card', async () => {
   const reviews: any[] = []
   s.bus.on('event', (e: any) => { if (e.type === 'review') reviews.push(e.data) })
 
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/nowhere' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/nowhere' , create: true } })).json()
   const card = (await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'Launched step' } })).json().card
   // the exit handler moves the card itself, then announces it on the bus
   db.prepare(`UPDATE cards SET column_name='review' WHERE id=?`).run(card.id)

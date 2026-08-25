@@ -27,7 +27,7 @@ it('hire registers a hired agent and messages to it deliver instantly', async ()
   let stub!: ReturnType<typeof stubConductor>
   const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
 
   const hired = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'stub-otter' } })).json()
   expect(hired.kind).toBe('hired')
@@ -43,7 +43,7 @@ it('hire registers a hired agent and messages to it deliver instantly', async ()
 
 it('hire returns 501 when no conductor is wired (test/inject contexts)', async () => {
   const s = buildServer(openDb(':memory:')); await s.ready()
-  await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })
+  await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })
   expect((await s.inject({ method: 'POST', url: '/api/v1/boards/1/hire', payload: {} })).statusCode).toBe(501)
 })
 
@@ -52,7 +52,7 @@ it('never wakes hired agents for announcements or notifications; asks and confir
   let stub!: ReturnType<typeof stubConductor>
   const s = buildServer(db, (_bus: Bus) => { stub = stubConductor(db); return stub })
   await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a1 = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'amber-fox' } })).json()
   const a2 = (await s.inject({ method: 'POST', url: `/api/v1/boards/${b.id}/hire`, payload: { name: 'jade-lynx' } })).json()
 

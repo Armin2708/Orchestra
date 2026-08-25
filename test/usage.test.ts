@@ -96,7 +96,7 @@ it('scopes effort ranks to the requested board', () => {
 it('snapshot attaches effort_rank/effort_tokens per agent, null rank for zero usage', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const busy = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'busy-fox' } })).json()
   await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'idle-owl' } })
   recordUsage(db, b.id, busy.id, fromSdkUsage(RESULT_USAGE))
@@ -112,7 +112,7 @@ it('snapshot attaches effort_rank/effort_tokens per agent, null rank for zero us
 it('serves the split on telemetry and system endpoints under separate keys', async () => {
   const db = openDb(':memory:')
   const s = buildServer(db); await s.ready()
-  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' } })).json()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/p' , create: true } })).json()
   const a = (await s.inject({ method: 'POST', url: '/api/v1/agents/register', payload: { board_id: b.id, name: 'busy-fox' } })).json()
   recordUsage(db, b.id, a.id, fromSdkUsage(RESULT_USAGE))
 
