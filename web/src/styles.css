@@ -1144,6 +1144,22 @@ textarea {
   background: rgba(0, 0, 0, 0.07); border-radius: 9999px; padding: 1px 7px;
 }
 .brand-item.active .brand-count { background: rgba(255, 255, 255, 0.2); }
+.brand-item-end { display: flex; align-items: center; gap: 6px; }
+.brand-item-del {
+  display: none; width: 18px; height: 18px; line-height: 16px; text-align: center;
+  border-radius: 50%; color: var(--ink-soft); font-size: 14px;
+}
+.brand-item:hover .brand-item-del, .brand-item-del:focus-visible { display: inline-block; }
+.brand-item-del:hover { background: rgba(200, 40, 40, 0.12); color: #c22; }
+.brand-item.active .brand-item-del { color: rgba(255, 255, 255, 0.7); }
+.brand-item.active .brand-item-del:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.brand-add { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px 8px; }
+.brand-add input {
+  flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+}
+.brand-add-error { flex-basis: 100%; margin: 0; font-size: 11.5px; color: #c22; }
+.brand-add-toggle { color: var(--ink-soft); }
 
 /* ── View tabs + Roadmap page ────────────────────── */
 .view-tabs { display: flex; gap: 6px; margin-left: 8px; }

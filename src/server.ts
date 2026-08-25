@@ -64,6 +64,7 @@ import type { OperationsRuntime } from './operations/runtime.js'
 import type { ActiveWorkRegistration } from './agent-os/operations-recovery.js'
 import { OperationsRateLimiter } from './operations/capacity.js'
 import { classifyOperationalFailure, OPERATIONS_FAILURE_POLICIES } from './operations/failure-policy.js'
+import { deleteBoardCascade } from './board-delete.js'
 import type { VapidKeys } from './push.js'
 import { formatInjectedMessage, injectTerminalMessage, recordTerminalEndpoint } from './terminal-inject.js'
 
@@ -2475,13 +2476,7 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
   server.delete<{ Params: { id: string } }>('/api/v1/boards/:id', (req, reply) => {
     const id = Number(req.params.id)
     if (!db.prepare(`SELECT 1 FROM boards WHERE id=?`).get(id)) return reply.code(404).send({ error: 'not found' })
-    db.prepare(`DELETE FROM deliveries WHERE message_id IN (SELECT id FROM messages WHERE board_id=?)`).run(id)
-    db.prepare(`DELETE FROM message_targets WHERE message_id IN (SELECT id FROM messages WHERE board_id=?)`).run(id)
-    db.prepare(`DELETE FROM messages WHERE board_id=?`).run(id)
-    db.prepare(`DELETE FROM card_events WHERE card_id IN (SELECT id FROM cards WHERE board_id=?)`).run(id)
-    db.prepare(`DELETE FROM cards WHERE board_id=?`).run(id)
-    db.prepare(`DELETE FROM agents WHERE board_id=?`).run(id)
-    db.prepare(`DELETE FROM boards WHERE id=?`).run(id)
+    deleteBoardCascade(db, id)
     emit(id, 'board', { deleted: id })
     return { ok: true }
   })

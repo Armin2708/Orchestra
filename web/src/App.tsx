@@ -12,6 +12,7 @@ import {
   Telemetry,
 } from './api'
 import { BoardSection } from './BoardSection'
+import { ConfirmDialog } from './ConfirmDialog'
 import {
   BoardTab, normalizeProjectFocus, PrimaryView, resolveLocationNavigation, resolveProjectFocus,
 } from './boardNavigation'
@@ -81,6 +82,10 @@ function LocalOwnerApp() {
     return normalizeProjectFocus(localStorage.getItem('orchestra-focus'))
   })
   const [menuOpen, setMenuOpen] = useState(false)
+  const [addingProject, setAddingProject] = useState(false)
+  const [newProjectPath, setNewProjectPath] = useState('')
+  const [addProjectError, setAddProjectError] = useState('')
+  const [confirmDeleteBoard, setConfirmDeleteBoard] = useState<{ id: number; name: string } | null>(null)
   const [navigation, setNavigation] = useState(() => resolveLocationNavigation(
     localStorage.getItem('orchestra-view'), localStorage.getItem('orchestra-board-tab'), location.search))
   const { view, boardTab } = navigation
@@ -122,6 +127,32 @@ function LocalOwnerApp() {
     const href = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`
     history.pushState(history.state, '', href)
     setLocationSearch(new URL(href, location.origin).search)
+  }
+
+  const addProject = async () => {
+    const project_path = newProjectPath.trim()
+    if (!project_path) return
+    if (!project_path.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(project_path)) {
+      setAddProjectError('Use an absolute path to the project folder')
+      return
+    }
+    try {
+      const board = await api('POST', '/boards/resolve', { project_path })
+      setAddingProject(false)
+      setNewProjectPath('')
+      setAddProjectError('')
+      refresh()
+      pick(board.id)
+    } catch (e) {
+      setAddProjectError(e instanceof ApiError ? e.message : 'Could not add project')
+    }
+  }
+
+  const deleteProject = async (id: number) => {
+    setConfirmDeleteBoard(null)
+    try { await api('DELETE', `/boards/${id}`) } catch { /* refresh below shows the truth */ }
+    if (focus === id) pick('all')
+    refresh()
   }
 
   useEffect(() => {
@@ -298,9 +329,30 @@ function LocalOwnerApp() {
                   <button key={s.board.id} className={focus === s.board.id ? 'brand-item active' : 'brand-item'}
                     onClick={() => pick(s.board.id)}>
                     {s.board.name}
-                    <span className="brand-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
+                    <span className="brand-item-end">
+                      <span className="brand-count">{s.agents.filter((a) => a.status !== 'gone').length}</span>
+                      <span className="brand-item-del" role="button" tabIndex={0} aria-label={`Delete project ${s.board.name}`}
+                        title="Delete project"
+                        onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setConfirmDeleteBoard({ id: s.board.id, name: s.board.name }) }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return
+                          e.preventDefault(); e.stopPropagation()
+                          setMenuOpen(false); setConfirmDeleteBoard({ id: s.board.id, name: s.board.name })
+                        }}>×</span>
+                    </span>
                   </button>
                 ))}
+                {addingProject ? (
+                  <form className="brand-add" onSubmit={(e) => { e.preventDefault(); void addProject() }}>
+                    <input autoFocus placeholder="/absolute/path/to/project" value={newProjectPath}
+                      onChange={(e) => { setNewProjectPath(e.target.value); setAddProjectError('') }}
+                      onKeyDown={(e) => { if (e.key === 'Escape') { setAddingProject(false); setAddProjectError('') } }} />
+                    <button type="submit" className="btn">Add</button>
+                    {addProjectError && <p className="brand-add-error">{addProjectError}</p>}
+                  </form>
+                ) : (
+                  <button className="brand-item brand-add-toggle" onClick={() => setAddingProject(true)}>+ Add project…</button>
+                )}
               </div>
             )}
           </div>
@@ -334,6 +386,11 @@ function LocalOwnerApp() {
       <PhoneRemoteDock active={view === 'board' ? boardTab : 'overview'} onTab={(tab) => {
         pickBoardTab(tab)
       }} onAttention={() => window.dispatchEvent(new Event('orchestra:open-attention'))} />
+      <ConfirmDialog open={confirmDeleteBoard !== null}
+        title={`Delete project “${confirmDeleteBoard?.name ?? ''}”?`}
+        body="Removes the project from Orchestra along with its agents, cards, mail, and history. The folder on disk is untouched. Starting an agent session in that folder will re-add it."
+        onConfirm={() => { if (confirmDeleteBoard) void deleteProject(confirmDeleteBoard.id) }}
+        onCancel={() => setConfirmDeleteBoard(null)} />
     </div>
     </RemoteAccessProvider>
   )
