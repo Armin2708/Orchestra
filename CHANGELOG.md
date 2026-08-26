@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.1 — 2026-08-26
+
+- **`orchestra demo`** — seed a sample board (agents, overlap warning,
+  agent-to-agent Q&A, review card) to explore without live sessions.
+- **`orchestra project add [path]`** — register a project from the CLI;
+  projects are operator-curated (sessions in unregistered folders run
+  untracked instead of auto-creating boards). The board UI adds a folder
+  picker for the same, plus per-project delete with full cascade.
+- Chat image paste fixes (clipboard type captured synchronously), kanban
+  card drawer + drag-to-done, zombie-session reaping freeing launch
+  capacity, launch-throttle diagnostics.
+- CI: all 23 release-evidence gates green (first passing run); community
+  files (SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, templates); dependency
+  audits clean.
+
 ## 0.1.0 — 2026-08-25
 
 First public release on npm (`npx orchestra-board`).

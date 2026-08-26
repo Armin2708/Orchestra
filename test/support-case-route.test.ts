@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 import { SUPPORT_CASE_EXPORT_CONSENT } from '../src/support-case-export.js'
+import { VERSION } from '../src/version.js'
 
 const servers: Array<ReturnType<typeof buildServer>> = []
 afterEach(async () => {
@@ -57,7 +58,7 @@ describe('local-owner support-case export route', () => {
       .toBe(exported.diagnostics_bundle.sha256)
     expect(JSON.parse(gunzipSync(diagnostics).toString('utf8'))).toMatchObject({
       schema_version: 1,
-      generator: { version: '0.1.0' },
+      generator: { version: VERSION },
     })
   })
 

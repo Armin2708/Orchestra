@@ -4,6 +4,8 @@ import path from 'node:path'
 
 const root = path.join(__dirname, '..')
 const json = (relative: string) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'))
+// the plugin hook commands pin the exact published version — track package.json
+const pinnedPackage = `orchestra-board@${json('package.json').version}`
 
 describe('dual-provider plugin manifests', () => {
   it('ships separate Claude and Codex lifecycle contracts', () => {
@@ -19,9 +21,9 @@ describe('dual-provider plugin manifests', () => {
     expect(codex.hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
     expect(codex.hooks.SessionEnd).toBeUndefined()
     expect(JSON.stringify(codex)).toContain('--provider codex')
-    expect(JSON.stringify(codex)).toContain('orchestra-board@0.1.0')
+    expect(JSON.stringify(codex)).toContain(pinnedPackage)
     expect(JSON.stringify(codex)).not.toContain('@latest')
-    expect(JSON.stringify(claude)).toContain('orchestra-board@0.1.0')
+    expect(JSON.stringify(claude)).toContain(pinnedPackage)
     expect(JSON.stringify(claude)).not.toContain('@latest')
   })
 
