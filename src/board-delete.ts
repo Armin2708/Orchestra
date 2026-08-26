@@ -47,8 +47,18 @@ export function deleteBoardCascade(db: Database.Database, boardId: number): void
     db.prepare(`DELETE FROM "${table}" WHERE ${where}`).run(...params)
   }
 
+  // Several subsystems install RAISE(ABORT) immutability triggers (knowledge chunk
+  // evidence, autoship intents, delivery reports…). They guard against edits inside a
+  // living board — an operator deleting the whole project is a sanctioned purge, so
+  // suspend every trigger for the transaction and restore them from their stored SQL.
+  // DDL is transactional in SQLite: a failed purge rolls the triggers back too.
+  const triggers = db.prepare(
+    `SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL`,
+  ).all() as { name: string; sql: string }[]
+
   db.transaction(() => {
     db.pragma('defer_foreign_keys = ON')
+    for (const trigger of triggers) db.exec(`DROP TRIGGER "${trigger.name.replace(/"/g, '""')}"`)
     // join/side tables keyed by agent or message id only — must run before the
     // board_id sweep empties agents/messages, or their subqueries match nothing
     wipe('agent_transcripts', `"agent_id" IN (SELECT id FROM agents WHERE board_id = ?)`, [boardId], [])
@@ -62,5 +72,6 @@ export function deleteBoardCascade(db: Database.Database, boardId: number): void
       wipe(table, `"board_id" = ?`, [boardId], [])
     }
     wipe('boards', `"id" = ?`, [boardId], [])
+    for (const trigger of triggers) db.exec(trigger.sql)
   })()
 }

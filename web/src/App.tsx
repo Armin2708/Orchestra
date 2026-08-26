@@ -157,10 +157,16 @@ function LocalOwnerApp() {
     }
   }
 
+  const [projectError, setProjectError] = useState('')
   const deleteProject = async (id: number) => {
     setConfirmDeleteBoard(null)
-    try { await api('DELETE', `/boards/${id}`) } catch { /* refresh below shows the truth */ }
-    if (focus === id) pick('all')
+    setProjectError('')
+    try {
+      await api('DELETE', `/boards/${id}`)
+      if (focus === id) pick('all')
+    } catch (e) {
+      setProjectError(e instanceof ApiError ? `Could not delete project: ${e.message}` : 'Could not delete project')
+    }
     refresh()
   }
 
@@ -331,6 +337,13 @@ function LocalOwnerApp() {
             <p className="sub">
               {snaps.length} project{snaps.length === 1 ? '' : 's'} · {agents.length} agent{agents.length === 1 ? '' : 's'} active · {cards.length} card{cards.length === 1 ? '' : 's'}
             </p>
+            {projectError && (
+              <p className="brand-project-error" role="alert">
+                {projectError}
+                <button type="button" className="brand-project-error-dismiss" aria-label="Dismiss"
+                  onClick={() => setProjectError('')}>×</button>
+              </p>
+            )}
             {menuOpen && (
               <div className="brand-menu">
                 <button className={focus === 'all' ? 'brand-item active' : 'brand-item'} onClick={() => pick('all')}>All projects</button>

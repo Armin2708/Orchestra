@@ -62,3 +62,24 @@ it('board delete cascades every board-linked table and spares other boards', { t
   const boards = (await s.inject({ method: 'GET', url: '/api/v1/boards' })).json()
   expect(boards.map((x: any) => x.id)).toEqual([keep.id])
 })
+
+it('board delete purges rows guarded by immutability triggers, which survive intact', { timeout: 30_000 }, async () => {
+  const db = openDb(':memory:')
+  const s = buildServer(db); await s.ready()
+  const b = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/guarded', create: true } })).json()
+  await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: b.id, title: 'X' } })
+  // mirror the knowledge/autoship immutability guards: deletes are refused outright
+  db.exec(`CREATE TRIGGER test_cards_immutable BEFORE DELETE ON cards
+    BEGIN SELECT RAISE(ABORT, 'test rows are immutable'); END`)
+  expect(() => db.prepare(`DELETE FROM cards WHERE board_id=?`).run(b.id)).toThrow(/immutable/)
+
+  const res = await s.inject({ method: 'DELETE', url: `/api/v1/boards/${b.id}` })
+  expect(res.statusCode).toBe(200)
+  expect(db.prepare(`SELECT count(*) AS n FROM cards`).get()).toEqual({ n: 0 })
+  // the trigger is restored after the purge and still guards ordinary deletes
+  expect(db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name='test_cards_immutable'`).get())
+    .toEqual({ n: 1 })
+  const again = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve', payload: { project_path: '/guarded2', create: true } })).json()
+  await s.inject({ method: 'POST', url: '/api/v1/cards', payload: { board_id: again.id, title: 'Y' } })
+  expect(() => db.prepare(`DELETE FROM cards WHERE board_id=?`).run(again.id)).toThrow(/immutable/)
+})
