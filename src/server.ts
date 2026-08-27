@@ -533,8 +533,22 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
     const existing = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p) as
       (Record<string, unknown> & { id: number }) | undefined
     if (existing) return existing
-    if (req.body.create !== true)
+    if (req.body.create !== true) {
+      // a session in a subfolder of a curated project belongs to that project:
+      // walk up to the nearest registered ancestor (a subfolder that is its own
+      // board matched above, so the deepest board always wins). Creation stays
+      // exact-path — only lookups inherit.
+      let dir = path.resolve(p)
+      while (true) {
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+        const ancestor = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(dir) as
+          (Record<string, unknown> & { id: number }) | undefined
+        if (ancestor) return ancestor
+      }
       return reply.code(404).send({ error: 'unknown project — the operator adds projects from the board UI (or orchestra init)' })
+    }
     if (!requireOperator(req, reply)) return
     db.prepare(`INSERT INTO boards (project_path, name) VALUES (?, ?)`).run(p, path.basename(p))
     const board = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(p) as

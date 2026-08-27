@@ -23,6 +23,37 @@ it('boards/resolve without create is lookup-only', async () => {
   expect(found.json().id).toBe(made.json().id)
 })
 
+// Sessions launched in a subfolder of a curated project belong to that project:
+// lookup walks up to the nearest registered ancestor; creation stays exact-path.
+it('resolve attaches subfolder sessions to the nearest ancestor board', async () => {
+  const s = buildServer(openDb(':memory:')); await s.ready()
+  const root = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo', create: true } })).json()
+  const sub = (await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo/apps/web', create: true } })).json()
+
+  // deep inside the sub-board → the deepest (nearest) board wins
+  const inSub = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo/apps/web/src/components' } })
+  expect(inSub.json().id).toBe(sub.id)
+  // inside the root but outside the sub-board → the root board
+  const inRoot = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo/backend/services' } })
+  expect(inRoot.json().id).toBe(root.id)
+  // a sibling prefix must not match on string prefix alone
+  const sibling = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo-other/backend' } })
+  expect(sibling.statusCode).toBe(404)
+  // no registered ancestor anywhere → still untracked
+  expect((await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/elsewhere/deep/dir' } })).statusCode).toBe(404)
+
+  // creation keeps exact-path semantics even under an existing board
+  const made = await s.inject({ method: 'POST', url: '/api/v1/boards/resolve',
+    payload: { project_path: '/repo/tools', create: true } })
+  expect(made.json().id).not.toBe(root.id)
+})
+
 it('fs/dirs lists only directories for the operator', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestra-fsdirs-'))
   fs.mkdirSync(path.join(root, 'beta'))
