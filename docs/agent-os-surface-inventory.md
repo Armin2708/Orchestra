@@ -429,6 +429,7 @@ POST /api/v1/cards/:id/send-back
 POST /api/v1/cards/:id/shipped
 POST /api/v1/cards/:id/verification
 POST /api/v1/cards/:id/verify
+POST /api/v1/fs/pick-dir
 ```
 
 These routes do not all behave identically. In particular, card launch returns either a canonical

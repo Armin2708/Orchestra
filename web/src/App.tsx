@@ -83,6 +83,7 @@ function LocalOwnerApp() {
   })
   const [menuOpen, setMenuOpen] = useState(false)
   const [addingProject, setAddingProject] = useState(false)
+  const [pickingNative, setPickingNative] = useState(false)
   const [addProjectError, setAddProjectError] = useState('')
   // server-side folder browser behind “+ Add project” — the browser can't hand us a
   // real filesystem path, so the daemon lists directories and the user walks to one
@@ -140,11 +141,7 @@ function LocalOwnerApp() {
       setAddProjectError(e instanceof ApiError ? e.message : 'Could not read that folder')
     }
   }
-  const openAddProject = () => {
-    setAddingProject(true)
-    void browseDirs()
-  }
-  const addProject = async (project_path: string) => {
+  const addProject = async (project_path: string): Promise<string | null> => {
     try {
       const board = await api('POST', '/boards/resolve', { project_path, create: true })
       setAddingProject(false)
@@ -152,9 +149,39 @@ function LocalOwnerApp() {
       setAddProjectError('')
       refresh()
       pick(board.id)
+      return null
     } catch (e) {
-      setAddProjectError(e instanceof ApiError ? e.message : 'Could not add project')
+      const message = e instanceof ApiError ? e.message : 'Could not add project'
+      setAddProjectError(message)
+      return message
     }
+  }
+  const openAddProject = async () => {
+    setAddProjectError('')
+    // the daemon can open the native Finder chooser on its own display — offered
+    // only to local browsers; remote clients and other platforms get 409 and the
+    // in-app walker below
+    setPickingNative(true)
+    let picked: { path: string | null; cancelled: boolean } | null = null
+    try {
+      picked = await api('POST', '/fs/pick-dir')
+    } catch {
+      picked = null
+    } finally {
+      setPickingNative(false)
+    }
+    if (picked?.cancelled) return
+    if (picked?.path) {
+      const failure = await addProject(picked.path)
+      if (!failure) return
+      // surface the resolve error in the walker panel, opened at the chosen folder
+      setAddingProject(true)
+      await browseDirs(picked.path)
+      setAddProjectError(failure)
+      return
+    }
+    setAddingProject(true)
+    void browseDirs()
   }
 
   const [projectError, setProjectError] = useState('')
@@ -387,7 +414,8 @@ function LocalOwnerApp() {
                     </div>
                   </div>
                 ) : (
-                  <button className="brand-item brand-add-toggle" onClick={openAddProject}>+ Add project…</button>
+                  <button className="brand-item brand-add-toggle" disabled={pickingNative}
+                    onClick={() => void openAddProject()}>{pickingNative ? 'Choosing folder…' : '+ Add project…'}</button>
                 )}
               </div>
             )}

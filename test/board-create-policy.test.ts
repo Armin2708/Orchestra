@@ -41,3 +41,57 @@ it('fs/dirs lists only directories for the operator', async () => {
   expect((await s.inject({ method: 'GET',
     url: `/api/v1/fs/dirs?path=${encodeURIComponent(path.join(root, 'file.txt'))}` })).statusCode).toBe(400)
 })
+
+// The native Finder chooser opens on the daemon's own display, so the route only
+// serves operators browsing from this machine; everyone else falls back to fs/dirs.
+it('fs/pick-dir returns the natively chosen folder to a local operator', async () => {
+  const s = buildServer(openDb(':memory:'), undefined, {
+    pickNativeFolder: async () => ({ path: '/Users/op/project', cancelled: false }) })
+  await s.ready()
+  const res = await s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir' })
+  expect(res.statusCode).toBe(200)
+  expect(res.json()).toEqual({ path: '/Users/op/project', cancelled: false })
+})
+
+it('fs/pick-dir reports a dismissed chooser as cancelled', async () => {
+  const s = buildServer(openDb(':memory:'), undefined, {
+    pickNativeFolder: async () => ({ path: null, cancelled: true }) })
+  await s.ready()
+  const res = await s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir' })
+  expect(res.statusCode).toBe(200)
+  expect(res.json()).toEqual({ path: null, cancelled: true })
+})
+
+it('fs/pick-dir never opens a dialog for non-local callers', async () => {
+  let opened = 0
+  const s = buildServer(openDb(':memory:'), undefined, {
+    pickNativeFolder: async () => { opened += 1; return { path: '/x', cancelled: false } } })
+  await s.ready()
+  const res = await s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir', remoteAddress: '203.0.113.9' })
+  expect(res.statusCode).toBeGreaterThanOrEqual(400)
+  expect(opened).toBe(0)
+})
+
+it('fs/pick-dir refuses a second chooser while one is open', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const s = buildServer(openDb(':memory:'), undefined, {
+    pickNativeFolder: async () => { await gate; return { path: '/first', cancelled: false } } })
+  await s.ready()
+  const first = s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir' })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const second = await s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir' })
+  expect(second.statusCode).toBe(409)
+  expect(second.json().code).toBe('picker_busy')
+  release()
+  expect((await first).statusCode).toBe(200)
+})
+
+it('fs/pick-dir maps a chooser failure to picker_unavailable so the UI falls back', async () => {
+  const s = buildServer(openDb(':memory:'), undefined, {
+    pickNativeFolder: async () => { throw new Error('automation denied') } })
+  await s.ready()
+  const res = await s.inject({ method: 'POST', url: '/api/v1/fs/pick-dir' })
+  expect(res.statusCode).toBe(409)
+  expect(res.json().code).toBe('picker_unavailable')
+})

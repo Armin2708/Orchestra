@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { generateName } from './names.js'
 import { pathsIntersect } from './overlap.js'
@@ -144,7 +145,32 @@ export interface ServerOptions {
   isDraining?: () => boolean
   reconcileActiveWork?: () => void
   registerActiveWork?: (registration: ActiveWorkRegistration) => () => void
+  // test seam: replace the real Finder choose-folder dialog (darwin osascript)
+  pickNativeFolder?: () => Promise<{ path: string | null; cancelled: boolean }>
 }
+
+// Native macOS choose-folder dialog for “+ Add project”. Runs on the daemon's own
+// display, so the route below only offers it to loopback operators.
+const chooseFolderWithFinder = () => new Promise<{ path: string | null; cancelled: boolean }>((resolve, reject) => {
+  execFile('osascript', [
+    // best-effort raise to the foreground — Automation consent may be denied, and
+    // the chooser itself must still open then
+    '-e', 'try',
+    '-e', 'tell application "System Events" to activate',
+    '-e', 'end try',
+    '-e', 'POSIX path of (choose folder with prompt "Choose a project folder to add")',
+  ], { timeout: 180_000 }, (error, stdout, stderr) => {
+    if (error) {
+      // -128 is AppleScript's user-cancelled; a dialog left open past the timeout counts too
+      if (/-128|cancell?ed/i.test(`${stderr} ${error.message}`) || error.killed) {
+        return resolve({ path: null, cancelled: true })
+      }
+      return reject(new Error(stderr.trim() || error.message))
+    }
+    const chosen = stdout.trim().replace(/\/+$/, '')
+    resolve(chosen ? { path: chosen, cancelled: false } : { path: null, cancelled: true })
+  })
+})
 
 const MESSAGE_KINDS = new Set(['ask', 'reply', 'task', 'notify', 'announce', 'swarm'] as const)
 // the operator has no agent row — these recipient names mean "no agent recipient", which an
@@ -548,6 +574,29 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       parent: parent === root ? null : parent,
       home,
       dirs: names.map((name) => ({ name, path: path.join(root, name) })),
+    }
+  })
+
+  // Native Finder chooser behind “+ Add project”. The dialog opens on the daemon's
+  // own display, so it is only offered when the operator's browser is on this
+  // machine — remote clients get picker_unavailable and keep the in-app walker.
+  let nativePickInFlight = false
+  server.post('/api/v1/fs/pick-dir', async (req, reply) => {
+    if (!requireOperator(req, reply)) return
+    if (process.platform !== 'darwin' && !opts.pickNativeFolder)
+      return reply.code(409).send({ error: 'the native folder picker requires macOS', code: 'picker_unavailable' })
+    const address = req.socket?.remoteAddress ?? ''
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(address))
+      return reply.code(409).send({ error: 'the native folder picker only opens for browsers on the daemon machine', code: 'picker_unavailable' })
+    if (nativePickInFlight)
+      return reply.code(409).send({ error: 'a folder chooser is already open on this machine', code: 'picker_busy' })
+    nativePickInFlight = true
+    try {
+      return await (opts.pickNativeFolder ?? chooseFolderWithFinder)()
+    } catch {
+      return reply.code(409).send({ error: 'could not open the folder chooser', code: 'picker_unavailable' })
+    } finally {
+      nativePickInFlight = false
     }
   })
 

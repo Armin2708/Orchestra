@@ -630,7 +630,8 @@
       "POST /api/v1/cards/:id/send-back",
       "POST /api/v1/cards/:id/shipped",
       "POST /api/v1/cards/:id/verification",
-      "POST /api/v1/cards/:id/verify"
+      "POST /api/v1/cards/:id/verify",
+      "POST /api/v1/fs/pick-dir"
     ],
     "legacy": [
       "DELETE /api/v1/boards/:id",
