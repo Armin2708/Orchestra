@@ -31,6 +31,8 @@ import { PhoneRemoteDock } from './PhoneRemoteDock'
 import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
 import type { BrowserAuthorityMode } from './deviceAuth'
 import { createSingleFlightRefresh } from './singleFlightRefresh'
+import { ClerkAuthControls } from './ClerkAuthControls'
+import { HubApp } from './HubApp'
 import {
   beginLocalOwnerAuthentication,
   beginLocalOwnerRetry,
@@ -38,6 +40,7 @@ import {
   LocalOwnerInitialOffline,
   resolveLocalOwnerSurface,
 } from './LocalOwnerStartup'
+import { hubConfigured } from './hubApi'
 import './messages.css'
 import './agentOs.css'
 
@@ -55,6 +58,13 @@ export function App({ authorityMode = 'local-owner', onAuthorityChanged }: {
   authorityMode?: BrowserAuthorityMode
   onAuthorityChanged?: () => void
 }) {
+  // Hub mode is a separate deployment (Vercel web talking to the Railway hub —
+  // see hubApi.ts) with no local daemon to pair with: `authorityMode` and every
+  // local-owner/paired-device branch below are device-authority concerns that
+  // simply don't apply. `hubConfigured()` is false whenever VITE_HUB_BASE_URL /
+  // VITE_CLERK_PUBLISHABLE_KEY are unset, which keeps the local single-machine
+  // app on the exact code path it always took — this branch is additive.
+  if (hubConfigured()) return <HubApp />
   if (authorityMode === 'paired-device') return <RemoteDeviceShell />
   if (authorityMode === 'pairing-required') return <PairingRequired onSignedIn={onAuthorityChanged} />
   return <LocalOwnerApp />
@@ -429,6 +439,7 @@ function LocalOwnerApp() {
             <NeedsYou boards={shown.map((snapshot) => snapshot.board)} readOnly={connectionState !== 'live'}
               onOpen={(item) => { pick(item.board_id); pickBoardTab('workspace') }} />
             <PushBell />
+            <ClerkAuthControls />
           </nav>
         </div>
       </header>

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendOrgEvent } from './events.js'
+import { assertAgentCapacity } from './entitlements.js'
 import { NotFoundError, ValidationError } from './errors.js'
 import { requireOrgEntity } from './scope.js'
 import { withTransaction, type HubSql, type HubSqlPool } from './sql.js'
@@ -35,6 +36,30 @@ export async function registerAgent(sql: HubSqlPool, input: RegisterAgentInput):
   const name = boundedString(input.name, 'name', 120)
 
   return withTransaction(sql, async (tx) => {
+    // Locks the org row for the rest of this transaction. Without this, the
+    // capacity check below and the INSERT further down are two separate reads/
+    // writes with no row lock between them: in production (a real Postgres
+    // connection per caller, READ COMMITTED), two concurrent registerAgent calls
+    // for two different new names can both read "one slot under cap" and both
+    // commit, leaving the org over its paid concurrent-agent capacity with no
+    // error to either caller. `FOR UPDATE` makes the second transaction block
+    // until the first commits or rolls back, so its own capacity check (below)
+    // sees the first call's newly-inserted agent and correctly refuses if that
+    // pushed the org to its cap. Scoped to this one org's row only — concurrent
+    // registrations for a DIFFERENT org are never serialized against each other.
+    //
+    // NOTE ON TEST COVERAGE: PGlite (the test harness's Postgres) is single-
+    // connection — see sql.ts's own doc comment on `withTransaction`'s fallback
+    // path — so two "concurrent" calls in a test never actually run as two
+    // independent transactions the way two real Postgres connections would.
+    // This lock's serialization behavior is therefore NOT provable in-harness;
+    // test/hub-entitlements.test.ts only asserts the lock statement is issued
+    // before the INSERT, which proves the code is wired correctly, not that the
+    // race is closed. The blocking-until-commit semantics of `SELECT ... FOR
+    // UPDATE` are standard, well-documented Postgres behavior, not something
+    // specific to this codebase.
+    await tx.query('SELECT id FROM orgs WHERE id = $1 FOR UPDATE', [input.orgId])
+
     const board = await tx.query('SELECT id FROM boards WHERE org_id = $1 AND id = $2', [input.orgId, input.boardId])
     if (!board.rows[0]) throw new NotFoundError('board not found in this org')
 
@@ -43,6 +68,13 @@ export async function registerAgent(sql: HubSqlPool, input: RegisterAgentInput):
       [input.orgId, input.boardId, name],
     )
     if (existing.rows[0]) return normalize(existing.rows[0])
+
+    // Only a genuinely new agent is weighed against the cap — a daemon reconnecting
+    // under a name it already registered takes the early return above and never
+    // reaches here, so it can't be refused just because the org is at capacity.
+    // See entitlements.ts's doc comment on assertAgentCapacity for why this check
+    // lives here rather than at the ops-endpoint dispatch for `agent.register`.
+    await assertAgentCapacity(tx, input.orgId)
 
     const inserted = await tx.query<HubAgent>(
       `INSERT INTO agents (id, org_id, board_id, device_id, name)
