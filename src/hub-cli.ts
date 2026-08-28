@@ -17,15 +17,18 @@ export function registerHubCommands(program: Command, deps: HubCliDeps = {}): vo
 
   program.command('hub')
     .description('run the hosted multi-org hub server')
-    .option('--port <port>', 'port to listen on', '4760')
-    .action(async (options: { port: string }) => {
+    // No CLI default here: falling back to `env.PORT` (Railway's supplied port)
+    // only works if an omitted `--port` is distinguishable from an explicit one.
+    .option('--port <port>', 'port to listen on')
+    .action(async (options: { port?: string }) => {
       const databaseUrl = env.HUB_DATABASE_URL ?? env.DATABASE_URL
       if (!databaseUrl) {
         throw new Error('HUB_DATABASE_URL (or DATABASE_URL) must be set to run the hub')
       }
-      const port = Number(options.port)
+      const rawPort = options.port ?? env.PORT ?? '4760'
+      const port = Number(rawPort)
       if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-        throw new Error(`--port must be a valid port number, got ${options.port}`)
+        throw new Error(`--port must be a valid port number, got ${rawPort}`)
       }
 
       const start = deps.startHub ?? defaultStartHub
