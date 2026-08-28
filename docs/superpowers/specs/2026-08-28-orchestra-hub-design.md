@@ -79,7 +79,25 @@ Entity shapes mirror the local sidecar so daemon↔hub translation is mostly 1:1
 
 **Authorization:** role checks (from mirrored memberships) on org admin actions; all agent-level actions (cards, mail, presence) require an active membership + non-revoked device. If a member is removed in Clerk, the webhook revokes their devices.
 
-**Billing:** creating an org requires completing Stripe Checkout (flat per-org monthly plan, seat cap enforced at invite acceptance). Stripe webhooks (`checkout.session.completed`, `customer.subscription.updated/deleted`) update `subscriptions.status`. Lapsed subscription ⇒ org `suspended`: reads still work (nobody's data is hostage), all writes are rejected with a clear error until payment resumes. Webhook handler is idempotent and signature-verified.
+**Billing.** The Stripe side is **already built and live** — products, 10 prices, test and live mode complete (see the `orchestra-cloud-pricing-memo` note). Plan 3 writes the *code*, not the catalogue. The approved model, USD only:
+
+| Line | Price | Lookup key |
+|------|-------|-----------|
+| Cloud base | $20/mo, $200/yr — includes 3 seats and 3 concurrent agents per seat | `cloud_base_{monthly,yearly}` |
+| Extra seat | $10/mo, $100/yr | `cloud_seat_{monthly,yearly}` |
+| Agent capacity pack (+10 concurrent) | $20/mo, $200/yr | `cloud_agent_pack_{monthly,yearly}` |
+| SSO add-on | $50/mo, $500/yr | `cloud_sso_{monthly,yearly}` |
+| Business seat (10-seat minimum) | $30/mo, $300/yr | `business_seat_{monthly,yearly}` |
+
+Rules that follow from this and bind the implementation:
+
+- **Reference prices by lookup key, never by price ID.** The keys are identical across test and live, which is what makes the code mode-agnostic. A hardcoded `price_…` id would work in test and break in production.
+- **Always target the `orchestraboard` Stripe profile / `acct_1TEIuEA5oVozeSuD`.** The CLI's `default` profile points at an unrelated business.
+- A subscription is **multi-line**: base + N seat items + M pack items + optional SSO. Seat and capacity limits are derived from subscription item quantities, and cached on the org so enforcement never depends on a live Stripe call.
+- **No free tier on hosted, and no metered overage.** Capacity is sold as fixed blocks; the local product stays free under FSL. (Cursor's metered-credit switch is the cautionary case in the memo.)
+- Two enforced limits: **seats** (cap membership) and **concurrent agents** (3 per seat, +10 per pack) — the latter is the genuinely novel axis and no competitor prices on it.
+
+**Lifecycle:** creating an org requires completing Stripe Checkout. Webhooks (`checkout.session.completed`, `customer.subscription.updated/deleted`) update `subscriptions.status` and the cached quantities. A lapsed subscription suspends the org: reads still work (nobody's data is held hostage), writes are refused with a clear error until payment resumes. The webhook handler is signature-verified and idempotent.
 
 **Free/paid boundary:** the local single-machine product remains fully free under FSL-1.1-ALv2 (which also bars third parties from selling Orchestra hosting). The hub code lives in this same public repo; the paid thing is the hosted service, not the code.
 
@@ -107,8 +125,18 @@ The existing React app gains a **hub mode**: Clerk sign-in/sign-up and org-switc
 
 ## 8. Deployment & Ops (v1)
 
-- One hub deploy on Fly.io or Railway; DB is **Supabase Postgres** (connect via Supabase's session pooler — the hub is a long-lived server). TLS terminated by the platform.
-- Config via env: `DATABASE_URL` (Supabase), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SECRET`, `HUB_BASE_URL`.
+Three hosted pieces, each on the platform that fits it:
+
+| Piece | Platform | Why |
+|-------|----------|-----|
+| Hub server (`orchestra hub`) | **Railway** | Long-lived Node process holding SSE connections and Postgres transactions. Serverless would break both. |
+| Web UI (`web/`) | **Vercel** | Static Vite build on a CDN; talks to the hub cross-origin. |
+| Database | **Supabase Postgres** | Connect via the **session pooler**, not the transaction pooler — the hub holds transactions and session-scoped advisory locks, which the transaction pooler breaks. |
+
+- **CORS is now load-bearing.** Splitting the UI onto Vercel means the browser calls the hub cross-origin, unlike local mode where the daemon serves its own UI same-origin. The hub must allow exactly the Vercel origin (plus preview deployments if wanted), with credentials, and must NOT use `*`.
+- **Web build config:** the UI needs the hub's base URL at build time (`VITE_HUB_BASE_URL`) plus `VITE_CLERK_PUBLISHABLE_KEY`. Local single-machine mode must keep working with neither set.
+- Hub env: `HUB_DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SIGNING_SECRET`, `HUB_BASE_URL`, `WEB_ORIGIN`.
+- **Stripe and Clerk webhooks both point at the Railway hub**, not at Vercel — they mutate database state.
 - Migrations: plain SQL migration files run at boot (same pattern as the local sidecar's numbered migrations).
 - Backups: Supabase daily snapshots. No multi-region, no HA in v1 — brief hub downtime degrades to the daemon offline mode above.
 
