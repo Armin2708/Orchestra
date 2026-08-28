@@ -15,8 +15,7 @@ export function registerHubCommands(program: Command, deps: HubCliDeps = {}): vo
   const output = deps.output ?? ((line: string) => console.log(line))
   const env = deps.env ?? process.env
 
-  program
-    .command('hub')
+  program.command('hub')
     .description('run the hosted multi-org hub server')
     .option('--port <port>', 'port to listen on', '4760')
     .action(async (options: { port: string }) => {

@@ -18,9 +18,17 @@ is `test/agent-os-baseline-docs.test.ts`.
 
 | Surface | Canonical | Compatibility | Legacy | Infrastructure | Total |
 |---|---:|---:|---:|---:|---:|
-| SQLite application tables | 170 | 3 | 10 | 17 | 200 |
-| Contract-scoped registered HTTP routes | 168 | 29 | 25 | 12 | 234 |
-| Contract-scoped CLI command families/subcommands | 94 | 5 | 18 | 23 | 140 |
+| SQLite application tables | 170 | 3 | 12 | 17 | 202 |
+| Contract-scoped registered HTTP routes | 175 | 33 | 49 | 17 | 274 |
+| Contract-scoped CLI command families/subcommands | 94 | 5 | 30 | 32 | 161 |
+
+The hosted multi-org hub (`src/hub/`) is a separate Fastify server backed by its own Postgres
+database — a different process, different storage engine, and different tenancy model from the
+daemon this inventory otherwise covers. Its 5 HTTP routes and its `hub` CLI command are folded
+into the Infrastructure rows above because they share this daemon's `orchestra` binary and route
+extractor; its Postgres tables are **not** SQLite tables and cannot appear in the "SQLite
+application tables" row above by construction — they are documented separately in
+[Hub (Postgres) database tables](#hub-postgres-database-tables).
 
 Classification does not mean “safe to delete.” Compatibility and legacy surfaces remain supported
 until migration telemetry and release gates allow removal.
@@ -192,6 +200,34 @@ guessing, and `os_compatibility_migration_checks` records the five validation ca
 four `os_compatibility_migration_telemetry_*` tables hold privacy-safe observation, rollup, and
 coverage state. The three `os_compatibility_failure_*` tables preserve crash-safe failure,
 success-receipt, and day-seal evidence. SQLite's own internal tables are intentionally excluded.
+
+### Hub (Postgres) database tables
+
+The hosted multi-org hub (`src/hub/`) runs against its own Postgres database — a separate engine
+and a separate schema from every table above, applied by `hubMigrate()` in
+`src/hub/migrations.ts` from the files in `src/hub/migrations/*.sql`. These tables are
+**deliberately excluded** from the `database_tables` block in
+[`agent-os-surface-inventory.json`](./agent-os-surface-inventory.json): that block's drift check
+(`test/agent-os-baseline-docs.test.ts`) opens an in-memory **SQLite** database and asserts the
+JSON list matches it exactly, so a Postgres-only table can never be added there without breaking
+that assertion. Three hub table names (`agents`, `boards`, `cards`) collide with existing SQLite
+table names above; they are prefixed `hub:` below to keep every name in this document unique.
+
+| Table | Migration | Notes |
+|---|---|---|
+| `hub:users` | `001-hub-core.sql` | hub account identity |
+| `hub:orgs` | `001-hub-core.sql` | tenant/organization record |
+| `hub:memberships` | `001-hub-core.sql` | user-to-org membership |
+| `hub:subscriptions` | `001-hub-core.sql` | org billing/plan state |
+| `hub:devices` | `001-hub-core.sql` | device tokens minted per org, see `src/hub/devices.ts` |
+| `hub:projects` | `002-hub-work.sql` | project scope within an org |
+| `hub:boards` | `002-hub-work.sql` | board scope within a project |
+| `hub:cards` | `002-hub-work.sql` | hub card records, see `src/hub/cards.ts` |
+| `hub:mail` | `002-hub-work.sql` | agent-to-agent mail, see `src/hub/mail.ts` |
+| `hub:agents` | `002-hub-work.sql` | named agent identity within a board |
+| `hub:org_events` | `003-hub-events.sql` | append-only per-org event stream consumed by `GET /api/v1/hub/orgs/:orgId/sync` |
+| `hub:org_event_seq` | `004-hub-event-seq.sql` | per-org monotonic sequence counter backing `org_events.seq` |
+| `hub:hub_schema_migrations` | created by `hubMigrate()` itself, not a `.sql` file | tracks which of the four migrations above have been applied |
 
 ## HTTP APIs
 
@@ -499,12 +535,17 @@ a canonical contract/job lifecycle (`src/server.ts:1055`).
 ```text
 GET /api/v1/auth/status
 GET /api/v1/events
+GET /api/v1/hub/orgs/:orgId/agents
+GET /api/v1/hub/orgs/:orgId/cards
+GET /api/v1/hub/orgs/:orgId/mail/inbox
+GET /api/v1/hub/orgs/:orgId/sync
 GET /api/v1/push/status
 GET /api/v1/push/vapid-key
 GET /api/v1/system
 GET /health
 POST /api/v1/auth/login
 POST /api/v1/auth/setup
+POST /api/v1/hub/orgs/:orgId/ops
 POST /api/v1/push/ntfy
 POST /api/v1/push/subscribe
 POST /api/v1/push/test
@@ -516,20 +557,51 @@ exchange; they never accept remote ingress. `GET /api/v1/events` is the operator
 (`src/server.ts:1358`). Agent OS event history is the paged durable
 `GET /api/v1/os/boards/:id/events`, not SSE.
 
+The five `/api/v1/hub/orgs/:orgId/*` routes (`src/hub/routes/ops.ts`, `src/hub/routes/sync.ts`)
+belong to the separate hosted hub server (`src/hub/server.ts`), not the local daemon.
+
+### Hub cross-organization trust boundary
+
+This is documented here rather than in
+[`docs/remote-mobile-threat-control-matrix.json`](./remote-mobile-threat-control-matrix.json)
+because that file's `abuse_cases` are a closed, executable-contract-backed register
+(`AC-01` through `AC-20`, enforced exactly by
+`test/remote-ops-adversarial-contract.test.ts` against the *local daemon's* phone-pairing
+`DeviceSession` model). The hub is a separate server with a separate, org-scoped device-token
+model; forcing a 21st entry into that closed register would either desync it from its own
+executable adversarial suite or require extending that suite to a subsystem it does not cover.
+The boundary below is real and evidenced, just tracked independently of REM-001.
+
+- **Trust boundary:** every hub request is scoped to the org bound to the presenting device
+  token; no route reads an org id from the request body.
+- **Control (implemented):** the hub resolves org scope from the device token in a single
+  `onRequest` hook and rejects any path org id that disagrees with it — see
+  `return reply.code(403).send({ error: 'device is not a member of this org', code: 'forbidden' })`
+  in `src/hub/server.ts`.
+- **Threat:** a hub instance serves many orgs from one process, so a scoping mistake in any new
+  route exposes another tenant's board to a valid-but-foreign device token.
+- **Abuse case:** a device token minted for org B is used to read, write, or stream org A's
+  board. Expected (current and target) behavior: every attempt is refused with 403 before
+  reaching a handler.
+- **Executable evidence:** `test/hub-cross-org-isolation.test.ts` mints a device token for a
+  second org and asserts a 403 from every hub route (reads, agents, mail, sync, and ops) against
+  the first org, then separately confirms an org-scoped read never returns another org's rows
+  even with a valid token for the requesting org.
+
 ## CLI API
 
-The exact 140 compatibility-contract command paths are machine-checked from `src/cli.ts`,
-`src/agent-os-cli.ts`, and `src/job-assignment-cli.ts`. Separately registered current commands
-include `doctor`, `onboard`, `lifecycle-demo`, and `ops support-case`; their focused tests and
-operator docs are additional release evidence rather than being silently folded into the 137-count
-historical extractor. The compact human map is:
+The exact 161 compatibility-contract command paths are machine-checked from `src/cli.ts`,
+`src/agent-os-cli.ts`, `src/job-assignment-cli.ts`, and `src/hub-cli.ts`. Separately registered
+current commands include `doctor`, `onboard`, `lifecycle-demo`, and `ops support-case`; their
+focused tests and operator docs are additional release evidence rather than being silently folded
+into the 137-count historical extractor. The compact human map is:
 
 | Class | Command surface |
 |---|---|
 | Canonical | `agent {list,create,show,home,rename,archive}`; `session {list,show,resume,pause,stop,retry,fork,reconcile-fork,rename,archive,search,export}`; `retention {show,set,run}`; `workspace {list,create,show,update,archive}`; `process {list,start,output,attach,input,resize,signal,restart}`; `attention {list,resolve}`; `contract {show,set,validate,publish,transition}`; `contract-template {list,preview,apply}`; `evidence {list,add}`; `delivery {show,submit,verify,accept,reject,revise,export}`; `context {show,set}`; `checkpoint {list,create,fork}`; `job {list,create,cancel,assignment {list,current,claim,assign,release,reassign}}`; `organization {list,create,show,command}`; `policy {list,create,evaluate}`; `events`; `conflicts`; `drivers`; `plugins` |
 | Compatibility | `hire`; `task`; `fire`; `wake`; `shipped` |
-| Legacy | `join`; `card {create,update,move}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step` |
-| Infrastructure | `serve`; `stop`; `restart`; `token`; `password {status,reset}`; `remote`; `hook`; `init`; `install`; `uninstall`; `integrations`; `remember`; `handoff` |
+| Legacy | `join`; `card {create,update,move,rank}`; `ask`; `reply`; `notify`; `note`; `announce`; `swarm`; `pulse`; `snapshot`; `idea`; `idea-done`; `ideas`; `milestone`; `step`; `mail`; `team {propose,list,design,hire-member,assign,update}`; `breakdown`; `funnel`; `next` |
+| Infrastructure | `serve`; `stop`; `restart`; `token`; `password {status,reset}`; `remote`; `hook`; `init`; `install`; `uninstall`; `integrations`; `remember`; `handoff`; `demo`; `deploy`; `project {add}`; `ops {backup,check-credential,configure-retention,credential-store,diagnostics,protect-credential,restore,retire-backups,revoke-credential,rotate-credential,verify-backup}`; `hub` |
 
 Root command names and every child command are listed individually in
 `agent-os-surface-inventory.json`; the test expands the dynamic Agent Home session-action loop so
