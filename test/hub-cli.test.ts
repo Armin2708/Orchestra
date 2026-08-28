@@ -15,6 +15,8 @@ vi.mock('../src/hub/env.js', () => ({
     webOrigin: 'https://app.example.com',
     clerkSecretKey: 'sk_test_from_hubenv',
     clerkWebhookSigningSecret: 'whsec_test_from_hubenv',
+    stripeSecretKey: 'sk_stripe_test_from_hubenv',
+    stripeWebhookSecret: 'whsec_stripe_test_from_hubenv',
   })),
 }))
 vi.mock('../src/hub/pg.js', () => ({
@@ -62,7 +64,7 @@ describe('orchestra hub command', () => {
 })
 
 describe('orchestra hub command: default start path (no injected startHub)', () => {
-  it('threads webOrigin, clerkSecretKey, and clerkWebhookSigningSecret from hubEnv() into buildHubServer', async () => {
+  it('threads webOrigin, Clerk, and Stripe config from hubEnv() into buildHubServer', async () => {
     const { buildHubServer } = await import('../src/hub/server.js')
 
     const program = new Command()
@@ -81,6 +83,8 @@ describe('orchestra hub command: default start path (no injected startHub)', () 
         webOrigin: 'https://app.example.com',
         clerkSecretKey: 'sk_test_from_hubenv',
         clerkWebhookSigningSecret: 'whsec_test_from_hubenv',
+        stripeSecretKey: 'sk_stripe_test_from_hubenv',
+        stripeWebhookSecret: 'whsec_stripe_test_from_hubenv',
       },
     )
   })

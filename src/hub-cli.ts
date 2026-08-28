@@ -58,11 +58,14 @@ async function defaultStartHub(opts: { port: number; databaseUrl: string }): Pro
   if (applied.length > 0) console.log(`applied hub migrations: ${applied.join(', ')}`)
   // Never log the key itself — only whether one is configured.
   console.log(`clerk auth: ${env.clerkSecretKey ? 'enabled' : 'disabled'}`)
+  console.log(`stripe billing: ${env.stripeSecretKey ? 'enabled' : 'disabled'}`)
 
   const server = buildHubServer(sql, {
     webOrigin: env.webOrigin,
     clerkSecretKey: env.clerkSecretKey,
     clerkWebhookSigningSecret: env.clerkWebhookSigningSecret,
+    stripeSecretKey: env.stripeSecretKey,
+    stripeWebhookSecret: env.stripeWebhookSecret,
   })
   await server.listen({ host: '0.0.0.0', port: opts.port })
 }
