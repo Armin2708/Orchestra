@@ -98,6 +98,25 @@ describe('web/src/hubApi', () => {
       await expect(hubFetch('GET', '/orgs/org_a/cards')).rejects.toMatchObject({ status: 403 })
     })
 
+    it('extracts the .error field from a hub error body, rather than surfacing raw JSON', async () => {
+      const body = JSON.stringify({ error: 'seat cap reached: this org is entitled to 3 seat(s)', code: 'forbidden' })
+      const fetchSpy = vi.fn(async () => new Response(body, { status: 403 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(hubFetch('POST', '/orgs/org_a/devices')).rejects.toMatchObject({
+        status: 403, message: 'seat cap reached: this org is entitled to 3 seat(s)',
+      })
+    })
+
+    it('falls back to the raw response text when the error body is not the expected {error} shape', async () => {
+      const fetchSpy = vi.fn(async () => new Response('<html>502 Bad Gateway</html>', { status: 502 }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(hubFetch('GET', '/orgs/org_a/cards')).rejects.toMatchObject({
+        status: 502, message: '<html>502 Bad Gateway</html>',
+      })
+    })
+
     it('throws HubApiError without calling fetch when there is no Clerk session (getToken resolves null)', async () => {
       mockedGetToken.mockResolvedValue(null as any)
       const fetchSpy = vi.fn()

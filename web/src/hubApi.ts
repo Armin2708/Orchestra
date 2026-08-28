@@ -81,6 +81,127 @@ export async function hubFetch(method: string, path: string, body?: unknown): Pr
     redirect: 'error',
     referrerPolicy: 'no-referrer',
   })
-  if (!res.ok) throw new HubApiError(res.status, await res.text())
+  if (!res.ok) throw new HubApiError(res.status, await hubErrorMessage(res))
   return res.json()
+}
+
+/**
+ * Every hub error body is `{ error, code }` (see `HubError`/`setErrorHandler` in
+ * src/hub/server.ts) — extracts `.error` so `HubApiError.message` is the actual
+ * human-readable refusal (e.g. `assertSeatAvailable`'s over-cap text) rather than
+ * the raw `{"error":"…","code":"forbidden"}` JSON a UI would otherwise render
+ * verbatim. Falls back to the raw response text for a body that isn't JSON
+ * shaped like that (a proxy error page, an empty body, …) so no failure mode
+ * loses information — it just stays unparsed instead of showing "undefined".
+ */
+async function hubErrorMessage(res: Response): Promise<string> {
+  const text = await res.text()
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown }
+    if (typeof parsed.error === 'string' && parsed.error) return parsed.error
+  } catch { /* not JSON — fall through to the raw text */ }
+  return text
+}
+
+// ---------------------------------------------------------------------------
+// Task 7: typed wrappers around hubFetch for the web UI's org board, billing
+// page, and device-token mint flow. Field names here deliberately mirror
+// src/hub/types.ts (HubCard, HubAgent) verbatim — the web package builds
+// separately from the hub server and cannot import its types directly, so
+// these are a hand-kept structural copy, not a shared source of truth.
+// ---------------------------------------------------------------------------
+
+export type HubCardColumn = 'backlog' | 'in_progress' | 'blocked' | 'review' | 'done'
+
+export interface HubCard {
+  id: string
+  org_id: string
+  board_id: string
+  number: number
+  title: string
+  description: string
+  column: HubCardColumn
+  owner_agent: string | null
+  paths: string[]
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export type HubAgentState = 'working' | 'idle' | 'waiting' | 'offline'
+
+export interface HubAgent {
+  id: string
+  org_id: string
+  board_id: string
+  device_id: string | null
+  name: string
+  state: HubAgentState
+  current_card_id: string | null
+  activity: string | null
+  last_heartbeat_at: string | null
+}
+
+export interface HubEntitlements {
+  tier: 'cloud' | 'business' | 'none'
+  status: string
+  sso: boolean
+  seats: { used: number; entitled: number; overCap: boolean }
+  agents: { used: number; entitled: number; overCap: boolean }
+}
+
+export interface HubDevice {
+  id: string
+  org_id: string
+  membership_id: string | null
+  name: string
+  last_seen_at: string | null
+  revoked_at: string | null
+}
+
+/**
+ * The one call a freshly signed-in browser makes before any other org-scoped
+ * request: maps the Clerk org the user has selected onto this hub's own
+ * `orgs.id` (a random `org_<uuid>` — see `GET /api/v1/hub/me` in
+ * src/hub/server.ts for why nothing else can derive it). Throws
+ * `HubApiError(403, …)` when the signed-in user has no active org selected
+ * yet — callers should treat that as "prompt org selection/creation", not as
+ * a fatal error.
+ */
+export async function resolveHubIdentity(): Promise<{ userId: string; orgId: string }> {
+  const body = await hubFetch('GET', '/me') as { user_id: string; org_id: string }
+  return { userId: body.user_id, orgId: body.org_id }
+}
+
+export async function listHubCards(orgId: string): Promise<HubCard[]> {
+  const body = await hubFetch('GET', `/orgs/${orgId}/cards`) as { cards: HubCard[] }
+  return body.cards
+}
+
+export async function listHubAgents(orgId: string): Promise<HubAgent[]> {
+  const body = await hubFetch('GET', `/orgs/${orgId}/agents`) as { agents: HubAgent[] }
+  return body.agents
+}
+
+export async function getHubEntitlements(orgId: string): Promise<HubEntitlements> {
+  return await hubFetch('GET', `/orgs/${orgId}/entitlements`) as HubEntitlements
+}
+
+export async function createHubCheckout(
+  orgId: string, lookupKey: string, quantity?: number,
+): Promise<{ url: string }> {
+  return await hubFetch('POST', `/orgs/${orgId}/billing/checkout`, {
+    lookup_key: lookupKey, quantity,
+  }) as { url: string }
+}
+
+export async function createHubPortal(orgId: string): Promise<{ url: string }> {
+  return await hubFetch('POST', `/orgs/${orgId}/billing/portal`) as { url: string }
+}
+
+/** Mints a device token for the signed-in member — returns the plaintext exactly
+ * once (see POST /orgs/:orgId/devices in src/hub/server.ts). Callers must show
+ * it to the user immediately and never re-fetch it: only its hash is stored. */
+export async function mintHubDeviceToken(orgId: string, name: string): Promise<{ device: HubDevice; token: string }> {
+  return await hubFetch('POST', `/orgs/${orgId}/devices`, { name }) as { device: HubDevice; token: string }
 }
