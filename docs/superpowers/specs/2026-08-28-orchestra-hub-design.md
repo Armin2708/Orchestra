@@ -3,6 +3,7 @@
 **Date:** 2026-08-28
 **Status:** Draft — awaiting operator approval
 **Approach:** "A" — hub mode inside this repo; local daemons sync to a hosted, multi-tenant, Postgres-backed hub. Local product stays free (FSL-1.1-ALv2); hosted orgs are paid.
+**Stack (operator-chosen):** Stripe (billing), Supabase (Postgres), Clerk (human auth + org membership).
 
 ## 1. Problem & Goals
 
@@ -40,7 +41,7 @@ Member A machine                Hosted hub (Fly/Railway)          Member B machi
                                  Stripe (Checkout + webhooks)
 ```
 
-- **Hub server** — new entrypoint (`orchestra hub`) in this repo. Reuses the existing Fastify server core and shared TypeScript event/entity types; storage is Postgres instead of the local sidecar. Multi-tenant: every row and every event is org-scoped.
+- **Hub server** — new entrypoint (`orchestra hub`) in this repo. Reuses the existing Fastify server core and shared TypeScript event/entity types; storage is **Supabase Postgres** (used as plain Postgres: our own migrations and SQL — no Supabase client SDK, RLS, or Realtime; the hub's own seq-based event stream is the realtime layer). Multi-tenant: every row and every event is org-scoped.
 - **Daemon sync client** — new module in the local daemon. Agents, hooks, and the CLI keep talking to `localhost` exactly as today; the daemon relays org-scoped writes to the hub and applies the hub's event stream into its local view.
 - **Web UI** — the existing React board app pointed at the hub API, plus sign-up/login, org switcher, invite management, and billing screens.
 - **Source of truth** — the hub owns all shared state (orgs, members, boards, cards, claims, mail, presence). Local daemons own their agents' processes, worktrees, and anything not org-shared. Code truth stays in git.
@@ -49,13 +50,14 @@ Member A machine                Hosted hub (Fly/Railway)          Member B machi
 
 All shared tables carry `org_id`; every query is org-scoped by middleware, never by convention.
 
+Identity and membership are **owned by Clerk** (users, organizations, memberships, invitations). Postgres keeps thin mirror rows — synced by Clerk webhooks — so the rest of the schema has real foreign keys and org-scoped queries never call Clerk on the hot path.
+
 | Table | Purpose / key columns |
 |-------|----------------------|
-| `users` | email (unique), argon2 password hash, created_at |
-| `orgs` | name, slug, owner user_id, seat_cap, status (`active` / `suspended`) |
-| `memberships` | user_id + org_id, role (`owner` / `admin` / `member`) |
+| `users` | mirror: clerk_user_id (unique), email, display name |
+| `orgs` | mirror + hub-owned fields: clerk_org_id (unique), name, slug, seat_cap, status (`active` / `suspended`) |
+| `memberships` | mirror: user_id + org_id, role (`owner` / `admin` / `member`) |
 | `subscriptions` | org_id, stripe_customer_id, stripe_subscription_id, status, current_period_end |
-| `invites` | org_id, token (single-use), role, expires_at, created_by |
 | `devices` | org_id + membership_id, token hash, name (hostname), last_seen_at, revoked_at |
 | `projects` | org_id, name, repo identity (remote URL fingerprint) — maps members' local checkouts of the same repo to one board |
 | `boards` | org_id + project_id |
@@ -69,11 +71,11 @@ Entity shapes mirror the local sidecar so daemon↔hub translation is mostly 1:1
 
 ## 4. Auth & Billing
 
-**Humans (web UI):** email + password (argon2id), server-side session cookie (`HttpOnly`, `Secure`, `SameSite=Lax`). No OAuth in v1.
+**Humans (web UI):** **Clerk** — hosted sign-in/sign-up components in the web app; the hub verifies Clerk session JWTs in middleware. Org creation, membership, roles, and invitations use **Clerk Organizations**; Clerk webhooks (`user.*`, `organization.*`, `organizationMembership.*`) keep the Postgres mirror tables current. Seat cap enforced by the hub when a membership webhook lands (over cap ⇒ membership rejected/flagged).
 
-**Daemons:** `orchestra org join <invite-url>` opens a short browser auth (or accepts a pasted invite token), then the hub mints a **device token** (long-lived, hashed at rest, scoped to one org + membership). The daemon stores it under `ORCHESTRA_HOME`, sends it as a bearer token on WS connect and REST calls. Members can list and revoke their devices; org admins can revoke any device.
+**Daemons:** `orchestra org join` prints a hub URL; the member authenticates there via Clerk, picks the org, and the hub mints a **device token** (hub-owned, long-lived, hashed at rest, scoped to one org + membership; a paste-token fallback for headless machines). The daemon stores it under `ORCHESTRA_HOME` and sends it as a bearer token on WS connect and REST calls — daemons never talk to Clerk. Members can list and revoke their devices; org admins can revoke any device.
 
-**Authorization:** membership role checks on org admin actions (invite, revoke, delete board, billing). All agent-level actions (cards, mail, presence) require any active membership + non-revoked device.
+**Authorization:** role checks (from mirrored memberships) on org admin actions; all agent-level actions (cards, mail, presence) require an active membership + non-revoked device. If a member is removed in Clerk, the webhook revokes their devices.
 
 **Billing:** creating an org requires completing Stripe Checkout (flat per-org monthly plan, seat cap enforced at invite acceptance). Stripe webhooks (`checkout.session.completed`, `customer.subscription.updated/deleted`) update `subscriptions.status`. Lapsed subscription ⇒ org `suspended`: reads still work (nobody's data is hostage), all writes are rejected with a clear error until payment resumes. Webhook handler is idempotent and signature-verified.
 
@@ -99,14 +101,14 @@ Each daemon heartbeats every ~15s per live agent: `{agent, state, card, activity
 
 ## 7. Web UI
 
-The existing React app gains a **hub mode**: sign-up/login, org switcher, invite management, billing page (Stripe-hosted portal link), and the org board. The org board is the existing board UI with per-agent additions: owner badge (which member), presence dot, activity line. Realtime via the same org event stream (WS) the daemons use. Board, Kanban, and mail views reuse existing components.
+The existing React app gains a **hub mode**: Clerk sign-in/sign-up and org-switcher/invite components (Clerk's prebuilt React components), a billing page (Stripe-hosted portal link), and the org board. The org board is the existing board UI with per-agent additions: owner badge (which member), presence dot, activity line. Realtime via the same org event stream (WS) the daemons use. Board, Kanban, and mail views reuse existing components.
 
 ## 8. Deployment & Ops (v1)
 
-- One hub deploy on Fly.io or Railway + managed Postgres. TLS terminated by the platform.
-- Config via env: `DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SESSION_SECRET`, `HUB_BASE_URL`.
+- One hub deploy on Fly.io or Railway; DB is **Supabase Postgres** (connect via Supabase's session pooler — the hub is a long-lived server). TLS terminated by the platform.
+- Config via env: `DATABASE_URL` (Supabase), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SECRET`, `HUB_BASE_URL`.
 - Migrations: plain SQL migration files run at boot (same pattern as the local sidecar's numbered migrations).
-- Backups: managed-Postgres daily snapshots. No multi-region, no HA in v1 — brief hub downtime degrades to the daemon offline mode above.
+- Backups: Supabase daily snapshots. No multi-region, no HA in v1 — brief hub downtime degrades to the daemon offline mode above.
 
 ## 9. Security Notes
 
@@ -123,7 +125,7 @@ Hermetic, no live network:
 
 - **Sync core:** two simulated daemons against a real throwaway Postgres (dockerized or `pglite`): concurrent `card.claim` ⇒ exactly one winner, loser gets 409 + current state; disconnect/reconnect resumes from `seq` with no gaps or duplicates; idempotency-key replay applies once.
 - **Billing gate:** mocked Stripe webhooks drive `subscriptions.status`; suspended org rejects writes, allows reads.
-- **Auth:** invite lifecycle (single-use, expiry, seat cap), device revocation kills the WS and rejects the token.
+- **Auth:** Clerk mocked at the middleware boundary (stub JWT verifier) and via synthetic webhook payloads driving the mirror tables; membership-removal webhook revokes devices; seat cap; device revocation kills the WS and rejects the token.
 - **Presence:** heartbeat TTL flips state to offline.
 - Existing local-mode test suite must stay green untouched — hub mode is additive.
 
@@ -131,7 +133,7 @@ Hermetic, no live network:
 
 1. Shared types + `org_events`/seq sync core (hub side, in-memory clients in tests).
 2. Postgres schema + migrations + org-scoped Fastify hub entrypoint.
-3. Auth: users/sessions/invites/devices.
+3. Auth: Clerk integration (JWT middleware + webhook mirror) + hub device tokens.
 4. Daemon sync client (join, WS, op queue, 409 surfacing) + cross-machine mail.
 5. Presence heartbeats.
 6. Web UI hub mode (login, org switcher, org board).
