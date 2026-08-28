@@ -31,6 +31,7 @@ import { PhoneRemoteDock } from './PhoneRemoteDock'
 import { PairingRequired, RemoteDeviceShell } from './RemoteDeviceShell'
 import type { BrowserAuthorityMode } from './deviceAuth'
 import { createSingleFlightRefresh } from './singleFlightRefresh'
+import { ClerkAuthControls } from './ClerkAuthControls'
 import {
   beginLocalOwnerAuthentication,
   beginLocalOwnerRetry,
@@ -429,6 +430,7 @@ function LocalOwnerApp() {
             <NeedsYou boards={shown.map((snapshot) => snapshot.board)} readOnly={connectionState !== 'live'}
               onOpen={(item) => { pick(item.board_id); pickBoardTab('workspace') }} />
             <PushBell />
+            <ClerkAuthControls />
           </nav>
         </div>
       </header>
