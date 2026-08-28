@@ -137,6 +137,7 @@ describe('remote browser authority boundary', () => {
     expect(shell).not.toContain('Paste token')
     expect(shell).not.toContain('setToken')
     expect(shell).toContain('passwordDeviceLogin')
+    expect(shell).toContain('<OrchestraMark className="remote-brand-mark" label="Orchestra" />')
   })
 
   it('uses a class-only dedicated shell and only classified remote data routes', () => {
@@ -164,6 +165,7 @@ describe('remote browser authority boundary', () => {
     expect(shell).toContain("operation: 'agent.stop'")
     expect(shell).toContain("operation: 'terminal.input'")
     expect(shell).toContain("const operation = 'approval.allow'")
+    expect(shell).toContain('<OrchestraMark className="remote-brand-mark" />')
     expect(shell).not.toContain('SettingsView')
     expect(center).toContain('remoteShell ? Promise.resolve(null)')
     expect(center).toContain("remoteShell && !access.hasScope('admin')")

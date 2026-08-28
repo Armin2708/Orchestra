@@ -1,7 +1,16 @@
 // Orchestra service worker — installable shell with authenticated data kept network-only.
 importScripts('/sw-push.js') // push + notificationclick handlers (card #20)
-const SHELL_CACHE = 'orchestra-shell-v3'
-const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png']
+const SHELL_CACHE = 'orchestra-shell-v4'
+const SHELL = [
+  '/',
+  '/manifest.webmanifest',
+  '/icons/icon-32.png',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/icons/orchestra-icon.svg',
+  '/icons/orchestra-mark.svg',
+]
 const isApiCache = (key) => key.startsWith('orchestra-api-')
 
 self.addEventListener('install', (e) => {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from './api'
+import { OrchestraMark } from './BrandMark'
 import {
   hasPendingDeviceAuthorityRecovery,
   passwordDeviceLogin,
@@ -96,6 +97,7 @@ export function PairingRequired({ error, onSignedIn }: { error?: string | null; 
   return (
     <main className="remote-pairing-required" aria-labelledby="pairing-required-title">
       <section className="remote-pairing-card">
+        <OrchestraMark className="remote-brand-mark" label="Orchestra" />
         <p className="settings-kicker">Remote device</p>
         <h1 id="pairing-required-title">Sign in</h1>
         <p>{error || 'This browser has no active DeviceSession yet.'}</p>
@@ -410,10 +412,13 @@ function RemoteDeviceShellContent() {
     <main className="remote-device-shell">
       <OfflineStateBanner />
       <header className="remote-shell-header">
-        <div>
-          <p className="settings-kicker">Paired remote shell</p>
-          <h1>Orchestra monitor</h1>
-          <p>Classified board summaries, no-tool messages, named-device controls, and device-bound push only.</p>
+        <div className="remote-shell-brand">
+          <OrchestraMark className="remote-brand-mark" />
+          <div>
+            <p className="settings-kicker">Paired remote shell</p>
+            <h1>Orchestra monitor</h1>
+            <p>Classified board summaries, no-tool messages, named-device controls, and device-bound push only.</p>
+          </div>
         </div>
         <div className="remote-shell-device">
           <strong>{access.session?.name ?? 'Verifying device…'}</strong>

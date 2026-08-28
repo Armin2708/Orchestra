@@ -93,6 +93,22 @@ const loadWorker = (options: {
 }
 
 describe('installable PWA', () => {
+  it('keeps generated web icons identical to the approved identity masters', () => {
+    const identity = path.resolve('brand/identity')
+    const icons = path.join(web, 'public/icons')
+    for (const [master, shipped] of [
+      ['orchestra-app-icon-32.png', 'icon-32.png'],
+      ['orchestra-app-icon-192.png', 'icon-192.png'],
+      ['orchestra-app-icon-512.png', 'icon-512.png'],
+      ['orchestra-app-icon-512.png', 'icon-maskable-512.png'],
+      ['orchestra-app-icon.svg', 'orchestra-icon.svg'],
+      ['orchestra-mark.svg', 'orchestra-mark.svg'],
+    ]) {
+      expect(fs.readFileSync(path.join(icons, shipped)))
+        .toEqual(fs.readFileSync(path.join(identity, master)))
+    }
+  })
+
   it('ships a valid manifest and every declared icon', () => {
     const manifest = JSON.parse(read('public/manifest.webmanifest'))
     expect(manifest.name).toContain('Orchestra')
@@ -173,16 +189,16 @@ describe('installable PWA', () => {
 
   it('deletes legacy API caches during activation and device-data purge', async () => {
     const activation = loadWorker({
-      cacheNames: ['orchestra-shell-v3', 'orchestra-shell-v2', 'orchestra-api-v1'],
+      cacheNames: ['orchestra-shell-v4', 'orchestra-shell-v3', 'orchestra-api-v1'],
     })
     await activation.dispatchWaitable('activate')
-    expect(activation.deletedCaches).toEqual(['orchestra-shell-v2', 'orchestra-api-v1'])
+    expect(activation.deletedCaches).toEqual(['orchestra-shell-v3', 'orchestra-api-v1'])
 
     const purge = loadWorker({
-      cacheNames: ['orchestra-shell-v3', 'orchestra-api-v1', 'unrelated-cache'],
+      cacheNames: ['orchestra-shell-v4', 'orchestra-api-v1', 'unrelated-cache'],
     })
     await purge.dispatchWaitable('message', { type: 'PURGE_DEVICE_DATA' })
-    expect(purge.deletedCaches).toEqual(['orchestra-shell-v3', 'orchestra-api-v1'])
+    expect(purge.deletedCaches).toEqual(['orchestra-shell-v4', 'orchestra-api-v1'])
   })
 
   it('ships phone install metadata without a native-app credential handoff', () => {

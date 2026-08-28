@@ -31,6 +31,7 @@ describe('local-owner first connection', () => {
     expect(markup).toContain('aria-busy="true"')
     expect(markup).toContain('role="status"')
     expect(markup).toContain('aria-live="polite"')
+    expect(markup).toContain('/icons/orchestra-mark.svg')
     expect(markup).toContain('Connecting to Orchestra')
     expect(markup).toContain('Loading authenticated project data')
     for (const heavySurface of [
@@ -49,6 +50,7 @@ describe('local-owner first connection', () => {
     const markup = renderToStaticMarkup(createElement(LocalOwnerInitialOffline, { onRetry: () => undefined }))
     expect(markup).toContain('role="alert"')
     expect(markup).not.toContain('aria-busy="true"')
+    expect(markup).toContain('/icons/orchestra-mark.svg')
     expect(markup).toContain('Orchestra is unavailable')
     expect(markup).toContain('keep retrying automatically')
     expect(markup).toContain('Retry now')

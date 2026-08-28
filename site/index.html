@@ -8,9 +8,18 @@
 <meta name="theme-color" content="#0a0c11">
 <meta property="og:title" content="Orchestra — run a team of coding agents that coordinate">
 <meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you conduct.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/orchestra-social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Orchestra — you conduct, agents play">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" sizes="any" href="assets/orchestra-icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/orchestra-icon-32.png">
+<link rel="apple-touch-icon" sizes="192x192" href="assets/orchestra-icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Silkscreen&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0a0c11;
@@ -38,7 +47,8 @@
   nav { position: relative; z-index: 20; border-bottom: 1px solid var(--line); background: rgba(10,12,17,.7); backdrop-filter: blur(10px); }
   .nav-inner { display: flex; align-items: center; height: 60px; gap: 26px; }
   .glyph { display: flex; align-items: center; gap: 11px; text-decoration: none; }
-  .glyph .gm { font-family: Silkscreen, monospace; font-size: 13px; letter-spacing: .18em; color: var(--ink); }
+  .glyph img { width: 34px; height: auto; }
+  .glyph .gm { font-size: 17px; font-weight: 600; letter-spacing: -.035em; color: var(--ink); }
   .nav-links { margin-left: auto; display: flex; align-items: center; gap: 26px; }
   .nav-links a { color: var(--muted); font-size: 14px; font-weight: 500; text-decoration: none; }
   .nav-links a:hover { color: var(--ink); }
@@ -73,11 +83,7 @@
   @media (max-width: 1000px) { .lottie-net { display: none; } }
 
   .hero-inner { position: relative; z-index: 2; max-width: 1180px; margin: 0 auto; padding: 108px 28px 0; text-align: center; }
-  .hero-mark {
-    font-family: Silkscreen, monospace; font-size: clamp(20px, 2.4vw, 27px); line-height: 1;
-    letter-spacing: .3em; padding-left: .3em;
-    color: var(--accent);
-  }
+  .hero-mark { display: block; width: clamp(112px, 13vw, 148px); height: auto; margin: 0 auto; }
   .hero h1 {
     font-size: clamp(32px, 4.6vw, 54px); line-height: 1.1; font-weight: 700;
     letter-spacing: -0.025em; margin: 24px auto 20px; max-width: 20ch;
@@ -213,10 +219,7 @@
   /* final CTA */
   .final { position: relative; overflow: hidden; text-align: center; padding: 130px 28px; border-top: 1px solid var(--line); }
   .final-inner { position: relative; z-index: 2; }
-  .final-mark {
-    font-family: Silkscreen, monospace; font-size: 12px; letter-spacing: .34em; padding-left: .34em;
-    color: var(--accent); display: inline-block;
-  }
+  .final-mark { display: block; width: 106px; height: auto; margin: 0 auto; }
   .final h2 { font-size: clamp(28px, 3.6vw, 40px); margin-top: 18px; letter-spacing: -0.02em; }
   .cmd {
     display: inline-flex; align-items: center; gap: 16px; margin-top: 34px;
@@ -238,8 +241,10 @@
   .foot-grid h4 { font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 500; margin-bottom: 14px; }
   .foot-grid a { display: block; color: var(--muted); text-decoration: none; margin-bottom: 10px; }
   .foot-grid a:hover { color: var(--ink); }
-  .foot-brand { font-family: Silkscreen, monospace; font-size: 13px; letter-spacing: .14em; }
-  .foot-brand small { display: block; font-family: Geist, sans-serif; color: var(--faint); margin-top: 10px; font-size: 12.5px; letter-spacing: 0; }
+  .foot-brand { display: inline-grid; gap: 10px; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: -.025em; }
+  .foot-brand span { display: flex; align-items: center; gap: 10px; }
+  .foot-brand img { width: 38px; height: auto; }
+  .foot-brand small { display: block; font-family: Geist, sans-serif; color: var(--faint); font-size: 12.5px; font-weight: 400; letter-spacing: 0; }
 
   /* reveal */
   html.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
@@ -278,14 +283,8 @@
 <nav>
   <div class="wrap nav-inner">
     <a class="glyph" href="/" aria-label="Orchestra home">
-      <svg width="22" height="22" viewBox="0 0 13 13" shape-rendering="crispEdges" aria-hidden="true">
-        <g fill="#45e07f">
-          <rect x="3" y="1" width="7" height="2"/><rect x="1" y="3" width="2" height="7"/>
-          <rect x="10" y="3" width="2" height="7"/><rect x="3" y="10" width="7" height="2"/>
-          <rect x="5" y="5" width="3" height="3"/>
-        </g>
-      </svg>
-      <span class="gm">ORCHESTRA</span>
+      <img src="assets/orchestra-mark-reversed.svg" alt="" width="34" height="21" aria-hidden="true">
+      <span class="gm">orchestra</span>
     </a>
     <div class="nav-links">
       <a href="#changelog">Changelog</a>
@@ -305,7 +304,7 @@
   <div class="lottie-net net-r" id="lottie-right" aria-hidden="true"></div>
 
   <div class="hero-inner">
-    <div class="hero-mark" aria-hidden="true">ORCHESTRA</div>
+    <img class="hero-mark" src="assets/orchestra-mark-reversed.svg" alt="Orchestra" width="148" height="93">
     <h1>Run a team of coding agents that coordinate.</h1>
     <p class="lede">A live board where Claude Code and Codex agents work together — mail, memory,
     and review gates — across every terminal you open. You conduct; they play.</p>
@@ -479,7 +478,7 @@
   <canvas class="digits" id="digits-final" aria-hidden="true"></canvas>
   <div class="noise" aria-hidden="true"></div>
   <div class="final-inner">
-    <p class="final-mark">ORCHESTRA</p>
+    <img class="final-mark" src="assets/orchestra-mark-reversed.svg" alt="" width="106" height="66" aria-hidden="true">
     <h2>Be the orchestra.</h2>
     <div class="cmd">
       <span><span class="p">$</span> npm i -g orchestra-board &amp;&amp; orchestra init</span>
@@ -492,7 +491,7 @@
 <footer>
   <div class="foot-grid">
     <div>
-      <span class="foot-brand">ORCHESTRA<small>You conduct, agents play.<br>© 2026</small></span>
+      <span class="foot-brand"><span><img src="assets/orchestra-mark-reversed.svg" alt="" width="38" height="24" aria-hidden="true">orchestra</span><small>You conduct, agents play.<br>© 2026</small></span>
     </div>
     <div>
       <h4>Product</h4>

@@ -12,6 +12,7 @@ import {
   Telemetry,
 } from './api'
 import { BoardSection } from './BoardSection'
+import { OrchestraMark } from './BrandMark'
 import { ConfirmDialog } from './ConfirmDialog'
 import {
   BoardTab, normalizeProjectFocus, PrimaryView, resolveLocationNavigation, resolveProjectFocus,
@@ -42,14 +43,6 @@ import './messages.css'
 import './agentOs.css'
 
 const SettingsView = React.lazy(() => import('./SettingsView').then((module) => ({ default: module.SettingsView })))
-export const Mark = () => (
-  <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
-    <rect width="32" height="32" rx="8" fill="#111"/>
-    <rect x="7" y="9" width="5" height="14" rx="1.5" fill="#F7F6F3"/>
-    <rect x="14" y="9" width="5" height="9" rx="1.5" fill="#F7F6F3"/>
-    <rect x="21" y="9" width="5" height="11" rx="1.5" fill="#F7F6F3"/>
-  </svg>
-)
 
 export function App({ authorityMode = 'local-owner', onAuthorityChanged }: {
   authorityMode?: BrowserAuthorityMode
@@ -355,7 +348,7 @@ function LocalOwnerApp() {
       <DaemonDownOverlay />
       <header className="topbar">
         <div className="brand">
-          <Mark />
+          <OrchestraMark />
           <div className="brand-picker">
             <button className="brand-btn" onClick={() => setMenuOpen((o) => !o)}>
               <span className="brand-title">{focus === 'all' ? 'All projects' : shown[0]?.board.name ?? 'Project unavailable'}</span>
@@ -526,7 +519,7 @@ function Login({ onSubmit }: { onSubmit: (session: string) => void }) {
   return (
     <div className="empty-hero">
       <div className="empty-card">
-        <Mark />
+        <OrchestraMark />
         <p className="login-kicker">Local dashboard</p>
         <h1>{mode === 'loading' ? 'Preparing sign-in' : setup ? 'Create your password' : 'Welcome back'}</h1>
         <p>{setup
@@ -562,7 +555,7 @@ function GettingStarted({ onSettings }: { onSettings: () => void }) {
   return (
     <div className="empty-hero">
       <div className="empty-card">
-        <Mark />
+        <OrchestraMark />
         <h1>No projects yet</h1>
         <p>A project appears the moment an agent joins it. Open a Claude Code session in any repo and it joins on its own:</p>
         <pre>cd your-project{'\n'}claude</pre>

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="brand/identity/orchestra-mark.svg" alt="Orchestra" width="160">
+</p>
+
 # Orchestra
 
 **A live kanban board your Claude Code and Codex agents share.** Run multiple coding-agent sessions on the same project and they coordinate through a board: each agent registers, posts a card saying what it's working on (and which paths it's touching), gets warned when scopes overlap, and can ask its neighbors questions — answers arrive automatically mid-work. You watch and steer everything from a live web kanban.

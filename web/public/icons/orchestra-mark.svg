@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 320" role="img" aria-labelledby="title desc">
+  <title id="title">Orchestra</title>
+  <desc id="desc">Twenty-one angular seats in three semicircular rows facing a centered conductor podium.</desc>
+  <defs>
+    <path id="seat" d="M-12-18H12L8 18H-8Z"/>
+  </defs>
+  <g transform="translate(256 170)">
+    <g fill="#A1A19B">
+      <use href="#seat" transform="translate(-188 34) rotate(-72) scale(1.05)"/>
+      <use href="#seat" transform="translate(-156 -22) rotate(-57) scale(1.05)"/>
+      <use href="#seat" transform="translate(-111 -67) rotate(-41) scale(1.05)"/>
+      <use href="#seat" transform="translate(-57 -95) rotate(-21) scale(1.05)"/>
+      <use href="#seat" transform="translate(0 -105) scale(1.05)"/>
+      <use href="#seat" transform="translate(57 -95) rotate(21) scale(1.05)"/>
+      <use href="#seat" transform="translate(111 -67) rotate(41) scale(1.05)"/>
+      <use href="#seat" transform="translate(156 -22) rotate(57) scale(1.05)"/>
+      <use href="#seat" transform="translate(188 34) rotate(72) scale(1.05)"/>
+    </g>
+    <g fill="#62625D">
+      <use href="#seat" transform="translate(-142 48) rotate(-65) scale(.96)"/>
+      <use href="#seat" transform="translate(-99 -2) rotate(-49) scale(.96)"/>
+      <use href="#seat" transform="translate(-51 -35) rotate(-27) scale(.96)"/>
+      <use href="#seat" transform="translate(0 -46) scale(.96)"/>
+      <use href="#seat" transform="translate(51 -35) rotate(27) scale(.96)"/>
+      <use href="#seat" transform="translate(99 -2) rotate(49) scale(.96)"/>
+      <use href="#seat" transform="translate(142 48) rotate(65) scale(.96)"/>
+    </g>
+    <g fill="#111111">
+      <use href="#seat" transform="translate(-91 61) rotate(-56) scale(.88)"/>
+      <use href="#seat" transform="translate(-47 32) rotate(-33) scale(.88)"/>
+      <use href="#seat" transform="translate(0 22) scale(.88)"/>
+      <use href="#seat" transform="translate(47 32) rotate(33) scale(.88)"/>
+      <use href="#seat" transform="translate(91 61) rotate(56) scale(.88)"/>
+      <path d="M-38 102H38V116H-38Z"/>
+    </g>
+  </g>
+</svg>

@@ -1,4 +1,5 @@
 import React from 'react'
+import { OrchestraMark } from './BrandMark'
 
 export type LocalOwnerConnectionState = 'live' | 'stale' | 'offline'
 export type LocalOwnerSurface = 'login' | 'connecting' | 'initial-offline' | 'application'
@@ -47,6 +48,7 @@ export function LocalOwnerConnecting() {
   return (
     <main className="empty-hero" aria-busy="true">
       <section className="empty-card" role="status" aria-live="polite" aria-atomic="true">
+        <OrchestraMark />
         <h1>Connecting to Orchestra</h1>
         <p>Loading authenticated project data…</p>
         <p className="hint">The command center will open when its first verified snapshot is ready.</p>
@@ -59,6 +61,7 @@ export function LocalOwnerInitialOffline({ onRetry }: { onRetry: () => void }) {
   return (
     <main className="empty-hero">
       <section className="empty-card" role="alert" aria-live="assertive" aria-atomic="true">
+        <OrchestraMark />
         <h1>Orchestra is unavailable</h1>
         <p>Authenticated project data could not be loaded. Orchestra will keep retrying automatically.</p>
         <button className="login-btn" type="button" onClick={onRetry}>Retry now</button>

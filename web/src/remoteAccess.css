@@ -136,6 +136,8 @@
 }
 .remote-pairing-required { display: grid; place-items: center; }
 .remote-pairing-card { width: min(540px, 100%); border: 1px solid #d9d4cb; border-radius: 16px; background: #fbfaf7; padding: 30px; }
+.remote-brand-mark { display: block; width: 84px; height: auto; }
+.remote-pairing-card > .remote-brand-mark { margin-bottom: 18px; }
 .remote-pairing-card h1 { margin-top: 5px; font-size: clamp(28px, 7vw, 42px); letter-spacing: -.045em; }
 .remote-pairing-card > p, .remote-pairing-card li { color: #6e6960; font-size: 13px; line-height: 1.6; }
 .remote-pairing-card ol { display: grid; gap: 8px; margin: 22px 0; padding-left: 22px; }
@@ -145,8 +147,10 @@
 .remote-device-shell { margin: 0 auto; }
 .remote-device-shell > header, .remote-device-shell > section, .remote-device-shell > p { width: min(980px, 100%); margin-left: auto; margin-right: auto; }
 .remote-shell-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; padding: 14px 0 30px; }
+.remote-shell-brand { display: flex; align-items: flex-start; gap: 18px; }
+.remote-shell-brand > .remote-brand-mark { width: 72px; margin-top: 5px; flex: 0 0 auto; }
 .remote-shell-header h1 { margin-top: 5px; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.05em; }
-.remote-shell-header > div:first-child > p:last-child { max-width: 650px; margin-top: 8px; color: #716b62; font-size: 12px; line-height: 1.5; }
+.remote-shell-brand > div > p:last-child { max-width: 650px; margin-top: 8px; color: #716b62; font-size: 12px; line-height: 1.5; }
 .remote-shell-device { display: grid; justify-items: end; gap: 5px; min-width: 220px; color: #777168; font-size: 10px; }
 .remote-shell-device strong { color: #35322d; font-size: 12px; }
 .remote-shell-device button, .remote-shell-section-title button, .remote-shell-message button {
@@ -228,6 +232,8 @@
   .remote-pairing-required, .remote-device-shell { padding-left: 15px; padding-right: 15px; }
   .remote-pairing-card { padding: 24px 20px; }
   .remote-shell-header, .remote-shell-section-title { flex-direction: column; }
+  .remote-shell-brand { gap: 14px; }
+  .remote-shell-brand > .remote-brand-mark { width: 58px; }
   .remote-shell-device { justify-items: start; min-width: 0; }
   .remote-shell-board-grid { grid-template-columns: 1fr; }
   .remote-agent-list article, .remote-approval-list article { align-items: stretch; flex-direction: column; }

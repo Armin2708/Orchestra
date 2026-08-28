@@ -1,7 +1,7 @@
 {
-  "name": "Orchestra — agent board",
+  "name": "Orchestra — agent coordination",
   "short_name": "Orchestra",
-  "description": "Monitor agents, answer attention, and use explicitly scoped remote controls",
+  "description": "Conduct Claude Code and Codex agents from one live project board",
   "id": "/",
   "start_url": "/",
   "scope": "/",
