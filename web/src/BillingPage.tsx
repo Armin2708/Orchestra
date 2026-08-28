@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { billingPrimaryAction, checkoutOutcome } from './billingRedirect'
 import {
   createHubCheckout, createHubPortal, getHubEntitlements, HubApiError, HubEntitlements,
 } from './hubApi'
@@ -11,14 +12,25 @@ const TIER_LABEL: Record<HubEntitlements['tier'], string> = {
 /** Lookup key for the Cloud base subscription's Stripe price — matches the
  * `cloud_base_monthly` key `deriveQuantities` (billing.ts) already recognizes;
  * this page never invents new pricing, it only starts the checkout Stripe
- * already knows how to price. Only used for orgs that are not already on the
- * Business tier — see `openUpgrade` below. */
+ * already knows how to price. Only used for an org with NO subscription at all
+ * — see `openCheckout` below and `billingPrimaryAction`. */
 const CLOUD_BASE_LOOKUP_KEY = 'cloud_base_monthly'
 
 export function BillingPage({ orgId }: { orgId: string }) {
   const [entitlements, setEntitlements] = useState<HubEntitlements | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'checkout' | 'portal' | null>(null)
+  const [outcome, setOutcome] = useState<'success' | 'cancelled' | null>(
+    () => (typeof window === 'undefined' ? null : checkoutOutcome(window.location.search)),
+  )
+
+  // Read once, then strip the query parameter, so a reload (or a later navigation) doesn't
+  // keep re-announcing a checkout that already happened. `replaceState` leaves no history
+  // entry to go "back" into.
+  useEffect(() => {
+    if (!outcome || typeof window === 'undefined') return
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [outcome])
 
   useEffect(() => {
     let cancelled = false
@@ -29,22 +41,22 @@ export function BillingPage({ orgId }: { orgId: string }) {
   }, [orgId])
 
   /**
-   * Tier-aware: a Business org must never land in a `cloud_base_monthly` checkout — that
-   * would open a second, wrong-tier subscription for a real (live-mode) Stripe customer.
-   * Business orgs are routed to the Stripe customer portal instead, where they can adjust
-   * `business_seat_*` quantities on their EXISTING subscription; a fresh checkout session
-   * would create a competing second subscription rather than updating the one they have,
-   * which is exactly the kind of billing mess this fix exists to avoid. `'none'` (no plan
-   * yet) and `'cloud'` (already on Cloud) both still go through the Cloud base checkout —
-   * `'none'` because that's how a Cloud subscription starts, `'cloud'` because upgrading
-   * onto Business is a support-assisted plan change, not a self-serve button.
+   * Checkout — reached ONLY by an org with no subscription at all.
+   *
+   * The primary button used to send tier `'cloud'` here as well as `'none'`, which
+   * double-billed an existing Cloud customer: a second Stripe subscription against the same
+   * customer, while `subscriptions.org_id` is a PRIMARY KEY — so the sync overwrote the row
+   * and the first subscription's purchased seats and packs became 0, with both still being
+   * charged. Cancelling either one then suspended the org while the other kept billing. An
+   * org that already has a subscription now goes to the Stripe customer portal instead
+   * (`openPortal`), where quantities change on the subscription they already have. The server
+   * refuses a second checkout regardless (`createCheckoutSession` in src/hub/billing.ts) —
+   * this is the client half of that fix, not the enforcement.
    */
-  const openUpgrade = async () => {
+  const openCheckout = async () => {
     setBusy('checkout'); setError(null)
     try {
-      const { url } = entitlements?.tier === 'business'
-        ? await createHubPortal(orgId)
-        : await createHubCheckout(orgId, CLOUD_BASE_LOOKUP_KEY, 1)
+      const { url } = await createHubCheckout(orgId, CLOUD_BASE_LOOKUP_KEY, 1)
       window.location.assign(url)
     } catch (e) {
       setError(e instanceof HubApiError ? e.message : 'could not start checkout')
@@ -70,9 +82,29 @@ export function BillingPage({ orgId }: { orgId: string }) {
 
   return (
     <div className="billing-page">
+      {outcome === 'success' && (
+        <p className="billing-checkout-success" role="status">
+          Payment received — thanks. Your plan is below. If the numbers still look like your
+          old plan, Stripe's confirmation is still in flight; reload in a moment.
+          <button type="button" className="btn ghost" onClick={() => setOutcome(null)}>Dismiss</button>
+        </p>
+      )}
+      {outcome === 'cancelled' && (
+        <p className="billing-checkout-cancelled" role="status">
+          Checkout cancelled — nothing was charged.
+          <button type="button" className="btn ghost" onClick={() => setOutcome(null)}>Dismiss</button>
+        </p>
+      )}
+
       <section className="billing-card">
         <h2>Plan</h2>
         <p className="billing-plan-name">{TIER_LABEL[entitlements.tier]}</p>
+        {!entitlements.subscribed && (
+          <p className="billing-suspended" role="alert">
+            This org has no subscription, so writes are disabled — agents cannot create or move
+            cards. Subscribe below to enable them. Reading the board always works.
+          </p>
+        )}
         {entitlements.status === 'suspended' && (
           <p className="billing-suspended" role="alert">
             Billing is suspended — writes are disabled until this is resolved.
@@ -102,14 +134,13 @@ export function BillingPage({ orgId }: { orgId: string }) {
       {error && <p className="billing-error" role="alert">{error}</p>}
 
       <div className="billing-actions">
-        <button type="button" className="btn primary" disabled={busy !== null} onClick={openUpgrade}>
-          {busy === 'checkout'
-            ? 'Opening…'
-            : entitlements.tier === 'business' ? 'Manage seats' : 'Upgrade / add seats'}
-        </button>
-        {entitlements.tier !== 'business' && (
-          <button type="button" className="btn ghost" disabled={busy !== null} onClick={openPortal}>
-            {busy === 'portal' ? 'Opening…' : 'Manage billing'}
+        {billingPrimaryAction(entitlements) === 'portal' ? (
+          <button type="button" className="btn primary" disabled={busy !== null} onClick={openPortal}>
+            {busy === 'portal' ? 'Opening…' : 'Manage plan and seats'}
+          </button>
+        ) : (
+          <button type="button" className="btn primary" disabled={busy !== null} onClick={openCheckout}>
+            {busy === 'checkout' ? 'Opening…' : 'Subscribe'}
           </button>
         )}
       </div>

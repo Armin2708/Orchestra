@@ -4,6 +4,7 @@ import { Mark } from './App'
 import { ClerkAuthControls } from './ClerkAuthControls'
 import { HubBoard } from './HubBoard'
 import { BillingPage } from './BillingPage'
+import { checkoutOutcome } from './billingRedirect'
 import { HubApiError, mintHubDeviceToken, resolveHubIdentity } from './hubApi'
 import './hubBoard.css'
 
@@ -48,7 +49,15 @@ function HubSignedIn() {
   const { organization, isLoaded } = useOrganization()
   const [identity, setIdentity] = useState<{ orgId: string } | null>(null)
   const [identityError, setIdentityError] = useState<string | null>(null)
-  const [tab, setTab] = useState<HubTab>('board')
+  // Stripe sends a paying customer back to `${WEB_ORIGIN}/billing?checkout=success`. This app
+  // has no router; `vercel.json`'s SPA rewrite serves index.html for that path, and this is
+  // what turns it into the billing tab rather than the board. `BillingPage` reads (and then
+  // clears) the parameter itself to show the acknowledgement.
+  const [tab, setTab] = useState<HubTab>(() => {
+    if (typeof window === 'undefined') return 'board'
+    if (checkoutOutcome(window.location.search)) return 'billing'
+    return window.location.pathname === '/billing' ? 'billing' : 'board'
+  })
   const [mintOpen, setMintOpen] = useState(false)
 
   useEffect(() => {

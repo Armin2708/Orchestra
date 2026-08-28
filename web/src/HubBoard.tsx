@@ -2,17 +2,17 @@ import React, { useEffect, useState } from 'react'
 import { agentInk, agentWash, initials } from './api'
 import { agentActivity } from './agentActivity'
 import {
-  HubAgent, HubApiError, HubCard, HubCardColumn, listHubAgents, listHubCards,
+  HubAgent, HubApiError, HubBoardSummary, HubCard, HubCardColumn,
+  createHubProject, listHubAgents, listHubBoards, listHubCards,
 } from './hubApi'
 import { STATUS } from './Board'
 import './kanban.css'
 import './hubBoard.css'
 
-// One shared project board per org (Plan 3's pitch: "several people's local
-// daemons share one project board") — the hub schema allows multiple `projects`/
-// `boards` rows per org for future flexibility, but there is no boards-listing
-// route yet (see the report), so this renders every card/agent in the org flat,
-// same lanes `STATUS` (Board.tsx) already defines for the local board.
+// Cards and agents render flat across the org, same lanes `STATUS` (Board.tsx) already
+// defines for the local board. The boards panel below is separate on purpose: what a member
+// actually needs from it is a board ID to hand a daemon, not a filter — every write op takes
+// one, and until the projects/boards routes existed there was no way to see or create one.
 const LANES: HubCardColumn[] = ['backlog', 'in_progress', 'blocked', 'review', 'done']
 
 const POLL_MS = 5000
@@ -88,14 +88,88 @@ export function HubBoard({ orgId }: { orgId: string }) {
         </div>
       </section>
 
-      <aside className="hub-agent-roster" aria-label="Agents">
-        <h3>Agents</h3>
-        {agents.length === 0 && <p className="hub-agent-empty">No agents connected yet.</p>}
-        <ul>
-          {agents.map((a) => <HubAgentRow key={a.id} agent={a} />)}
-        </ul>
+      <aside className="hub-side-panels">
+        <HubBoardsPanel orgId={orgId} />
+        <section className="hub-agent-roster" aria-label="Agents">
+          <h3>Agents</h3>
+          {agents.length === 0 && <p className="hub-agent-empty">No agents connected yet.</p>}
+          <ul>
+            {agents.map((a) => <HubAgentRow key={a.id} agent={a} />)}
+          </ul>
+        </section>
       </aside>
     </div>
+  )
+}
+
+/**
+ * The org's projects and boards, with a create form.
+ *
+ * Nothing in the product could create either one before this: every write op requires a
+ * `board_id` that already exists, so a customer who paid had nothing to point a daemon at.
+ * A new org gets one automatically (the Clerk `organization.created` webhook seeds it), and
+ * this is how a member sees that board's id — which their daemon needs verbatim — and adds
+ * more. Creating is a write, so a never-subscribed or suspended org gets the server's own
+ * refusal text here rather than a generic error.
+ */
+function HubBoardsPanel({ orgId }: { orgId: string }) {
+  const [boards, setBoards] = useState<HubBoardSummary[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      setBoards(await listHubBoards(orgId))
+      setError(null)
+    } catch (e) {
+      setError(e instanceof HubApiError ? e.message : 'failed to load boards')
+    }
+  }
+
+  // Loaded once per org rather than polled like the cards/agents above: boards change when
+  // someone creates one, and `create` refreshes the list itself.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void load() }, [orgId])
+
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed || busy) return
+    setBusy(true); setError(null)
+    try {
+      await createHubProject(orgId, trimmed)
+      setName('')
+      await load()
+    } catch (e) {
+      setError(e instanceof HubApiError ? e.message : 'could not create the project')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <section className="hub-boards-panel" aria-label="Projects and boards">
+      <h3>Boards</h3>
+      {boards === null && !error && <p className="hub-agent-empty">Loading…</p>}
+      {boards !== null && boards.length === 0 && (
+        <p className="hub-agent-empty">No boards yet — create one to give your daemons somewhere to work.</p>
+      )}
+      <ul className="hub-board-list">
+        {(boards ?? []).map((board) => (
+          <li key={board.id} className="hub-board-item">
+            <span className="hub-board-name">{board.project_name}</span>
+            <code className="hub-board-id" title="Board id — your daemon needs this">{board.id}</code>
+          </li>
+        ))}
+      </ul>
+      <form className="hub-board-create" onSubmit={create}>
+        <input value={name} onChange={(e) => setName(e.target.value)} className="hub-token-input"
+          placeholder="New project name" aria-label="New project name" />
+        <button type="submit" className="btn primary" disabled={busy || !name.trim()}>
+          {busy ? 'Creating…' : 'Create'}
+        </button>
+      </form>
+      {error && <p className="billing-error" role="alert">{error}</p>}
+    </section>
   )
 }
 

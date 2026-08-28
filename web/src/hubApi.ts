@@ -144,6 +144,12 @@ export interface HubAgent {
 
 export interface HubEntitlements {
   tier: 'cloud' | 'business' | 'none'
+  /** False only when NO Stripe subscription has ever synced for this org. Distinct from
+   * `tier: 'none'`, which also covers an org whose subscription exists but whose lookup keys
+   * the hub doesn't recognize — that org keeps its cached entitlements and keeps writing.
+   * `subscribed: false` is the state the server refuses writes for, and the state that must
+   * route the billing page's primary button to CHECKOUT rather than the portal. */
+  subscribed: boolean
   status: string
   sso: boolean
   seats: { used: number; entitled: number; overCap: boolean }
@@ -197,6 +203,32 @@ export async function createHubCheckout(
 
 export async function createHubPortal(orgId: string): Promise<{ url: string }> {
   return await hubFetch('POST', `/orgs/${orgId}/billing/portal`) as { url: string }
+}
+
+/** Named `…Summary` rather than `HubBoard` because `HubBoard.tsx` already exports a React
+ * component by that name — importing both into one module would collide. */
+export interface HubBoardSummary {
+  id: string
+  org_id: string
+  project_id: string
+  name: string
+  created_at: string
+  project_name: string
+}
+
+/** Every board in the org. A daemon needs a real `board_id` for every write op, and until
+ * the projects/boards routes landed there was no way to discover — or create — one. */
+export async function listHubBoards(orgId: string): Promise<HubBoardSummary[]> {
+  const body = await hubFetch('GET', `/orgs/${orgId}/boards`) as { boards: HubBoardSummary[] }
+  return body.boards
+}
+
+export async function createHubProject(
+  orgId: string, name: string,
+): Promise<{ project: { id: string; name: string }; board: HubBoardSummary }> {
+  return await hubFetch('POST', `/orgs/${orgId}/projects`, { name }) as {
+    project: { id: string; name: string }; board: HubBoardSummary
+  }
 }
 
 /** Mints a device token for the signed-in member — returns the plaintext exactly
