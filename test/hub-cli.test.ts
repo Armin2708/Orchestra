@@ -14,6 +14,7 @@ vi.mock('../src/hub/env.js', () => ({
     port: 4760,
     webOrigin: 'https://app.example.com',
     clerkSecretKey: 'sk_test_from_hubenv',
+    clerkWebhookSigningSecret: 'whsec_test_from_hubenv',
   })),
 }))
 vi.mock('../src/hub/pg.js', () => ({
@@ -61,7 +62,7 @@ describe('orchestra hub command', () => {
 })
 
 describe('orchestra hub command: default start path (no injected startHub)', () => {
-  it('threads webOrigin and clerkSecretKey from hubEnv() into buildHubServer', async () => {
+  it('threads webOrigin, clerkSecretKey, and clerkWebhookSigningSecret from hubEnv() into buildHubServer', async () => {
     const { buildHubServer } = await import('../src/hub/server.js')
 
     const program = new Command()
@@ -76,7 +77,11 @@ describe('orchestra hub command: default start path (no injected startHub)', () 
 
     expect(buildHubServer).toHaveBeenCalledWith(
       expect.anything(),
-      { webOrigin: 'https://app.example.com', clerkSecretKey: 'sk_test_from_hubenv' },
+      {
+        webOrigin: 'https://app.example.com',
+        clerkSecretKey: 'sk_test_from_hubenv',
+        clerkWebhookSigningSecret: 'whsec_test_from_hubenv',
+      },
     )
   })
 })

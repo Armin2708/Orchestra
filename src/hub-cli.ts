@@ -59,6 +59,10 @@ async function defaultStartHub(opts: { port: number; databaseUrl: string }): Pro
   // Never log the key itself — only whether one is configured.
   console.log(`clerk auth: ${env.clerkSecretKey ? 'enabled' : 'disabled'}`)
 
-  const server = buildHubServer(sql, { webOrigin: env.webOrigin, clerkSecretKey: env.clerkSecretKey })
+  const server = buildHubServer(sql, {
+    webOrigin: env.webOrigin,
+    clerkSecretKey: env.clerkSecretKey,
+    clerkWebhookSigningSecret: env.clerkWebhookSigningSecret,
+  })
   await server.listen({ host: '0.0.0.0', port: opts.port })
 }
