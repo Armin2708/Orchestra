@@ -11,7 +11,8 @@ const TIER_LABEL: Record<HubEntitlements['tier'], string> = {
 /** Lookup key for the Cloud base subscription's Stripe price — matches the
  * `cloud_base_monthly` key `deriveQuantities` (billing.ts) already recognizes;
  * this page never invents new pricing, it only starts the checkout Stripe
- * already knows how to price. */
+ * already knows how to price. Only used for orgs that are not already on the
+ * Business tier — see `openUpgrade` below. */
 const CLOUD_BASE_LOOKUP_KEY = 'cloud_base_monthly'
 
 export function BillingPage({ orgId }: { orgId: string }) {
@@ -27,10 +28,23 @@ export function BillingPage({ orgId }: { orgId: string }) {
     return () => { cancelled = true }
   }, [orgId])
 
-  const openCheckout = async () => {
+  /**
+   * Tier-aware: a Business org must never land in a `cloud_base_monthly` checkout — that
+   * would open a second, wrong-tier subscription for a real (live-mode) Stripe customer.
+   * Business orgs are routed to the Stripe customer portal instead, where they can adjust
+   * `business_seat_*` quantities on their EXISTING subscription; a fresh checkout session
+   * would create a competing second subscription rather than updating the one they have,
+   * which is exactly the kind of billing mess this fix exists to avoid. `'none'` (no plan
+   * yet) and `'cloud'` (already on Cloud) both still go through the Cloud base checkout —
+   * `'none'` because that's how a Cloud subscription starts, `'cloud'` because upgrading
+   * onto Business is a support-assisted plan change, not a self-serve button.
+   */
+  const openUpgrade = async () => {
     setBusy('checkout'); setError(null)
     try {
-      const { url } = await createHubCheckout(orgId, CLOUD_BASE_LOOKUP_KEY, 1)
+      const { url } = entitlements?.tier === 'business'
+        ? await createHubPortal(orgId)
+        : await createHubCheckout(orgId, CLOUD_BASE_LOOKUP_KEY, 1)
       window.location.assign(url)
     } catch (e) {
       setError(e instanceof HubApiError ? e.message : 'could not start checkout')
@@ -88,12 +102,16 @@ export function BillingPage({ orgId }: { orgId: string }) {
       {error && <p className="billing-error" role="alert">{error}</p>}
 
       <div className="billing-actions">
-        <button type="button" className="btn primary" disabled={busy !== null} onClick={openCheckout}>
-          {busy === 'checkout' ? 'Opening…' : 'Upgrade / add seats'}
+        <button type="button" className="btn primary" disabled={busy !== null} onClick={openUpgrade}>
+          {busy === 'checkout'
+            ? 'Opening…'
+            : entitlements.tier === 'business' ? 'Manage seats' : 'Upgrade / add seats'}
         </button>
-        <button type="button" className="btn ghost" disabled={busy !== null} onClick={openPortal}>
-          {busy === 'portal' ? 'Opening…' : 'Manage billing'}
-        </button>
+        {entitlements.tier !== 'business' && (
+          <button type="button" className="btn ghost" disabled={busy !== null} onClick={openPortal}>
+            {busy === 'portal' ? 'Opening…' : 'Manage billing'}
+          </button>
+        )}
       </div>
     </div>
   )
