@@ -69,6 +69,8 @@ Identity and membership are **owned by Clerk** (users, organizations, membership
 
 Entity shapes mirror the local sidecar so daemon↔hub translation is mostly 1:1, and the shared TypeScript types are the single definition for both sides.
 
+**No code is shared with the local storage layer.** The local daemon is `better-sqlite3` — synchronous, SQLite-dialect, with its own migration runner (`applyAgentOsMigrations`) and store classes. None of it ports to async Postgres. The hub therefore gets its own data layer (`src/hub/**`) with its own numbered SQL migrations; what crosses between local and hub is **types and wire shapes only**. Likewise the hub does not call `buildServer()` — that factory is SQLite-coupled by signature (`buildServer(db: Database.Database, …)`). The hub builds its own Fastify app that *follows* the same conventions (plugin-per-domain with `prefix`, `setErrorHandler` mapping typed errors to status codes, an `onRequest` principal hook).
+
 ## 4. Auth & Billing
 
 **Humans (web UI):** **Clerk** — hosted sign-in/sign-up components in the web app; the hub verifies Clerk session JWTs in middleware. Org creation, membership, roles, and invitations use **Clerk Organizations**; Clerk webhooks (`user.*`, `organization.*`, `organizationMembership.*`) keep the Postgres mirror tables current. Seat cap enforced by the hub when a membership webhook lands (over cap ⇒ membership rejected/flagged).
@@ -83,11 +85,11 @@ Entity shapes mirror the local sidecar so daemon↔hub translation is mostly 1:1
 
 ## 5. Sync Protocol
 
-**Transport:** one WebSocket per daemon per org: `wss://hub/orgs/:id/sync`, bearer device token. REST exists for the same ops (web UI uses it); WS is the daemon path.
+**Transport:** **SSE down, REST up** — matching the existing codebase, which uses `text/event-stream` everywhere and has no WebSocket dependency. Each daemon holds one long-lived `GET /api/v1/hub/orgs/:id/sync?since=<seq>` (SSE, bearer device token) for the hub→daemon event stream, and issues ordinary authenticated `POST`s for daemon→hub ops. This keeps one transport family across local and hub modes and avoids adding `ws`.
 
 **Events out (hub → daemon):** every committed shared-state change is appended to `org_events` with a per-org monotonic `seq`, then fanned out to connected daemons and web clients. Daemons persist their last applied `seq` and resume with `?since=<seq>` after any disconnect — replay is a range read of `org_events`. No gaps, no heuristic merging.
 
-**Ops in (daemon → hub):** commands, not state dumps: `card.create`, `card.move`, `card.claim`, `card.update`, `mail.send`, `agent.heartbeat`, `agent.register`. Each op carries a client-generated idempotency key (UUID) so offline-queue replay after reconnect cannot double-apply.
+**Ops in (daemon → hub):** commands, not state dumps: `card.create`, `card.move`, `card.claim`, `card.update`, `mail.send`, `agent.heartbeat`, `agent.register`. Each op carries a client-generated idempotency key (UUID) so offline-queue replay after reconnect cannot double-apply — same discipline as the local `EventStore`'s `(board_id, idempotency_key)` replay rule in `src/agent-os/event-store.ts`.
 
 **Conflict rule (the overlap-avoidance core):** every card write carries the card `version` the daemon last saw. The hub applies ops atomically (single Postgres transaction, `WHERE version = $expected`); first writer wins, the loser gets a **409 + the current card state**. The daemon surfaces the 409 to the agent as the existing board-etiquette failure: card is claimed/changed ⇒ `orchestra ask` the owner. Claims are therefore race-free by construction — two agents on two machines can both try to claim card #12; exactly one succeeds.
 
@@ -121,7 +123,10 @@ The existing React app gains a **hub mode**: Clerk sign-in/sign-up and org-switc
 
 ## 10. Testing
 
-Hermetic, no live network:
+Hermetic, no live network. Existing tests are vitest with in-memory SQLite and `server.inject()`; the hub keeps that shape but needs a Postgres. Tests run against **PGlite** (real Postgres compiled to WASM, in-process, dev-dependency only) so no Docker or live DB is required, and the data layer is written against a narrow `HubSql` interface that both `pg.Pool` and PGlite satisfy. PGlite is single-connection, so genuine parallel-transaction races are covered by asserting the atomic-update semantics directly (a stale-version `UPDATE … WHERE version = $expected` affects zero rows ⇒ 409), with an optional Docker-gated true-concurrency test.
+
+New runtime dependency: `pg`. New dev dependencies: `@types/pg`, `@electric-sql/pglite`.
+
 
 - **Sync core:** two simulated daemons against a real throwaway Postgres (dockerized or `pglite`): concurrent `card.claim` ⇒ exactly one winner, loser gets 409 + current state; disconnect/reconnect resumes from `seq` with no gaps or duplicates; idempotency-key replay applies once.
 - **Billing gate:** mocked Stripe webhooks drive `subscriptions.status`; suspended org rejects writes, allows reads.
@@ -129,13 +134,14 @@ Hermetic, no live network:
 - **Presence:** heartbeat TTL flips state to offline.
 - Existing local-mode test suite must stay green untouched — hub mode is additive.
 
-## 11. Build Order (input to the implementation plan)
+## 11. Build Order — three plans
 
-1. Shared types + `org_events`/seq sync core (hub side, in-memory clients in tests).
-2. Postgres schema + migrations + org-scoped Fastify hub entrypoint.
-3. Auth: Clerk integration (JWT middleware + webhook mirror) + hub device tokens.
-4. Daemon sync client (join, WS, op queue, 409 surfacing) + cross-machine mail.
-5. Presence heartbeats.
-6. Web UI hub mode (login, org switcher, org board).
-7. Stripe billing gate.
-8. Deploy recipe (Fly/Railway) + docs.
+The work decomposes into three plans, each producing working, testable software on its own:
+
+**Plan 1 — Hub server core (no Clerk, no Stripe, no UI).** Postgres data layer + migrations, org scoping, `org_events` with per-org `seq`, card ops with optimistic concurrency, mail, presence, device tokens, the SSE sync stream with `?since=` resume, and the `orchestra hub` entrypoint. Fully testable headlessly against PGlite. This is the foundation and the part that carries all the concurrency risk.
+
+**Plan 2 — Daemon sync client.** `orchestra org join`, the sync loop (SSE consumer + op poster), bounded offline queue with idempotency keys, 409 surfacing into existing board etiquette, presence heartbeats from the live daemon, cross-machine mail routing.
+
+**Plan 3 — Auth, billing, UI, deploy.** Clerk JWT middleware + webhook mirror, Stripe Checkout/portal + subscription gate, web UI hub mode (Clerk components, org switcher, org board with owner badge + presence), Fly/Railway deploy recipe, docs.
+
+Standing repo rule applies to every plan: new routes go into `docs/agent-os-surface-inventory.json`/`.md`, new CLI commands into `cli_commands`, new tables into `database_tables`, and threat-matrix counts are **recomputed**, never hand-incremented. A multi-tenant hub adds a cross-org isolation trust boundary, so expect new `TB-*` / `REM-T*` / `AC-*` entries with executable evidence.
