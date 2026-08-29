@@ -22,3 +22,5 @@ AGENTS.md
 /*.png
 /*.jpeg
 /*.jpg
+.vercel
+.env*
