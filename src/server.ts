@@ -30,6 +30,7 @@ import { recordTelemetry, boardTelemetry, injectedTotal, TelemetryEntry } from '
 import { ExternalTranscriptService, loadSdkSessionTranscript } from './external-transcript.js'
 import { agentEffortRanks, boardUsage, providerUsageTotal, usageTotal } from './usage.js'
 import { recordShipped } from './shipped.js'
+import { mainRepoOfWorktree } from './worktree-origin.js'
 import { shiplog } from './shiplog.js'
 import { defaultsForRole } from './agent-defaults.js'
 import { AgentOsError, UnsupportedError } from './agent-os/errors.js'
@@ -534,19 +535,35 @@ export function buildServer(db: Database.Database, conductor?: (bus: Bus) => Con
       (Record<string, unknown> & { id: number }) | undefined
     if (existing) return existing
     if (req.body.create !== true) {
-      // a session in a subfolder of a curated project belongs to that project:
-      // walk up to the nearest registered ancestor (a subfolder that is its own
-      // board matched above, so the deepest board always wins). Creation stays
-      // exact-path — only lookups inherit.
-      let dir = path.resolve(p)
-      while (true) {
-        const parent = path.dirname(dir)
-        if (parent === dir) break
-        dir = parent
-        const ancestor = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(dir) as
-          (Record<string, unknown> & { id: number }) | undefined
-        if (ancestor) return ancestor
+      const board = (from: string): (Record<string, unknown> & { id: number }) | undefined => {
+        // a session in a subfolder of a curated project belongs to that project:
+        // walk up to the nearest registered ancestor (a subfolder that is its own
+        // board matched above, so the deepest board always wins). Creation stays
+        // exact-path — only lookups inherit.
+        let dir = path.resolve(from)
+        while (true) {
+          const parent = path.dirname(dir)
+          if (parent === dir) return undefined
+          dir = parent
+          const ancestor = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(dir) as
+            (Record<string, unknown> & { id: number }) | undefined
+          if (ancestor) return ancestor
+        }
       }
+      // A LINKED WORKTREE is a sibling directory, not a subfolder, so the walk above can
+      // never reach the project it belongs to — yet the workflow rules tell agents to work
+      // in one, and every launched card gets one (`cardWorktree`). Its main repo is the
+      // stronger signal than "some registered directory happens to sit above me", so it is
+      // tried first; non-worktrees return null here and fall straight through unchanged.
+      const origin = mainRepoOfWorktree(p)
+      if (origin) {
+        const exact = db.prepare(`SELECT * FROM boards WHERE project_path = ?`).get(origin) as
+          (Record<string, unknown> & { id: number }) | undefined
+        const inherited = exact ?? board(origin)
+        if (inherited) return inherited
+      }
+      const walked = board(p)
+      if (walked) return walked
       return reply.code(404).send({ error: 'unknown project — the operator adds projects from the board UI (or orchestra init)' })
     }
     if (!requireOperator(req, reply)) return
