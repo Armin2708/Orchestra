@@ -26,4 +26,8 @@ arch defines one annular-section path and reuses it three times, making its
 three pieces mathematically identical in arc length. The outer, middle, and
 inner sections span 44°, 40°, and 36° respectively, preserving the visual
 scale progression between arches. Its PNG is rendered directly from that SVG.
+`orchestra-broken-arches-v5-imagegen-reference-equal-sections.png` returns to
+the operator-supplied raster as the exact visual target and uses built-in
+ImageGen to equalize the three pieces within each arch while preserving the
+reference's softer proportions and finish.
 Production assets under `brand/identity/` remain unchanged.
