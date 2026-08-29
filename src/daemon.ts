@@ -1016,24 +1016,6 @@ export async function serve(opts: ServeOptions = {}): Promise<void> {
         server.bus.on('event', listener)
         return () => server.bus.off('event', listener)
       },
-      mapLocalChange: (change, hubBoardId) => {
-        const event = change as { type?: unknown; data?: any }
-        if (event.type !== 'card' || !Number.isInteger(event.data?.id)) return null
-        const latest = db.prepare(`SELECT type FROM card_events WHERE card_id=?
-          ORDER BY id DESC LIMIT 1`).get(event.data.id) as { type: string } | undefined
-        if (latest?.type !== 'created') return null
-        return {
-          op: 'card.create',
-          payload: {
-            board_id: hubBoardId,
-            title: event.data.title,
-            description: event.data.description,
-            paths: event.data.paths,
-            owner_agent: event.data.owner ?? null,
-            _local_card_id: event.data.id,
-          },
-        }
-      },
     })
   } catch (error) {
     if (coordinatorStarted) {

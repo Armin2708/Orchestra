@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import type { HubSyncEvent } from './hub-client.js'
+import type { QueuedOp } from './outbox.js'
 
 export interface LocalBoardEvent {
   board_id: number
@@ -12,6 +13,19 @@ export interface LocalBoardStateOptions {
   orgId: string
   publish?: (event: LocalBoardEvent) => void
   localBoardId?: number
+}
+
+export interface LocalCardCreateOperation {
+  op: 'card.create'
+  payload: {
+    board_id: string
+    title: string
+    description: string
+    paths: string[]
+    owner_agent: string | null
+    _local_card_id: number
+  }
+  localCardId: number
 }
 
 type HubCard = {
@@ -76,6 +90,55 @@ export class LocalBoardState {
     }).immediate()
 
     for (const change of changes) this.#publish?.(change)
+  }
+
+  mapLocalChange(change: unknown, hubBoardId: string): LocalCardCreateOperation | null {
+    const event = change as { type?: unknown; data?: Record<string, unknown> }
+    if (event.type !== 'card' || !Number.isInteger(event.data?.id)) return null
+    const localCardId = Number(event.data!.id)
+    const mapped = this.#db.prepare(`SELECT 1 FROM org_sync_card_mappings
+      WHERE org_id=? AND local_card_id=?`).get(this.#orgId, localCardId)
+    if (mapped) return null
+    const card = this.#db.prepare(`SELECT card.*, agent.name AS owner
+      FROM cards card LEFT JOIN agents agent ON agent.id=card.owner_agent_id
+      WHERE card.id=?`).get(localCardId) as any
+    if (!card) return null
+    return {
+      op: 'card.create',
+      payload: {
+        board_id: hubBoardId,
+        title: card.title,
+        description: card.description,
+        paths: JSON.parse(card.paths),
+        owner_agent: card.owner ?? null,
+        _local_card_id: localCardId,
+      },
+      localCardId,
+    }
+  }
+
+  recordOutboundEnqueued(localCardId: number, idempotencyKey: string): void {
+    this.#db.prepare(`INSERT INTO org_sync_card_mappings
+      (org_id, local_card_id, outbound_idempotency_key)
+      VALUES (?, ?, ?)
+      ON CONFLICT(org_id, local_card_id) DO UPDATE SET
+        outbound_idempotency_key=COALESCE(org_sync_card_mappings.outbound_idempotency_key,
+          excluded.outbound_idempotency_key),
+        updated_at=datetime('now')`).run(this.#orgId, localCardId, idempotencyKey)
+  }
+
+  reconcileOutbound(pending: QueuedOp[]): void {
+    const reconcile = this.#db.transaction((items: QueuedOp[]) => {
+      for (const item of items) {
+        if (item.op !== 'card.create') continue
+        const payload = item.payload as { _local_card_id?: unknown } | null
+        if (!Number.isInteger(payload?._local_card_id)) continue
+        const localCardId = Number(payload!._local_card_id)
+        if (!this.#db.prepare('SELECT 1 FROM cards WHERE id=?').get(localCardId)) continue
+        this.recordOutboundEnqueued(localCardId, item.idempotencyKey)
+      }
+    })
+    reconcile.immediate(pending)
   }
 
   #project(event: HubSyncEvent): LocalBoardEvent[] {

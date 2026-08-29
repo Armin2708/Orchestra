@@ -37,6 +37,7 @@ export interface DaemonOrgSyncLoop {
 export interface LocalHubOp {
   op: string
   payload: unknown
+  localCardId?: number
 }
 
 export interface DaemonOrgSyncHandle {
@@ -95,6 +96,7 @@ export async function startDaemonOrgSync(
       localBoardId: options.localBoardId,
     }) : undefined
     const applyEvent = options.applyEvent ?? ((event: HubSyncEvent) => localState!.apply(event))
+    localState?.reconcileOutbound(outbox.pending())
     loop = options.createLoop?.({
       client,
       outbox,
@@ -124,12 +126,20 @@ export async function startDaemonOrgSync(
 
     const board = new HubBoardResolver(client)
     const presence = new PresencePublisher(client, board, options.listLocalAgents ?? (() => []), output)
-    if (options.subscribeLocalChanges && options.mapLocalChange) {
+    const mapLocalChange = options.mapLocalChange
+      ?? (localState ? ((change: unknown, hubBoardId: string) => localState.mapLocalChange(change, hubBoardId)) : undefined)
+    if (options.subscribeLocalChanges && mapLocalChange) {
       unsubscribeLocalChanges = options.subscribeLocalChanges((change) => {
         void (async () => {
-          const operation = await options.mapLocalChange!(change, await board.id())
+          localState?.reconcileOutbound(outbox.pending())
+          const operation = await mapLocalChange(change, await board.id())
           if (!operation) return
-          outbox.enqueue(operation.op, operation.payload)
+          const queuedId = outbox.enqueue(operation.op, operation.payload)
+          if (operation.localCardId !== undefined && localState) {
+            const queued = outbox.pending().find((item) => item.id === queuedId)
+            if (!queued) throw new Error('organization sync could not read the operation it just queued')
+            localState.recordOutboundEnqueued(operation.localCardId, queued.idempotencyKey)
+          }
           await loop?.flush?.()
         })().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
       })

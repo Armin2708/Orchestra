@@ -9,6 +9,8 @@ import {
 } from '../src/org-sync/daemon-integration.js'
 import type { OrgCredential } from '../src/org-sync/credentials.js'
 import { Outbox } from '../src/org-sync/outbox.js'
+import { openDb } from '../src/db.js'
+import { buildServer } from '../src/server.js'
 
 const homes: string[] = []
 const temporaryHome = () => {
@@ -191,5 +193,70 @@ describe('daemon organization sync integration', () => {
     })
     expect(loop.flush).toHaveBeenCalledOnce()
     expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('maps each local card once when milestone changes re-emit already-synced siblings', async () => {
+    const home = temporaryHome()
+    const db = openDb(':memory:')
+    const server = buildServer(db)
+    await server.ready()
+    const boardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/project', 'Project')`).run().lastInsertRowid)
+    const loop = fakeLoop()
+    const outbox = new Outbox(home)
+    const client = {
+      get: vi.fn(async () => ({ boards: [{ id: 'board_default', project_name: 'Default project' }] })),
+      postOp: vi.fn(),
+      streamSince: vi.fn(),
+    }
+    const handle = await startDaemonOrgSync({
+      home,
+      loadCredential: async () => credential,
+      createClient: () => client,
+      createOutbox: () => outbox,
+      createLoop: () => loop,
+      localDb: db,
+      publishLocalChange: (event) => server.bus.emit('event', event),
+      subscribeLocalChanges: (listener) => {
+        server.bus.on('event', listener)
+        return () => server.bus.off('event', listener)
+      },
+      listLocalAgents: () => [],
+      output: () => undefined,
+      heartbeatMs: 60_000,
+    })
+
+    const first = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: boardId, title: 'First card',
+    } })).json().card
+    const second = (await server.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: boardId, title: 'Second card',
+    } })).json().card
+    await vi.waitFor(() => expect(outbox.size()).toBe(2))
+
+    const milestone = (await server.inject({ method: 'POST', url: '/api/v1/milestones', payload: {
+      board_id: boardId, title: 'Release',
+    } })).json()
+    await server.inject({ method: 'PATCH', url: `/api/v1/cards/${first.id}/milestone`, payload: {
+      milestone_id: milestone.id,
+    } })
+    await server.inject({ method: 'PATCH', url: `/api/v1/cards/${second.id}/milestone`, payload: {
+      milestone_id: milestone.id,
+    } })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(outbox.pending().map((item: any) => item.payload._local_card_id).sort()).toEqual([
+      first.id, second.id,
+    ].sort())
+    expect(db.prepare(`SELECT local_card_id, outbound_idempotency_key
+      FROM org_sync_card_mappings WHERE org_id=? ORDER BY local_card_id`).all(credential.orgId))
+      .toEqual([
+        { local_card_id: first.id, outbound_idempotency_key: outbox.pending()[0].idempotencyKey },
+        { local_card_id: second.id, outbound_idempotency_key: outbox.pending()[1].idempotencyKey },
+      ])
+
+    await handle?.stop()
+    await server.close()
+    db.close()
   })
 })

@@ -90,29 +90,44 @@ const startSimulatedDaemon = async (
 describe('organization sync end to end', () => {
   it('applies a hosted card through the default path into the other daemon local board', async () => {
     const setup = await pair()
-    const db = openDb(path.join(setup.homeB, 'orchestra.db'))
-    localDbs.push(db)
-    const localBoardId = Number(db.prepare(`INSERT INTO boards (project_path, name)
+    const dbA = openDb(path.join(setup.homeA, 'orchestra.db'))
+    const dbB = openDb(path.join(setup.homeB, 'orchestra.db'))
+    localDbs.push(dbA, dbB)
+    const boardA = Number(dbA.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/machine-a', 'Machine A')`).run().lastInsertRowid)
+    const boardB = Number(dbB.prepare(`INSERT INTO boards (project_path, name)
       VALUES ('/machine-b', 'Machine B')`).run().lastInsertRowid)
-    const localServer = buildServer(db)
-    localServers.push(localServer)
-    await startSimulatedDaemon(setup.homeB, undefined, {
-      localDb: db,
-      publishLocalChange: (event) => localServer.bus.emit('event', event),
-    })
-    await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 1)
+    const serverA = buildServer(dbA)
+    const serverB = buildServer(dbB)
+    localServers.push(serverA, serverB)
+    for (const [home, db, server] of [
+      [setup.homeA, dbA, serverA],
+      [setup.homeB, dbB, serverB],
+    ] as const) {
+      await startSimulatedDaemon(home, undefined, {
+        localDb: db,
+        publishLocalChange: (event) => server.bus.emit('event', event),
+        subscribeLocalChanges: (listener) => {
+          server.bus.on('event', listener)
+          return () => server.bus.off('event', listener)
+        },
+        listLocalAgents: () => [],
+      })
+    }
+    await waitUntil(() => setup.hub.broadcast.listenerCount(setup.hub.orgId) === 2)
 
-    await setup.clientA.postOp('card.create', {
-      board_id: setup.hub.boardId,
+    const created = await serverA.inject({ method: 'POST', url: '/api/v1/cards', payload: {
+      board_id: boardA,
       title: 'Created on daemon A',
       description: 'Visible on the actual machine B board',
       paths: ['src/shared.ts'],
-    })
-    await waitUntil(() => Boolean(db.prepare(`SELECT 1 FROM cards WHERE board_id=? AND title=?`)
-      .get(localBoardId, 'Created on daemon A')))
+    } })
+    expect(created.statusCode).toBe(200)
+    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM cards WHERE board_id=? AND title=?`)
+      .get(boardB, 'Created on daemon A')))
 
-    const snapshot = await localServer.inject({
-      method: 'GET', url: `/api/v1/boards/${localBoardId}/snapshot`,
+    const snapshot = await serverB.inject({
+      method: 'GET', url: `/api/v1/boards/${boardB}/snapshot`,
     })
     expect(snapshot.statusCode).toBe(200)
     expect(snapshot.json().cards).toContainEqual(expect.objectContaining({
@@ -120,6 +135,10 @@ describe('organization sync end to end', () => {
       description: 'Visible on the actual machine B board',
       paths: ['src/shared.ts'],
     }))
+    expect(dbA.prepare('SELECT COUNT(*) AS count FROM cards WHERE board_id=?').get(boardA)).toEqual({ count: 1 })
+    expect((await setup.hub.sql.query('SELECT COUNT(*)::int AS count FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows)
+      .toEqual([{ count: 1 }])
+    expect(fs.existsSync(path.join(setup.homeA, 'org-state.json'))).toBe(false)
     expect(fs.existsSync(path.join(setup.homeB, 'org-state.json'))).toBe(false)
   })
 
