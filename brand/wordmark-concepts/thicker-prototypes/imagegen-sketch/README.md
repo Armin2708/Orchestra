@@ -33,4 +33,8 @@ reference's softer proportions and finish.
 `orchestra-broken-arches-v6-axis-aligned.png` adds a shared construction axis:
 all arches use one center and vertical symmetry line, equal angular sections,
 concentric curved edges, and gap boundaries aligned along common radial axes.
+`orchestra-broken-arches-v7-optically-equal-axis-aligned.png` corrects the
+remaining visual imbalance: center pieces are optically widened and side
+pieces shortened until all three pieces in each arch read at equal width,
+while every cut remains straight, radial, aligned, and symmetric.
 Production assets under `brand/identity/` remain unchanged.
