@@ -38,37 +38,65 @@ export class HubConflictError extends HubRequestError {
 
 type Query = Record<string, string | number | boolean | undefined>
 
+export interface HubClientOptions {
+  requestTimeoutMs?: number
+}
+
 export class HubClient {
   readonly #credential: OrgCredential
   readonly #orgRoot: string
+  readonly #requestTimeoutMs: number
 
-  constructor(credential: OrgCredential) {
+  constructor(credential: OrgCredential, options: HubClientOptions = {}) {
     this.#credential = credential
     this.#orgRoot = `${credential.hubBaseUrl.replace(/\/+$/, '')}/api/v1/hub/orgs/${encodeURIComponent(credential.orgId)}`
+    this.#requestTimeoutMs = positiveTimeout(options.requestTimeoutMs, 10_000)
   }
 
-  async postOp(op: string, payload: unknown, idempotencyKey = randomUUID()): Promise<OpResult> {
+  async postOp(
+    op: string,
+    payload: unknown,
+    idempotencyKey = randomUUID(),
+    signal?: AbortSignal,
+  ): Promise<OpResult> {
     if (!idempotencyKey) throw new Error('an idempotency key is required for every hub operation')
-    const response = await this.#fetch(`${this.#orgRoot}/ops`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ op, idempotency_key: idempotencyKey, payload }),
-    })
-    const body = await this.#jsonResponse(response)
-    if (!body || typeof body !== 'object' || !Number.isInteger((body as any).seq) || !('result' in body)) {
-      throw new HubRequestError('hub returned an invalid operation response', response.status)
+    const request = requestDeadline(signal, this.#requestTimeoutMs)
+    try {
+      const response = await this.#fetch(`${this.#orgRoot}/ops`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op, idempotency_key: idempotencyKey, payload }),
+        signal: request.signal,
+      })
+      const body = await this.#jsonResponse(response)
+      if (!body || typeof body !== 'object' || !Number.isInteger((body as any).seq) || !('result' in body)) {
+        throw new HubRequestError('hub returned an invalid operation response', response.status)
+      }
+      return { result: (body as any).result, seq: (body as any).seq }
+    } catch (error) {
+      if (request.timedOut()) throw new HubRetryableError('hub operation request timed out', undefined, { cause: error })
+      throw error
+    } finally {
+      request.dispose()
     }
-    return { result: (body as any).result, seq: (body as any).seq }
   }
 
-  async get(path: string, query: Query = {}): Promise<unknown> {
+  async get(path: string, query: Query = {}, signal?: AbortSignal): Promise<unknown> {
     const normalizedPath = path.replace(/^\/+/, '')
     const url = new URL(`${this.#orgRoot}/${normalizedPath}`)
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) url.searchParams.set(key, String(value))
     }
-    const response = await this.#fetch(url)
-    return this.#jsonResponse(response)
+    const request = requestDeadline(signal, this.#requestTimeoutMs)
+    try {
+      const response = await this.#fetch(url, { signal: request.signal })
+      return await this.#jsonResponse(response)
+    } catch (error) {
+      if (request.timedOut()) throw new HubRetryableError('hub read request timed out', undefined, { cause: error })
+      throw error
+    } finally {
+      request.dispose()
+    }
   }
 
   async streamSince(
@@ -78,10 +106,21 @@ export class HubClient {
   ): Promise<void> {
     const url = new URL(`${this.#orgRoot}/sync`)
     url.searchParams.set('since', String(seq))
-    const response = await this.#fetch(url, {
-      headers: { accept: 'text/event-stream' },
-      signal,
-    })
+    const request = requestDeadline(signal, this.#requestTimeoutMs)
+    let response: Response
+    try {
+      response = await this.#fetch(url, {
+        headers: { accept: 'text/event-stream' },
+        signal: request.signal,
+      })
+    } catch (error) {
+      if (request.timedOut()) throw new HubRetryableError('hub sync connection timed out', undefined, { cause: error })
+      throw error
+    } finally {
+      // The stream is intentionally long-lived. The deadline covers connection and
+      // response headers; daemon shutdown remains wired through the caller signal.
+      request.dispose()
+    }
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.toLowerCase().includes('text/event-stream') || !response.body) {
       throw new HubRequestError('hub returned an invalid sync stream', response.status)
@@ -156,7 +195,8 @@ export class HubClient {
   }
 
   async #jsonResponse(response: Response): Promise<unknown> {
-    try { return await response.json() } catch {
+    try { return await response.json() } catch (error) {
+      if (isAbortError(error) || isTimeoutError(error)) throw error
       throw new HubRequestError('hub returned an invalid JSON response', response.status)
     }
   }
@@ -164,3 +204,22 @@ export class HubClient {
 
 const isAbortError = (error: unknown): error is Error =>
   error instanceof Error && error.name === 'AbortError'
+
+const isTimeoutError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === 'TimeoutError'
+
+const positiveTimeout = (value: number | undefined, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+
+const requestDeadline = (signal: AbortSignal | undefined, milliseconds: number) => {
+  const timeout = new AbortController()
+  const timer = setTimeout(() => {
+    timeout.abort(new DOMException('The hub request timed out', 'TimeoutError'))
+  }, milliseconds)
+  timer.unref()
+  return {
+    signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal,
+    timedOut: () => timeout.signal.aborted,
+    dispose: () => clearTimeout(timer),
+  }
+}

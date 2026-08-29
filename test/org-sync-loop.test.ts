@@ -173,6 +173,33 @@ describe('SyncLoop', () => {
     expect(sent).toEqual(queued.map((item) => ({ op: item.op, key: item.idempotencyKey })))
   })
 
+  it('aborts an in-flight outbox post during stop instead of hanging shutdown', async () => {
+    const home = temporaryHome()
+    const outbox = new Outbox(home)
+    outbox.enqueue('card.create', { title: 'Parked request' })
+    const signals: AbortSignal[] = []
+    const client = {
+      postOp: vi.fn(async (_op: string, _payload: unknown, _key: string, signal?: AbortSignal) => {
+        if (!signal) throw new Error('missing request abort signal')
+        signals.push(signal)
+        await new Promise<void>((_resolve, reject) => {
+          if (signal.aborted) return reject(signal.reason)
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+        return { result: {}, seq: 0 }
+      }),
+      streamSince: vi.fn(),
+    }
+    const loop = new SyncLoop({ client, outbox, home, applyEvent: vi.fn() })
+    loop.start()
+    await waitUntil(() => signals.length === 1)
+
+    await expect(loop.stop()).resolves.toBeUndefined()
+
+    expect(signals[0].aborted).toBe(true)
+    expect(outbox.size()).toBe(1)
+  })
+
   it('flushes an op enqueued after the stream is already live', async () => {
     const home = temporaryHome()
     const outbox = new Outbox(home)

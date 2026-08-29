@@ -14,13 +14,14 @@ type Handler = (request: IncomingMessage, response: ServerResponse) => void | Pr
 let handler: Handler
 let server: ReturnType<typeof createServer>
 let client: HubClient
+let credential: OrgCredential
 
 beforeEach(async () => {
   handler = (_request, response) => { response.writeHead(404).end() }
   server = createServer((request, response) => { void handler(request, response) })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
-  const credential: OrgCredential = {
+  credential = {
     hubBaseUrl: `http://127.0.0.1:${port}`,
     orgId: 'org_example',
     deviceToken: 'orchestra_device_v1.secret-value',
@@ -122,5 +123,29 @@ describe('HubClient', () => {
     controller.abort()
 
     await expect(streaming).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('times out ordinary hub reads and writes when the server never responds', async () => {
+    handler = () => undefined
+    const shortDeadlineClient = new HubClient(credential, { requestTimeoutMs: 25 })
+
+    await expect(shortDeadlineClient.get('boards')).rejects.toMatchObject({
+      name: 'HubRetryableError', retryable: true,
+    })
+    await expect(shortDeadlineClient.postOp('card.create', { title: 'Never answered' }))
+      .rejects.toMatchObject({ name: 'HubRetryableError', retryable: true })
+  })
+
+  it('honours caller abort signals on ordinary hub reads and writes', async () => {
+    handler = () => undefined
+    const readController = new AbortController()
+    const reading = client.get('boards', {}, readController.signal)
+    readController.abort()
+    await expect(reading).rejects.toMatchObject({ name: 'AbortError' })
+
+    const writeController = new AbortController()
+    const writing = client.postOp('card.create', { title: 'Cancelled' }, undefined, writeController.signal)
+    writeController.abort()
+    await expect(writing).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

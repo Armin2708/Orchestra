@@ -14,7 +14,7 @@ import { Outbox, type QueuedOp } from './outbox.js'
 export type SyncState = 'offline' | 'connecting' | 'live'
 
 export interface SyncClient {
-  postOp(op: string, payload: unknown, idempotencyKey?: string): Promise<OpResult>
+  postOp(op: string, payload: unknown, idempotencyKey?: string, signal?: AbortSignal): Promise<OpResult>
   streamSince(
     seq: number,
     onEvent: (event: HubSyncEvent) => void | Promise<void>,
@@ -168,7 +168,7 @@ export class SyncLoop {
     for (const item of this.#outbox.pending()) {
       if (!this.#running) return
       try {
-        await this.#client.postOp(item.op, item.payload, item.idempotencyKey)
+        await this.#client.postOp(item.op, item.payload, item.idempotencyKey, this.#controller?.signal)
         this.#outbox.markSent(item.id)
       } catch (error) {
         if (error instanceof HubConflictError) {

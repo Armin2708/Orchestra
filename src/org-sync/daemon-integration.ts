@@ -18,8 +18,8 @@ export interface LocalSyncAgent {
 }
 
 export interface DaemonHubClient {
-  get(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<unknown>
-  postOp(op: string, payload: unknown, idempotencyKey?: string): Promise<OpResult>
+  get(path: string, query?: Record<string, string | number | boolean | undefined>, signal?: AbortSignal): Promise<unknown>
+  postOp(op: string, payload: unknown, idempotencyKey?: string, signal?: AbortSignal): Promise<OpResult>
   streamSince(
     seq: number,
     onEvent: (event: HubSyncEvent) => void | Promise<void>,
@@ -85,6 +85,7 @@ export async function startDaemonOrgSync(
   let loop: DaemonOrgSyncLoop | undefined
   let unsubscribeLocalChanges: (() => void) | undefined
   let ownedLocalDb: Database.Database | undefined
+  const sidecarController = new AbortController()
   try {
     const client = options.createClient?.(credential) ?? new HubClient(credential)
     const outbox = options.createOutbox?.(home) ?? new Outbox(home)
@@ -132,7 +133,7 @@ export async function startDaemonOrgSync(
       unsubscribeLocalChanges = options.subscribeLocalChanges((change) => {
         void (async () => {
           localState?.reconcileOutbound(outbox.pending())
-          const operation = await mapLocalChange(change, await board.id())
+          const operation = await mapLocalChange(change, await board.id(sidecarController.signal))
           if (!operation) return
           const queuedId = outbox.enqueue(operation.op, operation.payload)
           if (operation.localCardId !== undefined && localState) {
@@ -144,9 +145,9 @@ export async function startDaemonOrgSync(
         })().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
       })
     }
-    void presence.tick()
+    void presence.tick(sidecarController.signal)
     timer = setInterval(() => {
-      void presence.tick()
+      void presence.tick(sidecarController.signal)
       void loop?.flush?.().catch((error) => output(`org-sync outbound degraded: ${safeError(error)}`))
     }, options.heartbeatMs ?? 15_000)
     timer.unref()
@@ -160,6 +161,7 @@ export async function startDaemonOrgSync(
         stopped = true
         if (timer) clearInterval(timer)
         timer = undefined
+        sidecarController.abort()
         unsubscribeLocalChanges?.()
         unsubscribeLocalChanges = undefined
         await loop!.stop()
@@ -169,6 +171,7 @@ export async function startDaemonOrgSync(
     }
   } catch (error) {
     if (timer) clearInterval(timer)
+    sidecarController.abort()
     unsubscribeLocalChanges?.()
     await loop?.stop().catch(() => undefined)
     ownedLocalDb?.close()
@@ -188,11 +191,11 @@ class PresencePublisher {
     private readonly output: (line: string) => void,
   ) {}
 
-  async tick(): Promise<void> {
+  async tick(signal?: AbortSignal): Promise<void> {
     if (this.#running) return
     this.#running = true
     try {
-      const boardId = await this.board.id()
+      const boardId = await this.board.id(signal)
       for (const agent of this.listLocalAgents()) {
         const activity = agentActivity(agent)
         if (activity === 'gone') continue
@@ -201,7 +204,7 @@ class PresencePublisher {
           const registered = await this.client.postOp('agent.register', {
             board_id: boardId,
             name: agent.name,
-          })
+          }, undefined, signal)
           agentId = entityId(registered.result, 'agent.register')
           this.#agentIds.set(agent.name, agentId)
         }
@@ -210,10 +213,10 @@ class PresencePublisher {
           state: activity === 'working' ? 'working' : 'idle',
           current_card_id: null,
           activity,
-        })
+        }, undefined, signal)
       }
     } catch (error) {
-      this.output(`org-sync presence degraded: ${safeError(error)}`)
+      if (!isAbortError(error)) this.output(`org-sync presence degraded: ${safeError(error)}`)
     } finally {
       this.#running = false
     }
@@ -226,9 +229,9 @@ class HubBoardResolver {
 
   constructor(private readonly client: DaemonHubClient) {}
 
-  async id(): Promise<string> {
+  async id(signal?: AbortSignal): Promise<string> {
     if (this.#boardId) return this.#boardId
-    const response = await this.client.get('boards') as { boards?: unknown }
+    const response = await this.client.get('boards', {}, signal) as { boards?: unknown }
     if (!Array.isArray(response?.boards)) throw new Error('hub returned an invalid board listing')
     const boards = response.boards.filter(isBoardListing)
     const selected = boards.find((board) => board.project_name === 'Default project') ?? boards[0]
@@ -254,3 +257,6 @@ const safeError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : 'unknown sync failure'
   return message.replace(/orchestra_device_v1\.[^\s"']+/g, '[redacted device token]')
 }
+
+const isAbortError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === 'AbortError'
