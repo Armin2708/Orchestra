@@ -128,6 +128,7 @@ export class LocalBoardState {
   }
 
   reconcileOutbound(pending: QueuedOp[]): void {
+    if (pending.length === 0) return
     const reconcile = this.#db.transaction((items: QueuedOp[]) => {
       for (const item of items) {
         if (item.op !== 'card.create') continue

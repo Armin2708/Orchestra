@@ -10,6 +10,7 @@ import {
 } from '../src/org-sync/daemon-integration.js'
 import type { OrgCredential } from '../src/org-sync/credentials.js'
 import { Outbox } from '../src/org-sync/outbox.js'
+import { LocalBoardState } from '../src/org-sync/local-board-state.js'
 import { openDb } from '../src/db.js'
 import { buildServer } from '../src/server.js'
 
@@ -276,6 +277,17 @@ describe('daemon organization sync integration', () => {
     })
     expect(loop.flush).toHaveBeenCalledOnce()
     expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('does not open a board write transaction to reconcile an empty outbox', () => {
+    const db = openDb(':memory:')
+    const localState = new LocalBoardState({ db, orgId: credential.orgId })
+    const transaction = vi.spyOn(db, 'transaction')
+
+    localState.reconcileOutbound([])
+
+    expect(transaction).not.toHaveBeenCalled()
+    db.close()
   })
 
   it('maps each local card once when milestone changes re-emit already-synced siblings', async () => {
