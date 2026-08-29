@@ -88,7 +88,7 @@ const startSimulatedDaemon = async (
 }
 
 describe('organization sync end to end', () => {
-  it('applies a hosted card through the default path into the other daemon local board', async () => {
+  it('applies a hosted card to a dedicated org board instead of either existing local board', async () => {
     const setup = await pair()
     const dbA = openDb(path.join(setup.homeA, 'orchestra.db'))
     const dbB = openDb(path.join(setup.homeB, 'orchestra.db'))
@@ -97,6 +97,8 @@ describe('organization sync end to end', () => {
       VALUES ('/machine-a', 'Machine A')`).run().lastInsertRowid)
     const boardB = Number(dbB.prepare(`INSERT INTO boards (project_path, name)
       VALUES ('/machine-b', 'Machine B')`).run().lastInsertRowid)
+    const otherBoardB = Number(dbB.prepare(`INSERT INTO boards (project_path, name)
+      VALUES ('/machine-b-other', 'Machine B Other')`).run().lastInsertRowid)
     const serverA = buildServer(dbA)
     const serverB = buildServer(dbB)
     localServers.push(serverA, serverB)
@@ -123,11 +125,24 @@ describe('organization sync end to end', () => {
       paths: ['src/shared.ts'],
     } })
     expect(created.statusCode).toBe(200)
-    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM cards WHERE board_id=? AND title=?`)
-      .get(boardB, 'Created on daemon A')))
+    await waitUntil(() => Boolean(dbB.prepare(`SELECT 1 FROM cards WHERE title=?`)
+      .get('Created on daemon A')))
+
+    const orgBoardB = dbB.prepare(`SELECT board.id, board.project_path, board.name
+      FROM org_sync_boards mapping JOIN boards board ON board.id=mapping.local_board_id
+      WHERE mapping.org_id=?`).get(setup.hub.orgId) as {
+        id: number
+        project_path: string
+        name: string
+      }
+    expect(orgBoardB.name).toBe(`Organization ${setup.hub.orgId}`)
+    expect(path.dirname(orgBoardB.project_path)).toBe(path.join(setup.homeB, 'organizations'))
+    expect(path.basename(orgBoardB.project_path)).toMatch(/^[0-9a-f]{16}$/)
+    expect(orgBoardB.id).not.toBe(boardB)
+    expect(orgBoardB.id).not.toBe(otherBoardB)
 
     const snapshot = await serverB.inject({
-      method: 'GET', url: `/api/v1/boards/${boardB}/snapshot`,
+      method: 'GET', url: `/api/v1/boards/${orgBoardB.id}/snapshot`,
     })
     expect(snapshot.statusCode).toBe(200)
     expect(snapshot.json().cards).toContainEqual(expect.objectContaining({
@@ -135,6 +150,8 @@ describe('organization sync end to end', () => {
       description: 'Visible on the actual machine B board',
       paths: ['src/shared.ts'],
     }))
+    expect(dbB.prepare(`SELECT COUNT(*) AS count FROM cards
+      WHERE board_id IN (?, ?)`).get(boardB, otherBoardB)).toEqual({ count: 0 })
     expect(dbA.prepare('SELECT COUNT(*) AS count FROM cards WHERE board_id=?').get(boardA)).toEqual({ count: 1 })
     expect((await setup.hub.sql.query('SELECT COUNT(*)::int AS count FROM cards WHERE org_id=$1', [setup.hub.orgId])).rows)
       .toEqual([{ count: 1 }])

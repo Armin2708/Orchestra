@@ -260,14 +260,12 @@ export class LocalBoardState {
   }
 
   #targetBoardId(): number {
-    if (this.#localBoardId !== undefined) {
-      const selected = this.#db.prepare('SELECT id FROM boards WHERE id=?').get(this.#localBoardId)
-      if (!selected) throw new Error(`organization sync local board ${this.#localBoardId} does not exist`)
-      return this.#localBoardId
+    if (this.#localBoardId === undefined) {
+      throw new Error('organization sync has no configured local destination board')
     }
-    const board = this.#db.prepare('SELECT id FROM boards ORDER BY id LIMIT 1').get() as { id: number } | undefined
-    if (!board) throw new Error('organization sync cannot apply events until a local board exists')
-    return board.id
+    const selected = this.#db.prepare('SELECT id FROM boards WHERE id=?').get(this.#localBoardId)
+    if (!selected) throw new Error(`organization sync local board ${this.#localBoardId} does not exist`)
+    return this.#localBoardId
   }
 
   #localCard(id: number): Record<string, unknown> & { board_id: number } {
@@ -281,6 +279,10 @@ export class LocalBoardState {
 export function installLocalBoardSyncSchema(db: Database.Database): void {
   try { db.exec('ALTER TABLE agents ADD COLUMN org_sync_remote_origin TEXT') } catch { /* exists */ }
   db.exec(`
+    CREATE TABLE IF NOT EXISTS org_sync_boards (
+      org_id TEXT PRIMARY KEY,
+      local_board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS org_sync_card_mappings (
       id INTEGER PRIMARY KEY,
       org_id TEXT NOT NULL,
@@ -309,6 +311,28 @@ export function installLocalBoardSyncSchema(db: Database.Database): void {
       UNIQUE(org_id, seq)
     );
   `)
+}
+
+export function ensureLocalOrgBoard(
+  db: Database.Database,
+  orgId: string,
+  projectPath: string,
+): number {
+  installLocalBoardSyncSchema(db)
+  return db.transaction(() => {
+    const mapped = db.prepare(`SELECT board.id FROM org_sync_boards mapping
+      JOIN boards board ON board.id=mapping.local_board_id
+      WHERE mapping.org_id=?`).get(orgId) as { id: number } | undefined
+    if (mapped) return mapped.id
+
+    const existing = db.prepare('SELECT id FROM boards WHERE project_path=?')
+      .get(projectPath) as { id: number } | undefined
+    const boardId = existing?.id ?? Number(db.prepare(`INSERT INTO boards (project_path, name)
+      VALUES (?, ?)`).run(projectPath, `Organization ${orgId}`).lastInsertRowid)
+    db.prepare(`INSERT INTO org_sync_boards (org_id, local_board_id) VALUES (?, ?)
+      ON CONFLICT(org_id) DO UPDATE SET local_board_id=excluded.local_board_id`).run(orgId, boardId)
+    return boardId
+  }).immediate()
 }
 
 const eventIdentity = (event: HubSyncEvent): string => {

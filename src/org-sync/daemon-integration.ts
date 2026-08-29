@@ -1,11 +1,17 @@
 import os from 'node:os'
 import path from 'node:path'
+import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { agentActivity } from '../../web/src/agentActivity.js'
 import { openDb } from '../db.js'
 import { loadOrgCredential, type OrgCredential } from './credentials.js'
 import { HubClient, type HubSyncEvent, type OpResult } from './hub-client.js'
-import { LocalBoardState, type LocalBoardEvent } from './local-board-state.js'
+import {
+  ensureLocalOrgBoard,
+  LocalBoardState,
+  type LocalBoardEvent,
+} from './local-board-state.js'
 import { Outbox } from './outbox.js'
 import { SyncLoop, type SyncLoopOptions, type SyncState } from './sync-loop.js'
 
@@ -98,11 +104,18 @@ export async function startDaemonOrgSync(
     const client = options.createClient?.(credential) ?? new HubClient(credential)
     const outbox = options.createOutbox?.(home) ?? new Outbox(home)
     const localDb = options.applyEvent ? undefined : options.localDb ?? (ownedLocalDb = openDb(path.join(home, 'orchestra.db')))
+    let localBoardId = options.localBoardId
+    if (localDb && localBoardId === undefined) {
+      const orgDirectory = createHash('sha256').update(credential.orgId).digest('hex').slice(0, 16)
+      const projectPath = path.join(home, 'organizations', orgDirectory)
+      fs.mkdirSync(projectPath, { recursive: true })
+      localBoardId = ensureLocalOrgBoard(localDb, credential.orgId, projectPath)
+    }
     const localState = localDb ? new LocalBoardState({
       db: localDb,
       orgId: credential.orgId,
       publish: options.publishLocalChange,
-      localBoardId: options.localBoardId,
+      localBoardId,
     }) : undefined
     const applyEvent = options.applyEvent ?? ((event: HubSyncEvent) => localState!.apply(event))
     localState?.reconcileOutbound(outbox.pending())
