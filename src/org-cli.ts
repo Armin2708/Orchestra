@@ -7,7 +7,6 @@ import {
   saveOrgCredential,
   type OrgCredential,
 } from './org-sync/credentials.js'
-import { clearOrgSyncState } from './org-sync/state.js'
 
 export interface OrgCliDeps {
   loadCredential?: () => Promise<OrgCredential | null>
@@ -70,7 +69,10 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
   const load = deps.loadCredential ?? (() => loadOrgCredential())
   const save = deps.saveCredential ?? ((credential) => saveOrgCredential(credential))
   const clear = deps.clearCredential ?? (() => clearOrgCredential())
-  const clearState = deps.clearSyncState ?? (() => clearOrgSyncState())
+  const clearState = deps.clearSyncState ?? (async () => {
+    const { clearOrgSyncState } = await import('./org-sync/state.js')
+    await clearOrgSyncState()
+  })
   const verify = deps.verifyCredential ?? verifyOrgCredential
   const readToken = deps.readToken ?? tokenFromStdin
   const deviceName = deps.deviceName ?? os.hostname
