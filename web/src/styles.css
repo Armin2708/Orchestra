@@ -63,7 +63,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: 50%; border: 2px solid var(--bg); background: #346538;
 }
 .avatar.idle .presence { background: #956400; }
+.avatar.offline .presence { background: #b8b4ac; }
 .avatar.mini { width: 21px; height: 21px; border-radius: 6px; font-size: 9.5px; }
+
+/* ── Hub mode: sign-in / account controls (topbar nav) ──────────── */
+.clerk-auth { display: flex; align-items: center; gap: 6px; }
 
 .board-picker {
   border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 10px;

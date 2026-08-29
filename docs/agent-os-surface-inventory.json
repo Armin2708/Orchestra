@@ -418,6 +418,14 @@
     {
       "file": "src/agent-os/team-planning-routes.ts",
       "prefix": "/api/v1/os"
+    },
+    {
+      "file": "src/hub/routes/ops.ts",
+      "prefix": "/api/v1/hub"
+    },
+    {
+      "file": "src/hub/routes/sync.ts",
+      "prefix": "/api/v1/hub"
     }
   ],
   "http_routes": {
@@ -687,12 +695,17 @@
     "infrastructure": [
       "GET /api/v1/auth/status",
       "GET /api/v1/events",
+      "GET /api/v1/hub/orgs/:orgId/agents",
+      "GET /api/v1/hub/orgs/:orgId/cards",
+      "GET /api/v1/hub/orgs/:orgId/mail/inbox",
+      "GET /api/v1/hub/orgs/:orgId/sync",
       "GET /api/v1/push/status",
       "GET /api/v1/push/vapid-key",
       "GET /api/v1/system",
       "GET /health",
       "POST /api/v1/auth/login",
       "POST /api/v1/auth/setup",
+      "POST /api/v1/hub/orgs/:orgId/ops",
       "POST /api/v1/push/ntfy",
       "POST /api/v1/push/subscribe",
       "POST /api/v1/push/test",
@@ -702,7 +715,8 @@
   "cli_sources": [
     "src/cli.ts",
     "src/agent-os-cli.ts",
-    "src/job-assignment-cli.ts"
+    "src/job-assignment-cli.ts",
+    "src/hub-cli.ts"
   ],
   "cli_commands": {
     "canonical": [
@@ -845,6 +859,7 @@
       "deploy",
       "handoff",
       "hook",
+      "hub",
       "init",
       "install",
       "integrations",
@@ -1139,5 +1154,27 @@
       "evidence": "<ProcessTerminal ref={terminalRef} process={active} />"
     }
   ],
-  "planned_not_implemented": []
+  "planned_not_implemented": [],
+  "hub_table_sources": [
+    "src/hub/migrations/001-hub-core.sql",
+    "src/hub/migrations/002-hub-work.sql",
+    "src/hub/migrations/003-hub-events.sql",
+    "src/hub/migrations/004-hub-event-seq.sql",
+    "src/hub/migrations.ts"
+  ],
+  "hub_database_tables": [
+    "hub:agents",
+    "hub:boards",
+    "hub:cards",
+    "hub:devices",
+    "hub:hub_schema_migrations",
+    "hub:mail",
+    "hub:memberships",
+    "hub:org_event_seq",
+    "hub:org_events",
+    "hub:orgs",
+    "hub:projects",
+    "hub:subscriptions",
+    "hub:users"
+  ]
 }
