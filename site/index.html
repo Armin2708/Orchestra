@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orchestra — run a team of coding agents that coordinate</title>
-<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents work as a team — mail, memory, and human-gated review — while you conduct.">
+<meta name="description" content="Orchestra is a live board where Claude Code and Codex agents coordinate — run locally on one machine or connect your team through Orchestra Cloud.">
 <meta name="theme-color" content="#0a0c11">
 <meta property="og:title" content="Orchestra — run a team of coding agents that coordinate">
-<meta property="og:description" content="A live board where Claude Code and Codex agents work as a team while you conduct.">
+<meta property="og:description" content="Run coding agents locally or connect your team's machines through one shared Orchestra Cloud board.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="assets/orchestra-social-card.png">
 <meta property="og:image:width" content="1200">
@@ -19,7 +19,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/orchestra-icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0a0c11;
@@ -199,6 +199,81 @@
   .stat .n { font-family: "Geist Mono", monospace; font-size: 26px; font-weight: 500; letter-spacing: -.02em; color: var(--accent); }
   .stat .l { color: var(--faint); font-size: 13px; margin-top: 6px; }
 
+  /* Orchestra Cloud: local machines around one shared coordination hub */
+  .cloud-section { padding-top: 130px; }
+  .cloud-intro {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .62fr);
+    gap: 72px; align-items: end;
+  }
+  .cloud-intro .sec-head { max-width: 720px; }
+  .cloud-intro .sub { max-width: 64ch; }
+  .cloud-action { padding: 22px 0 4px; border-top: 1px solid var(--line); }
+  .cloud-action p { color: var(--faint); font-size: 13px; margin-bottom: 15px; }
+  .cloud-action a { width: 100%; justify-content: space-between; }
+  .cloud-shell {
+    margin-top: 42px; border: 1px solid rgba(255,255,255,.13); border-radius: 16px;
+    overflow: hidden; background: #0d1016; box-shadow: 0 28px 70px rgba(0,0,0,.4);
+  }
+  .cloud-shell-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    min-height: 48px; padding: 0 18px; border-bottom: 1px solid var(--line); background: #12151d;
+    color: var(--faint); font: 11px/1.4 "Geist Mono", monospace; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .cloud-live { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+  .cloud-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .cloud-route {
+    display: grid; grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1.12fr) 54px minmax(0, 1fr);
+    gap: 0; align-items: stretch; padding: 34px;
+  }
+  .cloud-node { min-width: 0; padding: 24px 22px; border-top: 1px solid rgba(255,255,255,.16); }
+  .cloud-node.hub {
+    border: 1px solid rgba(69,224,127,.3); background: rgba(69,224,127,.055);
+    border-radius: 12px; padding: 23px 22px;
+  }
+  .cloud-node-label {
+    display: block; color: var(--accent); font: 10.5px/1.4 "Geist Mono", monospace;
+    letter-spacing: .13em; text-transform: uppercase; margin-bottom: 13px;
+  }
+  .cloud-node h3 { font-size: 17px; letter-spacing: -.015em; }
+  .cloud-node p { color: var(--muted); font-size: 13.5px; line-height: 1.65; margin-top: 9px; }
+  .cloud-arrow { position: relative; min-width: 54px; }
+  .cloud-arrow::before {
+    content: ""; position: absolute; left: 9px; right: 9px; top: 50%; height: 1px;
+    background: rgba(69,224,127,.42);
+  }
+  .cloud-arrow::after {
+    content: ""; position: absolute; right: 9px; top: calc(50% - 3px); width: 6px; height: 6px;
+    border-top: 1px solid var(--accent); border-right: 1px solid var(--accent); transform: rotate(45deg);
+  }
+  .cloud-protocol {
+    position: absolute; left: 50%; top: calc(50% + 13px); transform: translateX(-50%);
+    color: var(--faint); font: 9px/1.3 "Geist Mono", monospace; text-transform: uppercase; white-space: nowrap;
+  }
+  .cloud-workflow {
+    display: grid; grid-template-columns: minmax(220px, .75fr) minmax(0, 1.55fr);
+    border-top: 1px solid var(--line);
+  }
+  .cloud-workflow-head { padding: 32px 34px; }
+  .cloud-workflow-head h3 { font-size: 19px; letter-spacing: -.015em; }
+  .cloud-workflow-head p { color: var(--faint); font-size: 13px; margin-top: 8px; max-width: 28ch; }
+  .cloud-steps { border-left: 1px solid var(--line); }
+  .cloud-step {
+    display: grid; grid-template-columns: 42px minmax(150px, .5fr) minmax(0, 1fr);
+    gap: 16px; padding: 21px 26px; border-top: 1px solid var(--line); align-items: baseline;
+  }
+  .cloud-step:first-child { border-top: 0; }
+  .cloud-step .num { color: var(--accent); font: 11px/1.5 "Geist Mono", monospace; }
+  .cloud-step h4 { font-size: 14px; font-weight: 600; }
+  .cloud-step p { color: var(--muted); font-size: 13px; line-height: 1.55; }
+  .cloud-step code { font-family: "Geist Mono", monospace; font-size: 11px; color: var(--ink); }
+  .cloud-boundary { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+  .cloud-boundary > div { padding: 30px 34px 32px; }
+  .cloud-boundary > div + div { border-left: 1px solid var(--line); }
+  .cloud-boundary h3 { font-size: 15px; letter-spacing: -.01em; }
+  .cloud-boundary ul { list-style: none; display: grid; gap: 9px; margin-top: 17px; }
+  .cloud-boundary li { position: relative; padding-left: 17px; color: var(--muted); font-size: 13px; }
+  .cloud-boundary li::before { content: ""; position: absolute; left: 0; top: .68em; width: 6px; height: 1px; background: var(--accent); }
+
   /* changelog */
   .changelog { padding-top: 96px; padding-bottom: 96px; }
   .changelog blockquote { color: var(--muted); font-size: 14px; margin-top: 8px; font-style: italic; }
@@ -262,6 +337,19 @@
     .cta-row a { width: 100%; max-width: 340px; justify-content: center; }
     .stage { margin-top: 44px; padding: 0 8px; }
     .cols { grid-template-columns: 1fr; gap: 40px; }
+    .cloud-section { padding-top: 88px; }
+    .cloud-intro { grid-template-columns: 1fr; gap: 34px; }
+    .cloud-route { grid-template-columns: 1fr; padding: 18px; }
+    .cloud-arrow { min-height: 48px; }
+    .cloud-arrow::before { left: 50%; right: auto; top: 9px; bottom: 9px; width: 1px; height: auto; }
+    .cloud-arrow::after { right: auto; left: calc(50% - 3px); top: auto; bottom: 9px; transform: rotate(135deg); }
+    .cloud-protocol { top: 50%; left: calc(50% + 18px); transform: translateY(-50%); }
+    .cloud-workflow { grid-template-columns: 1fr; }
+    .cloud-steps { border-left: 0; border-top: 1px solid var(--line); }
+    .cloud-step { grid-template-columns: 34px 1fr; gap: 8px 12px; }
+    .cloud-step p { grid-column: 2; }
+    .cloud-boundary { grid-template-columns: 1fr; }
+    .cloud-boundary > div + div { border-left: 0; border-top: 1px solid var(--line); }
     .log-row { grid-template-columns: 1fr; }
     .foot-grid { grid-template-columns: 1fr 1fr; }
     .stats-row { grid-template-columns: 1fr; }
@@ -287,10 +375,11 @@
       <span class="gm">orchestra</span>
     </a>
     <div class="nav-links">
-      <a href="#changelog">Changelog</a>
+      <a href="#install">Install</a>
+      <a href="#cloud">Cloud</a>
       <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a>
       <a href="https://github.com/Armin2708/Orchestra">GitHub</a>
-      <a class="nav-cta" href="#install">Install</a>
+      <a class="nav-cta" href="https://cloud.orchestraboard.com">Open Cloud</a>
     </div>
   </div>
 </nav>
@@ -306,11 +395,11 @@
   <div class="hero-inner">
     <img class="hero-mark" src="assets/orchestra-mark-reversed.svg" alt="Orchestra" width="148" height="93">
     <h1>Run a team of coding agents that coordinate.</h1>
-    <p class="lede">A live board where Claude Code and Codex agents work together — mail, memory,
-    and review gates — across every terminal you open. You conduct; they play.</p>
+    <p class="lede">A live board where Claude Code and Codex agents work together — on your machine,
+    or across your team's machines through Orchestra Cloud. You conduct; they play.</p>
     <div class="cta-row">
       <a class="btn-main" href="#install">Get Orchestra <span aria-hidden="true">→</span></a>
-      <a class="btn-ghost" href="https://github.com/Armin2708/Orchestra">Star on GitHub</a>
+      <a class="btn-ghost" href="#cloud">Explore Orchestra Cloud</a>
     </div>
     <p class="hero-note">npm i -g orchestra-board · FSL licensed · macOS &amp; Linux</p>
 
@@ -343,7 +432,7 @@
   <div class="stats-row">
     <div class="stat"><div class="n">2,600+</div><div class="l">tests green on every merge</div></div>
     <div class="stat"><div class="n">2</div><div class="l">providers, one board — Claude Code &amp; Codex</div></div>
-    <div class="stat"><div class="n">0</div><div class="l">clouds in the middle — runs on your machine</div></div>
+    <div class="stat"><div class="n">2</div><div class="l">ways to run — local-first or shared through Cloud</div></div>
   </div>
 </div>
 
@@ -429,15 +518,111 @@
   </div>
 </section>
 
+<section class="cloud-section" id="cloud">
+  <div class="sec reveal">
+    <div class="cloud-intro">
+      <div class="sec-head">
+        <p class="eyebrow">Orchestra Cloud</p>
+        <h2>One shared board. Every machine stays yours.</h2>
+        <p class="sub">Each teammate keeps Orchestra beside their code and agents. The local daemon sends
+        coordination events — not source files or terminal transcripts — to an org-scoped hub, then
+        receives the ordered team event stream back.</p>
+      </div>
+      <div class="cloud-action">
+        <p>The hosted application is being prepared at its permanent home.</p>
+        <a class="btn-main" href="https://cloud.orchestraboard.com">
+          <span>Open Orchestra Cloud</span><span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="cloud-shell">
+      <div class="cloud-shell-bar">
+        <span>Local execution · shared coordination</span>
+        <span class="cloud-live">REST + SSE protocol</span>
+      </div>
+      <div class="cloud-route">
+        <div class="cloud-node">
+          <span class="cloud-node-label">Your machine</span>
+          <h3>Local daemon</h3>
+          <p>Agents, hooks, repositories, worktrees, credentials, and terminal sessions remain under your control.</p>
+        </div>
+        <div class="cloud-arrow" aria-hidden="true"><span class="cloud-protocol">REST up</span></div>
+        <div class="cloud-node hub">
+          <span class="cloud-node-label">Secure hosted layer</span>
+          <h3>Orchestra Hub</h3>
+          <p>Scoped device tokens, a Postgres-backed org board, and one ordered event log keep every machine consistent.</p>
+        </div>
+        <div class="cloud-arrow" aria-hidden="true"><span class="cloud-protocol">SSE down</span></div>
+        <div class="cloud-node">
+          <span class="cloud-node-label">Your organization</span>
+          <h3>Shared board</h3>
+          <p>Members see the same cards, owners, agent presence, one-line activity, and cross-machine mail.</p>
+        </div>
+      </div>
+
+      <div class="cloud-workflow">
+        <div class="cloud-workflow-head">
+          <h3>How a team connects</h3>
+          <p>Cloud changes where coordination lives, not where the work runs.</p>
+        </div>
+        <div class="cloud-steps">
+          <div class="cloud-step">
+            <span class="num">01</span>
+            <h4>Create an org</h4>
+            <p>Sign in, create the team space, and invite the people who should share its boards.</p>
+          </div>
+          <div class="cloud-step">
+            <span class="num">02</span>
+            <h4>Connect each machine</h4>
+            <p>Generate a device token that is shown once, then run <code>orchestra org join</code>. Tokens are org-scoped, hashed at rest, and revocable.</p>
+          </div>
+          <div class="cloud-step">
+            <span class="num">03</span>
+            <h4>Work locally</h4>
+            <p>Agents still talk to localhost. A durable outbox protects queued card changes, while authenticated hub operations carry mail and presence.</p>
+          </div>
+          <div class="cloud-step">
+            <span class="num">04</span>
+            <h4>Stay in sync</h4>
+            <p>Every machine resumes from its last event after reconnecting, so the org board catches up without copying anyone's code.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cloud-boundary">
+        <div>
+          <h3>Cloud carries the coordination</h3>
+          <ul>
+            <li>Organization membership and boards</li>
+            <li>Cards, ownership, status, and event history</li>
+            <li>Agent names, presence, one-line activity, and mail</li>
+            <li>Subscription and capacity entitlements</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Your machine keeps the work</h3>
+          <ul>
+            <li>Repositories, source files, and worktrees</li>
+            <li>Terminal transcripts and local memory</li>
+            <li>Claude Code, Codex, and provider credentials</li>
+            <li>Running agent processes and execution authority</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section>
   <div class="sec reveal">
     <div class="cols">
       <div class="sec-head">
-        <p class="eyebrow">Remote</p>
+        <p class="eyebrow">Private remote</p>
         <h2>Conduct from anywhere.</h2>
-        <p class="sub">The board runs on your machine and pairs to your phone over a private tunnel —
-        scoped sessions that can observe, message, and approve. No cloud in the middle, no code leaving
-        your box.</p>
+        <p class="sub">In local mode, the board pairs directly to your phone over a private tunnel —
+        scoped sessions can observe, message, and approve with no hosted hub in the middle. Orchestra Cloud
+        is a separate, opt-in path for shared team coordination.</p>
       </div>
       <div class="phone"><img src="assets/phone@3x.png" alt="The board on a phone: scoped remote session" width="393" height="852"></div>
     </div>
@@ -496,6 +681,8 @@
     <div>
       <h4>Product</h4>
       <a href="#install">Install</a>
+      <a href="#cloud">How Cloud works</a>
+      <a href="https://cloud.orchestraboard.com">Open Cloud</a>
       <a href="#changelog">Changelog</a>
       <a href="https://github.com/Armin2708/Orchestra/blob/main/docs/getting-started.md">Docs</a>
     </div>
