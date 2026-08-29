@@ -15,4 +15,6 @@ podium, and `#F7F6F3` for the background. No text, instruments, people,
 notes, circles, nodes, extra blocks, outlines, 3D, texture, or watermark.
 
 `orchestra-broken-arches-v1.png` is the refined generation selected for
-review. Production assets under `brand/identity/` remain unchanged.
+initial review. `orchestra-broken-arches-v2-equal-sections.png` refines every
+row to three equal 50-degree sections separated by equal 15-degree gaps.
+Production assets under `brand/identity/` remain unchanged.
