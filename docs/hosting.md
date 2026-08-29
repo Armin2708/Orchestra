@@ -119,10 +119,37 @@ pooler mode before anything else.
 | `VITE_HUB_BASE_URL` | Vercel (**build-time**) | yes | The Railway hub's public URL. Baked into the JS bundle at build time by Vite — see [Vite env vars are build-time, not runtime](#vite-env-vars-are-build-time-not-runtime). |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Vercel (**build-time**) | yes | Clerk's publishable key, browser-safe by design. Also build-time — same caveat. |
 
+### Two bundles: the local board and the cloud workspace
+
+`web/` builds **two different products**, chosen by Vite mode — never by which env vars
+happen to be set:
+
+| Command | Entry | Product | Served by |
+|---|---|---|---|
+| `npm run build --prefix web` | `index.html` → `src/main.tsx` | the local board — personal, one machine, no org | the local daemon (`orchestra`) |
+| `npm run build:cloud --prefix web` | `cloud.html` → `src/cloud-main.tsx` | the shared cloud workspace (`HubApp`, Clerk, org) | Vercel |
+
+The cloud build renames `cloud.html` to `index.html` (`web/scripts/rename-cloud-entry.mjs`) so
+Vercel's `outputDirectory` and SPA rewrite are unchanged.
+
+**Only the cloud mode loads `web/.env.cloud.local`.** That separation is load-bearing. Both
+products previously came from one bundle gated at runtime on `hubConfigured()`, so any build
+made in a checkout that had `web/.env.local` configured produced a *cloud* bundle — and when
+the local daemon served it, Clerk's `clerk.browser.js` was blocked by the daemon's own
+`script-src 'self'` CSP, leaving the board stuck on "Loading…" with the cause visible only in
+the browser console. The local bundle now contains no Clerk and no `HubApp` at all, so no
+environment variable can turn a personal board into a cloud sign-in page.
+
+Local development follows the same split: `npm run dev` serves the board (proxying `/api` to
+the daemon on 4750), `npm run dev:cloud` serves the cloud workspace.
+
+Agents reach a shared org through the daemon's `orchestra org join` device token and its sync
+loop — server-side, never through this bundle. Nothing here affects that.
+
 ### Vite env vars are build-time, not runtime
 
 `VITE_HUB_BASE_URL` and `VITE_CLERK_PUBLISHABLE_KEY` are read via `import.meta.env` in
-`web/src/hubApi.ts` and `web/src/main.tsx`. Vite **inlines** `import.meta.env.VITE_*` values into
+`web/src/hubApi.ts` and `web/src/cloud-main.tsx`. Vite **inlines** `import.meta.env.VITE_*` values into
 the built JS at `vite build` time — they are not read from the environment when the server
 answers a request the way a typical backend `process.env` read would be. This means:
 
@@ -143,10 +170,13 @@ answers a request the way a typical backend `process.env` read would be. This me
 {
   "framework": "vite",
   "installCommand": "npm ci --prefix web",
-  "buildCommand": "npm run build --prefix web",
+  "buildCommand": "npm run build:cloud --prefix web",
   "outputDirectory": "web/dist"
 }
 ```
+
+`build:cloud`, not `build` — see [Two bundles](#two-bundles-the-local-board-and-the-cloud-workspace).
+A plain `build` here would deploy the *local board* to Vercel, which has no daemon to talk to.
 
 **Leave the Vercel project's "Root Directory" setting at its default (the repository root) —
 do not set it to `web`.** This is a deliberate deviation from the more obvious "point Root
@@ -162,8 +192,8 @@ Directory at `web/`" approach, for two reasons:
    tracked, reproducible deployment config: `--prefix web` scopes install and build to `web/`
    without ever touching the root `package.json`'s dependencies (which include native modules
    Vercel has no reason to compile), and `outputDirectory: "web/dist"` points at exactly what
-   `npm run build --prefix web` produces (`vite build && node scripts/compress-dist.mjs dist`,
-   per `web/package.json`).
+   `npm run build:cloud --prefix web` produces (`vite build --mode cloud`, then the cloud-entry
+   rename, then `scripts/compress-dist.mjs dist`, per `web/package.json`).
 
 Set `VITE_HUB_BASE_URL` and `VITE_CLERK_PUBLISHABLE_KEY` under Project Settings → Environment
 Variables (do **not** put them in `vercel.json` — Vercel's own docs now recommend against the

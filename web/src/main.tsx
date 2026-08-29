@@ -1,4 +1,3 @@
-import { ClerkProvider } from '@clerk/react'
 import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
@@ -24,23 +23,11 @@ function Root() {
   return <App authorityMode={mode} onAuthorityChanged={() => void refreshAuthority()} />
 }
 
-// Clerk identifies the human operating the browser. It is deliberately separate from
-// the device/authority pairing above, which authenticates this browser to the local
-// daemon; hub mode needs both — a person and a trusted device.
-const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined
-
-function Bootstrap() {
-  // Without a key the local single-machine app must still boot: hub sign-in is
-  // additive, and an unconfigured key must never take the board offline.
-  if (!clerkPublishableKey) return <Root />
-  return (
-    <ClerkProvider publishableKey={clerkPublishableKey} afterSignOutUrl="/">
-      <Root />
-    </ClerkProvider>
-  )
-}
-
-createRoot(document.getElementById('root')!).render(<Bootstrap />)
+// The local board's entry. It authenticates this browser to the local daemon and
+// nothing else — no Clerk, no hub. The shared cloud workspace is a separate bundle
+// (cloud-main.tsx); keeping them apart means the daemon can never be handed a build
+// that waits on a remote sign-in script its own CSP forbids.
+createRoot(document.getElementById('root')!).render(<Root />)
 
 // dev builds skip the worker so vite's module graph is never cached
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
