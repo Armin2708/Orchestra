@@ -7,11 +7,13 @@ import {
   saveOrgCredential,
   type OrgCredential,
 } from './org-sync/credentials.js'
+import { clearOrgSyncState } from './org-sync/state.js'
 
 export interface OrgCliDeps {
   loadCredential?: () => Promise<OrgCredential | null>
   saveCredential?: (credential: OrgCredential) => Promise<void>
   clearCredential?: () => Promise<void>
+  clearSyncState?: () => Promise<void>
   verifyCredential?: (credential: OrgCredential) => Promise<void>
   readToken?: () => Promise<string>
   deviceName?: () => string
@@ -57,10 +59,10 @@ export async function verifyOrgCredential(credential: OrgCredential): Promise<vo
 const activateOrgSync = async (): Promise<void> => {
   const { ensureDaemon, stopDaemon, waitForDaemonExit } = await import('./daemon.js')
   if (stopDaemon() && !(await waitForDaemonExit())) {
-    throw new Error('organization credential saved, but the existing daemon did not stop cleanly')
+    throw new Error('organization connection changed, but the existing daemon did not stop cleanly')
   }
   if (!(await ensureDaemon())) {
-    throw new Error('organization credential saved, but the daemon could not start; run `orchestra serve`')
+    throw new Error('organization connection changed, but the daemon could not start; run `orchestra serve`')
   }
 }
 
@@ -68,6 +70,7 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
   const load = deps.loadCredential ?? (() => loadOrgCredential())
   const save = deps.saveCredential ?? ((credential) => saveOrgCredential(credential))
   const clear = deps.clearCredential ?? (() => clearOrgCredential())
+  const clearState = deps.clearSyncState ?? (() => clearOrgSyncState())
   const verify = deps.verifyCredential ?? verifyOrgCredential
   const readToken = deps.readToken ?? tokenFromStdin
   const deviceName = deps.deviceName ?? os.hostname
@@ -134,6 +137,11 @@ export function registerOrgCommands(program: Command, deps: OrgCliDeps = {}): vo
     .description('disconnect this daemon from its hosted organization')
     .action(async () => {
       await clear()
+      try {
+        await activate()
+      } finally {
+        await clearState()
+      }
       output('local organization credential removed; this does not revoke the device token server-side')
       output('revoke the device from the hosted organization settings')
     })
